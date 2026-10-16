@@ -1,0 +1,150 @@
+{
+  "format": "youkai.scan",
+  "formatVersion": 1,
+  "view": "usable",
+  "exportedAt": "2026-10-16T08:05:00.000Z",
+  "producer": {
+    "name": "youkai",
+    "version": "0.0.0-example"
+  },
+  "session": {
+    "id": "d95a372b-3726-46c9-a73f-1210c369145a",
+    "savedRevision": 4,
+    "game": "zzz",
+    "entity": "driveDisc",
+    "client": "windowsLocal",
+    "locale": "zh-CN",
+    "startedAt": "2026-10-16T08:00:00.000Z",
+    "endedAt": "2026-10-16T08:02:00.000Z",
+    "termination": {
+      "kind": "cancelled",
+      "code": "userCancelled",
+      "phase": "capturing"
+    },
+    "scope": {
+      "rarity": "S",
+      "slots": [1, 2, 3, 4, 5, 6],
+      "minLevel": 0,
+      "maxLevel": 15,
+      "sets": "all",
+      "locked": "all",
+      "discarded": "all",
+      "equipped": "all"
+    },
+    "coverage": {
+      "status": "partial",
+      "expectedCount": null
+    },
+    "capturedCount": 4
+  },
+  "catalog": {
+    "namespace": "youkai.zzz",
+    "revision": "example-1",
+    "sets": {
+      "woodpeckerElectro": "啄木鸟电音"
+    },
+    "agents": {}
+  },
+  "fieldPolicy": {
+    "discarded": "required",
+    "equipped": "required"
+  },
+  "validationRules": {
+    "id": "zzzDriveDisc",
+    "version": "example-1",
+    "sha256": "067980f5ac751f0eb4b931cdcf263788c607706d692c5b164e4d73f843a9c8c9"
+  },
+  "excludedCount": 1,
+  "items": [
+    {
+      "sequence": 2,
+      "revision": 1,
+      "quality": "humanConfirmed",
+      "issues": [],
+      "validation": { "status": "passed", "issues": [] },
+      "data": {
+        "setId": "woodpeckerElectro",
+        "rarity": "S",
+        "slot": 4,
+        "level": 15,
+        "mainStat": {
+          "attribute": "critRate",
+          "value": "24",
+          "unit": "percent"
+        },
+        "substats": [
+          { "attribute": "critDamage", "value": "19.2", "unit": "percent" },
+          { "attribute": "attack", "value": "38", "unit": "flat" },
+          { "attribute": "health", "value": "112", "unit": "flat" },
+          { "attribute": "anomalyProficiency", "value": "9", "unit": "flat" }
+        ],
+        "locked": true,
+        "discarded": false,
+        "equipped": {
+          "state": "unequipped",
+          "agentId": null
+        }
+      }
+    },
+    {
+      "sequence": 3,
+      "revision": 1,
+      "quality": "humanConfirmed",
+      "issues": [],
+      "data": {
+        "setId": "woodpeckerElectro",
+        "rarity": "S",
+        "slot": 6,
+        "level": 15,
+        "mainStat": {
+          "attribute": "impact",
+          "value": "18",
+          "unit": "percent"
+        },
+        "substats": [
+          { "attribute": "critDamage", "value": "19.2", "unit": "percent" },
+          { "attribute": "attack", "value": "38", "unit": "flat" },
+          { "attribute": "health", "value": "112", "unit": "flat" },
+          { "attribute": "anomalyProficiency", "value": "9", "unit": "flat" }
+        ],
+        "locked": true,
+        "discarded": false,
+        "equipped": {
+          "state": "unequipped",
+          "agentId": null
+        }
+      },
+      "validation": { "status": "passed", "issues": [] }
+    },
+    {
+      "sequence": 4,
+      "revision": 1,
+      "quality": "humanConfirmed",
+      "issues": [],
+      "data": {
+        "setId": "woodpeckerElectro",
+        "rarity": "S",
+        "slot": 6,
+        "level": 15,
+        "mainStat": {
+          "attribute": "anomalyMastery",
+          "value": "30",
+          "unit": "percent"
+        },
+        "substats": [
+          { "attribute": "critDamage", "value": "19.2", "unit": "percent" },
+          { "attribute": "attack", "value": "38", "unit": "flat" },
+          { "attribute": "health", "value": "112", "unit": "flat" },
+          { "attribute": "anomalyProficiency", "value": "9", "unit": "flat" }
+        ],
+        "locked": true,
+        "discarded": false,
+        "equipped": {
+          "state": "unequipped",
+          "agentId": null
+        }
+      },
+      "validation": { "status": "passed", "issues": [] }
+    }
+  ]
+}
