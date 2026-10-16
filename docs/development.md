@@ -1,0 +1,38 @@
+# 开发指南
+
+更新日期：2026-10-16。本文维护环境要求与本仓库当前实际可用的开发命令；范围与里程碑安排见[实施清单](specs/scanner-implementation-plan.md)，构建与分发决策见 [T7](specs/t7-public-release-acceptance.md)。
+
+## 环境要求
+
+| 工具 | 要求与用途 |
+| --- | --- |
+| Go | 1.27.2（`go.mod` 固定 `go 1.27.2`；MyGo v0.5.5 要求 1.27.1+）。 |
+| MyGo | v0.5.5，作为 Go tool 依赖固定在 `go.mod`（`tool github.com/egoist/mygo/cmd/mygo`），经 `go tool mygo` 使用，不依赖全局安装的 `mygo` 命令。 |
+| Xcode 命令行工具 | macOS 打包所需（`codesign`、`hdiutil`、SDK）；开发机 `xcode-select` 指向 `/Applications/Xcode.app`。 |
+| mingw-w64 | 本机已安装（`/opt/homebrew/bin/x86_64-w64-mingw32-gcc`，Homebrew mingw-w64 14.0.0_3）。当前工程尚无 cgo 依赖，Windows 交叉编译在 `CGO_ENABLED=0` 下进行；接入 OCR cgo 绑定后用于交叉编译。 |
+| makensis | 本机已安装（v3.13）。macOS 上交叉构建 Windows 平台时也会产出 NSIS 安装包；未安装时 MyGo 仅警告并跳过安装包。 |
+
+不使用 Web 前端：`mygo.json` 为纯原生 UI 配置，无需 Bun、Node.js 或 WebView2。
+
+## 常用命令
+
+在仓库根目录执行。
+
+| 命令 | 用途 |
+| --- | --- |
+| `gofmt -l .` | 格式检查，无输出即通过。 |
+| `go vet ./...` | Go 静态检查。 |
+| `go build ./...` | 编译全部包。 |
+| `go test ./...` | 运行测试（当前尚无测试包）。 |
+| `go tool mygo vet .` | 先运行 `go vet ./...`，再检查原生 UI 生命周期问题；参数是应用目录（项目根），不能写成 `./...`。 |
+| `go tool mygo dev` | 开发运行，编辑 Go 代码、配置或资源后自动重建重启；开发应用名为 `Youkai Dev`（标识 `com.lotwt.youkai.dev`，位于 `.mygo/dev`），与正式安装的数据和权限隔离。退出应用或 Ctrl+C 结束。 |
+| `go tool mygo build` | 打包本机平台制品到 `build/<os>-<arch>/`：macOS 生成 ad-hoc 签名的 `Youkai.app` 与 DMG。 |
+| `GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build ./...` | Windows 交叉编译检查，只证明能编译，不代表能在 Windows 上运行。 |
+
+`go tool mygo build` 亦接受 `-platform` 指定目标，如 `-platform windows/amd64`（在 macOS 上产出 EXE，装有 makensis 时同时产出 NSIS 安装包）。按已确认的测试方式，交给用户测试的 Windows 安装包仍以 GitHub Actions 产物为准，见下节。
+
+## 与 Windows 测试方式的关系
+
+用户不在 Windows 上安装开发工具，Windows 上的功能与安装测试使用 GitHub Actions 构建的安装包（正式发布与开发期测试的 Windows 制品均来自 GitHub Actions，约定见[实施清单](specs/scanner-implementation-plan.md#开发与-windows-测试方式)）。
+
+Mac 上的 Windows 交叉编译检查只用于尽早发现编译与平台隔离问题：交叉编译通过不代表能在 Windows 上运行，VC++ 运行库（DLL 来源与实际加载）也不在本地交叉编译的覆盖范围内，需要快速排查非 VC++ 问题时可另行交叉编译免安装包供测试。只能在 Windows 实机验证的事项见实施清单第 1 节。

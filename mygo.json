@@ -1,0 +1,10 @@
+{
+  "name": "Youkai",
+  "identifier": "com.lotwt.youkai",
+  "version": "0.0.1",
+  "main": "./cmd/youkai",
+  "out": "build",
+  "macos": {
+    "minimumSystemVersion": "14.0"
+  }
+}
