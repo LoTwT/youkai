@@ -32,16 +32,17 @@ const (
 // fails fast instead of hanging until the process or CI job is killed.
 const downloadHeaderTimeout = 30 * time.Second
 
-// newHTTPClient returns the client downloads go through.
+// newHTTPClient returns the client downloads go through. It clones
+// http.DefaultTransport — proxy support (HTTPS_PROXY and friends), dial
+// and TLS handshake timeouts, HTTP/2 — and only adds a bound on how long
+// a request may wait for response headers.
 func newHTTPClient(responseHeaderTimeout time.Duration) *http.Client {
-	return &http.Client{
-		Transport: &http.Transport{
-			ResponseHeaderTimeout: responseHeaderTimeout,
-		},
-	}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.ResponseHeaderTimeout = responseHeaderTimeout
+	return &http.Client{Transport: transport}
 }
 
-// newTool installs dependencies below root, the repository directory.
+// tool installs dependencies below root, the repository directory.
 type tool struct {
 	root   string
 	client *http.Client
