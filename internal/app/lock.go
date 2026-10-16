@@ -22,17 +22,22 @@ var ErrLockHeld = errors.New("lock held by another process")
 // occupancy domain: all of them resolve to this same file.
 const dataRootLockFileName = "youkai.lock"
 
-// The scan occupancy's lock lives under a per-user directory that is
-// deliberately independent of the application name and the data root:
-// development ("Youkai Dev") and installed ("Youkai") builds share the
-// same file, so at most one youkai process per OS user can operate the
-// game. scanLockDirName sits in the user's home directory — never in the
-// caches or temporary locations, whose routine clearing could delete a
-// held lock file and silently split the occupancy domain, and never
-// beside the app-name-keyed data roots, whose names it must not collide
-// with even on case-insensitive filesystems.
+// The scan occupancy's lock lives under a directory named after youkai's
+// base application identifier, placed in the per-user application-data
+// base directory of the OS: ~/Library/Application Support on macOS,
+// %LOCALAPPDATA% on Windows. The identifier is the fixed base form —
+// without the .dev suffix the development build adds — and deliberately
+// not the display name the data roots are keyed on, so two properties
+// hold at once: development ("Youkai Dev") and installed ("Youkai")
+// builds of one OS user contend on the same lock file, and the directory
+// name never collides with the app data roots even on case-insensitive
+// filesystems. Staying in the per-user application-data base also keeps
+// the lock out of the caches and temporary locations, whose routine
+// clearing could delete a held lock file and silently split the
+// occupancy domain, and out of the user's home directory, where a
+// hidden directory is not the convention on Windows.
 const (
-	scanLockDirName  = ".youkai"
+	scanLockDirName  = "com.lotwt.youkai"
 	scanLockFileName = "scan.lock"
 )
 
@@ -143,14 +148,23 @@ func (s *ScanLock) Close() error {
 	return nil
 }
 
+// scanLockBase resolves the per-user application-data base directory
+// the scan lock file lives under. It is a variable solely so the
+// cross-process helper tests can point their child processes at a
+// temporary base through the helper environment — the OS lookups
+// (UserConfigDir, the Known Folder FOLDERID_LocalAppData) cannot be
+// redirected per process. Production code always runs the platform
+// default.
+var scanLockBase = userAppDataBase
+
 // scanLockPath resolves the scan occupancy's lock file under the current
-// user's home directory. It anchors on the home directory rather than
-// the application name or the data root so that every build of youkai of
-// the same user contends on the same file.
+// user's application-data base; see the scanLockDirName constants for
+// why that anchor is independent of the application name and the data
+// root, and shared by every build of one user.
 func scanLockPath() (string, error) {
-	home, err := os.UserHomeDir()
+	base, err := scanLockBase()
 	if err != nil {
-		return "", fmt.Errorf("resolve user home: %w", err)
+		return "", fmt.Errorf("resolve per-user application data base: %w", err)
 	}
-	return filepath.Join(home, scanLockDirName, scanLockFileName), nil
+	return filepath.Join(base, scanLockDirName, scanLockFileName), nil
 }

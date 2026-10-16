@@ -41,9 +41,9 @@ cgo 说明：`internal/recognition` 依赖 cgo 编译 onnxruntime_go 的 C 桥�
 | 占用域 | 锁文件位置 | 说明 |
 | --- | --- | --- |
 | 数据根占用 | 数据根内的 `youkai.lock`（正式版 `%LOCALAPPDATA%\Youkai\`、开发版对应 `Youkai Dev` 根；macOS 为 `~/Library/Application Support/<应用名>/`） | 入口在 `mygo.App.Run` 之前取得、进程退出释放；同一实际目录的路径别名（符号链接、`..`、大小写变体）天然落入同一占用域。第二实例取得失败即记录日志退出。 |
-| 扫描占用 | `~/.youkai/scan.lock`（两平台同规则，锚定用户主目录） | 按用户固定、与应用名和数据根无关，因此开发版与正式版在同一 OS 用户下共享同一把锁；由数据根占用持有者按需取得（先数据根后扫描），扫描流程接入在应用服务里程碑。 |
+| 扫描占用 | `~/Library/Application Support/com.lotwt.youkai/scan.lock`（macOS）；`%LOCALAPPDATA%\com.lotwt.youkai\scan.lock`（Windows） | 按用户固定，目录名用基础应用标识 `com.lotwt.youkai`（不带开发版后缀、不是数据根的显示名），因此开发版与正式版在同一 OS 用户下共享同一把锁；由数据根占用持有者按需取得（先数据根后扫描），扫描流程接入在应用服务里程碑。 |
 
-开发者需知：锁文件为空文件，内容无意义，互斥完全来自 OS 原语；**不要删除运行中实例的锁文件**（删除后新进程会锁到新文件，占用域被拆散）。`internal/app` 的跨进程测试把 `HOME`/`USERPROFILE` 指向临时目录再取扫描锁，避免触碰真实用户目录或与正在运行的应用互相干扰。
+开发者需知：锁文件为空文件，内容无意义，互斥完全来自 OS 原语；**不要删除运行中实例的锁文件**（删除后新进程会锁到新文件，占用域被拆散）。`internal/app` 的跨进程测试把扫描锁基目录注入为临时目录（Windows 的 Known Folder 无法按进程重定向，因此经测试注入而非环境变量），避免触碰真实用户目录或与正在运行的应用互相干扰。
 
 ## GitHub Actions 检查
 

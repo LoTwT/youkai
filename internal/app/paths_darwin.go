@@ -14,7 +14,7 @@ import (
 // defaults the same way. Logs have no dedicated interface, so they join
 // the standard ~/Library/Logs base, as the framework's default does.
 func currentOSRoots(appName string) (Paths, error) {
-	appSupport, err := os.UserConfigDir()
+	appSupport, err := userAppDataBase()
 	if err != nil {
 		return Paths{}, fmt.Errorf("app: resolve paths: resolve application support: %w", err)
 	}
@@ -27,4 +27,13 @@ func currentOSRoots(appName string) (Paths, error) {
 		return Paths{}, fmt.Errorf("app: resolve paths: resolve home: %w", err)
 	}
 	return appleRoots(appSupport, caches, filepath.Join(home, "Library", "Logs"), appName), nil
+}
+
+// userAppDataBase returns the per-user base directory for application
+// data, ~/Library/Application Support, resolved through the same
+// interface as the app roots above. State that must stay independent of
+// the application name — the scan lock of the occupancy locks — anchors
+// in a fixed subdirectory of this base instead of under an app name.
+func userAppDataBase() (string, error) {
+	return os.UserConfigDir()
 }

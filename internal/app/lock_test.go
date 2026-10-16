@@ -24,8 +24,17 @@ import (
 // lockHelperEnv switches the re-executed test binary into helper mode.
 const lockHelperEnv = "YOUKAI_LOCK_TEST_HELPER"
 
+// lockHelperScanBaseEnv points a helper at a temporary scan-lock base
+// directory. The base is injected rather than redirected through the
+// environment the OS lookups read: the Known Folder lookup of Windows
+// cannot be redirected per process at all.
+const lockHelperScanBaseEnv = "YOUKAI_LOCK_TEST_SCAN_BASE"
+
 func TestMain(m *testing.M) {
 	if os.Getenv(lockHelperEnv) == "1" {
+		if base := os.Getenv(lockHelperScanBaseEnv); base != "" {
+			scanLockBase = func() (string, error) { return base, nil }
+		}
 		os.Exit(runLockHelper())
 	}
 	os.Exit(m.Run())
@@ -153,14 +162,22 @@ func (s *syncBuffer) String() string {
 	return s.b.String()
 }
 
-func startLockHelper(t *testing.T) *lockHelper {
+// startLockHelper starts one helper process. A non-empty scanBase makes
+// the helper resolve the scan lock under that directory (see
+// lockHelperScanBaseEnv); data-root locks always use the directory given
+// per command.
+func startLockHelper(t *testing.T, scanBase string) *lockHelper {
 	t.Helper()
 	exe, err := os.Executable()
 	if err != nil {
 		t.Fatalf("locate test binary: %v", err)
 	}
 	cmd := exec.Command(exe)
-	cmd.Env = append(os.Environ(), lockHelperEnv+"=1")
+	env := []string{lockHelperEnv + "=1"}
+	if scanBase != "" {
+		env = append(env, lockHelperScanBaseEnv+"="+scanBase)
+	}
+	cmd.Env = append(os.Environ(), env...)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		t.Fatalf("helper stdin pipe: %v", err)
@@ -239,11 +256,11 @@ func (h *lockHelper) kill() {
 func TestDataRootLockExclusiveAcrossProcesses(t *testing.T) {
 	dataDir := filepath.Join(t.TempDir(), "data")
 
-	holder := startLockHelper(t)
+	holder := startLockHelper(t, "")
 	holder.send("data %s", dataDir)
 	holder.expect("acquired data")
 
-	rival := startLockHelper(t)
+	rival := startLockHelper(t, "")
 	rival.send("data %s", dataDir)
 	rival.expect("held data")
 
@@ -314,11 +331,11 @@ func TestDataRootLockPathAliasesConflict(t *testing.T) {
 	base := t.TempDir()
 	dataDir := filepath.Join(base, "data")
 
-	holder := startLockHelper(t)
+	holder := startLockHelper(t, "")
 	holder.send("data %s", dataDir)
 	holder.expect("acquired data")
 
-	rival := startLockHelper(t)
+	rival := startLockHelper(t, "")
 	for _, alias := range dataDirAliases(t, base, dataDir) {
 		rival.send("data %s", alias)
 		rival.expect("held data")
@@ -331,12 +348,12 @@ func TestDataRootLockPathAliasesConflict(t *testing.T) {
 func TestDataRootLockReleasedWhenHolderKilled(t *testing.T) {
 	dataDir := filepath.Join(t.TempDir(), "data")
 
-	crashed := startLockHelper(t)
+	crashed := startLockHelper(t, "")
 	crashed.send("data %s", dataDir)
 	crashed.expect("acquired data")
 	crashed.kill()
 
-	successor := startLockHelper(t)
+	successor := startLockHelper(t, "")
 	successor.send("data %s", dataDir)
 	successor.expect("acquired data")
 }
@@ -346,18 +363,20 @@ func TestDataRootLockReleasedWhenHolderKilled(t *testing.T) {
 // hold their own data-root occupancy, but only one of them can hold the
 // per-user scan occupancy — and releasing it hands the slot over.
 func TestScanLockExclusiveAcrossDataRoots(t *testing.T) {
-	// The scan lock file lives under the user's home directory; point the
-	// home at a temporary directory so the test never touches the real
-	// one nor collides with a concurrently running youkai.
-	setTempHome(t)
+	// The scan lock lives under the per-user application-data base of the
+	// OS; point it at a temporary directory — in this process directly,
+	// in the helpers through their environment — so the test never
+	// touches the real one nor collides with a running youkai.
+	scanBase := t.TempDir()
+	setScanLockBase(t, scanBase)
 
 	firstDir := filepath.Join(t.TempDir(), "first")
 	secondDir := filepath.Join(t.TempDir(), "second")
 
-	first := startLockHelper(t)
+	first := startLockHelper(t, scanBase)
 	first.send("data %s", firstDir)
 	first.expect("acquired data")
-	second := startLockHelper(t)
+	second := startLockHelper(t, scanBase)
 	second.send("data %s", secondDir)
 	second.expect("acquired data")
 
@@ -385,16 +404,17 @@ func TestScanLockExclusiveAcrossDataRoots(t *testing.T) {
 }
 
 // TestScanLockPathIsPerUserAndBuildIndependent pins the scan lock's
-// location contract: one path per user, derived from neither the
-// application name nor the data root, so every build of youkai contends
-// on the same file.
+// location contract: a fixed base-identifier directory under the
+// per-user application-data base — derived from neither the application
+// name nor the data root — so every build of youkai contends on the same
+// file.
 func TestScanLockPathIsPerUserAndBuildIndependent(t *testing.T) {
-	home := setTempHome(t)
+	base := setScanLockBase(t, t.TempDir())
 	got, err := scanLockPath()
 	if err != nil {
 		t.Fatalf("scanLockPath: %v", err)
 	}
-	if want := filepath.Join(home, scanLockDirName, scanLockFileName); got != want {
+	if want := filepath.Join(base, "com.lotwt.youkai", "scan.lock"); got != want {
 		t.Fatalf("scan lock path = %q, want %q", got, want)
 	}
 }
@@ -426,7 +446,7 @@ func TestDataRootLockSecondAcquireRefusedInProcess(t *testing.T) {
 // TestScanLockSecondAcquireRefusedInProcess is the in-process
 // counterpart for the scan occupancy.
 func TestScanLockSecondAcquireRefusedInProcess(t *testing.T) {
-	setTempHome(t)
+	setScanLockBase(t, t.TempDir())
 	data, err := AcquireDataRootLock(filepath.Join(t.TempDir(), "data"))
 	if err != nil {
 		t.Fatalf("acquire data root: %v", err)
@@ -454,7 +474,7 @@ func TestScanLockSecondAcquireRefusedInProcess(t *testing.T) {
 // the same holder can no longer ask for the scan occupancy — the refusal
 // is a usage error, not a lock conflict.
 func TestDataRootLockCloseGatesScanLock(t *testing.T) {
-	setTempHome(t)
+	setScanLockBase(t, t.TempDir())
 	data, err := AcquireDataRootLock(filepath.Join(t.TempDir(), "data"))
 	if err != nil {
 		t.Fatalf("acquire data root: %v", err)
@@ -487,13 +507,13 @@ func TestAcquireDataRootLockRejectsRelativePath(t *testing.T) {
 	}
 }
 
-// setTempHome points the OS home directory at a fresh temporary
-// directory for this test and its helper children (they inherit the
-// environment), returning that home.
-func setTempHome(t *testing.T) string {
+// setScanLockBase points the scan-lock base resolution at dir for this
+// test process and returns dir. Helper children receive the same base
+// through their environment instead — see lockHelperScanBaseEnv.
+func setScanLockBase(t *testing.T, dir string) string {
 	t.Helper()
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home)
-	return home
+	previous := scanLockBase
+	scanLockBase = func() (string, error) { return dir, nil }
+	t.Cleanup(func() { scanLockBase = previous })
+	return dir
 }
