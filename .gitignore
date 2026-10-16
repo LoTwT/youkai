@@ -7,6 +7,13 @@ mygo_windows_*.syso
 /youkai
 /youkai.exe
 
+# fetchdeps downloads (see the fetchdeps section in docs/development.md);
+# third-party resources never enter Git
+/resources/windows-amd64/onnxruntime/
+/resources/darwin-arm64/onnxruntime/
+/resources/models/
+/.fetchdeps-cache/
+
 # OS
 .DS_Store
 
