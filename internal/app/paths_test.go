@@ -11,10 +11,17 @@ import (
 // values join with filepath like the composers do, which is exact on each
 // OS and still checks names and nesting everywhere.
 
-// inside reports whether dir is a strict subdirectory of base.
+// inside reports whether dir is a strict subdirectory of base. The
+// parent check must not assume a separator: filepath.Rel answers with
+// the host's separator, "../" on Unix but "..\" on Windows, so it is
+// built from filepath.Separator to stay correct on both.
 func inside(base, dir string) bool {
 	rel, err := filepath.Rel(base, dir)
-	return err == nil && rel != "." && rel != ".." && !strings.HasPrefix(rel, "../")
+	if err != nil {
+		return false
+	}
+	return rel != "." && rel != ".." &&
+		!strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 func TestWindowsRoots(t *testing.T) {
