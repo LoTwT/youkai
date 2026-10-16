@@ -2,12 +2,15 @@
 # and go test on both target platforms, plus the MyGo UI vet on macOS. No
 # installers, no long-running tests, no OCR resource downloads.
 #
-# cgo is not used yet. When the OCR bindings (cgo) are introduced, macOS jobs
-# will need the runner's Xcode toolchain (clang) and Windows jobs MinGW-w64
-# gcc (Go's cgo does not support MSVC; the MSVC Runtime is only the source of
-# the ORT runtime DLLs, see T3). Whether the mingw bundled with the Windows
-# runner works or must be installed needs to be verified then, and the
-# toolchain setup added here.
+# cgo is used by the OCR bindings (internal/recognition). macOS jobs use the
+# runner's Xcode toolchain (clang); Windows jobs use the MinGW gcc bundled
+# with the runner image (gcc is part of the runner-images tool list, e.g.
+# 15.2.0 on windows-latest / Windows Server 2025) with the default
+# CGO_ENABLED=1, so no toolchain setup is needed here so far. This follows
+# from the runner-images documentation and gets confirmed by the first CI run
+# on a PR containing the bindings; if a runner image drops gcc, add a MinGW
+# setup step here. Compiling here does not prove the native library loads on
+# a real Windows machine; that remains a Windows test item.
 name: CI
 
 on:
