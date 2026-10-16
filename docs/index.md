@@ -13,6 +13,7 @@
 - [扫描结果 JSON v1](specs/scan-json-format.md)：自有文件契约，附[合成示例](examples/scan-usable-v1.json)；尚未实现。
 - [T7：构建打包与交付验收](specs/t7-public-release-acceptance.md)：首版交付门槛、无付费证书的打包路线、最低系统候选。
 - [扫描器背景与参考实现](scanner-handoff.md)：项目起因、参考扫描器研究结论和与 fairy 的边界。
+- [开发指南](development.md)：环境要求与当前实际可用的构建、测试、MyGo 开发命令。
 
 ## 目录约定
 
