@@ -197,15 +197,31 @@ func writeAll(file File, data []byte) error {
 	return nil
 }
 
-// discard aborts a write that already opened its target: the handle is
-// closed and the partial file removed, so a failed attempt leaves nothing
-// that a later save could mistake for a complete one. Errors here are
-// dropped on purpose — the failure that caused the abort is the one worth
-// reporting, and a leftover partial (only possible if the removal itself
-// fails) can never pass verification.
-func (s *Store) discard(file File, path string) {
+// discard aborts a write in flight: the handle is closed and the partial
+// file removed. The error that caused the abort is what the caller
+// reports; removePartial enriches it when the file survives. A survivor
+// of a write or sync failure is truncated, so it can never pass
+// verification — the next save takes a higher revision and retention
+// deletes it once a valid generation below exists.
+func (s *Store) discard(file File, path string, cause error) error {
 	_ = file.Close()
-	_ = s.fs.Remove(path)
+	return s.removePartial(path, cause)
+}
+
+// removePartial deletes the target of a failed save attempt. The cause is
+// returned unchanged when the deletion succeeds or the file is already
+// gone. When the deletion fails — on Windows this happens while another
+// handle still holds the file open — the returned error keeps the cause
+// and names the survivor, so a leftover file is diagnosable instead of
+// silently tolerated; the save has failed either way and the caller must
+// not treat it as success. A survivor of a close failure is complete
+// rather than truncated: a load may verify it, which preserves the work,
+// and the next save simply takes a higher revision.
+func (s *Store) removePartial(path string, cause error) error {
+	if rmErr := s.fs.Remove(path); rmErr != nil && !errors.Is(rmErr, fs.ErrNotExist) {
+		return fmt.Errorf("%w; %q is left behind: remove: %w", cause, path, rmErr)
+	}
+	return cause
 }
 
 // cloneCheckpoint deep-copies the slices a revision edit or a memo update

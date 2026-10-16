@@ -31,6 +31,7 @@ const (
 	faultWrite
 	faultSync
 	faultClose
+	faultRemove
 )
 
 type faultRule struct {
@@ -75,7 +76,12 @@ func (f *faultFS) Stat(path string) (fs.FileInfo, error) { return f.inner.Stat(p
 
 func (f *faultFS) ReadDir(dir string) ([]fs.DirEntry, error) { return f.inner.ReadDir(dir) }
 
-func (f *faultFS) Remove(path string) error { return f.inner.Remove(path) }
+func (f *faultFS) Remove(path string) error {
+	if r := f.rule(faultRemove, path); r != nil {
+		return r.err
+	}
+	return f.inner.Remove(path)
+}
 
 func (f *faultFS) OpenFile(path string, flag int, perm fs.FileMode) (File, error) {
 	if flag&os.O_CREATE != 0 {
@@ -131,6 +137,13 @@ func (f *faultFile) Sync() error {
 
 func (f *faultFile) Close() error {
 	if r := f.fs.rule(faultClose, f.path); r != nil {
+		// A real close failure still releases the handle — os.File
+		// closes the descriptor and reports the flush result — so the
+		// injected failure must release it too. Keeping the handle
+		// open would make the store's cleanup Remove fail on Windows
+		// (open files cannot be deleted), which no longer resembles
+		// the failure being simulated.
+		_ = f.inner.Close()
 		return r.err
 	}
 	return f.inner.Close()
@@ -143,6 +156,7 @@ var (
 	errDiskFull    = errors.New("fault: no space left on device")
 	errFaultSync   = errors.New("fault: sync failed")
 	errFaultClose  = errors.New("fault: close failed")
+	errFaultRemove = errors.New("fault: remove refused")
 )
 
 func newFaultStore(t *testing.T) (*Store, *faultFS, string) {
@@ -337,5 +351,125 @@ func TestShortWriteLeavesNothingBehind(t *testing.T) {
 	}
 	if len(data) <= 40 {
 		t.Fatalf("test setup is meaningless: document is %d bytes, budget 40", len(data))
+	}
+}
+
+// A close failure whose cleanup removal also fails must still be
+// reported as a failure — never as success — and must say that a file
+// survived. The survivor is complete (write and sync finished before the
+// close error), so a load can verify it, which preserves the work; the
+// retry then takes the next free revision and retention promotes the
+// survivor to the previous valid generation, since the load verified it.
+func TestCloseFailureWithUnremovableGeneration(t *testing.T) {
+	st, ffs, root := newFaultStore(t)
+	id := newRecord(t, st)
+	saveCheckpoint(t, st, id, Checkpoint{Session: testShell()})
+
+	ffs.inject(faultClose, "2.json", errFaultClose)
+	ffs.inject(faultRemove, "2.json", errFaultRemove)
+	_, err := st.SaveCheckpoint(id, Checkpoint{Session: testShell()})
+	if !errors.Is(err, errFaultClose) {
+		t.Fatalf("SaveCheckpoint = %v, want the close failure", err)
+	}
+	if !errors.Is(err, errFaultRemove) || !strings.Contains(err.Error(), "left behind") {
+		t.Errorf("error = %v, want the leftover file reported alongside the cause", err)
+	}
+	// The survivor is on disk and never counted as saved.
+	if _, statErr := os.Stat(filepath.Join(root, "sessions", id, "checkpoints", "2.json")); statErr != nil {
+		t.Fatalf("the unremoved generation is gone: %v", statErr)
+	}
+
+	// The survivor is complete, so a load verifies it — the bytes are
+	// real, and dropping them to honour the failed close would lose
+	// work. It becomes the memo base and a known-valid generation.
+	ffs.clear()
+	if rec := mustLoad(t, st, id); rec.Checkpoint.SavedRevision != 2 {
+		t.Errorf("loaded revision = %d, want the complete survivor 2", rec.Checkpoint.SavedRevision)
+	}
+
+	// The retry takes the next free revision (the survivor keeps 2
+	// busy), and retention keeps the verified survivor as the previous
+	// valid generation instead of the older base.
+	rev, err := st.SaveCheckpoint(id, Checkpoint{Session: testShell()})
+	if err != nil {
+		t.Fatalf("retry SaveCheckpoint: %v", err)
+	}
+	if rev != 3 {
+		t.Errorf("retry revision = %d, want 3", rev)
+	}
+	files := generationFiles(t, root, id)
+	if len(files) != 2 || files[0] != "2.json" || files[1] != "3.json" {
+		t.Errorf("generations after retry = %v, want [2.json 3.json]", files)
+	}
+	if rec := mustLoad(t, st, id); rec.Checkpoint.SavedRevision != 3 {
+		t.Errorf("loaded revision = %d, want 3", rec.Checkpoint.SavedRevision)
+	}
+}
+
+// A write failure whose cleanup removal also fails leaves a truncated
+// generation behind. It must never load, the retry must skip past it to
+// the next free revision, and retention must delete it once the new
+// valid generation establishes a fallback below it.
+func TestPartialGenerationWithFailedRemovalFallsBack(t *testing.T) {
+	st, ffs, root := newFaultStore(t)
+	id := newRecord(t, st)
+	base := Checkpoint{Session: testShell()}
+	base.Session.Coverage.Status = CoverageUnknown
+	saveCheckpoint(t, st, id, base)
+
+	ffs.injectShortWrite("2.json", 40, errFaultWrite)
+	ffs.inject(faultRemove, "2.json", errFaultRemove)
+	_, err := st.SaveCheckpoint(id, Checkpoint{Session: testShell()})
+	if !errors.Is(err, errFaultWrite) || !errors.Is(err, errFaultRemove) {
+		t.Fatalf("SaveCheckpoint = %v, want the write and removal failures", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(root, "sessions", id, "checkpoints", "2.json")); statErr != nil {
+		t.Fatalf("the unremoved partial is gone: %v", statErr)
+	}
+	// The truncated survivor is invalid: the load falls back to the
+	// base generation and never hands out the partial content.
+	if rec := mustLoad(t, st, id); rec.Checkpoint.SavedRevision != 1 {
+		t.Errorf("loaded revision = %d, want fallback to 1 past the partial", rec.Checkpoint.SavedRevision)
+	}
+
+	ffs.clear()
+	rev, err := st.SaveCheckpoint(id, Checkpoint{Session: testShell()})
+	if err != nil {
+		t.Fatalf("retry SaveCheckpoint: %v", err)
+	}
+	if rev != 3 {
+		t.Errorf("retry revision = %d, want 3 (the partial keeps 2 busy)", rev)
+	}
+	files := generationFiles(t, root, id)
+	if len(files) != 2 || files[0] != "1.json" || files[1] != "3.json" {
+		t.Errorf("generations after retry = %v, want [1.json 3.json]", files)
+	}
+}
+
+// An evidence write whose close fails and whose cleanup removal also
+// fails reports both and leaves the file. The write-once rule then keeps
+// the id occupied: a retry with the same id is refused instead of
+// truncating the survivor, and a fresh id works.
+func TestEvidenceCloseFailureWithUnremovableFile(t *testing.T) {
+	st, ffs, root := newFaultStore(t)
+	id := newRecord(t, st)
+
+	ffs.inject(faultClose, "shot-1.png", errFaultClose)
+	ffs.inject(faultRemove, "shot-1.png", errFaultRemove)
+	if _, err := st.WriteEvidence(id, "shot-1", []byte("image")); !errors.Is(err, errFaultClose) {
+		t.Fatalf("WriteEvidence = %v, want the close failure", err)
+	} else if !errors.Is(err, errFaultRemove) || !strings.Contains(err.Error(), "left behind") {
+		t.Errorf("error = %v, want the leftover file reported alongside the cause", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(root, "sessions", id, "evidence", "shot-1.png")); statErr != nil {
+		t.Fatalf("the unremoved evidence file is gone: %v", statErr)
+	}
+	// The survivor keeps its id: the retry is refused before any write
+	// (the exclusive create sees the file), never truncating it.
+	if _, err := st.WriteEvidence(id, "shot-1", []byte("image")); !errors.Is(err, ErrEvidenceExists) {
+		t.Errorf("retry with the same id = %v, want ErrEvidenceExists", err)
+	}
+	if _, err := st.WriteEvidence(id, "shot-2", []byte("image")); err != nil {
+		t.Errorf("retry with a fresh id: %v", err)
 	}
 }

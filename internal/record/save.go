@@ -134,15 +134,18 @@ func (s *Store) writeGeneration(recordID string, state *recordState, doc *Checkp
 		return 0, fmt.Errorf("record: save checkpoint of %q: create generation %d: %w", recordID, next, err)
 	}
 	if err := writeAll(file, data); err != nil {
-		s.discard(file, path)
+		err = s.discard(file, path, err)
 		return 0, fmt.Errorf("record: save checkpoint of %q: write generation %d: %w", recordID, next, err)
 	}
 	if err := file.Sync(); err != nil {
-		s.discard(file, path)
+		err = s.discard(file, path, err)
 		return 0, fmt.Errorf("record: save checkpoint of %q: sync generation %d: %w", recordID, next, err)
 	}
 	if err := file.Close(); err != nil {
-		_ = s.fs.Remove(path)
+		// os.File.Close releases the handle even when it errors, so
+		// removePartial can delete the file; if that also fails, the
+		// survivor is named in the returned error.
+		err = s.removePartial(path, err)
 		return 0, fmt.Errorf("record: save checkpoint of %q: close generation %d: %w", recordID, next, err)
 	}
 	return next, nil

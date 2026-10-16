@@ -55,15 +55,18 @@ func (s *Store) WriteEvidence(recordID, evidenceID string, image []byte) (Eviden
 		return EvidenceFile{}, fmt.Errorf("record: write evidence %q of %q: %w", evidenceID, recordID, err)
 	}
 	if err := writeAll(file, image); err != nil {
-		s.discard(file, path)
+		err = s.discard(file, path, err)
 		return EvidenceFile{}, fmt.Errorf("record: write evidence %q of %q: %w", evidenceID, recordID, err)
 	}
 	if err := file.Sync(); err != nil {
-		s.discard(file, path)
+		err = s.discard(file, path, err)
 		return EvidenceFile{}, fmt.Errorf("record: write evidence %q of %q: sync: %w", evidenceID, recordID, err)
 	}
 	if err := file.Close(); err != nil {
-		_ = s.fs.Remove(path)
+		// os.File.Close releases the handle even when it errors, so
+		// removePartial can delete the file; if that also fails, the
+		// survivor is named in the returned error.
+		err = s.removePartial(path, err)
 		return EvidenceFile{}, fmt.Errorf("record: write evidence %q of %q: close: %w", evidenceID, recordID, err)
 	}
 	sum := sha256.Sum256(image)
@@ -104,15 +107,15 @@ func (s *Store) WriteResource(recordID, resourceID string, content []byte) error
 		return fmt.Errorf("record: write resource %q of %q: %w", resourceID, recordID, err)
 	}
 	if err := writeAll(file, content); err != nil {
-		s.discard(file, path)
+		err = s.discard(file, path, err)
 		return fmt.Errorf("record: write resource %q of %q: %w", resourceID, recordID, err)
 	}
 	if err := file.Sync(); err != nil {
-		s.discard(file, path)
+		err = s.discard(file, path, err)
 		return fmt.Errorf("record: write resource %q of %q: sync: %w", resourceID, recordID, err)
 	}
 	if err := file.Close(); err != nil {
-		_ = s.fs.Remove(path)
+		err = s.removePartial(path, err)
 		return fmt.Errorf("record: write resource %q of %q: close: %w", resourceID, recordID, err)
 	}
 	return nil
