@@ -1,0 +1,5 @@
+# Keep text files on LF line endings in the repository and on checkout on
+# every platform, so `gofmt -l .` does not report phantom formatting diffs on
+# Windows runners, where a plain checkout would convert text files to CRLF.
+# Binary files are excluded automatically by `text=auto`.
+* text=auto eol=lf

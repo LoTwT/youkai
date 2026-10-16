@@ -1,0 +1,55 @@
+# Lightweight checks for every pull request and push to main: gofmt, go vet,
+# and go test on both target platforms, plus the MyGo UI vet on macOS. No
+# installers, no long-running tests, no OCR resource downloads.
+#
+# cgo is not used yet. When the OCR bindings (cgo) are introduced, macOS jobs
+# will need the runner's Xcode toolchain (clang) and Windows jobs the Visual
+# Studio (MSVC) toolchain; the setup will be added here at that point.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Check (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - macos-latest # Apple Silicon (arm64)
+          - windows-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Check formatting
+        shell: bash
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "gofmt found unformatted files:"
+            echo "$unformatted"
+            exit 1
+          fi
+      - name: Vet
+        run: go vet ./...
+      - name: Test
+        run: go test ./...
+      - name: Vet MyGo UI (macOS only)
+        if: runner.os == 'macOS'
+        run: go tool mygo vet .
