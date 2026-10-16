@@ -2,17 +2,17 @@
 
 ## 文档导航
 
-- [MyGo + Go 扫描器架构评估](specs/scanner-architecture.md)：主控方案草案，承接已确认的原生 UI、双平台首发、简体中文及 S 级盘完整槽位/等级/套装/装备范围；集中维护应用/会话契约、隐藏与恢复、字段处理与显示策略、双平台成本与验收和工作分派；尚未批准应用实施。
-- [扫描器首版实施清单](specs/scanner-implementation-plan.md)：将 T1 至 T7 串成正式工程与资源、三客户端单件流程、整仓及日常使用、交付验收四个内部里程碑；记录文件落点、依赖、通过条件、验证命令和失败处理，全部工程工作尚未开始。
-- [T1：MyGo 界面与构建分发](specs/t1-mygo-ui-distribution.md)：记录已确认的原生 UI、首版应用界面与说明仅简体中文、双平台同时首发、结果校对、关窗、分发及网页唤起桌面应用；付费签名与商店上架不作为首版前提，具体支持配置和构建实测继续收敛。
-- [T2：平台采集与输入](specs/t2-platform-capture-input.md)：资料评估与范围讨论已完成，记录两平台、三种已确认客户端，以及 Windows 两种尺寸候选中选定首组、Mac 首版单组尺寸和后续扩展内置尺寸的策略；保留设备、权限、帧时序和原生桥接条件，工程实测尚未进行。
-- [T3：OCR 运行库、模型与样本](specs/t3-ocr-runtime-model-samples.md)：已固定首轮绑定、运行库及模型候选，记录制品摘要、原生依赖、模型元数据与预处理，以及公开评测、三组样本和准确性边界；仅完成静态核查，尚未安装依赖或运行 OCR。
-- [T4：扫描会话与结果契约](specs/scanner-architecture.md#5-扫描会话与结果语义)：直接在公共架构中维护草案，涵盖进程全程的数据根独占、跨进程扫描占用、等待用户切回游戏、停止收尾、结果记账、保存恢复和校对导出；工程验证未运行。
-- [T5：绝区零仓库遍历与详情归属](specs/t5-zzz-inventory-traversal.md)：用户已认可设计与手动准备起点，记录页面预检、相同物品的详情证据、滚动衔接和完整性验收；三种客户端尚未实测。
-- [T6：用户操作、结果校对与导出](specs/t6-review-export-workflow.md)：主控交互草案，串联准备、扫描、校对、重开与两种导出；用户确认本机保留历史及截图，提供手动清理与[公共目录设计](specs/scanner-architecture.md#本地目录保留与清理)。自动接受记录可直接导出，问题盘校对确认后纳入；外部接入按需评估，尚未进行 UI 或文件往返验收。
-- [扫描结果 JSON v1](specs/scan-json-format.md)：自有文件契约设计，定义全部主词条编码、精确数值与单位、装备字段策略、当前校验与历史确认、遍历账目、档案证据与修订、可用记录筛选及计数；附[合成 JSON 示例](examples/scan-usable-v1.json)，尚未实现导入导出。
-- [T7：构建打包与交付验收](specs/t7-public-release-acceptance.md)：正常构建打包，不走官方分发渠道、不以付费签名或公证为前提；按用户委托维护最低系统候选、依赖与制品依据和离线安装缺口，支持范围仍须实测。保留完整功能验收，设备与客户端由用户在测试前准备。
-- [通用游戏扫描器分析 Handoff](scanner-handoff.md)：从 fairy 讨论接手 youkai 扫描器分析时阅读，包含用户目标、源码与 MyGo 调研、待评估架构、未确认事项和验证边界；尚未批准实施。
+- [MyGo + Go 扫描器架构](specs/scanner-architecture.md)：公共架构与首版范围的权威来源，包括模块边界、应用与会话契约、隐藏恢复退出、结果与存储、字段校验范围、验收与成本。
+- [扫描器首版实施清单](specs/scanner-implementation-plan.md)：四个内部里程碑、代码落点、Mac 开发与 Windows 测试方式、需尽早取得的证据和验证命令；尚未开始实施。
+- [T1：MyGo 界面与构建分发](specs/t1-mygo-ui-distribution.md)：已确认的产品选择、MyGo v0.5.5 选型、资源与安装、浏览器唤起依据和界面验收。
+- [T2：平台采集与输入](specs/t2-platform-capture-input.md)：三种客户端范围、Windows GDI/SendInput 与 macOS ScreenCaptureKit/Quartz 方案、坐标单位、显示配置候选、帧时序与平台故障。
+- [T3：OCR 运行库、模型与样本](specs/t3-ocr-runtime-model-samples.md)：固定的绑定、运行库与模型组合及制品核查、预处理与解码基准、三组样本与识别质量门槛。
+- T4：扫描会话与结果契约：直接在[架构第 5 节](specs/scanner-architecture.md#5-扫描会话与结果语义)维护。
+- [T5：绝区零仓库遍历与详情归属](specs/t5-zzz-inventory-traversal.md)：页面预检、选中与详情归属、滚动衔接、末尾判断和完整性验收。
+- [T6：用户操作、结果校对与导出](specs/t6-review-export-workflow.md)：准备到导出的操作流程、逐件校对、两种导出用途、历史与存储管理。
+- [扫描结果 JSON v1](specs/scan-json-format.md)：自有文件契约，附[合成示例](examples/scan-usable-v1.json)；尚未实现。
+- [T7：构建打包与交付验收](specs/t7-public-release-acceptance.md)：首版交付门槛、无付费证书的打包路线、最低系统候选。
+- [扫描器背景与参考实现](scanner-handoff.md)：项目起因、参考扫描器研究结论和与 fairy 的边界。
 
 ## 目录约定
 
