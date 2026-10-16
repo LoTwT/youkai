@@ -23,7 +23,7 @@
 | `gofmt -l .` | 格式检查，无输出即通过。 |
 | `go vet ./...` | Go 静态检查。 |
 | `go build ./...` | 编译全部包。 |
-| `go test ./...` | 运行测试（当前尚无测试包）。 |
+| `go test ./...` | 运行测试。 |
 | `go tool mygo vet .` | 先运行 `go vet ./...`，再检查原生 UI 生命周期问题；参数是应用目录（项目根），不能写成 `./...`。 |
 | `go tool mygo dev` | 开发运行，编辑 Go 代码、配置或资源后自动重建重启；开发应用名为 `Youkai Dev`（标识 `com.lotwt.youkai.dev`，位于 `.mygo/dev`），与正式安装的数据和权限隔离。退出应用或 Ctrl+C 结束。 |
 | `go tool mygo build` | 打包本机平台制品到 `build/<os>-<arch>/`：macOS 生成 ad-hoc 签名的 `Youkai.app` 与 DMG。 |
