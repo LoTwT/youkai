@@ -29,6 +29,21 @@ func main() {
 	log.Printf("youkai: data=%q cache=%q logs=%q resources=%q",
 		paths.Data, paths.Cache, paths.Logs, paths.Resources)
 
+	// The data-root occupancy must be held before Run and everything
+	// after it: the framework reads from PathUserData as Run starts, and
+	// later milestones read settings, checkpoints and history under the
+	// same root. A second youkai process on the same data root — under
+	// any path alias — fails here and exits; MyGo's own single-instance
+	// lock does not cover this occupancy, and the friendly failure UI and
+	// the hand-off to the running instance come with the application
+	// service of a later milestone.
+	dataLock, err := app.AcquireDataRootLock(paths.Data)
+	if err != nil {
+		log.Fatalf("youkai: %v", err)
+	}
+	defer dataLock.Close()
+	log.Printf("youkai: data-root lock acquired on %q", paths.Data)
+
 	mygo.App.WhenReady(func() {
 		mygo.NewWindow(mygo.WindowOptions{
 			Title:   "Youkai",
