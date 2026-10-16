@@ -6,6 +6,7 @@ tool github.com/egoist/mygo/cmd/mygo
 
 require (
 	github.com/egoist/mygo v0.5.5
+	github.com/yalue/onnxruntime_go v1.36.0
 	golang.org/x/sys v0.49.0
 )
 
