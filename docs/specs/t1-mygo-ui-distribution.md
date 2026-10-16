@@ -36,7 +36,7 @@ MyGo 的 [Menus and the tray](https://mygo.egoist.dev/docs/menus#tray-icons) 提
 
 选择依据：[v0.5.5 发布记录](https://github.com/egoist/mygo/releases/tag/v0.5.5)包含分栏布局和列表点击修复，并补齐了 cgo 文件的原生 UI 检查（[vet_ui.go](https://github.com/egoist/mygo/blob/4d8673cd2658a2c6e86b26c44751e57bf8174f91/cmd/mygo/vet_ui.go)）。2026-10-16 已在 v0.5.5 源码上复核本项目引用的单实例、cgo 默认值、资源合并、NSIS、深链接注册、文件对话框和 `App.Exit` 行为，与早先 v0.5.1 的阅读结论一致。
 
-本机 Go 已于 2026-10-15 经用户授权升级至 1.27.2（macOS arm64，SHA-256 与官网一致，签名与公证验证通过）。MyGo、OCR 依赖尚未安装；Windows 工具链尚未准备。
+本机 Go 已于 2026-10-15 经用户授权升级至 1.27.2（macOS arm64，SHA-256 与官网一致，签名与公证验证通过）。MyGo v0.5.5 已于 2026-10-16 固定为项目工具依赖（随工程初始化落地）；OCR 依赖尚未安装；mingw-w64（`x86_64-w64-mingw32-gcc`）已安装。
 
 [proc.go](https://github.com/egoist/mygo/blob/4d8673cd2658a2c6e86b26c44751e57bf8174f91/cmd/mygo/proc.go) 在未指定时设置 `CGO_ENABLED=0`。OCR 与 Mac 平台桥接要求显式启用 cgo 并使用目标平台 C 工具链。[Go 1.27](https://go.dev/doc/go1.27#ports) 已将 macOS 下限提高到 13，不能沿用 MyGo 官网的 macOS 12+；系统候选由 [T7](t7-public-release-acceptance.md#最低系统候选与证据)维护，OCR 制品与体积见 [T3](t3-ocr-runtime-model-samples.md#固定组合与制品静态核查)。
 
@@ -79,6 +79,7 @@ MyGo 的 [Menus and the tray](https://mygo.egoist.dev/docs/menus#tray-icons) 提
 | 扫描与校对节奏 | 扫描时游戏保持前台，完成或停止后校对，须明确告知。 | 开始前展示前台要求，扫描器可隐藏。 |
 | 扫描中关闭主窗口 | 两种模式：停止并保存退出，或隐藏后继续。 | 托盘或菜单栏提供返回入口。 |
 | 分发形式 | Windows 安装包，macOS DMG 拖拽安装，不走官方渠道。 | 两种制品分别验收安装、数据路径和首次打开。 |
+| 自动更新 | 首版包含（2026-10-16）：MyGo v0.5.5 内置更新，从 GitHub Releases（`LoTwT/youkai`）获取经 MyGo 更新密钥签名的版本。 | 更新公钥自 0.0.1 内置；私钥不进仓库，扫描中不安装更新，测试版与正式版渠道分开；规则见[架构第 6 节](scanner-architecture.md#6-首版功能范围)。 |
 | 识别资源 | 完整包随附模型、字典与运行库，首次启动无需下载。 | 安装包更大，但省去首次下载与版本匹配；云游戏仍需联网。 |
 | 浏览器入口 | 网页唤起桌面 App（2026-10-16）。 | 按第 3 节实现与验收深链接。 |
 | 交付标准 | 正常构建打包，不准备 Apple Developer 会员或 Windows 证书；用户在测试前准备环境。 | 付费签名、公证和上架不作为首版前提，见 [T7](t7-public-release-acceptance.md)。 |

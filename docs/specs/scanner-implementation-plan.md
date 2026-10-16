@@ -1,6 +1,6 @@
 # 扫描器首版实施清单
 
-更新日期：2026-10-16。状态：执行建议，四个里程碑均未开始；实施授权和范围由用户另行安排。
+更新日期：2026-10-16。状态：执行中，M1 已开始（工程骨架初始化完成，见[开发指南](../development.md)）；里程碑划分不变。
 
 首版作为一次完整交付，内部按四个里程碑检查进展。期间的构建供开发和用户测试，不作为删减范围的正式版本，也不另做独立 UI 验证版。
 
@@ -17,30 +17,31 @@
 | [T5](t5-zzz-inventory-traversal.md)、[T6](t6-review-export-workflow.md)、[JSON v1](scan-json-format.md) | 页面与遍历证据、用户操作、校对及文件契约。 |
 | [T7](t7-public-release-acceptance.md) | 最低系统候选、离线安装、打包路线及完整验收。 |
 
-当前仓库只有文档和合成示例，没有 `go.mod` 或应用代码。开发机为 macOS arm64、Go 1.27.2，Xcode 开发目录已选中，`hdiutil`、`codesign`、`makensis` 可定位；PATH 中的 `clang` 指向 Homebrew LLVM，正式构建需明确所用编译器与 SDK。MyGo 使用项目固定的 Go 工具依赖（v0.5.5），不依赖全局 `mygo` 命令。
+当前仓库已建立 Go 工程：`go.mod` 固定模块路径与 MyGo v0.5.5 工具依赖，`mygo.json` 与 `cmd/youkai/` 入口就位，其余包按里程碑逐步增加。开发机为 macOS arm64、Go 1.27.2，Xcode 开发目录已选中，`hdiutil`、`codesign`、`makensis` 可定位；PATH 中的 `clang` 指向 Homebrew LLVM，正式构建需明确所用编译器与 SDK。MyGo 使用项目固定的 Go 工具依赖（v0.5.5），不依赖全局 `mygo` 命令；环境与常用命令见[开发指南](../development.md)。
 
 采用一个 Go 模块、一个应用进程、一个活动扫描会话，按公共边界组织普通包，平台桥接只覆盖必要的原生 API。最小路线是单输入控制者、一个 OCR 工作者和有界队列。
 
 ### 开发与 Windows 测试方式
 
-用户决定（2026-10-16）：在当前 Mac 上开发，不转到 Windows 开发；由用户在 Windows 上测试。测试时机按进展安排：可在中间节点由用户到 Windows 上测试，也可先在 Mac 上完成一个较大阶段，再集中做一轮 Windows 测试。
+用户决定（2026-10-16）：在当前 Mac 上开发，不转到 Windows 开发；Windows 测试使用 GitHub Actions 构建的安装包，用户不在 Windows 上安装开发工具。测试时机按进展安排：可在中间节点由用户到 Windows 上测试，也可先在 Mac 上完成一个较大阶段，再集中做一轮 Windows 测试。
 
-- 日常在 Mac 上交叉编译 Windows 目标，尽早发现平台隔离和编译问题。cgo（OCR 绑定）的 Windows 交叉编译需要 mingw-w64 工具链，本机尚未安装。交叉编译通过不代表能在 Windows 上运行。
+- 交给用户测试的 Windows 制品统一来自 GitHub Actions 的 Windows runner 构建的安装包（MyGo 在 Windows 上可自动下载 NSIS）；需要快速排查与 VC++ 运行库无关的问题时，可由 Mac 交叉编译免安装包补充。
+- 日常在 Mac 上做 Windows 交叉编译检查，尽早发现平台隔离和编译问题。cgo（OCR 绑定）的 Windows 交叉编译需要 mingw-w64 工具链，本机已安装（`/opt/homebrew/bin/x86_64-w64-mingw32-gcc`）。交叉编译通过不代表能在 Windows 上运行，VC++ 相关问题也不在其覆盖范围内。
 - 以下内容只能在 Windows 实机验证：DLL 与 VC++ 运行库加载、截图、SendInput、托盘与全局快捷键、安装包和游戏响应。每次交给用户测试时附上制品版本、测试步骤和预期结果，结果写回对应记录。
 - 风险较高的节点建议尽早安排 Windows 测试，不要等到 M4：M1 末的安装包与 ORT 加载，以及 M2 的 Windows 采集与输入。具体合并到哪一轮测试由进展决定。
-- Windows 正式安装包在 Windows 本机构建（MyGo 在 Windows 上可自动下载 NSIS，VC++ 处理也在 Windows 上验证）。
 
 ### 已定的工程约定
 
 用户于 2026-10-16 确认：
 
 - **标识：** Go 模块路径为 `github.com/LoTwT/youkai`；应用标识（bundle identifier）为 `com.lotwt.youkai`，显示名 `Youkai`。应用标识会写入数据目录、单实例锁、协议注册和 macOS 权限记录，发布后不再更改。
-- **VC++ 运行库：** 采用应用本地部署，随应用放在 EXE 目录，不运行需提权的安装器，见 [T3](t3-ocr-runtime-model-samples.md#绑定与运行库的实际交接)。
+- **VC++ 运行库：** 采用应用本地部署，随应用放在 EXE 目录，不运行需提权的安装器；所需 DLL 取自 GitHub Actions Windows runner 上 Visual Studio 的 `VC\Redist\MSVC` 目录，不从 vc_redist 安装器解包。见 [T3](t3-ocr-runtime-model-samples.md#绑定与运行库的实际交接)。
 - **许可证：** MIT，仓库根目录 `LICENSE` 复制自 `LoTwT/ts-starter`。随包的 ORT（MIT）、模型（Apache 2.0）等第三方声明另行附带，见 [T7](t7-public-release-acceptance.md#2-首版交付门槛)。
 - **版本号：** 首个发布版为 `0.0.1`，按语义化版本递增。MyGo 在 `mygo.json` 未填 `version` 时默认使用 `0.1.0`，因此必须显式填写；同一版本号写入安装包、DMG 和 JSON 的 `producer.version`。
-- **构建与发布：** 开发期测试用的 Windows 构建在用户的 Windows 机器上完成；正式发布由 GitHub Actions 构建两个平台的制品，随版本发布在 GitHub Releases 上。
-- **第三方大文件：** ORT 运行库、VC++ 运行库文件和 OCR 模型不进 Git，由仓库内脚本按固定 URL 与 SHA-256 下载到被忽略的目录；本地构建、测试和 CI 都调用同一脚本，摘要不符即失败。
-- **PR 检查：** Mac 本地测试与 Windows 交叉编译通过即可合并；只能在 Windows 实机验证的内容记入待测清单，在用户的 Windows 上集中测试后再修。GitHub Actions 在 PR 上运行轻量检查：格式、`go vet`、`go test`，覆盖 macOS 与 Windows 两个 runner；不在 PR 上打安装包、跑长时间测试或游戏相关检查。正式制品构建只放在发布流程中。
+- **构建与发布：** 正式发布由 GitHub Actions 构建两个平台的制品，随版本发布在 GitHub Releases（`LoTwT/youkai`）上；Windows 上的测试同样使用 GitHub Actions 产出的安装包（用户不在 Windows 上安装开发工具），快速排查非 VC++ 问题时可由 Mac 交叉编译免安装包补充，见[开发与 Windows 测试方式](#开发与-windows-测试方式)。
+- **自动更新：** 首版包含，使用 MyGo v0.5.5 内置更新，从 GitHub Releases（`LoTwT/youkai`）获取经 MyGo 更新密钥签名的版本；范围与规则见[架构第 6 节](scanner-architecture.md#6-首版功能范围)，交付证据见 [T7](t7-public-release-acceptance.md#2-首版交付门槛)。
+- **第三方大文件：** ORT 运行库和 OCR 模型不进 Git，由仓库内脚本按固定 URL 与 SHA-256 下载到被忽略的目录；VC++ 运行库文件取自 GitHub Actions 的 Windows runner（见 VC++ 条目），同样不进 Git。本地构建、测试和 CI 都调用同一脚本，摘要不符即失败。
+- **PR 检查：** Mac 本地测试与 Windows 交叉编译通过即可合并；只能在 Windows 实机验证的内容记入待测清单，在用户的 Windows 上集中测试后再修。GitHub Actions 在 PR 上运行轻量检查：格式、`go vet`、`go test`，覆盖 macOS 与 Windows 两个 runner；不在 PR 上打安装包、跑长时间测试或游戏相关检查。供 Windows 测试的安装包由 GitHub Actions 按需构建（见[开发与 Windows 测试方式](#开发与-windows-测试方式)），正式发布制品构建放在发布流程中。
 - **本机工具：** 需要新增 mingw-w64 等工具时，先告知用户，由用户优先手动安装。
 - **PR 流程：** 本机 git skills 支持栈式 PR，但没有规定拆分或合并方式；仓库允许 merge、squash、rebase 三种合并。具体方式在实施拆分 PR 时按当时要求决定。
 - **提交溯源：** 安排任务的会话和实施会话可能不同；Agent-Models 所需的模型与 effort 由用户在实施前告知。
@@ -74,6 +75,7 @@
 - [ ] 实现应用持有会话、数据根占用、扫描占用和 MyGo 窗口复用；用两个独立进程验证同根编辑竞争、导出与删除竞争、路径别名、持有者崩溃后恢复，以及不同数据根只有一个能扫描。实现输入许可、有界队列、接纳序号和终结记账，用可控平台事件验证队列满、迟到结果、重复通知和并发停止。
 - [ ] 实现证据先写入、检查点更新、上一有效版本恢复及修订保存；接入正式界面的准备、进度和结果视图，能展示失败与未处理项。
 - [ ] 生成早期安装包与 DMG；随包放入应用本地的 VC++ 运行库并验证实际加载，核对 Mac 编译器、SDK、原生库系统标记和本地签名。安装包与 ORT 加载交用户在 Windows 上测试。
+- [ ] 接入 MyGo 自动更新并验证升级：更新公钥随 0.0.1 内置，从 GitHub Releases（`LoTwT/youkai`）检测并安装经签名的更新；测试版与正式版渠道分开，扫描进行中不安装，macOS 更新后录屏/辅助功能权限变化实测并写入说明。规则见[架构第 6 节](scanner-architecture.md#6-首版功能范围)。
 
 通过条件：两个平台的安装后应用都能加载随包资源，完成可控识别、停止、保存、重开和再次运行；缺库或模型损坏有可定位的结果。并发与写入故障测试证明已接纳记录不会无故消失或被迟到结果改写。此时尚不能宣称游戏兼容或离线首装通过。
 
@@ -158,6 +160,6 @@ go tool mygo build -platform darwin/arm64
 
 成本沿用[公共估计](scanner-architecture.md#8-工作量主要风险与改变结论的证据)：约 40–70 个开发日，不是交付日期承诺；M2 完成后依据实际成本复估，用户测试与样本标注需要可安排的时间。
 
-构建端需要取得公开依赖和模型；安装后的识别、校对与导出不需要 API key 或新账户。不购买发布者证书，不新增在线更新服务或浏览器界面。
+构建端需要取得公开依赖和模型；安装后的识别、校对与导出不需要 API key 或新账户。不购买发布者证书；自动更新采用 MyGo 内置机制（见[架构第 6 节](scanner-architecture.md#6-首版功能范围)），不自建更新服务，也不新增浏览器界面。
 
 每个里程碑交接提供可运行内容、修改文件、已过检查、未过项和下一步。JSON 契约变更先说明兼容策略，不原地改写用户已保存的库存。构建完成不等于已获提交、推送或发布授权。

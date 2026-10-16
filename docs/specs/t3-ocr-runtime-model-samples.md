@@ -92,7 +92,7 @@ Microsoft Go 固定提交 `402979ac1bef89dcd55add41eaa7277c407599eb` 仍是替�
 
 Windows 开发端的 MinGW cgo 工具链和运行端的 MSVC Runtime 是两项要求。显式加载主 DLL 不会自动解决它所依赖 DLL 的搜索；最终还需检查 youkai EXE 由 C 工具链带入的依赖。[Microsoft 运行库要求](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist?view=msvc-170) · [分发条件](https://learn.microsoft.com/en-us/cpp/windows/redistributing-visual-cpp-files?view=msvc-170)
 
-**VC++ 运行库采用应用本地部署（用户 2026-10-16 确认）：** 从 Microsoft 正式可再分发目录取得 x64 的 `MSVCP140.dll`、`MSVCP140_1.dll`、`VCRUNTIME140.dll`、`VCRUNTIME140_1.dll`，随应用放在 EXE 所在目录，不运行需要提权的 VC++ 安装器，与 MyGo 的每用户安装（[NSIS 脚本](https://github.com/egoist/mygo/blob/4d8673cd2658a2c6e86b26c44751e57bf8174f91/cmd/mygo/nsis.go)）一致。代价是这些文件的安全更新由 youkai 发新版负责。不能从开发机系统目录临时拷贝；版本不早于构建 ORT 1.29.0 所用的工具集，并在 M1 确认再分发条件、实际被加载的是随包副本，以及在没有安装过 VC++ 的干净 Windows 上能正常加载。
+**VC++ 运行库采用应用本地部署（用户 2026-10-16 确认）：** 所需的 4 个 x64 文件 `MSVCP140.dll`、`MSVCP140_1.dll`、`VCRUNTIME140.dll`、`VCRUNTIME140_1.dll` 取自 GitHub Actions Windows runner 上 Visual Studio 的 `VC\Redist\MSVC\…\x64\Microsoft.VC143.CRT` 目录（具体路径在打包 PR 实测确认），不从 vc_redist 安装器解包，随应用放在 EXE 所在目录，不运行需要提权的 VC++ 安装器，与 MyGo 的每用户安装（[NSIS 脚本](https://github.com/egoist/mygo/blob/4d8673cd2658a2c6e86b26c44751e57bf8174f91/cmd/mygo/nsis.go)）一致。代价是这些文件的安全更新由 youkai 发新版负责。版本不早于构建 ORT 1.29.0 所用的工具集，并在 M1 确认再分发条件、实际被加载的是随包副本，以及在没有安装过 VC++ 的干净 Windows 上能正常加载。
 
 MyGo、yalue 和 ORT 的所读源码许可为 MIT，ORT 制品另带 `ThirdPartyNotices.txt`；RapidOCR 仓库和所读 [ModelScope v3.10.0 模型卡](https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.10.0/README.md)声明 Apache 2.0。模型托管根目录的独立 `LICENSE` 未取得，因此交付前仍需将模型原始来源、转换说明和适用声明一起核对归档；不把一个仓库的许可当作所有第三方字体或可选文件的统一许可。首版无需携带 RapidOCR 的 Python 环境或可视化字体。
 
