@@ -218,10 +218,16 @@ func cloneCheckpoint(cp *Checkpoint) *Checkpoint {
 	out.Items = make([]ItemRecord, len(cp.Items))
 	for i, it := range cp.Items {
 		it.EvidenceIDs = append([]string(nil), it.EvidenceIDs...)
-		it.Revisions = make([]ItemRevision, len(it.Revisions))
-		for j, rev := range it.Revisions {
-			rev.Changes = append([]FieldChange(nil), rev.Changes...)
-			it.Revisions[j] = rev
+		if len(it.Revisions) > 0 {
+			// Copy into a fresh slice before it.Revisions is
+			// replaced: ranging over a field that was just
+			// overwritten ranges over the copy's zero values.
+			revisions := make([]ItemRevision, len(it.Revisions))
+			for j, rev := range it.Revisions {
+				rev.Changes = append([]FieldChange(nil), rev.Changes...)
+				revisions[j] = rev
+			}
+			it.Revisions = revisions
 		}
 		out.Items[i] = it
 	}
