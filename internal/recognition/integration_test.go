@@ -51,9 +51,8 @@ func resourcePaths(t *testing.T) (libPath, modelPath string, ok bool) {
 }
 
 // TestIntegration drives the recognizer against the real library and model.
-// The subtests run in a fixed order: the failure-path cases come first, while
-// the process-wide ORT environment is still down, so the missing-library case
-// is deterministic.
+// The failure-path cases do not depend on execution order: the missing-file
+// checks run before any environment state is consulted.
 func TestIntegration(t *testing.T) {
 	libPath, modelPath, ok := resourcePaths(t)
 	if !ok {
@@ -61,9 +60,6 @@ func TestIntegration(t *testing.T) {
 	}
 
 	t.Run("MissingLibrary", func(t *testing.T) {
-		if envActive() {
-			t.Skip("process-wide ORT environment already loaded; missing-library path cannot be isolated")
-		}
 		_, err := New(Resources{
 			LibraryPath: filepath.Join(filepath.Dir(libPath), "does-not-exist.dylib"),
 			ModelPath:   modelPath,
@@ -200,9 +196,9 @@ func TestIntegration(t *testing.T) {
 	})
 
 	t.Run("ReopenAfterClose", func(t *testing.T) {
-		// Closing the last recognizer tears the process-wide environment
-		// down; a fresh New must re-initialize it and recognize again. This
-		// is the "重开" lifecycle from M1's pass criteria.
+		// Recognizer close/reopen cycles are the per-scan pattern: Close
+		// releases only the session, and a fresh New reuses the still-loaded
+		// environment (the "重开" lifecycle from M1's pass criteria).
 		first, err := New(Resources{LibraryPath: libPath, ModelPath: modelPath})
 		if err != nil {
 			t.Fatalf("first New: %v", err)
@@ -227,6 +223,55 @@ func TestIntegration(t *testing.T) {
 		}
 		if got != want {
 			t.Fatalf("result after reopen = %+v, want %+v", got, want)
+		}
+	})
+
+	t.Run("ShutdownLifecycle", func(t *testing.T) {
+		// The environment belongs to the application lifetime: Shutdown is
+		// explicit, refuses while recognizers are open, is idempotent, and a
+		// later New may re-initialize the environment.
+		rec, err := New(Resources{LibraryPath: libPath, ModelPath: modelPath})
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+
+		if err := Shutdown(); !errors.Is(err, ErrEnvironmentInUse) {
+			t.Fatalf("Shutdown with open recognizer error = %v, want ErrEnvironmentInUse", err)
+		}
+
+		img := loadTestImage(t, "disc1_name.png")
+		want, err := rec.Recognize(context.Background(), img)
+		if err != nil {
+			t.Fatalf("recognize: %v", err)
+		}
+		if err := rec.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+
+		if err := Shutdown(); err != nil {
+			t.Fatalf("Shutdown after Close: %v", err)
+		}
+		if err := Shutdown(); err != nil {
+			t.Fatalf("second Shutdown (idempotent): %v", err)
+		}
+
+		// New after Shutdown re-initializes the environment on demand.
+		reopened, err := New(Resources{LibraryPath: libPath, ModelPath: modelPath})
+		if err != nil {
+			t.Fatalf("New after Shutdown: %v", err)
+		}
+		got, err := reopened.Recognize(context.Background(), img)
+		if err != nil {
+			t.Fatalf("recognize after re-init: %v", err)
+		}
+		if got != want {
+			t.Fatalf("result after re-init = %+v, want %+v", got, want)
+		}
+		if err := reopened.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+		if err := Shutdown(); err != nil {
+			t.Fatalf("final Shutdown: %v", err)
 		}
 	})
 }

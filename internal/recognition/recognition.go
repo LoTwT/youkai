@@ -15,6 +15,15 @@
 // This package requires cgo (CGO_ENABLED=1) to compile the ONNX Runtime Go
 // bindings. Nothing is loaded at package initialization: the native library
 // is dlopen'd/LoadLibrary'd only when [New] is first called.
+//
+// Lifecycle: the process-wide ONNX Runtime environment belongs to the
+// application's lifetime (docs/specs/scanner-architecture.md §4). It is
+// initialized by the first [New] and kept loaded across recognizer
+// open/close cycles — the application creates a recognizer per scan session
+// without repeatedly unloading the native library. The environment is
+// destroyed only by an explicit [Shutdown], typically once shortly before
+// process exit; [Shutdown] also covers the deliberate unload-and-reload case
+// by allowing later [New] calls to re-initialize the environment.
 package recognition
 
 import (
@@ -42,6 +51,10 @@ var (
 	// was already initialized from a different library path. Only one
 	// library can be loaded per process.
 	ErrLibraryInUse = errors.New("onnx runtime environment already loaded from a different library path")
+	// ErrEnvironmentInUse reports that [Shutdown] was called while
+	// recognizers are still open; the environment cannot be destroyed
+	// underneath them.
+	ErrEnvironmentInUse = errors.New("onnx runtime environment still in use")
 	// ErrModelUnavailable reports that the model file is missing, empty, or
 	// unreadable.
 	ErrModelUnavailable = errors.New("recognition model unavailable")
@@ -98,27 +111,22 @@ type Result struct {
 }
 
 // ortEnv holds the process-wide ONNX Runtime environment. The environment
-// belongs to the process (one loaded library, one ORT environment), so it is
-// reference-counted here: the first [New] initializes it, the last
-// [Recognizer.Close] destroys it, and recognizer creation in between reuses
-// it without re-initializing.
+// belongs to the application's lifetime (docs/specs/scanner-architecture.md
+// §4): the first [New] initializes it, [Recognizer.Close] only releases that
+// recognizer's session, and only [Shutdown] destroys the environment. The
+// refcount tracks open recognizers so Shutdown can refuse to run while
+// sessions are still alive.
 var ortEnv struct {
 	mu          sync.Mutex
-	refs        int    // number of open recognizers
+	initialized bool   // environment is loaded and not yet shut down
 	libraryPath string // absolute path the environment was loaded from
-}
-
-// envActive reports whether the process-wide ORT environment is currently
-// initialized. Only used by tests to make library-failure cases deterministic.
-func envActive() bool {
-	ortEnv.mu.Lock()
-	defer ortEnv.mu.Unlock()
-	return ortEnv.refs > 0
+	refs        int    // number of open recognizers
 }
 
 // Recognizer runs the recognition model on text-line crops. A Recognizer owns
 // one reused model session; create it with [New] and release it with
-// [Recognizer.Close].
+// [Recognizer.Close]. The process-wide ONNX Runtime environment outlives
+// individual recognizers and is released by [Shutdown].
 //
 // Inference is serialized: the first release uses a single recognition worker
 // (docs/specs/scanner-architecture.md §3), so [Recognizer.Recognize] takes the
@@ -138,11 +146,10 @@ type Recognizer struct {
 // New loads the ONNX Runtime library (if this is the first recognizer in the
 // process) and creates a reused model session.
 //
-// Close order (also applies to the failure paths inside New): the temporary
-// metadata/shape session used for validation is released inside the binding,
-// the real session is destroyed by [Recognizer.Close] once no inference is in
-// flight, and the process environment is destroyed only after the last
-// recognizer closes.
+// The environment initialized here stays loaded until an explicit
+// [Shutdown]; recognizer sessions are released by [Recognizer.Close] and do
+// not unload the native library. After [Shutdown], New re-initializes the
+// environment on demand.
 func New(res Resources) (*Recognizer, error) {
 	libPath, err := requireAbsPath(res.LibraryPath, "ONNX Runtime library")
 	if err != nil {
@@ -157,39 +164,38 @@ func New(res Resources) (*Recognizer, error) {
 	} else if fi.Size() == 0 {
 		return nil, fmt.Errorf("%w: %s: file is empty", ErrModelUnavailable, modelPath)
 	}
+	// Fail with a locatable message when the library file is absent before
+	// the platform loader reports it, so 缺库 is distinguishable from 错架构
+	// (the latter surfaces via the loader's own message below). Checked
+	// regardless of the environment state so the error is stable.
+	if _, err := os.Stat(libPath); err != nil {
+		return nil, fmt.Errorf("%w: %s: %v", ErrLibraryUnavailable, libPath, err)
+	}
 
 	ortEnv.mu.Lock()
 	defer ortEnv.mu.Unlock()
 
-	if ortEnv.refs == 0 {
-		// Fail with a locatable message when the file is absent before the
-		// platform loader reports it, so 缺库 is distinguishable from 错架构
-		// (the latter surfaces via the loader's own message below).
-		if _, err := os.Stat(libPath); err != nil {
-			return nil, fmt.Errorf("%w: %s: %v", ErrLibraryUnavailable, libPath, err)
+	if ortEnv.initialized {
+		if ortEnv.libraryPath != libPath {
+			return nil, fmt.Errorf("%w: environment uses %s, refusing to load %s",
+				ErrLibraryInUse, ortEnv.libraryPath, libPath)
 		}
+	} else {
 		ort.SetSharedLibraryPath(libPath)
 		if err := ort.InitializeEnvironment(); err != nil {
 			return nil, fmt.Errorf("%w: loading %s: %w", ErrLibraryUnavailable, libPath, err)
 		}
+		ortEnv.initialized = true
 		ortEnv.libraryPath = libPath
-	} else if ortEnv.libraryPath != libPath {
-		return nil, fmt.Errorf("%w: environment uses %s, refusing to load %s",
-			ErrLibraryInUse, ortEnv.libraryPath, libPath)
 	}
-	ortEnv.refs++
 
 	rec, err := newRecognizerSession(modelPath)
 	if err != nil {
-		ortEnv.refs--
-		if ortEnv.refs == 0 {
-			ortEnv.libraryPath = ""
-			if derr := ort.DestroyEnvironment(); derr != nil {
-				err = errors.Join(err, fmt.Errorf("destroying ONNX runtime environment: %w", derr))
-			}
-		}
+		// The environment stays loaded for the application lifetime; a failed
+		// session load does not tear it down.
 		return nil, err
 	}
+	ortEnv.refs++
 	return rec, nil
 }
 
@@ -287,10 +293,11 @@ func newRecognizerSession(modelPath string) (*Recognizer, error) {
 	}, nil
 }
 
-// Close releases the model session. It waits for in-flight [Recognizer.Recognize]
-// calls, so cancel them first if the wait must be bounded. Once the last
-// recognizer in the process closes, the process-wide ONNX Runtime environment
-// and its native library are unloaded. Close is idempotent.
+// Close releases this recognizer's model session. It waits for in-flight
+// [Recognizer.Recognize] calls, so cancel them first if the wait must be
+// bounded. The process-wide ONNX Runtime environment is not affected: it
+// stays loaded for the application lifetime and is destroyed only by
+// [Shutdown]. Close is idempotent.
 func (r *Recognizer) Close() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -303,13 +310,37 @@ func (r *Recognizer) Close() error {
 	ortEnv.mu.Lock()
 	defer ortEnv.mu.Unlock()
 	ortEnv.refs--
-	if ortEnv.refs == 0 {
-		ortEnv.libraryPath = ""
-		if derr := ort.DestroyEnvironment(); derr != nil {
-			err = errors.Join(err, fmt.Errorf("destroying ONNX runtime environment: %w", derr))
-		}
-	}
 	return err
+}
+
+// Shutdown destroys the process-wide ONNX Runtime environment and unloads
+// the native library. The environment belongs to the application's lifetime
+// (docs/specs/scanner-architecture.md §4): keep recognizers' open/close
+// cycles cheap by leaving the environment loaded between scans, and call
+// Shutdown once when recognition is permanently done, typically shortly
+// before process exit.
+//
+// Shutdown returns an error wrapping [ErrEnvironmentInUse] while recognizers
+// are still open; close them first. It is a no-op returning nil when the
+// environment is not initialized. After Shutdown, [New] re-initializes the
+// environment on demand (reloading the native library); repeated
+// Shutdown/New cycles are supported but each cycle pays the full library
+// load cost, so applications should not shutdown per scan.
+func Shutdown() error {
+	ortEnv.mu.Lock()
+	defer ortEnv.mu.Unlock()
+	if !ortEnv.initialized {
+		return nil
+	}
+	if ortEnv.refs > 0 {
+		return fmt.Errorf("%w: %d recognizer(s) still open", ErrEnvironmentInUse, ortEnv.refs)
+	}
+	ortEnv.initialized = false
+	ortEnv.libraryPath = ""
+	if err := ort.DestroyEnvironment(); err != nil {
+		return fmt.Errorf("destroying ONNX runtime environment: %w", err)
+	}
+	return nil
 }
 
 // Recognize preprocesses and recognizes a single text-line crop.
