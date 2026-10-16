@@ -1,7 +1,8 @@
 // Package app holds youkai's application-level foundations. It resolves
-// the directories the app keeps its data in; the application service, the
-// settings file and the data-root lock of later milestones build on these
-// roots.
+// the directories the app keeps its data in, and the cross-process
+// occupancy locks that guard a data root and the per-user scan slot; the
+// application service and the settings file of later milestones build on
+// these foundations.
 package app
 
 import (
