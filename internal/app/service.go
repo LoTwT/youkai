@@ -344,6 +344,10 @@ func (s *Service) Start(req StartRequest) (StartOutcome, error) {
 		Controller: spec.Controller,
 		Recognizer: recognizer,
 		Deliverer:  deliverer,
+		// The admission hook persists every admitted observation —
+		// evidence first, then its queued item — before its task reaches
+		// the workers, so a crash never loses an admitted record.
+		OnAdmit: deliverer.Admitted,
 	})
 	if err != nil {
 		return rollback(err)

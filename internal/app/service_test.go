@@ -184,10 +184,11 @@ func TestDelivererBatchesAndSavesFinalCheckpoint(t *testing.T) {
 	if len(records) != 1 || records[0].ID != string(out.SessionID) {
 		t.Fatalf("records = %+v, want %s", records, out.SessionID)
 	}
-	// 42 items at batch size 16: generations at 16 and 32 mid-session,
+	// 42 items at batch size 16, two counted changes each (admission and
+	// terminal update): 84 changes batch into 5 mid-session generations,
 	// plus the final one — the batching is visible in the revision.
-	if want := int64(3); records[0].LatestRevision != want {
-		t.Fatalf("latest revision = %d, want %d (two batches plus the final save)", records[0].LatestRevision, want)
+	if want := int64(6); records[0].LatestRevision != want {
+		t.Fatalf("latest revision = %d, want %d (five batches plus the final save)", records[0].LatestRevision, want)
 	}
 
 	rec, err := svc.LoadRecord(string(out.SessionID))
@@ -287,8 +288,9 @@ func TestSaveFailureVisibleRetryableKeepsPreviousGeneration(t *testing.T) {
 	if snap.Scan.End != scan.EndFailed {
 		t.Fatalf("end = %s, want failed (the storage fault cut the scan)", snap.Scan.End)
 	}
-	// The previous valid generation is the last durable state: 16 items
-	// from the first batch, no termination yet.
+	// The previous valid generation is the last durable state: the items
+	// of the first batch — admitted ones in their then-current states —
+	// without a termination.
 	records, err := svc.ListRecords()
 	if err != nil || len(records) != 1 {
 		t.Fatalf("records = %+v err %v", records, err)
@@ -297,9 +299,27 @@ func TestSaveFailureVisibleRetryableKeepsPreviousGeneration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadRecord: %v", err)
 	}
-	if len(rec.Checkpoint.Items) != checkpointBatchSize || rec.Checkpoint.Session.Termination != nil {
-		t.Fatalf("durable state = %d items, termination %+v; want the first batch's 16 items without termination",
-			len(rec.Checkpoint.Items), rec.Checkpoint.Session.Termination)
+	if len(rec.Checkpoint.Items) == 0 || len(rec.Checkpoint.Items) >= 42 {
+		t.Fatalf("durable state = %d items, want a partial batch", len(rec.Checkpoint.Items))
+	}
+	if rec.Checkpoint.Session.Termination != nil {
+		t.Fatalf("durable termination = %+v, want none", rec.Checkpoint.Session.Termination)
+	}
+	if len(rec.Checkpoint.Items) != int(rec.Checkpoint.Session.CapturedCount) {
+		t.Fatalf("durable captured count %d over %d items; admissions and items must agree",
+			rec.Checkpoint.Session.CapturedCount, len(rec.Checkpoint.Items))
+	}
+	for i, item := range rec.Checkpoint.Items {
+		if item.Sequence != int64(i+1) {
+			t.Fatalf("durable item %d has sequence %d; sequences must stay 1..n", i, item.Sequence)
+		}
+		// Recovery turned whatever the crash view left queued or running
+		// into interrupted unprocessed; nothing stays mid-flight.
+		switch item.Status {
+		case record.StatusProduced, record.StatusFailed, record.StatusUnprocessed:
+		default:
+			t.Fatalf("recovered item %d is %s, want a recovered terminal view", i, item.Status)
+		}
 	}
 	// A new start is refused while the result is unsaved.
 	if rival, err := svc.Start(StartRequest{ID: "r2"}); err != nil || !rival.Busy {
@@ -333,14 +353,15 @@ func TestSaveFailureVisibleRetryableKeepsPreviousGeneration(t *testing.T) {
 	waitNotBusy(t, svc)
 }
 
-// TestEvidenceFailureIsRetriedAtWrapUp injects one failing evidence
-// write: the affected item cannot be persisted during the scan, the
-// session fails, and the wrap-up's retry writes the evidence and saves
-// the complete record.
-func TestEvidenceFailureIsRetriedAtWrapUp(t *testing.T) {
+// TestEvidenceFailureAtAdmissionCutsScanKeepsItem injects one failing
+// evidence write at admission: the scan cuts with a storage fault, the
+// admitted observation still counts, and the record keeps the item with
+// the evidence that survived — unprocessed, because the stop terminated
+// its recognition before a result existed.
+func TestEvidenceFailureAtAdmissionCutsScanKeepsItem(t *testing.T) {
 	paths := newTestPaths(t)
 	// One admitted observation, then the controller holds the session
-	// open: the evidence failure of that one delivery lands squarely in
+	// open: the evidence failure of that one admission lands squarely in
 	// the capturing phase and cuts the scan.
 	gate := newAdmitThenGateController()
 	store := newFlakyStore(t, paths.Data)
@@ -354,6 +375,9 @@ func TestEvidenceFailureIsRetriedAtWrapUp(t *testing.T) {
 	if snap.Scan.End != scan.EndFailed || !hasFaultCode(snap.Scan, scan.CodeStorageFailure) {
 		t.Fatalf("snapshot = end %s faults %+v, want failed with the storage fault", snap.Scan.End, snap.Scan.Faults)
 	}
+	if snap.Scan.Counts.Captured != 1 || snap.Scan.Counts.Unprocessed != 1 {
+		t.Fatalf("counts = %+v, want the one admitted observation as unprocessed", snap.Scan.Counts)
+	}
 	records, err := svc.ListRecords()
 	if err != nil || len(records) != 1 {
 		t.Fatalf("records = %+v err %v", records, err)
@@ -362,22 +386,29 @@ func TestEvidenceFailureIsRetriedAtWrapUp(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadRecord: %v", err)
 	}
-	if len(rec.Checkpoint.Items) != snap.Scan.Counts.Captured {
-		t.Fatalf("record has %d items, kernel captured %d", len(rec.Checkpoint.Items), snap.Scan.Counts.Captured)
+	if len(rec.Checkpoint.Items) != 1 {
+		t.Fatalf("record has %d items, want the admitted observation", len(rec.Checkpoint.Items))
 	}
-	// The item whose evidence failed first is present and produced,
-	// with its evidence written by the retry.
 	first := rec.Checkpoint.Items[0]
-	if first.Status != record.StatusProduced || len(first.EvidenceIDs) != 1 {
-		t.Fatalf("first item = %s with evidence %v, want produced with its crop", first.Status, first.EvidenceIDs)
+	if first.Status != record.StatusUnprocessed || first.Reason != record.ReasonInterrupted {
+		t.Fatalf("first item = %s/%s, want unprocessed interrupted by the fault", first.Status, first.Reason)
+	}
+	// The failed line is absent, the rest of the observation's evidence
+	// survived.
+	if len(first.EvidenceIDs) != 0 {
+		t.Fatalf("evidence ids = %v; with one line and its write failing, none is referenced", first.EvidenceIDs)
 	}
 }
 
-// TestCrashedSessionReopensAsInterrupted simulates a crash between two
-// saves at the deliverer level: the kernel delivers everything, but the
-// wrap-up's final checkpoint never runs. Reopening the record shows the
-// interruption mark — a session shell without a termination.
-func TestCrashedSessionReopensAsInterrupted(t *testing.T) {
+// TestCrashedSessionKeepsAdmittedObservations simulates a crash while
+// observations are admitted but not all terminal: the recognizer
+// completes the first tasks and then blocks, the pipeline's capacity
+// caps the admissions, a batch checkpoint exists with admitted items in
+// non-terminal states — and then the process "dies": no finish, no more
+// writes. Reopening from the disk alone must keep every admitted
+// observation and its sequence, marking what was still queued or
+// running as interrupted unprocessed.
+func TestCrashedSessionKeepsAdmittedObservations(t *testing.T) {
 	paths := newTestPaths(t)
 	setScanLockBase(t, t.TempDir())
 	store, err := record.Open(paths.Data)
@@ -399,26 +430,37 @@ func TestCrashedSessionReopensAsInterrupted(t *testing.T) {
 		Coverage:  record.Coverage{Status: record.CoverageUnknown},
 	}
 	deliverer := newRecordDeliverer(store, shell, nil)
+	gate := make(chan struct{})
+	recognizer := newStallingRecognizer(12, 5*time.Millisecond, gate)
+	const capacity = scanPipelineCapacity
 	session, err := scan.Start(scan.Config{
 		ID:         scan.ID(id),
-		Capacity:   2,
-		Controller: admitNController(20),
-		Recognizer: newFakeRecognizer(),
+		Capacity:   capacity,
+		Controller: admitNController(40),
+		Recognizer: recognizer,
 		Deliverer:  deliverer,
+		OnAdmit:    deliverer.Admitted,
 	})
 	if err != nil {
 		t.Fatalf("scan.Start: %v", err)
 	}
-	// Wait for the first batch's save, then for the kernel to finish —
-	// and never call finish: the process "died" with the document at 16
-	// saved and the rest only in memory.
-	waitFor(t, 30*time.Second, "the first batch save", func() bool {
-		return deliverer.status().saved == checkpointBatchSize
+	t.Cleanup(func() {
+		close(gate)
+		session.Cancel()
+		<-session.Done()
 	})
-	<-session.Done()
+	// The stalling recognizer holds one slot and stops completing; the
+	// producer keeps the pipeline full, so admissions settle at
+	// completed + capacity and no further checkpoint is written.
+	const completed = 12
+	wantCaptured := completed + capacity
+	waitFor(t, 30*time.Second, "the stalled admissions", func() bool {
+		snap := session.Snapshot()
+		return snap.Counts.Captured == wantCaptured && deliverer.status().saved >= 1
+	})
 
-	// Reopen with a fresh store on the same root, the way a restarted
-	// process does.
+	// The crash: nothing below runs — no finish, no wrap-up. A fresh
+	// store on the same root reads what the last checkpoint holds.
 	reopened, err := record.Open(paths.Data)
 	if err != nil {
 		t.Fatalf("reopen store: %v", err)
@@ -427,13 +469,37 @@ func TestCrashedSessionReopensAsInterrupted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if len(rec.Checkpoint.Items) != checkpointBatchSize {
-		t.Fatalf("recovered %d items, want the %d the crash had saved", len(rec.Checkpoint.Items), checkpointBatchSize)
+	items := rec.Checkpoint.Items
+	if len(items) == 0 || len(items) >= wantCaptured {
+		t.Fatalf("recovered %d items, want a partial batch of the %d admitted", len(items), wantCaptured)
 	}
-	// The interruption mark: the shell has no termination, so the
-	// record reads as a session that never finished. The writer
-	// checkpoints only terminal states, so nothing arrives queued or
-	// running; the coverage stays unknown and is never upgraded.
+	if int(rec.Checkpoint.Session.CapturedCount) != len(items) {
+		t.Fatalf("recovered captured count %d over %d items; admissions and items must agree",
+			rec.Checkpoint.Session.CapturedCount, len(items))
+	}
+	for i, item := range items {
+		if item.Sequence != int64(i+1) {
+			t.Fatalf("recovered item %d has sequence %d; sequences must stay 1..n", i, item.Sequence)
+		}
+	}
+	if len(rec.Interrupted) == 0 {
+		t.Fatalf("no interrupted items; the crash left admissions queued or running in the checkpoint")
+	}
+	for _, item := range items {
+		switch item.Status {
+		case record.StatusProduced:
+			// Terminal outcomes survive exactly as saved.
+		case record.StatusUnprocessed:
+			if item.Reason != record.ReasonInterrupted {
+				t.Fatalf("recovered item %d = %s/%s, want interrupted", item.Sequence, item.Status, item.Reason)
+			}
+		default:
+			t.Fatalf("recovered item %d is %s; recovery must leave no mid-flight state", item.Sequence, item.Status)
+		}
+	}
+	// The interruption mark: the shell has no termination, so the record
+	// reads as a session that never finished; coverage stays unknown and
+	// is never upgraded.
 	if rec.Checkpoint.Session.Termination != nil {
 		t.Fatalf("recovered termination %+v, want none (the interruption mark)", rec.Checkpoint.Session.Termination)
 	}
@@ -441,13 +507,49 @@ func TestCrashedSessionReopensAsInterrupted(t *testing.T) {
 		t.Fatalf("coverage = %q downgraded %v, want unknown untouched",
 			rec.Checkpoint.Session.Coverage.Status, rec.CoverageDowngraded)
 	}
-	if len(rec.Interrupted) != 0 {
-		t.Fatalf("interrupted = %v; this writer checkpoints only terminal states", rec.Interrupted)
-	}
 	infos, err := reopened.ListRecords()
-	if err != nil || len(infos) != 1 || infos[0].ID != id || infos[0].LatestRevision != 1 {
-		t.Fatalf("listing = %+v err %v, want the interrupted record at revision 1", infos, err)
+	if err != nil || len(infos) != 1 || infos[0].ID != id || infos[0].LatestRevision < 1 {
+		t.Fatalf("listing = %+v err %v, want the interrupted record with a saved generation", infos, err)
 	}
+}
+
+// countStatus counts the items in one status.
+func countStatus(items []record.ItemRecord, status record.Status) int {
+	n := 0
+	for _, item := range items {
+		if item.Status == status {
+			n++
+		}
+	}
+	return n
+}
+
+// newStallingRecognizer builds a recognizer that completes the first
+// complete tasks after delay each and then blocks until the gate closes
+// or the context ends — a recognition pipeline that stalls mid-session.
+func newStallingRecognizer(complete int, delay time.Duration, gate <-chan struct{}) Recognizer {
+	var mu sync.Mutex
+	done := 0
+	return &scriptedRecognizer{recognize: func(ctx context.Context, task scan.Task, submit scan.Submit) error {
+		mu.Lock()
+		done++
+		count := done
+		mu.Unlock()
+		if count > complete {
+			select {
+			case <-gate:
+				return submit(task.SessionID, task.Seq, scan.Recognition{Result: task.Observation})
+			case <-ctx.Done():
+				return nil // terminated; the entry ends unprocessed
+			}
+		}
+		select {
+		case <-time.After(delay):
+			return submit(task.SessionID, task.Seq, scan.Recognition{Result: task.Observation})
+		case <-ctx.Done():
+			return nil
+		}
+	}}
 }
 
 // TestQuitStopsSessionThenClosesRecognizerThenReleasesOccupancy checks

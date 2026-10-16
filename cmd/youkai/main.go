@@ -9,6 +9,7 @@ import (
 	"log"
 	"os"
 	"sync"
+	"time"
 
 	"github.com/LoTwT/youkai/internal/app"
 	"github.com/egoist/mygo"
@@ -124,7 +125,17 @@ func devScanSource() app.ScanSource {
 	if err != nil {
 		log.Fatalf("youkai: dev scan source %q: %v", dir, err)
 	}
-	log.Printf("youkai: dev scan source wired to %q", dir)
+	// A development-only pace override (a Go duration like "3s"), for
+	// manual runs that need the scan to last long enough to stop it
+	// midway.
+	if raw := os.Getenv("YOUKAI_DEV_PACE"); raw != "" {
+		pace, err := time.ParseDuration(raw)
+		if err != nil || pace < 0 {
+			log.Fatalf("youkai: dev pace %q: %v", raw, err)
+		}
+		src.Pace = pace
+	}
+	log.Printf("youkai: dev scan source wired to %q (pace %s)", dir, src.Pace)
 	return src
 }
 

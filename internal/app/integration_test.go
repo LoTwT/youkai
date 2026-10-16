@@ -189,14 +189,17 @@ func TestIntegrationApplicationScan(t *testing.T) {
 		item := rec.Checkpoint.Items[0]
 		switch item.Status {
 		case record.StatusProduced:
-			if len(item.EvidenceIDs) != 7 {
-				t.Fatalf("produced item carries %d evidence files, want its 7 crops", len(item.EvidenceIDs))
-			}
+			// The result payload is alongside the evidence.
 		case record.StatusUnprocessed:
 			// The stop terminated the in-flight recognition; the
 			// observation is accounted for as unprocessed.
 		default:
 			t.Fatalf("item status = %s, want produced or unprocessed", item.Status)
+		}
+		// Evidence is written at admission, so it is on disk whatever
+		// the terminal state turned out to be.
+		if len(item.EvidenceIDs) != 7 {
+			t.Fatalf("item carries %d evidence files, want its 7 crops persisted at admission", len(item.EvidenceIDs))
 		}
 		if rec.Checkpoint.Session.Termination == nil ||
 			rec.Checkpoint.Session.Termination.Kind != record.TerminationCancelled {

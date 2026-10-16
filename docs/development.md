@@ -30,8 +30,11 @@ CGO_ENABLED=1 YOUKAI_DEV_SOURCE=$PWD/internal/recognition/testdata \
 
 - `YOUKAI_DEV_SOURCE` 指定观测目录（含 `lines.tsv`），启用开发数据源；目录缺失或清单不符会在启动时失败。
 - `YOUKAI_DEV_AUTOSTART` 置任意非空值时，应用就绪后自动开始一次扫描（同样仅开发开关生效；就绪回调本身不做耗时工作，开始请求在独立 goroutine 中发出）。
+- `YOUKAI_DEV_PACE` 可选，把开发数据源的接纳节奏改为给定时长（如 `3s`）；默认 250ms。需要中途停止时用它把扫描拉长（无界面按钮时用退出事件触发停止并收尾）。
 
 日志确认要点：`dev scan source wired`、`scan <id> accepted`、每件盘一行 `item N recognized: name=… level=…`、`checkpoint generation N saved (… items)` 与结束行的检查点路径（开发应用数据根 `~/Library/Application Support/Youkai Dev/sessions/<id>/checkpoints/<gen>.json`）、退出时 `exit wrap-up complete`。退出事件（⌘Q/关窗）异步触发明确退出收尾：停止活动会话 → 等待收尾与最终保存 → 关闭识别器 → 销毁 ORT 环境 → 释放占用。
+
+持久化从扫描过程中开始：每次接纳观测（`internal/scan` 的接纳钩子）都会先写该件的证据图、再以 queued 状态把条目加入检查点文档，终结时只更新状态与载荷；崩溃后重开由 `internal/record` 把排队/运行条目标为中断未处理，已接纳的物品不会消失。
 
 应用服务层的行为（开始请求幂等与忙碌、保存失败可见可重试、重开读取中断记录等）由 `go test ./internal/app` 的服务层测试用假识别器覆盖，不依赖原生库；`internal/app` 的集成测试在 OCR 资源缺失时自动 `t.Skip`。
 

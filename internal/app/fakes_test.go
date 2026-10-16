@@ -93,6 +93,18 @@ func (r *fakeRecognizer) Recognize(ctx context.Context, task scan.Task, submit s
 
 func (r *fakeRecognizer) Close() error { r.closeCount++; return nil }
 
+// scriptedRecognizer delegates each recognition to a function the test
+// provides; it implements Recognizer with a no-op Close.
+type scriptedRecognizer struct {
+	recognize func(ctx context.Context, task scan.Task, submit scan.Submit) error
+}
+
+func (r *scriptedRecognizer) Recognize(ctx context.Context, task scan.Task, submit scan.Submit) error {
+	return r.recognize(ctx, task, submit)
+}
+
+func (r *scriptedRecognizer) Close() error { return nil }
+
 // waitNotBusy waits until the active session wrapped (the final save
 // done) and returns the snapshot.
 func waitNotBusy(t *testing.T, svc *Service) Snapshot {
