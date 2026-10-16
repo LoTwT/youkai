@@ -212,6 +212,7 @@ MyGo UI
 
 ```text
 Youkai/
+  youkai.lock
   settings.json
   sessions/
     <local-record-id>/
