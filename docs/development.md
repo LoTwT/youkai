@@ -35,6 +35,27 @@
 
 `.github/workflows/ci.yml` 在每个 pull request 与推送到 `main` 时，于 `macos-latest`（Apple Silicon）与 `windows-latest` 两个 runner 上运行轻量检查：`gofmt -l .`（要求无输出）、`go vet ./...`、`go test ./...`，macOS 上额外运行 `go tool mygo vet .`。检查不打安装包、不跑长时间测试、不下载 OCR 资源；供 Windows 测试的安装包按需另行由 GitHub Actions 构建，见[实施清单](specs/scanner-implementation-plan.md#开发与-windows-测试方式)。仓库根 `.gitattributes` 将文本文件统一为 LF 换行，Windows 检出不会因此产生 `gofmt` 误报。
 
+## 第三方资源下载
+
+OCR 运行库与模型不进 Git，由 `tools/fetchdeps` 按固定 URL 与 SHA-256 下载（固定组合与摘要在 [T3](specs/t3-ocr-runtime-model-samples.md#固定组合与制品静态核查)，VC++ 运行库不在此工具范围，见[实施清单的工程约定](specs/scanner-implementation-plan.md#已定的工程约定)）。在仓库根目录运行，不需要 API key：
+
+| 命令 | 用途 |
+| --- | --- |
+| `go run ./tools/fetchdeps` | 下载全部平台的资源（双平台打包所需）。 |
+| `go run ./tools/fetchdeps -platform current` | 只下载当前平台所需的资源（公共模型仍会下载）。 |
+| `go run ./tools/fetchdeps -platform windows/amd64` | 只下载指定平台的资源，交叉打包前使用。 |
+
+产物与缓存位置（均被 `.gitignore` 忽略，不要手工编辑）：
+
+| 路径 | 内容 |
+| --- | --- |
+| `resources/windows-amd64/onnxruntime/` | Windows 的 `onnxruntime.dll`、`onnxruntime_providers_shared.dll` 与 ORT 的 `LICENSE`、`ThirdPartyNotices.txt`。 |
+| `resources/darwin-arm64/onnxruntime/` | macOS 的 `libonnxruntime.1.29.0.dylib` 与 ORT 的 `LICENSE`、`ThirdPartyNotices.txt`。 |
+| `resources/models/` | 两平台共用的识别模型 `PP-OCRv6_rec_small.onnx`。 |
+| `.fetchdeps-cache/` | 下载缓存（保存压缩包原文件；摘要一致时直接复用，不访问网络）。 |
+
+行为约定：已存在且摘要一致的文件跳过；压缩包与每个解出文件都按固定 SHA-256 校验，不符立即失败；所有文件先写临时文件、校验通过后改名，失败不会留下半成品。目录名对应 MyGo 的 `resources/` 约定：平台子目录的内容只随对应平台的应用发布，其余随所有平台发布。
+
 ## 与 Windows 测试方式的关系
 
 用户不在 Windows 上安装开发工具，Windows 上的功能与安装测试使用 GitHub Actions 构建的安装包（正式发布与开发期测试的 Windows 制品均来自 GitHub Actions，约定见[实施清单](specs/scanner-implementation-plan.md#开发与-windows-测试方式)）。
