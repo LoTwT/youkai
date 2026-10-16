@@ -4,6 +4,7 @@ import (
 	"image"
 	"image/color"
 	"math"
+	"path/filepath"
 	"testing"
 )
 
@@ -301,7 +302,11 @@ func TestRequireAbsPath(t *testing.T) {
 	if _, err := requireAbsPath("relative/onnx.so", "x"); err == nil {
 		t.Fatal("relative path accepted")
 	}
-	if _, err := requireAbsPath("/abs/onnx.so", "x"); err != nil {
-		t.Fatalf("absolute path rejected: %v", err)
+	// Absolute on every supported platform: on Windows a path needs a drive
+	// letter, so a Unix-style "/abs/..." literal would be rejected there.
+	// t.TempDir always returns a platform-absolute path.
+	abs := filepath.Join(t.TempDir(), "onnx.so")
+	if _, err := requireAbsPath(abs, "x"); err != nil {
+		t.Fatalf("absolute path %q rejected: %v", abs, err)
 	}
 }
