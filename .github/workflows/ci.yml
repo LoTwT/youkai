@@ -3,8 +3,11 @@
 # installers, no long-running tests, no OCR resource downloads.
 #
 # cgo is not used yet. When the OCR bindings (cgo) are introduced, macOS jobs
-# will need the runner's Xcode toolchain (clang) and Windows jobs the Visual
-# Studio (MSVC) toolchain; the setup will be added here at that point.
+# will need the runner's Xcode toolchain (clang) and Windows jobs MinGW-w64
+# gcc (Go's cgo does not support MSVC; the MSVC Runtime is only the source of
+# the ORT runtime DLLs, see T3). Whether the mingw bundled with the Windows
+# runner works or must be installed needs to be verified then, and the
+# toolchain setup added here.
 name: CI
 
 on:
