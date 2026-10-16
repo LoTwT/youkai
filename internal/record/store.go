@@ -29,8 +29,11 @@ import (
 	"fmt"
 	"io/fs"
 	"path/filepath"
+	"slices"
 	"strconv"
+	"strings"
 	"sync"
+	"time"
 )
 
 // Store persists scan records below one data root. The caller hands in
@@ -174,6 +177,74 @@ func (s *Store) CreateRecord(id string) error {
 		}
 	}
 	return nil
+}
+
+// RecordInfo describes one saved record directory for listing, as the
+// reopen flow of the application service presents it.
+type RecordInfo struct {
+	// ID is the record identifier, the name of its directory below
+	// sessions/.
+	ID string
+	// LatestRevision is the newest checkpoint generation's revision; 0
+	// when the directory holds no generation at all (an interrupted
+	// create or a first save that never completed — Load reports those
+	// as unrecoverable).
+	LatestRevision int64
+	// SavedAt is the modification time of the newest generation file;
+	// the zero time when none exists.
+	SavedAt time.Time
+}
+
+// ListRecords lists the saved records below the root, newest save first
+// (ties break by record id, descending). Only directories named by valid
+// record ids count; anything else that happens to sit below sessions/ is
+// invisible to the listing, as it is to every other store operation, so
+// the store neither trusts nor deletes what it did not write. A record
+// with no verifiable checkpoint is listed all the same: the caller shows
+// that recovery is impossible rather than the record silently missing.
+func (s *Store) ListRecords() ([]RecordInfo, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	entries, err := s.fs.ReadDir(s.recordDirParent())
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("record: list records: %w", err)
+	}
+	var infos []RecordInfo
+	for _, e := range entries {
+		if !e.IsDir() || !validID(e.Name()) {
+			continue
+		}
+		info := RecordInfo{ID: e.Name()}
+		gens, err := s.generations(e.Name())
+		if err != nil {
+			return nil, err
+		}
+		if len(gens) > 0 {
+			info.LatestRevision = gens[0].revision
+			if fi, err := s.fs.Stat(filepath.Join(s.checkpointsDir(e.Name()), gens[0].name)); err == nil {
+				info.SavedAt = fi.ModTime()
+			}
+			// An unreadable newest generation is left with a zero time:
+			// the listing stays best-effort, and Load is the operation
+			// that reports unreadable generations properly.
+		}
+		infos = append(infos, info)
+	}
+	slices.SortFunc(infos, func(a, b RecordInfo) int {
+		if c := b.SavedAt.Compare(a.SavedAt); c != 0 {
+			return c
+		}
+		return strings.Compare(b.ID, a.ID)
+	})
+	return infos, nil
+}
+
+// recordDirParent returns the directory holding all record directories.
+func (s *Store) recordDirParent() string {
+	return filepath.Join(s.root, "sessions")
 }
 
 // writeAll writes data fully, tolerating short writes: a filesystem may

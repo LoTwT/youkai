@@ -18,7 +18,9 @@ const (
 	// FormatVersion is the current internal checkpoint format version.
 	// Readers reject an unknown version instead of guessing at a
 	// compatible interpretation; changing the document shape bumps this.
-	FormatVersion = 1
+	// Version history: 2 added ItemRecord.Failure, the recognition
+	// failure text of failed items.
+	FormatVersion = 2
 )
 
 // Client identifies which of the three confirmed entry points produced a
@@ -385,8 +387,12 @@ type ItemRecord struct {
 	Status   Status `json:"status"`
 	// Reason is required exactly when Status is unprocessed: cancelled
 	// by the user or interrupted by a crash.
-	Reason  UnprocessedReason `json:"unprocessedReason,omitempty"`
-	Quality Quality           `json:"quality"`
+	Reason UnprocessedReason `json:"unprocessedReason,omitempty"`
+	// Failure carries why recognition ended without a payload when
+	// Status is failed; the public scan.json contract exposes the same
+	// text as the item's processing reason.
+	Failure string  `json:"failure,omitempty"`
+	Quality Quality `json:"quality"`
 	// Revision is 0 for the raw result and grows by one per persisted
 	// manual revision; it always equals the number of recorded
 	// revisions.
@@ -419,6 +425,16 @@ func (it *ItemRecord) validate() error {
 	default:
 		if it.Reason != "" {
 			return fmt.Errorf("status %q must not carry an unprocessed reason", it.Status)
+		}
+	}
+	switch it.Status {
+	case StatusFailed:
+		if it.Failure == "" {
+			return fmt.Errorf("status %q carries no failure text", it.Status)
+		}
+	default:
+		if it.Failure != "" {
+			return fmt.Errorf("status %q must not carry a failure text", it.Status)
 		}
 	}
 	if !it.Quality.valid() {

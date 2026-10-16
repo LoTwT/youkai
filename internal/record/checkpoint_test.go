@@ -77,7 +77,7 @@ func TestValidateShell(t *testing.T) {
 		mut  func(*Checkpoint)
 	}{
 		{"wrong format name", func(cp *Checkpoint) { cp.Format = "youkai.scan" }},
-		{"unknown format version", func(cp *Checkpoint) { cp.FormatVersion = 2 }},
+		{"unknown format version", func(cp *Checkpoint) { cp.FormatVersion = FormatVersion + 1 }},
 		{"saved revision zero", func(cp *Checkpoint) { cp.SavedRevision = 0 }},
 		{"empty session id", func(cp *Checkpoint) { cp.Session.SessionID = "" }},
 		{"empty game", func(cp *Checkpoint) { cp.Session.Game = "" }},
@@ -135,6 +135,11 @@ func TestValidateItems(t *testing.T) {
 	}{
 		{"unknown status", func(cp *Checkpoint) { cp.Items[0].Status = "waiting" }},
 		{"reason on produced", func(cp *Checkpoint) { cp.Items[0].Reason = ReasonCancelled }},
+		{"failure text on produced", func(cp *Checkpoint) { cp.Items[0].Failure = "boom" }},
+		{"failed without failure text", func(cp *Checkpoint) {
+			cp.Items[1].Status = StatusFailed
+			cp.Items[1].Reason = ""
+		}},
 		{"unprocessed without reason", func(cp *Checkpoint) { cp.Items[1].Reason = "" }},
 		{"unprocessed with invented reason", func(cp *Checkpoint) { cp.Items[1].Reason = "bored" }},
 		{"unknown quality", func(cp *Checkpoint) { cp.Items[0].Quality = "perfect" }},
