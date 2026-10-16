@@ -18,6 +18,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // digestOf returns the SHA-256 of b as lowercase hex.
@@ -473,6 +474,38 @@ func TestEnsureMemberDigestMismatchLeavesNothing(t *testing.T) {
 	}
 	if got, err := os.ReadFile(tt.destPath("windows-amd64/onnxruntime/good.dll")); err != nil || string(got) != "good-bytes" {
 		t.Errorf("good.dll should remain complete, got %q, %v", got, err)
+	}
+	assertNoLeftovers(t, tt.root)
+}
+
+func TestDownloadResponseHeaderTimeout(t *testing.T) {
+	// A server that never answers must not hang the tool: the client gives
+	// up once the response-header timeout elapses, and nothing is left
+	// behind.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done() // hold the request open until the client aborts
+	}))
+	defer srv.Close()
+	tt := newTool(t.TempDir())
+	tt.client = newHTTPClient(10 * time.Millisecond)
+	dep := dependency{
+		name:   "model.onnx",
+		url:    srv.URL + "/model.onnx",
+		sha256: digestOf([]byte("good-bytes")),
+		kind:   kindFile,
+		dest:   "models/model.onnx",
+	}
+
+	start := time.Now()
+	err := tt.ensure(context.Background(), dep)
+	if err == nil || !strings.Contains(err.Error(), "timeout") {
+		t.Fatalf("want a timeout error, got %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Errorf("download stalled for %s, want a fast failure", elapsed)
+	}
+	if _, err := os.Stat(tt.destPath(dep.dest)); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("destination exists after failure: %v", err)
 	}
 	assertNoLeftovers(t, tt.root)
 }

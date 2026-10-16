@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 const (
@@ -25,14 +26,29 @@ const (
 	userAgent = "youkai-fetchdeps (+https://github.com/LoTwT/youkai)"
 )
 
-// tool installs dependencies below root, the repository directory.
+// downloadHeaderTimeout bounds how long a download may wait for the
+// server's response headers. The body is left unlimited: large downloads
+// legitimately take minutes, and a request whose headers do not arrive
+// fails fast instead of hanging until the process or CI job is killed.
+const downloadHeaderTimeout = 30 * time.Second
+
+// newHTTPClient returns the client downloads go through.
+func newHTTPClient(responseHeaderTimeout time.Duration) *http.Client {
+	return &http.Client{
+		Transport: &http.Transport{
+			ResponseHeaderTimeout: responseHeaderTimeout,
+		},
+	}
+}
+
+// newTool installs dependencies below root, the repository directory.
 type tool struct {
 	root   string
 	client *http.Client
 }
 
 func newTool(root string) *tool {
-	return &tool{root: root, client: &http.Client{}}
+	return &tool{root: root, client: newHTTPClient(downloadHeaderTimeout)}
 }
 
 // destPath is the absolute path of dest, a slash-separated path under the
