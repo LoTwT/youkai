@@ -14,6 +14,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -403,12 +404,18 @@ func TestEnsureTgzEndToEnd(t *testing.T) {
 	if err != nil || string(got) != "dylib-bytes" {
 		t.Fatalf("dylib content = %q, %v", got, err)
 	}
-	info, err := os.Stat(dst)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if perm := info.Mode().Perm(); perm != 0o755 {
-		t.Errorf("dylib mode = %o, want 755", perm)
+	// Windows does not keep Unix permission bits — os.Chmod there only
+	// toggles the read-only attribute — so the installed mode can only be
+	// checked on Unix. (TestOpenTgzMember checks the archive header's mode,
+	// which is preserved on every platform.)
+	if runtime.GOOS != "windows" {
+		info, err := os.Stat(dst)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if perm := info.Mode().Perm(); perm != 0o755 {
+			t.Errorf("dylib mode = %o, want 755", perm)
+		}
 	}
 	if _, err := os.Stat(tt.destPath("darwin-arm64/onnxruntime/libonnxruntime.dylib")); !errors.Is(err, fs.ErrNotExist) {
 		t.Errorf("the duplicate dylib was unpacked: %v", err)
