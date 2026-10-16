@@ -1,0 +1,14 @@
+# MyGo build and development outputs
+/build/
+/.mygo/
+mygo_windows_*.syso
+
+# Go binaries built into the repository root
+/youkai
+/youkai.exe
+
+# OS
+.DS_Store
+
+# Lody session data
+.lody/
