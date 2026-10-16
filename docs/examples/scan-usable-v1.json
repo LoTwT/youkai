@@ -51,8 +51,7 @@
   },
   "validationRules": {
     "id": "zzzDriveDisc",
-    "version": "example-1",
-    "sha256": "067980f5ac751f0eb4b931cdcf263788c607706d692c5b164e4d73f843a9c8c9"
+    "version": "example-1"
   },
   "excludedCount": 1,
   "items": [
