@@ -14,7 +14,29 @@
 
 不使用 Web 前端：`mygo.json` 为纯原生 UI 配置，无需 Bun、Node.js 或 WebView2。
 
-cgo 说明：`internal/recognition` 依赖 cgo 编译 onnxruntime_go 的 C 桥接。直接调用的 `go build`/`go vet`/`go test` 与 `go tool mygo vet .` 在原生构建下默认 `CGO_ENABLED=1`，无需处理。`go tool mygo dev` 与 `go tool mygo build` 则遵循 MyGo v0.5.5 的行为：环境未显式设置 `CGO_ENABLED` 时，MyGo 给子进程设置 `CGO_ENABLED=0`（[T1](specs/t1-mygo-ui-distribution.md) 已记录，显式设置时尊重用户值）。当前 `cmd/youkai` 尚未引用识别包，应用构建不受影响；识别包接入应用后，必须以 `CGO_ENABLED=1 go tool mygo dev`、`CGO_ENABLED=1 go tool mygo build` 的方式调用，否则 cgo 包编译失败。识别包在包初始化时不加载任何原生库与模型（见[架构第 4 节](specs/scanner-architecture.md#4-ocr原生资源与构建)）。
+cgo 说明：`internal/recognition` 依赖 cgo 编译 onnxruntime_go 的 C 桥接。直接调用的 `go build`/`go vet`/`go test` 与 `go tool mygo vet .` 在原生构建下默认 `CGO_ENABLED=1`，无需处理。`go tool mygo dev` 与 `go tool mygo build` 则遵循 MyGo v0.5.5 的行为：环境未显式设置 `CGO_ENABLED` 时，MyGo 给子进程设置 `CGO_ENABLED=0`（[T1](specs/t1-mygo-ui-distribution.md) 已记录，显式设置时尊重用户值）。`cmd/youkai` 经应用服务引用识别包，因此必须以 `CGO_ENABLED=1 go tool mygo dev`、`CGO_ENABLED=1 go tool mygo build` 的方式调用，否则 cgo 包编译失败。识别器由应用服务在第一次接受的开始请求时才创建（`internal/app` 的懒加载），包初始化与就绪回调不加载任何原生库与模型（见[架构第 4 节](specs/scanner-architecture.md#4-ocr原生资源与构建)）。
+
+## 用开发数据源跑一次完整扫描
+
+M1 没有真实游戏控制器，扫描由开发数据源驱动：从 `internal/recognition/testdata`（`lines.tsv` 与 6 件盘共 42 张文字行裁剪）按固定顺序逐件接纳观测。它只能通过环境变量显式启用，正式构建默认不启用，也不是“任意图片导入识别”的用户功能；游戏适配器（M2）就位后由此替换。
+
+在本机（macOS）跑一次含真实识别的完整流程：
+
+```sh
+go run ./tools/fetchdeps -platform current
+CGO_ENABLED=1 YOUKAI_DEV_SOURCE=$PWD/internal/recognition/testdata \
+  YOUKAI_DEV_AUTOSTART=1 go tool mygo dev
+```
+
+- `YOUKAI_DEV_SOURCE` 指定观测目录（含 `lines.tsv`），启用开发数据源；目录缺失或清单不符会在启动时失败。
+- `YOUKAI_DEV_AUTOSTART` 置任意非空值时，应用就绪后自动开始一次扫描（同样仅开发开关生效；就绪回调本身不做耗时工作，开始请求在独立 goroutine 中发出）。
+- `YOUKAI_DEV_PACE` 可选，把开发数据源的接纳节奏改为给定时长（如 `3s`）；默认 250ms。需要中途停止时用它把扫描拉长（无界面按钮时用退出事件触发停止并收尾）。
+
+日志确认要点：`dev scan source wired`、`scan <id> accepted`、每件盘一行 `item N recognized: name=… level=…`、`checkpoint generation N saved (… items)` 与结束行的检查点路径（开发应用数据根 `~/Library/Application Support/Youkai Dev/sessions/<id>/checkpoints/<gen>.json`）、退出时 `exit wrap-up complete`。退出事件（⌘Q/关窗）异步触发明确退出收尾：停止活动会话 → 等待收尾与最终保存 → 关闭识别器 → 销毁 ORT 环境 → 释放占用。
+
+持久化从扫描过程中开始：每次接纳观测（`internal/scan` 的接纳钩子）都会先写该件的证据图、再以 queued 状态把条目加入检查点文档，终结时只更新状态与载荷；崩溃后重开由 `internal/record` 把排队/运行条目标为中断未处理，已接纳的物品不会消失。
+
+应用服务层的行为（开始请求幂等与忙碌、保存失败可见可重试、重开读取中断记录等）由 `go test ./internal/app` 的服务层测试用假识别器覆盖，不依赖原生库；`internal/app` 的集成测试在 OCR 资源缺失时自动 `t.Skip`。
 
 ## 常用命令
 
@@ -25,7 +47,7 @@ cgo 说明：`internal/recognition` 依赖 cgo 编译 onnxruntime_go 的 C 桥�
 | `gofmt -l .` | 格式检查，无输出即通过。 |
 | `go vet ./...` | Go 静态检查。 |
 | `go build ./...` | 编译全部包。 |
-| `go test ./...` | 运行测试；`internal/recognition` 的集成测试在 OCR 资源缺失时自动跳过，本地需先运行 fetchdeps。 |
+| `go test ./...` | 运行测试；`internal/recognition` 与 `internal/app` 的集成测试在 OCR 资源缺失时自动跳过，本地需先运行 fetchdeps。 |
 | `go test -race ./internal/recognition` | 识别包的竞态检查（含取消与生命周期并发路径）。 |
 | `go tool mygo vet .` | 先运行 `go vet ./...`，再检查原生 UI 生命周期问题；参数是应用目录（项目根），不能写成 `./...`。 |
 | `go tool mygo dev` | 开发运行，编辑 Go 代码、配置或资源后自动重建重启；开发应用名为 `Youkai Dev`（标识 `com.lotwt.youkai.dev`，位于 `.mygo/dev`），与正式安装的数据和权限隔离。退出应用或 Ctrl+C 结束。 |
@@ -41,7 +63,7 @@ cgo 说明：`internal/recognition` 依赖 cgo 编译 onnxruntime_go 的 C 桥�
 | 占用域 | 锁文件位置 | 说明 |
 | --- | --- | --- |
 | 数据根占用 | 数据根内的 `youkai.lock`（正式版 `%LOCALAPPDATA%\Youkai\`、开发版对应 `Youkai Dev` 根；macOS 为 `~/Library/Application Support/<应用名>/`） | 入口在 `mygo.App.Run` 之前取得、进程退出释放；同一实际目录的路径别名（符号链接、`..`、大小写变体）天然落入同一占用域。第二实例取得失败即记录日志退出。 |
-| 扫描占用 | `~/Library/Application Support/com.lotwt.youkai/scan.lock`（macOS）；`%LOCALAPPDATA%\com.lotwt.youkai\scan.lock`（Windows） | 按用户固定，目录名用基础应用标识 `com.lotwt.youkai`（不带开发版后缀、不是数据根的显示名），因此开发版与正式版在同一 OS 用户下共享同一把锁；由数据根占用持有者按需取得（先数据根后扫描），扫描流程接入在应用服务里程碑。 |
+| 扫描占用 | `~/Library/Application Support/com.lotwt.youkai/scan.lock`（macOS）；`%LOCALAPPDATA%\com.lotwt.youkai\scan.lock`（Windows） | 按用户固定，目录名用基础应用标识 `com.lotwt.youkai`（不带开发版后缀、不是数据根的显示名），因此开发版与正式版在同一 OS 用户下共享同一把锁；由数据根占用持有者按需取得（先数据根后扫描）。应用服务在接纳开始请求时取得，会话结束（保存收尾完成）后释放；显式退出收尾兜底释放。 |
 
 开发者需知：锁文件为空文件，内容无意义，互斥完全来自 OS 原语；**不要删除运行中实例的锁文件**（删除后新进程会锁到新文件，占用域被拆散）。`internal/app` 的跨进程测试把扫描锁基目录注入为临时目录（Windows 的 Known Folder 无法按进程重定向，因此经测试注入而非环境变量），避免触碰真实用户目录或与正在运行的应用互相干扰。
 

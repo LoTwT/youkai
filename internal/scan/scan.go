@@ -10,7 +10,9 @@
 //     before selecting the next item, waits while the pipeline is full and
 //     still observes cancellation while waiting;
 //   - admission that assigns session-monotonic capture sequence numbers
-//     and pending records, with unadmitted attempts consuming no number;
+//     and pending records, with unadmitted attempts consuming no number,
+//     and an optional hook that reports each admission to the
+//     persistence layer before the task reaches the workers;
 //   - five-state accounting (queued, running, produced, failed,
 //     unprocessed) where the captured count always equals the sum of the
 //     five states and every sequence number terminates exactly once —
@@ -61,6 +63,16 @@ type Config struct {
 	Recognizer Recognizer
 	// Deliverer receives terminal records for persistence.
 	Deliverer Deliverer
+	// OnAdmit, when non-nil, is called right after an observation was
+	// admitted and before its task reaches the recognition workers, on
+	// the admitting goroutine (the controller's producer). The
+	// persistence layer records the admission there — evidence first,
+	// then the queued item — so an admitted observation survives a crash
+	// even when it never reaches a terminal outcome. The call happens
+	// outside the kernel's state lock; a non-nil error is reported as a
+	// storage fault, which cuts collection like a delivery failure and
+	// never cancels finalization.
+	OnAdmit func(seq Seq, observation any) error
 }
 
 // Session is one scan session kernel. It is safe for concurrent use by the

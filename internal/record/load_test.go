@@ -269,7 +269,7 @@ func TestLoadMarksInterruptions(t *testing.T) {
 		{Sequence: 2, Status: StatusQueued, Quality: QualityNotEvaluated},
 		{Sequence: 3, Status: StatusRunning, Quality: QualityNotEvaluated},
 		{Sequence: 4, Status: StatusUnprocessed, Reason: ReasonCancelled, Quality: QualityNotEvaluated},
-		{Sequence: 5, Status: StatusFailed, Quality: QualityNotEvaluated},
+		{Sequence: 5, Status: StatusFailed, Failure: "recognizer error", Quality: QualityNotEvaluated},
 	}
 	cp.Session.CapturedCount = 5
 	cp.Session.Coverage.Status = CoverageUnknown

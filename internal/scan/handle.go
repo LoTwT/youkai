@@ -72,6 +72,13 @@ type Slot struct {
 // Attempts that are not admitted never consume a sequence number. Admit
 // fails once the session stopped or sealed; the controller then discards
 // the slot and returns.
+//
+// When the session has an OnAdmit hook, it runs here — after the state
+// lock is released and before the task is queued — so the persistence
+// layer records the observation (its evidence and its queued item)
+// before any terminal outcome for it can exist. A hook error is a
+// storage fault that cuts collection; the task is still queued below,
+// and the stop the fault triggers drains or discards it like any stray.
 func (c *Slot) Admit(observation any) (Seq, error) {
 	s := c.s
 	s.mu.Lock()
@@ -92,6 +99,20 @@ func (c *Slot) Admit(observation any) (Seq, error) {
 	s.counts.Captured++
 	s.notifyLocked()
 	s.mu.Unlock()
+	// The admission hook runs outside the state lock, before the queue
+	// receives the task: the persistence layer's record of the admission
+	// strictly precedes any terminal outcome. It happens on this
+	// goroutine — the controller's producer — by design: admission
+	// bookkeeping belongs to the admission step, and its cost (evidence
+	// writes and a batched checkpoint at most) is part of pacing the
+	// collection loop.
+	if s.cfg.OnAdmit != nil {
+		if err := s.cfg.OnAdmit(seq, observation); err != nil {
+			s.mu.Lock()
+			s.faultLocked(CodeStorageFailure, err, s.phase, false)
+			s.mu.Unlock()
+		}
+	}
 	// The queue holds at most the outstanding tasks, which the capacity
 	// bounds, so this buffered send never blocks in a well-behaved
 	// session. It happens outside the lock on purpose: even a contract

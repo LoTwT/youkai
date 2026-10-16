@@ -534,3 +534,106 @@ func TestPermitLifecycle(t *testing.T) {
 	}
 	reconcile(t, s, sink)
 }
+
+// TestOnAdmitPrecedesWorkersAndSeesEveryAdmission pins the admission
+// hook's contract: it is called for every admitted sequence, before the
+// recognition workers can see the task, and never for discarded
+// attempts.
+func TestOnAdmitPrecedesWorkersAndSeesEveryAdmission(t *testing.T) {
+	var mu sync.Mutex
+	admitted := make(map[scan.Seq]string)
+	hook := func(seq scan.Seq, observation any) error {
+		mu.Lock()
+		admitted[seq] = fmt.Sprint(observation)
+		mu.Unlock()
+		return nil
+	}
+	recognizer := &scriptedRecognizer{recognize: func(ctx context.Context, task scan.Task, submit scan.Submit) error {
+		mu.Lock()
+		_, seen := admitted[task.Seq]
+		mu.Unlock()
+		if !seen {
+			t.Errorf("worker saw task %d before the admission hook ran", task.Seq)
+		}
+		return submit(task.SessionID, task.Seq, scan.Recognition{Result: "done"})
+	}}
+	ctrl := &scriptedController{collect: func(ctx context.Context, h *scan.ControllerHandle) error {
+		for i := 0; i < 3; i++ {
+			slot := h.Acquire(ctx)
+			if slot == nil {
+				return ctx.Err()
+			}
+			if _, err := slot.Admit(fmt.Sprintf("obs-%d", i)); err != nil {
+				slot.Discard()
+				return ctx.Err()
+			}
+		}
+		// A discarded attempt consumes no number and must not reach the
+		// hook either.
+		slot := h.Acquire(ctx)
+		if slot == nil {
+			return ctx.Err()
+		}
+		slot.Discard()
+		return nil
+	}}
+	sink := &recordSink{}
+	s, err := scan.Start(scan.Config{
+		ID:         "on-admit",
+		Capacity:   2,
+		Controller: ctrl,
+		Recognizer: recognizer,
+		Deliverer:  sink,
+		OnAdmit:    hook,
+	})
+	if err != nil {
+		t.Fatalf("scan.Start: %v", err)
+	}
+	snap := waitEnded(t, s)
+	if snap.End != scan.EndCompleted {
+		t.Fatalf("end %s, want completed", snap.End)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(admitted) != 3 {
+		t.Fatalf("hook saw %d admissions, want exactly the 3 admitted ones", len(admitted))
+	}
+	for seq, want := range map[scan.Seq]string{1: "obs-0", 2: "obs-1", 3: "obs-2"} {
+		if got := admitted[seq]; got != want {
+			t.Fatalf("hook saw %q for sequence %d, want %q", got, seq, want)
+		}
+	}
+}
+
+// TestOnAdmitErrorIsAStorageFault checks the hook's failure path: the
+// error cuts collection as a storage fault, the admission it failed for
+// is still counted, and the accounting still reconciles.
+func TestOnAdmitErrorIsAStorageFault(t *testing.T) {
+	ctrl := &scriptedController{collect: admitN(4)}
+	sink := &recordSink{}
+	s, err := scan.Start(scan.Config{
+		ID:         "on-admit-fault",
+		Capacity:   4,
+		Controller: ctrl,
+		Recognizer: echoRecognizer(),
+		Deliverer:  sink,
+		OnAdmit: func(seq scan.Seq, observation any) error {
+			if seq == 2 {
+				return errors.New("disk full")
+			}
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("scan.Start: %v", err)
+	}
+	snap := waitEnded(t, s)
+	if snap.End != scan.EndFailed {
+		t.Fatalf("end %s, want failed", snap.End)
+	}
+	assertTrigger(t, snap, scan.TriggerFault, scan.CodeStorageFailure, scan.PhaseCapturing)
+	if snap.Counts.Captured == 0 {
+		t.Fatalf("counts %+v, want the admission to count even though its hook failed", snap.Counts)
+	}
+	reconcile(t, s, sink)
+}

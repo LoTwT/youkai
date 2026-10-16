@@ -1,10 +1,15 @@
 // Command youkai is the entry point of the Youkai application. It only
-// assembles the app and opens the main window; feature packages are wired
-// in here as later milestones add them.
+// assembles the app and opens the main window: the application service
+// owns sessions, saving and the exit wrap-up, and the MyGo views of the
+// next milestone call into it.
 package main
 
 import (
+	"fmt"
 	"log"
+	"os"
+	"sync"
+	"time"
 
 	"github.com/LoTwT/youkai/internal/app"
 	"github.com/egoist/mygo"
@@ -31,18 +36,46 @@ func main() {
 
 	// The data-root occupancy must be held before Run and everything
 	// after it: the framework reads from PathUserData as Run starts, and
-	// later milestones read settings, checkpoints and history under the
-	// same root. A second youkai process on the same data root — under
-	// any path alias — fails here and exits; MyGo's own single-instance
-	// lock does not cover this occupancy, and the friendly failure UI and
-	// the hand-off to the running instance come with the application
-	// service of a later milestone.
+	// the service reads settings, checkpoints and history under the same
+	// root. A second youkai process on the same data root — under any
+	// path alias — fails here and exits; MyGo's own single-instance lock
+	// does not cover this occupancy. The service takes over the lock for
+	// the explicit-exit wrap-up; the deferred release stays as the crash
+	// fallback (Close is idempotent).
 	dataLock, err := app.AcquireDataRootLock(paths.Data)
 	if err != nil {
 		log.Fatalf("youkai: %v", err)
 	}
 	defer dataLock.Close()
 	log.Printf("youkai: data-root lock acquired on %q", paths.Data)
+
+	svc, err := app.NewService(app.Config{
+		Paths:    paths,
+		DataLock: dataLock,
+		Source:   devScanSource(),
+	})
+	if err != nil {
+		log.Fatalf("youkai: %v", err)
+	}
+
+	// The explicit-exit wrap-up. The quit event only triggers it
+	// asynchronously — a quit callback must not block the main thread on
+	// session finalization, recognition or disk writes — and main joins
+	// it after the event loop stopped, so the wrap-up always completes
+	// before the process exits.
+	var shutdownOnce sync.Once
+	shutdown := func() {
+		shutdownOnce.Do(func() {
+			if err := svc.Quit(); err != nil {
+				// A failed save stops the wrap-up short of the teardown;
+				// nothing retries it in this headless milestone, so the
+				// failure is reported and the process exits with the
+				// last durable checkpoint standing.
+				log.Printf("youkai: exit wrap-up incomplete: %v", err)
+			}
+		})
+	}
+	mygo.App.OnBeforeQuit(func(e *mygo.QuitEvent) { go shutdown() })
 
 	mygo.App.WhenReady(func() {
 		mygo.NewWindow(mygo.WindowOptions{
@@ -52,9 +85,58 @@ func main() {
 			Content: ui.View(view),
 		})
 	})
+	if os.Getenv("YOUKAI_DEV_AUTOSTART") != "" {
+		// Development-only auto start: the interface that starts scans
+		// arrives with the next milestone, so a full run is driven by an
+		// explicit environment switch. The ready callback stays fast —
+		// the start, and with it the first model load, runs on its own
+		// goroutine.
+		mygo.App.WhenReady(func() {
+			go func() {
+				req := app.StartRequest{ID: fmt.Sprintf("dev-autostart-%d", os.Getpid())}
+				out, err := svc.Start(req)
+				if err != nil {
+					log.Printf("youkai: dev autostart: %v", err)
+					return
+				}
+				log.Printf("youkai: dev autostart: scan %s (busy=%v replayed=%v)",
+					out.SessionID, out.Busy, out.Replayed)
+			}()
+		})
+	}
 	if err := mygo.App.Run(); err != nil {
 		log.Fatal(err)
 	}
+	shutdown()
+}
+
+// devScanSource wires the development data source when the explicit
+// environment switch names an observations directory (its lines.tsv and
+// the crop images it lists). It exists so a scan can be driven before
+// the game adapters of M2 exist — development and tests only; installed
+// builds run without it and the service then refuses starts with a
+// clear error. It is not a user-facing image import feature.
+func devScanSource() app.ScanSource {
+	dir := os.Getenv("YOUKAI_DEV_SOURCE")
+	if dir == "" {
+		return nil
+	}
+	src, err := app.LoadDevScanSource(dir)
+	if err != nil {
+		log.Fatalf("youkai: dev scan source %q: %v", dir, err)
+	}
+	// A development-only pace override (a Go duration like "3s"), for
+	// manual runs that need the scan to last long enough to stop it
+	// midway.
+	if raw := os.Getenv("YOUKAI_DEV_PACE"); raw != "" {
+		pace, err := time.ParseDuration(raw)
+		if err != nil || pace < 0 {
+			log.Fatalf("youkai: dev pace %q: %v", raw, err)
+		}
+		src.Pace = pace
+	}
+	log.Printf("youkai: dev scan source wired to %q (pace %s)", dir, src.Pace)
+	return src
 }
 
 // resourcesRoot returns the app's shipped-resources directory as the
