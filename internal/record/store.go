@@ -111,8 +111,16 @@ func (s *Store) resourcesDir(id string) string {
 	return filepath.Join(s.recordDir(id), "resources")
 }
 
+// EvidencePath returns the path of one evidence image below a data root.
+// Exported for the evidence view, which resolves images by their stable
+// record and evidence identity instead of assembling arbitrary paths; the
+// store itself reads and writes through the same layout.
+func EvidencePath(root, recordID, evidenceID string) string {
+	return filepath.Join(root, "sessions", recordID, "evidence", evidenceID+".png")
+}
+
 func (s *Store) evidencePath(id, evidenceID string) string {
-	return filepath.Join(s.evidenceDir(id), evidenceID+".png")
+	return EvidencePath(s.root, id, evidenceID)
 }
 
 func (s *Store) resourcePath(id, resourceID string) string {
