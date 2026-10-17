@@ -151,7 +151,10 @@ jobs:
         # never unpacked from the vc_redist installer, never committed to Git.
         # MyGo merges resources/windows-amd64/ into the EXE's directory, which
         # is where the Windows loader looks when onnxruntime.dll (inside
-        # onnxruntime/) resolves its static CRT imports.
+        # onnxruntime/) resolves its static CRT imports. The runtime must be
+        # no older than the toolset that built ONNX Runtime 1.29.0; the v14
+        # series is binary-compatible, so the newest runtime available on
+        # the runner is used.
         shell: pwsh
         run: |
           $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
@@ -159,18 +162,32 @@ jobs:
           $vs = & $vswhere -latest -products * -property installationPath
           if (-not $vs) { throw "vswhere found no Visual Studio installation" }
           $redistRoot = Join-Path $vs "VC\Redist\MSVC"
+          # VC\Redist\MSVC also holds non-version directories (e.g. "v145")
+          # that [version] cannot parse, so only children named as dotted
+          # numeric versions take part in the comparison.
           $latest = Get-ChildItem $redistRoot -Directory -ErrorAction Stop |
-            Sort-Object { [version]$_.Name } -Descending | Select-Object -First 1
-          if (-not $latest) { throw "no VC\Redist\MSVC\<version> directory under $redistRoot" }
-          $crt = Join-Path $latest.FullName "x64\Microsoft.VC143.CRT"
-          $info = "VC++ redist directory: $($latest.FullName)"
+            Where-Object { $_.Name -match '^\d+(\.\d+)+$' } |
+            Sort-Object { [version]$_.Name } -Descending |
+            Select-Object -First 1
+          if (-not $latest) { throw "no dotted-numeric VC\Redist\MSVC\<version> directory under $redistRoot" }
+          # The CRT folder name carries the toolset generation
+          # (Microsoft.VC143.CRT today, Microsoft.VC145.CRT on newer Visual
+          # Studio); keep it unpinned and take the highest-numbered VC14x
+          # directory under the chosen version's x64.
+          $crt = Get-ChildItem (Join-Path $latest.FullName "x64") -Directory -ErrorAction Stop |
+            Where-Object { $_.Name -match '^Microsoft\.VC14\d*\.CRT$' } |
+            Sort-Object { [int]($_.Name -replace '^Microsoft\.VC(\d+)\.CRT$', '$1') } -Descending |
+            Select-Object -First 1
+          if (-not $crt) { throw "no Microsoft.VC14*.CRT directory under $($latest.FullName)\x64" }
+          $info = "VC++ redist version directory: $($latest.Name) ($($latest.FullName))"
+          $info += "`nCRT directory (x64): $($crt.Name)"
           foreach ($name in "MSVCP140.dll","MSVCP140_1.dll","VCRUNTIME140.dll","VCRUNTIME140_1.dll") {
-            $src = Join-Path $crt $name
+            $src = Join-Path $crt.FullName $name
             if (-not (Test-Path $src)) { throw "missing VC++ redist DLL: $src" }
             Copy-Item $src (Join-Path "resources/windows-amd64" $name) -Force
             $fileVersion = (Get-Item $src).VersionInfo.FileVersion
             $info += "`n$name  file version $fileVersion"
-            Write-Host "$name  file version $fileVersion  <- $($latest.Name)"
+            Write-Host "$name  file version $fileVersion  <- $($latest.Name)\x64\$($crt.Name)"
           }
           Set-Content -Path vc-redist-info.txt -Value $info -Encoding utf8
       - name: Build the EXE and the NSIS installer
@@ -272,7 +289,7 @@ jobs:
             entry "VCRUNTIME140.dll" "build/windows-amd64/VCRUNTIME140.dll"
             entry "VCRUNTIME140_1.dll" "build/windows-amd64/VCRUNTIME140_1.dll"
             echo
-            echo "ONNX Runtime 1.29.0 imports the VC++ v14 series (MSVCP140.dll, MSVCP140_1.dll, VCRUNTIME140.dll, VCRUNTIME140_1.dll; see T3 固定组合与制品静态核查); the v14 series is binary-compatible, so the runner's latest Microsoft.VC143.CRT is not older than the toolset that built it. Actual loading on a clean Windows machine is a Windows test item."
+            echo "ONNX Runtime 1.29.0 imports the VC++ v14 series (MSVCP140.dll, MSVCP140_1.dll, VCRUNTIME140.dll, VCRUNTIME140_1.dll; see T3 固定组合与制品静态核查); the v14 series is binary-compatible, so the runner's newest VC14x CRT (recorded above) is not older than the toolset that built it. Actual loading on a clean Windows machine is a Windows test item."
           } | tee packaging-manifest-windows-amd64.txt
       - name: Upload the installer and the manifest
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
