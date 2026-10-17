@@ -74,6 +74,14 @@ type Config struct {
 	// EvidenceCacheLimit bounds the decoded evidence bitmaps held at
 	// once; 0 uses evidenceCacheLimit.
 	EvidenceCacheLimit int
+	// Updates checks for and installs application updates (see
+	// update.go); nil hides the update area entirely.
+	Updates UpdateSource
+	// OnUpdateInstalled runs on the UI thread after an update installed
+	// successfully — the entry point relaunches the application in it,
+	// which runs the normal quit sequence (a session whose save keeps
+	// failing refuses the restart, and the window stays).
+	OnUpdateInstalled func()
 	// OnExitSettled runs on the UI thread after an explicit exit
 	// succeeded — the entry point quits the application in it. A failed
 	// wrap-up (an unsaved result) keeps the window instead.
@@ -141,6 +149,20 @@ type Model struct {
 	exitState exitState
 	exitErr   string
 
+	// The auto-update corner's state (update.go); updatesEnabled is cached
+	// from Updates at construction — Enabled probes the install location,
+	// too costly to repeat every frame, and the answer cannot change
+	// within a run.
+	updates           UpdateSource
+	updatesEnabled    bool
+	updatesState      updateState
+	updatesVersion    string
+	updatesNotes      string
+	updatesHandle     UpdateHandle
+	updatesCheckErr   string
+	updatesInstallErr string
+	updatesProgress   float64
+
 	cache *evidenceCache
 }
 
@@ -159,6 +181,10 @@ func New(cfg Config) *Model {
 		source: cfg.ScanSource,
 		split:  380,
 		cache:  newEvidenceCache(cfg.Evidence, limit),
+	}
+	if cfg.Updates != nil {
+		m.updates = cfg.Updates
+		m.updatesEnabled = cfg.Updates.Enabled()
 	}
 	m.list.Selected = &m.selected
 	return m
@@ -397,11 +423,19 @@ func (m *Model) Start() {
 }
 
 // canStart says whether the start button is usable: a source must be
-// wired, no start may be in flight, no session may hold the active slot
-// and the process may not be exiting.
+// wired, no start may be in flight, no session may hold the active slot,
+// the process may not be exiting, and no update may be installing or done
+// and about to restart — a scan just begun would be cut short by it.
 func (m *Model) canStart() bool {
 	return m.source.Available && m.startReqID == "" && !m.snap.Busy &&
-		m.exitState == exitIdle
+		m.exitState == exitIdle && !m.updateRestartImminent()
+}
+
+// updateRestartImminent reports whether an update is downloading or has
+// installed and the restart is due: the model stops offering scans for
+// the rest of the run.
+func (m *Model) updateRestartImminent() bool {
+	return m.updatesState == updateInstalling || m.updatesState == updateInstalled
 }
 
 // Stop requests the idempotent user stop of the active session.

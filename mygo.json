@@ -4,6 +4,10 @@
   "version": "0.0.1",
   "main": "./cmd/youkai",
   "out": "build",
+  "updates": {
+    "publicKey": "1NEJ3nMW2Y8VP1uPVJSj1LHkPsxQlDnFVA2H+4X7Ii0=",
+    "github": "LoTwT/youkai"
+  },
   "macos": {
     "minimumSystemVersion": "14.0"
   }
