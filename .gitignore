@@ -12,6 +12,9 @@ mygo_windows_*.syso
 /resources/windows-amd64/onnxruntime/
 /resources/darwin-arm64/onnxruntime/
 /resources/models/
+# VC++ runtime DLLs placed by the packaging workflow from the Actions
+# Windows runner's Visual Studio (docs/development.md 打包与安装包)
+/resources/windows-amd64/*.dll
 /.fetchdeps-cache/
 
 # OS
