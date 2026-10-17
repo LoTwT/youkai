@@ -14,6 +14,7 @@
 - [T7：构建打包与交付验收](specs/t7-public-release-acceptance.md)：首版交付门槛、无付费证书的打包路线、最低系统候选。
 - [扫描器背景与参考实现](scanner-handoff.md)：项目起因、参考扫描器研究结论和与 fairy 的边界。
 - [开发指南](development.md)：环境要求与当前实际可用的构建、测试、MyGo 开发命令。
+- [M1 Windows 实机测试报告](reports/2026-10-17-m1-windows-test.md)：首份实测报告——Package workflow 安装包在 Windows 11 实机的下载核对、安装、识别自检、启动、第二实例、数据目录与卸载结果，含未覆盖项与观察项。
 
 ## 目录约定
 
@@ -30,6 +31,7 @@
 | `specs/` | 专项需求、设计、必要的调研结论与取舍依据、接口合同、验收标准。 |
 | `references/` | 供查阅的领域资料、第三方约束与资料来源，由相关规格或实现引用。 |
 | `decisions/` | 需要独立保存的重要决策历史、当时的背景与取舍。 |
+| `reports/` | 实机与制品测试的实测报告，以日期与主题命名；记录至少包含的内容见[实施清单第 5 节](specs/scanner-implementation-plan.md#5-验证命令与执行记录)。 |
 
 ## 内容维护
 
