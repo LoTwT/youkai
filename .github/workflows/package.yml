@@ -12,6 +12,11 @@
 # Versions stay in mygo.json (currently 0.0.1); these are test builds, so the
 # manifest and the workflow artifact name carry the commit SHA instead of a
 # release tag.
+#
+# Updates are off in these builds (2026-10-17 决定): the updates section is
+# removed from mygo.json before the build, so nothing of the update
+# configuration is embedded and no update files are produced. The Release
+# workflow (release.yml) builds the updating packages; see docs/release.md.
 name: Package
 
 on:
@@ -33,6 +38,19 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      - name: Turn updates off (test builds do not update)
+        # The build embeds the update feed and public key whenever mygo.json
+        # carries updates — even without a signing key — so removing the
+        # section is what actually disables updates. The checkout's copy is
+        # modified, never committed; the self-test below asserts the state
+        # of the built artifact itself.
+        shell: bash
+        run: |
+          set -eu
+          jq 'del(.updates)' mygo.json > mygo.json.tmp
+          mv mygo.json.tmp mygo.json
+          test "$(jq 'has("updates")' mygo.json)" = false
+          echo "updates removed from mygo.json for this test build"
       - name: Download OCR resources (fetchdeps)
         run: go run ./tools/fetchdeps -platform darwin/arm64
       - name: Build the app bundle and DMG
@@ -85,11 +103,18 @@ jobs:
       - name: Recognition self-test on the packaged app
         # The bundle is ad-hoc signed on this runner, so it runs here. The
         # check loads the bundled dylib and model from Contents/Resources and
-        # recognizes one embedded sample; it exits non-zero on failure.
+        # recognizes one embedded sample; it exits non-zero on failure. Its
+        # first line also reports this build's updater state, asserted here:
+        # a test build must have updates off.
         shell: bash
         run: |
           set -e
-          YOUKAI_SELFTEST=1 "build/darwin-arm64/Youkai.app/Contents/MacOS/Youkai"
+          YOUKAI_SELFTEST=1 "build/darwin-arm64/Youkai.app/Contents/MacOS/Youkai" 2>selftest-stderr.txt
+          cat selftest-stderr.txt
+          grep -q 'youkai: self-test: updates=disabled' selftest-stderr.txt || {
+            echo "ERROR: updates must be disabled in a Package build — the self-test log does not say updates=disabled"
+            exit 1
+          }
       - name: Write the packaging manifest
         shell: bash
         run: |
@@ -143,6 +168,16 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      - name: Turn updates off (test builds do not update)
+        # See the macOS job: removing the updates section is what disables
+        # updates; the self-test below asserts the built artifact's state.
+        shell: bash
+        run: |
+          set -eu
+          jq 'del(.updates)' mygo.json > mygo.json.tmp
+          mv mygo.json.tmp mygo.json
+          test "$(jq 'has("updates")' mygo.json)" = false
+          echo "updates removed from mygo.json for this test build"
       - name: Download OCR resources (fetchdeps)
         run: go run ./tools/fetchdeps -platform windows/amd64
       - name: Place the VC++ runtime DLLs next to the app (app-local)
@@ -244,7 +279,9 @@ jobs:
         # Runs the GUI-subsystem EXE headlessly: the self-test path returns
         # before any window exists, loading the bundled onnxruntime.dll —
         # whose CRT imports resolve through the VC++ DLLs placed next to the
-        # EXE — and the model, then recognizing one embedded sample.
+        # EXE — and the model, then recognizing one embedded sample. The
+        # log's first line reports the updater state, asserted here: a test
+        # build must have updates off.
         shell: pwsh
         run: |
           $env:YOUKAI_SELFTEST = "1"
@@ -257,6 +294,9 @@ jobs:
             $out = Get-Content selftest-stdout.txt -Raw
             if ($out) { Write-Host $out }
             throw "recognition self-test failed: exit code $($p.ExitCode) — the stderr above names the library and model paths it tried; a missing VC++ DLL or a broken packaged layout shows up here"
+          }
+          if (-not (Select-String -Path selftest-stderr.txt -Pattern 'youkai: self-test: updates=disabled' -Quiet)) {
+            throw "updates must be disabled in a Package build — the self-test log does not say updates=disabled"
           }
       - name: Write the packaging manifest
         shell: bash

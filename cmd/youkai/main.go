@@ -119,6 +119,13 @@ func main() {
 			Reason:    "当前构建没有接入游戏扫描源（M2 接入游戏适配）；开发构建可通过环境变量 YOUKAI_DEV_SOURCE 启用开发数据源。",
 		},
 		Evidence: ui.FileEvidence{Root: paths.Data},
+		// The auto-update corner: MyGo's updater behind the UI's seam, and
+		// the restart after a successful install. Relaunch runs the normal
+		// quit sequence — a session whose final save keeps failing refuses
+		// it, the window stays with its retry, and the installed update
+		// runs at the next launch.
+		Updates:           mygoUpdates{},
+		OnUpdateInstalled: func() { mygo.App.Relaunch() },
 		// A settled explicit exit closes the application: the model's
 		// quit goroutine already waited for the wrap-up, so this Quit
 		// re-enters the allowed path (the model allows the close) and the
@@ -170,6 +177,13 @@ func main() {
 		})
 		model.Attach(win)
 
+		// One update check in the background after startup (2026-10-17
+		// 决定): it neither blocks the ready callback — the check runs in
+		// the model's own background work — nor activates the window; its
+		// result lands through Update, which only redraws. Builds without
+		// updates ignore it (the area explains that state instead).
+		model.CheckUpdates()
+
 		// The subscription pump: a notification only means "something
 		// changed", so the pump re-fetches the authoritative snapshot and
 		// hands it to the model on the UI thread, which discards stale
@@ -216,6 +230,16 @@ func main() {
 // from a terminal (or with redirection on Windows, whose GUI subsystem has
 // no console) to see it.
 func selfTest(root string) {
+	// The updater state of this build, before anything else: both
+	// packaging workflows assert it — the Package workflow builds without
+	// the updates configuration (updates=disabled), the Release workflow
+	// with the signing key (updates=enabled). Reporting it here keeps the
+	// assertion on the very artifact that ships, not on the build log.
+	if mygo.Updater.Enabled() {
+		log.Printf("youkai: self-test: updates=enabled")
+	} else {
+		log.Printf("youkai: self-test: updates=disabled")
+	}
 	res, err := app.OCRResources(root)
 	if err != nil {
 		log.Fatalf("youkai: self-test: %v", err)

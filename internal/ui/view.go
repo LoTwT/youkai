@@ -51,6 +51,8 @@ func (m *Model) View(c *ui.Context) {
 		}
 		ui.Divider(c)
 		m.resultsArea(c, t)
+		ui.Divider(c)
+		m.updateArea(c, t)
 		if m.exitState != exitIdle {
 			ui.Divider(c)
 			m.exitArea(c, t)
@@ -86,6 +88,8 @@ func (m *Model) startNote() string {
 		return "开始失败：" + m.startErr
 	case m.snap.Busy:
 		return fmt.Sprintf("扫描进行中（会话 %s），结束后可再次开始。", m.snap.SessionID)
+	case m.updateRestartImminent():
+		return "正在安装更新，应用稍后将自动重启；暂不能开始扫描。"
 	case m.startReqID != "":
 		return "正在开始扫描……"
 	case !m.source.Available:

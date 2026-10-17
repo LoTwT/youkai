@@ -1,0 +1,456 @@
+# Release builds for both channels, signed for MyGo's auto-update and
+# published on GitHub Releases (LoTwT/youkai) — the update source the apps
+# check (mygo.json's updates). Two channels, kept apart by MyGo's
+# updates.tagPrefix (see docs/release.md):
+#
+#   - test:  tags test-v<version> (test-v0.0.1). Test builds check only
+#     test-v releases, found through the GitHub API. Their releases are
+#     published as ordinary releases — the updater only accepts published,
+#     non-draft, non-prerelease releases — but never as the repository's
+#     latest, and the title and notes say 测试版，勿用.
+#   - stable: tags v<version> (v0.0.1). MyGo treats the prefix "v" as no
+#     prefix: stable builds read the repository's latest release, which
+#     test releases never become. (Even on the API path the prefix "v"
+#     could not match a test-v… tag.)
+#
+# The draft release is created before the builds so both platform jobs
+# upload into the same draft. Each platform job verifies its own packaged
+# layout (bundled resources, signatures, the recognition self-test and the
+# updater state of the built artifact) before uploading; the publish job
+# runs only after both platforms succeeded, verifies the release's assets
+# are complete, and publishes the draft for the channel. Failed jobs can
+# be re-run: they replace their assets in the same draft (--clobber).
+#
+# Versions come from the tags: the source mygo.json stays at its
+# development version, and each job writes the tag's version and channel
+# prefix into its checkout's copy of mygo.json — the built app,
+# mygo.App.Version() and the tag always agree, without version bumps in
+# the repository. Every released version needs a "## <version>" section in
+# CHANGELOG.md: MyGo fails the build without it (the section becomes the
+# in-app release notes), and the draft job checks it before building
+# anything.
+name: Release
+
+on:
+  push:
+    tags:
+      - "test-v*"
+      - "v*"
+
+permissions:
+  contents: write # the draft release, the uploads to it, and publishing it
+
+jobs:
+  draft-release:
+    name: Validate the tag and create the draft release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Validate the tag, the changelog and the update configuration
+        # Fail before anything is built when the tag is malformed, its
+        # version has no changelog section, or the update source is not in
+        # place — a wrong tag then builds nothing at all.
+        shell: bash
+        run: |
+          set -eu
+          tag="${GITHUB_REF_NAME}"
+          case "$tag" in
+            test-v*) prefix="test-v" ;;
+            v*) prefix="v" ;;
+            *) echo "ERROR: tag $tag matches neither test-v* nor v*"; exit 1 ;;
+          esac
+          version="${tag#"$prefix"}"
+          if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "ERROR: tag $tag — the part after $prefix must be major.minor.patch (each a number), got: $version"
+            exit 1
+          fi
+          echo "channel prefix: $prefix, version: $version"
+          # The update manifests carry the version's CHANGELOG.md section
+          # as the in-app release notes; `mygo build` fails the release
+          # without it, and this early check names the fix.
+          esc=$(printf '%s' "$version" | sed 's/\./\\./g')
+          if ! grep -Eq "^## ${esc}( |\]|$)" CHANGELOG.md; then
+            echo "ERROR: CHANGELOG.md has no \"## $version\" section — add one (its text becomes the release notes of both channels)"
+            exit 1
+          fi
+          # A release build needs the update source in the configuration.
+          if [ "$(jq -r '.updates.publicKey // empty' mygo.json)" = "" ] ||
+             [ "$(jq -r '.updates.github // empty' mygo.json)" != "LoTwT/youkai" ]; then
+            echo "ERROR: mygo.json must carry updates.publicKey and updates.github (\"LoTwT/youkai\") for release builds"
+            exit 1
+          fi
+      - name: Create the draft release
+        # Both platform jobs upload into this one draft; without it each
+        # `mygo build -upload` would create a draft of its own.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+              --draft --verify-tag --title "$GITHUB_REF_NAME" --generate-notes
+          fi
+
+  macos:
+    name: Build and upload (darwin/arm64)
+    needs: draft-release
+    runs-on: macos-latest # Apple Silicon
+    timeout-minutes: 40
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Set the release version and channel in mygo.json
+        # The checkout's copy is modified, never committed. The version and
+        # the channel come from the tag; the channel prefix decides which
+        # releases the built app treats as its own.
+        shell: bash
+        run: |
+          set -eu
+          tag="${GITHUB_REF_NAME}"
+          case "$tag" in
+            test-v*) prefix="test-v" ;;
+            v*) prefix="v" ;;
+            *) echo "ERROR: unexpected tag $tag (the workflow triggers on test-v* and v*)"; exit 1 ;;
+          esac
+          version="${tag#"$prefix"}"
+          jq --arg version "$version" --arg tagPrefix "$prefix" \
+            '.version = $version | .updates.tagPrefix = $tagPrefix' mygo.json > mygo.json.tmp
+          mv mygo.json.tmp mygo.json
+          echo "RELEASE_VERSION=$version" >> "$GITHUB_ENV"
+          echo "building Youkai $version on channel prefix $prefix"
+      - name: Download OCR resources (fetchdeps)
+        run: go run ./tools/fetchdeps -platform darwin/arm64
+      - name: Build the app bundle, the DMG and the signed update, and upload
+        # CGO_ENABLED must be explicit: MyGo forces CGO_ENABLED=0 when the
+        # environment leaves it unset, and the OCR bindings need cgo. The
+        # deployment target matches the macos.minimumSystemVersion of
+        # mygo.json (14.0). MYGO_UPDATER_PRIVATE_KEY signs the update
+        # archive and manifest — without it the build skips the update
+        # files and the verification below fails — and GH_TOKEN lets the
+        # upload reach the draft release (and the delta computation read
+        # the published releases).
+        env:
+          CGO_ENABLED: "1"
+          MACOSX_DEPLOYMENT_TARGET: "14.0"
+          GH_TOKEN: ${{ github.token }}
+          MYGO_UPDATER_PRIVATE_KEY: ${{ secrets.MYGO_UPDATER_PRIVATE_KEY }}
+        run: go tool mygo build -platform darwin/arm64 -upload
+      - name: Verify the bundle, the DMG, the signature and the update files
+        shell: bash
+        run: |
+          set -u
+          app="build/darwin-arm64/Youkai.app"
+          dmg=$(find build/darwin-arm64 -maxdepth 1 -name '*.dmg' -print -quit)
+          archive="build/darwin-arm64/youkai-${RELEASE_VERSION}-darwin-arm64.tar.gz"
+          manifest="build/darwin-arm64/update-darwin-arm64.json"
+          fail=0
+          if [ ! -d "$app" ]; then
+            echo "ERROR: missing app bundle: $app"
+            fail=1
+          fi
+          if [ -z "$dmg" ]; then
+            echo "ERROR: no DMG under build/darwin-arm64 (MyGo skips the disk image with a warning when hdiutil fails; a release must have one)"
+            fail=1
+          fi
+          for f in \
+            "Contents/Resources/onnxruntime/libonnxruntime.1.29.0.dylib" \
+            "Contents/Resources/onnxruntime/LICENSE" \
+            "Contents/Resources/onnxruntime/ThirdPartyNotices.txt" \
+            "Contents/Resources/models/PP-OCRv6_rec_small.onnx" \
+            "Contents/Resources/THIRD-PARTY-NOTICES.md"; do
+            if [ ! -e "$app/$f" ]; then
+              echo "ERROR: missing bundled resource: $app/$f"
+              fail=1
+            fi
+          done
+          for f in "$archive" "$manifest"; do
+            if [ ! -f "$f" ]; then
+              echo "ERROR: missing update file — the build must sign updates, so MYGO_UPDATER_PRIVATE_KEY is missing or does not match updates.publicKey: $f"
+              fail=1
+            fi
+          done
+          if [ "$fail" -ne 0 ]; then
+            exit 1
+          fi
+          # The manifest serves the tag's version and points its archive at
+          # this very release, so installed apps can never be fed another
+          # channel's files.
+          jq -e --arg version "$RELEASE_VERSION" --arg tag "$GITHUB_REF_NAME" \
+            '.version == $version and (.url | endswith("/" + $tag + "/youkai-" + $version + "-darwin-arm64.tar.gz"))' \
+            "$manifest" > /dev/null || {
+            echo "ERROR: $manifest does not serve version $RELEASE_VERSION from tag $GITHUB_REF_NAME"
+            cat "$manifest"
+            exit 1
+          }
+          # The ad-hoc signature must cover the whole bundle, including the
+          # bundled dylib (which keeps its own valid signature when upstream
+          # ships one; MyGo ad-hoc signs only unsigned Mach-O files).
+          codesign --verify --deep --strict --verbose=2 "$app"
+          echo "--- executable and dylib minimum system (LC_BUILD_VERSION) ---"
+          otool -l "$app/Contents/MacOS/Youkai" | grep -A3 LC_BUILD_VERSION
+          otool -l "$app/Contents/Resources/onnxruntime/libonnxruntime.1.29.0.dylib" | grep -A3 LC_BUILD_VERSION
+      - name: Recognition self-test on the packaged app
+        # The bundle is ad-hoc signed on this runner, so it runs here. The
+        # check loads the bundled dylib and model from Contents/Resources and
+        # recognizes one embedded sample; it exits non-zero on failure. Its
+        # first line also reports the updater state, asserted here: a
+        # release build must have updates on.
+        shell: bash
+        run: |
+          set -e
+          YOUKAI_SELFTEST=1 "build/darwin-arm64/Youkai.app/Contents/MacOS/Youkai" 2>selftest-stderr.txt
+          cat selftest-stderr.txt
+          grep -q 'youkai: self-test: updates=enabled' selftest-stderr.txt || {
+            echo "ERROR: a release build must have updates on — the self-test log does not say updates=enabled"
+            exit 1
+          }
+
+  windows:
+    name: Build and upload (windows/amd64)
+    needs: draft-release
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Set the release version and channel in mygo.json
+        # See the macOS job: the version and channel come from the tag; the
+        # checkout's copy is modified, never committed.
+        shell: bash
+        run: |
+          set -eu
+          tag="${GITHUB_REF_NAME}"
+          case "$tag" in
+            test-v*) prefix="test-v" ;;
+            v*) prefix="v" ;;
+            *) echo "ERROR: unexpected tag $tag (the workflow triggers on test-v* and v*)"; exit 1 ;;
+          esac
+          version="${tag#"$prefix"}"
+          jq --arg version "$version" --arg tagPrefix "$prefix" \
+            '.version = $version | .updates.tagPrefix = $tagPrefix' mygo.json > mygo.json.tmp
+          mv mygo.json.tmp mygo.json
+          echo "RELEASE_VERSION=$version" >> "$GITHUB_ENV"
+          echo "building Youkai $version on channel prefix $prefix"
+      - name: Download OCR resources (fetchdeps)
+        run: go run ./tools/fetchdeps -platform windows/amd64
+      - name: Place the VC++ runtime DLLs next to the app (app-local)
+        # App-local VC++ deployment (T3 绑定与运行库的实际交接): the four x64
+        # CRT DLLs come from the runner's Visual Studio VC\Redist directory —
+        # never unpacked from the vc_redist installer, never committed to Git.
+        # MyGo merges resources/windows-amd64/ into the EXE's directory, which
+        # is where the Windows loader looks when onnxruntime.dll (inside
+        # onnxruntime/) resolves its static CRT imports. The runtime must be
+        # no older than the toolset that built ONNX Runtime 1.29.0; the v14
+        # series is binary-compatible, so the newest runtime available on
+        # the runner is used.
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          if (-not (Test-Path $vswhere)) { throw "vswhere.exe not found at $vswhere" }
+          $vs = & $vswhere -latest -products * -property installationPath
+          if (-not $vs) { throw "vswhere found no Visual Studio installation" }
+          $redistRoot = Join-Path $vs "VC\Redist\MSVC"
+          # VC\Redist\MSVC also holds non-version directories (e.g. "v145")
+          # that [version] cannot parse, so only children named as dotted
+          # numeric versions take part in the comparison.
+          $latest = Get-ChildItem $redistRoot -Directory -ErrorAction Stop |
+            Where-Object { $_.Name -match '^\d+(\.\d+)+$' } |
+            Sort-Object { [version]$_.Name } -Descending |
+            Select-Object -First 1
+          if (-not $latest) { throw "no dotted-numeric VC\Redist\MSVC\<version> directory under $redistRoot" }
+          # The CRT folder name carries the toolset generation
+          # (Microsoft.VC143.CRT today, Microsoft.VC145.CRT on newer Visual
+          # Studio); keep it unpinned and take the highest-numbered VC14x
+          # directory under the chosen version's x64.
+          $crt = Get-ChildItem (Join-Path $latest.FullName "x64") -Directory -ErrorAction Stop |
+            Where-Object { $_.Name -match '^Microsoft\.VC14\d*\.CRT$' } |
+            Sort-Object { [int]($_.Name -replace '^Microsoft\.VC(\d+)\.CRT$', '$1') } -Descending |
+            Select-Object -First 1
+          if (-not $crt) { throw "no Microsoft.VC14*.CRT directory under $($latest.FullName)\x64" }
+          $info = "VC++ redist version directory: $($latest.Name) ($($latest.FullName))"
+          $info += "`nCRT directory (x64): $($crt.Name)"
+          foreach ($name in "MSVCP140.dll","MSVCP140_1.dll","VCRUNTIME140.dll","VCRUNTIME140_1.dll") {
+            $src = Join-Path $crt.FullName $name
+            if (-not (Test-Path $src)) { throw "missing VC++ redist DLL: $src" }
+            Copy-Item $src (Join-Path "resources/windows-amd64" $name) -Force
+            $fileVersion = (Get-Item $src).VersionInfo.FileVersion
+            $info += "`n$name  file version $fileVersion"
+            Write-Host "$name  file version $fileVersion  <- $($latest.Name)\x64\$($crt.Name)"
+          }
+          Set-Content -Path vc-redist-info.txt -Value $info -Encoding utf8
+      - name: Build the EXE, the NSIS installer and the signed update, and upload
+        # Explicit CGO_ENABLED: MyGo defaults its child processes to
+        # CGO_ENABLED=0 unless the environment overrides it. NSIS: MyGo
+        # downloads it on Windows when makensis is not installed, and the
+        # artifact check below fails loudly if the installer is missing.
+        # MYGO_UPDATER_PRIVATE_KEY signs the update archive and manifest.
+        env:
+          CGO_ENABLED: "1"
+          GH_TOKEN: ${{ github.token }}
+          MYGO_UPDATER_PRIVATE_KEY: ${{ secrets.MYGO_UPDATER_PRIVATE_KEY }}
+        run: go tool mygo build -platform windows/amd64 -upload
+      - name: Verify the EXE, the installer, the packaged layout and the update files
+        shell: bash
+        run: |
+          set -u
+          exe="build/windows-amd64/Youkai.exe"
+          setup=$(find build/windows-amd64 -maxdepth 1 -name '*Setup*.exe' -print -quit)
+          archive="build/windows-amd64/youkai-${RELEASE_VERSION}-windows-amd64.tar.gz"
+          manifest="build/windows-amd64/update-windows-amd64.json"
+          fail=0
+          if [ ! -f "$exe" ]; then
+            echo "ERROR: missing executable: $exe"
+            fail=1
+          fi
+          if [ -z "$setup" ]; then
+            echo "ERROR: no NSIS installer under build/windows-amd64 — MyGo skips the installer with a mere warning when NSIS/makensis is unavailable; a release must produce it"
+            fail=1
+          fi
+          # The merged resource root is the EXE's own directory: every
+          # bundled artifact must sit right next to Youkai.exe.
+          for f in \
+            "onnxruntime/onnxruntime.dll" \
+            "onnxruntime/onnxruntime_providers_shared.dll" \
+            "onnxruntime/LICENSE" \
+            "onnxruntime/ThirdPartyNotices.txt" \
+            "models/PP-OCRv6_rec_small.onnx" \
+            "THIRD-PARTY-NOTICES.md" \
+            "MSVCP140.dll" \
+            "MSVCP140_1.dll" \
+            "VCRUNTIME140.dll" \
+            "VCRUNTIME140_1.dll"; do
+            if [ ! -e "build/windows-amd64/$f" ]; then
+              echo "ERROR: missing packaged file next to the EXE: build/windows-amd64/$f"
+              fail=1
+            fi
+          done
+          for f in "$archive" "$manifest"; do
+            if [ ! -f "$f" ]; then
+              echo "ERROR: missing update file — the build must sign updates, so MYGO_UPDATER_PRIVATE_KEY is missing or does not match updates.publicKey: $f"
+              fail=1
+            fi
+          done
+          if [ "$fail" -ne 0 ]; then
+            exit 1
+          fi
+          # The manifest serves the tag's version and points its archive at
+          # this very release.
+          jq -e --arg version "$RELEASE_VERSION" --arg tag "$GITHUB_REF_NAME" \
+            '.version == $version and (.url | endswith("/" + $tag + "/youkai-" + $version + "-windows-amd64.tar.gz"))' \
+            "$manifest" > /dev/null || {
+            echo "ERROR: $manifest does not serve version $RELEASE_VERSION from tag $GITHUB_REF_NAME"
+            cat "$manifest"
+            exit 1
+          }
+          echo "--- installer contents (7z listing) ---"
+          7z l "$setup" || { echo "ERROR: 7z failed to list the installer"; exit 1; }
+          echo "--- VC++ DLLs inside the installer ---"
+          for name in MSVCP140.dll MSVCP140_1.dll VCRUNTIME140.dll VCRUNTIME140_1.dll; do
+            7z l "$setup" | grep -i "$name" || { echo "ERROR: $name not found in the installer"; exit 1; }
+          done
+      - name: Recognition self-test on the packaged EXE
+        # Runs the GUI-subsystem EXE headlessly: the self-test path returns
+        # before any window exists, loading the bundled onnxruntime.dll —
+        # whose CRT imports resolve through the VC++ DLLs placed next to the
+        # EXE — and the model, then recognizing one embedded sample. The
+        # log's first line reports the updater state, asserted here: a
+        # release build must have updates on.
+        shell: pwsh
+        run: |
+          $env:YOUKAI_SELFTEST = "1"
+          $exe = "build\windows-amd64\Youkai.exe"
+          $p = Start-Process -FilePath $exe -NoNewWindow -Wait -PassThru `
+            -RedirectStandardOutput selftest-stdout.txt -RedirectStandardError selftest-stderr.txt
+          $err = Get-Content selftest-stderr.txt -Raw
+          if ($err) { Write-Host $err }
+          if ($p.ExitCode -ne 0) {
+            $out = Get-Content selftest-stdout.txt -Raw
+            if ($out) { Write-Host $out }
+            throw "recognition self-test failed: exit code $($p.ExitCode) — the stderr above names the library and model paths it tried; a missing VC++ DLL or a broken packaged layout shows up here"
+          }
+          if (-not (Select-String -Path selftest-stderr.txt -Pattern 'youkai: self-test: updates=enabled' -Quiet)) {
+            throw "a release build must have updates on — the self-test log does not say updates=enabled"
+          }
+
+  publish:
+    name: Verify the release assets and publish
+    needs: [macos, windows]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Verify the assets and publish the release
+        # Only after both platforms built, verified and uploaded: check that
+        # the release holds every artifact of both channels' files — the
+        # installers, and each platform's update archive and manifest — then
+        # publish the draft for its channel.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          tag="${GITHUB_REF_NAME}"
+          case "$tag" in
+            test-v*) prefix="test-v"; channel="test" ;;
+            v*) prefix="v"; channel="stable" ;;
+            *) echo "ERROR: unexpected tag $tag (the workflow triggers on test-v* and v*)"; exit 1 ;;
+          esac
+          version="${tag#"$prefix"}"
+          repo="${GITHUB_REPOSITORY}"
+          assets=$(gh release view "$tag" --repo "$repo" --json assets -q '.assets[].name')
+          need=(
+            "Youkai $version arm64.dmg"
+            "Youkai Setup $version amd64.exe"
+            "youkai-$version-darwin-arm64.tar.gz"
+            "update-darwin-arm64.json"
+            "youkai-$version-windows-amd64.tar.gz"
+            "update-windows-amd64.json"
+          )
+          fail=0
+          for name in "${need[@]}"; do
+            if ! printf '%s\n' "$assets" | grep -Fxq "$name"; then
+              echo "ERROR: the release is missing the asset: $name"
+              fail=1
+            fi
+          done
+          if [ "$fail" -ne 0 ]; then
+            echo "--- the release holds ---"
+            printf '%s\n' "$assets"
+            exit 1
+          fi
+          # The manifests the apps download must serve the tag's version.
+          dir=$(mktemp -d)
+          gh release download "$tag" --repo "$repo" --pattern 'update-*.json' --dir "$dir" --clobber
+          for target in darwin-arm64 windows-amd64; do
+            got=$(jq -r '.version' "$dir/update-$target.json")
+            if [ "$got" != "$version" ]; then
+              echo "ERROR: update-$target.json serves version $got, want $version (the tag)"
+              exit 1
+            fi
+          done
+          # Test-channel releases publish as ordinary releases — the MyGo
+          # updater only accepts published, non-draft, non-prerelease
+          # releases — but never as the repository's latest, which the
+          # stable channel reads. The stable release becomes the latest.
+          if [ "$channel" = "test" ]; then
+            body=$(gh release view "$tag" --repo "$repo" --json body -q .body)
+            notes=$(printf '测试版，勿用：此版本只用于自动更新渠道的联调，正式使用请安装最新正式版。\n\n%s' "$body")
+            gh release edit "$tag" --repo "$repo" \
+              --draft=false --prerelease=false --latest=false \
+              --title "Youkai ${version}（测试版，勿用）" \
+              --notes "$notes"
+          else
+            gh release edit "$tag" --repo "$repo" \
+              --draft=false --prerelease=false --latest=true \
+              --title "Youkai $version"
+          fi
+          echo "published $tag on the $channel channel (latest: $([ "$channel" = stable ] && echo yes || echo no))"

@@ -122,6 +122,7 @@ OCR 运行库与模型不进 Git，由 `tools/fetchdeps` 按固定 URL 与 SHA-2
 | Windows 交叉 | `go run ./tools/fetchdeps -platform windows/amd64 && CGO_ENABLED=1 CC=x86_64-w64-mingw32-gcc go tool mygo build -platform windows/amd64` |
 
 - 产物：macOS 为 ad-hoc 签名的 `Youkai.app` 与 `Youkai 0.0.1 arm64.dmg`（`build/darwin-arm64/`）；Windows 为 `Youkai.exe`、随包资源与 NSIS 每用户安装包 `Youkai Setup 0.0.1 amd64.exe`（`build/windows-amd64/`）。本机装有 makensis 时才产出安装包，缺失只警告并跳过，须自行确认安装包确实生成（workflow 会强制校验）。
+- 自动更新与本地构建：`mygo.json` 带 `updates`（公钥与 GitHub 源）时，`mygo build` 会把更新源嵌入产物——本地不带私钥的构建只警告并跳过更新档案（`youkai-*-darwin-arm64.tar.gz`、`update-darwin-arm64.json`），安装该产物后仍会检查正式渠道的更新；带 `MYGO_UPDATER_PRIVATE_KEY` 时产出签名更新档案（本地演练见[下文](#自动更新的本地演练)）。需要完全关闭更新的构建（如交给测试的免更新制品）先从 `mygo.json` 移除 `updates` 再构建。`go run`/`go test` 与 `mygo dev` 的产物不嵌入更新源，应用内更新区显示“当前构建未启用自动更新”。
 - `CGO_ENABLED=1` 必须显式设置（MyGo 对未设置的环境默认 `CGO_ENABLED=0`）；`MACOSX_DEPLOYMENT_TARGET=14.0` 与 `mygo.json` 的 `macos.minimumSystemVersion` 一致（T7 最低系统候选），影响 C 代码编译与链接的最低系统标记，MyGo 不代设。
 - 资源布局：MyGo 把 `resources/` 与 `resources/<平台>/` 合并为应用资源根——macOS 是 `Youkai.app/Contents/Resources`，Windows 是 EXE 所在目录；识别器经 `internal/app` 的 `OCRResources` 从资源根的 `onnxruntime/`、`models/` 以绝对路径加载，不依赖工作目录。VC++ 运行库（4 个 x64 DLL）只由打包 workflow 从 Windows runner 放入 `resources/windows-amd64/` 顶层（即 EXE 同目录，见 `.gitignore`；本地交叉打包产物不含它们，不影响打包本身）。
 - 随包声明：`resources/THIRD-PARTY-NOTICES.md` 随所有平台分发；ORT 的 `LICENSE` 与 `ThirdPartyNotices.txt` 由 fetchdeps 放在 `onnxruntime/` 内。
@@ -140,9 +141,21 @@ Get-Content err.txt
 `.github/workflows/package.yml`（Package）只用 `workflow_dispatch` 手动触发（合并到 main 后在 Actions 页运行；PR 不打安装包，轻量检查见[上节](#github-actions-检查)），在 `macos-latest` 与 `windows-latest` 各一个 job：
 
 - 各自运行 fetchdeps 并以显式 `CGO_ENABLED=1` 打包（macOS 另设 `MACOSX_DEPLOYMENT_TARGET=14.0`）。
+- **关闭自动更新**：两个 job 构建前用 `jq` 移除检出里 `mygo.json` 的 `updates` 段（不提交），产物因此不嵌入更新配置、不产出更新档案；识别自检日志首行的 `updates=disabled` 被强制断言。带更新签名的发布构建由标签触发的 Release workflow 承担，见[发布与自动更新](release.md)。
 - Windows job 用 `vswhere` 定位 runner 上 Visual Studio 的 `VC\Redist\MSVC` 下名称形如版本号的最新目录（`v145` 之类非版本目录不计），在其 `x64` 下取编号最高的 `Microsoft.VC14*.CRT`，把 `MSVCP140.dll`、`MSVCP140_1.dll`、`VCRUNTIME140.dll`、`VCRUNTIME140_1.dll` 复制到 `resources/windows-amd64/` 顶层再打包，实际使用的版本目录与 CRT 目录名写入制品清单；不从 vc_redist 安装器解包、不进 Git。
 - 两个 job 都强制校验产物生成（缺 DMG、缺安装包——包括缺 NSIS 被跳过——或随包文件缺位都会失败），并在打包布局上运行识别自检（Windows job 因此能在 runner 上实际验证 ORT DLL、VC++ DLL 与模型的加载）。
-- 上传安装包、DMG 与制品清单（文件名、大小、SHA-256、原生库与模型摘要、VC++ 运行库版本、提交 SHA）为 workflow artifact；测试构建以提交 SHA 标识，不发布 Releases（正式发布与自动更新属后续 PR）。
+- 上传安装包、DMG 与制品清单（文件名、大小、SHA-256、原生库与模型摘要、VC++ 运行库版本、提交 SHA）为 workflow artifact；测试构建以提交 SHA 标识，不发布 Releases（正式发布与自动更新见[发布与自动更新](release.md)）。
+
+### 自动更新的本地演练
+
+2026-10-17 在本机用一次性测试密钥对（`go tool mygo keygen` 生成，用后即弃，与正式密钥无关）演练了 MyGo 的签名与校验链路，演练材料全部放在 `/tmp`（不进仓库）：
+
+1. **构建侧签名**：`mygo.json` 临时换上测试公钥后 `MYGO_UPDATER_PRIVATE_KEY=<测试私钥> go tool mygo build -platform darwin/arm64`，产出签名归档 `youkai-0.0.1-darwin-arm64.tar.gz` 与清单 `update-darwin-arm64.json`；清单的 `notes` 取自 `CHANGELOG.md` 的 `## 0.0.1` 小节，首版无已发布版本时差量更新记 "no version is published yet" 跳过。打包产物自检首行报告 `updates=enabled`。
+2. **应用侧校验与替换**：清单 URL 改指 `http://127.0.0.1:8765`（MyGo 的更新客户端允许回环 HTTP，`mygo.json` 的 `url` 源则强制 HTTPS，故经 ldflags 注入 feed 的等价方式演练）；用一个经 `-ldflags -X` 注入同一 feed 与公钥、版本 `0.0.0` 的一次性驱动程序（包在伪 `.app` 中，`MYGO_ENV=production`）执行 `Enabled → Check → Install`：检测到 `0.0.1` 与说明、带进度下载 36,009,549 字节、验签通过并把伪 bundle 整体替换为归档里的 `Youkai.app`（含 `_CodeSignature`）。
+3. **拒绝路径**：同尺寸翻 1 字节的损坏归档、用另一把一次性密钥重签的清单，都在安装时报 `mygo: installing the update: the update is not signed with the app's key` 且不替换；签名字段缺失的清单在检查时报 `incomplete manifest`。
+4. **无私钥行为**：带 `updates` 但不设 `MYGO_UPDATER_PRIVATE_KEY` 的本地构建只警告 "Not signing an update" 并跳过更新档案，产物仍嵌入更新源（自检 `updates=enabled`，安装后可收到正式渠道更新）；按 Package workflow 的方式移除 `updates` 再构建，产物自检为 `updates=disabled`。
+
+未覆盖（只能在真实发布后验证）：真实 GitHub Releases 渠道隔离（`test-v` / latest）、差量更新、Windows 侧替换与重装后的行为，见[发布与自动更新](release.md)的升级实测清单。
 
 ## 与 Windows 测试方式的关系
 
