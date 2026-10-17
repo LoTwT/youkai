@@ -214,13 +214,20 @@ func TestStartUpdateChecksSchedule(t *testing.T) {
 	default:
 		t.Fatal("no periodic wait was scheduled")
 	}
+	// The send above only proves the scheduling goroutine received the
+	// tick; it queues the check right after, then asks for its next wait.
+	// Waiting for that next wait therefore proves the check is queued, so
+	// settling cannot run ahead of it. Taking it here also leaves ticks
+	// empty for the disabled model below.
+	select {
+	case <-ticks:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the schedule did not ask for its next wait after a tick")
+	}
 	settle(t, m, q, tt)
 	if checks != 2 {
 		t.Fatalf("the periodic check did not run: %d checks", checks)
 	}
-	// The schedule asked for its next wait while settling; take it, so
-	// what follows can only be a wait the second model would wrongly add.
-	<-ticks
 
 	// A build without updates starts nothing: no check, no wait.
 	off := &fakeUpdates{enabled: false}
