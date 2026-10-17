@@ -14,12 +14,27 @@ import (
 	"time"
 
 	"github.com/LoTwT/youkai/internal/app"
+	"github.com/LoTwT/youkai/internal/recognition"
 	"github.com/LoTwT/youkai/internal/ui"
 	"github.com/egoist/mygo"
 	mgui "github.com/egoist/mygo/ui"
 )
 
 func main() {
+	// The install-time recognition self-check: an explicit environment
+	// switch (any non-empty YOUKAI_SELFTEST) turns the process into a
+	// one-shot check of the artifacts this build actually ships — load the
+	// bundled ONNX Runtime library and model from the resolved resources
+	// root, recognize one embedded sample, then exit. It runs before the
+	// application service, the locks and any user data, so verifying an
+	// installed app (DMG copy, Windows install directory) never touches
+	// them. This is a development and packaging switch, not a user-facing
+	// image import feature.
+	if os.Getenv("YOUKAI_SELFTEST") != "" {
+		selfTest(resourcesRoot())
+		return
+	}
+
 	paths, err := app.Resolve(app.Options{
 		Name:      mygo.App.Name(),
 		Resources: resourcesRoot(),
@@ -157,6 +172,29 @@ func main() {
 		log.Fatal(err)
 	}
 	shutdown()
+}
+
+// selfTest runs the install-time recognition check against root, the
+// resolved resources root of this executable (Contents/Resources of a copied
+// .app, the EXE's install directory on Windows, the staged development app
+// under mygo dev). It logs the outcome with the loaded paths and exits the
+// process non-zero on failure; the log goes to stderr, so run the executable
+// from a terminal (or with redirection on Windows, whose GUI subsystem has
+// no console) to see it.
+func selfTest(root string) {
+	res, err := app.OCRResources(root)
+	if err != nil {
+		log.Fatalf("youkai: self-test: %v", err)
+	}
+	log.Printf("youkai: self-test: library=%q model=%q", res.LibraryPath, res.ModelPath)
+	got, err := recognition.SelfCheck(res)
+	if err != nil {
+		log.Fatalf("youkai: self-test failed: %v", err)
+	}
+	if err := recognition.Shutdown(); err != nil {
+		log.Fatalf("youkai: self-test: %v", err)
+	}
+	log.Printf("youkai: self-test passed: text=%q score=%.3f", got.Text, got.Score)
 }
 
 // devScanSource wires the development data source when the explicit
