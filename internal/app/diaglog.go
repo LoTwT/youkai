@@ -32,25 +32,29 @@ const (
 	diagnosticLogBackups       = 3
 )
 
-// DiagnosticLog is this process's diagnostic log file under Paths.Logs:
-// an io.Writer the standard library logger writes through beside stderr
-// (io.MultiWriter in cmd/youkai), so development keeps its terminal
-// output and installed builds gain a retrievable file. It appends across
-// runs — the lines of earlier sessions stay retrievable until rotation
-// retires them, so a restart never erases the evidence of the run before
-// it — and rotates by size, keeping a bounded number of backups.
+// DiagnosticLog is this process's diagnostic log: the io.Writer the
+// standard library logger sends its output to. Every line is written to
+// the log file under Paths.Logs first and mirrored to stderr afterwards,
+// best effort in both directions: an invalid stderr handle — a Windows
+// GUI-subsystem process has no console — must not cost the line its file
+// copy (io.MultiWriter would stop at the first failing writer and keep
+// every line out of the file), and a failed file must not cost the line
+// its stderr copy. The file appends across runs — the lines of earlier
+// sessions stay retrievable until rotation retires them, so a restart
+// never erases the evidence of the run before it — and rotates by size,
+// keeping a bounded number of backups.
 //
 // Failures never propagate to the logger's callers: the sink is a
 // diagnostic best effort, so when the file cannot be written it degrades
-// to a no-op after one stderr notice while stderr keeps carrying every
-// line.
+// to the stderr mirror alone after one notice, and the mirror's own
+// result is always discarded.
 type DiagnosticLog struct {
 	mu   sync.Mutex
 	path string
 	max  int64
 	keep int
-	// file is nil once the sink is closed or degraded; Write then swallows
-	// its input, and stderr — through the MultiWriter — still has it.
+	// file is nil once the sink is closed or degraded; Write then leaves
+	// the line to the stderr mirror alone.
 	file io.WriteCloser
 	// size is the number of bytes in the active file, from its stat at
 	// open and every write since, so rotation needs no stat per line.
@@ -91,23 +95,37 @@ func openDiagnosticLog(dir string, maxSize int64, keep int) (*DiagnosticLog, err
 	return &DiagnosticLog{path: path, max: maxSize, keep: keep, file: file, size: size}, nil
 }
 
-// Write appends p to the active log file, rotating it first when p would
-// grow the file past the size limit. The standard logger serializes its
-// calls, but the sink guards itself anyway: Close may race a slow writer.
-// It reports success even when the file part has failed — an error would
-// only reach log.Printf callers that ignore it — and says so on stderr
-// once instead; see notifyLogProblem.
+// Write records p in the log file and mirrors it to stderr, always
+// claiming success: the standard logger's callers cannot act on a
+// diagnostic failure. The file comes first — a failing stderr (the
+// Windows GUI subsystem without a console, a closed redirection) loses
+// nothing from the file — and the mirror's result is discarded — a
+// closed or degraded file loses nothing from stderr. The standard logger
+// serializes its calls, but the sink guards itself anyway: Close may
+// race a slow writer.
 func (l *DiagnosticLog) Write(p []byte) (int, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	l.writeFile(p)
+	_, _ = diagnosticLogStderr.Write(p)
+	return len(p), nil
+}
+
+// writeFile appends p to the active log file, rotating it first when p
+// would grow the file past the size limit. It reports nothing: the file
+// is one best-effort half of Write, whose callers never see a failure.
+// When the file stops being writable the sink degrades — a nil file,
+// after one notifyLogProblem notice — and the stderr mirror carries the
+// lines on.
+func (l *DiagnosticLog) writeFile(p []byte) {
 	if l.file == nil {
-		// Closed or degraded: swallow the line, stderr still has it.
-		return len(p), nil
+		// Closed or degraded: the line's stderr copy is all there is.
+		return
 	}
 	if l.size+int64(len(p)) > l.max {
 		l.rotateLocked()
 		if l.file == nil {
-			return len(p), nil
+			return
 		}
 	}
 	n, err := l.file.Write(p)
@@ -115,10 +133,9 @@ func (l *DiagnosticLog) Write(p []byte) (int, error) {
 		l.file.Close()
 		l.file = nil
 		notifyLogProblem("diagnostic log file no longer writable, continuing on stderr only: %v", err)
-		return len(p), nil
+		return
 	}
 	l.size += int64(n)
-	return n, nil
 }
 
 // rotateLocked retires the active file into the backup chain and opens a
@@ -166,10 +183,10 @@ func (l *DiagnosticLog) rotateLocked() {
 }
 
 // Close closes the active file. It is safe to call more than once; after
-// it returns, writes become no-ops (stderr, through the MultiWriter,
-// still receives them). No flush is needed: the sink writes through to
-// the operating system on every line, so a crash or a log.Fatal exit
-// never loses lines already logged.
+// it returns, writes still mirror to stderr but no longer reach the
+// file. No flush is needed: the sink writes through to the operating
+// system on every line, so a crash or a log.Fatal exit never loses lines
+// already logged.
 func (l *DiagnosticLog) Close() error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -205,6 +222,16 @@ var openLogAppend = func(name string) (io.WriteCloser, int64, error) {
 	}
 	return f, fi.Size(), nil
 }
+
+// diagnosticLogStderr is the mirror every line is written to after the
+// file. The mirror's result is discarded because its failure modes are
+// exactly the ones the file must survive: an invalid handle on the
+// Windows GUI subsystem without a console, or a closed redirection —
+// io.MultiWriter with stderr first would stop at such a failure and keep
+// every line out of the file. A package-level variable so the tests can
+// inject a failing or recording writer instead of the process's real
+// stderr.
+var diagnosticLogStderr io.Writer = os.Stderr
 
 // notifyLogProblem reports a diagnostic-log problem on stderr, prefixed
 // like the application's log lines. It bypasses the standard logger —

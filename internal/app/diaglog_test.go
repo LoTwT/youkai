@@ -16,9 +16,18 @@ import (
 // (a file where a directory belongs, a directory where the log file
 // belongs), never by permissions, which Windows does not carry the same
 // way (its read-only bit does not stop file creation in a directory) —
-// the CI runs these tests on both platforms. Only the two states that no
+// the CI runs these tests on both platforms. Only the states that no
 // filesystem shape can produce portably — a file that fails every write,
-// and the stderr notices — use the package's injection points.
+// an unwritable stderr, and the stderr notices — use the package's
+// injection points.
+
+// discardStderr points the sink's stderr mirror at io.Discard for this
+// test: the mirror defaults to the process's real stderr, which the test
+// output must not be spammed with.
+func discardStderr(t *testing.T) {
+	t.Helper()
+	setDiagLogStderr(t, io.Discard)
+}
 
 // TestOpenDiagnosticLogCreatesDirectoryAndAppends covers the two promises
 // that make the log retrievable at all: the logs directory appears without
@@ -26,6 +35,7 @@ import (
 // existed on installed builds), and a second run appends instead of
 // truncating the first run's lines.
 func TestOpenDiagnosticLogCreatesDirectoryAndAppends(t *testing.T) {
+	discardStderr(t)
 	dir := filepath.Join(t.TempDir(), "logs", "youkai") // does not exist yet
 	first, err := openDiagnosticLog(dir, 1024, 3)
 	if err != nil {
@@ -69,6 +79,7 @@ func TestOpenDiagnosticLogCreatesDirectoryAndAppends(t *testing.T) {
 // two backups, ten 50-byte lines leave the last six: two per file,
 // newest in the active file.
 func TestDiagnosticLogRotationAndRetention(t *testing.T) {
+	discardStderr(t)
 	dir := t.TempDir()
 	log, err := openDiagnosticLog(dir, 120, 2)
 	if err != nil {
@@ -133,6 +144,7 @@ func TestDiagnosticLogRotationAndRetention(t *testing.T) {
 // rotations, and succeeds as soon as the obstruction is gone.
 func TestDiagnosticLogRotationRetriesPastObstruction(t *testing.T) {
 	notices := setLogNotices(t)
+	discardStderr(t)
 	dir := t.TempDir()
 	log, err := openDiagnosticLog(dir, 40, 1)
 	if err != nil {
@@ -252,12 +264,13 @@ func TestOpenDiagnosticLogRejectsInvalidLimits(t *testing.T) {
 // contract: when the file stops accepting writes — a full disk, or an
 // exclusive opener on Windows — the sink must claim success to the logger
 // (diagnostics never fail the application's own operations), say so on
-// stderr exactly once, and become a no-op so every later line still
-// reaches stderr through the MultiWriter. A real failing file cannot be
-// produced portably, so the injected opener hands the sink one that fails
-// every write.
+// stderr exactly once, and keep every later line flowing to the stderr
+// mirror. A real failing file cannot be produced portably, so the
+// injected opener hands the sink one that fails every write.
 func TestDiagnosticLogWriteFailureDegradesToStderr(t *testing.T) {
 	notices := setLogNotices(t)
+	var stderr strings.Builder
+	setDiagLogStderr(t, &stderr)
 	setOpenLogAppend(t, func(string) (io.WriteCloser, int64, error) {
 		return failingLogWriteCloser{}, 0, nil
 	})
@@ -277,6 +290,53 @@ func TestDiagnosticLogWriteFailureDegradesToStderr(t *testing.T) {
 	if len(*notices) != 1 {
 		t.Errorf("notices = %d (%v), want exactly one", len(*notices), *notices)
 	}
+	if stderr.String() != strings.Repeat(line, 3) {
+		t.Errorf("stderr mirror = %q, want every line to keep arriving after the file degraded", stderr.String())
+	}
+}
+
+// TestDiagnosticLogFileIntactWhenStderrFails pins the ordering that makes
+// the fix work on installed Windows builds: the GUI-subsystem process has
+// no console, its stderr handle is invalid, and every write to it fails —
+// a stderr-first io.MultiWriter would stop at that failure and keep every
+// line out of the file. The sink writes the file first and mirrors to
+// stderr afterwards, discarding the mirror's result, so a permanently
+// failing stderr (an always-failing writer here) loses nothing from the
+// file — rotation included — and never surfaces an error to the logger.
+func TestDiagnosticLogFileIntactWhenStderrFails(t *testing.T) {
+	setDiagLogStderr(t, failingStderrWriter{})
+	dir := t.TempDir()
+	log, err := openDiagnosticLog(dir, 40, 2)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { log.Close() })
+
+	// 20-byte lines against a 40-byte limit: every third write rotates,
+	// so the failure of the stderr mirror is exercised across rotations
+	// and appends alike.
+	const line = "0123456789012345678\n"
+	var want strings.Builder
+	for i := 1; i <= 6; i++ {
+		if n, err := log.Write([]byte(line)); err != nil || n != len(line) {
+			t.Fatalf("write %d: n=%d err=%v, want the sink to claim success", i, n, err)
+		}
+		fmt.Fprint(&want, line)
+	}
+	// The whole backup chain holds every line, oldest backup first: the
+	// failing stderr cost the file nothing.
+	active := filepath.Join(dir, diagnosticLogFileName)
+	var got strings.Builder
+	for _, name := range []string{active + ".2", active + ".1", active} {
+		b, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		got.Write(b)
+	}
+	if got.String() != want.String() {
+		t.Errorf("file chain = %q, want every line %q", got.String(), want.String())
+	}
 }
 
 // failingLogWriteCloser is the injected log file of the degradation test:
@@ -286,6 +346,13 @@ type failingLogWriteCloser struct{}
 
 func (failingLogWriteCloser) Write([]byte) (int, error) { return 0, errors.New("disk full") }
 func (failingLogWriteCloser) Close() error              { return nil }
+
+// failingStderrWriter is the injected stderr mirror of the ordering test:
+// every write fails, as the invalid handle of a Windows GUI-subsystem
+// process without a console does.
+type failingStderrWriter struct{}
+
+func (failingStderrWriter) Write([]byte) (int, error) { return 0, errors.New("invalid handle") }
 
 // TestBuildCommitFrom pins the header's commit marker: a short revision,
 // the modified marker for dirty builds, and "" when the build carries no
@@ -352,4 +419,14 @@ func setOpenLogAppend(t *testing.T, open func(name string) (io.WriteCloser, int6
 	previous := openLogAppend
 	openLogAppend = open
 	t.Cleanup(func() { openLogAppend = previous })
+}
+
+// setDiagLogStderr points the sink's stderr mirror at w for this test and
+// restores the process's real stderr afterwards; the package-level
+// indirection exists for exactly these injections (see diagnosticLogStderr).
+func setDiagLogStderr(t *testing.T, w io.Writer) {
+	t.Helper()
+	previous := diagnosticLogStderr
+	diagnosticLogStderr = w
+	t.Cleanup(func() { diagnosticLogStderr = previous })
 }

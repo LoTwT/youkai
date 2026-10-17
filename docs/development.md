@@ -71,7 +71,7 @@ CGO_ENABLED=1 YOUKAI_DEV_SOURCE=$PWD/internal/recognition/testdata \
 
 ## 诊断日志
 
-标准库 `log` 的输出在取得数据根占用后同时写 stderr 与日志文件（`cmd/youkai` 用 `io.MultiWriter` 组合）：开发与重定向排查继续看 stderr，安装版——Windows EXE 为 GUI 子系统，stderr 本身不可见——由此获得可取回的落盘日志（M1 报告观察项“安装版没有落盘日志”的修复，行为由 `internal/app` 的 `OpenDiagnosticLog` 提供）。
+标准库 `log` 的输出在取得数据根占用后写入 `internal/app` 的日志 sink：每行**先落日志文件、再尽力镜像到 stderr**（镜像结果丢弃）。顺序是修复在 Windows 安装版上生效的关键——GUI 子系统无控制台，stderr 句柄无效、每次写入都失败，若像 `io.MultiWriter` 那样把 stderr 放在前面，它的失败会让文件一行都收不到；文件在前则安装版获得可取回的落盘日志，开发与重定向排查继续看 stderr（M1 报告观察项“安装版没有落盘日志”的修复，行为由 `internal/app` 的 `OpenDiagnosticLog` 提供）。
 
 | 项 | 值 |
 | --- | --- |
@@ -82,7 +82,7 @@ CGO_ENABLED=1 YOUKAI_DEV_SOURCE=$PWD/internal/recognition/testdata \
 
 - 打开时机在数据根占用之后：第二实例占用失败即退出，不会打开日志文件，因此两个进程不会交错或截断同一文件；代价是路径解析失败、占用失败等早期错误只在 stderr（开发期可见；安装版无从看到，但这类错误本身也意味着应用未能启动）。
 - 每次运行的第一行日志写明版本、构建提交（取 `debug.ReadBuildInfo` 的 VCS 信息，工作区有本地修改时加 `-modified` 后缀；构建未打标时为 `unknown`）、平台与数据根，用户反馈附带日志即可定位构建。
-- 日志打不开（如目录不可写）不阻止启动：stderr 照常输出并提示一次原因；运行中写入失败同样只退回 stderr（降级逻辑在 `internal/app`，Windows 上备份文件被杀毒或备份软件占用时轮转重试而不丢行，每轮失败只提示一次）。
+- 日志打不开（如目录不可写）不阻止启动：stderr 照常输出并提示一次原因；运行中文件写入失败同样只退回 stderr 镜像（降级逻辑在 `internal/app`，Windows 上备份文件被杀毒或备份软件占用时轮转重试而不丢行，每轮失败只提示一次）。
 - `YOUKAI_SELFTEST` 自检在路径解析之前运行，仍只写 stderr（安装布局验证按[打包与安装包](#打包与安装包)的重定向方式读取）。
 
 ## GitHub Actions 检查

@@ -8,7 +8,6 @@ package main
 
 import (
 	"fmt"
-	"io"
 	"log"
 	"os"
 	"runtime"
@@ -75,10 +74,13 @@ func main() {
 	// or truncate each other's lines. The alternative — per-process file
 	// names — would leave one file per start in the directory and make
 	// "attach the log" mean picking among many. The cost is that the lines
-	// above, and lock failures, reach stderr only. The file is kept beside
-	// stderr, not instead of it: development keeps its terminal output and
-	// redirection still works, while installed builds (the Windows GUI
-	// subsystem has no console) gain a retrievable log.
+	// above, and lock failures, reach stderr only. The sink becomes the
+	// logger's whole output: it writes the file first and mirrors to
+	// stderr afterwards, discarding the mirror's errors — an installed
+	// Windows process runs on the GUI subsystem with no console, where
+	// the stderr handle is invalid, and a stderr-first MultiWriter would
+	// stop at that failure and keep every line out of the file. stderr
+	// keeps working for development and redirection.
 	logFile, err := app.OpenDiagnosticLog(paths.Logs)
 	if err != nil {
 		// Not fatal: the app runs without a retrievable log, stderr still
@@ -86,7 +88,7 @@ func main() {
 		log.Printf("youkai: diagnostic log unavailable, logging to stderr only: %v", err)
 	} else {
 		defer logFile.Close()
-		log.SetOutput(io.MultiWriter(os.Stderr, logFile))
+		log.SetOutput(logFile)
 	}
 	// The first file line of every run identifies the build a user-attached
 	// log came from (T7's problem-report requirement): the version, the VCS
