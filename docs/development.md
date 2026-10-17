@@ -124,7 +124,7 @@ Get-Content err.txt
 `.github/workflows/package.yml`（Package）只用 `workflow_dispatch` 手动触发（合并到 main 后在 Actions 页运行；PR 不打安装包，轻量检查见[上节](#github-actions-检查)），在 `macos-latest` 与 `windows-latest` 各一个 job：
 
 - 各自运行 fetchdeps 并以显式 `CGO_ENABLED=1` 打包（macOS 另设 `MACOSX_DEPLOYMENT_TARGET=14.0`）。
-- Windows job 用 `vswhere` 定位 runner 上 Visual Studio 的 `VC\Redist\MSVC\<版本>\x64\Microsoft.VC143.CRT`，把 `MSVCP140.dll`、`MSVCP140_1.dll`、`VCRUNTIME140.dll`、`VCRUNTIME140_1.dll` 复制到 `resources/windows-amd64/` 顶层再打包，运行库版本写入清单；不从 vc_redist 安装器解包、不进 Git。
+- Windows job 用 `vswhere` 定位 runner 上 Visual Studio 的 `VC\Redist\MSVC` 下名称形如版本号的最新目录（`v145` 之类非版本目录不计），在其 `x64` 下取编号最高的 `Microsoft.VC14*.CRT`，把 `MSVCP140.dll`、`MSVCP140_1.dll`、`VCRUNTIME140.dll`、`VCRUNTIME140_1.dll` 复制到 `resources/windows-amd64/` 顶层再打包，实际使用的版本目录与 CRT 目录名写入制品清单；不从 vc_redist 安装器解包、不进 Git。
 - 两个 job 都强制校验产物生成（缺 DMG、缺安装包——包括缺 NSIS 被跳过——或随包文件缺位都会失败），并在打包布局上运行识别自检（Windows job 因此能在 runner 上实际验证 ORT DLL、VC++ DLL 与模型的加载）。
 - 上传安装包、DMG 与制品清单（文件名、大小、SHA-256、原生库与模型摘要、VC++ 运行库版本、提交 SHA）为 workflow artifact；测试构建以提交 SHA 标识，不发布 Releases（正式发布与自动更新属后续 PR）。
 
