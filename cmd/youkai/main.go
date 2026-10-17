@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"runtime"
 	"sync"
 	"time"
 
@@ -66,6 +67,39 @@ func main() {
 	}
 	defer dataLock.Close()
 	log.Printf("youkai: data-root lock acquired on %q", paths.Data)
+
+	// The diagnostic log file is opened only now, under the data-root
+	// occupancy: a second instance fails the acquire above and exits
+	// before touching the log directory, so two processes never interleave
+	// or truncate each other's lines. The alternative — per-process file
+	// names — would leave one file per start in the directory and make
+	// "attach the log" mean picking among many. The cost is that the lines
+	// above, and lock failures, reach stderr only. The sink becomes the
+	// logger's whole output: it writes the file first and mirrors to
+	// stderr afterwards, discarding the mirror's errors — an installed
+	// Windows process runs on the GUI subsystem with no console, where
+	// the stderr handle is invalid, and a stderr-first MultiWriter would
+	// stop at that failure and keep every line out of the file. stderr
+	// keeps working for development and redirection.
+	logFile, err := app.OpenDiagnosticLog(paths.Logs)
+	if err != nil {
+		// Not fatal: the app runs without a retrievable log, stderr still
+		// carries everything, and one notice explains why there is none.
+		log.Printf("youkai: diagnostic log unavailable, logging to stderr only: %v", err)
+	} else {
+		defer logFile.Close()
+		log.SetOutput(logFile)
+	}
+	// The first file line of every run identifies the build a user-attached
+	// log came from (T7's problem-report requirement): the version, the VCS
+	// revision the binary was built from when the build carries it, the
+	// platform and the data root.
+	commit := app.BuildCommit()
+	if commit == "" {
+		commit = "unknown"
+	}
+	log.Printf("youkai: version=%s commit=%s platform=%s/%s data=%q",
+		mygo.App.Version(), commit, runtime.GOOS, runtime.GOARCH, paths.Data)
 
 	source := devScanSource()
 	svc, err := app.NewService(app.Config{
