@@ -1,0 +1,453 @@
+// Package ui builds youkai's main window on MyGo's native UI. It owns no
+// session, result or save state of its own: the model renders the
+// application service's snapshots and record loads, and every interaction
+// only schedules asynchronous work against the service — a UI callback
+// never waits on a scan, recognition or a save.
+//
+// The model's state is confined to the UI thread: view callbacks mutate it
+// during a frame, background work mutates it through Updater (the window's
+// Update), and nothing else touches it. View tests without a window drive
+// the same paths through a queued Updater.
+package ui
+
+import (
+	"strconv"
+	"sync"
+
+	"github.com/LoTwT/youkai/internal/app"
+	"github.com/LoTwT/youkai/internal/record"
+	"github.com/LoTwT/youkai/internal/scan"
+	"github.com/egoist/mygo/ui"
+)
+
+// Service is the application-service surface the main window drives. It is
+// the application service's own exported API, so *app.Service satisfies it
+// directly; the entry point also pumps the service's subscription into
+// Apply (the model itself stays free of native window types).
+type Service interface {
+	// Start accepts a start request into the single active slot; the
+	// same request ID returns the session it created.
+	Start(req app.StartRequest) (app.StartOutcome, error)
+	// Stop requests an idempotent user stop of the active session.
+	Stop()
+	// Snapshot is the authoritative state at one service revision.
+	Snapshot() app.Snapshot
+	// RetrySave re-attempts a failed persistence of the active session.
+	RetrySave() error
+	// ListRecords lists the saved records below the data root.
+	ListRecords() ([]record.RecordInfo, error)
+	// LoadRecord loads one saved record with recovery semantics applied.
+	LoadRecord(recordID string) (*record.Recovery, error)
+	// Quit runs the explicit-exit wrap-up; it blocks until it is done.
+	Quit() error
+}
+
+// Updater runs fn on the UI thread and redraws the window. *mygo.Window
+// implements it; view tests queue the closures and run them from the test
+// goroutine.
+type Updater interface {
+	Update(fn func())
+}
+
+// ScanSourceInfo says whether a scan can start and why. The entry point
+// knows whether it wired a source (M1: only the development data source);
+// the service refuses starts without one, and the button explains it.
+type ScanSourceInfo struct {
+	// Available is whether the service has a source to start from.
+	Available bool
+	// Label names the wired source for the prepare area (empty to hide).
+	Label string
+	// Reason explains why starts are impossible when Available is false.
+	Reason string
+}
+
+// Config assembles the main-window model.
+type Config struct {
+	// Service is the application service the window drives. Required.
+	Service Service
+	// ScanSource describes the start availability shown in the prepare
+	// area.
+	ScanSource ScanSourceInfo
+	// Evidence loads evidence images by record and evidence identity;
+	// nil disables images (the details show their texts only).
+	Evidence EvidenceSource
+	// EvidenceCacheLimit bounds the decoded evidence bitmaps held at
+	// once; 0 uses evidenceCacheLimit.
+	EvidenceCacheLimit int
+	// OnExitSettled runs on the UI thread after an explicit exit
+	// succeeded — the entry point quits the application in it. A failed
+	// wrap-up (an unsaved result) keeps the window instead.
+	OnExitSettled func()
+}
+
+// exitState is where the explicit-exit flow stands.
+type exitState int
+
+const (
+	exitIdle exitState = iota
+	exitRunning
+	exitFailed
+	exitDone
+)
+
+// Model is the state of youkai's main window: what the prepare, progress
+// and results areas show. It renders the service's snapshots and loaded
+// records; its state is confined to the UI thread (see the package
+// comment).
+type Model struct {
+	cfg Config
+	upd Updater
+
+	// wg tracks the model-spawned background work; view tests wait on it
+	// to know a click's asynchronous work has settled.
+	wg sync.WaitGroup
+
+	source ScanSourceInfo
+
+	// The last applied service snapshot and its identity, for discarding
+	// stale updates by session and revision.
+	snap            app.Snapshot
+	appliedSession  scan.ID
+	appliedRevision uint64
+	prevBusy        bool
+	// liveSavedShown is the saved count of the live record the results
+	// area last reloaded from disk.
+	liveSavedShown int
+
+	// Start requests: one request ID per attempt, reused until the
+	// service answered, so a double click cannot start two sessions.
+	startSerial int
+	startReqID  string
+	startErr    string
+
+	history    []HistoryEntry
+	histChoice string
+	histErr    string
+
+	// recLoad versions the results area's content: every action that
+	// replaces or refreshes it bumps the counter, and a load's result
+	// applies only while its version is current.
+	recLoad int64
+	rec     *RecordView
+	recErr  string
+
+	// The results table's place and its chosen row (an index into
+	// rec.rows, -1 for none; the list's Key keeps it on the item's
+	// sequence across reloads).
+	list     ui.ListState
+	selected int
+	split    float32
+
+	exitState exitState
+	exitErr   string
+
+	cache *evidenceCache
+}
+
+// New creates the main-window model. It starts no work: Attach connects
+// the updater and loads the record history.
+func New(cfg Config) *Model {
+	if cfg.Service == nil {
+		panic("ui: new model: service is nil")
+	}
+	limit := cfg.EvidenceCacheLimit
+	if limit <= 0 {
+		limit = evidenceCacheLimit
+	}
+	m := &Model{
+		cfg:    cfg,
+		source: cfg.ScanSource,
+		split:  380,
+		cache:  newEvidenceCache(cfg.Evidence, limit),
+	}
+	m.list.Selected = &m.selected
+	return m
+}
+
+// Attach connects the updater every background result flows through and
+// loads the record history. It runs before the first frame that reacts to
+// input, from the entry point's ready callback.
+func (m *Model) Attach(upd Updater) {
+	if upd == nil {
+		panic("ui: attach: updater is nil")
+	}
+	m.upd = upd
+	m.loadHistory()
+}
+
+// update applies fn on the UI thread: in the window through Updater, which
+// also redraws. Fail fast when nothing is attached — a model that reacts
+// must be attached first.
+func (m *Model) update(fn func()) {
+	if m.upd == nil {
+		panic("ui: background work without an attached updater")
+	}
+	m.upd.Update(fn)
+}
+
+// goAsync runs fn as the model's own background work; tests wait for it
+// through Idle. fn itself must not touch model state — it publishes
+// through update.
+func (m *Model) goAsync(fn func()) {
+	m.wg.Add(1)
+	go func() {
+		defer m.wg.Done()
+		fn()
+	}()
+}
+
+// Idle waits until the model's background work settled. View tests use it
+// before draining the queued updater.
+func (m *Model) Idle() { m.wg.Wait() }
+
+// Apply renders one service snapshot, discarding stale updates: a
+// snapshot of the session already shown applies only at a higher
+// revision; one of another session (including the empty idle identity)
+// always applies. The entry point's subscription pump calls it through
+// the window's Update.
+func (m *Model) Apply(snap app.Snapshot) {
+	if snap.SessionID == m.appliedSession && snap.Revision <= m.appliedRevision {
+		return
+	}
+	prevSession, prevBusy := m.appliedSession, m.prevBusy
+	m.appliedSession, m.appliedRevision = snap.SessionID, snap.Revision
+	m.snap = snap
+	m.prevBusy = snap.Busy
+
+	// A new session becomes the results area's record: the live one, an
+	// empty view until its saved generations load (a refused start rolls
+	// the service back to the previous session, whose saved record reloads
+	// through the growth branch below).
+	if snap.SessionID != "" && snap.SessionID != prevSession {
+		m.showLiveLocked()
+	}
+	// The live record's saved count grew: a newer generation is on disk,
+	// so reload it (the previous rows stay until the load lands).
+	if m.rec != nil && m.rec.Live && snap.SessionID != "" &&
+		m.rec.ID == string(snap.SessionID) && snap.SavedCount > m.liveSavedShown {
+		m.liveSavedShown = snap.SavedCount
+		m.reloadRecord(m.rec.ID, true)
+	}
+	// A session that just wrapped left a durable record: refresh the
+	// history list. The idle snapshot at startup loads it once via Attach.
+	if prevBusy && !snap.Busy && snap.SessionID != "" {
+		m.loadHistory()
+	}
+}
+
+// showLiveLocked switches the results area to the live (or last) session's
+// record with an empty view, ready for its saved generations to load.
+func (m *Model) showLiveLocked() {
+	m.recLoad++
+	m.selected = -1
+	m.recErr = ""
+	m.liveSavedShown = 0
+	m.rec = &RecordView{ID: string(m.appliedSession), Live: true}
+}
+
+// ShowLive switches the results area back to the current (or last) scan's
+// record, after a reopened history record replaced it.
+func (m *Model) ShowLive() {
+	if m.appliedSession == "" || m.exitState == exitRunning {
+		return
+	}
+	if m.rec != nil && m.rec.Live && m.rec.ID == string(m.appliedSession) {
+		return
+	}
+	m.showLiveLocked()
+	m.reloadRecord(string(m.appliedSession), true)
+}
+
+// HistoryEntry is one saved record of the history list, as the reopen flow
+// shows it.
+type HistoryEntry struct {
+	// ID is the record identifier to reopen.
+	ID string
+	// Label is the text the history list shows.
+	Label string
+}
+
+// loadHistory refreshes the history list from the service.
+func (m *Model) loadHistory() {
+	m.goAsync(func() {
+		infos, err := m.cfg.Service.ListRecords()
+		m.update(func() {
+			if err != nil {
+				m.histErr = err.Error()
+				return
+			}
+			m.histErr = ""
+			entries := make([]HistoryEntry, 0, len(infos))
+			for _, info := range infos {
+				label := info.ID
+				if !info.SavedAt.IsZero() {
+					label = info.SavedAt.Format("2006-01-02 15:04") + " · " + info.ID
+				}
+				entries = append(entries, HistoryEntry{ID: info.ID, Label: label})
+			}
+			m.history = entries
+			if m.histChoice == "" && len(entries) > 0 {
+				m.histChoice = entries[0].Label
+			}
+			if m.histChoice != "" && !m.hasHistoryLabel(m.histChoice) {
+				m.histChoice = ""
+			}
+		})
+	})
+}
+
+func (m *Model) hasHistoryLabel(label string) bool {
+	for _, e := range m.history {
+		if e.Label == label {
+			return true
+		}
+	}
+	return false
+}
+
+// HistoryLabels returns the history list's labels for the picker.
+func (m *Model) HistoryLabels() []string {
+	labels := make([]string, len(m.history))
+	for i, e := range m.history {
+		labels[i] = e.Label
+	}
+	return labels
+}
+
+// OpenHistory reopens the chosen history record: its newest verifiable
+// checkpoint loads with recovery semantics and becomes the results area's
+// record.
+func (m *Model) OpenHistory() {
+	id := m.historyID(m.histChoice)
+	if id == "" || m.exitState == exitRunning {
+		return
+	}
+	m.recLoad++
+	m.selected = -1
+	m.recErr = ""
+	m.reloadRecord(id, false)
+}
+
+func (m *Model) historyID(label string) string {
+	for _, e := range m.history {
+		if e.Label == label {
+			return e.ID
+		}
+	}
+	return ""
+}
+
+// reloadRecord loads one record from the service and, when the load lands,
+// makes it the results area's content — guarded by the recLoad version the
+// load started under, so a newer action's content is never overwritten by
+// an older load's result.
+func (m *Model) reloadRecord(id string, live bool) {
+	version := m.recLoad
+	m.goAsync(func() {
+		rec, err := m.cfg.Service.LoadRecord(id)
+		m.update(func() {
+			if version != m.recLoad {
+				return // a newer action replaced the results area's content
+			}
+			if err != nil {
+				m.recErr = err.Error()
+				return
+			}
+			m.recErr = ""
+			m.rec = BuildRecordView(id, rec, live)
+			m.selected = m.rec.RowOf(m.selectedSeq())
+			if m.selected < 0 && len(m.rec.Rows) > 0 {
+				m.selected = 0 // the first captured record, in capture order
+			}
+		})
+	})
+}
+
+// selectedSeq returns the selected row's capture sequence, 0 for none.
+func (m *Model) selectedSeq() int64 {
+	if m.rec == nil || m.selected < 0 || m.selected >= len(m.rec.Rows) {
+		return 0
+	}
+	return m.rec.Rows[m.selected].Seq
+}
+
+// Start begins a scan: a fresh request identity per attempt, reused until
+// the service answered, so repeated clicks cannot start two sessions. The
+// click only schedules the call; the outcome arrives through update and
+// the service's snapshots.
+func (m *Model) Start() {
+	if !m.canStart() {
+		return
+	}
+	if m.startReqID == "" {
+		m.startSerial++
+		m.startReqID = "ui-" + strconv.Itoa(m.startSerial)
+	}
+	m.startErr = ""
+	reqID := m.startReqID
+	m.goAsync(func() {
+		_, err := m.cfg.Service.Start(app.StartRequest{ID: reqID})
+		m.update(func() {
+			m.startReqID = ""
+			if err != nil {
+				m.startErr = err.Error()
+			}
+		})
+	})
+}
+
+// canStart says whether the start button is usable: a source must be
+// wired, no start may be in flight, no session may hold the active slot
+// and the process may not be exiting.
+func (m *Model) canStart() bool {
+	return m.source.Available && m.startReqID == "" && !m.snap.Busy &&
+		m.exitState == exitIdle
+}
+
+// Stop requests the idempotent user stop of the active session.
+func (m *Model) Stop() {
+	if !m.snap.Busy {
+		return
+	}
+	m.goAsync(func() { m.cfg.Service.Stop() })
+}
+
+// RetrySave re-attempts the failed persistence the progress area shows.
+func (m *Model) RetrySave() {
+	if m.snap.SaveError == "" {
+		return
+	}
+	m.goAsync(func() { _ = m.cfg.Service.RetrySave() })
+}
+
+// AllowClose reports whether the window may close now. The first ask
+// starts the explicit-exit wrap-up asynchronously and refuses the close;
+// the wrap-up shows its progress in the window. A failed wrap-up (an
+// unsaved result) keeps the window with the save failure and its retry;
+// once the save settled, the next ask runs the wrap-up again. A completed
+// wrap-up allows every later ask.
+func (m *Model) AllowClose() bool {
+	switch m.exitState {
+	case exitDone:
+		return true
+	case exitRunning:
+		return false
+	}
+	m.exitState = exitRunning
+	m.exitErr = ""
+	m.goAsync(func() {
+		err := m.cfg.Service.Quit()
+		m.update(func() {
+			if err != nil {
+				m.exitState = exitFailed
+				m.exitErr = err.Error()
+				return
+			}
+			m.exitState = exitDone
+			if m.cfg.OnExitSettled != nil {
+				m.cfg.OnExitSettled()
+			}
+		})
+	})
+	return false
+}
