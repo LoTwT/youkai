@@ -1,11 +1,11 @@
 // Package app holds youkai's application-level foundations and the
 // application service that composes them: directory resolution, the
-// cross-process occupancy locks guarding a data root and the per-user
-// scan slot, the scan payloads and the recognizer adapter bridging the
-// session kernel to the OCR runtime, the development-only scan data
-// source, and the service that owns sessions, saving, records and the
-// explicit-exit wrap-up. MyGo views never touch the kernels directly;
-// they call the service.
+// rotating diagnostic log file, the cross-process occupancy locks
+// guarding a data root and the per-user scan slot, the scan payloads and
+// the recognizer adapter bridging the session kernel to the OCR runtime,
+// the development-only scan data source, and the service that owns
+// sessions, saving, records and the explicit-exit wrap-up. MyGo views
+// never touch the kernels directly; they call the service.
 package app
 
 import (

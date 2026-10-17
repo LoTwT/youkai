@@ -69,6 +69,22 @@ CGO_ENABLED=1 YOUKAI_DEV_SOURCE=$PWD/internal/recognition/testdata \
 
 开发者需知：锁文件为空文件，内容无意义，互斥完全来自 OS 原语；**不要删除运行中实例的锁文件**（删除后新进程会锁到新文件，占用域被拆散）。`internal/app` 的跨进程测试把扫描锁基目录注入为临时目录（Windows 的 Known Folder 无法按进程重定向，因此经测试注入而非环境变量），避免触碰真实用户目录或与正在运行的应用互相干扰。
 
+## 诊断日志
+
+标准库 `log` 的输出在取得数据根占用后同时写 stderr 与日志文件（`cmd/youkai` 用 `io.MultiWriter` 组合）：开发与重定向排查继续看 stderr，安装版——Windows EXE 为 GUI 子系统，stderr 本身不可见——由此获得可取回的落盘日志（M1 报告观察项“安装版没有落盘日志”的修复，行为由 `internal/app` 的 `OpenDiagnosticLog` 提供）。
+
+| 项 | 值 |
+| --- | --- |
+| 正式版日志目录 | Windows `%LOCALAPPDATA%\Youkai\logs\`；macOS `~/Library/Logs/Youkai/`（`Paths.Logs`，见[架构第 5 节](specs/scanner-architecture.md#本地目录保留与清理)） |
+| 开发版日志目录 | 同规则按应用名单独命名（macOS 为 `~/Library/Logs/Youkai Dev/`），与正式版互不混写 |
+| 文件 | `youkai.log` 为当前文件，跨运行追加、不截断（重启不抹掉上一次运行的证据）；`youkai.log.1`…`youkai.log.3` 为轮转备份，`.1` 最新 |
+| 轮转与保留 | 单文件 1 MiB 上限、保留 3 份备份（`internal/app` 的常量，按实机证据调整），日志目录上限 4 个文件；日志只按大小轮转，属诊断数据，不按时间清理，与历史记录的删除分开（架构第 5 节） |
+
+- 打开时机在数据根占用之后：第二实例占用失败即退出，不会打开日志文件，因此两个进程不会交错或截断同一文件；代价是路径解析失败、占用失败等早期错误只在 stderr（开发期可见；安装版无从看到，但这类错误本身也意味着应用未能启动）。
+- 每次运行的第一行日志写明版本、构建提交（取 `debug.ReadBuildInfo` 的 VCS 信息，工作区有本地修改时加 `-modified` 后缀；构建未打标时为 `unknown`）、平台与数据根，用户反馈附带日志即可定位构建。
+- 日志打不开（如目录不可写）不阻止启动：stderr 照常输出并提示一次原因；运行中写入失败同样只退回 stderr（降级逻辑在 `internal/app`，Windows 上备份文件被杀毒或备份软件占用时轮转重试而不丢行，每轮失败只提示一次）。
+- `YOUKAI_SELFTEST` 自检在路径解析之前运行，仍只写 stderr（安装布局验证按[打包与安装包](#打包与安装包)的重定向方式读取）。
+
 ## GitHub Actions 检查
 
 `.github/workflows/ci.yml` 在每个 pull request 与推送到 `main` 时，于 `macos-latest`（Apple Silicon）与 `windows-latest` 两个 runner 上运行轻量检查：`gofmt -l .`（要求无输出）、`go vet ./...`、`go test ./...`，macOS 上额外运行 `go tool mygo vet .`。检查不打安装包、不跑长时间测试、不下载 OCR 资源；供 Windows 测试的安装包由手动触发的 Package workflow 按需构建（见[打包 workflow](#打包-workflow)）。仓库根 `.gitattributes` 将文本文件统一为 LF 换行，Windows 检出不会因此产生 `gofmt` 误报。
