@@ -1,7 +1,9 @@
 // Command youkai is the entry point of the Youkai application. It only
-// assembles the app and opens the main window: the application service
-// owns sessions, saving and the exit wrap-up, and the MyGo views of the
-// next milestone call into it.
+// assembles the application service and the main window: the service owns
+// sessions, saving and the exit wrap-up, the window's model (internal/ui)
+// renders its snapshots, and this file wires the two — the subscription
+// pump, the evidence loader, the start availability and the close-as-
+// explicit-exit behavior.
 package main
 
 import (
@@ -12,8 +14,9 @@ import (
 	"time"
 
 	"github.com/LoTwT/youkai/internal/app"
+	"github.com/LoTwT/youkai/internal/ui"
 	"github.com/egoist/mygo"
-	"github.com/egoist/mygo/ui"
+	mgui "github.com/egoist/mygo/ui"
 )
 
 func main() {
@@ -49,14 +52,31 @@ func main() {
 	defer dataLock.Close()
 	log.Printf("youkai: data-root lock acquired on %q", paths.Data)
 
+	source := devScanSource()
 	svc, err := app.NewService(app.Config{
 		Paths:    paths,
 		DataLock: dataLock,
-		Source:   devScanSource(),
+		Source:   source,
 	})
 	if err != nil {
 		log.Fatalf("youkai: %v", err)
 	}
+
+	model := ui.New(ui.Config{
+		Service: svc,
+		ScanSource: ui.ScanSourceInfo{
+			Available: source != nil,
+			Label:     "开发数据源",
+			Reason:    "当前构建没有接入游戏扫描源（M2 接入游戏适配）；开发构建可通过环境变量 YOUKAI_DEV_SOURCE 启用开发数据源。",
+		},
+		Evidence: ui.FileEvidence{Root: paths.Data},
+		// A settled explicit exit closes the application: the model's
+		// quit goroutine already waited for the wrap-up, so this Quit
+		// re-enters the allowed path (the model allows the close) and the
+		// event loop ends. A failed wrap-up never reaches here — the
+		// window stays with the save failure instead.
+		OnExitSettled: func() { mygo.App.Quit() },
+	})
 
 	// The explicit-exit wrap-up. The quit event only triggers it
 	// asynchronously — a quit callback must not block the main thread on
@@ -68,29 +88,58 @@ func main() {
 		shutdownOnce.Do(func() {
 			if err := svc.Quit(); err != nil {
 				// A failed save stops the wrap-up short of the teardown;
-				// nothing retries it in this headless milestone, so the
-				// failure is reported and the process exits with the
-				// last durable checkpoint standing.
+				// with the window gone nothing retries it, so the failure
+				// is reported and the process exits with the last durable
+				// checkpoint standing.
 				log.Printf("youkai: exit wrap-up incomplete: %v", err)
 			}
 		})
 	}
-	mygo.App.OnBeforeQuit(func(e *mygo.QuitEvent) { go shutdown() })
+	// M1 treats closing the main window as the explicit exit (the two
+	// close modes, the tray and deep links are M3): every close and quit
+	// attempt joins the one wrap-up, which shows its progress in the
+	// window and may refuse to close until the final save settled.
+	mygo.App.OnBeforeQuit(func(e *mygo.QuitEvent) {
+		if !model.AllowClose() {
+			e.PreventDefault()
+		}
+	})
 
 	mygo.App.WhenReady(func() {
-		mygo.NewWindow(mygo.WindowOptions{
-			Title:   "Youkai",
-			Width:   480,
-			Height:  320,
-			Content: ui.View(view),
+		win := mygo.NewWindow(mygo.WindowOptions{
+			Title:     "Youkai",
+			Width:     1020,
+			Height:    700,
+			MinWidth:  860,
+			MinHeight: 560,
+			Content:   mgui.View(model.View),
 		})
+		win.OnClose(func(e *mygo.CloseEvent) {
+			if !model.AllowClose() {
+				e.PreventDefault()
+			}
+		})
+		model.Attach(win)
+
+		// The subscription pump: a notification only means "something
+		// changed", so the pump re-fetches the authoritative snapshot and
+		// hands it to the model on the UI thread, which discards stale
+		// session revisions itself. Background progress never activates
+		// the window — Update only redraws.
+		sub := svc.Subscribe()
+		initial := sub.Initial
+		win.Update(func() { model.Apply(initial) })
+		go func() {
+			for range sub.Changes {
+				snap := svc.Snapshot()
+				win.Update(func() { model.Apply(snap) })
+			}
+		}()
 	})
 	if os.Getenv("YOUKAI_DEV_AUTOSTART") != "" {
-		// Development-only auto start: the interface that starts scans
-		// arrives with the next milestone, so a full run is driven by an
-		// explicit environment switch. The ready callback stays fast —
-		// the start, and with it the first model load, runs on its own
-		// goroutine.
+		// Development-only auto start, for full runs without a click. The
+		// ready callback stays fast — the start, and with it the first
+		// model load, runs on its own goroutine.
 		mygo.App.WhenReady(func() {
 			go func() {
 				req := app.StartRequest{ID: fmt.Sprintf("dev-autostart-%d", os.Getpid())}
@@ -112,10 +161,10 @@ func main() {
 
 // devScanSource wires the development data source when the explicit
 // environment switch names an observations directory (its lines.tsv and
-// the crop images it lists). It exists so a scan can be driven before
-// the game adapters of M2 exist — development and tests only; installed
-// builds run without it and the service then refuses starts with a
-// clear error. It is not a user-facing image import feature.
+// the crop images it lists). It exists so a scan can be driven before the
+// game adapters of M2 exist — development and tests only; installed
+// builds run without it and the service then refuses starts with a clear
+// error. It is not a user-facing image import feature.
 func devScanSource() app.ScanSource {
 	dir := os.Getenv("YOUKAI_DEV_SOURCE")
 	if dir == "" {
@@ -150,12 +199,4 @@ func resourcesRoot() string {
 		log.Fatalf("youkai: resolve resources: %v", err)
 	}
 	return dir
-}
-
-// view is the placeholder content of the main window until the real
-// interface is built.
-func view(c *ui.Context) {
-	ui.Column(c).Fill().Center().Children(func() {
-		ui.Text(c, "Youkai")
-	})
 }
