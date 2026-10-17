@@ -407,6 +407,14 @@ jobs:
           version="${tag#"$prefix"}"
           repo="${GITHUB_REPOSITORY}"
           assets=$(gh release view "$tag" --repo "$repo" --json assets -q '.assets[].name')
+          # MyGo names the installers with spaces ("Youkai <version>
+          # arm64.dmg", "Youkai Setup <version> amd64.exe"), but GitHub
+          # renames every uploaded asset filename that contains special
+          # characters and stores each space as a dot: test-v0.0.1 holds
+          # "Youkai.0.0.1.arm64.dmg", not "Youkai 0.0.1 arm64.dmg". Apply
+          # the same space-to-dot renaming to the expected names and match
+          # the stored names; the other assets contain no spaces and pass
+          # through unchanged.
           need=(
             "Youkai $version arm64.dmg"
             "Youkai Setup $version amd64.exe"
@@ -417,8 +425,9 @@ jobs:
           )
           fail=0
           for name in "${need[@]}"; do
-            if ! printf '%s\n' "$assets" | grep -Fxq "$name"; then
-              echo "ERROR: the release is missing the asset: $name"
+            stored="${name// /.}"
+            if ! printf '%s\n' "$assets" | grep -Fxq "$stored"; then
+              echo "ERROR: the release is missing the asset: $stored"
               fail=1
             fi
           done
