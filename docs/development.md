@@ -53,7 +53,7 @@ CGO_ENABLED=1 YOUKAI_DEV_SOURCE=$PWD/internal/recognition/testdata \
 | `go test -race ./internal/recognition` | 识别包的竞态检查（含取消与生命周期并发路径）。 |
 | `go tool mygo vet .` | 先运行 `go vet ./...`，再检查原生 UI 生命周期问题；参数是应用目录（项目根），不能写成 `./...`。 |
 | `go tool mygo dev` | 开发运行，编辑 Go 代码、配置或资源后自动重建重启；开发应用名为 `Youkai Dev`（标识 `com.lotwt.youkai.dev`，位于 `.mygo/dev`），与正式安装的数据和权限隔离。退出应用或 Ctrl+C 结束。 |
-| `go tool mygo build` | 打包本机平台制品到 `build/<os>-<arch>/`：macOS 生成 ad-hoc 签名的 `Youkai.app` 与 DMG。 |
+| `go tool mygo build` | 打包本机平台制品到 `build/<os>-<arch>/`：macOS 生成 ad-hoc 签名的 `Youkai.app` 与 DMG。须显式 `CGO_ENABLED=1`，macOS 另设部署目标，完整命令与说明见[打包与安装包](#打包与安装包)。 |
 | `CGO_ENABLED=1 CC=x86_64-w64-mingw32-gcc GOOS=windows GOARCH=amd64 go build ./...` | Windows 交叉编译检查（OCR 绑定需要 cgo 与 mingw-w64）；只证明能编译，不代表能在 Windows 上运行。需要交叉编译识别测试二进制时把 `build` 换成 `test -c -o <path> ./internal/recognition`。 |
 
 `go tool mygo build` 亦接受 `-platform` 指定目标，如 `-platform windows/amd64`（在 macOS 上产出 EXE，装有 makensis 时同时产出 NSIS 安装包）。按已确认的测试方式，交给用户测试的 Windows 安装包仍以 GitHub Actions 产物为准，见下节。
@@ -71,7 +71,7 @@ CGO_ENABLED=1 YOUKAI_DEV_SOURCE=$PWD/internal/recognition/testdata \
 
 ## GitHub Actions 检查
 
-`.github/workflows/ci.yml` 在每个 pull request 与推送到 `main` 时，于 `macos-latest`（Apple Silicon）与 `windows-latest` 两个 runner 上运行轻量检查：`gofmt -l .`（要求无输出）、`go vet ./...`、`go test ./...`，macOS 上额外运行 `go tool mygo vet .`。检查不打安装包、不跑长时间测试、不下载 OCR 资源；供 Windows 测试的安装包按需另行由 GitHub Actions 构建，见[实施清单](specs/scanner-implementation-plan.md#开发与-windows-测试方式)。仓库根 `.gitattributes` 将文本文件统一为 LF 换行，Windows 检出不会因此产生 `gofmt` 误报。
+`.github/workflows/ci.yml` 在每个 pull request 与推送到 `main` 时，于 `macos-latest`（Apple Silicon）与 `windows-latest` 两个 runner 上运行轻量检查：`gofmt -l .`（要求无输出）、`go vet ./...`、`go test ./...`，macOS 上额外运行 `go tool mygo vet .`。检查不打安装包、不跑长时间测试、不下载 OCR 资源；供 Windows 测试的安装包由手动触发的 Package workflow 按需构建（见[打包 workflow](#打包-workflow)）。仓库根 `.gitattributes` 将文本文件统一为 LF 换行，Windows 检出不会因此产生 `gofmt` 误报。
 
 OCR cgo 绑定接入后，两个 runner 都要编译 `internal/recognition` 的 C 桥接：macOS runner 自带 Xcode 的 `clang`，`windows-latest` 镜像自带 MinGW gcc（写入镜像工具清单，Windows Server 2025 为 gcc 15.2.0），且原生构建 `CGO_ENABLED` 默认为 1，CI 无需额外装工具链；资源缺失时识别集成测试用 `t.Skip` 跳过，因此 PR 检查仍不下载 OCR 资源。以上 runner 镜像结论来自 runner-images 的镜像清单，首次在本仓库 PR 上实际运行 CI 时确认；若镜像变动导致 gcc 缺失，在 CI 中补装 MinGW。CI 编译通过不代表 cgo 绑定能在 Windows 实机加载运行库，该验证归 Windows 测试（见[实施清单的开发与 Windows 测试方式](specs/scanner-implementation-plan.md#开发与-windows-测试方式)）。
 
@@ -96,8 +96,40 @@ OCR 运行库与模型不进 Git，由 `tools/fetchdeps` 按固定 URL 与 SHA-2
 
 行为约定：已存在且摘要一致的文件跳过；压缩包与每个解出文件都按固定 SHA-256 校验，不符立即失败；所有文件先写临时文件、校验通过后改名，失败不会留下半成品。目录名对应 MyGo 的 `resources/` 约定：平台子目录的内容只随对应平台的应用发布，其余随所有平台发布。
 
+## 打包与安装包
+
+两个目标平台的本地打包命令（先按上节下载对应平台资源；版本号取 `mygo.json`，当前 `0.0.1`）：
+
+| 平台 | 命令 |
+| --- | --- |
+| macOS | `go run ./tools/fetchdeps -platform darwin/arm64 && MACOSX_DEPLOYMENT_TARGET=14.0 CGO_ENABLED=1 go tool mygo build -platform darwin/arm64` |
+| Windows 交叉 | `go run ./tools/fetchdeps -platform windows/amd64 && CGO_ENABLED=1 CC=x86_64-w64-mingw32-gcc go tool mygo build -platform windows/amd64` |
+
+- 产物：macOS 为 ad-hoc 签名的 `Youkai.app` 与 `Youkai 0.0.1 arm64.dmg`（`build/darwin-arm64/`）；Windows 为 `Youkai.exe`、随包资源与 NSIS 每用户安装包 `Youkai Setup 0.0.1 amd64.exe`（`build/windows-amd64/`）。本机装有 makensis 时才产出安装包，缺失只警告并跳过，须自行确认安装包确实生成（workflow 会强制校验）。
+- `CGO_ENABLED=1` 必须显式设置（MyGo 对未设置的环境默认 `CGO_ENABLED=0`）；`MACOSX_DEPLOYMENT_TARGET=14.0` 与 `mygo.json` 的 `macos.minimumSystemVersion` 一致（T7 最低系统候选），影响 C 代码编译与链接的最低系统标记，MyGo 不代设。
+- 资源布局：MyGo 把 `resources/` 与 `resources/<平台>/` 合并为应用资源根——macOS 是 `Youkai.app/Contents/Resources`，Windows 是 EXE 所在目录；识别器经 `internal/app` 的 `OCRResources` 从资源根的 `onnxruntime/`、`models/` 以绝对路径加载，不依赖工作目录。VC++ 运行库（4 个 x64 DLL）只由打包 workflow 从 Windows runner 放入 `resources/windows-amd64/` 顶层（即 EXE 同目录，见 `.gitignore`；本地交叉打包产物不含它们，不影响打包本身）。
+- 随包声明：`resources/THIRD-PARTY-NOTICES.md` 随所有平台分发；ORT 的 `LICENSE` 与 `ThirdPartyNotices.txt` 由 fetchdeps 放在 `onnxruntime/` 内。
+
+**识别自检（`YOUKAI_SELFTEST`）**：任何构建（含安装后的应用）在该环境变量非空时启动，会在触碰用户数据与占用锁之前加载随包 ORT 运行库与模型、识别一张内置固定样本（期望文本 `等级15/15`，取自 `internal/recognition` 的测试裁剪）并退出：成功退出码 0，失败非 0 并在 stderr 记录原因。用于验证安装布局（DMG 拷贝出的应用、Windows 安装目录）识别可用，是打包与开发开关，不是用户可见的图片导入功能。macOS 直接运行 `Youkai.app/Contents/MacOS/Youkai`；Windows EXE 为 GUI 子系统无控制台，用 PowerShell 重定向：
+
+```powershell
+$env:YOUKAI_SELFTEST="1"
+Start-Process "$env:LOCALAPPDATA\Programs\Youkai\Youkai.exe" -NoNewWindow -Wait -PassThru `
+  -RedirectStandardError err.txt -RedirectStandardOutput out.txt | Out-Null
+Get-Content err.txt
+```
+
+### 打包 workflow
+
+`.github/workflows/package.yml`（Package）只用 `workflow_dispatch` 手动触发（合并到 main 后在 Actions 页运行；PR 不打安装包，轻量检查见[上节](#github-actions-检查)），在 `macos-latest` 与 `windows-latest` 各一个 job：
+
+- 各自运行 fetchdeps 并以显式 `CGO_ENABLED=1` 打包（macOS 另设 `MACOSX_DEPLOYMENT_TARGET=14.0`）。
+- Windows job 用 `vswhere` 定位 runner 上 Visual Studio 的 `VC\Redist\MSVC\<版本>\x64\Microsoft.VC143.CRT`，把 `MSVCP140.dll`、`MSVCP140_1.dll`、`VCRUNTIME140.dll`、`VCRUNTIME140_1.dll` 复制到 `resources/windows-amd64/` 顶层再打包，运行库版本写入清单；不从 vc_redist 安装器解包、不进 Git。
+- 两个 job 都强制校验产物生成（缺 DMG、缺安装包——包括缺 NSIS 被跳过——或随包文件缺位都会失败），并在打包布局上运行识别自检（Windows job 因此能在 runner 上实际验证 ORT DLL、VC++ DLL 与模型的加载）。
+- 上传安装包、DMG 与制品清单（文件名、大小、SHA-256、原生库与模型摘要、VC++ 运行库版本、提交 SHA）为 workflow artifact；测试构建以提交 SHA 标识，不发布 Releases（正式发布与自动更新属后续 PR）。
+
 ## 与 Windows 测试方式的关系
 
-用户不在 Windows 上安装开发工具，Windows 上的功能与安装测试使用 GitHub Actions 构建的安装包（正式发布与开发期测试的 Windows 制品均来自 GitHub Actions，约定见[实施清单](specs/scanner-implementation-plan.md#开发与-windows-测试方式)）。
+用户不在 Windows 上安装开发工具，Windows 上的功能与安装测试使用 GitHub Actions 构建的安装包：开发期测试从 Package workflow 的产物获取（见[上节](#打包-workflow)），正式发布制品随版本发布在 GitHub Releases（约定见[实施清单](specs/scanner-implementation-plan.md#开发与-windows-测试方式)）。
 
 Mac 上的 Windows 交叉编译检查只用于尽早发现编译与平台隔离问题：交叉编译通过不代表能在 Windows 上运行，VC++ 运行库（DLL 来源与实际加载）也不在本地交叉编译的覆盖范围内，需要快速排查非 VC++ 问题时可另行交叉编译免安装包供测试。只能在 Windows 实机验证的事项见实施清单第 1 节。

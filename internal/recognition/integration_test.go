@@ -276,6 +276,32 @@ func TestIntegration(t *testing.T) {
 	})
 }
 
+// TestSelfCheck runs the install-time self-check against the real artifacts,
+// exactly as the entry point's YOUKAI_SELFTEST mode does on an installed app.
+func TestSelfCheck(t *testing.T) {
+	libPath, modelPath, ok := resourcePaths(t)
+	if !ok {
+		t.Fatal("unreachable")
+	}
+	res := Resources{LibraryPath: libPath, ModelPath: modelPath}
+	got, err := SelfCheck(res)
+	if err != nil {
+		t.Fatalf("SelfCheck: %v", err)
+	}
+	if got.Text != selfCheckWant {
+		t.Fatalf("SelfCheck text = %q, want %q", got.Text, selfCheckWant)
+	}
+	if got.Score <= 0 {
+		t.Fatalf("SelfCheck score = %v, want > 0", got.Score)
+	}
+	// The self-check leaves the environment loaded, as the application's
+	// first scan does; the entry point's self-test mode calls Shutdown after
+	// it, and so does this test to leave the process clean.
+	if err := Shutdown(); err != nil {
+		t.Fatalf("Shutdown after SelfCheck: %v", err)
+	}
+}
+
 // testLine is one row of testdata/lines.tsv.
 type testLine struct {
 	file     string

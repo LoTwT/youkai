@@ -1,0 +1,284 @@
+# On-demand packaging of installable builds for both target platforms.
+# Manually dispatched only (Actions tab → Package → Run workflow): pull
+# requests never build installers — the lightweight CI (ci.yml) covers them.
+# The macOS job builds the ad-hoc signed .app and DMG; the Windows job builds
+# the EXE and the NSIS per-user installer, placing the VC++ runtime DLLs from
+# the runner's Visual Studio next to the EXE (app-local deployment, see
+# docs/specs/t3-ocr-runtime-model-samples.md 绑定与运行库的实际交接).
+# Both jobs run the recognition self-test (YOUKAI_SELFTEST) against the
+# packaged layout, so a green run proves the bundled ONNX Runtime library,
+# the model — and on Windows the VC++ DLLs — actually load and recognize.
+#
+# Versions stay in mygo.json (currently 0.0.1); these are test builds, so the
+# manifest and the workflow artifact name carry the commit SHA instead of a
+# release tag.
+name: Package
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  macos:
+    name: Package (darwin/arm64)
+    runs-on: macos-latest # Apple Silicon
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Download OCR resources (fetchdeps)
+        run: go run ./tools/fetchdeps -platform darwin/arm64
+      - name: Build the app bundle and DMG
+        # CGO_ENABLED must be explicit: MyGo forces CGO_ENABLED=0 when the
+        # environment leaves it unset, and the OCR bindings need cgo. The
+        # deployment target matches the macos.minimumSystemVersion of
+        # mygo.json (14.0, see T7 最低系统候选).
+        env:
+          CGO_ENABLED: "1"
+          MACOSX_DEPLOYMENT_TARGET: "14.0"
+        run: go tool mygo build -platform darwin/arm64
+      - name: Verify the bundle, the DMG and the signature
+        shell: bash
+        run: |
+          set -u
+          app="build/darwin-arm64/Youkai.app"
+          dmg=$(find build/darwin-arm64 -maxdepth 1 -name '*.dmg' -print -quit)
+          fail=0
+          if [ ! -d "$app" ]; then
+            echo "ERROR: missing app bundle: $app"
+            fail=1
+          fi
+          if [ -z "$dmg" ]; then
+            echo "ERROR: no DMG under build/darwin-arm64 (MyGo skips the disk image with a warning when hdiutil fails; a packaged build must have one)"
+            fail=1
+          fi
+          for f in \
+            "Contents/Resources/onnxruntime/libonnxruntime.1.29.0.dylib" \
+            "Contents/Resources/onnxruntime/LICENSE" \
+            "Contents/Resources/onnxruntime/ThirdPartyNotices.txt" \
+            "Contents/Resources/models/PP-OCRv6_rec_small.onnx" \
+            "Contents/Resources/THIRD-PARTY-NOTICES.md"; do
+            if [ ! -e "$app/$f" ]; then
+              echo "ERROR: missing bundled resource: $app/$f"
+              fail=1
+            fi
+          done
+          if [ "$fail" -ne 0 ]; then
+            exit 1
+          fi
+          # The ad-hoc signature must cover the whole bundle, including the
+          # bundled dylib (which keeps its own valid signature when upstream
+          # ships one; MyGo ad-hoc signs only unsigned Mach-O files).
+          codesign --verify --deep --strict --verbose=2 "$app"
+          echo "--- executable and dylib minimum system (LC_BUILD_VERSION) ---"
+          otool -l "$app/Contents/MacOS/Youkai" | grep -A3 LC_BUILD_VERSION
+          otool -l "$app/Contents/Resources/onnxruntime/libonnxruntime.1.29.0.dylib" | grep -A3 LC_BUILD_VERSION
+          echo "--- dylib signature ---"
+          codesign -dv "$app/Contents/Resources/onnxruntime/libonnxruntime.1.29.0.dylib" 2>&1 || true
+      - name: Recognition self-test on the packaged app
+        # The bundle is ad-hoc signed on this runner, so it runs here. The
+        # check loads the bundled dylib and model from Contents/Resources and
+        # recognizes one embedded sample; it exits non-zero on failure.
+        shell: bash
+        run: |
+          set -e
+          YOUKAI_SELFTEST=1 "build/darwin-arm64/Youkai.app/Contents/MacOS/Youkai"
+      - name: Write the packaging manifest
+        shell: bash
+        run: |
+          version=$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' mygo.json)
+          app="build/darwin-arm64/Youkai.app"
+          dmg=$(find build/darwin-arm64 -maxdepth 1 -name '*.dmg' -print -quit)
+          dylib="$app/Contents/Resources/onnxruntime/libonnxruntime.1.29.0.dylib"
+          model="$app/Contents/Resources/models/PP-OCRv6_rec_small.onnx"
+          hash() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d' ' -f1; else shasum -a 256 "$1" | cut -d' ' -f1; fi; }
+          {
+            echo "Youkai packaging manifest"
+            echo "commit: ${GITHUB_SHA}"
+            echo "platform: darwin/arm64"
+            echo "app version (mygo.json): ${version}"
+            echo "macOS deployment target: 14.0"
+            echo "built (UTC): $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo
+            echo "## Artifacts"
+            printf '%s  %s bytes  sha256:%s\n' "$(basename "$dmg")" "$(wc -c < "$dmg" | tr -d ' ')" "$(hash "$dmg")"
+            printf 'Youkai.app (bundle)  %s bytes total  (in the DMG)\n' "$(du -sk "$app" | cut -f1)K"
+            echo
+            echo "## Bundled native libraries and model"
+            printf '%s  %s bytes  sha256:%s\n' "libonnxruntime.1.29.0.dylib" "$(wc -c < "$dylib" | tr -d ' ')" "$(hash "$dylib")"
+            printf '%s  %s bytes  sha256:%s\n' "PP-OCRv6_rec_small.onnx" "$(wc -c < "$model" | tr -d ' ')" "$(hash "$model")"
+            echo
+            echo "## Bundle signature"
+            codesign --verify --deep --strict "$app" && echo "codesign --verify --deep --strict: OK (ad-hoc)"
+            echo
+            echo "## Minimum system (LC_BUILD_VERSION)"
+            otool -l "$app/Contents/MacOS/Youkai" | grep -A3 LC_BUILD_VERSION
+            otool -l "$dylib" | grep -A3 LC_BUILD_VERSION
+          } | tee packaging-manifest-darwin-arm64.txt
+      - name: Upload the DMG and the manifest
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: youkai-darwin-arm64-${{ github.sha }}
+          if-no-files-found: error
+          path: |
+            build/darwin-arm64/*.dmg
+            packaging-manifest-darwin-arm64.txt
+
+  windows:
+    name: Package (windows/amd64)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Download OCR resources (fetchdeps)
+        run: go run ./tools/fetchdeps -platform windows/amd64
+      - name: Place the VC++ runtime DLLs next to the app (app-local)
+        # App-local VC++ deployment (T3 绑定与运行库的实际交接): the four x64
+        # CRT DLLs come from the runner's Visual Studio VC\Redist directory —
+        # never unpacked from the vc_redist installer, never committed to Git.
+        # MyGo merges resources/windows-amd64/ into the EXE's directory, which
+        # is where the Windows loader looks when onnxruntime.dll (inside
+        # onnxruntime/) resolves its static CRT imports.
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          if (-not (Test-Path $vswhere)) { throw "vswhere.exe not found at $vswhere" }
+          $vs = & $vswhere -latest -products * -property installationPath
+          if (-not $vs) { throw "vswhere found no Visual Studio installation" }
+          $redistRoot = Join-Path $vs "VC\Redist\MSVC"
+          $latest = Get-ChildItem $redistRoot -Directory -ErrorAction Stop |
+            Sort-Object { [version]$_.Name } -Descending | Select-Object -First 1
+          if (-not $latest) { throw "no VC\Redist\MSVC\<version> directory under $redistRoot" }
+          $crt = Join-Path $latest.FullName "x64\Microsoft.VC143.CRT"
+          $info = "VC++ redist directory: $($latest.FullName)"
+          foreach ($name in "MSVCP140.dll","MSVCP140_1.dll","VCRUNTIME140.dll","VCRUNTIME140_1.dll") {
+            $src = Join-Path $crt $name
+            if (-not (Test-Path $src)) { throw "missing VC++ redist DLL: $src" }
+            Copy-Item $src (Join-Path "resources/windows-amd64" $name) -Force
+            $fileVersion = (Get-Item $src).VersionInfo.FileVersion
+            $info += "`n$name  file version $fileVersion"
+            Write-Host "$name  file version $fileVersion  <- $($latest.Name)"
+          }
+          Set-Content -Path vc-redist-info.txt -Value $info -Encoding utf8
+      - name: Build the EXE and the NSIS installer
+        # Explicit CGO_ENABLED: MyGo defaults its child processes to
+        # CGO_ENABLED=0 unless the environment overrides it. NSIS: MyGo
+        # downloads it on Windows when makensis is not installed, and the
+        # artifact check below fails loudly if the installer is missing.
+        env:
+          CGO_ENABLED: "1"
+        run: go tool mygo build -platform windows/amd64
+      - name: Verify the EXE, the installer and the packaged layout
+        shell: bash
+        run: |
+          set -u
+          exe="build/windows-amd64/Youkai.exe"
+          setup=$(find build/windows-amd64 -maxdepth 1 -name '*Setup*.exe' -print -quit)
+          fail=0
+          if [ ! -f "$exe" ]; then
+            echo "ERROR: missing executable: $exe"
+            fail=1
+          fi
+          if [ -z "$setup" ]; then
+            echo "ERROR: no NSIS installer under build/windows-amd64 — MyGo skips the installer with a mere warning when NSIS/makensis is unavailable; a packaged build must produce it"
+            fail=1
+          fi
+          # The merged resource root is the EXE's own directory: every
+          # bundled artifact must sit right next to Youkai.exe.
+          for f in \
+            "onnxruntime/onnxruntime.dll" \
+            "onnxruntime/onnxruntime_providers_shared.dll" \
+            "onnxruntime/LICENSE" \
+            "onnxruntime/ThirdPartyNotices.txt" \
+            "models/PP-OCRv6_rec_small.onnx" \
+            "THIRD-PARTY-NOTICES.md" \
+            "MSVCP140.dll" \
+            "MSVCP140_1.dll" \
+            "VCRUNTIME140.dll" \
+            "VCRUNTIME140_1.dll"; do
+            if [ ! -e "build/windows-amd64/$f" ]; then
+              echo "ERROR: missing packaged file next to the EXE: build/windows-amd64/$f"
+              fail=1
+            fi
+          done
+          if [ "$fail" -ne 0 ]; then
+            exit 1
+          fi
+          echo "--- installer contents (7z listing) ---"
+          7z l "$setup" || { echo "ERROR: 7z failed to list the installer"; exit 1; }
+          echo "--- VC++ DLLs inside the installer ---"
+          for name in MSVCP140.dll MSVCP140_1.dll VCRUNTIME140.dll VCRUNTIME140_1.dll; do
+            7z l "$setup" | grep -i "$name" || { echo "ERROR: $name not found in the installer"; exit 1; }
+          done
+      - name: Recognition self-test on the packaged EXE
+        # Runs the GUI-subsystem EXE headlessly: the self-test path returns
+        # before any window exists, loading the bundled onnxruntime.dll —
+        # whose CRT imports resolve through the VC++ DLLs placed next to the
+        # EXE — and the model, then recognizing one embedded sample.
+        shell: pwsh
+        run: |
+          $env:YOUKAI_SELFTEST = "1"
+          $exe = "build\windows-amd64\Youkai.exe"
+          $p = Start-Process -FilePath $exe -NoNewWindow -Wait -PassThru `
+            -RedirectStandardOutput selftest-stdout.txt -RedirectStandardError selftest-stderr.txt
+          $err = Get-Content selftest-stderr.txt -Raw
+          if ($err) { Write-Host $err }
+          if ($p.ExitCode -ne 0) {
+            $out = Get-Content selftest-stdout.txt -Raw
+            if ($out) { Write-Host $out }
+            throw "recognition self-test failed: exit code $($p.ExitCode) — the stderr above names the library and model paths it tried; a missing VC++ DLL or a broken packaged layout shows up here"
+          }
+      - name: Write the packaging manifest
+        shell: bash
+        run: |
+          version=$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' mygo.json)
+          exe="build/windows-amd64/Youkai.exe"
+          setup=$(find build/windows-amd64 -maxdepth 1 -name '*Setup*.exe' -print -quit)
+          hash() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d' ' -f1; else shasum -a 256 "$1" | cut -d' ' -f1; fi; }
+          entry() { printf '%s  %s bytes  sha256:%s\n' "$1" "$(wc -c < "$2" | tr -d ' ')" "$(hash "$2")"; }
+          {
+            echo "Youkai packaging manifest"
+            echo "commit: ${GITHUB_SHA}"
+            echo "platform: windows/amd64"
+            echo "app version (mygo.json): ${version}"
+            echo "built (UTC): $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo
+            echo "## Artifacts"
+            entry "$(basename "$setup")" "$setup"
+            entry "Youkai.exe" "$exe"
+            echo
+            echo "## Bundled native libraries and model"
+            entry "onnxruntime.dll" "build/windows-amd64/onnxruntime/onnxruntime.dll"
+            entry "onnxruntime_providers_shared.dll" "build/windows-amd64/onnxruntime/onnxruntime_providers_shared.dll"
+            entry "PP-OCRv6_rec_small.onnx" "build/windows-amd64/models/PP-OCRv6_rec_small.onnx"
+            echo
+            echo "## VC++ runtime (app-local, from the runner's Visual Studio)"
+            cat vc-redist-info.txt
+            entry "MSVCP140.dll" "build/windows-amd64/MSVCP140.dll"
+            entry "MSVCP140_1.dll" "build/windows-amd64/MSVCP140_1.dll"
+            entry "VCRUNTIME140.dll" "build/windows-amd64/VCRUNTIME140.dll"
+            entry "VCRUNTIME140_1.dll" "build/windows-amd64/VCRUNTIME140_1.dll"
+            echo
+            echo "ONNX Runtime 1.29.0 imports the VC++ v14 series (MSVCP140.dll, MSVCP140_1.dll, VCRUNTIME140.dll, VCRUNTIME140_1.dll; see T3 固定组合与制品静态核查); the v14 series is binary-compatible, so the runner's latest Microsoft.VC143.CRT is not older than the toolset that built it. Actual loading on a clean Windows machine is a Windows test item."
+          } | tee packaging-manifest-windows-amd64.txt
+      - name: Upload the installer and the manifest
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: youkai-windows-amd64-${{ github.sha }}
+          if-no-files-found: error
+          path: |
+            build/windows-amd64/*Setup*.exe
+            packaging-manifest-windows-amd64.txt

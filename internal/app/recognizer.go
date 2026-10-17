@@ -43,11 +43,14 @@ func onnxRuntimeLibName(goos string) string {
 	}
 }
 
-// ocrResources resolves the OCR runtime and model paths below a resources
-// root, as the bundled layout ships them. Paths stay absolute and rooted
-// at resourcesRoot so loading never depends on the working directory or
-// the system library search path (docs/specs/scanner-architecture.md §4).
-func ocrResources(resourcesRoot string) (recognition.Resources, error) {
+// OCRResources resolves the OCR runtime and model paths below a resources
+// root, as the bundled layout ships them. It backs both the application
+// service's recognizer and the entry point's install self-check (see
+// recognition.SelfCheck), so the two always load the same packaged copies.
+// Paths stay absolute and rooted at resourcesRoot so loading never depends on
+// the working directory or the system library search path
+// (docs/specs/scanner-architecture.md §4).
+func OCRResources(resourcesRoot string) (recognition.Resources, error) {
 	lib := onnxRuntimeLibName(runtime.GOOS)
 	if lib == "" {
 		return recognition.Resources{}, fmt.Errorf("app: no pinned ONNX runtime artifact for %s/%s", runtime.GOOS, runtime.GOARCH)
@@ -66,7 +69,7 @@ func ocrResources(resourcesRoot string) (recognition.Resources, error) {
 // process-wide environment outlives the session (see recognition.Shutdown)
 // and the returned adapter is closed only by the explicit-exit wrap-up.
 func newOCRRecognizer(resourcesRoot string) (Recognizer, error) {
-	res, err := ocrResources(resourcesRoot)
+	res, err := OCRResources(resourcesRoot)
 	if err != nil {
 		return nil, err
 	}
