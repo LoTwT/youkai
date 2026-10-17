@@ -4,7 +4,7 @@
 
 ## 版本号与两条渠道
 
-- **版本号**：`major.minor.patch`（语义化），首个发布版 `0.0.1`，随发布递增。发布时以**标签中的版本为准**：`mygo.json` 源文件保持开发版本（当前 `0.0.1`），发布 workflow 在构建前把标签版本与渠道前缀写入构建检出里的 `mygo.json` 副本（不提交），因此构建产物、`mygo.App.Version()` 与标签一致，不为发布提交版本号改动。
+- **版本号**：`major.minor.patch`（语义化），首个发布版 `0.0.1`，随发布递增。发布时以**标签中的版本为准**：`mygo.json` 源文件保持开发版本（当前 `0.0.1`），发布 workflow 在构建前把标签版本与渠道前缀写入构建检出里的 `mygo.json` 副本（不提交；改写前对该文件设置 `git update-index --skip-worktree`，`git status` 因此不报修改，Go 的 VCS 戳记仍是标签提交的干净状态——构建日志与诊断日志首行携带干净的 `commit=`，不带 `-modified`），因此构建产物、`mygo.App.Version()` 与标签一致，不为发布提交版本号改动。
 - **测试渠道**：标签 `test-v<版本>`（如 `test-v0.0.1`）。发布为**普通 Release**——MyGo 更新器只接受已发布、非草稿、非预发布的版本——但**不设为 latest**，标题与说明注明“测试版，勿用”。测试渠道构建的应用只检查 `test-v` 标签的 Release。
 - **正式渠道**：标签 `v<版本>`。正式渠道构建读仓库 **latest Release** 的更新清单（MyGo 对前缀 `v` 与不设前缀等价：`tagged()` 为假，feed 为 `releases/latest/download/`）。选显式 `tagPrefix: "v"` 是为了在 workflow 里自文档；测试渠道 Release 发布时一律 `--latest=false`，但这只是不把测试版显式标记为 latest，挡不住 GitHub 的回退：仓库中没有显式 latest 时，`releases/latest` 返回最新发布的非草稿、非预发布 Release。因此在**第一个正式版（`v*`）发布前**，唯一的测试版仍会被 GitHub 当作 latest（`test-v0.0.1` 发布后实测 `GET /repos/LoTwT/youkai/releases/latest` 返回的正是它）。目前不存在正式渠道构建的安装，latest 指向测试版不影响更新隔离；第一个正式版必须以 `--latest=true` 发布（workflow 已如此），此后 latest 恒为正式版。即使走标签列表路径（`internal/update/github.go` 的 `HasPrefix(tag, prefix)`），前缀 `v` 也匹配不到 `test-v…`，两渠道不会串。
 - **渠道隔离靠 `updates.tagPrefix`**：发布 workflow 按标签写入 `test-v` 或 `v`，应用内嵌的更新源随渠道固定；同一把更新密钥签名两个渠道，公钥自 `0.0.1` 随包内置（晚加需用户手动重装一次）。
@@ -24,7 +24,7 @@
 - 公钥与私钥为 Ed25519 对（`go tool mygo keygen` 生成，私钥文件为 `mygo-update.key` 的内容）。**私钥只存于用户的密码管理器与仓库 secret `MYGO_UPDATER_PRIVATE_KEY`，绝不进仓库**；丢失私钥会使已安装应用无法再收到更新（搁浅），泄露则可向用户推送任意代码。
 - 发布构建经 `MYGO_UPDATER_PRIVATE_KEY` 签名；私钥与公钥不匹配时 `mygo build` 直接失败，缺失时跳过更新档案并告警——发布 workflow 的产物校验会因缺少 `youkai-<版本>-<target>.tar.gz` / `update-<target>.json` 而失败，不会发出一个“没有更新的发布版”。
 - `mygo build -upload` 在安装包旁产出：应用归档 `youkai-<版本>-<target>.tar.gz`、可选的 `.delta` 差量更新（默认对之前 3 个版本生成，取不到已发布档案时跳过并告警）与更新清单 `update-<target>.json`（版本、说明、日期、归档与差量的 URL/大小/签名）。清单最后上传，应用不会看到指向缺失文件的清单。
-- 应用侧（`mygo.Updater`）：`Enabled()` 要求构建时嵌入了更新源与公钥、非开发运行（`mygo dev`）、且能写入安装位置（macOS 的 `.app`、Windows 的每用户安装目录）；`Check` 读清单并比较版本，`Install` 下载（优先差量、失败回退整包）、按内置公钥验签、替换应用本体，之后 `App.Relaunch()` 按正常退出序列重启（保存失败的会话会拒绝退出，窗口留在重试）。数据根与记录目录不在替换范围内，历史数据保留。
+- 应用侧（`mygo.Updater`）：`Enabled()` 要求构建时嵌入了更新源与公钥、非开发运行（`mygo dev`）、且能写入安装位置（macOS 的 `.app`、Windows 的每用户安装目录）；`Check` 读清单并比较版本，`Install` 下载（优先差量、失败回退整包）、按内置公钥验签、替换应用本体。安装成功后应用走明确退出收尾（保存失败的会话会拒绝退出，窗口留在重试），**收尾完成后自动重启进入新版本**——MyGo 的 `App.Relaunch` 在退出被拒（如收尾未完成）时会自行取消，重启由应用在收尾完成后重新发起；数据根占用在收尾中先行释放，新进程可立即接管。检查时机：启动后一次、应用持续运行期间每 24 小时一次（`internal/ui` 的 `updateCheckInterval` 常量）、更新区按钮手动触发；检查与安装都不激活窗口。Windows“应用和功能”的版本显示（HKCU 卸载项 `DisplayVersion`）由应用启动时刷新到当前版本——NSIS 安装器只在安装当天写一次，MyGo 更新器只替换文件不写注册表；NSIS 卸载器删除整个键、从不读该值，刷新不影响卸载。数据根与记录目录不在替换范围内，历史数据保留。
 - 不参与更新的是 **Package workflow 的测试构建**：构建前移除 `mygo.json` 的 `updates`，不嵌入更新配置、不产出更新档案，识别自检断言 `updates=disabled`（见[开发指南](development.md#打包-workflow)）。开发运行（`mygo dev`）同样关闭更新。本地 `go tool mygo build` 带 `updates` 而无私钥时会嵌入更新源（产物可收到正式渠道更新）但不产出更新档案，构建日志会警告——需要完全关闭时同样先移除 `updates`。
 
 ## 发布步骤
@@ -63,4 +63,7 @@ Release 资产一览（`<版本>` 为标签版本，表列为 GitHub 上的存�
   3. 签名错误被拒：篡改清单或换密钥的档案使安装失败，界面如实显示错误（如 `mygo: installing the update: the update is not signed with the app's key`），应用继续运行原版本。可用一次性测试密钥对在本地演练（见[开发指南](development.md#自动更新的本地演练)，勿用正式密钥）。
   4. 扫描进行中（含收尾与待重试保存）禁止安装：更新区按钮禁用并说明原因；会话保存完成后可安装。
   5. macOS 升级后 Gatekeeper 与权限表现：ad-hoc 签名替换后首次打开是否再次拦截、录屏/辅助功能权限是否保留（TCC 随 bundle identifier 记录，替换重签名后的表现以实测为准），结果写回本节与 T7。
+  6. 自动重启进入新版本：安装完成后应用自动重启，重启后诊断日志首行 `version=` 为新版本号、窗口更新区显示“当前版本 <新版本>”（2026-10-17 两平台升级实测曾“安装后应用退出但不再拉起”，根因是应用的关窗拦截取消了 MyGo 的首次 Relaunch；已修复为收尾完成后重新发起，并在 macOS 本机完整演练通过，见[开发指南](development.md#自动更新的本地演练)）。
+  7. Windows“应用和功能”中的版本：升级后列表显示新版本号（应用启动时刷新 HKCU 卸载项 `DisplayVersion`；`Uninstall.exe` 保持安装时的版本属正常，卸载行为不受影响）。
+  8. 更新日志行：诊断日志含各阶段行，逐行核对便于定位——检查 `youkai: update check: found …` / `no version newer than …` / `update check failed: …`，安装 `update install: downloading and verifying …`、`update install: downloaded N bytes`、`update install: … installed` / `update install failed: …`，重启 `update installed, restarting the application` 与 `exit settled, relaunching into the installed update`。
 - 测试渠道发布后，另用安装了测试版应用的设备确认它只收到 `test-v` 渠道的更新、正式版只收到正式渠道更新。

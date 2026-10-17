@@ -119,6 +119,16 @@ jobs:
             *) echo "ERROR: unexpected tag $tag (the workflow triggers on test-v* and v*)"; exit 1 ;;
           esac
           version="${tag#"$prefix"}"
+          # The rewrite below must not mark the working tree as modified:
+          # Go stamps the VCS state into the binary (debug.ReadBuildInfo's
+          # vcs.*), and the app's diagnostic log reports it — a release
+          # build then says commit=<tag sha>-modified, misreading its own
+          # release process's configuration write as a source change.
+          # skip-worktree keeps the rewrite out of `git status`, so the
+          # build carries the tag's clean commit. The source itself is
+          # exactly the tagged checkout; only this configuration write is
+          # local.
+          git update-index --skip-worktree mygo.json
           jq --arg version "$version" --arg tagPrefix "$prefix" \
             '.version = $version | .updates.tagPrefix = $tagPrefix' mygo.json > mygo.json.tmp
           mv mygo.json.tmp mygo.json
@@ -226,7 +236,9 @@ jobs:
           cache: true
       - name: Set the release version and channel in mygo.json
         # See the macOS job: the version and channel come from the tag; the
-        # checkout's copy is modified, never committed.
+        # checkout's copy is modified, never committed. The skip-worktree
+        # bit keeps that rewrite out of `git status`, so the build stamps
+        # the tag's clean commit (no "-modified") into the binary.
         shell: bash
         run: |
           set -eu
@@ -237,6 +249,7 @@ jobs:
             *) echo "ERROR: unexpected tag $tag (the workflow triggers on test-v* and v*)"; exit 1 ;;
           esac
           version="${tag#"$prefix"}"
+          git update-index --skip-worktree mygo.json
           jq --arg version "$version" --arg tagPrefix "$prefix" \
             '.version = $version | .updates.tagPrefix = $tagPrefix' mygo.json > mygo.json.tmp
           mv mygo.json.tmp mygo.json

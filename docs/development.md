@@ -81,7 +81,7 @@ CGO_ENABLED=1 YOUKAI_DEV_SOURCE=$PWD/internal/recognition/testdata \
 | 轮转与保留 | 单文件 1 MiB 上限、保留 3 份备份（`internal/app` 的常量，按实机证据调整），日志目录上限 4 个文件；日志只按大小轮转，属诊断数据，不按时间清理，与历史记录的删除分开（架构第 5 节） |
 
 - 打开时机在数据根占用之后：第二实例占用失败即退出，不会打开日志文件，因此两个进程不会交错或截断同一文件；代价是路径解析失败、占用失败等早期错误只在 stderr（开发期可见；安装版无从看到，但这类错误本身也意味着应用未能启动）。
-- 每次运行的第一行日志写明版本、构建提交（取 `debug.ReadBuildInfo` 的 VCS 信息，工作区有本地修改时加 `-modified` 后缀；构建未打标时为 `unknown`）、平台与数据根，用户反馈附带日志即可定位构建。
+- 每次运行的第一行日志写明版本、构建提交（取 `debug.ReadBuildInfo` 的 VCS 信息，工作区有本地修改时加 `-modified` 后缀；构建未打标时为 `unknown`）、平台与数据根，用户反馈附带日志即可定位构建。发布与打包 workflow 对 `mygo.json` 的改写（版本/渠道前缀/移除 updates）经 `git update-index --skip-worktree` 对 Git 隐藏，其构建产物携带标签或提交的干净提交号，不带 `-modified`。
 - 日志打不开（如目录不可写）不阻止启动：stderr 照常输出并提示一次原因；运行中文件写入失败同样只退回 stderr 镜像（降级逻辑在 `internal/app`，Windows 上备份文件被杀毒或备份软件占用时轮转重试而不丢行，每轮失败只提示一次）。
 - `YOUKAI_SELFTEST` 自检在路径解析之前运行，仍只写 stderr（安装布局验证按[打包与安装包](#打包与安装包)的重定向方式读取）。
 
@@ -156,6 +156,22 @@ Get-Content err.txt
 4. **无私钥行为**：带 `updates` 但不设 `MYGO_UPDATER_PRIVATE_KEY` 的本地构建只警告 "Not signing an update" 并跳过更新档案，产物仍嵌入更新源（自检 `updates=enabled`，安装后可收到正式渠道更新）；按 Package workflow 的方式移除 `updates` 再构建，产物自检为 `updates=disabled`。
 
 未覆盖（只能在真实发布后验证）：真实 GitHub Releases 渠道隔离（`test-v` / latest）、差量更新、Windows 侧替换与重装后的行为，见[发布与自动更新](release.md)的升级实测清单。
+
+### 完整应用演练（安装 → 自动重启）
+
+2026-10-17 修复“装后不自动重启”后补充的整链路演练：不再用驱动程序，而是跑**完整应用**，覆盖检查、下载、安装替换、明确退出收尾与自动重启的真实接线（含关窗拦截与数据根占用锁）。材料仍在 `/tmp`、密钥对一次性（`go tool mygo keygen` 生成，用后即弃）：
+
+1. **构建两个版本**：`mygo.json` 的 `updates.url` 强制 HTTPS，本地回环源经 ldflags 注入等价变量（`mygo build` 不支持自定义 ldflags，故用 `go build` 手工构建并手工组装 `.app`）：
+
+   ```sh
+   CGO_ENABLED=1 go build -ldflags "-X github.com/egoist/mygo.packageUpdateFeed=http://127.0.0.1:8765/update-darwin-arm64.json -X github.com/egoist/mygo.packageUpdateKey=<测试公钥> -X 'github.com/egoist/mygo.packageName=Youkai Upd Test' -X github.com/egoist/mygo.packageVersion=<版本> -X github.com/egoist/mygo.packageIdentifier=com.lotwt.youkai.updtest -X github.com/egoist/mygo.production=1" -o <bundle>/Contents/MacOS/YoukaiUpdTest ./cmd/youkai
+   ```
+
+   演练专用名称与标识（`Youkai Upd Test` / `com.lotwt.youkai.updtest`）使数据根、日志与单实例锁都和正式版隔离。`Info.plist` 必须带 `CFBundleShortVersionString`：**macOS 上 `mygo.App.Version()` 读 bundle 的 Info.plist**，缺了它版本号为空、检查比较失真。`MYGO_ENV` 无需设置（`production=1` 已按 `mygo build` 的方式链接）。
+2. **本地更新源**：`python3 -m http.server 8765 --bind 127.0.0.1` 服务新版归档与清单；归档用 `COPYFILE_DISABLE=1 tar -czf … -C <staging> YoukaiUpdTest.app` 制作——macOS 的 bsdtar 默认把扩展属性写成 `._*` AppleDouble 条目，多出的顶层条目会让 MyGo 拒绝归档（`the update holds no app bundle`）。清单（`update-darwin-arm64.json`）的 `signature` 为 Ed25519 对归档 SHA-256 摘要的签名（base64），一次性小程序用测试私钥生成即可。
+3. **演练运行**：`YOUKAI_DEV_AUTOUPDATE=1 <bundle>/Contents/MacOS/YoukaiUpdTest`——该开发开关让检查发现的新版本自动安装（仍遵守“扫描中禁止安装”），无需点击界面。诊断日志（`~/Library/Logs/Youkai Upd Test/youkai.log`）应依次出现：`version=0.0.1` → `update check: found 0.0.2 (running 0.0.1)` → `downloading and verifying` → `downloaded N bytes` → `0.0.2 installed` → `update installed, restarting` → `exit wrap-up complete` → `exit settled, relaunching into the installed update` → **`version=0.0.2`**（自动重启的新进程）→ `no version newer than 0.0.2`。2026-10-17 本机按此演练通过（下载 10,001,699 字节，1 秒内完成替换、收尾与重启）。
+
+未覆盖（只能在真实发布后验证，与上节合并看待）：真实渠道、差量更新，以及 **Windows 实机**的安装替换、自动重启与 HKCU `DisplayVersion` 刷新（本机只能交叉编译验证）。
 
 ## 与 Windows 测试方式的关系
 

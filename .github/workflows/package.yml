@@ -43,10 +43,13 @@ jobs:
         # carries updates — even without a signing key — so removing the
         # section is what actually disables updates. The checkout's copy is
         # modified, never committed; the self-test below asserts the state
-        # of the built artifact itself.
+        # of the built artifact itself. The skip-worktree bit keeps the
+        # rewrite out of `git status`, so the build stamps the checkout's
+        # clean commit (no "-modified") into the binary's VCS info.
         shell: bash
         run: |
           set -eu
+          git update-index --skip-worktree mygo.json
           jq 'del(.updates)' mygo.json > mygo.json.tmp
           mv mygo.json.tmp mygo.json
           test "$(jq 'has("updates")' mygo.json)" = false
@@ -171,9 +174,12 @@ jobs:
       - name: Turn updates off (test builds do not update)
         # See the macOS job: removing the updates section is what disables
         # updates; the self-test below asserts the built artifact's state.
+        # skip-worktree keeps the rewrite out of `git status`, so the build
+        # stamps the checkout's clean commit (no "-modified").
         shell: bash
         run: |
           set -eu
+          git update-index --skip-worktree mygo.json
           jq 'del(.updates)' mygo.json > mygo.json.tmp
           mv mygo.json.tmp mygo.json
           test "$(jq 'has("updates")' mygo.json)" = false
