@@ -15,6 +15,7 @@
 - [扫描器背景与参考实现](scanner-handoff.md)：项目起因、参考扫描器研究结论和与 fairy 的边界。
 - [开发指南](development.md)：环境要求与当前实际可用的构建、测试、MyGo 开发命令。
 - [M1 Windows 实机测试报告](reports/2026-10-17-m1-windows-test.md)：首份实测报告——Package workflow 安装包在 Windows 11 实机的下载核对、安装、识别自检、启动、第二实例、数据目录与卸载结果，含未覆盖项与观察项。
+- [M1 macOS 实机测试报告](reports/2026-10-17-m1-macos-test.md)：DMG 安装版在 macOS（Apple Silicon）实机的下载核对、安装、Gatekeeper 首次打开与放行、识别自检、启动、第二实例、数据目录与移除结果，含未覆盖项与观察项。
 
 ## 目录约定
 
