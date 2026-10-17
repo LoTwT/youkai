@@ -101,6 +101,23 @@ func main() {
 	log.Printf("youkai: version=%s commit=%s platform=%s/%s data=%q",
 		mygo.App.Version(), commit, runtime.GOOS, runtime.GOARCH, paths.Data)
 
+	// "应用和功能" lists the app from the NSIS-written uninstall entry, and
+	// the in-place updater never refreshes that registry value (MyGo
+	// replaces the app's files only) — keep DisplayVersion at the running
+	// version so the list does not lag an update behind. Only the
+	// production build owns the entry: development builds ("Youkai Dev")
+	// and rehearsal builds under other names must not rewrite it. The NSIS
+	// uninstaller never reads the value (it deletes the whole key), so this
+	// cannot disturb an uninstall; failures are harmless and logged. On
+	// macOS there is no such entry and the call is a no-op.
+	if mygo.App.Name() == "Youkai" && !mygo.IsDev() {
+		if updated, err := app.RefreshUninstallDisplayVersion(mygo.App.Version()); err != nil {
+			log.Printf("youkai: refresh the uninstall entry's version: %v", err)
+		} else if updated {
+			log.Printf("youkai: uninstall entry version refreshed to %s", mygo.App.Version())
+		}
+	}
+
 	source := devScanSource()
 	svc, err := app.NewService(app.Config{
 		Paths:    paths,
@@ -111,6 +128,18 @@ func main() {
 		log.Fatalf("youkai: %v", err)
 	}
 
+	// The installed update's restart. MyGo's Relaunch cancels itself when
+	// anything refuses the quit — "Nothing happens when OnBeforeQuit … or
+	// a window cancels the quit" (login.go) — and youkai's close
+	// interception refuses the first quit of every exit so the wrap-up can
+	// run (AllowClose starts it and says no). The relaunch the install
+	// asks for is therefore cancelled by design, so the restart is re-
+	// issued once the wrap-up settled: the quit is allowed then, and the
+	// data-root occupancy is already released by the wrap-up's teardown,
+	// so the relaunched process can take it. Both callbacks run on the UI
+	// thread, as does everything they touch.
+	updateInstalled := false
+
 	model := ui.New(ui.Config{
 		Service: svc,
 		ScanSource: ui.ScanSourceInfo{
@@ -119,19 +148,41 @@ func main() {
 			Reason:    "当前构建没有接入游戏扫描源（M2 接入游戏适配）；开发构建可通过环境变量 YOUKAI_DEV_SOURCE 启用开发数据源。",
 		},
 		Evidence: ui.FileEvidence{Root: paths.Data},
-		// The auto-update corner: MyGo's updater behind the UI's seam, and
-		// the restart after a successful install. Relaunch runs the normal
-		// quit sequence — a session whose final save keeps failing refuses
-		// it, the window stays with its retry, and the installed update
-		// runs at the next launch.
-		Updates:           mygoUpdates{},
-		OnUpdateInstalled: func() { mygo.App.Relaunch() },
+		// The auto-update corner: MyGo's updater behind the UI's seam. The
+		// running version shows in the area ("当前版本 …"); DevAutoInstall
+		// is the rehearsal switch (YOUKAI_DEV_AUTOUPDATE) that installs a
+		// found update on its own, for driving the real install and
+		// restart flow end to end (docs/development.md 自动更新的本地演
+		// 练) — development only, never a user setting.
+		Updates:        mygoUpdates{},
+		AppVersion:     mygo.App.Version(),
+		DevAutoInstall: os.Getenv("YOUKAI_DEV_AUTOUPDATE") != "",
+		// After a successful install the application restarts into the new
+		// version: this first Relaunch only starts the exit — the close
+		// interception cancels it (see updateInstalled above) after firing
+		// the wrap-up — and the re-issued one below, with the wrap-up
+		// settled, is the restart itself. A session whose final save keeps
+		// failing still refuses the exit, the window stays with its retry,
+		// and the installed update runs at the next launch.
+		OnUpdateInstalled: func() {
+			updateInstalled = true
+			log.Printf("youkai: update installed, restarting the application")
+			mygo.App.Relaunch()
+		},
 		// A settled explicit exit closes the application: the model's
-		// quit goroutine already waited for the wrap-up, so this Quit
-		// re-enters the allowed path (the model allows the close) and the
-		// event loop ends. A failed wrap-up never reaches here — the
-		// window stays with the save failure instead.
-		OnExitSettled: func() { mygo.App.Quit() },
+		// quit goroutine already waited for the wrap-up, so quitting re-
+		// enters the allowed path (the model allows the close) and the
+		// event loop ends — relaunching instead when an update is
+		// installed. A failed wrap-up never reaches here — the window
+		// stays with the save failure instead.
+		OnExitSettled: func() {
+			if updateInstalled {
+				log.Printf("youkai: exit settled, relaunching into the installed update")
+				mygo.App.Relaunch()
+				return
+			}
+			mygo.App.Quit()
+		},
 	})
 
 	// The explicit-exit wrap-up. The quit event only triggers it
@@ -177,12 +228,14 @@ func main() {
 		})
 		model.Attach(win)
 
-		// One update check in the background after startup (2026-10-17
-		// 决定): it neither blocks the ready callback — the check runs in
-		// the model's own background work — nor activates the window; its
-		// result lands through Update, which only redraws. Builds without
-		// updates ignore it (the area explains that state instead).
-		model.CheckUpdates()
+		// The update-check schedule (2026-10-17 决定): the startup check
+		// stays, and a running application re-checks every
+		// updateCheckInterval. It neither blocks the ready callback — the
+		// checks run in the model's own background work — nor activates the
+		// window; results land through Update, which only redraws. Builds
+		// without updates start nothing (the area explains that state
+		// instead).
+		model.StartUpdateChecks()
 
 		// The subscription pump: a notification only means "something
 		// changed", so the pump re-fetches the authoritative snapshot and

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/LoTwT/youkai/internal/scan"
 	"github.com/egoist/mygo/ui"
@@ -13,15 +14,19 @@ import (
 var errInstallBoom = errors.New("install boom")
 
 // fakeUpdates is the update-source double: Enabled is canned, Check comes
-// from a function the test swaps per step.
+// from a function the test swaps per step. asked counts the checks that
+// reached the source, so tests can tell "never asked" from "asked and
+// answered".
 type fakeUpdates struct {
 	enabled bool
+	asked   int
 	check   func(ctx context.Context) (UpdateHandle, error)
 }
 
 func (f *fakeUpdates) Enabled() bool { return f.enabled }
 
 func (f *fakeUpdates) Check(ctx context.Context) (UpdateHandle, error) {
+	f.asked++
 	if f.check == nil {
 		return nil, nil
 	}
@@ -123,6 +128,172 @@ func TestViewUpdateCheckFlow(t *testing.T) {
 	}
 	if err := tt.Click("检查更新"); err != nil {
 		t.Error("the check button disappeared after a failure")
+	}
+}
+
+// TestViewUpdateShowsCurrentVersion covers the update area's running
+// version line: it names the build in every state — updates enabled or
+// not — because that is where a user checks what they run.
+func TestViewUpdateShowsCurrentVersion(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		enabled bool
+	}{
+		{name: "enabled", enabled: true},
+		{name: "disabled", enabled: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			src := &fakeUpdates{enabled: tc.enabled}
+			m, q := newTestModel(t, Config{
+				Service:    &fakeService{},
+				Updates:    src,
+				AppVersion: "0.0.2",
+			})
+			tt := ui.NewTester(m.View, 1020, 700)
+			settle(t, m, q, tt)
+			if !tt.HasText("当前版本 0.0.2") {
+				t.Error("the running version does not show in the update area")
+			}
+			m.CheckUpdates()
+			settle(t, m, q, tt)
+			if !tt.HasText("当前版本 0.0.2") {
+				t.Error("the running version disappeared after a check")
+			}
+		})
+	}
+}
+
+// TestStartUpdateChecksSchedule drives the update-check schedule with an
+// injected wait: the startup check runs at once, the first periodic wait
+// asks for the 24-hour interval, and firing it runs the next check
+// through the UI thread like every background result. Builds without
+// updates start nothing at all.
+func TestStartUpdateChecksSchedule(t *testing.T) {
+	checks := 0
+	src := &fakeUpdates{
+		enabled: true,
+		check: func(ctx context.Context) (UpdateHandle, error) {
+			checks++
+			return nil, nil
+		},
+	}
+	// The controllable wait: every call records the interval it was asked
+	// for and hands back a channel only the test fires.
+	type tick struct {
+		interval time.Duration
+		ch       chan time.Time
+	}
+	ticks := make(chan tick, 4)
+	wait := func(interval time.Duration) <-chan time.Time {
+		ch := make(chan time.Time)
+		ticks <- tick{interval: interval, ch: ch}
+		return ch
+	}
+	m, q := newTestModel(t, Config{
+		Service:         &fakeService{},
+		Updates:         src,
+		UpdateCheckWait: wait,
+	})
+	tt := ui.NewTester(m.View, 1020, 700)
+	settle(t, m, q, tt)
+
+	m.StartUpdateChecks()
+	settle(t, m, q, tt)
+	if checks != 1 {
+		t.Fatalf("the startup check did not run: %d checks", checks)
+	}
+	select {
+	case tk := <-ticks:
+		if tk.interval != updateCheckInterval {
+			t.Fatalf("the periodic wait asked for %s, want %s", tk.interval, updateCheckInterval)
+		}
+		// Fire the tick: the check it schedules must land through the
+		// queued updater, on the UI thread, not from the ticking
+		// goroutine.
+		tk.ch <- time.Now()
+	default:
+		t.Fatal("no periodic wait was scheduled")
+	}
+	settle(t, m, q, tt)
+	if checks != 2 {
+		t.Fatalf("the periodic check did not run: %d checks", checks)
+	}
+	// The schedule asked for its next wait while settling; take it, so
+	// what follows can only be a wait the second model would wrongly add.
+	<-ticks
+
+	// A build without updates starts nothing: no check, no wait.
+	off := &fakeUpdates{enabled: false}
+	m2, q2 := newTestModel(t, Config{
+		Service:         &fakeService{},
+		Updates:         off,
+		UpdateCheckWait: wait,
+	})
+	tt2 := ui.NewTester(m2.View, 1020, 700)
+	settle(t, m2, q2, tt2)
+	m2.StartUpdateChecks()
+	settle(t, m2, q2, tt2)
+	if off.asked != 0 {
+		t.Fatalf("a disabled build asked the source %d times", off.asked)
+	}
+	select {
+	case <-ticks:
+		t.Error("a disabled build scheduled a periodic wait")
+	default:
+	}
+}
+
+// TestDevAutoInstall drives the rehearsal switch: an update a check found
+// installs on its own and fires the restart hook; the install guards
+// still apply — a scan holding the slot keeps the update waiting until the
+// session settles.
+func TestDevAutoInstall(t *testing.T) {
+	found := &fakeUpdateHandle{version: "0.0.2"}
+	src := &fakeUpdates{
+		enabled: true,
+		check: func(ctx context.Context) (UpdateHandle, error) {
+			return found, nil
+		},
+	}
+	relaunched := 0
+	m, q := newTestModel(t, Config{
+		Service:        &fakeService{},
+		Updates:        src,
+		DevAutoInstall: true,
+		OnUpdateInstalled: func() {
+			relaunched++
+		},
+	})
+	tt := ui.NewTester(m.View, 1020, 700)
+	settle(t, m, q, tt)
+
+	// A running session forbids the automatic install no less than the
+	// button: the update is found and waits.
+	applyAndSettle(t, m, q, tt, snap("s1", 1, true, scan.PhaseCapturing,
+		scan.Counts{Captured: 3}, 3, false, ""))
+	m.CheckUpdates()
+	settle(t, m, q, tt)
+	if found.installs != 0 {
+		t.Fatalf("the automatic install ran during a scan: %d", found.installs)
+	}
+	if !tt.HasText("发现新版本 0.0.2。") {
+		t.Error("the found update does not show while it waits")
+	}
+
+	// The session settled: the next check installs on its own and fires
+	// the restart hook once.
+	applyAndSettle(t, m, q, tt, snap("s1", 2, false, scan.PhaseEnded,
+		scan.Counts{Captured: 3}, 3, false, ""))
+	m.CheckUpdates()
+	settle(t, m, q, tt)
+	if found.installs != 1 {
+		t.Fatalf("the automatic install did not run once: %d", found.installs)
+	}
+	if relaunched != 1 {
+		t.Fatalf("the restart hook fired %d times, want 1", relaunched)
+	}
+	if !tt.HasText("更新已安装，正在重启应用……") {
+		t.Error("the installed state does not show")
 	}
 }
 

@@ -40,6 +40,11 @@ type UpdateHandle interface {
 // progress callback keeps the app responsive.
 const checkTimeout = time.Minute
 
+// updateCheckInterval is how long a running application waits between
+// background update checks (2026-10-17 决定：每 24 小时检查一次): the
+// startup check and the area's button run outside this schedule.
+const updateCheckInterval = 24 * time.Hour
+
 // updateState is where the update flow stands. The model allows only the
 // transitions the actions guard: check from anything but checking,
 // installing or installed; install from available while nothing blocks it.
@@ -54,8 +59,40 @@ const (
 	updateInstalled
 )
 
-// CheckUpdates checks for a newer version in the background — once at
-// startup from the entry point's ready callback, and from the area's
+// StartUpdateChecks runs the update-check schedule: one check at once (the
+// startup check the entry point used to trigger on its own), then one every
+// updateCheckInterval for as long as the application runs (2026-10-17 决
+// 定：启动后的首次检查保留，应用持续运行时每 24 小时再检查一次). Checks
+// never activate the window — their results land through update, which only
+// redraws — and builds without updates start nothing: the area explains
+// that state instead.
+//
+// The waiting goroutine is deliberately outside the model's WaitGroup, whose
+// waits are what Idle and the view tests settle: a days-long wait would
+// never settle. It ticks for the rest of the process and is never started
+// twice.
+func (m *Model) StartUpdateChecks() {
+	if m.updates == nil || !m.updatesEnabled {
+		return
+	}
+	m.CheckUpdates()
+	wait := m.cfg.UpdateCheckWait
+	if wait == nil {
+		wait = func(interval time.Duration) <-chan time.Time { return time.After(interval) }
+	}
+	go func() {
+		for {
+			<-wait(updateCheckInterval)
+			// The tick lands off the UI thread and the model's state is
+			// confined to it, so the check is scheduled like any other
+			// background event instead of running here.
+			m.update(func() { m.CheckUpdates() })
+		}
+	}()
+}
+
+// CheckUpdates checks for a newer version in the background — from the
+// schedule's startup check, from a periodic tick and from the area's
 // button. It never blocks the caller: the result lands through update,
 // which only redraws the window.
 func (m *Model) CheckUpdates() {
@@ -81,6 +118,13 @@ func (m *Model) CheckUpdates() {
 				m.updatesVersion = handle.Version()
 				m.updatesNotes = handle.Notes()
 				m.updatesHandle = handle
+				// The rehearsal switch installs what a check found on its
+				// own; the normal flow waits for the install button. The
+				// guards inside InstallUpdate still apply, so a scan that
+				// holds the slot or a pending save keeps the update waiting.
+				if m.devAutoInstall {
+					m.InstallUpdate()
+				}
 			}
 		})
 	})
@@ -176,14 +220,21 @@ func (m *Model) updateStatusText() string {
 	}
 }
 
-// updateArea is the auto-update corner at the bottom of the window: builds
-// that cannot update say so (test packages, development runs); otherwise a
-// check button, the found version with its notes and the install button —
-// disabled with its reason while a scan session is active — and the honest
-// outcome of every step.
+// updateArea is the auto-update corner at the bottom of the window: the
+// running version, then — for builds that cannot update (test packages,
+// development runs) — the note saying so; otherwise a check button, the
+// found version with its notes and the install button — disabled with its
+// reason while a scan session is active — and the honest outcome of every
+// step.
 func (m *Model) updateArea(c *ui.Context, t *ui.Theme) {
 	if m.updates == nil {
 		return
+	}
+	// The running version names the build on screen (the 2026-10-17
+	// upgrade rehearsal could not tell what it was running): the update
+	// area is where a user checks what they run, next to what they could.
+	if m.appVersion != "" {
+		ui.Text(c, "当前版本 "+m.appVersion).TextColor(t.TextMuted)
 	}
 	if !m.updatesEnabled {
 		ui.Text(c, "当前构建未启用自动更新。").TextColor(t.TextMuted)

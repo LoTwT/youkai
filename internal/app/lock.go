@@ -37,8 +37,12 @@ const dataRootLockFileName = "youkai.lock"
 // occupancy domain, and out of the user's home directory, where a
 // hidden directory is not the convention on Windows.
 const (
-	scanLockDirName  = "com.lotwt.youkai"
-	scanLockFileName = "scan.lock"
+	// baseAppIdentifier is youkai's fixed base application identifier —
+	// the "identifier" of mygo.json, without the .dev suffix the
+	// development build adds. The scan lock directory and the NSIS
+	// uninstall entry (uninstall_windows.go) are named after it.
+	baseAppIdentifier = "com.lotwt.youkai"
+	scanLockFileName  = "scan.lock"
 )
 
 // DataRootLock is this process's exclusive occupancy of a data root. It
@@ -80,7 +84,7 @@ func AcquireDataRootLock(dataDir string) (*DataRootLock, error) {
 // makes that order explicit at the API level.
 //
 // The scan lock file location is per-user and shared by all builds; see
-// the scanLockDirName constants for why. It is taken during scan
+// the baseAppIdentifier constants for why. It is taken during scan
 // preparation and released when the scan wraps up; wiring that flow is
 // the application service's job.
 func (l *DataRootLock) AcquireScanLock() (*ScanLock, error) {
@@ -158,13 +162,13 @@ func (s *ScanLock) Close() error {
 var scanLockBase = userAppDataBase
 
 // scanLockPath resolves the scan occupancy's lock file under the current
-// user's application-data base; see the scanLockDirName constants for
-// why that anchor is independent of the application name and the data
-// root, and shared by every build of one user.
+// user's application-data base; see the constants above for why that
+// anchor is independent of the application name and the data root, and
+// shared by every build of one user.
 func scanLockPath() (string, error) {
 	base, err := scanLockBase()
 	if err != nil {
 		return "", fmt.Errorf("resolve per-user application data base: %w", err)
 	}
-	return filepath.Join(base, scanLockDirName, scanLockFileName), nil
+	return filepath.Join(base, baseAppIdentifier, scanLockFileName), nil
 }

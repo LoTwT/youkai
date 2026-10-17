@@ -13,6 +13,7 @@ package ui
 import (
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/LoTwT/youkai/internal/app"
 	"github.com/LoTwT/youkai/internal/record"
@@ -77,6 +78,20 @@ type Config struct {
 	// Updates checks for and installs application updates (see
 	// update.go); nil hides the update area entirely.
 	Updates UpdateSource
+	// AppVersion is the running application's version, shown in the update
+	// area as "当前版本 …" so the window itself names the build it runs;
+	// the entry point passes mygo.App.Version(). Empty hides the line.
+	AppVersion string
+	// DevAutoInstall installs an update a check found on its own, without
+	// the install button. It is a development switch (the entry point sets
+	// it from YOUKAI_DEV_AUTOUPDATE) for driving the real install and
+	// restart flow in the update rehearsal (docs/development.md), never a
+	// user setting; InstallUpdate's guards still apply.
+	DevAutoInstall bool
+	// UpdateCheckWait waits for the next periodic update check of
+	// StartUpdateChecks; nil waits real time. View tests inject a
+	// controllable wait to drive the schedule without sleeping.
+	UpdateCheckWait func(interval time.Duration) <-chan time.Time
 	// OnUpdateInstalled runs on the UI thread after an update installed
 	// successfully — the entry point relaunches the application in it,
 	// which runs the normal quit sequence (a session whose save keeps
@@ -152,7 +167,7 @@ type Model struct {
 	// The auto-update corner's state (update.go); updatesEnabled is cached
 	// from Updates at construction — Enabled probes the install location,
 	// too costly to repeat every frame, and the answer cannot change
-	// within a run.
+	// within a run. appVersion and devAutoInstall come from the config.
 	updates           UpdateSource
 	updatesEnabled    bool
 	updatesState      updateState
@@ -162,6 +177,8 @@ type Model struct {
 	updatesCheckErr   string
 	updatesInstallErr string
 	updatesProgress   float64
+	appVersion        string
+	devAutoInstall    bool
 
 	cache *evidenceCache
 }
@@ -186,6 +203,8 @@ func New(cfg Config) *Model {
 		m.updates = cfg.Updates
 		m.updatesEnabled = cfg.Updates.Enabled()
 	}
+	m.appVersion = cfg.AppVersion
+	m.devAutoInstall = cfg.DevAutoInstall
 	m.list.Selected = &m.selected
 	return m
 }
