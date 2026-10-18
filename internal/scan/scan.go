@@ -280,26 +280,59 @@ func (s *Session) Cancel() {
 }
 
 // runProducer runs the controller on the session's producer goroutine:
-// Prepare, then Collect once preparation passed, then either the normal
-// finalization (range complete) or nothing (a stop already started the
-// finalizer).
+// Prepare, then Collect once preparation passed, then — before anything
+// else — the controller's Release (when it implements Releaser), and
+// finally either the normal finalization (range complete) or nothing (a
+// stop already started the finalizer). producerDone closes only after
+// Release returned, so the stop path's finalizer — which waits for
+// producerDone — always observes released resources before it seals: the
+// release happens first, then the sealing, never the other way around.
 func (s *Session) runProducer() {
 	defer close(s.producerDone)
 	h := &ControllerHandle{s: s}
+	completed := s.runController(h) && s.beginCompletion()
+	s.releaseController()
+	if completed {
+		s.finalize(true)
+	}
+}
+
+// runController runs the controller's two phases and reports whether the
+// collection loop returned normally (range complete). Every other exit —
+// a Prepare or Collect error, or a stop accepted while still preparing —
+// reports false; the outcome itself was already decided by the fault or
+// the stop path.
+func (s *Session) runController(h *ControllerHandle) bool {
 	if err := s.cfg.Controller.Prepare(s.scanCtx, h); err != nil {
 		// A cancelled context after a stop is the controller unwinding,
 		// not a new fault; anything else is recorded.
 		s.controllerFault(PhasePreparing, err)
-		return
+		return false
 	}
 	if !s.enterCapturing() {
-		return // a stop was accepted while preparing
+		return false // a stop was accepted while preparing
 	}
 	if err := s.cfg.Controller.Collect(s.scanCtx, h); err != nil {
 		s.controllerFault(PhaseCapturing, err)
+		return false
+	}
+	return true
+}
+
+// releaseController releases the resources of a controller that
+// implements Releaser, exactly once, after the controller returned. A
+// release error is recorded as a releaseFailed fault; the session's
+// outcome was already decided and stays unchanged.
+func (s *Session) releaseController() {
+	rel, ok := s.cfg.Controller.(Releaser)
+	if !ok {
 		return
 	}
-	s.rangeCompleted()
+	if err := rel.Release(); err != nil {
+		s.mu.Lock()
+		s.faultLocked(CodeReleaseFailed, err, PhaseFinalizing, false)
+		s.mu.Unlock()
+	}
 }
 
 // controllerFault records a controller error from phase where, or absorbs
@@ -355,21 +388,24 @@ func (s *Session) runWorker() {
 	}
 }
 
-// rangeCompleted is the normal completion path: the controller reported
-// the range complete. The producer goroutine itself becomes the finalizer
-// and drains the queue instead of cutting it.
-func (s *Session) rangeCompleted() {
+// beginCompletion is the normal completion path's first half: the
+// controller reported the range complete, so input permission closes and
+// the session moves to finalizing. It reports false when a stop already
+// decided the outcome (the stop path's own finalizer then seals the
+// session). The producer goroutine calls it and afterwards releases the
+// controller and runs the finalizer itself, so the release strictly
+// precedes the sealing.
+func (s *Session) beginCompletion() bool {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.stopping || s.phase != PhaseCapturing {
-		s.mu.Unlock()
-		return
+		return false
 	}
 	s.permit = false
 	s.phase = PhaseFinalizing
 	s.finalizerStarted = true
 	s.notifyLocked()
-	s.mu.Unlock()
-	s.finalize(true)
+	return true
 }
 
 // finalize drains or terminates the remaining work and seals the session.

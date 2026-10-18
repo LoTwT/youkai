@@ -8,9 +8,12 @@ import (
 
 // ControllerHandle is the kernel side of the controller contract: the
 // query and admission points the collection loop uses. The kernel hands
-// one handle to the controller's Prepare and Collect calls; its methods
-// must be called only from the controller's own goroutine (the producer),
-// because admission and capacity belong to that single producer.
+// one handle to the controller's Prepare and Collect calls. InputPermitted
+// and Fail are safe to call from any goroutine (their implementations take
+// the session lock; the port layer's watcher reports stream faults through
+// Fail from its own goroutine); Acquire and the Slot methods belong to the
+// single producer goroutine, because admission and capacity are the
+// producer's alone.
 type ControllerHandle struct {
 	s *Session
 }
@@ -18,7 +21,8 @@ type ControllerHandle struct {
 // InputPermitted reports whether the collection side may dispatch short
 // game operations. It is false during preparing, opens exactly when
 // capturing begins and, once a stop closed it, never reopens. The
-// controller checks it before every short operation.
+// controller checks it before every short operation. Safe to call from any
+// goroutine.
 func (h *ControllerHandle) InputPermitted() bool {
 	h.s.mu.Lock()
 	defer h.s.mu.Unlock()
@@ -47,7 +51,10 @@ func (h *ControllerHandle) Acquire(ctx context.Context) *Slot {
 // the controller is in. Wrap the cause in a FaultError to carry a
 // diagnostic code (focusLost, geometryChanged, …); a plain error gets
 // controllerFailed. Faults reported after the session's outcome is already
-// decided are recorded as additional faults and change nothing.
+// decided are recorded as additional faults and change nothing. Safe to
+// call from any goroutine — the platform session's watcher, for example,
+// reports its faults from a goroutine of its own while the producer runs
+// the collection loop.
 func (h *ControllerHandle) Fail(err error) {
 	if err == nil {
 		return

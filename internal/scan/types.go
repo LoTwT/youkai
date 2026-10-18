@@ -123,6 +123,11 @@ const (
 	CodeRuntimeFailure = "runtimeFailure"
 	// CodeStorageFailure marks a delivery (persistence) failure.
 	CodeStorageFailure = "storageFailure"
+	// CodeReleaseFailed marks a fault recorded when a controller's
+	// Release (see Releaser) returned an error after the session's outcome
+	// was already decided. It never changes the outcome: the resources are
+	// gone either way, and the release failure is the durable diagnosis.
+	CodeReleaseFailed = "releaseFailed"
 )
 
 // FaultError pairs a diagnostic code with the error that caused a session
@@ -298,6 +303,24 @@ type Controller interface {
 	// (normal completion) or a non-nil error to fail the session. It must
 	// return promptly once ctx is cancelled.
 	Collect(ctx context.Context, h *ControllerHandle) error
+}
+
+// Releaser is implemented by controllers that hold session resources
+// across Prepare and Collect — a platform session with its capture stream,
+// dispatcher and stop hotkey, for example. The kernel calls Release
+// exactly once on the producer goroutine after the controller returned,
+// with input permission already closed and before the finalizer waits for
+// the workers and seals, so an ended session never leaves platform
+// resources running. Without this hook a controller whose Prepare
+// succeeded but whose session was stopped before entering Collect would
+// never be asked to clean up, because Collect is the only method that
+// could do it.
+//
+// Release must be idempotent in effect for defensive purposes but is
+// called at most once per session. Its error is recorded as a
+// releaseFailed fault and never changes the session's outcome.
+type Releaser interface {
+	Release() error
 }
 
 // Recognizer is the injected recognition worker. The kernel calls
