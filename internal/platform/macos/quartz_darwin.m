@@ -165,6 +165,13 @@ int yk_post_mouse_button(int32_t button, int down, double x, double y) {
 	if (button > 2) {
 		CGEventSetIntegerValueField(event, kCGMouseEventButtonNumber, (int64_t)button);
 	}
+	// Mark the press and its release as one physical click. 实测轮 ①
+	// observed the synthesized events carrying no click state; games that
+	// count click state (kCGMouseEventClickState) would see the pair as
+	// stateless motion, so both halves now carry a state of 1. The real
+	// delivery effect is re-verified with fieldprobe in the next field
+	// round; fakes cannot observe it.
+	CGEventSetIntegerValueField(event, kCGMouseEventClickState, 1);
 	return yk_post_event(event);
 }
 
