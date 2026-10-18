@@ -161,7 +161,9 @@ type OperationKind string
 const (
 	// OpMouseMoved moves the cursor to a position without pressing.
 	OpMouseMoved OperationKind = "mouseMoved"
-	// OpMouseClick presses and releases one button at a position.
+	// OpMouseClick presses and releases one button at a position, holding
+	// it for the op's Hold interval (the default when zero) so a game
+	// sampling input once per frame observes the press.
 	OpMouseClick OperationKind = "mouseClick"
 	// OpKeyPress presses and releases one key.
 	OpKeyPress OperationKind = "keyPress"
@@ -171,6 +173,34 @@ const (
 	// a real-device question (实测轮 ①), and the platform does not
 	// assume a Windows wheel notch equals any fixed pixel count.
 	OpScroll OperationKind = "scroll"
+	// OpDrag presses the button at the op's position, interpolates
+	// PostMouseMoved towards To over Steps steps spanning Duration, then
+	// releases at To. 实测轮 ① proved this path scrolls the cloud
+	// client's inventory list (synthesized wheel events are ignored by
+	// it), which is why drag — not scroll — is the traversal primitive
+	// of the port vocabulary.
+	OpDrag OperationKind = "drag"
+)
+
+// Bounded-input defaults and bounds: the port vocabulary's numbers (PR
+// 4a) mirrored here so a dispatcher driven directly behaves like one
+// driven through the unified port. The dispatcher applies the defaults
+// and enforces the bounds itself, as the final authority.
+const (
+	// DefaultHold is the press-to-release interval of a click whose Hold
+	// is zero; anything above MaxHold is rejected. 实测轮 ① measured the
+	// cloud client needing a perceptible (≥50–80 ms) press-to-release
+	// interval.
+	DefaultHold = 60 * time.Millisecond
+	MaxHold     = 200 * time.Millisecond
+	// DefaultDragSteps is the interpolated move count of a drag whose
+	// Steps is zero; MaxDragSteps bounds it.
+	DefaultDragSteps = 10
+	MaxDragSteps     = 32
+	// DefaultDragDuration is the press-to-release span of a drag whose
+	// Duration is zero; MaxDragDuration bounds it.
+	DefaultDragDuration = 400 * time.Millisecond
+	MaxDragDuration     = 1 * time.Second
 )
 
 // InputOperation is one bounded single operation. Position and Button
@@ -179,23 +209,36 @@ const (
 type InputOperation struct {
 	Kind OperationKind
 	// Position is the target position in screen points (top-left
-	// origin, the Quartz global display coordinate space).
+	// origin, the Quartz global display coordinate space). For a drag it
+	// is the press position.
 	Position Point
-	// Button is the mouse button for a click.
+	// To is the drag destination in screen points; OpDrag only.
+	To Point
+	// Button is the mouse button for a click or drag.
 	Button MouseButton
 	// KeyCode is the key for a key press.
 	KeyCode KeyCode
 	// ScrollDeltaY is the vertical scroll delta in pixels.
 	ScrollDeltaY float64
+	// Hold is the press-to-release interval of a click; zero takes
+	// DefaultHold, above MaxHold is rejected.
+	Hold time.Duration
+	// Steps is the interpolated move count of a drag; zero takes
+	// DefaultDragSteps, above MaxDragSteps is rejected.
+	Steps int
+	// Duration is the press-to-release span of a drag; zero takes
+	// DefaultDragDuration, above MaxDragDuration is rejected.
+	Duration time.Duration
 }
 
 // validate reports whether the operation carries the data its kind
-// needs.
+// needs. Hold, Steps and Duration bounds are enforced in Dispatch,
+// where their defaults apply, not here.
 func (op InputOperation) validate() error {
 	switch op.Kind {
 	case OpMouseMoved:
 		return nil
-	case OpMouseClick:
+	case OpMouseClick, OpDrag:
 		if op.Button < 0 {
 			return fmt.Errorf("macos: invalid mouse button %d", op.Button)
 		}
@@ -289,10 +332,19 @@ type InputResult struct {
 	// BlockedCode and BlockedReason are set when Status is blocked.
 	BlockedCode   BlockedCode
 	BlockedReason string
+	// Aborted reports that a drag stopped mid-way because the step gate
+	// (the kernel's input permission) closed; the release was posted and
+	// the button left the ledger, but the operation did not run to its
+	// destination.
+	Aborted bool
 	// EventsPosted is the number of events created and posted.
 	EventsPosted int
 	// EventsFailed is the number of events that failed to create.
 	EventsFailed int
+	// StartedAt is when the dispatcher began handling the request; At is
+	// when it finished. Together they bound the "after" a caller uses
+	// when requesting the next frame.
+	StartedAt time.Time
 	// At is when the dispatcher finished handling the request.
 	At time.Time
 }

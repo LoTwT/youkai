@@ -82,9 +82,18 @@ type InputDispatcher struct {
 	poster InputPoster
 	// now supplies timestamps.
 	now func() time.Time
+	// sleep waits out a click's hold or a drag's step interval; tests
+	// inject a recorder. The default is time.Sleep.
+	sleep func(time.Duration)
 	// readiness is an optional hook re-checked immediately before
 	// posting; it typically runs the foreground/visibility verdict.
 	readiness func(req ShortInputRequest) error
+	// stepGate is an optional hook checked between a drag's steps and
+	// honored before a click's release: when it reports false the drag
+	// stops, the press is released and the result is marked Aborted. It
+	// reads the kernel's input permission; the dispatcher never keeps
+	// permission truth of its own.
+	stepGate func() bool
 	// open/stream: the dispatcher opens for exactly one session token.
 	open   bool
 	stream StreamToken
@@ -96,6 +105,11 @@ type InputDispatcher struct {
 	closedReason string
 	// held is the press ledger.
 	held []HeldInput
+	// lastPostAt is when the last event post succeeded; zero when
+	// nothing was ever posted. Session close uses it to dwell before
+	// the process may exit, because CGEventPost has no confirmation
+	// semantics (实测轮 ①).
+	lastPostAt time.Time
 }
 
 // NewInputDispatcher builds a dispatcher around poster. now defaults
@@ -104,7 +118,37 @@ func NewInputDispatcher(poster InputPoster, now func() time.Time) *InputDispatch
 	if now == nil {
 		now = time.Now
 	}
-	return &InputDispatcher{poster: poster, now: now}
+	return &InputDispatcher{poster: poster, now: now, sleep: time.Sleep}
+}
+
+// SetSleep installs the sleep used between a click's press and release
+// and between a drag's steps. It exists for tests; the default is
+// time.Sleep.
+func (d *InputDispatcher) SetSleep(sleep func(time.Duration)) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if sleep != nil {
+		d.sleep = sleep
+	}
+}
+
+// SetStepGate installs the gate honored between a drag's steps: when it
+// reports false, the drag aborts — the release is posted immediately
+// and the result is marked Aborted — so a stop never waits for more
+// than one step interval. The hook must be fast and must not call back
+// into the dispatcher.
+func (d *InputDispatcher) SetStepGate(gate func() bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.stepGate = gate
+}
+
+// LastPostAt returns when the last event post succeeded; the zero time
+// when nothing was ever posted. It backs the session-close dwell.
+func (d *InputDispatcher) LastPostAt() time.Time {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.lastPostAt
 }
 
 // SetReadiness installs the hook re-checked immediately before every
@@ -148,12 +192,16 @@ func (d *InputDispatcher) SetGeometry(v GeometryVersion) {
 // Dispatch delivers one bounded operation. The whole call is
 // serialized: checks and posting happen under the dispatcher lock, so
 // a concurrent Close can only take effect between operations, never
-// between an operation's own events.
+// between an operation's own events. A click holds its press for the
+// op's Hold interval (the stop path waits at most one hold); a drag
+// checks the step gate between steps and aborts — release posted,
+// Aborted marked — the moment the gate closes.
 func (d *InputDispatcher) Dispatch(req ShortInputRequest) InputResult {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	started := d.now()
 	blocked := func(code BlockedCode, reason string) InputResult {
-		return InputResult{Status: DispatchBlocked, BlockedCode: code, BlockedReason: reason, At: d.now()}
+		return InputResult{Status: DispatchBlocked, BlockedCode: code, BlockedReason: reason, StartedAt: started, At: d.now()}
 	}
 	switch {
 	case d.closed:
@@ -168,19 +216,44 @@ func (d *InputDispatcher) Dispatch(req ShortInputRequest) InputResult {
 	if err := req.Op.validate(); err != nil {
 		return blocked(BlockedInvalidOperation, err.Error())
 	}
+	// A click's hold and a drag's steps and duration take their defaults
+	// here and are bounded here; an out-of-bounds request never reaches
+	// the poster.
+	hold := req.Op.Hold
+	if hold == 0 {
+		hold = DefaultHold
+	}
+	if hold < 0 || hold > MaxHold {
+		return blocked(BlockedInvalidOperation, fmt.Sprintf("click hold %s outside 0..%s", req.Op.Hold, MaxHold))
+	}
+	steps := req.Op.Steps
+	if steps == 0 {
+		steps = DefaultDragSteps
+	}
+	if steps < 0 || steps > MaxDragSteps {
+		return blocked(BlockedInvalidOperation, fmt.Sprintf("drag steps %d outside 0..%d", req.Op.Steps, MaxDragSteps))
+	}
+	dur := req.Op.Duration
+	if dur == 0 {
+		dur = DefaultDragDuration
+	}
+	if dur < 0 || dur > MaxDragDuration {
+		return blocked(BlockedInvalidOperation, fmt.Sprintf("drag duration %s outside 0..%s", req.Op.Duration, MaxDragDuration))
+	}
 	if d.readiness != nil {
 		if err := d.readiness(req); err != nil {
 			return blocked(BlockedReadiness, err.Error())
 		}
 	}
 
-	res := InputResult{At: d.now()}
+	res := InputResult{StartedAt: started}
 	post := func(fail func() error) bool {
 		if err := fail(); err != nil {
 			res.EventsFailed++
 			return false
 		}
 		res.EventsPosted++
+		d.lastPostAt = d.now()
 		return true
 	}
 	switch req.Op.Kind {
@@ -189,11 +262,14 @@ func (d *InputDispatcher) Dispatch(req ShortInputRequest) InputResult {
 	case OpMouseClick:
 		// The press and its release are one atomic operation: when the
 		// press fails to create, the release is never posted on its
-		// own — a stray release could undo a press the user made.
+		// own — a stray release could undo a press the user made. The
+		// hold keeps the press observable by a game sampling input once
+		// per frame; the stop path may wait at most this one hold.
 		if !post(func() error { return d.poster.PostMouseButton(req.Op.Button, true, req.Op.Position) }) {
 			break
 		}
-		d.held = append(d.held, HeldInput{Kind: "button", Button: req.Op.Button, Position: req.Op.Position, Since: res.At})
+		d.held = append(d.held, HeldInput{Kind: "button", Button: req.Op.Button, Position: req.Op.Position, Since: started})
+		d.sleep(hold)
 		if post(func() error { return d.poster.PostMouseButton(req.Op.Button, false, req.Op.Position) }) {
 			d.unholdButton(req.Op.Button)
 		}
@@ -202,15 +278,54 @@ func (d *InputDispatcher) Dispatch(req ShortInputRequest) InputResult {
 		if !post(func() error { return d.poster.PostKey(req.Op.KeyCode, true) }) {
 			break
 		}
-		d.held = append(d.held, HeldInput{Kind: "key", KeyCode: req.Op.KeyCode, Since: res.At})
+		d.held = append(d.held, HeldInput{Kind: "key", KeyCode: req.Op.KeyCode, Since: started})
 		if post(func() error { return d.poster.PostKey(req.Op.KeyCode, false) }) {
 			d.unholdKey(req.Op.KeyCode)
 		}
 	case OpScroll:
 		post(func() error { return d.poster.PostScroll(req.Op.ScrollDeltaY) })
+	case OpDrag:
+		// Press, interpolate moves towards To, release — the path 实测轮
+		// ① verified against the cloud client. The step gate is honored
+		// between steps: closing it aborts the drag immediately with the
+		// release posted, so a stop never waits for more than one step
+		// interval.
+		if !post(func() error { return d.poster.PostMouseButton(req.Op.Button, true, req.Op.Position) }) {
+			break
+		}
+		d.held = append(d.held, HeldInput{Kind: "button", Button: req.Op.Button, Position: req.Op.Position, Since: started})
+		last := req.Op.Position
+		interval := dur / time.Duration(steps)
+		for i := 1; i <= steps; i++ {
+			d.sleep(interval)
+			if d.stepGate != nil && !d.stepGate() {
+				res.Aborted = true
+				break
+			}
+			p := lerpPoint(req.Op.Position, req.Op.To, float64(i)/float64(steps))
+			if !post(func() error { return d.poster.PostMouseMoved(p) }) {
+				break
+			}
+			last = p
+		}
+		if !res.Aborted {
+			// The full span has passed; the release lands on the
+			// destination.
+			d.sleep(interval)
+			last = req.Op.To
+		}
+		if post(func() error { return d.poster.PostMouseButton(req.Op.Button, false, last) }) {
+			d.unholdButton(req.Op.Button)
+		}
 	}
 
+	res.At = d.now()
 	switch {
+	case res.Aborted:
+		// An aborted drag stopped short of its destination; the events
+		// that ran all posted, but the operation as requested did not
+		// complete, so partial — never posted — is the honest status.
+		res.Status = DispatchPartial
 	case res.EventsFailed == 0:
 		res.Status = DispatchPosted
 	case res.EventsPosted == 0:
@@ -221,6 +336,11 @@ func (d *InputDispatcher) Dispatch(req ShortInputRequest) InputResult {
 		res.Status = DispatchPartial
 	}
 	return res
+}
+
+// lerpPoint interpolates between a and b by frac (0→a, 1→b).
+func lerpPoint(a, b Point, frac float64) Point {
+	return Point{X: a.X + (b.X-a.X)*frac, Y: a.Y + (b.Y-a.Y)*frac}
 }
 
 // unholdKey/unholdButton remove one released input from the ledger;
