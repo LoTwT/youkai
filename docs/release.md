@@ -1,10 +1,10 @@
 # 发布与自动更新
 
-更新日期：2026-10-17。本文维护 youkai 的版本规则、两条发布渠道、打标签与发布步骤、更新密钥管理与发布后验证（含升级实测清单）；日常构建命令见[开发指南](development.md)，交付门槛见 [T7](specs/t7-public-release-acceptance.md)，自动更新的范围与规则见[架构第 6 节](specs/scanner-architecture.md#6-首版功能范围)。发布由 `LoTwT/youkai` 的 GitHub Releases 承担，也是 MyGo 内置更新的下载源（MyGo v0.5.5，行为依据其 `docs/updates.md`、`docs/github-actions.md` 与 `internal/update`）。
+更新日期：2026-10-18。本文维护 youkai 的版本规则、两条发布渠道、打标签与发布步骤、更新密钥管理与发布后验证（含升级实测清单）；日常构建命令见[开发指南](development.md)，交付门槛见 [T7](specs/t7-public-release-acceptance.md)，自动更新的范围与规则见[架构第 6 节](specs/scanner-architecture.md#6-首版功能范围)。发布由 `LoTwT/youkai` 的 GitHub Releases 承担，也是 MyGo 内置更新的下载源（MyGo v0.5.5，行为依据其 `docs/updates.md`、`docs/github-actions.md` 与 `internal/update`）。
 
 ## 版本号与两条渠道
 
-- **版本号**：`major.minor.patch`（语义化），首个发布版 `0.0.1`，随发布递增。发布时以**标签中的版本为准**：`mygo.json` 源文件保持开发版本（当前 `0.0.1`），发布 workflow 在构建前把标签版本与渠道前缀写入构建检出里的 `mygo.json` 副本（不提交；改写前对该文件设置 `git update-index --skip-worktree`，`git status` 因此不报修改，Go 的 VCS 戳记仍是标签提交的干净状态——构建日志与诊断日志首行携带干净的 `commit=`，不带 `-modified`），因此构建产物、`mygo.App.Version()` 与标签一致，不为发布提交版本号改动。
+- **版本号**：`major.minor.patch`（语义化），首个发布版 `0.0.1`，随发布递增。发布时以**标签中的版本为准**：`mygo.json` 源文件保持开发版本（当前 `0.0.1`），发布 workflow 在构建前把标签版本与渠道前缀写入构建检出里的 `mygo.json` 副本（不提交；改写前对该文件设置 `git update-index --skip-worktree`，`git status` 因此不报修改）。Go 的 VCS 戳记按 `git status` 判定，未跟踪文件同样会标记 `-modified`，构建前因此不得有任何过程文件落进检出（test-v0.0.1 至 test-v0.0.4 的 Windows 构建曾因 VC++ 步骤把 `vc-redist-info.txt` 写进仓库根而携带 `commit=<sha>-modified`，已改为写入 runner 临时目录 `RUNNER_TEMP`，机制见[开发指南的诊断日志](development.md#诊断日志)）。构建日志与诊断日志首行因此携带干净的 `commit=`，构建产物、`mygo.App.Version()` 与标签一致，不为发布提交版本号改动。
 - **测试渠道**：标签 `test-v<版本>`（如 `test-v0.0.1`）。发布为**普通 Release**——MyGo 更新器只接受已发布、非草稿、非预发布的版本——但**不设为 latest**，标题与说明注明“测试版，勿用”。测试渠道构建的应用只检查 `test-v` 标签的 Release。
 - **正式渠道**：标签 `v<版本>`。正式渠道构建读仓库 **latest Release** 的更新清单（MyGo 对前缀 `v` 与不设前缀等价：`tagged()` 为假，feed 为 `releases/latest/download/`）。选显式 `tagPrefix: "v"` 是为了在 workflow 里自文档；测试渠道 Release 发布时一律 `--latest=false`，但这只是不把测试版显式标记为 latest，挡不住 GitHub 的回退：仓库中没有显式 latest 时，`releases/latest` 返回最新发布的非草稿、非预发布 Release。因此在**第一个正式版（`v*`）发布前**，唯一的测试版仍会被 GitHub 当作 latest（`test-v0.0.1` 发布后实测 `GET /repos/LoTwT/youkai/releases/latest` 返回的正是它）。目前不存在正式渠道构建的安装，latest 指向测试版不影响更新隔离；第一个正式版必须以 `--latest=true` 发布（workflow 已如此），此后 latest 恒为正式版。即使走标签列表路径（`internal/update/github.go` 的 `HasPrefix(tag, prefix)`），前缀 `v` 也匹配不到 `test-v…`，两渠道不会串。
 - **渠道隔离靠 `updates.tagPrefix`**：发布 workflow 按标签写入 `test-v` 或 `v`，应用内嵌的更新源随渠道固定；同一把更新密钥签名两个渠道，公钥自 `0.0.1` 随包内置（晚加需用户手动重装一次）。
@@ -58,12 +58,12 @@ Release 资产一览（`<版本>` 为标签版本，表列为 GitHub 上的存�
 - **资产核对**：上表必需项齐全；`update-*.json` 的 `version` 与标签一致、`url` 指向本标签；Windows 安装包内含 VC++ DLL（发布 job 已自动核对，抽查 release 页面即可）。
 - **识别自检**：`YOUKAI_SELFTEST=1` 在安装版上通过（workflow 已在打包布局上跑过，实机再确认一次安装布局）。
 - **升级实测清单**（按 T7“自动更新”交付门槛，逐项留证）：
-  1. 旧版检测到新版：启动后台检查与“检查更新”入口都显示新版本号与说明（说明应来自 CHANGELOG 小节）。
-  2. 安装更新后：版本号与标签一致（诊断日志首行 `version=`），历史记录与数据根保留、可重开。
-  3. 签名错误被拒：篡改清单或换密钥的档案使安装失败，界面如实显示错误（如 `mygo: installing the update: the update is not signed with the app's key`），应用继续运行原版本。可用一次性测试密钥对在本地演练（见[开发指南](development.md#自动更新的本地演练)，勿用正式密钥）。
-  4. 扫描进行中（含收尾与待重试保存）禁止安装：更新区按钮禁用并说明原因；会话保存完成后可安装。
-  5. macOS 升级后 Gatekeeper 与权限表现：ad-hoc 签名替换后首次打开是否再次拦截、录屏/辅助功能权限是否保留（TCC 随 bundle identifier 记录，替换重签名后的表现以实测为准），结果写回本节与 T7。
-  6. 自动重启进入新版本：安装完成后应用自动重启，重启后诊断日志首行 `version=` 为新版本号、窗口更新区显示“当前版本 <新版本>”（2026-10-17 两平台升级实测曾“安装后应用退出但不再拉起”，根因是应用的关窗拦截取消了 MyGo 的首次 Relaunch；已修复为收尾完成后重新发起，并在 macOS 本机完整演练通过，见[开发指南](development.md#自动更新的本地演练)）。
-  7. Windows“应用和功能”中的版本：升级后列表显示新版本号（应用启动时刷新 HKCU 卸载项 `DisplayVersion`；`Uninstall.exe` 保持安装时的版本属正常，卸载行为不受影响）。
-  8. 更新日志行：诊断日志含各阶段行，逐行核对便于定位——检查 `youkai: update check: found …` / `no version newer than …` / `update check failed: …`，安装 `update install: downloading and verifying …`、`update install: downloaded N bytes`、`update install: … installed` / `update install failed: …`，重启 `update installed, restarting the application` 与 `exit settled, relaunching into the installed update`。
-- 测试渠道发布后，另用安装了测试版应用的设备确认它只收到 `test-v` 渠道的更新、正式版只收到正式渠道更新。
+  1. 旧版检测到新版：启动后台检查与“检查更新”入口都显示新版本号与说明（说明应来自 CHANGELOG 小节）。（2026-10-18 实测：两平台 0.0.1→0.0.4 每轮升级均检测到新版本——日志 `update check: found <版本> (running <旧版本>)`，升级后再次检查显示已是最新；说明文字的显示未逐字核对，见[M1 自动更新升级实测报告](reports/2026-10-18-m1-auto-update-test.md)。）
+  2. 安装更新后：版本号与标签一致（诊断日志首行 `version=`），历史记录与数据根保留、可重开。（2026-10-18 实测：两平台升级后日志首行 `version=0.0.4`，`/Applications/Youkai.app` 与 `Youkai.exe` 文件版本均为 0.0.4，历史数据保留经用户确认；“可重开”未单独验证，见[M1 自动更新升级实测报告](reports/2026-10-18-m1-auto-update-test.md)。）
+  3. 签名错误被拒：篡改清单或换密钥的档案使安装失败，界面如实显示错误（如 `mygo: installing the update: the update is not signed with the app's key`），应用继续运行原版本。可用一次性测试密钥对在本地演练（见[开发指南](development.md#自动更新的本地演练)，勿用正式密钥）。（安装版实机未测，见[M1 自动更新升级实测报告](reports/2026-10-18-m1-auto-update-test.md)的未覆盖项。）
+  4. 扫描进行中（含收尾与待重试保存）禁止安装：更新区按钮禁用并说明原因；会话保存完成后可安装。（仅单元测试覆盖——M1 安装版无扫描源，实机待 M2 后验证，见[M1 自动更新升级实测报告](reports/2026-10-18-m1-auto-update-test.md)的未覆盖项。）
+  5. macOS 升级后 Gatekeeper 与权限表现：ad-hoc 签名替换后首次打开是否再次拦截、录屏/辅助功能权限是否保留（TCC 随 bundle identifier 记录，替换重签名后的表现以实测为准），结果写回本节与 T7。（2026-10-18 实测：Gatekeeper 侧已验证——0.0.3→0.0.4 升级并自动重启进入新版本后无再次拦截；录屏/辅助功能权限待 M2 申请权限后实测，见[M1 自动更新升级实测报告](reports/2026-10-18-m1-auto-update-test.md)。）
+  6. 自动重启进入新版本：安装完成后应用自动重启，重启后诊断日志首行 `version=` 为新版本号、窗口更新区显示“当前版本 <新版本>”（2026-10-17 两平台升级实测曾“安装后应用退出但不再拉起”，根因是应用的关窗拦截取消了 MyGo 的首次 Relaunch；已修复为收尾完成后重新发起，并在 macOS 本机完整演练通过，见[开发指南](development.md#自动更新的本地演练)）。（2026-10-18 实机确认：两平台 0.0.3→0.0.4 同一秒内完成安装、退出收尾与重启，重启后首行 `version=0.0.4`，Windows 当前运行进程即重启实例，见[M1 自动更新升级实测报告](reports/2026-10-18-m1-auto-update-test.md)。）
+  7. Windows“应用和功能”中的版本：升级后列表显示新版本号（应用启动时刷新 HKCU 卸载项 `DisplayVersion`；`Uninstall.exe` 保持安装时的版本属正常，卸载行为不受影响）。（2026-10-18 实测：0.0.2→0.0.3 升级后日志 `uninstall entry version refreshed to 0.0.3`；0.0.3→0.0.4 后注册表 `DisplayVersion` 为 0.0.4，见[M1 自动更新升级实测报告](reports/2026-10-18-m1-auto-update-test.md)。）
+  8. 更新日志行：诊断日志含各阶段行，逐行核对便于定位——检查 `youkai: update check: found …` / `no version newer than …` / `update check failed: …`，安装 `update install: downloading and verifying …`、`update install: downloaded N bytes`、`update install: … installed` / `update install failed: …`，重启 `update installed, restarting the application` 与 `exit settled, relaunching into the installed update`。（2026-10-18 实测：0.0.3→0.0.4 两平台各阶段行齐全；`downloaded N bytes` 曾在完成时报两次（MyGo 进度回调在最后一块与 EOF 各报一次完成），已改为每次下载记一次、差量回退整包时两次下载各一行，见[M1 自动更新升级实测报告](reports/2026-10-18-m1-auto-update-test.md)。）
+- 测试渠道发布后，另用安装了测试版应用的设备确认它只收到 `test-v` 渠道的更新、正式版只收到正式渠道更新。（2026-10-18：测试渠道侧已在升级链全程验证——安装测试版的两台设备逐轮收到 `test-v` 更新；渠道隔离的排除侧与正式渠道因尚无 `v*` 发布未验证，见[M1 自动更新升级实测报告](reports/2026-10-18-m1-auto-update-test.md)。）

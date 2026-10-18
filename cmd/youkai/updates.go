@@ -55,18 +55,43 @@ type mygoUpdate struct{ u *mygo.Update }
 func (h mygoUpdate) Version() string { return h.u.Version }
 func (h mygoUpdate) Notes() string   { return h.u.Notes }
 
+// downloadLog turns MyGo's raw progress reports into one log line per
+// completed download. The progress of one download ends with the finished
+// total reported twice — once when the last bytes arrive and once more on
+// EOF — and a failed delta update makes MyGo download the whole archive
+// with the progress starting over, so a completion is remembered until an
+// in-progress report (below the total) means another download has begun.
+type downloadLog struct {
+	logged bool // the current download's completion already has its line
+}
+
+// report takes one progress report of the current download: the completion
+// line is written at the first report at or past the total, and only a
+// report below the total (a download in progress) arms the next one.
+func (d *downloadLog) report(downloaded, total int64) {
+	if total > 0 && downloaded >= total {
+		if !d.logged {
+			log.Printf("youkai: update install: downloaded %d bytes", downloaded)
+			d.logged = true
+		}
+		return
+	}
+	// No size known, or the download is still running: the next completion
+	// belongs to a download that has no line yet.
+	d.logged = false
+}
+
 // Install follows MyGo's download, signature verification and replacement
 // flow; the running app is not affected until the entry point relaunches
-// it. The start, every completed download with its bytes (a failed delta
-// update makes MyGo download the whole archive, so more than one line can
-// appear) and the outcome are logged; the progress reaches the UI
-// unchanged.
+// it. The start, each completed download with its bytes — once per
+// download, so a failed delta update that falls back to the whole archive
+// leaves one line per download — and the outcome are logged; the progress
+// reaches the UI unchanged.
 func (h mygoUpdate) Install(ctx context.Context, progress func(downloaded, total int64)) error {
 	log.Printf("youkai: update install: downloading and verifying %s", h.u.Version)
+	var downloads downloadLog
 	err := h.u.Install(ctx, func(downloaded, total int64) {
-		if total > 0 && downloaded >= total {
-			log.Printf("youkai: update install: downloaded %d bytes", downloaded)
-		}
+		downloads.report(downloaded, total)
 		if progress != nil {
 			progress(downloaded, total)
 		}

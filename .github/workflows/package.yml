@@ -230,7 +230,13 @@ jobs:
             $info += "`n$name  file version $fileVersion"
             Write-Host "$name  file version $fileVersion  <- $($latest.Name)\x64\$($crt.Name)"
           }
-          Set-Content -Path vc-redist-info.txt -Value $info -Encoding utf8
+          # The info file lives in the runner's temp directory, never in
+          # the checkout: Go stamps the build's VCS state from `git
+          # status`, which counts untracked files as changes, so a process
+          # file in the repository root would make the build report
+          # commit=<sha>-modified (the Windows builds of test-v0.0.1 to
+          # test-v0.0.4 did). The manifest step below reads it from there.
+          Set-Content -Path (Join-Path $env:RUNNER_TEMP "vc-redist-info.txt") -Value $info -Encoding utf8
       - name: Build the EXE and the NSIS installer
         # Explicit CGO_ENABLED: MyGo defaults its child processes to
         # CGO_ENABLED=0 unless the environment overrides it. NSIS: MyGo
@@ -329,7 +335,10 @@ jobs:
             entry "PP-OCRv6_rec_small.onnx" "build/windows-amd64/models/PP-OCRv6_rec_small.onnx"
             echo
             echo "## VC++ runtime (app-local, from the runner's Visual Studio)"
-            cat vc-redist-info.txt
+            # The VC++ step wrote this file into RUNNER_TEMP so the
+            # checkout holds no untracked files — an untracked file would
+            # mark the build's VCS stamp -modified.
+            cat "$RUNNER_TEMP/vc-redist-info.txt"
             entry "MSVCP140.dll" "build/windows-amd64/MSVCP140.dll"
             entry "MSVCP140_1.dll" "build/windows-amd64/MSVCP140_1.dll"
             entry "VCRUNTIME140.dll" "build/windows-amd64/VCRUNTIME140.dll"

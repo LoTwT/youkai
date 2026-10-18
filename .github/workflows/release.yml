@@ -301,7 +301,14 @@ jobs:
             $info += "`n$name  file version $fileVersion"
             Write-Host "$name  file version $fileVersion  <- $($latest.Name)\x64\$($crt.Name)"
           }
-          Set-Content -Path vc-redist-info.txt -Value $info -Encoding utf8
+          # The info file lives in the runner's temp directory, never in
+          # the checkout: Go stamps the build's VCS state from `git
+          # status`, which counts untracked files as changes, so a process
+          # file in the repository root would make the build report
+          # commit=<sha>-modified (the Windows builds of test-v0.0.1 to
+          # test-v0.0.4 did). The Package workflow's manifest step reads
+          # it from there.
+          Set-Content -Path (Join-Path $env:RUNNER_TEMP "vc-redist-info.txt") -Value $info -Encoding utf8
       - name: Build the EXE, the NSIS installer and the signed update, and upload
         # Explicit CGO_ENABLED: MyGo defaults its child processes to
         # CGO_ENABLED=0 unless the environment overrides it. NSIS: MyGo

@@ -17,6 +17,7 @@
 - [发布与自动更新](release.md)：版本号规则、测试与正式两条发布渠道、发布 workflow 步骤、更新密钥管理与发布后验证（含升级实测清单）。
 - [M1 Windows 实机测试报告](reports/2026-10-17-m1-windows-test.md)：首份实测报告——Package workflow 安装包在 Windows 11 实机的下载核对、安装、识别自检、启动、第二实例、数据目录与卸载结果，含未覆盖项与观察项。
 - [M1 macOS 实机测试报告](reports/2026-10-17-m1-macos-test.md)：DMG 安装版在 macOS（Apple Silicon）实机的下载核对、安装、Gatekeeper 首次打开与放行、识别自检、启动、第二实例、数据目录与移除结果，含未覆盖项与观察项。
+- [M1 自动更新升级实测报告](reports/2026-10-18-m1-auto-update-test.md)：Release 测试渠道的升级链实测——两平台 test-v0.0.1 至 test-v0.0.4 逐轮升级（检测、下载进度、自动重启、版本一致与数据保留），含 Windows 构建提交号带 `-modified` 与下载完成日志重复两项观察的根因、修复与本地演练，未覆盖项与不能推出的结论。
 
 ## 目录约定
 
