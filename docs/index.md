@@ -3,7 +3,7 @@
 ## 文档导航
 
 - [MyGo + Go 扫描器架构](specs/scanner-architecture.md)：公共架构与首版范围的权威来源，包括模块边界、应用与会话契约、隐藏恢复退出、结果与存储、字段校验范围、验收与成本。
-- [扫描器首版实施清单](specs/scanner-implementation-plan.md)：四个内部里程碑、代码落点、Mac 开发与 Windows 测试方式、需尽早取得的证据和验证命令；M1 已完成收尾（结论见清单第 3 节），M2 尚未开始。
+- [扫描器首版实施清单](specs/scanner-implementation-plan.md)：四个内部里程碑、代码落点、Mac 开发与 Windows 测试方式、需尽早取得的证据和验证命令；M1 已完成收尾（结论见清单第 3 节），M2 进行中——两平台底座已合并，macOS 云客户端实测轮 ① 已完成，Windows 实测待轮 ②。
 - [T1：MyGo 界面与构建分发](specs/t1-mygo-ui-distribution.md)：已确认的产品选择、MyGo v0.5.5 选型、资源与安装、浏览器唤起依据和界面验收。
 - [T2：平台采集与输入](specs/t2-platform-capture-input.md)：三种客户端范围、Windows GDI/SendInput 与 macOS ScreenCaptureKit/Quartz 方案、坐标单位、显示配置候选、帧时序与平台故障。
 - [T3：OCR 运行库、模型与样本](specs/t3-ocr-runtime-model-samples.md)：固定的绑定、运行库与模型组合及制品核查、预处理与解码基准、三组样本与识别质量门槛。
@@ -18,6 +18,7 @@
 - [M1 Windows 实机测试报告](reports/2026-10-17-m1-windows-test.md)：首份实测报告——Package workflow 安装包在 Windows 11 实机的下载核对、安装、识别自检、启动、第二实例、数据目录与卸载结果，含未覆盖项与观察项。
 - [M1 macOS 实机测试报告](reports/2026-10-17-m1-macos-test.md)：DMG 安装版在 macOS（Apple Silicon）实机的下载核对、安装、Gatekeeper 首次打开与放行、识别自检、启动、第二实例、数据目录与移除结果，含未覆盖项与观察项。
 - [M1 自动更新升级实测报告](reports/2026-10-18-m1-auto-update-test.md)：Release 测试渠道的升级链实测——两平台 test-v0.0.1 至 test-v0.0.4 逐轮升级（检测、下载进度、自动重启、版本一致与数据保留），含 Windows 构建提交号带 `-modified` 与下载完成日志重复两项观察的根因、修复与本地演练，未覆盖项与不能推出的结论。
+- [M2 macOS 实测轮 ① 报告](reports/2026-10-18-m2-macos-field-round1.md)：macOS 平台底座在真实《云·绝区零》云客户端上的采集与输入实测——窗口身份（位置漂移、每会话重解析）、~56fps 单窗口流与完整停止释放、几何附件自洽与 macOS 26 rect 形态修复、displayTime 时钟（含分析错误更正）、绝对位移/点击/拖拽/全局热键验证；合成滚轮被客户端忽略（遍历走拖拽）；如实记录第一轮输入失败的两个驱动侧根因（CGEventPost 退出竞争、缺 LockOSThread）与修复，含结论表、未覆盖项与遗留项。
 
 ## 目录约定
 
