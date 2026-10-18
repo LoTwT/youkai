@@ -302,6 +302,14 @@ func (s *CaptureSession) Token() StreamToken { return s.token }
 // (zero before the first frame with valid geometry).
 func (s *CaptureSession) Geometry() GeometryVersion { return s.tracker.Version() }
 
+// CurrentGeometry returns the current geometry state and its version in
+// one consistent read; ok is false before any valid geometry. A caller
+// freezing a baseline uses this so the transform and the version it
+// stamps cannot come from two different observations.
+func (s *CaptureSession) CurrentGeometry() (FrameGeometry, GeometryVersion, bool) {
+	return s.tracker.Snapshot()
+}
+
 // LatestFrame returns the newest cached frame observation.
 func (s *CaptureSession) LatestFrame() (ImageObservation, bool) { return s.cache.Latest() }
 

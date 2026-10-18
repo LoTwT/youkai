@@ -63,6 +63,10 @@ func (p *posterFake) posted() []string {
 func openedDispatcher(poster macos.InputPoster, token macos.StreamToken, geo macos.GeometryVersion) *macos.InputDispatcher {
 	t := time.Now()
 	d := macos.NewInputDispatcher(poster, func() time.Time { return t })
+	// The hold and drag intervals are real sleeps by default; these
+	// tests care about ordering, not timing, so the sleep is a no-op.
+	// The hold and drag behavior tests below inject their own recorder.
+	d.SetSleep(func(time.Duration) {})
 	if err := d.OpenFor(token); err != nil {
 		panic(err)
 	}

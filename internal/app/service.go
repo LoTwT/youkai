@@ -200,7 +200,16 @@ func NewService(cfg Config) (*Service, error) {
 			return newOCRRecognizer(cfg.Paths.Resources)
 		}
 	}
-	return &Service{cfg: cfg, store: store, newRecognizer: newRecognizer}, nil
+	svc := &Service{cfg: cfg, store: store, newRecognizer: newRecognizer}
+	// Sources that own a stop entry (the game scan source, whose
+	// sessions register a global stop hotkey) receive the service's Stop
+	// here, so a hotkey-driven stop walks the same idempotent entry as
+	// the UI — including the stopRequested path while a start is still
+	// committing.
+	if binder, ok := cfg.Source.(interface{ bindStop(func()) }); ok {
+		binder.bindStop(svc.Stop)
+	}
+	return svc, nil
 }
 
 // Start accepts a start request into the single active slot: it takes

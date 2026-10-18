@@ -93,7 +93,7 @@
 
 关联 T2、T3、T4、T5、T6。M1 就绪后先接入最小平台预检，优先验证 Mac 云客户端的采集、受控输入与停止，不等待 Windows 单件功能做完。随后贯通 Windows 完整客户端，再完成两种云客户端；三种场景均通过后才扩大到整仓遍历。
 
-**平台底座状态（2026-10-18）：**两平台底座已实现并合并（Windows PR #25、macOS PR #26，实现状态见 [T2](t2-platform-capture-input.md) 2.1/2.2 节）。macOS 云客户端的采集与输入已由实测轮 ①（2026-10-18）用 tools/fieldprobe 驱动真实原生层验证通过——窗口身份、~56fps 单窗口流、几何附件（含 macOS 26 rect 形态修复）、displayTime 时钟、绝对位移/点击/拖拽/全局热键；合成滚轮被客户端忽略，遍历列表滚动走拖拽。实测发现的平台修复（rect 附件）与驱动工具随该轮提交，完整证据见[M2 macOS 实测轮 ① 报告](../reports/2026-10-18-m2-macos-field-round1.md)；报告同时记录了第一轮输入失败的两个驱动侧根因与遗留项（下一轮自动化采样 20–30 件与 9 个中文名复核、退出路径 dwell 的集成实现）。Windows 实测轮 ② 待做；平台底座接入扫描内核的集成随后进行。
+**平台底座状态（2026-10-19）：**两平台底座已实现并合并（Windows PR #25、macOS PR #26，实现状态见 [T2](t2-platform-capture-input.md) 2.1/2.2 节）。macOS 云客户端的采集与输入已由实测轮 ①（2026-10-18）用 tools/fieldprobe 驱动真实原生层验证通过——窗口身份、~56fps 单窗口流、几何附件（含 macOS 26 rect 形态修复）、displayTime 时钟、绝对位移/点击/拖拽/全局热键；合成滚轮被客户端忽略，遍历列表滚动走拖拽。实测发现的平台修复（rect 附件）与驱动工具随该轮提交，完整证据见[M2 macOS 实测轮 ① 报告](../reports/2026-10-18-m2-macos-field-round1.md)；报告同时记录了第一轮输入失败的两个驱动侧根因与遗留项（下一轮自动化采样 20–30 件与 9 个中文名复核、退出路径 dwell 的集成实现）。**平台会话集成（PR 4a，2026-10-19）已完成**：统一平台端口（`internal/platform`：Port/Session、故障分类与诊断码、中性按键表、两平台适配器与 fake）接入扫描内核——内核新增可选 `scan.Releaser`（控制者资源在会话封存前恰好释放一次）、collect 控制者（Preflight→Open→就绪等待→基线锁定→Traversal 接缝，4a 仅 ObserveOnly 不输入不接纳）、应用服务 GameScanSource（热键绑定服务统一停止入口，提交前触发热键走 stopRequested 不丢）、入口按 `YOUKAI_GAME_SOURCE=observe` 接线仅观测演练（环境变量见[开发指南](../development.md)）；macOS 退出 dwell、停止热键注册期（Prepare 起、Release 止）与拖拽/按住时长词汇一并落地，`kCGMouseEventClickState=1` 已补、退出路径 dwell 已实现。Windows 实测轮 ② 待做；4b/4c 的真实遍历与识别接入随后进行。
 
 - [ ] 为每种客户端记录首组显示配置、窗口身份、输入坐标和图像单位，明确云视频区域，核验手动准备的仓库起点。Windows 从两种候选中选一组实测，Mac 按实际画面测绘。
 - [ ] 接入采集、短输入和权限检查；验证前台、几何变化、失去目标、撤权和全局停止键。输入许可在预检前保持关闭，停止后不因重新隐藏窗口而恢复。

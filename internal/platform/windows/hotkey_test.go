@@ -127,11 +127,15 @@ func TestShutdownAssemblesHonestReport(t *testing.T) {
 	sender := newFakeSender()
 	sender.respond = func(call int, events []InputEvent) (int, bool, error) {
 		if call == 0 {
-			return 2, false, nil // click: move + down, up missing
+			return 2, false, nil // click press batch [move, down] fully inserted
+		}
+		if call == 1 {
+			return 0, false, errors.New("SendInput: internal error") // release batch not inserted
 		}
 		return len(events), false, nil
 	}
 	actor := NewInputActor(sender, nil)
+	actor.SetSleep(func(time.Duration) {})
 	actor.Permit()
 	if res := actor.Dispatch(clickRequest(1, PixelPoint{0, 0})); res.State != StatePartialDelivered {
 		t.Fatalf("setup: want partial delivery, got %s", res.State)

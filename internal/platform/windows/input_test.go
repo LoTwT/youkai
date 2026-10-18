@@ -3,6 +3,7 @@ package windows
 import (
 	"errors"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 )
@@ -85,6 +86,8 @@ func clickRequest(version GeometryVersion, p PixelPoint) InputRequest {
 func TestActorDeliversFullOperation(t *testing.T) {
 	sender := newFakeSender()
 	actor := NewInputActor(sender, nil)
+	sleeps := make(chan time.Duration, 4)
+	actor.SetSleep(func(d time.Duration) { sleeps <- d })
 	actor.Permit()
 
 	res := actor.Dispatch(clickRequest(1, PixelPoint{10, 10}))
@@ -100,8 +103,26 @@ func TestActorDeliversFullOperation(t *testing.T) {
 	if len(res.HeldAfter) != 0 {
 		t.Fatalf("a full delivery leaves nothing held: %+v", res.HeldAfter)
 	}
-	if sender.callCount() != 1 || len(sender.calls[0]) != 3 {
-		t.Fatalf("one SendInput call with 3 events, got %d calls", sender.callCount())
+	// A click is two SendInput batches — [move, down], the hold, [up] —
+	// so the press stays observable by a game sampling once per frame.
+	if sender.callCount() != 2 {
+		t.Fatalf("two SendInput calls (press batch, release batch), got %d", sender.callCount())
+	}
+	if len(sender.calls[0]) != 2 || len(sender.calls[1]) != 1 || sender.calls[1][0].Kind != EventMouseUp {
+		t.Fatalf("batches: %+v %+v", sender.calls[0], sender.calls[1])
+	}
+	// The default hold separates them.
+	select {
+	case d := <-sleeps:
+		if d != DefaultHold {
+			t.Fatalf("default hold %v, want %v", d, DefaultHold)
+		}
+	default:
+		t.Fatal("the hold never slept")
+	}
+	// The last successful insertion feeds the post-time bookkeeping.
+	if actor.LastPostAt().IsZero() {
+		t.Fatal("a delivered click must record LastPostAt")
 	}
 }
 
@@ -154,13 +175,21 @@ func TestActorRefusesOnPrecheckFailure(t *testing.T) {
 }
 
 func TestActorPartialDeliveryLedger(t *testing.T) {
-	// The move and the button-down are inserted, the button-up is not:
-	// the button stays in the ledger and the result reports the count.
+	// The press batch ([move, down]) is inserted, the release batch ([up])
+	// is not: the button stays in the ledger and the result reports the
+	// count.
 	sender := newFakeSender()
 	sender.respond = func(call int, events []InputEvent) (int, bool, error) {
-		return 2, false, nil
+		if call == 0 {
+			return 2, false, nil
+		}
+		if call == 1 {
+			return 0, false, errors.New("SendInput: internal error")
+		}
+		return len(events), false, nil
 	}
 	actor := NewInputActor(sender, nil)
+	actor.SetSleep(func(time.Duration) {})
 	actor.Permit()
 
 	res := actor.Dispatch(clickRequest(1, PixelPoint{3, 3}))
@@ -173,8 +202,8 @@ func TestActorPartialDeliveryLedger(t *testing.T) {
 
 	// Release at stop time succeeds and clears the ledger.
 	sender.respond = func(call int, events []InputEvent) (int, bool, error) {
-		if call != 1 {
-			t.Fatalf("release should be the second call, got %d", call)
+		if call != 2 {
+			t.Fatalf("release should be the third call, got %d", call)
 		}
 		if len(events) != 1 || events[0].Kind != EventMouseUp {
 			t.Fatalf("release should be one mouse-up event: %+v", events)
@@ -299,13 +328,17 @@ func TestActorZeroDeliveryWithoutError(t *testing.T) {
 func TestClosePermissionWaitsForInFlightOperation(t *testing.T) {
 	// The dispatch entry and the permission close synchronize: an
 	// in-flight bounded operation finishes first, the close takes
-	// effect, and the next operation cannot slip past it.
+	// effect, and the next operation cannot slip past it. A click now
+	// spans several SendInput batches; every one of them must finish
+	// before the close.
 	sender := newFakeSender()
 	entered := make(chan struct{})
 	gate := make(chan struct{})
-	sender.onEnter = func() { close(entered) }
+	var enterOnce sync.Once
+	sender.onEnter = func() { enterOnce.Do(func() { close(entered) }) }
 	sender.gate = gate
 	actor := NewInputActor(sender, nil)
+	actor.SetSleep(func(time.Duration) {})
 	actor.Permit()
 
 	dispatched := make(chan InputResult, 1)
@@ -344,22 +377,25 @@ func TestClosePermissionWaitsForInFlightOperation(t *testing.T) {
 }
 
 func TestReleaseHeldRecordsFailuresHonestly(t *testing.T) {
-	// A partial click leaves the button down; the stop-time release is
-	// refused once — the record must say so, and the key stays in the
-	// ledger because it may still be down.
+	// A click whose release batch fails leaves the button down; the
+	// stop-time release is then refused once — the record must say so,
+	// and the key stays in the ledger because it may still be down.
 	sender := newFakeSender()
-	releaseAttempts := 0
+	upAttempts := 0
 	sender.respond = func(call int, events []InputEvent) (int, bool, error) {
-		if call == 0 {
-			return 2, false, nil // click: move + down inserted, up not
+		if len(events) == 2 {
+			return 2, false, nil // press batch [move, down] fully inserted
 		}
-		releaseAttempts++
-		if releaseAttempts == 1 {
-			return 0, false, errors.New("release blocked by another thread")
+		if len(events) == 1 && events[0].Kind == EventMouseUp {
+			upAttempts++
+			if upAttempts <= 2 { // the click's release and the first stop-time release
+				return 0, false, errors.New("release blocked by another thread")
+			}
 		}
 		return len(events), false, nil
 	}
 	actor := NewInputActor(sender, nil)
+	actor.SetSleep(func(time.Duration) {})
 	actor.Permit()
 	if res := actor.Dispatch(clickRequest(1, PixelPoint{0, 0})); res.State != StatePartialDelivered {
 		t.Fatalf("setup: want partial delivery, got %s", res.State)
@@ -412,13 +448,14 @@ func TestReleaseHeldBlockedRecordsBlocked(t *testing.T) {
 func TestReleaseHeldNothingHeldSendsNothing(t *testing.T) {
 	sender := newFakeSender()
 	actor := NewInputActor(sender, nil)
+	actor.SetSleep(func(time.Duration) {})
 	actor.Permit()
 	actor.Dispatch(clickRequest(1, PixelPoint{0, 0})) // full delivery, nothing held
 	if records := actor.ReleaseHeld(); records != nil {
 		t.Fatalf("no held keys, no release records: %+v", records)
 	}
-	if sender.callCount() != 1 {
-		t.Fatalf("release must not send events when nothing is held: %d calls", sender.callCount())
+	if sender.callCount() != 2 {
+		t.Fatalf("release must not send events when nothing is held (2 click batches): %d calls", sender.callCount())
 	}
 }
 

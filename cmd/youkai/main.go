@@ -15,7 +15,10 @@ import (
 	"time"
 
 	"github.com/LoTwT/youkai/internal/app"
+	"github.com/LoTwT/youkai/internal/game/zzz/collect"
+	"github.com/LoTwT/youkai/internal/platform"
 	"github.com/LoTwT/youkai/internal/recognition"
+	"github.com/LoTwT/youkai/internal/record"
 	"github.com/LoTwT/youkai/internal/ui"
 	"github.com/egoist/mygo"
 	mgui "github.com/egoist/mygo/ui"
@@ -118,7 +121,7 @@ func main() {
 		}
 	}
 
-	source := devScanSource()
+	source, sourceLabel := scanSource()
 	svc, err := app.NewService(app.Config{
 		Paths:    paths,
 		DataLock: dataLock,
@@ -144,7 +147,7 @@ func main() {
 		Service: svc,
 		ScanSource: ui.ScanSourceInfo{
 			Available: source != nil,
-			Label:     "开发数据源",
+			Label:     sourceLabel,
 			Reason:    "当前构建没有接入游戏扫描源（M2 接入游戏适配）；开发构建可通过环境变量 YOUKAI_DEV_SOURCE 启用开发数据源。",
 		},
 		Evidence: ui.FileEvidence{Root: paths.Data},
@@ -306,6 +309,84 @@ func selfTest(root string) {
 		log.Fatalf("youkai: self-test: %v", err)
 	}
 	log.Printf("youkai: self-test passed: text=%q score=%.3f", got.Text, got.Score)
+}
+
+// scanSource wires the scan source the environment selects, and
+// returns its UI label:
+//
+//   - YOUKAI_DEV_SOURCE names the development fixture directory (the
+//     development and testing stand-in of M1);
+//   - YOUKAI_GAME_SOURCE=observe wires the observe-only game rehearsal
+//     through the unified platform port — a session opens the platform,
+//     observes the target and waits; no input is dispatched (the real
+//     traversal arrives with 4b/4c);
+//   - both set at once is a wiring error the entry point refuses;
+//   - neither leaves the production state: no source, starts refused
+//     with the documented reason.
+func scanSource() (app.ScanSource, string) {
+	devDir := os.Getenv("YOUKAI_DEV_SOURCE")
+	gameMode := os.Getenv("YOUKAI_GAME_SOURCE")
+	if devDir != "" && gameMode != "" {
+		log.Fatalf("youkai: YOUKAI_DEV_SOURCE and YOUKAI_GAME_SOURCE are both set; pick one scan source")
+	}
+	if devDir != "" {
+		return devScanSource(), "开发数据源"
+	}
+	if gameMode != "" {
+		if gameMode != "observe" {
+			log.Fatalf("youkai: YOUKAI_GAME_SOURCE=%q is not supported (only \"observe\")", gameMode)
+		}
+		return gameScanSource(), "游戏窗口（仅观测演练，不发送输入）"
+	}
+	return nil, "开发数据源"
+}
+
+// gameScanSource wires the observe-only game rehearsal for this
+// platform. The macOS target is the App Store cloud client field round
+// ① identified; the Windows target identity waits for field round ②
+// and must be provided explicitly (YOUKAI_GAME_EXE plus
+// YOUKAI_GAME_CLIENT=local|cloud) — a guessed identity could act on the
+// wrong window, so the wiring refuses instead. The stop hotkeys follow
+// the field rounds: ⌃⌥⌘S on macOS (verified), Ctrl+Alt+Shift+S on
+// Windows (unverified, deliberately avoiding the Win key); customization
+// arrives with the settings of M3.
+func gameScanSource() app.ScanSource {
+	port, err := platform.Host()
+	if err != nil {
+		log.Fatalf("youkai: platform: %v", err)
+	}
+	var (
+		target platform.TargetSpec
+		client record.Client
+		hotkey platform.HotkeySpec
+	)
+	switch runtime.GOOS {
+	case "darwin":
+		target = collect.MacCloudTarget
+		client = record.ClientMacOSCloud
+		hotkey = platform.HotkeySpec{Key: platform.KeyS, Ctrl: true, Alt: true, Meta: true}
+	case "windows":
+		exe := os.Getenv("YOUKAI_GAME_EXE")
+		kind := os.Getenv("YOUKAI_GAME_CLIENT")
+		if exe == "" || (kind != "local" && kind != "cloud") {
+			log.Fatalf("youkai: the Windows game target needs YOUKAI_GAME_EXE=<game exe path> and YOUKAI_GAME_CLIENT=local|cloud (the real window identity is measured in field round ②; refusing to guess), got exe=%q client=%q", exe, kind)
+		}
+		target = platform.TargetSpec{ExecutablePath: exe}
+		client = record.ClientWindowsCloud
+		if kind == "local" {
+			client = record.ClientWindowsLocal
+		}
+		hotkey = platform.HotkeySpec{Key: platform.KeyS, Ctrl: true, Alt: true, Shift: true}
+	default:
+		log.Fatalf("youkai: no game platform on %s", runtime.GOOS)
+	}
+	log.Printf("youkai: game scan source wired (observe-only): client=%s target=%+v", client, target)
+	return &app.GameScanSource{
+		Port:   port,
+		Target: target,
+		Hotkey: hotkey,
+		Client: client,
+	}
 }
 
 // devScanSource wires the development data source when the explicit

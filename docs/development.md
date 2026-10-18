@@ -32,6 +32,15 @@ CGO_ENABLED=1 YOUKAI_DEV_SOURCE=$PWD/internal/recognition/testdata \
 - `YOUKAI_DEV_AUTOSTART` 置任意非空值时，应用就绪后自动开始一次扫描（同样仅开发开关生效；就绪回调本身不做耗时工作，开始请求在独立 goroutine 中发出）。
 - `YOUKAI_DEV_PACE` 可选，把开发数据源的接纳节奏改为给定时长（如 `3s`）；默认 250ms。需要观察进度或练习中途停止时用它把扫描拉长：主界面的“停止”按钮可随时中途停止，关闭主窗口走明确退出收尾。
 
+## 仅观测演练（游戏窗口，PR 4a）
+
+M2 平台会话集成后可用另一组开关接入真实游戏窗口做仅观测演练（不发送任何输入）：
+
+- `YOUKAI_GAME_SOURCE=observe` 启用游戏窗口仅观测演练：会话经统一平台端口（`internal/platform`）打开真实窗口、解析目标、锁定几何基线并持续观测，全程不派发输入、不接纳观测，用于联调平台集成与停止链路；主界面标签显示“游戏窗口（仅观测演练，不发送输入）”。与 `YOUKAI_DEV_SOURCE` 同时设置会拒绝启动。
+- Windows 目标身份待实测轮 ②，须显式提供：`YOUKAI_GAME_EXE=<游戏 exe 完整路径>` 与 `YOUKAI_GAME_CLIENT=local|cloud`（分别对应完整客户端与云客户端记录标识）；缺失时拒绝接线并说明原因——猜一个身份可能作用于错误窗口。macOS 目标固定为实测轮 ① 记录的云客户端（bundle `com.miHoYo.cloudgames.Nap`）。
+- 停止热键：macOS 默认 ⌃⌥⌘S（实测验证）；Windows 默认 Ctrl+Alt+Shift+S 加 NoRepeat（未验证，避开 Win 键组合）。热键在准备阶段注册、持续到会话释放，全局可用；自定义留待 M3 设置。
+- 真实遍历（4b/4c）就位后，`observe` 演练模式仍可用于无输入联调；两者都不设置时保持生产默认（无扫描源，开始被拒）。
+
 日志确认要点：`dev scan source wired`、`scan <id> accepted`、每件盘一行 `item N recognized: name=… level=…`、`checkpoint generation N saved (… items)` 与结束行的检查点路径（开发应用数据根 `~/Library/Application Support/Youkai Dev/sessions/<id>/checkpoints/<gen>.json`）、退出时 `exit wrap-up complete`。退出事件（⌘Q/关窗）异步触发明确退出收尾：停止活动会话 → 等待收尾与最终保存 → 关闭识别器 → 销毁 ORT 环境 → 释放占用。
 
 持久化从扫描过程中开始：每次接纳观测（`internal/scan` 的接纳钩子）都会先写该件的证据图、再以 queued 状态把条目加入检查点文档，终结时只更新状态与载荷；崩溃后重开由 `internal/record` 把排队/运行条目标为中断未处理，已接纳的物品不会消失。
