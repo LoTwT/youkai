@@ -74,6 +74,8 @@ T2 负责目标窗口身份、采集、坐标、短输入、平台故障和原�
 
 AppKit 相关操作交由应用已有的主线程调度，帧回调用单独串行队列；停止流使用异步完成回调，不能在主线程等扫描 goroutine、也不能持服务锁同步等待主线程。原生停止完成且在途回调处理妥当后才释放资源；旧流/旧会话回调必须能被拒绝。不增加独立 Swift 辅助应用或另一套 UI。
 
+**macOS 实现状态（2026-10-18）：**本节方案的最小实现已落地在 `internal/platform/macos`（M2 平台底座 PR，未接入扫描内核/适配器/UI）：SCShareableContent 枚举与 bundle+PID+windowID 身份锁定（同名/替换窗口判歧义）、desktopIndependentWindow 单窗口流（仅图像、BGRA、帧回调独立串行队列并在回调内显式复制像素为 Go 自有图像、有界最新帧缓存、异步停止并区分“已请求/原生已停/回调已排空/已释放”、迟到回调计数拒绝）、SCFrameStatus 与 displayTime 的 mach→Go 单调时间锚定转换、AX 信任（不弹授权）与事件合成预检及基于实际枚举/启动流结果的录屏可用性判定、Quartz 短输入串行派发（未派发/部分/已投递三态如实表达 CGEventPost 无确认返回值、自身按下的键鼠单独记账并在停止时尝试释放且失败如实记录）、前台 PID + 屏幕内可见性 + AXFocusedWindow（有限超时、失败即拒绝）的就绪核验、点/像素与 contentRect/contentScale/scaleFactor 的单位建模及几何版本化（旧版本坐标拒绝输入）、Carbon RegisterEventHotKey 全局停止热键（在主线程注册、经宿主应用主 run loop 派发、无 run loop 时限期失败而非挂起、注册失败上报）。几何/缓存/竞争/权限映射/热键生命周期的纯逻辑有单元测试并随双平台 CI 运行；需要真实原生环境的路径（实际 SCStream 出帧与附件、CGEvent 送达游戏、AX 实窗查询、热键触发且不抢焦点、权限授予/撤回行为）不写假装通过的测试，留实测轮 ① 验证。该包自包含、不定义跨平台共享接口；Windows 侧由并行 PR 实现，统一集成接口由后续 PR 裁定。
+
 ### 2.3 API 可用版本不等于产品下限
 
 下表来自 Apple DocC 可用性与已安装 SDK 的声明；只限定使用相应 API 的条件。
