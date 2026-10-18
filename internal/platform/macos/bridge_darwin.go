@@ -389,6 +389,97 @@ func (darwinPoster) PostScroll(deltaY float64) error {
 	return nil
 }
 
+// ---- Main-queue dispatch gate ----
+
+// mainQueueGate is the shared in-flight marker for the bridge's
+// main-queue dispatches: the frontmost query and the hotkey
+// register/unregister. They all enqueue onto the same serial main
+// queue, so one block that has not been confirmed to run means the
+// queue is backed up for every caller — while the marker is held, a
+// new dispatch fails fast instead of enqueueing more work behind it,
+// and a stalled main thread no longer accumulates one queued block per
+// call (实测轮 ① 报告 §12).
+//
+// The marker is held from dispatch until the native call confirms its
+// block ran. A call that times out keeps it held — its block is still
+// on the queue (or runs moments after the deadline) — and hands it to
+// a recovery probe, which releases it once the queue drains past the
+// late block. The gate therefore recovers by itself when the main
+// thread becomes healthy; there is no reset path.
+//
+// A single flag is sufficient rather than a generation counter: the
+// gate has one holder at a time by construction (acquire only succeeds
+// on a free marker, and the recovery probe is the sole release of a
+// timed-out dispatch), so no stale release can race a newer holder.
+type mainQueueGate struct {
+	mu       sync.Mutex
+	inflight bool
+	op       string // the dispatch in flight, named in rejections
+}
+
+// acquire marks one main-queue dispatch in flight. It returns nil when
+// the caller now owns the single dispatch slot, and a rejection error
+// when a previous dispatch has not been confirmed to run yet — the
+// caller must not enqueue anything in that case.
+func (g *mainQueueGate) acquire(op string) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.inflight {
+		return fmt.Errorf("macos: previous main-queue dispatch (%s) still in flight", g.op)
+	}
+	g.inflight = true
+	g.op = op
+	return nil
+}
+
+// release clears the marker after the dispatched block was confirmed
+// to have run on the main queue (the native call returned without the
+// run-loop timeout, whatever its outcome was).
+func (g *mainQueueGate) release() {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.inflight = false
+	g.op = ""
+}
+
+// awaitRecovery runs after a dispatch timed out with the marker still
+// held: it blocks until probe reports its own block ran — by main-queue
+// FIFO order the late block has executed by then — and releases the
+// marker. The timed-out call starts it as a goroutine; it owns the
+// marker until then and parks on the probe's bounded wait, never on a
+// Go lock.
+func (g *mainQueueGate) awaitRecovery(probe func() bool) {
+	for !probe() {
+		// The probe's own bound expired with the queue still unserved;
+		// its block is now the latest queued one. Probe again — this
+		// adds at most one queued block per bound, not per call.
+	}
+	g.release()
+}
+
+// mainQueueRecoveryBound bounds one recovery probe wait. It sits far
+// beyond any operational timeout on purpose: the probe parks until the
+// main queue is actually served instead of polling, so a stalled queue
+// gains at most one probe block in total; the bound is a defensive
+// ceiling that should never expire in practice.
+const mainQueueRecoveryBound = 365 * 24 * time.Hour
+
+// probeMainQueueServed enqueues the read-only frontmost query with the
+// recovery bound and reports whether its block ran. The frontmost
+// query is the cheapest side-effect-free main-queue dispatch in the
+// bridge, so it probes on behalf of every dispatch point; any result,
+// including "no frontmost application", proves the queue is being
+// served, while -1 means the probe block did not run within the bound.
+func probeMainQueueServed() bool {
+	return int32(C.yk_frontmost_pid(C.double(mainQueueRecoveryBound.Seconds()))) != -1
+}
+
+// mainDispatchGate marks main-queue dispatches process-wide. One
+// shared marker across the dispatch points (rather than one per call
+// site) bounds the outstanding work to a single dispatched block plus
+// its recovery probe, whichever caller hits the stalled queue.
+var mainDispatchGate mainQueueGate
+
 // ---- Foreground, AX and permissions ----
 
 type darwinForegroundProbe struct {
@@ -399,16 +490,27 @@ type darwinForegroundProbe struct {
 // The AppKit read is routed through the application's main thread with
 // a bounded wait, per T2 §2.2 (AppKit 相关操作交由应用已有的主线程
 // 调度); without a serving main run loop it fails fast instead of
-// hanging.
+// hanging, and while a previous main-queue dispatch is still in flight
+// it fails immediately instead of queueing behind it (see the
+// main-queue dispatch gate).
 func NewForegroundProbe() ForegroundProbe {
 	return darwinForegroundProbe{timeout: 2 * time.Second}
 }
 
 func (p darwinForegroundProbe) FrontmostPID() (int32, error) {
+	if err := mainDispatchGate.acquire("frontmost query"); err != nil {
+		return 0, err
+	}
 	pid := int32(C.yk_frontmost_pid(C.double(p.timeout.Seconds())))
-	switch pid {
-	case -1:
+	if pid == -1 {
+		// Timed out: the enqueued read is still on the main queue, so
+		// the marker stays held and the recovery probe clears it once
+		// the queue drains.
+		go mainDispatchGate.awaitRecovery(probeMainQueueServed)
 		return 0, errors.New("macos: main run loop unavailable for the frontmost query")
+	}
+	mainDispatchGate.release() // the block ran, whatever pid it produced
+	switch pid {
 	case 0:
 		return 0, errors.New("macos: no frontmost application")
 	default:
@@ -465,8 +567,10 @@ type darwinHotKeyRegistrar struct {
 // NewHotKeyRegistrar returns the Carbon-based global hotkey
 // registrar. Registration runs on the application's main thread and
 // the hotkey is delivered by the host's main run loop; without one the
-// registrar fails fast within the timeout instead of hanging. Real
-// registration behavior is verified in 实测轮 ①.
+// registrar fails fast within the timeout instead of hanging, and a
+// previous main-queue dispatch still in flight fails immediately
+// instead of queueing behind it (see the main-queue dispatch gate).
+// Real registration behavior is verified in 实测轮 ①.
 func NewHotKeyRegistrar() NativeHotKeyRegistrar {
 	return darwinHotKeyRegistrar{timeout: 2 * time.Second}
 }
@@ -479,15 +583,25 @@ type nativeHotKeyHandle struct {
 }
 
 func (r darwinHotKeyRegistrar) Register(spec HotKeySpec, onTrigger func()) (NativeHotKeyHandle, error) {
+	if err := mainDispatchGate.acquire("hotkey register"); err != nil {
+		return nil, err
+	}
 	id := registryAddHotkey(onTrigger)
 	var ref unsafe.Pointer
 	rc := C.yk_hotkey_register(C.uint32_t(spec.KeyCode), C.uint32_t(spec.Modifiers),
 		C.int64_t(id), C.double(r.timeout.Seconds()), &ref)
+	if rc == -2 {
+		// Timed out: the enqueued registration is still on the main
+		// queue. The binding is dropped now, so a trigger from the late
+		// registration is a counted drop, and the recovery probe owns
+		// the marker until the queue drains.
+		go mainDispatchGate.awaitRecovery(probeMainQueueServed)
+		registryRemoveHotkey(id)
+		return nil, errors.New("macos: main run loop unavailable for hotkey registration")
+	}
+	mainDispatchGate.release() // the marshalled block ran; rc is its outcome
 	if rc != 0 {
 		registryRemoveHotkey(id)
-		if rc == -2 {
-			return nil, errors.New("macos: main run loop unavailable for hotkey registration")
-		}
 		return nil, fmt.Errorf("macos: RegisterEventHotKey failed (status %d)", int(rc))
 	}
 	return nativeHotKeyHandle{ref: ref, id: id}, nil
@@ -498,12 +612,20 @@ func (r darwinHotKeyRegistrar) Unregister(handle NativeHotKeyHandle) error {
 	if !ok || h.ref == nil {
 		return errors.New("macos: unknown native hotkey handle")
 	}
+	if err := mainDispatchGate.acquire("hotkey unregister"); err != nil {
+		return err
+	}
 	rc := C.yk_hotkey_unregister(h.ref, C.double(r.timeout.Seconds()))
 	registryRemoveHotkey(h.id)
+	if rc == -2 {
+		// Timed out: the enqueued unregistration is still on the main
+		// queue; the recovery probe clears the marker once the queue
+		// drains.
+		go mainDispatchGate.awaitRecovery(probeMainQueueServed)
+		return errors.New("macos: main run loop unavailable for hotkey unregistration")
+	}
+	mainDispatchGate.release()
 	if rc != 0 {
-		if rc == -2 {
-			return errors.New("macos: main run loop unavailable for hotkey unregistration")
-		}
 		return fmt.Errorf("macos: UnregisterEventHotKey failed (status %d)", int(rc))
 	}
 	return nil
