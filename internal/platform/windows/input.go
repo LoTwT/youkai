@@ -3,6 +3,7 @@ package windows
 import (
 	"errors"
 	"fmt"
+	"math"
 	"slices"
 	"sync"
 	"time"
@@ -27,13 +28,38 @@ type OpKind string
 
 const (
 	// OpClick: move the cursor to the op point (absolute), then one
-	// button press and release.
+	// button press held for the op's Hold interval, then the release.
 	OpClick OpKind = "click"
 	// OpKeyPress: one key press and release, no cursor motion.
 	OpKeyPress OpKind = "keyPress"
 	// OpScroll: move the cursor to the op point (absolute), then a small
 	// number of wheel steps in one direction.
 	OpScroll OpKind = "scroll"
+	// OpDrag: move to the op point, press, interpolate absolute moves
+	// towards To over Steps steps spanning Duration, then release. The
+	// macOS field round proved drag the workable list-scrolling
+	// primitive for the cloud client; the Windows port vocabulary
+	// mirrors it.
+	OpDrag OpKind = "drag"
+)
+
+// Bounded-input defaults and bounds: the port vocabulary's numbers (PR
+// 4a) mirrored here so the actor behaves like the macOS dispatcher. The
+// actor applies the defaults and enforces the bounds itself, as the
+// final authority.
+const (
+	// DefaultHold is the press-to-release interval of a click whose Hold
+	// is zero; anything above MaxHold is rejected.
+	DefaultHold = 60 * time.Millisecond
+	MaxHold     = 200 * time.Millisecond
+	// DefaultDragSteps is the interpolated move count of a drag whose
+	// Steps is zero; MaxDragSteps bounds it.
+	DefaultDragSteps = 10
+	MaxDragSteps     = 32
+	// DefaultDragDuration is the press-to-release span of a drag whose
+	// Duration is zero; MaxDragDuration bounds it.
+	DefaultDragDuration = 400 * time.Millisecond
+	MaxDragDuration     = 1 * time.Second
 )
 
 // MaxWheelSteps bounds one scroll operation. One step is one wheel
@@ -48,21 +74,34 @@ const MaxInputEventsPerOp = 1 + MaxWheelSteps
 // are meaningful; Validate rejects everything else.
 type InputOp struct {
 	Kind   OpKind
-	Point  PixelPoint  // screen physical pixels; click and scroll
-	Button MouseButton // click
+	Point  PixelPoint  // screen physical pixels; click, scroll and drag press
+	To     PixelPoint  // drag destination; OpDrag only
+	Button MouseButton // click and drag
 	Key    VirtualKey  // keyPress
 	// WheelSteps is the scroll amount in detents, 1..MaxWheelSteps by
 	// magnitude; the sign is the direction (positive scrolls away from
 	// the user, like a standard wheel up).
 	WheelSteps int
+	// Hold is the press-to-release interval of a click; zero takes
+	// DefaultHold, above MaxHold is rejected by Dispatch.
+	Hold time.Duration
+	// Steps is the interpolated move count of a drag; zero takes
+	// DefaultDragSteps, above MaxDragSteps is rejected by Dispatch.
+	Steps int
+	// Duration is the press-to-release span of a drag; zero takes
+	// DefaultDragDuration, above MaxDragDuration is rejected by
+	// Dispatch.
+	Duration time.Duration
 }
 
-// Validate checks the op is one well-formed bounded operation.
+// Validate checks the op is one well-formed bounded operation. Hold,
+// Steps and Duration bounds are enforced in Dispatch, where their
+// defaults apply, not here.
 func (op InputOp) Validate() error {
 	switch op.Kind {
-	case OpClick:
+	case OpClick, OpDrag:
 		if op.Button < MouseButtonLeft || op.Button > MouseButtonMiddle {
-			return fmt.Errorf("click: invalid mouse button %d", op.Button)
+			return fmt.Errorf("%s: invalid mouse button %d", op.Kind, op.Button)
 		}
 		return nil
 	case OpKeyPress:
@@ -88,7 +127,7 @@ func (op InputOp) Validate() error {
 // requires the point checks of the precheck (click and scroll do; a key
 // press does not).
 func (op InputOp) HasPoint() bool {
-	return op.Kind == OpClick || op.Kind == OpScroll
+	return op.Kind == OpClick || op.Kind == OpScroll || op.Kind == OpDrag
 }
 
 // InputRequest is the "short input request" handover category of T2
@@ -141,9 +180,10 @@ type InputEvent struct {
 // ExpandOp turns a validated op into its bounded event list. Click and
 // scroll first move the cursor to the op point with an absolute move —
 // relative motion is never used for positioning because pointer speed
-// settings make it unrepeatable. No inter-event delay is inserted; if a
-// game needs a perceptible hold that is an integration-time decision
-// backed by field evidence, not a platform default.
+// settings make it unrepeatable. The list is the logical expansion; the
+// actor may deliver it in several batches (a click's hold splits it
+// into [move, down], a pause, [up]; a drag interleaves sleeps and step
+// gates between batches).
 func ExpandOp(op InputOp) ([]InputEvent, error) {
 	if err := op.Validate(); err != nil {
 		return nil, err
@@ -155,6 +195,20 @@ func ExpandOp(op InputOp) ([]InputEvent, error) {
 			{Kind: EventMouseDown, Button: op.Button},
 			{Kind: EventMouseUp, Button: op.Button},
 		}, nil
+	case OpDrag:
+		events := make([]InputEvent, 0, 2+MaxDragSteps)
+		events = append(events,
+			InputEvent{Kind: EventMouseMove, Point: op.Point},
+			InputEvent{Kind: EventMouseDown, Button: op.Button})
+		steps := op.Steps
+		if steps == 0 {
+			steps = DefaultDragSteps
+		}
+		for i := 1; i <= steps; i++ {
+			events = append(events, InputEvent{Kind: EventMouseMove, Point: LerpPoint(op.Point, op.To, i, steps)})
+		}
+		events = append(events, InputEvent{Kind: EventMouseUp, Button: op.Button})
+		return events, nil
 	case OpKeyPress:
 		return []InputEvent{
 			{Kind: EventKeyDown, Key: op.Key},
@@ -180,6 +234,26 @@ func ExpandOp(op InputOp) ([]InputEvent, error) {
 	}
 }
 
+// LerpPoint interpolates between a and b by i/steps (0→a, steps→b),
+// rounding half away from zero.
+func LerpPoint(a, b PixelPoint, i, steps int) PixelPoint {
+	return PixelPoint{
+		X: a.X + roundDiv(b.X-a.X, steps, i),
+		Y: a.Y + roundDiv(b.Y-a.Y, steps, i),
+	}
+}
+
+func roundDiv(delta, steps, i int) int {
+	if delta == 0 || i == 0 {
+		return 0
+	}
+	v := float64(delta) * float64(i) / float64(steps)
+	if v < 0 {
+		return int(math.Floor(v - 0.5))
+	}
+	return int(math.Floor(v + 0.5))
+}
+
 // InputState is the dispatch state of one input request.
 type InputState string
 
@@ -193,7 +267,9 @@ const (
 	// effect remains unverified.
 	StateDelivered InputState = "delivered"
 	// StatePartialDelivered: some but not all events were inserted; the
-	// held ledger records whatever is still down.
+	// held ledger records whatever is still down. An aborted drag also
+	// reports this state with Aborted set: its posted events all ran,
+	// but the operation stopped short of its destination.
 	StatePartialDelivered InputState = "partialDelivered"
 	// StateBlocked: SendInput inserted nothing and the system reported
 	// access denial — the shape a UIPI permission mismatch takes. The
@@ -238,6 +314,11 @@ type InputResult struct {
 	State          InputState
 	EventsPlanned  int
 	EventsInserted int
+	// Aborted reports that a drag stopped mid-way because the step gate
+	// (the kernel's input permission) closed: the release was inserted
+	// and the button left the ledger, but the operation did not reach
+	// its destination.
+	Aborted bool
 	// EffectUnverified is always true: SendInput counts insertion into
 	// the system stream, never what the game did with the events.
 	EffectUnverified bool
@@ -279,12 +360,21 @@ type PrecheckFunc func(req InputRequest) error
 // after ClosePermission it never reopens — the kernel's closed-permission
 // semantics, enforced by the platform gate itself.
 //
+// A click holds its press for the op's Hold interval, delivered as two
+// SendInput batches — [move, down], a pause, [up] — so the stop path
+// waits at most one hold. A drag delivers [move, down], then one batch
+// per interpolated move with a step-gate check between steps, then [up];
+// a closed gate aborts the drag with the release inserted and Aborted
+// set, so a stop waits at most one step interval.
+//
 // The actor is pure logic over the injected Sender and PrecheckFunc; the
 // Win32 wiring is in the //go:build windows files.
 type InputActor struct {
 	mu          sync.Mutex
 	send        Sender
 	precheck    PrecheckFunc
+	sleep       func(time.Duration)
+	stepGate    func() bool
 	permitted   bool
 	closed      bool
 	closeReason string
@@ -293,11 +383,43 @@ type InputActor struct {
 	// blindly re-sends.
 	blocked bool
 	held    []HeldKey
+	// lastPostAt is when the last event insertion succeeded; zero when
+	// nothing was ever inserted.
+	lastPostAt time.Time
 }
 
 // NewInputActor builds an actor in the closed, unpermitted state.
 func NewInputActor(send Sender, precheck PrecheckFunc) *InputActor {
-	return &InputActor{send: send, precheck: precheck}
+	return &InputActor{send: send, precheck: precheck, sleep: time.Sleep}
+}
+
+// SetSleep installs the sleep used between a click's press and release
+// and between a drag's steps. It exists for tests; the default is
+// time.Sleep.
+func (a *InputActor) SetSleep(sleep func(time.Duration)) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if sleep != nil {
+		a.sleep = sleep
+	}
+}
+
+// SetStepGate installs the gate honored between a drag's steps: when it
+// reports false the drag aborts — the release is inserted, Aborted set —
+// so a stop waits at most one step interval. The hook must be fast and
+// must not call back into the actor.
+func (a *InputActor) SetStepGate(gate func() bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.stepGate = gate
+}
+
+// LastPostAt returns when the last event insertion succeeded; the zero
+// time when nothing was ever inserted.
+func (a *InputActor) LastPostAt() time.Time {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.lastPostAt
 }
 
 // Permit opens input permission for dispatching normal operations. It is
@@ -338,7 +460,9 @@ func (a *InputActor) Closed() bool {
 
 // Dispatch executes one bounded operation. The result distinguishes
 // not-dispatched, delivered, partial delivery with counts, the blocked
-// shape and failure; it never claims a game action succeeded.
+// shape and failure; it never claims a game action succeeded. A click
+// and a drag hold their press, so the whole operation spans several
+// SendInput batches under the actor's serial section.
 func (a *InputActor) Dispatch(req InputRequest) InputResult {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -347,6 +471,36 @@ func (a *InputActor) Dispatch(req InputRequest) InputResult {
 	if err := req.Op.Validate(); err != nil {
 		res.State = StateNotDispatched
 		res.Err = err
+		return res
+	}
+	// A click's hold and a drag's steps and duration take their defaults
+	// here and are bounded here; an out-of-bounds request never reaches
+	// the sender.
+	hold := req.Op.Hold
+	if hold == 0 {
+		hold = DefaultHold
+	}
+	if hold < 0 || hold > MaxHold {
+		res.State = StateNotDispatched
+		res.Err = fmt.Errorf("click hold %s outside 0..%s", req.Op.Hold, MaxHold)
+		return res
+	}
+	steps := req.Op.Steps
+	if steps == 0 {
+		steps = DefaultDragSteps
+	}
+	if steps < 0 || steps > MaxDragSteps {
+		res.State = StateNotDispatched
+		res.Err = fmt.Errorf("drag steps %d outside 0..%d", req.Op.Steps, MaxDragSteps)
+		return res
+	}
+	dur := req.Op.Duration
+	if dur == 0 {
+		dur = DefaultDragDuration
+	}
+	if dur < 0 || dur > MaxDragDuration {
+		res.State = StateNotDispatched
+		res.Err = fmt.Errorf("drag duration %s outside 0..%s", req.Op.Duration, MaxDragDuration)
 		return res
 	}
 	if a.blocked {
@@ -370,47 +524,120 @@ func (a *InputActor) Dispatch(req InputRequest) InputResult {
 			return res
 		}
 	}
-	events, err := ExpandOp(req.Op)
-	if err != nil {
+
+	// sendBatch inserts one batch, folding its accepted prefix into the
+	// ledger and the counters; blockedSeen marks the UIPI shape.
+	blockedSeen := false
+	sendBatch := func(events []InputEvent) bool {
+		if len(events) == 0 {
+			return true
+		}
+		accepted, blocked, err := a.send.SendInput(events)
+		res.EventsPlanned += len(events)
+		res.EventsInserted += accepted
+		if accepted > 0 {
+			a.lastPostAt = time.Now()
+		}
+		switch {
+		case blocked:
+			blockedSeen = true
+			a.blocked = true
+			res.Err = NewFault(CodeInputBlocked,
+				"SendInput inserted no events and the system reported access denial; the target likely runs at a higher privilege level (UIPI)",
+				nil, PhaseDispatch, time.Now(), 0)
+			applyHeld(events[:accepted], &a.held)
+			return false
+		case accepted < len(events):
+			applyHeld(events[:accepted], &a.held)
+			if err != nil && res.Err == nil {
+				res.Err = err
+			}
+			return false
+		default:
+			applyHeld(events, &a.held)
+			return true
+		}
+	}
+
+	pressDown := func(op InputOp) bool {
+		return sendBatch([]InputEvent{
+			{Kind: EventMouseMove, Point: op.Point},
+			{Kind: EventMouseDown, Button: op.Button},
+		})
+	}
+	releaseUp := func(op InputOp) {
+		sendBatch([]InputEvent{{Kind: EventMouseUp, Button: op.Button}})
+	}
+
+	switch req.Op.Kind {
+	case OpClick:
+		// [move, down], a hold, [up]: the press stays observable by a
+		// game sampling input once per frame, and a stop waits at most
+		// one hold.
+		if !pressDown(req.Op) {
+			break
+		}
+		a.sleep(hold)
+		releaseUp(req.Op)
+	case OpDrag:
+		if !pressDown(req.Op) {
+			break
+		}
+		interval := dur / time.Duration(steps)
+		for i := 1; i <= steps; i++ {
+			a.sleep(interval)
+			if a.stepGate != nil && !a.stepGate() {
+				res.Aborted = true
+				break
+			}
+			if !sendBatch([]InputEvent{{Kind: EventMouseMove, Point: LerpPoint(req.Op.Point, req.Op.To, i, steps)}}) {
+				break
+			}
+		}
+		if !res.Aborted {
+			a.sleep(interval)
+		}
+		releaseUp(req.Op)
+	case OpKeyPress:
+		events, err := ExpandOp(req.Op)
+		if err != nil {
+			res.State = StateNotDispatched
+			res.Err = err
+			return res
+		}
+		sendBatch(events)
+	case OpScroll:
+		events, err := ExpandOp(req.Op)
+		if err != nil {
+			res.State = StateNotDispatched
+			res.Err = err
+			return res
+		}
+		sendBatch(events)
+	default:
 		res.State = StateNotDispatched
-		res.Err = err
+		res.Err = fmt.Errorf("unknown input op kind %q", req.Op.Kind)
 		return res
 	}
-	res.EventsPlanned = len(events)
 
-	accepted, blocked, err := a.send.SendInput(events)
-	res.EventsInserted = accepted
 	switch {
-	case blocked:
-		// Zero events, access denied: the UIPI shape. Refuse everything
-		// further instead of retrying or elevating.
-		a.blocked = true
+	case blockedSeen:
 		res.State = StateBlocked
-		res.Err = NewFault(CodeInputBlocked,
-			"SendInput inserted no events and the system reported access denial; the target likely runs at a higher privilege level (UIPI)",
-			nil, PhaseDispatch, time.Now(), 0)
-	case accepted == 0:
+	case res.Aborted:
+		// The posted events all ran, but the drag stopped short of its
+		// destination: partial is the honest state.
+		res.State = StatePartialDelivered
+	case res.EventsInserted >= res.EventsPlanned && res.EventsPlanned > 0:
+		res.State = StateDelivered
+	case res.EventsInserted == 0:
 		res.State = StateFailed
-		if err == nil {
+		if res.Err == nil {
 			res.Err = NewFault(CodeInputFailed,
 				"SendInput inserted no events and reported no error; input may be blocked by UIPI or another thread",
 				nil, PhaseDispatch, time.Now(), 0)
-		} else {
-			res.Err = NewFault(CodeInputFailed, "SendInput failed", err, PhaseDispatch, time.Now(), 0)
 		}
-	case accepted >= len(events):
-		res.State = StateDelivered
-		// A full delivery contains each down and its up, so the ledger is
-		// unchanged.
 	default:
-		// 0 < accepted < len: a prefix of the events was inserted; ledger
-		// every down of the prefix that has no up in it. A sender note
-		// (when there is one) survives into the result.
 		res.State = StatePartialDelivered
-		if err != nil {
-			res.Err = err
-		}
-		a.applyHeld(events[:accepted])
 	}
 	res.HeldAfter = slices.Clone(a.held)
 	return res
@@ -418,29 +645,29 @@ func (a *InputActor) Dispatch(req InputRequest) InputResult {
 
 // applyHeld folds a prefix of inserted events into the held ledger: a
 // down whose up is not in the prefix leaves the key or button held.
-func (a *InputActor) applyHeld(prefix []InputEvent) {
+func applyHeld(prefix []InputEvent, held *[]HeldKey) {
 	for _, ev := range prefix {
 		switch ev.Kind {
 		case EventMouseDown:
-			a.addHeld(HeldKey{IsButton: true, Button: ev.Button})
+			addHeld(held, HeldKey{IsButton: true, Button: ev.Button})
 		case EventMouseUp:
-			a.removeHeld(HeldKey{IsButton: true, Button: ev.Button})
+			removeHeld(held, HeldKey{IsButton: true, Button: ev.Button})
 		case EventKeyDown:
-			a.addHeld(HeldKey{Key: ev.Key})
+			addHeld(held, HeldKey{Key: ev.Key})
 		case EventKeyUp:
-			a.removeHeld(HeldKey{Key: ev.Key})
+			removeHeld(held, HeldKey{Key: ev.Key})
 		}
 	}
 }
 
-func (a *InputActor) addHeld(k HeldKey) {
-	if !slices.Contains(a.held, k) {
-		a.held = append(a.held, k)
+func addHeld(held *[]HeldKey, k HeldKey) {
+	if !slices.Contains(*held, k) {
+		*held = append(*held, k)
 	}
 }
 
-func (a *InputActor) removeHeld(k HeldKey) {
-	a.held = slices.DeleteFunc(a.held, func(h HeldKey) bool { return h == k })
+func removeHeld(held *[]HeldKey, k HeldKey) {
+	*held = slices.DeleteFunc(*held, func(h HeldKey) bool { return h == k })
 }
 
 // Held snapshots the currently ledgered keys/buttons.
