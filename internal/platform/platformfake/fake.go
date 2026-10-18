@@ -267,6 +267,16 @@ func (s *Session) TriggerFault(f *platform.Fault) {
 	s.OnFault(f)
 }
 
+// HotkeyCallback returns the captured OnStop wiring — the controller's
+// wrapped stop entry — so a test can invoke it directly, bypassing this
+// fake's own closed guard and probing the caller's late-trigger
+// protection.
+func (s *Session) HotkeyCallback() func() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.OnStop
+}
+
 // Counters reports the call recordings.
 func (s *Session) Counters() (observe, lock, frames, dispatch, close int) {
 	s.mu.Lock()
