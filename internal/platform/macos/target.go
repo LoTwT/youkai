@@ -183,3 +183,82 @@ func SelectProcessWindows(selector WindowSelector, windows []NativeWindow) []Nat
 	}
 	return out
 }
+
+// Target candidate filtering (实测轮 ①): the cloud client's process owns
+// several small layer-0 windows besides the real one (four 33 pt strips
+// and a 500×500 untitled overlay), so "any same-process window means
+// ambiguity" — the rule AssessTarget applies — would misjudge every
+// observation. Resolution instead passes each window through a predicate
+// and demands that exactly one survivor remains; the same predicate, with
+// the selected window itself excluded, decides which siblings count as
+// ambiguity sources on later observations.
+
+// candidateEdgeEpsilon is the slack, in points, when testing that a
+// window frame lies fully inside a display: window and display frames
+// come from the same enumeration snapshot but may differ by sub-point
+// rounding between the two sources.
+const candidateEdgeEpsilon = 0.01
+
+// WindowFullyInsideDisplays reports whether frame lies completely inside
+// one of the displays (allowing the epsilon above on every edge). A
+// window that only overlaps a display, or straddles two, fails.
+func WindowFullyInsideDisplays(frame PointRect, displays []NativeDisplay) bool {
+	for _, d := range displays {
+		if frame.X >= d.Frame.X-candidateEdgeEpsilon &&
+			frame.Y >= d.Frame.Y-candidateEdgeEpsilon &&
+			frame.MaxX() <= d.Frame.MaxX()+candidateEdgeEpsilon &&
+			frame.MaxY() <= d.Frame.MaxY()+candidateEdgeEpsilon {
+			return true
+		}
+	}
+	return false
+}
+
+// IsTargetCandidate reports whether w passes the target-resolution
+// predicate: it belongs to bundleID, sits in the normal window layer
+// (0), is on screen, and lies fully inside one display. Layer, onScreen
+// and in-display each exclude a class of windows the field round ①
+// observed around the cloud client (system overlays, minimized or parked
+// windows, partially dragged-off windows); the predicate is a resolution
+// rule, not a health report — a healthy window that fails it is simply
+// not a resolvable target right now.
+func IsTargetCandidate(bundleID string, w NativeWindow, displays []NativeDisplay) bool {
+	if w.BundleID != bundleID || w.Layer != 0 || !w.OnScreen {
+		return false
+	}
+	return WindowFullyInsideDisplays(w.Frame, displays)
+}
+
+// FilterTargetCandidates returns the windows of bundleID that pass the
+// candidate predicate, in enumeration order. A fresh session must find
+// exactly one survivor to lock; the caller reports zero and multi-window
+// outcomes (it owns the diagnostic vocabulary).
+func FilterTargetCandidates(bundleID string, windows []NativeWindow, displays []NativeDisplay) []NativeWindow {
+	var out []NativeWindow
+	for _, w := range windows {
+		if IsTargetCandidate(bundleID, w, displays) {
+			out = append(out, w)
+		}
+	}
+	return out
+}
+
+// FilterAmbiguitySiblings returns the windows of the locked process that
+// pass the candidate predicate, excluding the selected window itself.
+// Only these count as ambiguity sources when re-assessing a locked
+// target: the selected window's own state (minimized, dragged half off a
+// display) is the target's problem, not ambiguity, and same-process
+// windows that fail the predicate are not resolvable targets and must
+// not block input to the locked one.
+func FilterAmbiguitySiblings(selector WindowSelector, windows []NativeWindow, displays []NativeDisplay) []NativeWindow {
+	var out []NativeWindow
+	for _, w := range windows {
+		if !selector.SameProcess(w) || selector.Matches(w) {
+			continue
+		}
+		if IsTargetCandidate(selector.BundleID, w, displays) {
+			out = append(out, w)
+		}
+	}
+	return out
+}
