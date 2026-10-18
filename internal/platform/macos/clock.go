@@ -26,8 +26,11 @@ type MachTimebase struct {
 	Numer, Denom uint32
 }
 
-// Identity is the timebase of Apple Silicon (and of any host whose tick
-// rate is already nanoseconds).
+// Identity is a test-convenience fake (one tick equals one nanosecond)
+// and describes no real host: Apple Silicon hosts report 125/3 (as
+// measured on the 实测轮 ① machine; see
+// docs/reports/2026-10-18-m2-macos-field-round1.md), and the darwin
+// bridge always reads the live fraction from mach_timebase_info.
 var MachTimebaseIdentity = MachTimebase{Numer: 1, Denom: 1}
 
 // MachClockSource supplies the raw native clock facts. The darwin

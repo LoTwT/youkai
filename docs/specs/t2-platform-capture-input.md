@@ -1,6 +1,6 @@
 # T2：平台采集与输入评估
 
-更新日期：2026-10-18。状态：首版两平台、三种客户端范围已由用户确认，Windows 首版显示配置已定（1920×1080，见第 3.2 节）；技术方案为建议，尚无截图、输入或游戏实测。本文只维护平台专项，公共模块与会话契约以[架构](scanner-architecture.md)为准。
+更新日期：2026-10-18。状态：首版两平台、三种客户端范围已由用户确认，Windows 首版显示配置已定（1920×1080，见第 3.2 节）；两平台底座已实现（见 2.1、2.2 实现状态），macOS 云客户端已完成实测轮 ①——采集与输入验证通过（见[M2 macOS 实测轮 ① 报告](../reports/2026-10-18-m2-macos-field-round1.md)），Windows 实测轮 ② 待做。本文只维护平台专项，公共模块与会话契约以[架构](scanner-architecture.md)为准。
 
 ## 1. 已有约束与当前问题
 
@@ -63,7 +63,7 @@ T2 负责目标窗口身份、采集、坐标、短输入、平台故障和原�
 | 窗口身份 | `SCWindow` 提供 windowID、frame、owningApplication、isOnScreen；所属应用提供 bundleIdentifier 与 processID。[SCWindow](https://developer.apple.com/documentation/screencapturekit/scwindow) | 锁定 bundle 身份、进程实例与 windowID；名称只作显示。App Store 包装、真正渲染进程、登录窗与游戏窗的关系须实机记录，不预填猜测的 bundle ID。 |
 | 前台 | `NSWorkspace.frontmostApplication` 表示接收键事件的应用；SDK 特别说明 Stage Manager 下 `SCWindow.isActive` 可在窗口不在屏幕上时仍为真。[前台应用](https://developer.apple.com/documentation/appkit/nsworkspace/frontmostapplication) · [isActive](https://developer.apple.com/documentation/screencapturekit/scwindow/isactive) | 前台 PID 相符不等于目标游戏窗就绪。检查屏幕内可见性与窗口歧义；必要时读取 AXFocusedWindow 的角色、位置、尺寸，不能仅用应用名称或 isActive 放行。AX 查询失败/超时或无法唯一对应目标时拒绝输入，不用私有窗口 ID API 补洞。 |
 | 采集 | 单窗口过滤、流回调与帧附件均有官方示例；帧可携带状态、显示时间、contentRect、contentScale、scaleFactor。[示例](https://developer.apple.com/documentation/screencapturekit/capturing-screen-content-in-macos) · [帧信息](https://developer.apple.com/documentation/screencapturekit/scstreamframeinfo) | 配置明确的小型原生帧队列和有界交接；只把有效状态及图像交给内核。窗口流能取得图像不证明窗口可点击，更不表示云视频内容在前进。 |
-| 输入 | `CGEventCreateMouseEvent` 接受全局坐标；键盘和滚轮有独立创建函数，`CGEventPost` 投递到事件流且无游戏确认返回值。SDK 提供 `CGPreflightPostEventAccess` 查询事件合成权限。[Quartz 投递](https://developer.apple.com/documentation/coregraphics/cgevent/post(tap:)) · [预检](https://developer.apple.com/documentation/coregraphics/cgpreflightposteventaccess()) | 按目标就绪与输入许可串行投递短操作。鼠标落点、按键映射、滚轮方向/单位以及云应用是否接受事件均待实测；不把 Windows 的一个滚轮刻度直接当作同样的列表位移。 |
+| 输入 | `CGEventCreateMouseEvent` 接受全局坐标；键盘和滚轮有独立创建函数，`CGEventPost` 投递到事件流且无游戏确认返回值。SDK 提供 `CGPreflightPostEventAccess` 查询事件合成权限。[Quartz 投递](https://developer.apple.com/documentation/coregraphics/cgevent/post(tap:)) · [预检](https://developer.apple.com/documentation/coregraphics/cgpreflightposteventaccess()) | 按目标就绪与输入许可串行投递短操作。macOS 云客户端已实测（实测轮 ①）：绝对位移、点击与拖拽均有效；**合成滚轮事件被客户端忽略**，遍历列表滚动必须走拖拽（按下→插值移动→抬起，已实测产生列表滚动）。Windows 的落点、按键映射与滚轮行为仍待实测；不把 Windows 的一个滚轮刻度直接当作同样的列表位移。 |
 | 录屏授权 | 官方示例要求 Screen Recording 权限；示例说明首次授权后需重启应用才能采集。[示例](https://developer.apple.com/documentation/screencapturekit/capturing-screen-content-in-macos) | 预检录屏权限，并以枚举/启动流和首个有效画面的实际结果判断可用。授权、重启和不同系统版本的提示行为均纳入安装后验收；没有固定“点了允许立即成功”的承诺。 |
 | 辅助功能与输入授权 | Apple 工程师说明事件投递需要用户明确授予辅助功能权限；`AXIsProcessTrustedWithOptions` 查询信任，异步提示不改变当前返回值。[Apple 工程师说明](https://developer.apple.com/forums/thread/103992) · [AX 查询](https://developer.apple.com/documentation/applicationservices/1459186-axisprocesstrustedwithoptions) · [用户授权说明](https://support.apple.com/guide/mac-help/mh43185/mac) | 分别检查 AX 信任与事件合成能力；录屏已获准不能代替输入授权。请求必须由明确的用户操作发起，之后重新查询。监听输入与合成输入是不同能力，不先要求 Input Monitoring。 |
 | 应用沙箱 | Apple 当前文档将辅助应用使用 Accessibility API 列为 App Sandbox 限制。[App Sandbox 限制](https://developer.apple.com/documentation/security/protecting-user-data-with-app-sandbox) | 当前 AX 路径建议按非 App Sandbox 的普通 DMG 应用核对，签名/公证另交 T1/T7；DMG 格式本身不证明未启用沙箱。游戏来自 App Store 不代表扫描器也必须进入 App Sandbox；签名不代替 TCC 授权。 |
@@ -75,6 +75,8 @@ T2 负责目标窗口身份、采集、坐标、短输入、平台故障和原�
 AppKit 相关操作交由应用已有的主线程调度，帧回调用单独串行队列；停止流使用异步完成回调，不能在主线程等扫描 goroutine、也不能持服务锁同步等待主线程。原生停止完成且在途回调处理妥当后才释放资源；旧流/旧会话回调必须能被拒绝。不增加独立 Swift 辅助应用或另一套 UI。
 
 **macOS 实现状态（2026-10-18）：**本节方案的最小实现已落地在 `internal/platform/macos`（M2 平台底座 PR，未接入扫描内核/适配器/UI）：SCShareableContent 枚举与 bundle+PID+windowID 身份锁定（同名/替换窗口判歧义）、desktopIndependentWindow 单窗口流（仅图像、BGRA、帧回调独立串行队列并在回调内显式复制像素为 Go 自有图像、有界最新帧缓存、异步停止并区分“已请求/原生已停/回调已排空/已释放”、迟到回调计数拒绝）、SCFrameStatus 与 displayTime 的 mach→Go 单调时间锚定转换、AX 信任（不弹授权）与事件合成预检及基于实际枚举/启动流结果的录屏可用性判定、Quartz 短输入串行派发（未派发/部分/已投递三态如实表达 CGEventPost 无确认返回值、自身按下的键鼠单独记账并在停止时尝试释放且失败如实记录）、前台 PID + 屏幕内可见性 + AXFocusedWindow（有限超时、失败即拒绝）的就绪核验、点/像素与 contentRect/contentScale/scaleFactor 的单位建模及几何版本化（旧版本坐标拒绝输入）、Carbon RegisterEventHotKey 全局停止热键（在主线程注册、经宿主应用主 run loop 派发、无 run loop 时限期失败而非挂起、注册失败上报）。几何/缓存/竞争/权限映射/热键生命周期的纯逻辑有单元测试并随双平台 CI 运行；需要真实原生环境的路径（实际 SCStream 出帧与附件、CGEvent 送达游戏、AX 实窗查询、热键触发且不抢焦点、权限授予/撤回行为）不写假装通过的测试，留实测轮 ① 验证。该包自包含、不定义跨平台共享接口；Windows 侧由并行 PR 实现，统一集成接口由后续 PR 裁定。
+
+**macOS 实测轮 ① 结论（2026-10-18）：**平台底座已在真实云客户端（macOS 26）上验证，采集与输入所需的平台能力全部通过，完整证据见[实测轮 ① 报告](../reports/2026-10-18-m2-macos-field-round1.md)。对本文有约束力的实测事实：窗口位置每次启动漂移（级联+用户拖动），窗口身份须每次会话按 bundle + layer 0 + onScreen + 完整在屏内重新解析，过滤后必须唯一；rect 附件（contentRect/screenRect）在 macOS 26 以 NSDictionary{X,Y,Width,Height}（NSNumber）到达而非 Apple 示例暗示的 NSValue(CGRect)，平台已兼容两种形态、未知形态按无附件处理并记录；`SCWindow.isOnScreen` 须观测进程初始化 AppKit 后才有意义（未初始化时全 false 为伪象），`isActive` 多应用可同时为真、仅作观测不作前台依据；AX 系统级焦点窗口查询在本机恒返 AXError -25205（辅助功能已信任仍如此），平台的可选输入、失败即拒绝（fail-closed）设计维持，前台证据用 `NSWorkspace.frontmostApplication`；SCStream 在未初始化 AppKit 的进程创建会触发 CGS_REQUIRE_INIT 断言（真实 NSApplication 应用不受影响，开发工具须先 NSApplicationLoad）；合成滚轮被云客户端忽略，遍历列表滚动必须走拖拽（点击默认 ≥50–80ms 按下→抬起间隔，kCGMouseEventClickState 未设置、集成时考虑）；云客户端长时间空闲自动退出，空闲等待必须有界；退出路径的 dwell 要求见第 5 节。全局停止热键维持已定方案：仅扫描期间注册、可自定义，实测注册/注销全程不抢焦点。
 
 ### 2.3 API 可用版本不等于产品下限
 
@@ -181,7 +183,7 @@ Mac 先在现有设备上检查客户端提供的显示或窗口选项，选取�
 | 隐藏本身不中断，进度不激活窗口 | Hide/托盘更新不能触发主窗激活、自动弹进度窗或关闭必要消息循环。窗口流能继续出图不允许忽略游戏失焦/遮挡；Windows 的前台和可见标记同样不证明没有置顶覆盖层。 |
 | 用户恢复可交互主窗，先关许可再显示，停止本次采集并收尾 | 主窗显示/激活必须排在关闭许可之后。此时仍可异步显示收尾状态；不能把“已请求停止”显示成全部资源已释放。没有自动续扫。 |
 | 用户先点托盘/关闭按钮已经导致失焦 | OS 可能在菜单回调或 OnClose 执行前就改变焦点；此时按已有失焦走停止。再次 Hide 不能把正在收尾的会话救回，关窗偏好不覆盖已经发生的停止原因。 |
-| 明确退出/⌘Q 优先于关窗偏好 | 先关闭许可，再统一异步停止/保存；回调快速返回，不阻塞 UI 主线程等采集/OCR。正常退出可等待清理，进程崩溃、强制退出与系统关机不是同等级可保证的路径。 |
+| 明确退出/⌘Q 优先于关窗偏好 | 先关闭许可，再统一异步停止/保存；回调快速返回，不阻塞 UI 主线程等采集/OCR。正常退出可等待清理，进程崩溃、强制退出与系统关机不是同等级可保证的路径。**退出路径集成要求（实测轮 ①）**：最后一次释放事件后停留 ~50ms 或做一次同步 WindowServer 调用再退出——`CGEventPost` 无确认语义，进程立即退出可能丢失在途释放事件（键/鼠标卡在按下态；驱动侧复现，见报告）。 |
 
 “前台”还不等于“无遮挡”：Windows 的 `WindowFromPoint` 可辅助检查落点所属窗口，但它忽略隐藏/禁用窗口，并非全图无遮挡证明；macOS 的独立窗口流可能绕过其他窗口的遮挡。建议结合窗口叠放/相交检查与 T5 的当前页面证据，发现未知遮挡时拒绝输入，并实测置顶悬浮窗/系统提示等反例。[点命中限制](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-windowfrompoint)
 
@@ -203,7 +205,7 @@ Mac 先在现有设备上检查客户端提供的显示或窗口选项，选取�
 
 ## 7. 后续验收清单
 
-以下随正式功能完成，尚未运行。测试替身只验证纯逻辑。
+以下随正式功能完成。macOS 侧部分条目已由实测轮 ①（2026-10-18，见[M2 macOS 实测轮 ① 报告](../reports/2026-10-18-m2-macos-field-round1.md)）覆盖并逐项标注；其余尚未运行，测试替身只验证纯逻辑。
 
 ### 不运行游戏的检查
 
@@ -226,12 +228,12 @@ Mac 先在现有设备上检查客户端提供的显示或窗口选项，选取�
 
 ### Apple Silicon macOS 实机
 
-- 使用用户确认的 App Store 云绝区零应用，记录应用/系统版本和真实窗口身份；从目标窗口得到可核验图像，实测点、输出像素、有效视频区域和一次安全操作的对应关系。
-- 分别验证录屏/辅助功能拒绝、授予、撤回、应用重启后的行为；检查事件合成预检与真实投递效果。以最终 app bundle 及安装方式验收，不能把终端/开发启动进程获得的权限当发行版已获准。
-- 覆盖普通窗口、选定显示缩放及其不支持变体、窗口拖动、Space/Stage Manager 切换、遮挡、同应用弹窗、最小化、锁屏/休眠；继续出图也不能掩盖输入前提失效。
-- 核对原生全局停止入口、菜单栏菜单、主窗恢复、关窗和 ⌘Q；停止期间继续显示收尾状态，采集流回调结束后释放资源，连续启停无累积原生资源增长。
-- **云端必验：**静态页面、低帧率、视频延迟、客户端仍动画但游戏图像不变、断流/排队/重连、点击晚生效、视频区域或画质变化。已投递动作未证实就不继续导航，重连不自动续扫。
-- 与 Windows 一样，用人工核对的固定库存完成真实扫描、证据保存、校对及架构规定的结果交付，核对逐项出现次数与导航证据；只有 UI 可打开、能截一帧或能点一次均不算闭环完成。实体与字段采用架构第 6 节的范围。
+- 使用用户确认的 App Store 云绝区零应用，记录应用/系统版本和真实窗口身份；从目标窗口得到可核验图像，实测点、输出像素、有效视频区域和一次安全操作的对应关系。（实测轮 ① 已覆盖前半：应用/系统版本、窗口身份、~56fps 可核验图像、点/像素/输出几何（surface/scaleFactor/contentScale/contentRect 自洽，右侧黑边与顶部标题条已量出）与安全点击/拖拽的对应已记录；视频有效区域与布局的精确测绘归实施清单 M2 第 1 项。）
+- 分别验证录屏/辅助功能拒绝、授予、撤回、应用重启后的行为；检查事件合成预检与真实投递效果。以最终 app bundle 及安装方式验收，不能把终端/开发启动进程获得的权限当发行版已获准。（未覆盖：本轮三项权限已就位（TCC 归属宿主应用），首次授权弹窗流程未观察到；事件合成预检与真实投递效果已实测通过。权限授予/拒绝/撤回与重启行为留安装版验收。）
+- 覆盖普通窗口、选定显示缩放及其不支持变体、窗口拖动、Space/Stage Manager 切换、遮挡、同应用弹窗、最小化、锁屏/休眠；继续出图也不能掩盖输入前提失效。（未覆盖：本轮仅普通窗口形态；窗口位置漂移已记录并要求每会话重新解析。其余变体留后续实测。）
+- 核对原生全局停止入口、菜单栏菜单、主窗恢复、关窗和 ⌘Q；停止期间继续显示收尾状态，采集流回调结束后释放资源，连续启停无累积原生资源增长。（部分覆盖：全局热键 ⌃⌥⌘S 实测触发、注销干净、不抢焦点；停止→排空→释放完整，8 轮采集（跨进程）均如此。菜单栏/主窗恢复/关窗/⌘Q、收尾状态显示与同进程连续启停的资源核查属应用集成（M2/M3），退出路径 dwell 要求见第 5 节。）
+- **云端必验：**静态页面、低帧率、视频延迟、客户端仍动画但游戏图像不变、断流/排队/重连、点击晚生效、视频区域或画质变化。已投递动作未证实就不继续导航，重连不自动续扫。（未覆盖：本轮仅正常网络与正常帧率；另有运维事实——云客户端长时间空闲自动退出，空闲等待必须有界。）
+- 与 Windows 一样，用人工核对的固定库存完成真实扫描、证据保存、校对及架构规定的结果交付，核对逐项出现次数与导航证据；只有 UI 可打开、能截一帧或能点一次均不算闭环完成。实体与字段采用架构第 6 节的范围。（未覆盖：扫描闭环属 M2 后续；下一轮自动化采样 20–30 件与 9 个中文名复核。）
 
 双平台验收记录至少包含支持配置、应用与依赖版本、截图与坐标证据、输入与停止日志、失败原因、原生资源与进程总内存观测。稳定性与耗时预算由架构统一。
 

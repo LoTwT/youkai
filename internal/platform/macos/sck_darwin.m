@@ -211,6 +211,49 @@ void yk_free_enumeration(YKWindow *windows, YKDisplay *displays) {
 	                  error != nil ? (char *)error.localizedDescription.UTF8String : NULL);
 }
 
+// Rect attachments have been observed in two shapes: an NSValue
+// wrapping a CGRect, and an NSDictionary with X/Y/Width/Height
+// NSNumber entries (observed on macOS 26 in the M2 field test). Both
+// are accepted; anything else counts as "no attachment" instead of
+// throwing. yk_rect_shape_reported prints an unrecognized shape's
+// description once per process so field runs can record it.
+static bool yk_rect_shape_reported = false;
+static bool yk_rect_from_attachment(CFTypeRef value, CGRect *out) {
+	if (value == NULL) return false;
+	id obj = (__bridge id)value;
+	if ([obj isKindOfClass:[NSValue class]]) {
+		NSValue *v = (NSValue *)obj;
+		if (strcmp(v.objCType, @encode(CGRect)) == 0) {
+			*out = v.rectValue;
+			return true;
+		}
+		return false;
+	}
+	if ([obj isKindOfClass:[NSDictionary class]]) {
+		NSDictionary *d = (NSDictionary *)obj;
+		NSNumber *x = d[@"X"];
+		NSNumber *y = d[@"Y"];
+		NSNumber *w = d[@"Width"];
+		NSNumber *h = d[@"Height"];
+		if (x == nil || y == nil || w == nil || h == nil) {
+			if (!yk_rect_shape_reported) {
+				yk_rect_shape_reported = true;
+				fprintf(stderr, "fieldprobe: rect attachment dictionary without X/Y/Width/Height: %s\n",
+				        d.description.UTF8String);
+			}
+			return false;
+		}
+		*out = CGRectMake(x.doubleValue, y.doubleValue, w.doubleValue, h.doubleValue);
+		return true;
+	}
+	if (!yk_rect_shape_reported) {
+		yk_rect_shape_reported = true;
+		fprintf(stderr, "fieldprobe: unrecognized rect attachment of class %s: %s\n",
+		        object_getClassName(obj), [obj description].UTF8String);
+	}
+	return false;
+}
+
 // stream:didOutputSampleBuffer:ofType: extracts the frame status,
 // display time and geometry attachments, then calls Go while the
 // pixel buffer is locked so Go can copy the pixels.
@@ -264,31 +307,30 @@ void yk_free_enumeration(YKWindow *windows, YKDisplay *displays) {
 					geo.scaleFactor = value;
 				}
 			}
-			// Content and screen rects arrive as NSValue-wrapped CGRects
-			// (as in Apple's capture sample). objCType distinguishes a
-			// rect value from point/size values; rectValue is the
-			// modern accessor for a CGRect (NSRect) value.
-			NSValue *contentRect = (__bridge NSValue *)CFDictionaryGetValue(
-			    info, (__bridge CFStringRef)SCStreamFrameInfoContentRect);
-			if (contentRect != nil &&
-			    strcmp(contentRect.objCType, @encode(CGRect)) == 0) {
-				CGRect r = contentRect.rectValue;
-				geo.hasContentRect = true;
-				geo.contentX = r.origin.x;
-				geo.contentY = r.origin.y;
-				geo.contentW = r.size.width;
-				geo.contentH = r.size.height;
-			}
-			NSValue *screenRect = (__bridge NSValue *)CFDictionaryGetValue(
-			    info, (__bridge CFStringRef)SCStreamFrameInfoScreenRect);
-			if (screenRect != nil &&
-			    strcmp(screenRect.objCType, @encode(CGRect)) == 0) {
-				CGRect r = screenRect.rectValue;
-				geo.hasScreenRect = true;
-				geo.screenX = r.origin.x;
-				geo.screenY = r.origin.y;
-				geo.screenW = r.size.width;
-				geo.screenH = r.size.height;
+			// Rect attachments must not kill the frame callback when the
+			// system delivers an unexpected shape; the numbers above stay
+			// valid and the rects simply count as absent.
+			@try {
+				CGRect r;
+				if (yk_rect_from_attachment(
+				        CFDictionaryGetValue(info, (__bridge CFStringRef)SCStreamFrameInfoContentRect), &r)) {
+					geo.hasContentRect = true;
+					geo.contentX = r.origin.x;
+					geo.contentY = r.origin.y;
+					geo.contentW = r.size.width;
+					geo.contentH = r.size.height;
+				}
+				if (yk_rect_from_attachment(
+				        CFDictionaryGetValue(info, (__bridge CFStringRef)SCStreamFrameInfoScreenRect), &r)) {
+					geo.hasScreenRect = true;
+					geo.screenX = r.origin.x;
+					geo.screenY = r.origin.y;
+					geo.screenW = r.size.width;
+					geo.screenH = r.size.height;
+				}
+			} @catch (NSException *e) {
+				geo.hasContentRect = false;
+				geo.hasScreenRect = false;
 			}
 		}
 	}
