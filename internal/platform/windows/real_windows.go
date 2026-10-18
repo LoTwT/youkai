@@ -16,9 +16,6 @@ import (
 // identity rules, geometry versioning, dispatch accounting — stays in
 // the pure-logic files and stays testable everywhere.
 
-// ntToUnixBias is unused: Filetime.Nanoseconds already returns
-// nanoseconds since the Unix epoch.
-
 type winWindowAPI struct{}
 
 // RealWindowAPI returns the user32-backed WindowAPI.

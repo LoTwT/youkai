@@ -40,7 +40,7 @@ type HotkeyLoop struct {
 // any session starts, instead of being discovered mid-scan. The error is
 // a CodeHotkeyUnavailable PlatformFault so the caller can fail the
 // precheck with the diagnostic code intact.
-func StartHotkeyLoop(mgr *HotkeyManager, api HotkeyAPI) (*HotkeyLoop, error) {
+func StartHotkeyLoop(mgr *HotkeyManager) (*HotkeyLoop, error) {
 	l := &HotkeyLoop{
 		mgr:    mgr,
 		regErr: make(chan error, 1),
