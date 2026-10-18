@@ -72,10 +72,10 @@
           "unit": "percent"
         },
         "substats": [
-          { "attribute": "critDamage", "value": "19.2", "unit": "percent" },
-          { "attribute": "attack", "value": "38", "unit": "flat" },
-          { "attribute": "health", "value": "112", "unit": "flat" },
-          { "attribute": "anomalyProficiency", "value": "9", "unit": "flat" }
+          { "attribute": "critDamage", "value": "19.2", "unit": "percent", "enhancementRolls": 3 },
+          { "attribute": "attack", "value": "38", "unit": "flat", "enhancementRolls": 1 },
+          { "attribute": "health", "value": "112", "unit": "flat", "enhancementRolls": 0 },
+          { "attribute": "anomalyProficiency", "value": "9", "unit": "flat", "enhancementRolls": 0 }
         ],
         "locked": true,
         "discarded": false,
@@ -101,10 +101,10 @@
           "unit": "percent"
         },
         "substats": [
-          { "attribute": "critDamage", "value": "19.2", "unit": "percent" },
-          { "attribute": "attack", "value": "38", "unit": "flat" },
-          { "attribute": "health", "value": "112", "unit": "flat" },
-          { "attribute": "anomalyProficiency", "value": "9", "unit": "flat" }
+          { "attribute": "critDamage", "value": "19.2", "unit": "percent", "enhancementRolls": 3 },
+          { "attribute": "attack", "value": "38", "unit": "flat", "enhancementRolls": 1 },
+          { "attribute": "health", "value": "112", "unit": "flat", "enhancementRolls": 0 },
+          { "attribute": "anomalyProficiency", "value": "9", "unit": "flat", "enhancementRolls": 0 }
         ],
         "locked": true,
         "discarded": false,
@@ -131,10 +131,10 @@
           "unit": "percent"
         },
         "substats": [
-          { "attribute": "critDamage", "value": "19.2", "unit": "percent" },
-          { "attribute": "attack", "value": "38", "unit": "flat" },
-          { "attribute": "health", "value": "112", "unit": "flat" },
-          { "attribute": "anomalyProficiency", "value": "9", "unit": "flat" }
+          { "attribute": "critDamage", "value": "19.2", "unit": "percent", "enhancementRolls": 3 },
+          { "attribute": "attack", "value": "38", "unit": "flat", "enhancementRolls": 1 },
+          { "attribute": "health", "value": "112", "unit": "flat", "enhancementRolls": 0 },
+          { "attribute": "anomalyProficiency", "value": "9", "unit": "flat", "enhancementRolls": 0 }
         ],
         "locked": true,
         "discarded": false,
