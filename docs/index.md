@@ -3,7 +3,7 @@
 ## 文档导航
 
 - [MyGo + Go 扫描器架构](specs/scanner-architecture.md)：公共架构与首版范围的权威来源，包括模块边界、应用与会话契约、隐藏恢复退出、结果与存储、字段校验范围、验收与成本。
-- [扫描器首版实施清单](specs/scanner-implementation-plan.md)：四个内部里程碑、代码落点、Mac 开发与 Windows 测试方式、需尽早取得的证据和验证命令；尚未开始实施。
+- [扫描器首版实施清单](specs/scanner-implementation-plan.md)：四个内部里程碑、代码落点、Mac 开发与 Windows 测试方式、需尽早取得的证据和验证命令；M1 已完成收尾（结论见清单第 3 节），M2 尚未开始。
 - [T1：MyGo 界面与构建分发](specs/t1-mygo-ui-distribution.md)：已确认的产品选择、MyGo v0.5.5 选型、资源与安装、浏览器唤起依据和界面验收。
 - [T2：平台采集与输入](specs/t2-platform-capture-input.md)：三种客户端范围、Windows GDI/SendInput 与 macOS ScreenCaptureKit/Quartz 方案、坐标单位、显示配置候选、帧时序与平台故障。
 - [T3：OCR 运行库、模型与样本](specs/t3-ocr-runtime-model-samples.md)：固定的绑定、运行库与模型组合及制品核查、预处理与解码基准、三组样本与识别质量门槛。

@@ -1,6 +1,6 @@
 # T3：OCR 运行库、模型与样本评估
 
-更新日期：2026-10-16。状态：首轮验证组合已固定并完成制品静态核查；尚未安装依赖、加载运行库或运行识别。用户已认可模型评估方向与准确性边界：v6 small 优先验证，保留未知与人工校对，不承诺自动识别 100% 正确。字段范围由[架构第 6 节](scanner-architecture.md#首版字段清单提案)维护，模块边界、取消与分发要求以[架构第 4 节](scanner-architecture.md#4-ocr原生资源与构建)为准。
+更新日期：2026-10-18。状态：首轮验证组合已固定并完成制品静态核查；绑定、运行库与模型已接入 youkai，双平台安装版实机完成加载与识别（自检及升级链，见[实施清单 M1](scanner-implementation-plan.md#m1正式工程资源与会话底座)）；三组样本与识别质量门槛尚未建立（M2）。用户已认可模型评估方向与准确性边界：v6 small 优先验证，保留未知与人工校对，不承诺自动识别 100% 正确。字段范围由[架构第 6 节](scanner-architecture.md#首版字段清单提案)维护，模块边界、取消与分发要求以[架构第 4 节](scanner-architecture.md#4-ocr原生资源与构建)为准。
 
 ## 1. 当前建议
 
@@ -63,7 +63,7 @@ T2 提供截图
 
 | 组成 | 首轮候选与来源 | 当前证据边界 |
 | --- | --- | --- |
-| Go 绑定 | yalue v1.36.0，提交 `1f0fb0647fc7091b57ec72dcf0f666d2234e4d04`。 | [README](https://github.com/yalue/onnxruntime_go/blob/1f0fb0647fc7091b57ec72dcf0f666d2234e4d04/README.md)指定 ORT 1.29.0 头文件；Windows 使用动态加载跨过 MSVC 原生库与 MinGW cgo 的链接差异。仍需实际构建。 |
+| Go 绑定 | yalue v1.36.0，提交 `1f0fb0647fc7091b57ec72dcf0f666d2234e4d04`。 | [README](https://github.com/yalue/onnxruntime_go/blob/1f0fb0647fc7091b57ec72dcf0f666d2234e4d04/README.md)指定 ORT 1.29.0 头文件；Windows 使用动态加载跨过 MSVC 原生库与 MinGW cgo 的链接差异。已随 M1 实际构建并在双平台安装版加载（见[实施清单 M1](scanner-implementation-plan.md#m1正式工程资源与会话底座)）。 |
 | 原生引擎 | ORT 1.29.0 官方 Windows x64 / macOS arm64 包，源码提交 `2e2543fbe9fae542f921d47a72d21d5a4ef0b710`。 | 两包摘要与[官方发布制品](https://github.com/microsoft/onnxruntime/releases/tag/v1.29.0)相符；只选 CPU 执行提供器，不表示上游二进制已裁掉其他提供器。 |
 | 文字模型 | `PP-OCRv6_rec_small.onnx`，来自 RapidAI/RapidOCR 的 ModelScope `v3.10.0` 资源。 | [清单固定提交](https://github.com/RapidAI/RapidOCR/blob/7cfd3d9ef786a2e538ca30df700325e72e85b5f5/python/rapidocr/default_models.yaml)与下载文件摘要一致；不是从 Paddle 的 MB 数值推定 ONNX 体积。 |
 | 字符表 | 该 ONNX 的 `character` 元数据，顺序及摘要随模型固定。 | 已读取 18,708 个条目；加 CTC blank 和末尾空格后与输出的 18,710 类相符。无需另找一份可能不配套的 v5 字典。 |
@@ -92,7 +92,7 @@ Microsoft Go 固定提交 `402979ac1bef89dcd55add41eaa7277c407599eb` 仍是替�
 
 Windows 开发端的 MinGW cgo 工具链和运行端的 MSVC Runtime 是两项要求。显式加载主 DLL 不会自动解决它所依赖 DLL 的搜索；最终还需检查 youkai EXE 由 C 工具链带入的依赖。[Microsoft 运行库要求](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist?view=msvc-170) · [分发条件](https://learn.microsoft.com/en-us/cpp/windows/redistributing-visual-cpp-files?view=msvc-170)
 
-**VC++ 运行库采用应用本地部署（用户 2026-10-16 确认）：** 所需的 4 个 x64 文件 `MSVCP140.dll`、`MSVCP140_1.dll`、`VCRUNTIME140.dll`、`VCRUNTIME140_1.dll` 取自 GitHub Actions Windows runner 上 Visual Studio 的 `VC\Redist\MSVC` 最新版本目录下 `x64` 的 `Microsoft.VC14*.CRT` 目录（不写死 CRT 编号，多个时取编号最高者；具体路径在打包 PR 实测确认），不从 vc_redist 安装器解包，随应用放在 EXE 所在目录，不运行需要提权的 VC++ 安装器，与 MyGo 的每用户安装（[NSIS 脚本](https://github.com/egoist/mygo/blob/4d8673cd2658a2c6e86b26c44751e57bf8174f91/cmd/mygo/nsis.go)）一致。代价是这些文件的安全更新由 youkai 发新版负责。版本不早于构建 ORT 1.29.0 所用的工具集，并在 M1 确认再分发条件、实际被加载的是随包副本，以及在没有安装过 VC++ 的干净 Windows 上能正常加载。
+**VC++ 运行库采用应用本地部署（用户 2026-10-16 确认）：** 所需的 4 个 x64 文件 `MSVCP140.dll`、`MSVCP140_1.dll`、`VCRUNTIME140.dll`、`VCRUNTIME140_1.dll` 取自 GitHub Actions Windows runner 上 Visual Studio 的 `VC\Redist\MSVC` 最新版本目录下 `x64` 的 `Microsoft.VC14*.CRT` 目录（不写死 CRT 编号，多个时取编号最高者），不从 vc_redist 安装器解包，随应用放在 EXE 所在目录，不运行需要提权的 VC++ 安装器，与 MyGo 的每用户安装（[NSIS 脚本](https://github.com/egoist/mygo/blob/4d8673cd2658a2c6e86b26c44751e57bf8174f91/cmd/mygo/nsis.go)）一致。代价是这些文件的安全更新由 youkai 发新版负责。版本不早于构建 ORT 1.29.0 所用的工具集。取用路径已随打包 workflow 实测确认（run 38993717827 取 `14.51.36247.0`，实机安装目录的 4 个 DLL 与制品清单一致，见[M1 Windows 实机测试报告](../reports/2026-10-17-m1-windows-test.md)）；干净 Windows（无系统 VC++）上实际加载随包副本的验证经用户决定不补测（2026-10-18，以实机已装系统 VC++ 时安装版自检与运行通过为口径，见[实施清单 M1 结论](scanner-implementation-plan.md#m1正式工程资源与会话底座)），再分发条件的最终核对随正式发布完成。
 
 MyGo、yalue 和 ORT 的所读源码许可为 MIT，ORT 制品另带 `ThirdPartyNotices.txt`；RapidOCR 仓库和所读 [ModelScope v3.10.0 模型卡](https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.10.0/README.md)声明 Apache 2.0。模型托管根目录的独立 `LICENSE` 未取得，因此交付前仍需将模型原始来源、转换说明和适用声明一起核对归档；不把一个仓库的许可当作所有第三方字体或可选文件的统一许可。首版无需携带 RapidOCR 的 Python 环境或可视化字体。
 

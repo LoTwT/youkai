@@ -1,6 +1,6 @@
 # T7：构建打包与交付验收
 
-更新日期：2026-10-16。状态：交付规划，未实施或验收。本文维护首版交付门槛、无付费证书的打包路线和最低系统候选。
+更新日期：2026-10-18。状态：交付规划；打包与发布路线已实施——双平台 Package/Release workflow、测试渠道发布与两平台升级链实机验证（见[实施清单 M1](scanner-implementation-plan.md#m1正式工程资源与会话底座)），第 2 节的首版交付门槛尚未验收（M4）。本文维护首版交付门槛、无付费证书的打包路线和最低系统候选。
 
 ## 1. 已确认目标与现有条件
 
@@ -14,9 +14,9 @@
 
 ## 2. 首版交付门槛
 
-本表提出可检验的交付条件，具体功能规则引用已有权威文档，避免另建一套判定标准。所有项目目前均未通过工程验收。
+本表提出可检验的交付条件，具体功能规则引用已有权威文档，避免另建一套判定标准。所有项目均未通过完整工程验收；M1 已为安装、打包与自动更新相关项取得部分实测证据（见[实施清单 M1 结论](scanner-implementation-plan.md#m1正式工程资源与会话底座)）。
 
-实施顺序与内部里程碑见[首版实施清单](scanner-implementation-plan.md)。早期构建已安排资源加载和打包检查，完整安装及三种客户端验收仍按本节判断，不能用阶段产物替代首版交付。
+实施顺序与内部里程碑见[首版实施清单](scanner-implementation-plan.md)。早期构建已完成资源加载和打包检查（安装布局识别自检与产物强制校验，见实施清单 M1），完整安装及三种客户端验收仍按本节判断，不能用阶段产物替代首版交付。
 
 | 交付项 | 必须取得的证据 |
 | --- | --- |
@@ -41,7 +41,7 @@
 | Windows x64 | 生成应用 EXE 与 NSIS 安装包，不配置 youkai 的 Authenticode 发布者证书或签名服务；已有第三方文件签名不主动删除。 | 安装、卸载、资源加载、协议注册和首次启动；记录 SmartScreen、Smart App Control 或设备策略的实际表现。 |
 | macOS arm64 | 生成 `.app` 与 DMG，采用无需开发者会员的 ad-hoc 本地签名，不配置 Developer ID 或公证凭据。 | 应用及内置原生代码的签名完整性、资源加载、首次打开、录屏/输入授权，以及重装或换版本后的权限体验。 |
 
-MyGo 当前分发文档说明 macOS 默认使用 ad-hoc 签名，Windows 的证书签名属于可配置步骤；NSIS 安装器与 DMG 制作仍需要对应打包工具。含 OCR 的 cgo 依赖还需要目标平台编译器。缺少打包工具而跳过安装包不能算完成，构建端下载工具与用户首次启动下载识别资源是两回事。依据 v0.5.5 的[分发文档](https://mygo.egoist.dev/docs/distribution)，尚未实际构建。
+MyGo 当前分发文档说明 macOS 默认使用 ad-hoc 签名，Windows 的证书签名属于可配置步骤；NSIS 安装器与 DMG 制作仍需要对应打包工具。含 OCR 的 cgo 依赖还需要目标平台编译器。缺少打包工具而跳过安装包不能算完成，构建端下载工具与用户首次启动下载识别资源是两回事。依据 v0.5.5 的[分发文档](https://mygo.egoist.dev/docs/distribution)；双平台制品已由 Package 与 Release workflow 实际构建并实机安装验证（见[实施清单 M1](scanner-implementation-plan.md#m1正式工程资源与会话底座)）。
 
 商店外分发仍受操作系统检查。Mac 的 ad-hoc 签名不提供 Developer ID 身份或 Apple 公证，下载后的首次打开可能被 Gatekeeper 阻止；Apple 提供的单应用确认路径取决于系统和管理策略。Windows 未签名的新制品可能出现 SmartScreen 提示，强制策略或 Smart App Control 也可能直接阻止执行。首版说明需准确记录这些限制，不能承诺无提示启动或所有拦截都有继续按钮，也不把关闭整机保护作为安装步骤。[Apple 打开应用说明](https://support.apple.com/en-us/102445) · [Microsoft SmartScreen 说明](https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/smartscreen-reputation) · [Smart App Control FAQ](https://support.microsoft.com/en-us/windows/security/threat-malware-protection/smart-app-control-frequently-asked-questions)
 
@@ -71,13 +71,13 @@ Windows 依据：[Go 最低要求](https://go.dev/wiki/MinimumRequirements)、[M
 
 最低候选必须贯穿应用元数据、Go/C/Objective-C 的部署目标及全部随包原生文件。Mac 要核对实际 Mach-O 的系统标记、加载路径及签名；Windows 要核对最终 EXE/DLL 的导入、架构和运行库。静态文件检查能排除明显不配套，但不能证明系统 API 行为、游戏输入或云画面兼容。
 
-MyGo v0.5.5 的 [config.go](https://github.com/egoist/mygo/blob/4d8673cd2658a2c6e86b26c44751e57bf8174f91/cmd/mygo/config.go)仍将 `macos.minimumSystemVersion` 默认为 `12.0`，[bundle.go](https://github.com/egoist/mygo/blob/4d8673cd2658a2c6e86b26c44751e57bf8174f91/cmd/mygo/bundle.go)据此生成 `LSMinimumSystemVersion`。按本轮候选构建时应显式设为 `14.0`，再核对 Go 和原生桥接的实际部署目标；修改应用声明本身不会改变已经编译好的 OCR 库下限。
+MyGo v0.5.5 的 [config.go](https://github.com/egoist/mygo/blob/4d8673cd2658a2c6e86b26c44751e57bf8174f91/cmd/mygo/config.go)仍将 `macos.minimumSystemVersion` 默认为 `12.0`，[bundle.go](https://github.com/egoist/mygo/blob/4d8673cd2658a2c6e86b26c44751e57bf8174f91/cmd/mygo/bundle.go)据此生成 `LSMinimumSystemVersion`。本轮候选构建已显式设为 `14.0`（`mygo.json` 与本地打包命令、Package/Release workflow 一致）；Go 和原生桥接的实际部署目标随最低系统实机验收核对，修改应用声明本身不会改变已经编译好的 OCR 库下限。
 
 ### 尚需完成的工程证据
 
 资料阶段已复算两个 ORT 压缩包和模型的 SHA-256，并静态核对库依赖与模型元数据。以下随正式功能完成：
 
 1. 两平台构建并打包原生 UI、cgo 和随包资源；显式路径加载，检查中文/空格路径、任意工作目录、缺库、错架构、损坏模型及重复运行。
-2. Windows 按 [T3 的应用本地部署](t3-ocr-runtime-model-samples.md#绑定与运行库的实际交接)随包提供 VC++ v14 x64 运行库文件；版本不能仅因名称带“2019”就视为足够，须不早于构建 ORT 所用的工具版本。核对再分发条件，以及在未装 VC++ 的干净系统上实际加载的是随包副本。[版本要求](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist?view=msvc-170)
+2. Windows 按 [T3 的应用本地部署](t3-ocr-runtime-model-samples.md#绑定与运行库的实际交接)随包提供 VC++ v14 x64 运行库文件；版本不能仅因名称带“2019”就视为足够，须不早于构建 ORT 所用的工具版本。随包布局与摘要已随 M1 打包与实机测试核对（见[实施清单 M1](scanner-implementation-plan.md#m1正式工程资源与会话底座)）；未装 VC++ 的干净系统上实际加载随包副本的验证经用户决定不补测（2026-10-18，M1 收尾，口径见 [T3](t3-ocr-runtime-model-samples.md#绑定与运行库的实际交接)），再分发条件的最终核对随正式发布完成。[版本要求](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist?view=msvc-170)
 3. 在无开发工具的干净环境断网安装，用固定图片完成识别、校对、保存与导出；这仍不包括离线云游戏。Mac 另测无付费签名路线下首次打开和授权，最终资源与签名后制品摘要另记。
 4. 三种真实客户端分别通过整仓及取消闭环，按 T3/T5/T6 统计字段、导航、遗漏、重复物品、校对量和负载。Mac 14 与 Windows 11 25H2 等拟声明下限均需相应证据；无法验证的范围保留未验证标签。
