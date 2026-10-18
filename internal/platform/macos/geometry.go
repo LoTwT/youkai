@@ -441,6 +441,15 @@ func (t *GeometryTracker) Current() (FrameGeometry, bool) {
 	return t.current, t.hasGeo
 }
 
+// Snapshot returns the current geometry and its version in one locked
+// read, so a caller freezing a baseline cannot see a transform of one
+// version stamped with another.
+func (t *GeometryTracker) Snapshot() (FrameGeometry, GeometryVersion, bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.current, t.version, t.hasGeo
+}
+
 // Displays returns the current display configuration and whether one
 // was observed.
 func (t *GeometryTracker) Displays() ([]PointRect, bool) {

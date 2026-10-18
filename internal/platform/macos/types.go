@@ -332,6 +332,10 @@ type InputResult struct {
 	// BlockedCode and BlockedReason are set when Status is blocked.
 	BlockedCode   BlockedCode
 	BlockedReason string
+	// ReadinessErr is the raw error the readiness hook returned when
+	// BlockedCode is BlockedReadiness, so a typed denial survives the
+	// dispatcher instead of being flattened to its message text.
+	ReadinessErr error
 	// Aborted reports that a drag stopped mid-way because the step gate
 	// (the kernel's input permission) closed; the release was posted and
 	// the button left the ledger, but the operation did not run to its

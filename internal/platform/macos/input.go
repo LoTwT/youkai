@@ -242,7 +242,14 @@ func (d *InputDispatcher) Dispatch(req ShortInputRequest) InputResult {
 	}
 	if d.readiness != nil {
 		if err := d.readiness(req); err != nil {
-			return blocked(BlockedReadiness, err.Error())
+			return InputResult{
+				Status:        DispatchBlocked,
+				BlockedCode:   BlockedReadiness,
+				BlockedReason: err.Error(),
+				ReadinessErr:  err,
+				StartedAt:     started,
+				At:            d.now(),
+			}
 		}
 	}
 
