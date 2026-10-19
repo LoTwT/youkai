@@ -1,11 +1,10 @@
 // Package collect is the ZZZ game adapter's session controller: the
 // scan.Controller that drives one scan through the unified platform
-// port. PR 4a wires the lifecycle — preflight, open, wait for a ready
-// target, lock the geometry baseline, hand over to the traversal — and
-// provides only the observe-only traversal: no input is dispatched and
-// nothing is admitted; the session exists to rehearse the platform
-// integration end to end. The real traversal (T5) arrives with 4c and
-// works through the same Traversal seam.
+// port. The controller owns the lifecycle — preflight, open, wait for a
+// ready target, lock the geometry baseline, hand over to the traversal
+// (see traversal.go) — while the traversal owns T5's navigation and
+// admission rules. PR 4a wired the lifecycle with the observe-only
+// traversal; PR 4c adds the inventory traversal skeleton beside it.
 //
 // The pure ZZZ field semantics (catalog, disc validation) stay in the
 // parent game/zzz package, which must not grow this package's platform
@@ -14,6 +13,7 @@ package collect
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -23,34 +23,6 @@ import (
 	"github.com/LoTwT/youkai/internal/platform"
 	"github.com/LoTwT/youkai/internal/scan"
 )
-
-// Traversal is the seam between the session controller and the ZZZ
-// inventory traversal (T5). Precheck verifies the page and range
-// preconditions of the locked session; Collect runs the traversal loop
-// under the kernel's capacity and input-permission rules. PR 4a's only
-// implementation is ObserveOnly.
-type Traversal interface {
-	Precheck(ctx context.Context, sess platform.Session) error
-	Collect(ctx context.Context, sess platform.Session, h *scan.ControllerHandle) error
-}
-
-// ObserveOnly is the PR 4a traversal: it dispatches no input, admits no
-// observation and simply holds the session open until the scan context
-// ends — a user stop, a fault or the quit path all arrive through
-// there. Its Precheck deliberately checks nothing: no page evidence
-// exists yet.
-type ObserveOnly struct{}
-
-// Precheck implements Traversal: PR 4a checks nothing.
-func (ObserveOnly) Precheck(ctx context.Context, sess platform.Session) error {
-	return nil
-}
-
-// Collect implements Traversal: wait for the end of the scan.
-func (ObserveOnly) Collect(ctx context.Context, sess platform.Session, h *scan.ControllerHandle) error {
-	<-ctx.Done()
-	return ctx.Err()
-}
 
 // MacCloudTarget is the App Store cloud client's target on macOS, as
 // field round ① identified it (bundle com.miHoYo.cloudgames.Nap).
@@ -85,6 +57,14 @@ type Controller struct {
 	// Stop). The registered hotkey triggers it; a late trigger after
 	// Release is ignored so it cannot cut the next session.
 	Stop func()
+	// OnScopeObserved, when set, receives the observed-scope payload of
+	// the session's traversal (the ScopeReporter capability) once its
+	// precheck succeeded — the application's record wiring persists it
+	// as the session's observed range (T5 §3). It runs once, on the
+	// producer goroutine, right after the precheck; a traversal without
+	// the capability or with an empty report never triggers it. Wire it
+	// via SetScopeSink before the session starts.
+	OnScopeObserved func(scope json.RawMessage)
 
 	// PrepareBudget bounds the whole preparation wait; zero takes the
 	// default. ObserveEvery paces the wait loop; zero takes the default.
@@ -200,7 +180,11 @@ func (c *Controller) Prepare(ctx context.Context, h *scan.ControllerHandle) erro
 				c.trav = c.newTraversal()
 				trav := c.trav
 				c.mu.Unlock()
-				return trav.Precheck(ctx, sess)
+				if err := trav.Precheck(ctx, sess); err != nil {
+					return err
+				}
+				c.relayScope(trav)
+				return nil
 			}
 			if fault, ok := portFault(err); ok {
 				switch fault.Class {
@@ -229,12 +213,35 @@ func (c *Controller) Prepare(ctx context.Context, h *scan.ControllerHandle) erro
 	}
 }
 
+// SetScopeSink wires OnScopeObserved; the application calls it between
+// building the controller and starting the session (the service does it
+// right after the scan source handed over the spec). The field is
+// written before the kernel starts the producer goroutine and only read
+// there, so no synchronization is needed.
+func (c *Controller) SetScopeSink(sink func(json.RawMessage)) { c.OnScopeObserved = sink }
+
 // newTraversal builds this session's traversal.
 func (c *Controller) newTraversal() Traversal {
 	if c.Traversal != nil {
 		return c.Traversal()
 	}
 	return ObserveOnly{}
+}
+
+// relayScope hands the traversal's observed-scope report (T5 §3) to the
+// application's sink. It runs once, after a successful precheck, on the
+// producer goroutine.
+func (c *Controller) relayScope(trav Traversal) {
+	if c.OnScopeObserved == nil {
+		return
+	}
+	r, ok := trav.(ScopeReporter)
+	if !ok {
+		return
+	}
+	if scope := r.ObservedScope(); len(scope) > 0 {
+		c.OnScopeObserved(scope)
+	}
 }
 
 // Collect implements scan.Controller: the traversal runs the collection

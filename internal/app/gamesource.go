@@ -9,6 +9,15 @@ import (
 	"github.com/LoTwT/youkai/internal/record"
 )
 
+// scopeRelay is the controller capability that receives the traversal's
+// observed-scope relay; collect.Controller implements it (see its
+// ScopeReporter). The service wires the record deliverer's sink into it
+// before the session starts, so the range the precheck actually
+// observed reaches the session's record (T5 §3).
+type scopeRelay interface {
+	SetScopeSink(func(json.RawMessage))
+}
+
 // GameScanSource supplies scans that run against a real game window
 // through the unified platform port. PR 4a wires it only for the
 // observe-only rehearsal: the session opens the platform, resolves and

@@ -289,6 +289,32 @@ func applyTerminalLocked(item *record.ItemRecord, rec scan.Record) error {
 	return nil
 }
 
+// observeScope records the range the traversal's precheck actually
+// observed (T5 §3): it amends the shell's ObservedScope — the declared
+// Scope stays untouched — and persists with the very next checkpoint,
+// so the observed range survives a crash right after the precheck. A
+// report that is not a JSON document is refused, not silently dropped:
+// the record only keeps what verifies.
+func (d *recordDeliverer) observeScope(raw json.RawMessage) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.finished {
+		return
+	}
+	if len(raw) == 0 || !json.Valid(raw) || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		d.saveErr = fmt.Errorf("app: record %s: observed scope is not a JSON document: %q", d.recordID, raw)
+		return
+	}
+	d.shell.ObservedScope = append(json.RawMessage(nil), raw...)
+	d.sinceSave++
+	if d.saveErr == nil {
+		d.saveErr = d.saveLocked()
+	}
+	if d.saveErr == nil {
+		d.sinceSave = 0
+	}
+}
+
 // saveLocked writes the document under construction as a new checkpoint
 // generation. The captured count is the admitted count — every admitted
 // observation is in the document, whatever its state. Callers hold mu.

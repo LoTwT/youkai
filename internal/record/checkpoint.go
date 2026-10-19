@@ -253,9 +253,15 @@ type SessionShell struct {
 	// Scope is what the session set out to scan, as the game adapter
 	// defines it. Opaque to this package on purpose; only checked to be
 	// a JSON document.
-	Scope     json.RawMessage `json:"scope"`
-	StartedAt time.Time       `json:"startedAt"`
-	EndedAt   *time.Time      `json:"endedAt,omitempty"`
+	Scope json.RawMessage `json:"scope"`
+	// ObservedScope is the range the traversal's precheck actually
+	// observed on the page (T5 §3's 筛选、排序、数量 snapshot) — the
+	// declared Scope stays what the session set out to scan. Opaque the
+	// same way; absent when no traversal reported one (the development
+	// source verifies no page, and a failed precheck observes nothing).
+	ObservedScope json.RawMessage `json:"observedScope,omitempty"`
+	StartedAt     time.Time       `json:"startedAt"`
+	EndedAt       *time.Time      `json:"endedAt,omitempty"`
 	// Termination is nil while the session is still running; a
 	// checkpoint without it is exactly what recovery marks interrupted.
 	Termination *Termination `json:"termination,omitempty"`
@@ -295,6 +301,14 @@ func (sh *SessionShell) validate(itemCount int) error {
 	}
 	if bytes.Equal(bytes.TrimSpace(sh.Scope), []byte("null")) {
 		return errors.New("scope is null")
+	}
+	if len(sh.ObservedScope) > 0 {
+		if !json.Valid(sh.ObservedScope) {
+			return errors.New("observedScope is not a JSON document")
+		}
+		if bytes.Equal(bytes.TrimSpace(sh.ObservedScope), []byte("null")) {
+			return errors.New("observedScope is null")
+		}
 	}
 	if sh.StartedAt.IsZero() {
 		return errors.New("startedAt is zero")
