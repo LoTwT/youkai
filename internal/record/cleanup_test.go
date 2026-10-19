@@ -353,7 +353,7 @@ func TestDeleteAllEvidenceContinuesAfterFailures(t *testing.T) {
 	st, ffs, root := newFaultStore(t)
 	cleanupRecord(t, st, "rec-1")
 	cleanupRecord(t, st, "rec-2")
-	ffs.inject(faultRemove, "rec-1/evidence/detail-1.png", errFaultRemove)
+	ffs.inject(faultRemove, filepath.Join("rec-1", "evidence", "detail-1.png"), errFaultRemove)
 
 	batch, err := st.DeleteAllEvidence()
 	if !errors.Is(err, errFaultRemove) {

@@ -119,7 +119,7 @@ func TestViewHistoryScreenshotCleanupPreviewsCancelAndFails(t *testing.T) {
 	m.OpenHistory()
 	settle(t, m, q, tt)
 
-	if err := tt.Click("删除截图 r1"); err != nil {
+	if err := tt.Click("删除截图"); err != nil {
 		t.Fatal(err)
 	}
 	settle(t, m, q, tt)
@@ -140,7 +140,7 @@ func TestViewHistoryScreenshotCleanupPreviewsCancelAndFails(t *testing.T) {
 
 	// A failed deletion keeps the measured entry and its retry.
 	svc.deleteErr = errString("磁盘忙")
-	if err := tt.Click("删除截图 r1"); err != nil {
+	if err := tt.Click("删除截图"); err != nil {
 		t.Fatal(err)
 	}
 	settle(t, m, q, tt)
@@ -323,7 +323,7 @@ func TestViewHistoryRecordDeletionClosesResults(t *testing.T) {
 	m.OpenHistory()
 	settle(t, m, q, tt)
 
-	if err := tt.Click("删除当前记录 r1"); err != nil {
+	if err := tt.Click("删除当前记录"); err != nil {
 		t.Fatal(err)
 	}
 	settle(t, m, q, tt)
@@ -364,7 +364,7 @@ func TestViewCleanupBlockedByExportAndUnsavedEdit(t *testing.T) {
 	if !tt.HasText("正在导出，完成前不能清理。") {
 		t.Fatalf("exporting does not block cleanup: %q", tt.Texts())
 	}
-	if err := tt.Click("删除截图 r1"); err != nil {
+	if err := tt.Click("删除截图"); err != nil {
 		t.Fatal(err)
 	}
 	drainAll(t, m, q)
@@ -382,7 +382,7 @@ func TestViewCleanupBlockedByExportAndUnsavedEdit(t *testing.T) {
 	if !tt.HasText("当前记录有未保存的修改，保存或放弃后才能清理。") {
 		t.Fatalf("an unsaved edit does not block cleanup: %q", tt.Texts())
 	}
-	if err := tt.Click("删除当前记录 r1"); err != nil {
+	if err := tt.Click("删除当前记录"); err != nil {
 		t.Fatal(err)
 	}
 	drainAll(t, m, q)

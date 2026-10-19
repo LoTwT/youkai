@@ -300,14 +300,14 @@ func (m *Model) historyRow(c *ui.Context, t *ui.Theme, entry HistoryEntry, block
 	}
 	ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
 		ui.Text(c, label).TextColor(t.TextMuted).SingleLine()
-		if ui.Button(c, "打开 "+entry.ID).Clicked() {
+		if ui.Button(c, "打开").Clicked() {
 			m.histChoice = entry.Label
 			m.OpenHistory()
 		}
-		if ui.Button(c, "删除截图 "+entry.ID).Disabled(blocked != "").Clicked() {
+		if ui.Button(c, "删除截图").Disabled(blocked != "").Clicked() {
 			m.RequestScreenshotCleanup(entry.ID)
 		}
-		if ui.Button(c, "删除当前记录 "+entry.ID).Disabled(blocked != "").Clicked() {
+		if ui.Button(c, "删除当前记录").Disabled(blocked != "").Clicked() {
 			m.RequestRecordCleanup(entry.ID)
 		}
 	})
