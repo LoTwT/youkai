@@ -2,6 +2,7 @@ package ui
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -167,6 +168,133 @@ func TestStartRefusalIsShown(t *testing.T) {
 		t.Fatal("the next attempt kept the old refusal")
 	}
 	drainAll(t, m, q)
+}
+
+// TestCloseBehaviorPreference checks the default, the change and its
+// persistence: hide is the default, changing to exit saves once, and a
+// failed save keeps the effective preference with a visible error.
+func TestCloseBehaviorPreference(t *testing.T) {
+	var saved []app.CloseBehavior
+	m, q := newTestModel(t, Config{Service: &fakeService{}, SaveCloseBehavior: func(behavior app.CloseBehavior) error {
+		saved = append(saved, behavior)
+		return nil
+	}})
+	if m.CloseBehavior() != app.CloseBehaviorHide {
+		t.Fatalf("default close behavior = %q", m.CloseBehavior())
+	}
+	// A startup with the persisted exit preference applies it directly.
+	persisted, pq := newTestModel(t, Config{Service: &fakeService{}, CloseBehavior: app.CloseBehaviorExit})
+	if persisted.CloseBehavior() != app.CloseBehaviorExit {
+		t.Fatalf("startup close behavior = %q", persisted.CloseBehavior())
+	}
+	drainAll(t, persisted, pq)
+
+	m.SetCloseBehavior(app.CloseBehaviorExit)
+	drainAll(t, m, q)
+	if m.CloseBehavior() != app.CloseBehaviorExit {
+		t.Fatalf("close behavior = %q after the change", m.CloseBehavior())
+	}
+	if len(saved) != 1 || saved[0] != app.CloseBehaviorExit {
+		t.Fatalf("saved preferences = %v", saved)
+	}
+	m.SetCloseBehavior(app.CloseBehaviorExit)
+	drainAll(t, m, q)
+	if len(saved) != 1 {
+		t.Fatalf("an unchanged preference was saved again: %v", saved)
+	}
+
+	failing, fq := newTestModel(t, Config{Service: &fakeService{}, SaveCloseBehavior: func(app.CloseBehavior) error {
+		return errors.New("disk full")
+	}})
+	failing.SetCloseBehavior(app.CloseBehaviorExit)
+	drainAll(t, failing, fq)
+	if failing.CloseBehavior() != app.CloseBehaviorExit {
+		t.Fatal("a failed save reverted the effective preference")
+	}
+	if !strings.Contains(failing.closeBehaviorErr, "disk full") {
+		t.Fatalf("save error = %q", failing.closeBehaviorErr)
+	}
+}
+
+// TestLifecycleStatusRendersTrayState checks the four tray states and the
+// stoppable flag.
+func TestLifecycleStatusRendersTrayState(t *testing.T) {
+	svc := &fakeService{}
+	m, q := newTestModel(t, Config{Service: svc})
+	if status := m.LifecycleStatus(); status.Text != "就绪" || status.Busy {
+		t.Fatalf("idle status = %+v", status)
+	}
+	m.Apply(snap("s1", 1, true, scan.PhaseCapturing, scan.Counts{Captured: 1}, 0, true, ""))
+	drainAll(t, m, q)
+	if status := m.LifecycleStatus(); status.Text != "扫描中" || !status.Busy {
+		t.Fatalf("scanning status = %+v", status)
+	}
+	m.Apply(snap("s1", 2, true, scan.PhaseFinalizing, scan.Counts{Captured: 1}, 1, true, "disk full"))
+	drainAll(t, m, q)
+	if status := m.LifecycleStatus(); status.Text != "保存失败" {
+		t.Fatalf("save-failure status = %+v", status)
+	}
+	if m.AllowClose() {
+		t.Fatal("the first close was allowed before the exit wrap-up")
+	}
+	if status := m.LifecycleStatus(); status.Text != "收尾中" || status.Busy {
+		t.Fatalf("exit status = %+v", status)
+	}
+	drainAll(t, m, q)
+}
+
+// TestPrepareRestoreStopsWithoutStarting checks the unified restore
+// contract: an active session is stopped, nothing is started, and an idle
+// model is left alone.
+func TestPrepareRestoreStopsWithoutStarting(t *testing.T) {
+	svc := &fakeService{}
+	m, q := newTestModel(t, Config{Service: svc})
+	m.Apply(snap("s1", 1, true, scan.PhaseCapturing, scan.Counts{Captured: 1}, 0, true, ""))
+	drainAll(t, m, q)
+	m.PrepareRestore()
+	drainAll(t, m, q)
+	if svc.stops != 1 {
+		t.Fatalf("restore stops = %d, want 1", svc.stops)
+	}
+	if len(svc.starts) != 0 {
+		t.Fatalf("restore started a scan: %v", svc.starts)
+	}
+
+	m.Apply(snap("s1", 2, false, scan.PhaseEnded, scan.Counts{Captured: 1}, 1, false, ""))
+	drainAll(t, m, q)
+	m.PrepareRestore()
+	drainAll(t, m, q)
+	if svc.stops != 1 {
+		t.Fatalf("an idle restore stopped again: %d", svc.stops)
+	}
+
+	// A start request that the service has not answered yet has no Busy
+	// snapshot; the restore still stops it so it cannot begin collecting
+	// behind the restored window.
+	m.startReqID = "ui-in-flight"
+	m.PrepareRestore()
+	if svc.stops != 2 {
+		t.Fatalf("an in-flight start was not stopped: %d stops", svc.stops)
+	}
+	m.startReqID = ""
+}
+
+// TestExitFailureCallback checks that a failed wrap-up reaches the entry
+// point, which restores the window for the retry.
+func TestExitFailureCallback(t *testing.T) {
+	failures := 0
+	svc := &fakeService{quitFn: func() error { return errors.New("disk full") }}
+	m, q := newTestModel(t, Config{
+		Service:      svc,
+		OnExitFailed: func() { failures++ },
+	})
+	if m.AllowClose() {
+		t.Fatal("the close was allowed before the wrap-up")
+	}
+	drainAll(t, m, q)
+	if failures != 1 {
+		t.Fatalf("exit failures reported = %d, want 1", failures)
+	}
 }
 
 // TestExitFlow checks the explicit-exit flow: the first close starts the
