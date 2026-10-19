@@ -480,13 +480,13 @@ func TestParseDetailUnknownPartsStayUnknown(t *testing.T) {
 	}
 }
 
-// TestParseDetailUserSuppliedNames covers the slot-5 and slot-6 display
-// names the Windows sample does not show: the six element damage bonuses
-// and the three slot-6 attributes, first supplied by the user on
+// TestParseDetailSlot5Slot6MainStatNames covers the slot-5 and slot-6
+// display names the Windows sample does not show: the six element damage
+// bonuses and the three slot-6 attributes, first supplied by the user on
 // 2026-10-18 and verified name-by-name against real client screens in the
 // 2026-10-19 macOS sample round (see affixes.go); the macOS fixture below
 // replays the same names as real screen text.
-func TestParseDetailUserSuppliedNames(t *testing.T) {
+func TestParseDetailSlot5Slot6MainStatNames(t *testing.T) {
 	cases := []struct {
 		slot int
 		line string

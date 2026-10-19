@@ -413,9 +413,11 @@ func exactAsserted(file string) bool {
 }
 
 // recognizeTestdata recognizes every crop of every fixture group and
-// reports the full expected/actual/score table; the macOS cloud-client
-// crops come from compressed cloud video and their stat lines are
-// reported, not asserted.
+// reports the full expected/actual/score table. Name and level lines are
+// asserted to decode exactly; stat lines are asserted space-insensitively
+// (the model omits the inter-column space the layout shows), and the
+// macOS cloud-client crops demonstrate the same behavior on compressed
+// cloud video.
 func recognizeTestdata(t *testing.T, rec *Recognizer) {
 	t.Helper()
 	for _, group := range fixtureGroups {
