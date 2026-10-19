@@ -3,14 +3,14 @@
 ## 文档导航
 
 - [MyGo + Go 扫描器架构](specs/scanner-architecture.md)：公共架构与首版范围的权威来源，包括模块边界、应用与会话契约、隐藏恢复退出、结果与存储、字段校验范围、验收与成本。
-- [扫描器首版实施清单](specs/scanner-implementation-plan.md)：四个内部里程碑、代码落点、Mac 开发与 Windows 测试方式、需尽早取得的证据和验证命令；M1 已完成收尾（结论见清单第 3 节），M2 进行中——两平台底座、平台会话集成（4a）、遍历骨架（4c）、macOS 云客户端像素匹配器/单页遍历（4b-1）与准备循环/真实遍历接入（4b-2）已实现，macOS 云客户端实测轮 ① 与样本采集轮已完成（坐标标定修正、9 个主属性名核实、27 件调参样本入库、筛选/滚动/时延标定写回 T5），Windows 实测待轮 ②。
+- [扫描器首版实施清单](specs/scanner-implementation-plan.md)：四个内部里程碑、代码落点、Mac 开发与 Windows 测试方式、需尽早取得的证据和验证命令；M1 已完成收尾（结论见清单第 3 节），M2 进行中——两平台底座、平台会话集成（4a）、遍历骨架（4c）、macOS 云客户端像素匹配器/单页遍历（4b-1）与准备循环/真实遍历接入（4b-2）已实现，macOS 云客户端实测轮 ① 与样本采集轮已完成（坐标标定修正、9 个主属性名核实、27 件调参样本入库、筛选/滚动/时延标定写回 T5）；Windows 实测轮 ② 推迟，完成前不宣称 Windows M3 通过；M3 按文档冻结 → Clear/重复盘 → 结构化解析/浏览 → 6a 管理状态+装备存在性 → 6b 装备者身份 → 编辑确认 → 覆盖/JSON+CSV 导出 → 历史与截图清理 → 终止恢复/窗口生命周期 → 规模验收推进。
 - [T1：MyGo 界面与构建分发](specs/t1-mygo-ui-distribution.md)：已确认的产品选择、MyGo v0.5.5 选型、资源与安装、浏览器唤起依据和界面验收。
 - [T2：平台采集与输入](specs/t2-platform-capture-input.md)：三种客户端范围、Windows GDI/SendInput 与 macOS ScreenCaptureKit/Quartz 方案、坐标单位、显示配置候选、帧时序与平台故障。
 - [T3：OCR 运行库、模型与样本](specs/t3-ocr-runtime-model-samples.md)：固定的绑定、运行库与模型组合及制品核查、预处理与解码基准、三组样本与识别质量门槛。
 - T4：扫描会话与结果契约：直接在[架构第 5 节](specs/scanner-architecture.md#5-扫描会话与结果语义)维护。
 - [T5：绝区零仓库遍历与详情归属](specs/t5-zzz-inventory-traversal.md)：页面预检、选中与详情归属、滚动衔接、末尾判断和完整性验收；macOS 云客户端的布局、阈值、单页流程（4b-1）与位置×列表两层遍历（4b-2）已标定并实现。
-- [T6：用户操作、结果校对与导出](specs/t6-review-export-workflow.md)：准备到导出的操作流程、逐件校对、两种导出用途、历史与存储管理。
-- [扫描结果 JSON v1](specs/scan-json-format.md)：自有文件契约，附[合成示例](examples/scan-usable-v1.json)；尚未实现。
+- [T6：用户操作、结果校对与导出](specs/t6-review-export-workflow.md)：准备到导出的操作流程、逐件校对、JSON/CSV 两种导出、历史与截图/记录清理。
+- [扫描结果 JSON/CSV v1](specs/scan-json-format.md)：自有可用数据文件契约（JSON 与同源 CSV），附[合成示例](examples/scan-usable-v1.json)；尚未实现。
 - [T7：构建打包与交付验收](specs/t7-public-release-acceptance.md)：首版交付门槛、无付费证书的打包路线、最低系统候选。
 - [扫描器背景与参考实现](scanner-handoff.md)：项目起因、参考扫描器研究结论和与 fairy 的边界。
 - [开发指南](development.md)：环境要求与当前实际可用的构建、测试、MyGo 开发命令。

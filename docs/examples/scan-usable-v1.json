@@ -1,7 +1,6 @@
 {
   "format": "youkai.scan",
   "formatVersion": 1,
-  "view": "usable",
   "exportedAt": "2026-10-16T08:05:00.000Z",
   "producer": {
     "name": "youkai",
@@ -41,12 +40,14 @@
     "namespace": "youkai.zzz",
     "revision": "example-1",
     "sets": {
-      "woodpeckerElectro": "啄木鸟电音"
+      "31100": "河豚电音"
     },
-    "agents": {}
+    "agents": {
+      "1311": "耀嘉音"
+    }
   },
   "fieldPolicy": {
-    "discarded": "required",
+    "management": "required",
     "equipped": "required"
   },
   "validationRules": {
@@ -62,7 +63,7 @@
       "issues": [],
       "validation": { "status": "passed", "issues": [] },
       "data": {
-        "setId": "woodpeckerElectro",
+        "setId": 31100,
         "rarity": "S",
         "slot": 4,
         "level": 15,
@@ -77,11 +78,10 @@
           { "attribute": "health", "value": "112", "unit": "flat", "enhancementRolls": 0 },
           { "attribute": "anomalyProficiency", "value": "9", "unit": "flat", "enhancementRolls": 0 }
         ],
-        "locked": true,
-        "discarded": false,
+        "managementState": "locked",
         "equipped": {
-          "state": "unequipped",
-          "agentId": null
+          "state": "equipped",
+          "agentId": 1311
         }
       }
     },
@@ -90,8 +90,9 @@
       "revision": 1,
       "quality": "humanConfirmed",
       "issues": [],
+      "validation": { "status": "passed", "issues": [] },
       "data": {
-        "setId": "woodpeckerElectro",
+        "setId": 31100,
         "rarity": "S",
         "slot": 6,
         "level": 15,
@@ -106,22 +107,21 @@
           { "attribute": "health", "value": "112", "unit": "flat", "enhancementRolls": 0 },
           { "attribute": "anomalyProficiency", "value": "9", "unit": "flat", "enhancementRolls": 0 }
         ],
-        "locked": true,
-        "discarded": false,
+        "managementState": "discarded",
         "equipped": {
           "state": "unequipped",
           "agentId": null
         }
-      },
-      "validation": { "status": "passed", "issues": [] }
+      }
     },
     {
       "sequence": 4,
       "revision": 1,
       "quality": "humanConfirmed",
       "issues": [],
+      "validation": { "status": "passed", "issues": [] },
       "data": {
-        "setId": "woodpeckerElectro",
+        "setId": 31100,
         "rarity": "S",
         "slot": 6,
         "level": 15,
@@ -136,14 +136,12 @@
           { "attribute": "health", "value": "112", "unit": "flat", "enhancementRolls": 0 },
           { "attribute": "anomalyProficiency", "value": "9", "unit": "flat", "enhancementRolls": 0 }
         ],
-        "locked": true,
-        "discarded": false,
+        "managementState": "none",
         "equipped": {
           "state": "unequipped",
           "agentId": null
         }
-      },
-      "validation": { "status": "passed", "issues": [] }
+      }
     }
   ]
 }
