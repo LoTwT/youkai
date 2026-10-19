@@ -844,6 +844,10 @@ func (run *inventoryRun) scrollToTop(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+		afterStart, afterOK := run.thumbStart(out.after)
+		log.Printf("youkai: collect: position %d: top fling %d: thumb %d/%t -> %d/%t, stationary=%t displaced=%t lost=%t rows=%d",
+			run.position, flings+1, beforeStart, beforeOK, afterStart, afterOK,
+			out.stationary, out.displaced, out.lost, out.match.Rows)
 		flings++
 		progressed := false
 		switch {
@@ -919,6 +923,7 @@ func (run *inventoryRun) confirmTop(ctx context.Context) error {
 		if err := run.observeReady(ctx); err != nil {
 			return err
 		}
+		beforeStart, beforeOK := run.thumbStart(run.lastFrame)
 		res := run.view.Dispatch(platform.InputOp{
 			Kind:     platform.InputDrag,
 			Geometry: run.geo,
@@ -934,6 +939,23 @@ func (run *inventoryRun) confirmTop(ctx context.Context) error {
 		out, err := run.awaitScroll(ctx, run.lastFrame)
 		if err != nil {
 			return err
+		}
+		afterStart, afterOK := run.thumbStart(out.after)
+		log.Printf("youkai: collect: position %d: top confirmation attempt %d: top=%t thumb %d/%t -> %d/%t stationary=%t displaced=%t lost=%t evidence=%s",
+			run.position, attempt+1,
+			run.listMatch.List != nil && run.listMatch.List.Top,
+			beforeStart, beforeOK, afterStart, afterOK,
+			out.stationary, out.displaced, out.lost, out.match.Evidence)
+		// The scrollbar is independent of the animated list pixels: if it
+		// stayed at the top with the same thumb start, the drag did not
+		// scroll the list even when the pixel verdict is undecided because
+		// of live UI animation or rubber-band noise.
+		if beforeOK && afterOK && absInt(afterStart-beforeStart) <= 2 &&
+			run.listVerdict(out.afterMatch) && out.afterMatch.List != nil && out.afterMatch.List.Top {
+			log.Printf("youkai: collect: position %d: top confirmation accepted: the thumb stayed at the top", run.position)
+			run.listMatch = out.afterMatch
+			run.lastFrame = out.after
+			return nil
 		}
 		switch {
 		case out.stationary:
