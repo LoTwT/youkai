@@ -32,12 +32,16 @@ const (
 	LineSub4  = "sub4"
 )
 
-// Non-recognition context roles: the rarity badge and the selected cell's
-// border. The recognizer never reads these regions; the projection writes
-// them as admission evidence.
+// Non-recognition context roles: the rarity badge, the selected cell's
+// border and the two equipped-agent avatars. The recognizer never reads
+// these regions; the projection writes them as admission evidence. The
+// detail avatar is the primary equipper evidence, the list avatar confirms
+// it, and the identity matcher consumes both crops.
 const (
 	LineQualityBadge = "qualityBadge"
 	LineSelectedCell = "selectedCell"
+	LineDetailAvatar = "detailAvatar"
+	LineListAvatar   = "listAvatar"
 )
 
 // detailLines returns the detail pane's line regions actually present on
@@ -55,11 +59,16 @@ func (l Layout) detailLines(substats int) []LineRegion {
 }
 
 // contextLines returns the admission's non-recognition evidence regions
-// for a selected slot: the rarity badge and the slot's selection border.
+// for a selected slot: the rarity badge, the slot's selection border and
+// the detail/list equipped-agent avatars. The avatars are cropped for the
+// identity matcher and persisted as evidence; they never reach the
+// recognizer.
 func (l Layout) contextLines(slot int) []LineRegion {
 	return []LineRegion{
 		{Role: LineQualityBadge, Rect: l.QualityBadge},
 		{Role: LineSelectedCell, Rect: l.BorderRect(slot)},
+		{Role: LineDetailAvatar, Rect: l.DetailAvatar},
+		{Role: LineListAvatar, Rect: l.AvatarRect(slot)},
 	}
 }
 

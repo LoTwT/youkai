@@ -94,10 +94,9 @@ func TestStructuredDiscRarityFromCapture(t *testing.T) {
 
 // TestStructuredDiscCarriesCaptureState checks the adapter's non-text
 // fields: management state and equipment presence come from the capture,
-// the equipped object keeps agentId null until PR 6b, equipped records stay
-// unavailable until identity exists, and explicitly unequipped records can
-// validate once their management state is known (still needing human
-// confirmation).
+// an equipped object without an accepted identity keeps agentId null and
+// validation unavailable, and explicitly unequipped records can validate
+// once their management state is known (still needing human confirmation).
 func TestStructuredDiscCarriesCaptureState(t *testing.T) {
 	lines := detailLines()
 	structured := structuredDisc(Observation{
@@ -117,7 +116,7 @@ func TestStructuredDiscCarriesCaptureState(t *testing.T) {
 		t.Fatalf("equipped = %+v, want equipped", structured.Data.Equipped)
 	}
 	if structured.Data.Equipped.AgentID != nil {
-		t.Fatalf("equipped.agentId = %v, want null in this revision", structured.Data.Equipped.AgentID)
+		t.Fatalf("equipped.agentId = %v, want null without an accepted identity", structured.Data.Equipped.AgentID)
 	}
 	if structured.Validation.Status != zzz.ValidationUnavailable {
 		t.Fatalf("validation = %+v, want unavailable while agentId is unresolved", structured.Validation)
@@ -149,6 +148,56 @@ func TestStructuredDiscCarriesCaptureState(t *testing.T) {
 	}
 }
 
+// TestStructuredDiscCarriesAgentIdentity checks the identity rules: an
+// accepted catalog id fills equipped.agentId and lets an otherwise complete
+// record pass validation; zero or an unknown id stays null and unavailable;
+// an unequipped record ignores a supplied id. Quality remains needsReview
+// at the deliverer, covered by TestDelivererPersistsRawAndStructured.
+func TestStructuredDiscCarriesAgentIdentity(t *testing.T) {
+	lines := detailLines()
+	base := Observation{
+		Rarity:          zzz.RarityS,
+		ManagementState: zzz.ManagementNone,
+		EquippedState:   zzz.EquippedStateEquipped,
+	}
+	matched := base
+	matched.AgentID = 1311
+	got := structuredDisc(matched, lines)
+	if got == nil || got.Data.Equipped == nil || got.Data.Equipped.AgentID == nil ||
+		*got.Data.Equipped.AgentID != 1311 {
+		t.Fatalf("equipped = %+v, want agentId 1311", got)
+	}
+	if got.Validation.Status != zzz.ValidationPassed {
+		t.Fatalf("validation = %+v, want passed with a known id", got.Validation)
+	}
+
+	unmatched := base
+	unmatched.AgentID = 0
+	if got := structuredDisc(unmatched, lines); got.Data.Equipped.AgentID != nil ||
+		got.Validation.Status != zzz.ValidationUnavailable {
+		t.Fatalf("unmatched = %+v/%s, want agentId null and unavailable", got.Data.Equipped, got.Validation.Status)
+	}
+
+	stale := base
+	stale.AgentID = 9999
+	if got := structuredDisc(stale, lines); got.Data.Equipped.AgentID != nil ||
+		got.Validation.Status != zzz.ValidationUnavailable {
+		t.Fatalf("stale = %+v/%s, want agentId null and unavailable", got.Data.Equipped, got.Validation.Status)
+	}
+
+	unequipped := Observation{
+		Rarity:          zzz.RarityS,
+		ManagementState: zzz.ManagementDiscarded,
+		EquippedState:   zzz.EquippedStateUnequipped,
+		AgentID:         1311,
+	}
+	if got := structuredDisc(unequipped, lines); got.Data.Equipped.AgentID != nil ||
+		got.Data.Equipped.State != zzz.EquippedStateUnequipped ||
+		got.Validation.Status != zzz.ValidationPassed {
+		t.Fatalf("unequipped = %+v/%s, want null agentId and passed", got.Data.Equipped, got.Validation.Status)
+	}
+}
+
 // TestStructuredDiscWithoutDetailRoles checks that a non-disc observation
 // gets no fabricated structured payload.
 func TestStructuredDiscWithoutDetailRoles(t *testing.T) {
@@ -159,9 +208,9 @@ func TestStructuredDiscWithoutDetailRoles(t *testing.T) {
 
 // TestDelivererPersistsRawAndStructured drives the terminal update and
 // checks that a produced item keeps the raw lines and the structured
-// payload in one data document, is marked needsReview even with confirmed
-// management/equipment presence, and never becomes auto-accepted while the
-// equipper identity is unresolved.
+// payload in one data document, carries a matched agent id while still
+// being marked needsReview, and never becomes auto-accepted merely because
+// validation passed.
 func TestDelivererPersistsRawAndStructured(t *testing.T) {
 	lines := detailLines()
 	result := RecognitionResult{
@@ -170,6 +219,7 @@ func TestDelivererPersistsRawAndStructured(t *testing.T) {
 			Rarity:          zzz.RarityS,
 			ManagementState: zzz.ManagementLocked,
 			EquippedState:   zzz.EquippedStateEquipped,
+			AgentID:         1311,
 		}, lines),
 	}
 	item := record.ItemRecord{
@@ -203,8 +253,11 @@ func TestDelivererPersistsRawAndStructured(t *testing.T) {
 		t.Fatalf("persisted managementState = %v, want locked", doc.Structured.Data.ManagementState)
 	}
 	if doc.Structured.Data.Equipped == nil || doc.Structured.Data.Equipped.State != zzz.EquippedStateEquipped ||
-		doc.Structured.Data.Equipped.AgentID != nil {
-		t.Fatalf("persisted equipped = %+v, want equipped/null", doc.Structured.Data.Equipped)
+		doc.Structured.Data.Equipped.AgentID == nil || *doc.Structured.Data.Equipped.AgentID != 1311 {
+		t.Fatalf("persisted equipped = %+v, want equipped/1311", doc.Structured.Data.Equipped)
+	}
+	if doc.Structured.Validation.Status != zzz.ValidationPassed {
+		t.Fatalf("persisted validation = %+v, want passed", doc.Structured.Validation)
 	}
 
 	failed := record.ItemRecord{Sequence: 2, Status: record.StatusRunning, Quality: record.QualityNotEvaluated}

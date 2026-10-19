@@ -54,11 +54,18 @@ type Observation struct {
 	ManagementEvidence string
 	// EquippedState is the traversal's confirmed equipment presence
 	// ("equipped", "unequipped") or empty when unreadable or conflicting.
-	// Agent identity is not part of this revision.
 	EquippedState string
 	// EquippedEvidence describes the detail and list avatar verdicts the
 	// presence decision rested on.
 	EquippedEvidence string
+	// AgentID is the fairy numeric id the avatar matcher accepted, or 0
+	// when the identity was not evaluated, was ambiguous, or was below
+	// the matcher's confidence floor.
+	AgentID int
+	// AgentIDEvidence records the matcher's scores and the reason it did
+	// or did not accept an identity. It is persisted in the observed
+	// payload for audit; the avatar pixels live in the evidence files.
+	AgentIDEvidence string
 	// Capture is the traversal's own capture record, verbatim. Its pixels
 	// are omitted by the collect side and live only in the evidence
 	// files; the payload keeps the navigation provenance (position,
@@ -87,10 +94,18 @@ func observedPayload(obs Observation) (json.RawMessage, error) {
 		context[i] = observedLine{Role: crop.Role, Source: crop.Source}
 	}
 	raw, err := json.Marshal(struct {
-		Lines   []observedLine  `json:"lines"`
-		Context []observedLine  `json:"context,omitempty"`
-		Capture json.RawMessage `json:"capture,omitempty"`
-	}{Lines: lines, Context: context, Capture: obs.Capture})
+		Lines                 []observedLine  `json:"lines"`
+		Context               []observedLine  `json:"context,omitempty"`
+		EquippedAgentID       int             `json:"equippedAgentId,omitempty"`
+		EquippedAgentEvidence string          `json:"equippedAgentEvidence,omitempty"`
+		Capture               json.RawMessage `json:"capture,omitempty"`
+	}{
+		Lines:                 lines,
+		Context:               context,
+		EquippedAgentID:       obs.AgentID,
+		EquippedAgentEvidence: obs.AgentIDEvidence,
+		Capture:               obs.Capture,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("app: marshal observed payload: %w", err)
 	}

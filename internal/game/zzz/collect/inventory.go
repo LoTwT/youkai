@@ -196,8 +196,9 @@ type Observation struct {
 	// or conflicting; it is not unequipped.
 	EquippedState string `json:"equippedState,omitempty"`
 	// EquippedEvidence describes the detail and list avatar verdicts the
-	// presence decision rested on. Agent identity is deliberately absent
-	// (PR 6b).
+	// presence decision rested on. The equipper's identity is matched from
+	// the avatar crops in Context by the application projection; this
+	// field stays presence-only.
 	EquippedEvidence string `json:"equippedEvidence,omitempty"`
 	// ScrollEvidence records the latest verified viewport transition that
 	// preceded this admission in the same position, if any, and is empty
@@ -208,9 +209,11 @@ type Observation struct {
 	// a four-substat disc, sub4.
 	Lines []LineRegion `json:"lines"`
 	// Context are the non-recognition regions that establish the
-	// admission: the rarity badge and the selected cell's border. The
-	// projection writes them as evidence; the recognizer never reads
-	// them.
+	// admission: the rarity badge, the selected cell's border and the
+	// detail/list equipped-agent avatars. The projection writes them as
+	// evidence; the recognizer never reads them. The avatar crops are the
+	// identity matcher's input and are saved as evidence files, not
+	// exported in the usable data.
 	Context []LineRegion `json:"context"`
 	// VisitIndex is this admission's visit number (1-based). The
 	// skeleton numbers admitted visits in admission order; the full
