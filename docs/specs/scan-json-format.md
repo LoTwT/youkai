@@ -1,109 +1,110 @@
-# Youkai 扫描结果 JSON v1
+# Youkai 扫描结果 JSON 与 CSV v1
 
-更新日期：2026-10-18。状态：文件契约设计，尚未实现或发布。2026-10-18 随 M2 字段解析定案增补副词条强化档位字段；契约尚未实现，无既有文件需要兼容迁移。用户已确认先做 youkai 自有 JSON，外部工具接入等具体需求出现后再评估。会话、保存与物品身份仍以[公共架构第 5 节](scanner-architecture.md#5-扫描会话与结果语义)为准；操作流程见 [T6](t6-review-export-workflow.md)。
+更新日期：2026-10-20。状态：文件契约设计，尚未实现或发布。2026-10-20 冻结首版数据模型与导出：管理状态合并为 `managementState`，套装与代理人使用 fairy 数值 ID；首版只导出可用数据 JSON 与 CSV，不提供 archive 视图、ZIP 或档案导入导出。契约尚未实现，无既有文件需要兼容迁移。用户已确认先做 youkai 自有文件，外部工具接入等具体需求出现后再评估。会话、保存与物品身份以[公共架构第 5 节](scanner-architecture.md#5-扫描会话与结果语义)为准；操作流程见 [T6](t6-review-export-workflow.md)。
 
-## 1. 一个载荷，两种文件用途
+## 1. 两种导出格式，同一数据源
 
-采用一个版本化 JSON 外壳和一套驱动盘字段，`view` 区分两种用途：
+首版只有两种导出格式，均来自同一次已保存修订、同一批可用记录；不重新 OCR、不改单位、不重新编号：
 
-| `view` | 文件 | 内容 |
+| 格式 | 文件 | 内容 |
 | --- | --- | --- |
-| `archive` | `*.youkai.zip`，根目录为 `scan.json` | 全部已接纳观测、当前字段、原始识别、人工修订和证据文件，可重开校对。 |
-| `usable` | `*.youkai.json` | 当前可用记录及来源、范围、覆盖、排除数量，不含截图和识别审计。 |
+| JSON | `*.youkai.json` | 当前可用记录及来源、范围、覆盖、排除数量，和只含实际引用条目的目录子集。 |
+| CSV | `*.youkai.csv` | 同一批记录的单表宽表；一行一件盘，副词条展开为 `sub1` 至 `sub4`。 |
 
-两种视图中的 `items[].data` 完全同构；`usable` 从同一已保存修订筛选并投影，不重新 OCR、不改单位、不重新编号。`archive` 只表示本次已接纳内容齐全，不代表库存扫全。两种文件都不是跨次库存同步指令，缺少某件物品不表示应删除它。
-
-公共文件仅导出已收尾、封存且保存成功的快照。运行中检查点需要表达排队、运行等状态，继续由内部持久化契约维护；不把运行中的 UI 状态、取消句柄或队列直接序列化为公共文件。
+两种文件都不含截图或原始识别审计，都是单向导出，不是跨次库存同步指令，缺少某件物品不表示应删除它。公共文件仅导出已收尾、封存且保存成功的快照；运行中的排队、运行和取消句柄继续由内部持久化契约维护，不进入公共文件。
 
 所有 JSON 使用 UTF-8、无 BOM、无注释、无重复键，字段名大小写严格匹配。对象键顺序无语义，物品按采集序号递增输出。`formatVersion` 使用整数，未知版本拒绝解释；v1 不接受未定义字段或枚举，新增会改变读取契约的字段时升版，不预设动态插件、任意扩展包或迁移框架。
 
 ## 2. 公共外壳
 
-以下字段在两种视图中均必需。时间采用 UTC 文本 `YYYY-MM-DDTHH:mm:ss.sssZ`；计数、序号、修订号和像素尺寸均为 JSON 整数，最大为 `9007199254740991`，不以浮点数承载标识。
+时间采用 UTC 文本 `YYYY-MM-DDTHH:mm:ss.sssZ`；计数、序号、修订号和像素尺寸均为 JSON 整数，最大为 `9007199254740991`，不以浮点数承载标识。
 
 | 字段 | 类型与含义 |
 | --- | --- |
 | `format` / `formatVersion` | 固定 `"youkai.scan"` / `1`。 |
-| `view` | `archive` 或 `usable`。它本身即导出筛选方式，不另设互相矛盾的模式开关。 |
 | `exportedAt` | 此文件导出时间。 |
 | `producer` | `{ "name": "youkai", "version": string }`，版本非空。 |
-| `session` | 下表定义的来源会话。导入独立副本不改来源 ID，本地副本标识属于内部存储。 |
-| `catalog` | `{ "namespace": "youkai.zzz", "revision": string, "sets": object, "agents": object }`。两张对象表均为稳定标识到显示名称的映射，只携带本文件实际引用的条目。 |
-| `fieldPolicy` | `{ "discarded": "required" 或 "notCaptured", "equipped": "required" 或 "stateOnly" 或 "notCaptured" }`。核心字段始终必需，两项管理字段的解释见第 3 节。 |
+| `session` | 下表定义的来源会话。 |
+| `catalog` | `{ "namespace": "youkai.zzz", "revision": string, "sets": object, "agents": object }`。两张对象表均为十进制字符串键到显示名称的映射，只携带本文件实际引用的条目。 |
+| `fieldPolicy` | 固定 `{ "management": "required", "equipped": "required" }`；含义见第 3 节。 |
 | `validationRules` | `{ "id": string, "version": string }` 或 `null`。本次当前校验所用的应用内置规则，标识与版本非空；`version` 是内置资料表的修订号，表内容变化即递增，与 `catalog.revision` 相同。不是原始识别资源版本，见下方当前校验契约。 |
-| `excludedCount` | 本视图排除的已采集记录数；等于 `session.capturedCount - items.length`。档案固定为零。 |
+| `excludedCount` | 本文件排除的已采集记录数；等于 `session.capturedCount - items.length`。 |
 | `items` | 第 3 节的记录数组。可用项为零时允许空数组，不丢失来源与覆盖信息。 |
 
-`catalog` 标识由 youkai 固定映射表分配，不直接使用 OCR 文本或可修改的中文名。首版采用可读且稳定的键，例如 `woodpeckerElectro`，键的语法为 `^[a-z][A-Za-z0-9]*$`；键分配后不随翻译或显示名称改变，也不复用于另一套装。标识的完整含义是命名空间、实体类别和键，套装键与代理人键互不混用。资料修订记录版本，已发布键保持身份；新增套装或代理人属于资料更新，不必提升文件结构版本。
+### 标识与目录子集
 
-套装、代理人名称与校验规则是应用内置的 Go 资料表，从固定版本的 fairy 公开资料复制所需部分（见[架构字段校验](scanner-architecture.md#字段校验范围与资料来源)），不含数值表。`catalog.sets` 和 `catalog.agents` 只是文件自解释的名称投影，不能取代校验规则。档案须覆盖原始值和修订历史引用的标识，可用视图只携带其记录引用的标识。
+套装和代理人都使用 fairy 数值 ID：套装如河豚电音 `31100`，代理人如耀嘉音 `1311`。公共 JSON 的 `data.setId` 和 `data.equipped.agentId` 是数值；`catalog.sets`、`catalog.agents` 的键是该 ID 的十进制字符串（JSON 对象键只能是字符串），值是可读显示名，例如 `"31100": "河豚电音"`、`"1311": "耀嘉音"`。读取端按数值 ID 关联，显示名称不承担身份。
+
+`catalog` 只导出文件实际引用的条目：`sets` 只含 `items[].data.setId` 出现过的套装，`agents` 只含 `data.equipped.agentId` 非空的代理人。不导出固定资料中的完整 30 套或 60 人表，也不因某个套装或代理人曾在其他会话出现而补录。目录只是文件自解释的名称投影，不能取代应用内置的固定校验资料。资料修订记录版本，已发布 ID 保持身份；新增套装或代理人属于资料更新，不必提升文件结构版本。
+
+单件驱动盘没有可读的唯一游戏 ID，仍用 `session.id + items[].sequence` 标识一次观测；`catalog` 不是单件盘索引，不能用来跨会话合并物品。属性完全相同的两件盘各保留一条记录，禁止用属性哈希、数组位置或目录键充当物品身份。
 
 | `session` 字段 | 类型与含义 |
 | --- | --- |
 | `id` | 小写标准 UUID 文本；与 `items[].sequence` 共同标识一次观测。 |
-| `savedRevision` | 已持久化的结果修订号，非负整数；与单件 `revision`、UI 快照版本分开。独立导入副本各自递增，因此 `id + savedRevision` 不保证在不同副本间唯一，不能用作跨文件内容相等或同步依据。 |
+| `savedRevision` | 已持久化的结果修订号，非负整数；与单件 `revision`、UI 快照版本分开。 |
 | `game` / `entity` | v1 固定 `zzz` / `driveDisc`。一文件只有一种游戏和实体。 |
 | `client` | `windowsLocal`、`windowsCloud`、`macosCloud`，对应三种已确认入口。 |
 | `locale` | v1 固定 `zh-CN`，对应用户已确认的首版游戏识别语言；不表示已经通过识别验收，也不规定应用界面语言。 |
 | `startedAt` / `endedAt` | 开始和实际收尾时间；中断恢复且结束时刻不可知时，`endedAt` 为 `null`，不拿恢复时间冒充结束。 |
-| `termination` | `{ "kind": "completed" 或 "cancelled" 或 "failed" 或 "interrupted", "code": string, "phase": "preparing" 或 "capturing" 或 "finalizing" }`。保留首个结束触发，后续故障另记档案事件。 |
-| `scope` | `{ "rarity": "S", "slots": [1,2,3,4,5,6], "minLevel": 0, "maxLevel": 15, "sets": "all", "locked": "all", "discarded": "all", "equipped": "all" }`。对应用户已确认的首版完整范围，`sets: "all"` 指所固定资料版本全部套装；不按锁定、弃置或装备状态排除盘。缩小范围须明确更新契约，不能把 UI 临时筛选偷换为来源范围。 |
-| `coverage` | `{ "status": "complete" 或 "partial" 或 "unknown", "expectedCount": integer 或 null }`。总数只有同范围可信证据时才填；覆盖依据在档案中保留。 |
+| `termination` | `{ "kind": "completed" 或 "cancelled" 或 "failed" 或 "interrupted", "code": string, "phase": "preparing" 或 "capturing" 或 "finalizing" }`。保留首个结束触发。 |
+| `scope` | `{ "rarity": "S", "slots": [1,2,3,4,5,6], "minLevel": 0, "maxLevel": 15, "sets": "all", "locked": "all", "discarded": "all", "equipped": "all" }`。这些是游戏筛选条件与声明范围，不是 `data` 字段。首版范围为全部套装，且不按锁定、弃置或装备状态排除盘；缩小范围须明确更新契约，不能把 UI 临时筛选偷换为来源范围。 |
+| `coverage` | `{ "status": "complete" 或 "partial" 或 "unknown", "expectedCount": integer 或 null }`。总数只有同范围可信证据时才填。 |
 | `capturedCount` | 已接纳的 S 级物品观测数，包括后来失败或未处理项。导航尝试、参照物截图和明确非 S 项不计入。 |
 
 `termination.code` 为非空诊断代码，建议使用 `verifiedEnd`、`userCancelled`、`focusLost`、`geometryChanged`、`permissionRevoked`、`navigationMismatch`、`evidenceFailed`、`runtimeFailure`、`storageFailure` 或 `interrupted`。`evidenceFailed` 表示已接纳截图的投影或入队失败，保留原始错误；它只用于解释，不授权额外动作；读取端可展示不认识的代码，不能因此把 `kind` 改为正常完成。后续故障不会覆盖首个触发。
 
 `termination.phase` 是首个结束触发所在的阶段，不是文件导出时的状态。正常遍历到末尾通常为 `completed + capturing`；准备阶段已验证空库存可为 `completed + preparing`，不统一改写成 `finalizing`。
 
-范围描述预期扫描什么，`coverage` 描述实际覆盖到哪里，`excludedCount` 描述导出舍弃多少已采集记录，三者独立。即使 `coverage.status=complete`，可用视图仍可能有排除项。`complete` 不由 OCR 成功率或 `expectedCount` 单独推出；有可信总数时必须与采集数一致，否则保留冲突并降为 `partial` 或 `unknown`。
+范围描述预期扫描什么，`coverage` 描述实际覆盖到哪里，`excludedCount` 描述导出舍弃多少已采集记录，三者独立。即使 `coverage.status=complete`，仍可能有排除项。`complete` 不由 OCR 成功率或 `expectedCount` 单独推出；有可信总数时必须与采集数一致，否则保留冲突并降为 `partial` 或 `unknown`。按 T5 的严格排序规则，只有排序标签已读取并验证时才允许 `complete`；未验证时只能为 `partial` 或 `unknown`。
 
 ## 3. 一件驱动盘
 
-每条记录必需 `sequence`、`revision`、`quality`、`issues`、`validation`、`data`；`archive` 另有必需的 `audit`，`usable` 禁止包含它。
+每条记录必需 `sequence`、`revision`、`quality`、`issues`、`validation`、`data`。
 
 | 字段 | 规则 |
 | --- | --- |
-| `sequence` | 从 1 开始的采集序号。档案完整保留 `1..capturedCount`；可用视图可有间断，但不重编号。禁止用属性哈希或数组位置充当身份。 |
+| `sequence` | 从 1 开始的采集序号。可用数据可有间断，但不重编号。禁止用属性哈希或数组位置充当身份。 |
 | `revision` | 原始结果为 0；每次已保存的人工修改或整件确认递增。只反映此件变化。 |
 | `quality` | `autoAccepted`、`needsReview`、`humanConfirmed`、`notEvaluated`。记录本修订的识别或人工确认状态，不说明库存覆盖，也不能代替当前资料校验。 |
-| `issues` | 本修订的识别或人工校对问题数组，元素为 `{ "field": string 或 null, "code": string, "severity": "error" 或 "warning", "message": string }`。`null` 表示整件问题；导入重校验的问题单独落在 `validation.issues`。 |
+| `issues` | 本修订的识别或人工校对问题数组，元素为 `{ "field": string 或 null, "code": string, "severity": "error" 或 "warning", "message": string }`。`null` 表示整件问题。 |
 | `validation` | `{ "status": "passed" 或 "failed" 或 "unavailable", "issues": array }`，问题结构同 `issues`。对应本件当前 `revision` 与顶层 `validationRules`，规则见下文。 |
 | `data` | 以下全部字段组成的对象；尚无规范化结果时整体为 `null`。不得用空对象冒充成功识别。 |
 
 | `data` 字段 | 类型与业务语义 |
 | --- | --- |
-| `setId` | 套装稳定键或 `null`。非空时必须能在 `catalog.sets` 解析。 |
+| `setId` | fairy 套装数值 ID 或 `null`。非空时必须是整数，并能在 `catalog.sets` 的十进制字符串键中解析。 |
 | `rarity` | 固定 `S`，来自已验证的画面或筛选证据，不从文件声明凭空补齐。 |
 | `slot` / `level` | 槽位为 1 至 6，等级为 0 至 15；未知分别为 `null`。 |
 | `mainStat` | 第 4 节的词条对象或 `null`。 |
 | `substats` | 按画面从上至下的词条对象数组（第 4 节，含强化档位），最多四条；数量不明为 `null`，确认没有可见副词条才用 `[]`。已知存在但未读出的行保留带未知值的词条对象，不能删掉该行。 |
-| `locked` | `true`、`false`、`null`，依次为已锁定、未锁定、未知；首版可用记录必需已知。 |
-| `discarded` | `true`、`false`、`null`，依次为已弃置、未弃置、未知。 |
-| `equipped` | `{ "state": "unknown" 或 "unequipped" 或 "equipped", "agentId": string 或 null }`。`unknown` 和 `unequipped` 的 `agentId` 必须为 `null`；已装备允许代理人暂未知，非空键须在 `catalog.agents` 中。 |
+| `managementState` | `"locked"`、`"discarded"`、`"none"` 或 `null`。真实游戏状态只有前三态；`null` 表示未读到、不可读或证据冲突。没有 `unknown` 枚举值。 |
+| `equipped` | 整体可为 `null`（未读到）；读到后为 `{ "state": "equipped" 或 "unequipped", "agentId": number 或 null }`。结构上允许 `{ "state": "equipped", "agentId": null }` 作为未完成观测，但 `required` 校验下不能进入可用数据。 |
 
-未知、否定和空集合不能互换。`substats=[]` 只陈述读到了空列表，是否符合 S 级及当前等级由资料规则判断，不保证可用。识别不到装备者不等于未装备，锁定与弃置也分别保留，不能仅凭用户回忆的图标位置合并成一个状态。
+`managementState` 的三态互斥由图标决定：盘格右下角红色垃圾桶为 `discarded`，灰色锁为 `locked`，无图标为 `none`。列表盘格右下角角标是主要依据，顶部“拆解”左侧指示用于确认弃置；两者冲突或任一不可读时记 `null`。锁定角标带有闪光动画，单帧可能漏检；多帧采样与颜色加形状分类仍是 PR 6a 的待验证项，不得把未验证结果写成 `none`。
 
-`fieldPolicy` 在会话开始时随支持配置固定，导出和人工校对不能降低要求来增加可用数量：
+装备状态从详情页等级右侧头像判断并匹配代理人身份，列表格右上角头像确认；冲突或不可读时整个 `equipped` 记 `null`。当前代理人装备和他人装备都属于 `equipped`，当前装备置顶只影响遍历顺序，不构成额外的数据状态。`unequipped` 时 `agentId` 必须为 `null`；`equipped` 且用于可用数据时，`agentId` 必须是 fairy 代理人数值 ID（例如耀嘉音 `1311`），并能在 `catalog.agents` 中解析。
 
-- `required`：弃置须为布尔值；装备须明确未装备，或已装备且代理人已知。
-- `stateOnly`：仅用于装备，须明确已装备或未装备，已装备的代理人可未知；已经可靠取得的代理人仍保留并校验，不能丢弃它。状态本身未知时不可用。
-- `notCaptured`：该版本明确未提供该字段，弃置须为 `null`，装备须为 `unknown + agentId=null`，并在界面和数据中明示。
+未知、否定和空集合不能互换。`managementState=null` 不等于 `none`，`equipped=null` 不等于 `unequipped`，`substats=[]` 只陈述读到了空列表。识别不到装备者不等于未装备；管理状态与装备分别保留，不能仅凭用户回忆的图标位置合并或补默认值。
 
-后两种策略表达经验证的能力边界，不授权取消用户要求的“可行即纳入”；采用较低能力仍须有实机证据并与用户讨论。当前验证目标和示例均将两项设为 `required`。
+`fieldPolicy` 在 v1 固定为 `{ "management": "required", "equipped": "required" }`，不再接受按字段拆分的旧组合：
 
-按用户已确认的校对方案，可用视图只接受所有必需字段已知、`validation.status=passed`、两处问题数组均没有 `error`，且 `quality` 为 `autoAccepted` 或 `humanConfirmed` 的记录。自动接受记录无需逐件人工确认，问题记录经校对确认后再纳入；说明见 [T6](t6-review-export-workflow.md#导出前校对的已确认规则)。仅保存局部修改不会自动确认整件。修改自动接受或已确认条目后，新修订进入 `needsReview`，整件确认后才可输出。手动补录可使原始失败或未处理记录变为可用，但不得改写其原始处理结局。
+- `management: "required"`：`managementState` 必须为 `locked`、`discarded` 或 `none`，不能为 `null`。
+- `equipped: "required"`：`equipped` 必须非 `null`；`unequipped` 时 `agentId=null`，`equipped` 时 `agentId` 必须是非空 fairy 数值 ID 且可在目录中解析。`{ "state": "equipped", "agentId": null }` 不能进入可用数据。
 
-### 当前校验与导入
+按用户已确认的校对方案，可用数据只接受所有必需字段已知、`validation.status=passed`、两处问题数组均没有 `error`，且 `quality` 为 `autoAccepted` 或 `humanConfirmed` 的记录。自动接受记录无需逐件人工确认，问题记录经校对确认后再纳入；说明见 [T6](t6-review-export-workflow.md#导出前校对的已确认规则)。仅保存局部修改不会自动确认整件。修改自动接受或已确认条目后，新修订进入 `needsReview`，整件确认后才可输出。手动补录可使原始失败或未处理记录变为可用，但不得改写其原始处理结局。
 
-`validation` 是对当前数据的可重算结论，与原始识别和人工确认分开。新扫描、保存人工修改、重开历史或导入档案时，使用应用随包且明确固定的当前规则重新检查字段策略、资料标识、单位、槽位、等级及数值格式；不下载新规则，不用档案自称通过代替检查。顶层 `validationRules` 记录实际所用规则，原始资料版本继续保留在 `provenance.resources` 中。
+### 当前校验
+
+`validation` 是对当前数据的可重算结论，与原始识别和人工确认分开。新扫描、保存人工修改或重开历史时，使用应用随包且明确固定的当前规则重新检查字段策略、资料标识、单位、槽位、等级及数值格式；不下载新规则，不用历史确认代替检查。顶层 `validationRules` 记录实际所用规则。
 
 - `passed`：全部必需检查完成且无错误，`validationRules` 必须非空；警告可保留。
 - `failed`：已发现缺字段或领域冲突，`validation.issues` 至少有一个 `error`。
 - `unavailable`：尚无已知字段冲突，但缺少资料或规则无法解释该目录版本，不能完成全部检查；至少有一个说明资料缺口的 `error`。没有可用规则时 `validationRules=null`，所有记录均为 `unavailable`。
 
-导入先检查结构、修订链和证据，再重算当前校验；领域冲突不改写 `audit`、`data`、`quality` 或人工修订。界面同时显示原确认状态和当前问题，将 `failed/unavailable` 列入待处理；允许查看原图、保存未完成修改和导出完整档案，但禁止整件确认与可用导出，直至当前检查通过。校验通过不会把 `needsReview` 或 `notEvaluated` 自动升为自动接受。
+重开历史记录时，界面同时显示原确认状态和当前问题，将 `failed/unavailable` 列入待处理；允许查看原图、保存未完成修改，但禁止整件确认与可用导出，直至当前检查通过。校验通过不会把 `needsReview` 或 `notEvaluated` 自动升为自动接受。
 
-仅更新校验而未发生人工修改或确认时，保存只增加 `session.savedRevision`，不增加单件 `revision`；规则和结果均未变则不制造新修订。后台校验绑定所读的物品修订和规则版本，旧回包不得覆盖新值。导出取已保存的同一份规则、校验结果和数据快照；`usable` 中每件均为 `passed`，有记录时规则不得为空。只读消费端不能把旧校验当作当前应用的验收结果，重新使用或转换时仍应按自己的校验契约检查。
+仅更新校验而未发生人工修改或确认时，保存只增加 `session.savedRevision`，不增加单件 `revision`；规则和结果均未变则不制造新修订。后台校验绑定所读的物品修订和规则版本，旧回包不得覆盖新值。导出取已保存的同一份规则、校验结果和数据快照；JSON 中每件均为 `passed`，有记录时规则不得为空。只读消费端不能把旧校验当作当前应用的验收结果，重新使用或转换时仍应按自己的校验契约检查。
 
 ## 4. 精确数值和单位
 
@@ -129,91 +130,37 @@
 
 十进制字符串是一项格式设计取舍：每条多两个引号，省去二进制浮点往返误差和百分数约定不清的问题，不增加用户运行库。JSON 标准允许解析器限制数值精度，也明确提示重复键会导致不同读取行为，因此本契约额外要求精确字符串和重复键拒绝。[RFC 8259 第 4、6、8.1 节](https://www.rfc-editor.org/rfc/rfc8259)
 
-## 5. 档案附加信息
+## 5. CSV 导出
 
-`archive` 视图增加顶层 `provenance` 和 `assets`；可用视图不包含这两个字段。图片直接存文件，不嵌入 Base64。JSON 中的 `evidenceId` 引用 `assets[].id`，同一帧被多个字段引用时只存一份。
+CSV 是单表宽表，一行一件可用盘，记录集合、顺序与同次 JSON 一致；副词条按画面顺序展开到 `sub1` 至 `sub4`。文件为 UTF-8 文本，首行为表头，逗号分隔；含逗号、双引号或换行的字段按 RFC 4180 加引号，双引号写成两个。空值写为空字段，不写 `null` 文本。
 
-### 原始观测与修订
-
-每条 `audit` 保留以下字段。`processing`、`observed`、`originalQuality`、`originalIssues`、`observations` 和采集信息封存后不可更改；人工操作只追加 `revisions`，并更新记录的当前 `data`、`quality`、`issues` 和 `revision`。
-
-| `audit` 字段 | 结构与规则 |
+| 列 | 来源与含义 |
 | --- | --- |
-| `capturedAt` | 被服务接纳的时间。 |
-| `processing` | `{ "status": "produced" 或 "failed" 或 "unprocessed", "reason": string 或 null }`。后两种须有原因；公共档案不存在排队、运行。 |
-| `observed` | 原始规范化 `data` 对象或 `null`，与当前字段采用相同结构；失败时仍可保留部分结果。 |
-| `originalQuality` / `originalIssues` | 原始质量与问题，结构同当前字段。原始质量不能是人工确认。 |
-| `capture` | `{ "frameId": string, "frameReceivedAt": timestamp, "geometryRevision": integer, "visitIndex": integer, "position": integer, "viewportIndex": integer, "row": integer, "column": integer, "association": string, "rarityFilter": "S"（可选）, "scrollEvidence": string（可选）, "evidenceIds": string[] }`。时间是平台收到帧的时间，不冒充云端渲染时间；访问序号引用下方遍历账目，包含明确非 S 的跳过位置，所以不等于采集序号。几何版本、行列和视口从 0 开始，不以它们代替物品身份。`position` 是转盘位置 1–6；`viewportIndex` 在每个位置内重新从 0 计数，不能跨位置当作全局视口。`rarityFilter` 仅在准备阶段已确认漏斗 Active 且本件为 S 时写 `S`；`scrollEvidence` 仅在进入该视口的最近一次已核实滚动后、由该视口的第一个接纳件携带一次，内容为前后 frame id、rows、matches 数量与 matcher evidence 的可读字符串。二者都是可选 provenance，不替代详情归属证据。 |
-| `observations` | 字段证据数组，元素结构见下文。识别未运行可为空，已得出的文字或图标结果不能因后续任务失败被清空。 |
-| `revisions` | 人工修订数组，按修订号递增；无人工操作时为 `[]`。 |
+| `sequence` | `items[].sequence`。 |
+| `revision` | `items[].revision`。 |
+| `quality` | `items[].quality`。 |
+| `validationStatus` | `items[].validation.status`。 |
+| `setId` | `data.setId`，十进制数值；同次 JSON 的 `catalog.sets` 提供名称。 |
+| `rarity` | `data.rarity`。 |
+| `slot` / `level` | `data.slot` / `data.level`。 |
+| `mainStatAttribute` / `mainStatValue` / `mainStatUnit` | 主词条三个字段。 |
+| `sub1Attribute` / `sub1Value` / `sub1Unit` / `sub1Rolls` | 第一条副词条；`Rolls` 对应 `enhancementRolls`。`sub2` 至 `sub4` 同构。 |
+| `managementState` | `data.managementState`。 |
+| `equippedState` | `data.equipped.state`；`equipped=null` 时为空。 |
+| `equippedAgentId` | `data.equipped.agentId`，十进制数值；`unequipped` 或 `equipped=null` 时为空。 |
 
-`capture.association` 取 `initialVerified`、`transitionVerified` 或 `neighborRoundTripVerified`，分别对应 T5 的初始详情、选中切换和相同详情的有界参照核验。`evidenceIds` 须含目标详情上下文及建立归属所需的证据，不能只留词条裁剪。已接纳 S 级的品质依据也在其中。未能确认 S 品质或详情归属的尝试不分配物品序号，按下方账目保留未解决位置及会话事件。
-
-字段证据采用以下结构；同一字段可有多次观测，候选和分数不自动成为最终值：
-
-```json
-{
-  "field": "mainStat",
-  "method": "ocr",
-  "rawText": "暴击率 24.0%",
-  "candidate": { "attribute": "critRate", "value": "24", "unit": "percent" },
-  "score": 0.98,
-  "evidenceId": "detail-1",
-  "rect": { "x": 120, "y": 80, "width": 300, "height": 48 }
-}
-```
-
-`field` 为 `data` 的一个根字段名，或 `substats[0]` 至 `substats[3]`；问题对象使用同一命名。`method` 取 `ocr`、`icon` 或 `scopeEvidence`。`rawText` 仅在有原始文字时填写，否则为 `null`；`candidate` 使用目标字段的类型，无法规范化时为 `null`（副词条的 `candidate` 含 `enhancementRolls`）。分数未知为 `null`。`rect` 使用被引用原图的像素坐标、左上原点，非负 `x/y`、正 `width/height`，不得越界；全图证据时为 `null`。坐标不使用 Windows 屏幕坐标或 Mac 逻辑点。
-
-每个修订为 `{ "revision": integer, "savedAt": timestamp, "changes": array, "confirmed": boolean }`。`changes` 的元素是 `{ "field": string, "before": value, "after": value }`，只允许可编辑的 `data` 根字段，整组副词条（含强化档位）作为一个数组替换。每次修订中字段不重复，`before` 须与前一修订一致；单纯整件确认允许空变更。禁止修改 `rarity`、来源、覆盖和原始处理结局。修订号从 1 连续递增，最后一个等于条目的 `revision`；无修订时当前字段等于原始字段。
-
-原始 `observed=null` 时，人工补录从标准未知对象建立修订：`rarity=S`、`equipped={"state":"unknown","agentId":null}`，其余字段均为 `null`；`S` 只继承已接纳时的独立品质证据。没有人工修订时仍保留整个 `data=null`，不自动展开为空壳。最后修订应用后的字段必须等于当前 `data`；`humanConfirmed` 必须对应最后修订的 `confirmed=true`。导入按[当前校验契约](#当前校验与导入)处理，旧确认保留为历史事实，不使冲突字段跳过检查。
-
-### 会话依据与文件索引
-
-`provenance` 必需字段如下，均为只读来源：
-
-- `resources`：`{role,id,version,sha256}` 数组，记录实际使用的适配器、布局、模型和字典；校验规则由顶层 `validationRules` 记录。`role` 取 `adapter`、`layout`、`model`、`dictionary`；同一 `role + id` 唯一，摘要为 64 位小写十六进制。预检未运行到的资源不虚构记录；适配器可对构建制品或固定资源清单求摘要。
-- `captureProfile`：`{id,osVersion,description,resourceId,evidenceIds}`，前三项为非空字符串，标识所用显示配置并保留可读描述；`resourceId` 指向 `assets` 中随包的配置 JSON，`evidenceIds` 为设置证据。配置 JSON 保存 T2 要求的实际点/像素、视频区域、DPI 等记录，结构随所标明布局资源版本解释，不凭描述文字重新建立扫描坐标。尚未建立配置便准备失败时，此字段为 `null`；已有采集记录时不得为空。
-- `inventorySetup`：`{rarityFilter,otherFilters,sortLabel,verified,evidenceIds}`。品质筛选为 `S`、`all` 或 `unknown`；其他筛选为 `all` 或 `unknown`；排序标签为实际可读文本或 `null`；`verified` 为布尔值。声明范围和实际筛选分开，混合列表可以只接纳已确认 S 项。`rarityFilter` 仍按 `S/all/unknown` 契约记录会话级声明，不因每件 `capture.rarityFilter` 的出现而改写；后者是准备完成后逐件观测到的 S 筛选证据。未验证范围不能声称完整覆盖。
-- `coverageEvidenceIds`：遍历、衔接与末尾依据的证据 ID 数组。完整结论必须具有 T5 规定的证据，不只核对数组非空。
-- `traversal`：`{visits,transitions}`，结构化的访问与视口衔接账目，规则见下节；尚未开始访问时两数组为空。
-- `events`：`{at,phase,code,message,evidenceIds}` 数组，保留后续故障、未被接纳的导航异常及品质未知等问题。只承担解释和追溯，不建立可重放的输入指令服务。
-
-### 遍历账目
-
-`visits` 每项为 `{visitIndex,geometryRevision,position,viewportIndex,row,column,outcome,rarity,sequence,evidenceIds}`。只有确认是新的占用位置并开始处理它，才分配从 1 连续递增的 `visitIndex`；重叠重见、参照核验和同位置等待不增加访问数。`position` 是转盘位置 1–6；`viewportIndex` 在每个位置内从 0 重新计数，位置是该次已核验视口中的非负行列，必须属于记录的几何版本。封存时 `outcome` 只取以下三种：
-
-| `outcome` | 必需关系 |
-| --- | --- |
-| `capturedS` | `rarity=S`、`sequence` 为已接纳物品序号；与该件 `audit.capture` 的访问序号、几何、视口和行列一致。 |
-| `skippedNonS` | `rarity` 为 `A` 或 `B`，`sequence=null`，保留可判读的品质证据；不产生物品记录。 |
-| `unresolved` | `rarity` 为 `S`、`A`、`B` 或 `unknown`，`sequence=null`，保留停止原因事件及已有证据；不把未知品质或未确认详情记为跳过。 |
-
-`capturedS` 与 `items` 按 `sequence` 一一对应，数量等于 `capturedCount`；每个物品序号只出现一次。已访问数为 `visits.length`，由三类结果对账。前两类必须有非空证据引用，未解决位置可以只留下动作前证据；连目标位置都无法确认的异常只记 `events`，不虚构访问项。不同位置属性相同仍各自保留；任何 `unresolved` 都禁止 `coverage.status=complete`。
-
-进行中的访问只存在于内部检查点，按[公共保存与恢复规则](scanner-architecture.md#保存校对与导出)终结后才能进入公共档案；取消或中断不能留下没有 `outcome` 的访问项，也不能把已接纳的 `capturedS` 改成 `unresolved` 来删除物品。
-
-`transitions` 每项为 `{geometryRevision,fromViewportIndex,toViewportIndex,matches,evidenceIds}`，只记录成功核验的视口移动。每个转盘位置的初始视口为 0，每次已核实移动递增 1；`matches` 是非空的 `{fromRow,fromColumn,toRow,toColumn}` 数组，保存唯一、一一对应的重叠位置，非负坐标均受布局约束。证据须含前后列表画面及实际位移依据，不能用滚轮次数补齐对应。访问到非零视口须有从 0 到该视口的连续衔接；几何改变不在旧会话内续接。移动失败留事件和证据，不添加一个猜测成功的衔接。
-
-账目按 [T5](t5-zzz-inventory-traversal.md#6-保存什么证据怎样验收)随检查点保存，封存后只读。结构对账只排除矛盾，不能单凭账目完整宣布扫全；范围、起点、全部占用位置和末端仍需对应的视觉证据。空库存允许零访问，但必须有独立空列表依据。此结构不保存可执行输入脚本，也不增加常驻录像或事件服务。
-
-### 证据文件完整性
-
-`assets` 中每条为 `{id,kind,path,mediaType,byteLength,sha256,width,height}`。ID 为非空且唯一的字符串；`kind` 为 `image` 或 `resource`；图片的 MIME 为 `image/png`、正整数宽高，资源为 `application/json` 且宽高均为 `null`。`byteLength` 为正整数，`sha256` 为 64 位小写十六进制。路径相对 ZIP 根目录，分别限制在 `evidence/` 或 `resources/` 下，统一 `/`；禁止绝对路径、反斜杠、空段、`.`、`..`、符号链接和重复路径。所有引用须可解析到正确类型，字节数和摘要须匹配；所有随包证据和资源须列入索引，不读取档案外文件。仅模型版本和摘要随档案保存，不把整套推理模型再复制到每份扫描档案。
-
-正常档案导出须带齐引用文件，否则失败且不替换已有文件。打开缺图、错摘要或损坏档案可显示错误和可读信息，但不能以完整、可正常校对的档案静默接纳。导入先检查条目数量、声明和实际解压大小及资源尺寸，在取得正式图片负载后由 T7 固定容量限制；不以未经测量的固定上限冒充性能保证。
+CSV 只承载物品行，不重复会话外壳、`catalog`、`excludedCount` 或问题数组；需要来源、覆盖结论和目录名称时导出 JSON。JSON 与 CSV 不包含截图、原始识别或修订历史，清理截图不影响已经导出的文件。
 
 ## 6. 示例与校验边界
 
-[可用数据示例](../examples/scan-usable-v1.json)为手写合成记录，用于解释格式；资源版本、规则版本、会话和字段均不构成游戏扫描或模型准确性证据。它演示人工确认记录、两类六号位百分比主词条、副词条强化档位、当前校验、完整管理状态和已取消会话的部分结果。
+[可用数据示例](../examples/scan-usable-v1.json)为手写合成记录，用于解释格式；资源版本、规则版本、会话和字段均不构成游戏扫描或模型准确性证据。它演示人工确认记录、两类六号位百分比主词条、副词条强化档位、当前校验、三种管理状态、已装备代理人和已取消会话的部分结果。
 
 实现时按顺序检查：
 
 1. **文件与结构：**UTF-8、重复键、大小写、格式版本、必需字段、允许字段、枚举、时间、整数和十进制语法。Go 默认 JSON 解码不能单独满足所有要求，重复键和缺失布尔值应显式检查。
-2. **关联与对账：**会话及序号唯一、顺序、采集与排除数、原始处理结局总数、目录标识、修订连续性和证据引用。`archive` 每件恰有一个原始结局，三种结局合计等于采集数；人工补录不改变该计数。访问与采集序号分别对账，覆盖混合品质跳过、相同双盘、未解决位置和视口重叠。
-3. **领域与质量：**固定资料中的名称标识、槽位与主词条组合、副词条类型、单位、等级范围、副词条强化档位 0–5、字段策略和当前修订确认状态；数值只检查格式。遍历全部合法属性与单位，包含六号位 `impact + percent`、`anomalyMastery + percent`；导入旧确认遇新规则冲突或资料缺失时保留原审计并阻止可用导出。结构合法不等于识别正确，人工确认也不保证客观零错误。
-4. **往返：**同属性双盘仍为两件；未知不变否定；导出再读取保留精确值、部分覆盖和原始序号；修订能追到原图；缺图、损坏和失败写入明确报错。
+2. **关联与对账：**会话及序号唯一、顺序、采集与排除数、目录标识、修订连续性和当前校验。`capturedCount = items.length + excludedCount`；同一序号只出现一次；`catalog` 只含实际引用条目，数值 ID 与十进制字符串键一致。
+3. **领域与质量：**固定资料中的套装与代理人数值 ID、槽位与主词条组合、副词条类型、单位、等级范围、副词条强化档位 0–5、字段策略和当前修订确认状态；数值只检查格式。遍历全部合法属性与单位，包含六号位 `impact + percent`、`anomalyMastery + percent`。`managementState` 只接受三种真实状态或 `null`；`equipped` 的不变量按第 3 节检查。结构合法不等于识别正确，人工确认也不保证客观零错误。
+4. **往返：**同属性双盘仍为两件；`null` 不变否定，`managementState=null` 不写成 `none`；导出再读取保留精确值、部分覆盖和原始序号；JSON 与 CSV 来自同一修订和同一批记录。没有截图时仍能解释缺失，不伪造证据。
 
 Go 的 `encoding/json` v1 文档说明其允许重复键和结构体字段不区分大小写匹配；当前文档也区分了 v2 默认拒绝重复键和大小写严格匹配的行为。实现时优先使用目标 Go 版本已提供的严格选项，再验证必需字段、关联和领域规则，不自行重复实现标准解码器，也不把一次 `Unmarshal` 当作全部校验。[Go 官方 JSON 文档](https://pkg.go.dev/encoding/json#pkg-overview)
 
