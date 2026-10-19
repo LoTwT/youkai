@@ -409,6 +409,7 @@ func (run *inventoryRun) preparePosition(ctx context.Context, pos int) error {
 	run.visited = make([]bool, len(run.inv.Layout.Slots))
 	run.allowInitial = true
 	run.lastScrollRows = 0
+	run.lastScrollEvidence = ""
 
 	if err := run.establishList(ctx); err != nil {
 		return err
@@ -523,18 +524,39 @@ func (run *inventoryRun) switchWheel(ctx context.Context, pos int) error {
 	}
 }
 
-// resetFilters opens the filter panel, resets it, selects the S rarity
-// filter, closes the panel and requires the funnel to be active. The reset
-// is executed for every wheel position because the panel's state persists
-// across positions and sessions; the S selection is re-applied every time
-// so the walk only ever lists S discs. A funnel that stays clear stops the
-// walk — the S filter did not take effect, and proceeding could admit A/B
-// discs (user decision 2026-10-19).
+// resetFilters verifies the reset and the S selection as two separate
+// effects. It opens the panel, resets it, closes the panel and requires the
+// funnel to be clear — the only independent check that the reset really
+// removed other filters. Only then does it reopen the panel, select S,
+// close and require the funnel to be active. The selected state of the S
+// control has no calibrated pixel probe, so one Active reading cannot prove
+// both that the reset removed old filters and that S was applied; the
+// intermediate Clear check is therefore mandatory. A failed step stops the
+// walk and keeps admitted results.
 func (run *inventoryRun) resetFilters(ctx context.Context) error {
 	if err := run.openFilterPanel(ctx); err != nil {
 		return err
 	}
 	if err := run.resetFilterPanel(ctx); err != nil {
+		return err
+	}
+	if err := run.closeFilterPanel(ctx); err != nil {
+		return err
+	}
+	if err := run.requireWheelPosition("filter reset"); err != nil {
+		return err
+	}
+	if run.listMatch.Filter == nil || run.listMatch.Filter.State != FilterClear {
+		state := FilterUnknown
+		if run.listMatch.Filter != nil {
+			state = run.listMatch.Filter.State
+		}
+		return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
+			"collect: wheel position %d: the filter reset did not take effect; the funnel is %q, not clear — refusing to continue",
+			run.position, state))
+	}
+
+	if err := run.openFilterPanel(ctx); err != nil {
 		return err
 	}
 	if err := run.selectRarityS(ctx); err != nil {
@@ -543,10 +565,8 @@ func (run *inventoryRun) resetFilters(ctx context.Context) error {
 	if err := run.closeFilterPanel(ctx); err != nil {
 		return err
 	}
-	if run.listMatch.Wheel == nil || run.listMatch.Wheel.Position != run.position {
-		return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
-			"collect: wheel position %d: the wheel moved during the filter reset: %s",
-			run.position, run.listMatch.Evidence))
+	if err := run.requireWheelPosition("S filter selection"); err != nil {
+		return err
 	}
 	if run.listMatch.Filter == nil || run.listMatch.Filter.State != FilterActive {
 		state := FilterUnknown
@@ -563,6 +583,17 @@ func (run *inventoryRun) resetFilters(ctx context.Context) error {
 			run.position, state))
 	}
 	return nil
+}
+
+// requireWheelPosition keeps every close of the filter panel tied to the
+// wheel position the position's preparation started on.
+func (run *inventoryRun) requireWheelPosition(step string) error {
+	if run.listMatch.Wheel != nil && run.listMatch.Wheel.Position == run.position {
+		return nil
+	}
+	return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
+		"collect: wheel position %d: the wheel moved during the %s: %s",
+		run.position, step, run.listMatch.Evidence))
 }
 
 // openFilterPanel clicks the funnel and waits for the panel page to settle.
@@ -1493,10 +1524,11 @@ func (run *inventoryRun) currentList(ctx context.Context) (platform.Frame, error
 	return f, nil
 }
 
-// sameFrameContent reports whether two frames carry the same immutable
-// image content. The platform hands Go-owned frames that nothing aliases
-// after the return, so an identical image pointer is proof the content did
-// not change.
+// sameFrameContent is a fast path for callers that may reuse one immutable
+// frame image (the scripted tests and the replay do). Production adapters
+// create a new image for every Frame, so the identical-pointer check only
+// short-circuits the equal-object case; MatchScroll remains the primary
+// evidence for every other pair.
 func sameFrameContent(a, b platform.Frame) bool {
 	return a.Image != nil && a.Image == b.Image && a.Content == b.Content
 }

@@ -43,7 +43,7 @@ M2 平台会话集成后可用另一组开关接入真实游戏窗口做仅观�
 
 ## 真实遍历（macOS 云客户端，4b-2）
 
-- `YOUKAI_GAME_SOURCE=traverse` 在 **darwin** 上接入已标定的驱动盘仓库遍历：预检只要求仓库页、列表形状与唯一转盘位；随后按转盘位置 1→6 自动切换位置、重置筛选并勾选 S 稀有度（关闭面板后要求漏斗 Active；仍为 clear 即停止，A/B 不进入列表）、回顶并确认，再逐件点击/初始读取、等待详情归属、截帧接纳。每位置自动准备失败即停止并保留已接纳结果，不做补偿动作。滚动位移须等相对 candidate 的 Stationary 确认后才提交；到 `ScrollBudget` 仍不停稳按 Lost 安全停止。
+- `YOUKAI_GAME_SOURCE=traverse` 在 **darwin** 上接入已标定的驱动盘仓库遍历：预检只要求仓库页、列表形状与唯一转盘位；随后按转盘位置 1→6 自动切换位置，并按两段独立校验准备筛选：重置→关闭→要求漏斗 Clear（重置未生效即停止），重新打开→勾选 S→关闭→要求漏斗 Active（S 未生效即停止，A/B 不进入列表）；再回顶并确认，逐件点击/初始读取、等待详情归属、截帧接纳。S 选中态尚无像素探针，不能用一个 Active 同时证明重置与 S，因此不合并两次面板开关。每位置自动准备失败即停止并保留已接纳结果，不做补偿动作。滚动位移须等相对 candidate 的 Stationary 确认后才提交；到 `ScrollBudget` 仍不停稳按 Lost 安全停止。
 - 该模式只在 darwin 可用：Windows（及其他平台）没有已标定布局，入口直接拒绝并说明原因，不会猜测锚点或窗口身份。Windows 的 `observe` 演练仍按上一节要求提供目标身份。
 - 初始观测范围写入会话记录的 `observedScope`（`kind/page/layout/geometry/slots/startPosition/filterAtStart/sort`），不声称顶部或数量；`filterAtStart` 是准备前的漏斗状态，不代表本轮的 S 筛选声明。每件接纳的 `capture` 带 `position`（1–6）、逐位置重新计数的 `viewportIndex`、`rarityFilter:"S"` 与可选的一次性 `scrollEvidence`。详情行裁剪送识别，品质徽章与选中格边框作为上下文证据落盘、不送识别。
 - 与 `YOUKAI_DEV_SOURCE` 同时设置仍会拒绝启动；未设置任何来源时保持生产默认（无扫描源）。这是开发/联调开关，不是面向用户的扫描模式选择。

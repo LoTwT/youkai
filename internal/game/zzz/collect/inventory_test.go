@@ -73,6 +73,9 @@ type scriptedGame struct {
 	topStuck          bool // the top fling does not move the list
 	topJumpRows       int  // non-zero: the top fling moves up this many rows
 	resetClearsFilter bool // the panel reset clears the funnel (default true)
+	// resetLeavesActive makes the reset leave the funnel active, as if the
+	// reset did not remove an existing filter.
+	resetLeavesActive bool
 	// sClickDoesNothing makes every S rarity click a no-op;
 	// sClickDoesNothingAt does so only at one wheel position. The funnel
 	// then stays clear after the panel closes.
@@ -448,8 +451,12 @@ func (g *scriptedGame) dispatch(op platform.InputOp) platform.InputResult {
 			switch {
 			case op.At.Eq(g.layout.PanelReset):
 				if g.resetClearsFilter {
+					next := "clear"
+					if g.resetLeavesActive {
+						next = "active"
+					}
 					g.pending = append(g.pending, pendingEffect{dueAt: lag, apply: func(g *scriptedGame) {
-						g.filter = "clear"
+						g.filter = next
 					}})
 				}
 			case op.At.Eq(g.layout.PanelS):
@@ -612,6 +619,12 @@ func (g *scriptedGame) opsSnapshot() []platform.InputOp {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	return append([]platform.InputOp(nil), g.ops...)
+}
+
+func (g *scriptedGame) filterState() string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.filter
 }
 
 var (
@@ -882,14 +895,14 @@ func TestSinglePageCompletesOneViewport(t *testing.T) {
 	}
 
 	ops := game.opsSnapshot()
-	if clicks := countOps(ops, platform.InputClick, image.Point{}, image.Point{}); clicks != 20+5+4*6 {
-		t.Fatalf("%d clicks, want 20 slot clicks, 5 wheel switches and 24 filter-control clicks", clicks)
+	if clicks := countOps(ops, platform.InputClick, image.Point{}, image.Point{}); clicks != 20+5+6*6 {
+		t.Fatalf("%d clicks, want 20 slot clicks, 5 wheel switches and 36 filter-control clicks", clicks)
 	}
 	if wheelClicks := countWheelClicks(ops, game.layout); wheelClicks != 5 {
 		t.Fatalf("%d wheel clicks, want 5", wheelClicks)
 	}
-	if filterClicks := countFilterClicks(ops, game.layout); filterClicks != 24 {
-		t.Fatalf("%d filter-control clicks, want 4 per position", filterClicks)
+	if filterClicks := countFilterClicks(ops, game.layout); filterClicks != 36 {
+		t.Fatalf("%d filter-control clicks, want 6 per position", filterClicks)
 	}
 	if drags := countOps(ops, platform.InputDrag, game.layout.ScrollFrom, game.layout.ScrollTo); drags != 6 {
 		t.Fatalf("%d advance drags, want one per position's bottom confirmation", drags)
@@ -1665,7 +1678,7 @@ func TestTraverseWalksSixPositions(t *testing.T) {
 	if clicks := countWheelClicks(ops, game.layout); clicks != 5 {
 		t.Fatalf("%d wheel clicks, want 5 switches after the initial position", clicks)
 	}
-	if clicks := countFilterClicks(ops, game.layout); clicks != 6*4 {
+	if clicks := countFilterClicks(ops, game.layout); clicks != 6*6 {
 		t.Fatalf("%d filter-control clicks, want reset flow for every position", clicks)
 	}
 	if drags := countOps(ops, platform.InputDrag, game.layout.TopFrom, game.layout.TopTo); drags != 6 {
@@ -1673,6 +1686,37 @@ func TestTraverseWalksSixPositions(t *testing.T) {
 	}
 	if drags := countOps(ops, platform.InputDrag, game.layout.ScrollFrom, game.layout.ScrollTo); drags != 6 {
 		t.Fatalf("%d advance drags, want one per position (position 2's partial scroll is its end evidence)", drags)
+	}
+}
+
+// T29b: a verified scroll at the end of position 1 whose new viewport holds
+// no admitted disc must not leak its scrollEvidence into position 2's first
+// capture.
+func TestTraverseScrollEvidenceDoesNotLeakAcrossPositions(t *testing.T) {
+	items := make([]bool, 36)
+	for i := 0; i < 20; i++ {
+		items[i] = true // rows 0..4; rows 5..8 are empty
+	}
+	game := newScriptedGame(items...)
+	game.setList(2, listOf(1))
+	h := newTraversalHarness(t, game)
+	h.inv.ScrollBudget = 800 * time.Millisecond
+	h.start()
+	h.endCompleted()
+
+	obs := h.observations()
+	if len(obs) != 21 {
+		t.Fatalf("admitted %d, want 20 at position 1 and 1 at position 2", len(obs))
+	}
+	first := obs[20]
+	if first.Position != 2 || first.ScrollEvidence != "" {
+		t.Fatalf("position 2's first capture = %+v, want no inherited scrollEvidence", first)
+	}
+	// Position 1 spent one advance drag and its bottom confirmation; every
+	// later position contributes its bottom confirmation only.
+	drags := countOps(game.opsSnapshot(), platform.InputDrag, game.layout.ScrollFrom, game.layout.ScrollTo)
+	if drags != 7 {
+		t.Fatalf("%d advance drags, want position 1's verified scroll plus six bottom confirmations", drags)
 	}
 }
 
@@ -1730,14 +1774,57 @@ func TestTraverseSFilterNotActiveStops(t *testing.T) {
 	if clicks := countSlotClicks(ops, game.layout); clicks != 0 {
 		t.Fatalf("%d slot clicks before the funnel check", clicks)
 	}
-	if clicks := countFilterClicks(ops, game.layout); clicks != 4 {
-		t.Fatalf("%d filter-control clicks, want open, reset, S and close", clicks)
+	if clicks := countFilterClicks(ops, game.layout); clicks != 6 {
+		t.Fatalf("%d filter-control clicks, want open/reset/close then open/S/close", clicks)
 	}
 	if drags := countOps(ops, platform.InputDrag, game.layout.TopFrom, game.layout.TopTo); drags != 0 {
 		t.Fatalf("%d top drags, want none before the funnel check", drags)
 	}
 	if scope := string(h.inv.ObservedScope()); !strings.Contains(scope, `"filterAtStart":"active"`) {
 		t.Fatalf("observed scope %s lacks the active filter at start", scope)
+	}
+}
+
+// T32b: a reset that leaves the funnel active means old filters may still
+// hide S discs. The first close must prove Clear; the S selection later
+// cannot substitute for that evidence.
+func TestTraverseFilterResetNotClearStops(t *testing.T) {
+	game := newScriptedGame(true)
+	game.filter = "active"
+	game.resetLeavesActive = true
+	h := newTraversalHarness(t, game)
+	h.start()
+	snap := h.endFailed(collect.CodeNavigationMismatch)
+	if snap.Counts.Captured != 0 {
+		t.Fatalf("a failed reset admits nothing: %+v", snap.Counts)
+	}
+	ops := game.opsSnapshot()
+	if clicks := countFilterClicks(ops, game.layout); clicks != 3 {
+		t.Fatalf("%d filter-control clicks, want open, reset and close before the clear check", clicks)
+	}
+	if clicks := countSlotClicks(ops, game.layout); clicks != 0 {
+		t.Fatalf("%d slot clicks before the reset check", clicks)
+	}
+	if drags := countOps(ops, platform.InputDrag, game.layout.TopFrom, game.layout.TopTo); drags != 0 {
+		t.Fatalf("%d top drags, want none before the reset check", drags)
+	}
+}
+
+// T32c: the normal preparation applies S after a verified clear reset and
+// keeps walking with the funnel active.
+func TestTraverseSFilterActiveContinues(t *testing.T) {
+	game := newScriptedGame(true)
+	h := newTraversalHarness(t, game)
+	h.start()
+	h.endCompleted()
+	if obs := h.observations(); len(obs) != 1 {
+		t.Fatalf("admitted %d, want 1", len(obs))
+	}
+	if got := game.filterState(); got != "active" {
+		t.Fatalf("funnel %q after preparation, want active", got)
+	}
+	if clicks := countFilterClicks(game.opsSnapshot(), game.layout); clicks != 6*6 {
+		t.Fatalf("%d filter-control clicks, want open/reset/close then open/S/close for every position", clicks)
 	}
 }
 
@@ -1814,7 +1901,7 @@ func TestTraversePreparationAnimationLag(t *testing.T) {
 	if got := len(h.observations()); got != 0 {
 		t.Fatalf("an all-empty inventory admitted %d", got)
 	}
-	if clicks := countFilterClicks(game.opsSnapshot(), game.layout); clicks != 6*4 {
+	if clicks := countFilterClicks(game.opsSnapshot(), game.layout); clicks != 6*6 {
 		t.Fatalf("%d filter-control clicks, want every position prepared", clicks)
 	}
 }
