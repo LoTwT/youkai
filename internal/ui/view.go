@@ -2,7 +2,11 @@ package ui
 
 import (
 	"fmt"
+	"strconv"
+	"strings"
 
+	"github.com/LoTwT/youkai/internal/app"
+	"github.com/LoTwT/youkai/internal/game/zzz"
 	"github.com/LoTwT/youkai/internal/record"
 	"github.com/LoTwT/youkai/internal/scan"
 	"github.com/egoist/mygo/ui"
@@ -216,7 +220,10 @@ func (m *Model) resultsArea(c *ui.Context, t *ui.Theme) {
 	ui.Column(c).Grow(1).Gap(t.Space(1)).Children(func() {
 		ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, m.resultsTitle()).FontWeight(600)
-			if m.rec != nil && !m.rec.Live && m.appliedSession != "" && m.exitState != exitRunning {
+			if m.rec != nil && len(m.rec.Rows) > 0 {
+				ui.Text(c, m.pendingText()).TextColor(t.TextMuted)
+			}
+			if m.rec != nil && m.rec.ID != string(m.appliedSession) && m.appliedSession != "" && m.exitState != exitRunning {
 				if ui.Button(c, "查看本次扫描").Clicked() {
 					m.ShowLive()
 				}
@@ -287,6 +294,7 @@ func (m *Model) emptyResultsText() string {
 // unfinished items say so instead of inventing values.
 func (m *Model) tablePane(c *ui.Context) {
 	rows := m.rec.Rows
+	previous := m.selected
 	ui.Table(c, &m.list, resultColumns, len(rows), func(row, col int) {
 		r := rows[row]
 		switch col {
@@ -304,6 +312,9 @@ func (m *Model) tablePane(c *ui.Context) {
 			ui.Text(c, r.ResultColumnText()).SingleLine()
 		}
 	}).Fill()
+	// The table writes the chosen row directly; settle it through the
+	// editor guard so a dirty item is never replaced by a plain click.
+	m.applyTableSelection(previous)
 }
 
 // detailPane shows the chosen item: its outcome and quality, the failure
@@ -322,6 +333,7 @@ func (m *Model) detailPane(c *ui.Context) {
 			return
 		}
 		ui.Column(c).Gap(t.Space(2)).Children(func() {
+			m.navigationPrompt(c, t)
 			m.detailHeader(c, t, row)
 			switch row.Status {
 			case record.StatusFailed:
@@ -364,10 +376,19 @@ func (m *Model) detailHeader(c *ui.Context, t *ui.Theme, row *Row) {
 	})
 }
 
-// structuredForm renders the produced item's fields read-only: every
-// field the payload can leave unread says "未读取", and management state
-// and the equipper keep null distinct from none/unequipped.
+// structuredForm renders the produced item's fields: read-only by
+// default, editable while this item's editor is open. Every field the
+// payload can leave unread says "未读取", and management state and the
+// equipper keep null distinct from none/unequipped. The validation shown
+// here is recomputed from the current data and rules, so it can never
+// outlive the values it describes.
 func (m *Model) structuredForm(c *ui.Context, t *ui.Theme, row *Row) {
+	if m.edit != nil && m.rec != nil && m.edit.recordID == m.rec.ID && m.edit.seq == row.Seq {
+		m.editForm(c, t, row)
+		return
+	}
+	check := app.CheckDiscData(row.Structured.Data)
+	issues := currentIssues(row, check)
 	ui.Text(c, "字段（只读）").FontWeight(600)
 	ui.Column(c).Gap(t.Space(1)).Children(func() {
 		formField(c, t, "套装", row.SetFormText())
@@ -378,9 +399,9 @@ func (m *Model) structuredForm(c *ui.Context, t *ui.Theme, row *Row) {
 		m.substatField(c, t, row)
 		formField(c, t, "管理状态", row.ManagementStateText())
 		formField(c, t, "装备", row.EquippedText())
-		formField(c, t, "校验状态", row.ValidationText())
-		formField(c, t, "问题", row.IssueSummaryText())
-		for _, issue := range row.Issues() {
+		formField(c, t, "校验状态", validationStatusText(check.Validation.Status))
+		formField(c, t, "问题", issueSummaryText(issues))
+		for _, issue := range issues {
 			field := issue.Field
 			if field == "" {
 				field = "整件"
@@ -388,7 +409,333 @@ func (m *Model) structuredForm(c *ui.Context, t *ui.Theme, row *Row) {
 			ui.Textf(c, "· %s · %s（%s）：%s", field, issue.Code, issue.Severity, issue.Message).
 				MaxWidth(360).FontSize(t.FontSize * 0.9).TextColor(t.TextMuted)
 		}
+		m.reviewActions(c, t, row, check)
 	})
+}
+
+// currentIssues merges the persisted recognition issues with the
+// validation recomputed for the current values, showing an exact
+// duplicate once.
+func currentIssues(row *Row, check app.DataCheck) []zzz.Issue {
+	out := append([]zzz.Issue(nil), row.Structured.Issues...)
+	for _, issue := range check.Issues {
+		present := false
+		for _, have := range out {
+			if have == issue {
+				present = true
+				break
+			}
+		}
+		if !present {
+			out = append(out, issue)
+		}
+	}
+	return out
+}
+
+// issueSummaryText is the compact count of an issue list.
+func issueSummaryText(issues []zzz.Issue) string {
+	if len(issues) == 0 {
+		return "无问题"
+	}
+	errors := 0
+	for _, issue := range issues {
+		if issue.Severity == zzz.SeverityError {
+			errors++
+		}
+	}
+	if errors == 0 {
+		return fmt.Sprintf("%d 个问题", len(issues))
+	}
+	return fmt.Sprintf("%d 个问题（%d 个错误）", len(issues), errors)
+}
+
+// reviewActions offers the per-item review controls in the read-only
+// view: entering the editor or confirming the item as it stands.
+func (m *Model) reviewActions(c *ui.Context, t *ui.Theme, row *Row, check app.DataCheck) {
+	if row.Structured == nil {
+		return
+	}
+	ui.Divider(c)
+	ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
+		if ui.Button(c, "编辑").Disabled(m.reviewSaving).Clicked() {
+			m.startEdit()
+		}
+		confirmLabel := "确认并下一项"
+		if m.reviewErr != "" && m.lastConfirm {
+			confirmLabel = "重试确认并下一项"
+		}
+		confirm := ui.Button(c, confirmLabel).Disabled(!check.Confirmable() || m.reviewSaving)
+		if confirm.Clicked() {
+			m.confirmCurrent()
+		}
+		if problem := firstCheckProblem(check); problem != "" {
+			ui.Text(c, "确认前还需："+problem).TextColor(t.TextMuted)
+		}
+	})
+	if m.reviewNotice != "" {
+		ui.Text(c, m.reviewNotice)
+	}
+	if m.reviewErr != "" {
+		ui.Text(c, m.reviewErr).TextColor(t.Danger)
+	}
+}
+
+// firstCheckProblem names the first reason a row cannot be confirmed.
+func firstCheckProblem(check app.DataCheck) string {
+	if len(check.Blocking) > 0 {
+		return check.Blocking[0].Message
+	}
+	if len(check.Gaps) > 0 {
+		return check.Gaps[0].Message
+	}
+	return ""
+}
+
+// editForm is the editable structured form. It shows fixed catalog
+// pickers, decimal text boxes and the current revision's validation
+// preview; saving is refused while a present value is malformed, and
+// confirmation additionally needs every required field.
+func (m *Model) editForm(c *ui.Context, t *ui.Theme, row *Row) {
+	edit := m.edit
+	edit.refresh()
+	draft := &edit.draft
+
+	ui.Text(c, "字段（编辑中）").FontWeight(600)
+	ui.Column(c).Gap(t.Space(1)).Children(func() {
+		ui.Text(c, "稀有度："+row.RarityText()+"（本修订不可编辑）").TextColor(t.TextMuted)
+
+		labeledRow(c, t, "套装", func() {
+			ui.Select(c, &draft.SetID, setChoices(currentID(draft.SetID))).Width(240).Disabled(m.reviewSaving)
+		})
+		labeledRow(c, t, "槽位", func() {
+			ui.Select(c, &draft.Slot, slotChoices(currentID(draft.Slot))).Width(120).Disabled(m.reviewSaving)
+		})
+		labeledRow(c, t, "等级", func() {
+			ui.TextInput(c, &draft.Level).Width(80).Disabled(m.reviewSaving)
+		})
+
+		labeledRow(c, t, "主词条", func() {
+			ui.Row(c).Gap(t.Space(1)).AlignItems(ui.Center).Children(func() {
+				ui.Select(c, &draft.MainAttribute, attributeChoices(attributeTextValue(draft.MainAttribute))).Width(170).Disabled(m.reviewSaving)
+				ui.TextInput(c, &draft.MainValue).Width(100).Disabled(m.reviewSaving)
+				ui.Select(c, &draft.MainUnit, unitChoices(attributeTextValue(draft.MainAttribute), attributeTextValue(draft.MainUnit))).Width(150).Disabled(m.reviewSaving)
+			})
+		})
+
+		m.editSubstats(c, t, edit)
+
+		labeledRow(c, t, "管理状态", func() {
+			ui.Select(c, &draft.ManagementState, managementChoices(attributeTextValue(draft.ManagementState))).Width(170).Disabled(m.reviewSaving)
+		})
+		labeledRow(c, t, "装备", func() {
+			ui.Select(c, &draft.EquippedState, equippedChoices(optionValue(draft.EquippedState))).Width(170).Disabled(m.reviewSaving)
+		})
+		labeledRow(c, t, "代理人", func() {
+			disabled := optionValue(draft.EquippedState) != string(zzz.EquippedStateEquipped)
+			ui.Select(c, &draft.AgentID, agentChoices(currentID(draft.AgentID))).Width(220).Disabled(disabled || m.reviewSaving)
+		})
+
+		ui.Divider(c)
+		ui.Text(c, "校验预览："+validationStatusText(edit.check.Validation.Status)).FontWeight(600)
+		for _, problem := range edit.fieldErrors {
+			ui.Textf(c, "· %s：%s", reviewFieldLabel(problem.Field), problem.Message).
+				MaxWidth(380).FontSize(t.FontSize * 0.9).TextColor(t.Danger)
+		}
+		for _, issue := range edit.check.Blocking {
+			ui.Textf(c, "· %s：%s", reviewFieldLabel(issue.Field), issue.Message).
+				MaxWidth(380).FontSize(t.FontSize * 0.9).TextColor(t.Danger)
+		}
+		for _, gap := range edit.check.Gaps {
+			ui.Textf(c, "· 待补全 %s：%s", reviewFieldLabel(gap.Field), gap.Message).
+				MaxWidth(380).FontSize(t.FontSize * 0.9).TextColor(t.TextMuted)
+		}
+
+		ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
+			saveLabel := "保存修改"
+			if m.reviewErr != "" && !m.lastConfirm {
+				saveLabel = "重试保存"
+			}
+			if ui.Button(c, saveLabel).Disabled(!edit.canSave() || m.reviewSaving).Clicked() {
+				m.saveEdit(false, nil)
+			}
+			confirmLabel := "确认并下一项"
+			if m.reviewErr != "" && m.lastConfirm {
+				confirmLabel = "重试确认并下一项"
+			}
+			if ui.Button(c, confirmLabel).Disabled(!edit.canConfirm() || m.reviewSaving).Clicked() {
+				m.saveEdit(true, nil)
+			}
+			if ui.Button(c, "放弃修改").Disabled(m.reviewSaving).Clicked() {
+				m.discardEdit()
+			}
+		})
+		if m.reviewSaving {
+			ui.Text(c, "正在保存……").TextColor(t.TextMuted)
+		}
+		if m.reviewErr != "" {
+			ui.Text(c, m.reviewErr).TextColor(t.Danger)
+		}
+		if m.reviewNotice != "" {
+			ui.Text(c, m.reviewNotice)
+		}
+	})
+}
+
+// editSubstats renders the substat list and its null/confirmed-empty
+// distinction.
+func (m *Model) editSubstats(c *ui.Context, t *ui.Theme, edit *editState) {
+	draft := &edit.draft
+	ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Start).Children(func() {
+		ui.Text(c, "副词条").Width(72).TextColor(t.TextMuted)
+		ui.Column(c).Grow(1).Gap(t.Space(1)).Children(func() {
+			unknown := !draft.SubstatsKnown
+			ui.Checkbox(c, &unknown, "数量未读取（保存为 null）").Disabled(m.reviewSaving)
+			if unknown != !draft.SubstatsKnown {
+				draft.SubstatsKnown = !unknown
+				if !draft.SubstatsKnown {
+					draft.Substats = nil
+				}
+			}
+			if !draft.SubstatsKnown {
+				return
+			}
+			for i := range draft.Substats {
+				if m.editSubstatRow(c, t, i) {
+					draft.Substats = append(draft.Substats[:i], draft.Substats[i+1:]...)
+					break
+				}
+			}
+			if len(draft.Substats) == 0 {
+				ui.Text(c, "无（确认没有可见副词条）").TextColor(t.TextMuted)
+			}
+			if ui.Button(c, "添加副词条").Disabled(len(draft.Substats) >= 4 || m.reviewSaving).Clicked() {
+				draft.Substats = append(draft.Substats, substatDraft{
+					Attribute: unreadOption,
+					Unit:      unreadOption,
+				})
+			}
+		})
+	})
+}
+
+// editSubstatRow renders one substat's pickers and decimal boxes. It
+// reports whether the row's delete button was clicked.
+func (m *Model) editSubstatRow(c *ui.Context, t *ui.Theme, index int) bool {
+	draft := &m.edit.draft
+	sub := &draft.Substats[index]
+	remove := false
+	ui.Row(c).Gap(t.Space(1)).AlignItems(ui.Center).Children(func() {
+		ui.Textf(c, "%d", index+1).Width(16).TextColor(t.TextMuted)
+		ui.Select(c, &sub.Attribute, attributeChoices(attributeTextValue(sub.Attribute))).Width(160).Disabled(m.reviewSaving)
+		ui.TextInput(c, &sub.Value).Width(90).Disabled(m.reviewSaving)
+		ui.Select(c, &sub.Unit, unitChoices(attributeTextValue(sub.Attribute), attributeTextValue(sub.Unit))).Width(140).Disabled(m.reviewSaving)
+		ui.Text(c, "强化").TextColor(t.TextMuted)
+		ui.TextInput(c, &sub.Rolls).Width(50).Disabled(m.reviewSaving)
+		if ui.Button(c, "删除").Disabled(m.reviewSaving).Clicked() {
+			remove = true
+		}
+	})
+	return remove
+}
+
+// labeledRow is one editor label followed by its controls.
+func labeledRow(c *ui.Context, t *ui.Theme, label string, build func()) {
+	ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
+		ui.Text(c, label).Width(72).TextColor(t.TextMuted)
+		build()
+	})
+}
+
+// navigationPrompt asks what to do with unsaved input before a record
+// switch or exit. Normal browsing never shows it.
+func (m *Model) navigationPrompt(c *ui.Context, t *ui.Theme) {
+	if m.navPrompt == nil {
+		return
+	}
+	exit := m.navPrompt.kind == navExit
+	text := "当前条目有未保存的修改。"
+	if exit {
+		text = "当前条目有未保存的修改，退出前请处理。"
+	}
+	ui.Column(c).Gap(t.Space(1)).Children(func() {
+		ui.Text(c, text).FontWeight(600)
+		ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
+			saveLabel, discardLabel := "保存修改并继续", "放弃修改"
+			if exit {
+				saveLabel, discardLabel = "保存修改并退出", "放弃修改并退出"
+			}
+			if ui.Button(c, saveLabel).Disabled(m.reviewSaving).Clicked() {
+				m.promptSaveAndContinue()
+			}
+			if ui.Button(c, discardLabel).Disabled(m.reviewSaving).Clicked() {
+				m.promptDiscardAndContinue()
+			}
+			if ui.Button(c, "留在当前项").Disabled(m.reviewSaving).Clicked() {
+				m.promptStay()
+			}
+		})
+		if m.reviewSaving {
+			ui.Text(c, "正在保存……").TextColor(t.TextMuted)
+		}
+		if m.reviewErr != "" {
+			ui.Text(c, m.reviewErr).TextColor(t.Danger)
+		}
+	})
+}
+
+// currentID reads a numeric picker label back to its id.
+func currentID(label string) *int {
+	value := optionValue(label)
+	if value == "" {
+		return nil
+	}
+	id, ok := parseDecimalInt(value)
+	if !ok {
+		return nil
+	}
+	return &id
+}
+
+// attributeTextValue reads a non-numeric picker label back to its value.
+func attributeTextValue(label string) *string {
+	value := optionValue(label)
+	if value == "" {
+		return nil
+	}
+	return &value
+}
+
+// reviewFieldLabel renders one data field path for the editor's error
+// list.
+func reviewFieldLabel(field string) string {
+	switch field {
+	case "":
+		return "整件"
+	case "setId":
+		return "套装"
+	case "rarity":
+		return "稀有度"
+	case "slot":
+		return "槽位"
+	case "level":
+		return "等级"
+	case "mainStat":
+		return "主词条"
+	case "substats":
+		return "副词条"
+	case "managementState":
+		return "管理状态"
+	case "equipped":
+		return "装备"
+	}
+	if strings.HasPrefix(field, "substats[") {
+		index := strings.TrimSuffix(strings.TrimPrefix(field, "substats["), "]")
+		if n, err := strconv.Atoi(index); err == nil {
+			return fmt.Sprintf("副词条 %d", n+1)
+		}
+	}
+	return field
 }
 
 // formField is one label/value line of the read-only form.

@@ -103,8 +103,8 @@ type Config struct {
 // occupancy, the record store, the process-lifetime recognizer and the
 // single active scan session. Its lifecycle belongs to the process, not
 // to a window or a button callback: the UI only calls Start, Stop,
-// Snapshot, Subscribe, RetrySave, the record listing and Quit. A window
-// hiding or rebuilding never starts or ends a session.
+// Snapshot, Subscribe, RetrySave, the record listing, SaveItemRevision
+// and Quit. A window hiding or rebuilding never starts or ends a session.
 //
 // One start request occupies the single active slot. The slot frees when
 // the session ended and its final save succeeded; a failed save keeps it
