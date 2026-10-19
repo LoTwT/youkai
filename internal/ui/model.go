@@ -75,6 +75,9 @@ type Config struct {
 	// Evidence loads evidence images by record and evidence identity;
 	// nil disables images (the details show their texts only).
 	Evidence EvidenceSource
+	// ExportSaver chooses and writes the usable-data JSON/CSV files; nil
+	// hides the export controls.
+	ExportSaver ExportSaver
 	// EvidenceCacheLimit bounds the decoded evidence bitmaps held at
 	// once; 0 uses evidenceCacheLimit.
 	EvidenceCacheLimit int
@@ -155,7 +158,19 @@ type Model struct {
 	// applies only while its version is current.
 	recLoad int64
 	rec     *RecordView
+	// recData is the loaded checkpoint the view was built from; exports
+	// take their frozen revision from it and never from a newer disk read.
+	recData *record.Recovery
 	recErr  string
+
+	// The export controls' frozen usable-data snapshot and outcome. The
+	// snapshot is rebuilt on every record load and saved item, and both
+	// formats are rendered from it.
+	exportData     *app.UsableExport
+	exportBuildErr string
+	exporting      bool
+	exportNotice   string
+	exportError    string
 
 	// The results table's place and its chosen row (an index into
 	// rec.rows, -1 for none; the list's Key keeps it on the item's
@@ -295,17 +310,27 @@ func (m *Model) Apply(snap app.Snapshot) {
 	// The live record's saved count grew: a newer generation is on disk,
 	// so reload it (the previous rows stay until the load lands). A dirty
 	// editor keeps its snapshot; catchUpLive reloads once it settles.
+	reloadedLive := false
 	if m.rec != nil && m.rec.Live && snap.SessionID != "" &&
 		m.rec.ID == string(snap.SessionID) && snap.SavedCount > m.liveSavedShown {
 		if !m.editingDirty() && !m.reviewSaving {
 			m.liveSavedShown = snap.SavedCount
 			m.reloadRecord(m.rec.ID, true)
+			reloadedLive = true
 		}
 	}
-	// A session that just wrapped left a durable record: refresh the
-	// history list. The idle snapshot at startup loads it once via Attach.
+	// A session that just wrapped left a durable final record: refresh the
+	// history list and, when the saved count did not grow (for example a
+	// session with no captured items), reload the live record so its
+	// termination and saved revision are the final ones. The idle snapshot
+	// at startup loads history once via Attach.
 	if prevBusy && !snap.Busy && snap.SessionID != "" {
 		m.loadHistory()
+		if !reloadedLive && m.rec != nil && m.rec.Live && m.rec.ID == string(snap.SessionID) &&
+			!m.editingDirty() && !m.reviewSaving {
+			m.liveSavedShown = snap.SavedCount
+			m.reloadRecord(m.rec.ID, true)
+		}
 	}
 }
 
@@ -317,6 +342,11 @@ func (m *Model) showLiveLocked() {
 	m.recErr = ""
 	m.liveSavedShown = 0
 	m.rec = &RecordView{ID: string(m.appliedSession), Live: true}
+	m.recData = nil
+	m.exportData = nil
+	m.exportBuildErr = ""
+	m.exportNotice = ""
+	m.exportError = ""
 	m.edit = nil
 	m.navPrompt = nil
 	m.reviewErr = ""
@@ -413,6 +443,8 @@ func (m *Model) performOpenHistory(id string) {
 	m.recLoad++
 	m.selected = -1
 	m.recErr = ""
+	m.exportNotice = ""
+	m.exportError = ""
 	m.edit = nil
 	m.navPrompt = nil
 	m.reviewErr = ""
@@ -449,6 +481,8 @@ func (m *Model) reloadRecord(id string, live bool) {
 			previous := m.selected
 			seq := m.selectedSeq()
 			m.rec = BuildRecordView(id, rec, live)
+			m.recData = rec
+			m.rebuildExport()
 			m.selected = m.rec.RowOf(seq)
 			if m.selected < 0 && previous >= 0 && previous < len(m.rec.Rows) {
 				// No stable sequence was selected (an out-of-range index

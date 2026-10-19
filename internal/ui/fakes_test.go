@@ -7,6 +7,7 @@ import (
 	"image/color"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/LoTwT/youkai/internal/app"
 	"github.com/LoTwT/youkai/internal/game/zzz"
@@ -253,7 +254,9 @@ func snap(session string, rev uint64, busy bool, phase scan.Phase, counts scan.C
 }
 
 // recovery builds a loaded record with the items; items the crash left
-// interrupted are reported as the recovery marks them.
+// interrupted are reported as the recovery marks them. The shell carries
+// the fields the export module needs, so export tests can use the same
+// helper.
 func recovery(items ...record.ItemRecord) *record.Recovery {
 	var interrupted []int64
 	for _, it := range items {
@@ -263,12 +266,20 @@ func recovery(items ...record.ItemRecord) *record.Recovery {
 	}
 	return &record.Recovery{
 		Checkpoint: record.Checkpoint{
+			Format:        record.FormatName,
+			FormatVersion: record.FormatVersion,
+			SavedRevision: 1,
 			Session: record.SessionShell{
-				SessionID: "rec",
-				Game:      "zzz",
-				Entity:    "driveDisc",
-				Client:    record.ClientWindowsLocal,
-				Locale:    "zh-CN",
+				SessionID:     "rec",
+				Game:          "zzz",
+				Entity:        "driveDisc",
+				Client:        record.ClientWindowsLocal,
+				Locale:        "zh-CN",
+				Scope:         []byte(`{"kind":"zzzInventory","mode":"traverse"}`),
+				StartedAt:     time.Date(2026, 10, 20, 8, 0, 0, 0, time.UTC),
+				Termination:   &record.Termination{Kind: record.TerminationCompleted, Code: "verifiedEnd", Phase: record.PhaseCapturing},
+				Coverage:      record.Coverage{Status: record.CoverageUnknown},
+				CapturedCount: int64(len(items)),
 			},
 			Items: items,
 		},
