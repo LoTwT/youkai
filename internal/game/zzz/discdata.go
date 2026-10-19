@@ -7,11 +7,12 @@ package zzz
 // recognized lines remain in the enclosing recognition payload for
 // evidence and audit (see internal/app.RecognitionResult).
 //
-// Management state and equipment presence now come from the collector's
-// calibrated badge/avatar evidence. The equipper's identity is deliberately
-// still not recognized: this revision writes agentId=null and keeps
-// validation unavailable, so no record can be auto-accepted yet. A later
-// revision fills the identity and may then allow auto-acceptance.
+// Management state, equipment presence and the equipper's identity come
+// from the collector's calibrated badge/avatar evidence. The identity is
+// written only when the avatar matcher reports a reliable fairy numeric
+// id; an absent, ambiguous or unreliable match keeps agentId=null and
+// validation unavailable. No record is ever auto-accepted: quality stays
+// needsReview even when the identity is filled.
 
 // ManagementState and equipment-presence values of an observation, as the
 // collector confirmed them. Empty means the collector could not read the
@@ -26,11 +27,13 @@ const (
 )
 
 // CaptureState is the non-text evidence the collector confirmed for one
-// observation. Empty fields stay JSON null. This revision fills presence
-// only; Equipped.AgentID remains null until PR 6b.
+// observation. Empty fields stay JSON null. AgentID is the fairy numeric
+// agent id the avatar matcher accepted, or 0 when the identity is absent,
+// ambiguous or unreliable; an id outside the catalog is treated as unknown.
 type CaptureState struct {
 	ManagementState string
 	EquippedState   string
+	AgentID         int
 }
 
 // RarityS is the only rarity this revision can assert, because it comes
@@ -47,8 +50,8 @@ const (
 	// confirmed management state.
 	CodeManagementStateUnavailable = "managementStateUnavailable"
 	// CodeEquippedStateUnavailable: the observation carried no confirmed
-	// equipment-presence state, or its equipper identity is not recognized
-	// yet (agentId=null).
+	// equipment-presence state, or an equipped record's equipper identity
+	// is absent, ambiguous or unreliable (agentId=null).
 	CodeEquippedStateUnavailable = "equippedStateUnavailable"
 )
 
@@ -68,10 +71,10 @@ type SubstatData struct {
 	EnhancementRolls *int `json:"enhancementRolls"`
 }
 
-// Equipped is the public equipper shape. This revision fills State with
-// the confirmed presence ("equipped" or "unequipped") and always leaves
-// AgentID null; PR 6b fills the identity without reshaping persisted
-// records.
+// Equipped is the public equipper shape. State carries the confirmed
+// presence ("equipped" or "unequipped"); AgentID is the fairy numeric id
+// when the avatar matcher accepted it, and null otherwise (including every
+// unequipped record and every unreliable match).
 type Equipped struct {
 	State   string `json:"state"`
 	AgentID *int   `json:"agentId"`
@@ -153,8 +156,8 @@ func ToData(rec DiscRecord, rarity string) DiscData {
 
 // ToDataWithState converts a parsed detail record plus confirmed capture
 // state into the public data object. Empty or unrecognized state remains
-// null. An equipped/unequipped object always carries agentId=null in this
-// revision.
+// null. An equipped object carries agentId only when State.AgentID is a
+// catalog id; unequipped records always carry null.
 func ToDataWithState(rec DiscRecord, rarity string, state CaptureState) DiscData {
 	var rarityValue *string
 	if rarity == RarityS {
@@ -193,7 +196,15 @@ func ToDataWithState(rec DiscRecord, rarity string, state CaptureState) DiscData
 	}
 	var equipped *Equipped
 	switch state.EquippedState {
-	case EquippedStateEquipped, EquippedStateUnequipped:
+	case EquippedStateEquipped:
+		equipped = &Equipped{State: state.EquippedState}
+		if state.AgentID > 0 {
+			if _, ok := LookupAgentByID(state.AgentID); ok {
+				id := state.AgentID
+				equipped.AgentID = &id
+			}
+		}
+	case EquippedStateUnequipped:
 		equipped = &Equipped{State: state.EquippedState}
 	}
 
@@ -246,11 +257,12 @@ func mainStatData(stat Stat) *StatData {
 
 // validate derives the current validation status. Parsing errors mean
 // failed. Without them, a missing management state is a data gap, and an
-// equipped record is still incomplete while the equipper identity
-// (agentId) is not recognized. An explicitly unequipped record has no
-// equipper to identify, so a confirmed management state is enough for
-// validation to pass; the record still needs human confirmation because
-// this revision never marks a scan auto-accepted.
+// equipped record is incomplete while the equipper identity (agentId) is
+// not reliably recognized. An equipped record with a confirmed management
+// state and a catalog-resolvable agent id passes validation; an explicitly
+// unequipped record has no equipper to identify, so a confirmed management
+// state is enough. The record still needs human confirmation because this
+// revision never marks a scan auto-accepted.
 func validate(issues []Issue, state CaptureState) Validation {
 	if hasError(issues) {
 		return Validation{Status: ValidationFailed, Issues: normalizeIssues(issues)}
@@ -262,8 +274,14 @@ func validate(issues []Issue, state CaptureState) Validation {
 	}
 	switch state.EquippedState {
 	case EquippedStateEquipped:
-		gaps = append(gaps, newIssue("equipped", CodeEquippedStateUnavailable,
-			"本修订已确认装备存在性，但尚未识别装备者身份（agentId 为 null），无法完成校验"))
+		switch {
+		case state.AgentID <= 0:
+			gaps = append(gaps, newIssue("equipped", CodeEquippedStateUnavailable,
+				"已确认装备存在性，但未能可靠识别装备者身份（agentId 为 null），无法完成校验"))
+		case !validAgentID(state.AgentID):
+			gaps = append(gaps, newIssue("equipped", CodeEquippedStateUnavailable,
+				"已识别装备者身份，但该 ID 不在 catalog 中，无法完成校验"))
+		}
 	case EquippedStateUnequipped:
 		// No equipper to identify; the state itself is complete.
 	case "":
@@ -288,6 +306,14 @@ func validManagementState(state string) bool {
 	default:
 		return false
 	}
+}
+
+// validAgentID reports whether id resolves in the agent catalog. The
+// matcher only emits catalog ids; this check keeps a malformed or stale
+// capture from writing an id the structured payload cannot resolve.
+func validAgentID(id int) bool {
+	_, ok := LookupAgentByID(id)
+	return ok
 }
 
 // hasError reports whether any issue has error severity.

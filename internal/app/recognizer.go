@@ -142,9 +142,11 @@ func (r *lineRecognizer) Recognize(ctx context.Context, task scan.Task, submit s
 // structuredDisc interprets the recognized lines of one observation as a
 // drive-disc detail page. The detail-line parser consumes the name, level,
 // main and sub1..sub4 roles; rarity comes from the observation's verified
-// capture evidence, never from the text. A result without any detail-line
-// role (for example a context-only observation) carries no structured
-// payload rather than a fabricated empty disc.
+// capture evidence, never from the text. The equipper identity comes from
+// the avatar matcher's accepted id (zero when unreliable) and is passed
+// through unchanged. A result without any detail-line role (for example a
+// context-only observation) carries no structured payload rather than a
+// fabricated empty disc.
 func structuredDisc(obs Observation, lines []RecognizedLine) *zzz.StructuredDisc {
 	detail, ok := discDetailLines(lines)
 	if !ok {
@@ -154,6 +156,7 @@ func structuredDisc(obs Observation, lines []RecognizedLine) *zzz.StructuredDisc
 	structured := zzz.ToStructuredWithState(rec, obs.Rarity, zzz.CaptureState{
 		ManagementState: obs.ManagementState,
 		EquippedState:   obs.EquippedState,
+		AgentID:         obs.AgentID,
 	}, issues)
 	return &structured
 }
