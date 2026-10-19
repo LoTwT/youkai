@@ -160,6 +160,10 @@ type Model struct {
 	list     ui.ListState
 	selected int
 	split    float32
+	// showEvidence reveals the detail pane's evidence area — screenshots,
+	// raw OCR lines, their provenance and model scores. It is off by
+	// default so the structured form stays the main view.
+	showEvidence bool
 
 	exitState exitState
 	exitErr   string
@@ -196,7 +200,7 @@ func New(cfg Config) *Model {
 	m := &Model{
 		cfg:    cfg,
 		source: cfg.ScanSource,
-		split:  380,
+		split:  520,
 		cache:  newEvidenceCache(cfg.Evidence, limit),
 	}
 	if cfg.Updates != nil {

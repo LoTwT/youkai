@@ -18,11 +18,16 @@ const scanHint = "扫描期间会自动操作游戏。请保持游戏窗口在�
 const stopMeans = "停止方式：点击本窗口的“停止”按钮。"
 
 // resultColumns is the results table's layout: the capture sequence, the
-// raw processing state and a one-line content summary.
+// structured set/slot/level, the two explicitly nullable states and the
+// quality with its problems. Failed and unprocessed items keep their row
+// and explain themselves in the last column.
 var resultColumns = []ui.TableColumn{
-	{Title: "序号", Width: 64, Align: ui.End},
-	{Title: "状态", Width: 130},
-	{Title: "内容"},
+	{Title: "序号", Width: 40, Align: ui.End, Fixed: true},
+	{Title: "套装", Width: 90, Fixed: true},
+	{Title: "槽位/等级", Width: 84, Fixed: true},
+	{Title: "管理状态", Width: 72, Fixed: true},
+	{Title: "装备", Width: 110, Fixed: true},
+	{Title: "质量/问题"},
 }
 
 // View builds the main window's three areas — prepare, progress and
@@ -277,7 +282,9 @@ func (m *Model) emptyResultsText() string {
 }
 
 // tablePane is the results list. Every captured item stays in it whatever
-// its state — failed and unprocessed items never disappear.
+// its state — failed and unprocessed items never disappear. Produced items
+// with a structured interpretation summarize their fields; raw-only and
+// unfinished items say so instead of inventing values.
 func (m *Model) tablePane(c *ui.Context) {
 	rows := m.rec.Rows
 	ui.Table(c, &m.list, resultColumns, len(rows), func(row, col int) {
@@ -286,16 +293,23 @@ func (m *Model) tablePane(c *ui.Context) {
 		case 0:
 			ui.Textf(c, "%d", r.Seq)
 		case 1:
-			ui.Text(c, r.StatusText()).SingleLine()
+			ui.Text(c, r.SetColumnText()).SingleLine()
 		case 2:
-			ui.Text(c, r.Summary()).SingleLine()
+			ui.Text(c, r.SlotLevelColumnText()).SingleLine()
+		case 3:
+			ui.Text(c, r.ManagementColumnText()).SingleLine()
+		case 4:
+			ui.Text(c, r.EquippedColumnText()).SingleLine()
+		case 5:
+			ui.Text(c, r.ResultColumnText()).SingleLine()
 		}
 	}).Fill()
 }
 
 // detailPane shows the chosen item: its outcome and quality, the failure
-// or unprocessed reason, and every observed line with its evidence image,
-// recognized text and raw model score.
+// or unprocessed reason, the read-only structured form of a produced disc
+// and, folded away by default, its evidence. The evidence area keeps every
+// observed line with its image, recognized text and raw model score.
 func (m *Model) detailPane(c *ui.Context) {
 	t := c.Theme()
 	var row *Row
@@ -308,26 +322,128 @@ func (m *Model) detailPane(c *ui.Context) {
 			return
 		}
 		ui.Column(c).Gap(t.Space(2)).Children(func() {
-			ui.Textf(c, "序号 %d · %s · 质量：%s", row.Seq, row.StatusText(), row.QualityText()).FontWeight(600)
-			if row.Status == record.StatusFailed {
+			m.detailHeader(c, t, row)
+			switch row.Status {
+			case record.StatusFailed:
 				ui.Text(c, "识别失败："+row.Failure).TextColor(t.Danger)
-			}
-			if row.Status == record.StatusUnprocessed {
+				ui.Text(c, "该条目没有结构化字段（识别失败）。").TextColor(t.TextMuted)
+			case record.StatusUnprocessed:
 				ui.Text(c, "未处理原因："+unprocessedReasonText(row.Reason)).TextColor(t.Danger)
+				ui.Text(c, "该条目没有结构化字段（识别未运行）。").TextColor(t.TextMuted)
+			case record.StatusProduced:
+				if row.Structured == nil {
+					ui.Text(c, "该条目没有结构化字段，原始识别文本见下方证据。").TextColor(t.TextMuted)
+				} else {
+					m.structuredForm(c, t, row)
+				}
+			default:
+				ui.Text(c, "识别尚未完成，暂无结构化字段。").TextColor(t.TextMuted)
 			}
-			for i := range row.Lines {
-				m.lineDetail(c, t, row, i)
+			m.evidenceArea(c, t, row)
+		})
+	})
+}
+
+// detailHeader shows the item's identity and outcome, with the evidence
+// disclosure control. Evidence stays folded by default so the structured
+// form is the main view.
+func (m *Model) detailHeader(c *ui.Context, t *ui.Theme, row *Row) {
+	ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
+		ui.Textf(c, "序号 %d · %s · 质量：%s", row.Seq, row.StatusText(), row.QualityText()).FontWeight(600)
+		ui.Box(c).Grow(1)
+		if len(row.Lines) == 0 && len(row.EvidenceIDs) == 0 {
+			return
+		}
+		label := "显示证据"
+		if m.showEvidence {
+			label = "隐藏证据"
+		}
+		if ui.Button(c, label).Clicked() {
+			m.showEvidence = !m.showEvidence
+		}
+	})
+}
+
+// structuredForm renders the produced item's fields read-only: every
+// field the payload can leave unread says "未读取", and management state
+// and the equipper keep null distinct from none/unequipped.
+func (m *Model) structuredForm(c *ui.Context, t *ui.Theme, row *Row) {
+	ui.Text(c, "字段（只读）").FontWeight(600)
+	ui.Column(c).Gap(t.Space(1)).Children(func() {
+		formField(c, t, "套装", row.SetFormText())
+		formField(c, t, "稀有度", row.RarityText())
+		formField(c, t, "槽位", row.SlotText())
+		formField(c, t, "等级", row.LevelText())
+		formField(c, t, "主词条", row.MainStatText())
+		m.substatField(c, t, row)
+		formField(c, t, "管理状态", row.ManagementStateText())
+		formField(c, t, "装备", row.EquippedText())
+		formField(c, t, "校验状态", row.ValidationText())
+		formField(c, t, "问题", row.IssueSummaryText())
+		for _, issue := range row.Issues() {
+			field := issue.Field
+			if field == "" {
+				field = "整件"
 			}
-			// Evidence beyond the observed lines (a line without metadata
-			// still has its image).
-			for i := len(row.Lines); i < len(row.EvidenceIDs); i++ {
-				m.lineDetail(c, t, row, i)
-			}
-			if len(row.Lines) == 0 && len(row.EvidenceIDs) == 0 {
-				ui.Text(c, "该条目没有证据行。").TextColor(t.TextMuted)
+			ui.Textf(c, "· %s · %s（%s）：%s", field, issue.Code, issue.Severity, issue.Message).
+				MaxWidth(360).FontSize(t.FontSize * 0.9).TextColor(t.TextMuted)
+		}
+	})
+}
+
+// formField is one label/value line of the read-only form.
+func formField(c *ui.Context, t *ui.Theme, label, value string) {
+	if value == "" {
+		value = "—"
+	}
+	ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Start).Children(func() {
+		ui.Text(c, label).Width(72).TextColor(t.TextMuted)
+		ui.Text(c, value)
+	})
+}
+
+// substatField lists the substats in display order; a null list (unknown
+// line count) stays distinct from a confirmed empty one.
+func (m *Model) substatField(c *ui.Context, t *ui.Theme, row *Row) {
+	ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Start).Children(func() {
+		ui.Text(c, "副词条").Width(72).TextColor(t.TextMuted)
+		ui.Column(c).Grow(1).Gap(t.Space(0.5)).Children(func() {
+			texts, known := row.SubstatTexts()
+			switch {
+			case !known:
+				ui.Text(c, "未读取")
+			case len(texts) == 0:
+				ui.Text(c, "无（确认没有可见副词条）")
+			default:
+				for i, text := range texts {
+					ui.Textf(c, "%d. %s", i+1, text)
+				}
 			}
 		})
 	})
+}
+
+// evidenceArea keeps the raw OCR lines, model scores, screenshots and
+// their provenance out of the main view until the user asks for them.
+func (m *Model) evidenceArea(c *ui.Context, t *ui.Theme, row *Row) {
+	if len(row.Lines) == 0 && len(row.EvidenceIDs) == 0 {
+		ui.Text(c, "该条目没有证据行。").TextColor(t.TextMuted)
+		return
+	}
+	if !m.showEvidence {
+		ui.Text(c, "截图与原始识别文本已折叠。").TextColor(t.TextMuted).FontSize(t.FontSize * 0.9)
+		return
+	}
+	ui.Divider(c)
+	ui.Text(c, "证据（原始 OCR）").FontWeight(600)
+	for i := range row.Lines {
+		m.lineDetail(c, t, row, i)
+	}
+	// Evidence beyond the observed lines (a line without metadata still
+	// has its image).
+	for i := len(row.Lines); i < len(row.EvidenceIDs); i++ {
+		m.lineDetail(c, t, row, i)
+	}
 }
 
 func unprocessedReasonText(reason record.UnprocessedReason) string {

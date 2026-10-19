@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"encoding/json"
 	"fmt"
 	"image"
 	"image/color"
@@ -8,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/LoTwT/youkai/internal/app"
+	"github.com/LoTwT/youkai/internal/game/zzz"
 	"github.com/LoTwT/youkai/internal/record"
 	"github.com/LoTwT/youkai/internal/scan"
 	"github.com/egoist/mygo/ui"
@@ -274,3 +276,28 @@ func item(seq int64, status record.Status, reason record.UnprocessedReason, fail
 	}
 	return it
 }
+
+// structuredItem builds a produced item with raw recognized lines and a
+// persisted structured payload, as a current record carries both.
+func structuredItem(seq int64, disc zzz.DiscRecord, texts ...string) record.ItemRecord {
+	it := item(seq, record.StatusProduced, "", "", texts...)
+	structured := zzz.ToStructured(disc, zzz.RarityS, nil)
+	raw, err := json.Marshal(structured)
+	if err != nil {
+		panic(err)
+	}
+	var doc map[string]json.RawMessage
+	if err := json.Unmarshal(it.Data, &doc); err != nil {
+		panic(err)
+	}
+	doc["structured"] = raw
+	it.Data, err = json.Marshal(doc)
+	if err != nil {
+		panic(err)
+	}
+	return it
+}
+
+// intp returns a pointer to v for the structured payload's nullable
+// numeric fields.
+func intp(v int) *int { return &v }

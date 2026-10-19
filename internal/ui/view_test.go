@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/LoTwT/youkai/internal/app"
+	"github.com/LoTwT/youkai/internal/game/zzz"
 	"github.com/LoTwT/youkai/internal/record"
 	"github.com/LoTwT/youkai/internal/scan"
 	"github.com/egoist/mygo/ui"
@@ -187,8 +188,20 @@ func (e errString) Error() string { return string(e) }
 // user-cancelled and interrupted items, the interrupted one marked by the
 // recovery.
 func testRecord() *record.Recovery {
+	disc := zzz.DiscRecord{
+		SetID: intp(31100),
+		Slot:  1,
+		Level: intp(15),
+		MainStat: zzz.Stat{
+			Attribute: zzz.AttrHealth, Value: "2200", Unit: zzz.UnitFlat,
+		},
+		Substats: []zzz.Substat{{
+			Stat:             zzz.Stat{Attribute: zzz.AttrCritDamage, Value: "19.2", Unit: zzz.UnitPercent},
+			EnhancementRolls: intp(3),
+		}},
+	}
 	return recovery(
-		item(1, record.StatusProduced, "", "", "河豚电音", "+15"),
+		structuredItem(1, disc, "河豚电音", "+15"),
 		item(2, record.StatusFailed, "", "识别超时", "名", "级"),
 		item(3, record.StatusUnprocessed, record.ReasonCancelled, "", "名"),
 		item(4, record.StatusUnprocessed, record.ReasonInterrupted, "", "名"),
@@ -243,11 +256,19 @@ func TestViewDetailMatchesSelection(t *testing.T) {
 		}
 	}
 
-	// The first record is chosen by default; its texts, scores and images
-	// show.
+	// The first record is chosen by default. Its structured form shows
+	// while the evidence stays folded; revealing the evidence adds the
+	// raw texts and scores with their images.
 	if !tt.HasText("序号 1 · 已产出 · 质量：未评价") {
 		t.Fatalf("the default selection does not show: %q", tt.Texts())
 	}
+	if tt.HasText("模型分数 0.900") {
+		t.Fatalf("the evidence showed before it was asked for: %q", tt.Texts())
+	}
+	if err := tt.Click("显示证据"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
 	if !tt.HasText("模型分数 0.900") || !tt.HasText("+15") {
 		t.Fatalf("the produced texts or scores do not show: %q", tt.Texts())
 	}
@@ -286,6 +307,61 @@ func TestViewDetailMatchesSelection(t *testing.T) {
 	}
 }
 
+// TestViewStructuredFormAndEvidenceToggle checks the results detail's
+// default shape: the read-only structured form is visible, the evidence
+// stays collapsed, and the toggle reveals and hides the raw OCR evidence
+// without losing the selected item's images.
+func TestViewStructuredFormAndEvidenceToggle(t *testing.T) {
+	img := color.RGBA{R: 171, G: 31, B: 91, A: 255}
+	ev := &fakeEvidence{images: map[string]*ui.Bitmap{
+		"r1/000001-line0": solidBitmap(img),
+	}}
+	m, q, tt := openTestRecord(t, ev, 0)
+
+	for _, want := range []string{
+		"套装", "河豚电音（31100）", "稀有度", "S", "槽位", "1 号位",
+		"等级", "15 级", "主词条", "生命值 · 2200 · 固定值",
+		"副词条", "暴击伤害 · 19.2 · 百分比 · 强化 +3",
+		"管理状态", "装备", "校验状态", "不可用",
+		"截图与原始识别文本已折叠。",
+	} {
+		if !tt.HasText(want) {
+			t.Fatalf("the structured form does not show %q: %q", want, tt.Texts())
+		}
+	}
+	if tt.HasText("无标记") || tt.HasText("未装备") {
+		t.Fatalf("a null management/equipped rendered as a read state: %q", tt.Texts())
+	}
+	if tt.HasText("模型分数") || tt.HasText("证据（原始 OCR）") {
+		t.Fatalf("the evidence occupied the main view: %q", tt.Texts())
+	}
+	if n := countColor(tt.Image(), img); n != 0 {
+		t.Fatalf("the collapsed evidence still showed its image (%d px)", n)
+	}
+
+	if err := tt.Click("显示证据"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
+	if !tt.HasText("隐藏证据") || !tt.HasText("证据（原始 OCR）") || !tt.HasText("模型分数 0.900") {
+		t.Fatalf("the evidence did not reveal: %q", tt.Texts())
+	}
+	if n := countColor(tt.Image(), img); n < 100 {
+		t.Fatalf("the revealed evidence image does not show (%d px)", n)
+	}
+
+	if err := tt.Click("隐藏证据"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
+	if !tt.HasText("显示证据") || tt.HasText("模型分数") || tt.HasText("证据（原始 OCR）") {
+		t.Fatalf("the evidence did not fold back: %q", tt.Texts())
+	}
+	if n := countColor(tt.Image(), img); n != 0 {
+		t.Fatalf("the folded evidence still showed its image (%d px)", n)
+	}
+}
+
 // TestViewFastSelectionSwitch checks that a load completing for an item
 // the user already switched away from cannot attach to the newly chosen
 // one: the details always render the selected item's own images, and a
@@ -302,6 +378,12 @@ func TestViewFastSelectionSwitch(t *testing.T) {
 		"r1/000002-line1": solidBitmap(item2B),
 	}}
 	m, q, tt := openTestRecord(t, ev, 0)
+
+	// Reveal the evidence area before checking image loading and switching.
+	if err := tt.Click("显示证据"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
 
 	// The first item is chosen and its loads are scheduled. Switch to the
 	// second item before the loads land, then settle: the second item's
@@ -346,6 +428,10 @@ func TestViewFastSelectionSwitch(t *testing.T) {
 func TestViewEvidenceFailureShows(t *testing.T) {
 	ev := &fakeEvidence{images: map[string]*ui.Bitmap{}}
 	m, q, tt := openTestRecord(t, ev, 0)
+	if err := tt.Click("显示证据"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
 	if !tt.HasText("证据图片不可用：missing evidence 000001-line0") {
 		t.Fatalf("the evidence failure does not show: %q", tt.Texts())
 	}
@@ -481,8 +567,8 @@ func TestViewHistoryReopen(t *testing.T) {
 		},
 		loads: map[string]*record.Recovery{
 			"new":  testRecord(),
-			"old":  recovery(item(1, record.StatusProduced, "", "", "啄木鸟电音")),
-			"live": recovery(item(1, record.StatusProduced, "", "", "静听抒怀")),
+			"old":  recovery(structuredItem(1, zzz.DiscRecord{SetID: intp(31000), Slot: 2, Level: intp(0)}, "啄木鸟电音")),
+			"live": recovery(structuredItem(1, zzz.DiscRecord{SetID: intp(32800), Slot: 1, Level: intp(15)}, "静听嘉音")),
 		},
 	}
 	m, q := newTestModel(t, Config{Service: svc})
@@ -520,7 +606,7 @@ func TestViewHistoryReopen(t *testing.T) {
 		t.Fatal(err)
 	}
 	settle(t, m, q, tt)
-	if !tt.HasText("静听抒怀") {
+	if !tt.HasText("静听嘉音") {
 		t.Fatalf("the live record did not reopen: %q", tt.Texts())
 	}
 }
@@ -533,8 +619,10 @@ func TestEvidenceCacheIsBounded(t *testing.T) {
 		list: []record.RecordInfo{{ID: "r1", LatestRevision: 1, SavedAt: time.Now()}},
 		loads: map[string]*record.Recovery{
 			"r1": recovery(
-				item(1, record.StatusProduced, "", "", "一行一", "一行二", "一行三", "一行四", "一行五", "一行六"),
-				item(2, record.StatusProduced, "", "", "二行一", "二行二", "二行三", "二行四", "二行五", "二行六"),
+				structuredItem(1, zzz.DiscRecord{SetID: intp(31100), Slot: 1, Level: intp(15)},
+					"一行一", "一行二", "一行三", "一行四", "一行五", "一行六"),
+				structuredItem(2, zzz.DiscRecord{SetID: intp(31200), Slot: 2, Level: intp(15)},
+					"二行一", "二行二", "二行三", "二行四", "二行五", "二行六"),
 			),
 		},
 	}
@@ -550,6 +638,10 @@ func TestEvidenceCacheIsBounded(t *testing.T) {
 	settle(t, m, q, tt)
 	m.OpenHistory()
 	settle(t, m, q, tt)
+	if err := tt.Click("显示证据"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
 
 	// The first item's six images load and stay (they are on screen).
 	if ev.callsCount() != 6 {
@@ -561,7 +653,7 @@ func TestEvidenceCacheIsBounded(t *testing.T) {
 
 	// Switching to the second item loads its six; eviction trims the
 	// first item's down to the limit while keeping what is on screen.
-	if err := tt.Click("二行一"); err != nil {
+	if err := tt.Click("震星迪斯科"); err != nil {
 		t.Fatal(err)
 	}
 	settle(t, m, q, tt)
@@ -573,7 +665,7 @@ func TestEvidenceCacheIsBounded(t *testing.T) {
 	}
 
 	// Switching back reloads only what was evicted.
-	if err := tt.Click("一行一"); err != nil {
+	if err := tt.Click("河豚电音"); err != nil {
 		t.Fatal(err)
 	}
 	settle(t, m, q, tt)
