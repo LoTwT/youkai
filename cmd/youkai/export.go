@@ -68,18 +68,15 @@ func refuseManagedTarget(root, path string) error {
 	if err != nil {
 		return fmt.Errorf("解析数据目录：%w", err)
 	}
-	if resolved, err := filepath.EvalSymlinks(absRoot); err == nil {
-		absRoot = resolved
-	}
+	absRoot = resolveExisting(absRoot)
 	absPath, err := filepath.Abs(path)
 	if err != nil {
 		return fmt.Errorf("解析导出路径：%w", err)
 	}
-	// Resolve the existing parent so a symlink inside the data root is
-	// still recognised as managed. The file itself may not exist yet.
-	if parent, err := filepath.EvalSymlinks(filepath.Dir(absPath)); err == nil {
-		absPath = filepath.Join(parent, filepath.Base(absPath))
-	}
+	// Resolve the existing part of the target so a symlink inside the data
+	// root is still recognised as managed. The file itself, or even its
+	// immediate directory, may not exist yet.
+	absPath = resolveExisting(absPath)
 	rel, err := filepath.Rel(absRoot, absPath)
 	if err != nil {
 		return nil // different volumes cannot be inside the data root
@@ -88,6 +85,29 @@ func refuseManagedTarget(root, path string) error {
 		return errors.New("导出位置不能位于应用管理的数据目录内，请选择其他目录")
 	}
 	return nil
+}
+
+// resolveExisting resolves every symlink in the deepest existing ancestor
+// of path and reattaches the components that do not exist yet. A path
+// whose parent is already created and a nested future path therefore
+// compare against the same real root.
+func resolveExisting(path string) string {
+	cur := path
+	rest := ""
+	for {
+		if resolved, err := filepath.EvalSymlinks(cur); err == nil {
+			if rest == "" {
+				return resolved
+			}
+			return filepath.Join(resolved, rest)
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			return path
+		}
+		rest = filepath.Join(filepath.Base(cur), rest)
+		cur = parent
+	}
 }
 
 // writeExportFile writes data beside the target, syncs and closes it, then
