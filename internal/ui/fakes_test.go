@@ -104,6 +104,17 @@ type fakeService struct {
 	loads   map[string]*record.Recovery
 	loadErr map[string]error
 	loadLog []string
+
+	saves  []saveCall
+	saveFn func(recordID string, sequence, expectedRevision int64, edit app.ItemRevisionEdit) (app.ItemRevisionResult, error)
+}
+
+// saveCall is one recorded SaveItemRevision request.
+type saveCall struct {
+	recordID         string
+	sequence         int64
+	expectedRevision int64
+	edit             app.ItemRevisionEdit
 }
 
 func (f *fakeService) Start(req app.StartRequest) (app.StartOutcome, error) {
@@ -151,6 +162,28 @@ func (f *fakeService) LoadRecord(recordID string) (*record.Recovery, error) {
 		return nil, fmt.Errorf("no verifiable checkpoint after 1 generation(s)")
 	}
 	return rec, nil
+}
+
+func (f *fakeService) SaveItemRevision(recordID string, sequence, expectedRevision int64, edit app.ItemRevisionEdit) (app.ItemRevisionResult, error) {
+	f.mu.Lock()
+	f.saves = append(f.saves, saveCall{
+		recordID:         recordID,
+		sequence:         sequence,
+		expectedRevision: expectedRevision,
+		edit:             edit,
+	})
+	fn := f.saveFn
+	f.mu.Unlock()
+	if fn != nil {
+		return fn(recordID, sequence, expectedRevision, edit)
+	}
+	return app.ItemRevisionResult{}, fmt.Errorf("fake service: no save handler")
+}
+
+func (f *fakeService) saveCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.saves)
 }
 
 func (f *fakeService) Quit() error {

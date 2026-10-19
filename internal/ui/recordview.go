@@ -50,6 +50,10 @@ type Row struct {
 	Failure string
 	// Quality is the field-quality state of the current revision.
 	Quality record.Quality
+	// Revision is the persisted item revision the row shows. An edit is
+	// saved against it, so a stale editor can only be rejected, never
+	// overwrite a newer revision.
+	Revision int64
 	// Lines are the observed text lines, in observation order.
 	Lines []Line
 	// EvidenceIDs are the evidence images backing the observation; line i
@@ -112,26 +116,33 @@ func BuildRecordView(id string, rec *record.Recovery, live bool) *RecordView {
 		Shell:            cp.Session,
 	}
 	for i := range cp.Items {
-		it := &cp.Items[i]
-		row := Row{
-			Seq:         it.Sequence,
-			Status:      it.Status,
-			Reason:      it.Reason,
-			Failure:     it.Failure,
-			Quality:     it.Quality,
-			EvidenceIDs: append([]string(nil), it.EvidenceIDs...),
-		}
-		res := parseResult(it.Data)
-		if it.Status == record.StatusProduced {
-			row.Structured = res.Structured
-			if row.Structured == nil {
-				row.Structured = backfillStructured(it.Data, it.Observed)
-			}
-		}
-		row.Lines = mergeLines(it.Observed, res)
-		view.Rows = append(view.Rows, row)
+		view.Rows = append(view.Rows, buildRow(&cp.Items[i]))
 	}
 	return view
+}
+
+// buildRow flattens one item into its results row. BuildRecordView and
+// the save response share it, so a saved revision renders exactly like
+// the same item loaded from disk.
+func buildRow(it *record.ItemRecord) Row {
+	row := Row{
+		Seq:         it.Sequence,
+		Status:      it.Status,
+		Reason:      it.Reason,
+		Failure:     it.Failure,
+		Quality:     it.Quality,
+		Revision:    it.Revision,
+		EvidenceIDs: append([]string(nil), it.EvidenceIDs...),
+	}
+	res := parseResult(it.Data)
+	if it.Status == record.StatusProduced {
+		row.Structured = res.Structured
+		if row.Structured == nil {
+			row.Structured = backfillStructured(it.Data, it.Observed)
+		}
+	}
+	row.Lines = mergeLines(it.Observed, res)
+	return row
 }
 
 // parseResult reads one item's result payload defensively: a shape that
@@ -473,20 +484,7 @@ func (r Row) IssueSummaryText() string {
 	if r.Structured == nil {
 		return ""
 	}
-	issues := r.Issues()
-	if len(issues) == 0 {
-		return "无问题"
-	}
-	errors := 0
-	for _, issue := range issues {
-		if issue.Severity == zzz.SeverityError {
-			errors++
-		}
-	}
-	if errors == 0 {
-		return fmt.Sprintf("%d 个问题", len(issues))
-	}
-	return fmt.Sprintf("%d 个问题（%d 个错误）", len(issues), errors)
+	return issueSummaryText(r.Issues())
 }
 
 // SetColumnText is the results table's set cell: "未解析" names a produced
@@ -607,6 +605,22 @@ func unitText(unit *string) string {
 		return "百分比"
 	default:
 		return fmt.Sprintf("未知单位（%s）", *unit)
+	}
+}
+
+// PendingReview reports whether the row is a produced structured item
+// whose review is not settled. Failed and unprocessed rows are not
+// reviewable in this revision, and an auto-accepted or human-confirmed
+// row needs no further confirmation.
+func (r Row) PendingReview() bool {
+	if r.Status != record.StatusProduced || r.Structured == nil {
+		return false
+	}
+	switch r.Quality {
+	case record.QualityHumanConfirmed, record.QualityAutoAccepted:
+		return false
+	default:
+		return true
 	}
 }
 

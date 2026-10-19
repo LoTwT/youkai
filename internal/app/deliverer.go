@@ -40,6 +40,10 @@ type recordStore interface {
 	CreateRecord(id string) error
 	WriteEvidence(recordID, evidenceID string, image []byte) (record.EvidenceFile, error)
 	SaveCheckpoint(recordID string, cp record.Checkpoint) (int64, error)
+	// SaveRevision appends one manual revision to a finished item of the
+	// newest saved checkpoint. The review flow reaches it through the
+	// service, never through the scan deliverer.
+	SaveRevision(recordID string, sequence, expectedRevision int64, edit record.ItemEdit) (record.ItemRecord, int64, error)
 	ListRecords() ([]record.RecordInfo, error)
 	Load(recordID string) (*record.Recovery, error)
 }

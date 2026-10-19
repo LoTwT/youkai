@@ -39,6 +39,9 @@ type Service interface {
 	ListRecords() ([]record.RecordInfo, error)
 	// LoadRecord loads one saved record with recovery semantics applied.
 	LoadRecord(recordID string) (*record.Recovery, error)
+	// SaveItemRevision appends one manual revision to a produced item and
+	// returns the updated item.
+	SaveItemRevision(recordID string, sequence, expectedRevision int64, edit app.ItemRevisionEdit) (app.ItemRevisionResult, error)
 	// Quit runs the explicit-exit wrap-up; it blocks until it is done.
 	Quit() error
 }
@@ -165,6 +168,18 @@ type Model struct {
 	// default so the structured form stays the main view.
 	showEvidence bool
 
+	// The review editor: one item's unsaved draft, and the save currently
+	// in flight. reviewSerial invalidates a late response when a newer
+	// action owns the editor. navPrompt holds a navigation that waits for
+	// the dirty draft to be saved or discarded.
+	edit         *editState
+	reviewSerial int64
+	reviewSaving bool
+	reviewErr    string
+	reviewNotice string
+	lastConfirm  bool
+	navPrompt    *navigationRequest
+
 	exitState exitState
 	exitErr   string
 
@@ -266,16 +281,26 @@ func (m *Model) Apply(snap app.Snapshot) {
 	// A new session becomes the results area's record: the live one, an
 	// empty view until its saved generations load (a refused start rolls
 	// the service back to the previous session, whose saved record reloads
-	// through the growth branch below).
+	// through the growth branch below). Unsaved review input is never
+	// thrown away by a scan starting behind the user's back.
 	if snap.SessionID != "" && snap.SessionID != prevSession {
-		m.showLiveLocked()
+		busyEditing := m.reviewSaving || m.editingDirty()
+		if busyEditing && m.rec != nil && m.rec.ID != string(snap.SessionID) {
+			m.rec.Live = false // the previous session's record is history now
+			m.reviewNotice = "新的扫描已开始；保存或放弃当前编辑后可查看本次扫描。"
+		} else {
+			m.showLiveLocked()
+		}
 	}
 	// The live record's saved count grew: a newer generation is on disk,
-	// so reload it (the previous rows stay until the load lands).
+	// so reload it (the previous rows stay until the load lands). A dirty
+	// editor keeps its snapshot; catchUpLive reloads once it settles.
 	if m.rec != nil && m.rec.Live && snap.SessionID != "" &&
 		m.rec.ID == string(snap.SessionID) && snap.SavedCount > m.liveSavedShown {
-		m.liveSavedShown = snap.SavedCount
-		m.reloadRecord(m.rec.ID, true)
+		if !m.editingDirty() && !m.reviewSaving {
+			m.liveSavedShown = snap.SavedCount
+			m.reloadRecord(m.rec.ID, true)
+		}
 	}
 	// A session that just wrapped left a durable record: refresh the
 	// history list. The idle snapshot at startup loads it once via Attach.
@@ -292,17 +317,26 @@ func (m *Model) showLiveLocked() {
 	m.recErr = ""
 	m.liveSavedShown = 0
 	m.rec = &RecordView{ID: string(m.appliedSession), Live: true}
+	m.edit = nil
+	m.navPrompt = nil
+	m.reviewErr = ""
+	m.reviewNotice = ""
 }
 
 // ShowLive switches the results area back to the current (or last) scan's
 // record, after a reopened history record replaced it.
 func (m *Model) ShowLive() {
-	if m.appliedSession == "" || m.exitState == exitRunning {
+	if m.appliedSession == "" || m.exitState == exitRunning || m.exitState == exitDone {
 		return
 	}
 	if m.rec != nil && m.rec.Live && m.rec.ID == string(m.appliedSession) {
 		return
 	}
+	m.requestNavigation(navigationRequest{kind: navShowLive})
+}
+
+// performShowLive is the navigation action behind ShowLive.
+func (m *Model) performShowLive() {
 	m.showLiveLocked()
 	m.reloadRecord(string(m.appliedSession), true)
 }
@@ -368,12 +402,21 @@ func (m *Model) HistoryLabels() []string {
 // record.
 func (m *Model) OpenHistory() {
 	id := m.historyID(m.histChoice)
-	if id == "" || m.exitState == exitRunning {
+	if id == "" || m.exitState == exitRunning || m.exitState == exitDone {
 		return
 	}
+	m.requestNavigation(navigationRequest{kind: navOpenHistory, recordID: id})
+}
+
+// performOpenHistory is the navigation action behind OpenHistory.
+func (m *Model) performOpenHistory(id string) {
 	m.recLoad++
 	m.selected = -1
 	m.recErr = ""
+	m.edit = nil
+	m.navPrompt = nil
+	m.reviewErr = ""
+	m.reviewNotice = ""
 	m.reloadRecord(id, false)
 }
 
@@ -403,8 +446,15 @@ func (m *Model) reloadRecord(id string, live bool) {
 				return
 			}
 			m.recErr = ""
+			previous := m.selected
+			seq := m.selectedSeq()
 			m.rec = BuildRecordView(id, rec, live)
-			m.selected = m.rec.RowOf(m.selectedSeq())
+			m.selected = m.rec.RowOf(seq)
+			if m.selected < 0 && previous >= 0 && previous < len(m.rec.Rows) {
+				// No stable sequence was selected (an out-of-range index
+				// from a not-yet-loaded view): keep the same position.
+				m.selected = previous
+			}
 			if m.selected < 0 && len(m.rec.Rows) > 0 {
 				m.selected = 0 // the first captured record, in capture order
 			}
@@ -490,6 +540,29 @@ func (m *Model) AllowClose() bool {
 	case exitRunning:
 		return false
 	}
+	if m.reviewSaving {
+		m.navPrompt = &navigationRequest{kind: navExit}
+		m.reviewErr = "正在保存，完成前不能退出。"
+		return false
+	}
+	if m.editingDirty() {
+		// The close is refused until the editor's input is saved or
+		// discarded; the prompt offers both and a way to stay.
+		m.navPrompt = &navigationRequest{kind: navExit}
+		return false
+	}
+	m.beginExit()
+	return false
+}
+
+// beginExit starts the explicit-exit wrap-up. It runs once the editor is
+// settled (or absent).
+func (m *Model) beginExit() {
+	if m.exitState == exitRunning || m.exitState == exitDone {
+		return
+	}
+	m.edit = nil
+	m.navPrompt = nil
 	m.exitState = exitRunning
 	m.exitErr = ""
 	m.goAsync(func() {
@@ -506,5 +579,4 @@ func (m *Model) AllowClose() bool {
 			}
 		})
 	})
-	return false
 }
