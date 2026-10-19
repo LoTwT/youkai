@@ -14,8 +14,8 @@ import (
 // reads. Roles are stable identifiers for evidence and for the
 // recognition pipeline's later projection; they are not UI labels.
 type LineRegion struct {
-	Role string
-	Rect image.Rectangle
+	Role string          `json:"role"`
+	Rect image.Rectangle `json:"rect"`
 }
 
 // Detail line roles. The first six always exist on a populated pane; sub4
@@ -31,6 +31,37 @@ const (
 	LineSub3  = "sub3"
 	LineSub4  = "sub4"
 )
+
+// Non-recognition context roles: the rarity badge and the selected cell's
+// border. The recognizer never reads these regions; the projection writes
+// them as admission evidence.
+const (
+	LineQualityBadge = "qualityBadge"
+	LineSelectedCell = "selectedCell"
+)
+
+// detailLines returns the detail pane's line regions actually present on
+// a disc with the given substat count: a three-substat disc has no fourth
+// substat row (the band holds the set-effect label instead).
+func (l Layout) detailLines(substats int) []LineRegion {
+	out := make([]LineRegion, 0, len(l.DetailLines))
+	for _, line := range l.DetailLines {
+		if line.Role == LineSub4 && substats < 4 {
+			continue
+		}
+		out = append(out, line)
+	}
+	return out
+}
+
+// contextLines returns the admission's non-recognition evidence regions
+// for a selected slot: the rarity badge and the slot's selection border.
+func (l Layout) contextLines(slot int) []LineRegion {
+	return []LineRegion{
+		{Role: LineQualityBadge, Rect: l.QualityBadge},
+		{Role: LineSelectedCell, Rect: l.BorderRect(slot)},
+	}
+}
 
 // ColorProbe is one small region classified by its mean color: the colors
 // name the calibrated tiers (for example "clear"/"active" on the funnel

@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"image"
+	"image/color"
 	"image/draw"
 	"image/png"
 	"math"
@@ -273,16 +274,29 @@ type fieldReplay struct {
 	initial platform.Frame
 	cells   []platform.Frame // slot i is cells[i]
 	current int              // 0: the initial list; i+1: cells[i]
-	nextID  uint64
-	ops     []platform.InputOp
+	// position is the synthetic wheel position the traversal selected.
+	// The recording is wheel 2; the two-layer traversal starts at 1, so
+	// the replay repaints the wheel arcs for whatever position the
+	// traversal asks for.
+	position int
+	// panel reports that the filter panel is open; panel frames are the
+	// current base frame with the open probes painted.
+	panel bool
+	// cached is the rendered frame for the current synthetic state; its
+	// pixels are immutable once built, like the recorded frames.
+	cached   *image.RGBA
+	cacheKey string
+	nextID   uint64
+	ops      []platform.InputOp
 }
 
 func newFieldReplay(t *testing.T, root string) *fieldReplay {
 	t.Helper()
 	l := collect.MacCloudLayout()
 	r := &fieldReplay{
-		layout:  l,
-		initial: loadSourceFrame(t, root, "s2-62-wheelL-list"),
+		layout:   l,
+		initial:  loadSourceFrame(t, root, "s2-62-wheelL-list"),
+		position: 2, // the recording shows wheel position 2
 	}
 	for slot := 0; slot < l.Rows*l.Columns; slot++ {
 		name := fmt.Sprintf("s2-wL-top-cell-r%dc%d", slot/l.Columns, slot%l.Columns)
@@ -309,7 +323,65 @@ func (r *fieldReplay) frame(ctx context.Context, req platform.FrameRequest) (pla
 	f := base
 	f.ID = r.nextID
 	f.ArrivedAt = time.Now()
+	f.Image = r.render(base.Image)
 	return f, nil
+}
+
+// render paints the synthetic state the traversal acts on: the selected
+// wheel position, the closed (or open) filter panel, a clear funnel, and
+// for positions other than the recorded one, an empty list with a
+// full-length thumb. The recorded pixels outside these probes are kept.
+func (r *fieldReplay) render(src *image.RGBA) *image.RGBA {
+	key := fmt.Sprintf("%d|%d|%v", r.current, r.position, r.panel)
+	if r.cached != nil && r.cacheKey == key {
+		return r.cached
+	}
+	dst := image.NewRGBA(src.Bounds())
+	draw.Draw(dst, dst.Bounds(), src, image.Point{}, draw.Src)
+	fill := func(rect image.Rectangle, c color.RGBA) {
+		rect = rect.Intersect(dst.Bounds())
+		for y := rect.Min.Y; y < rect.Max.Y; y++ {
+			for x := rect.Min.X; x < rect.Max.X; x++ {
+				dst.SetRGBA(x, y, c)
+			}
+		}
+	}
+	if r.panel {
+		for _, probe := range r.layout.PanelOpen {
+			fill(probe.At, probe.Colors["open"])
+		}
+		r.cached, r.cacheKey = dst, key
+		return dst
+	}
+	for _, probe := range r.layout.PanelOpen {
+		fill(probe.At, probe.Colors["closed"])
+	}
+	fill(r.layout.Funnel.At, r.layout.Funnel.Colors["clear"])
+	// Repaint the wheel selection: clear every arc, then paint the current
+	// position's four arcs with the selection color.
+	for i, center := range r.layout.Wheel {
+		for _, arc := range r.layout.WheelArcs {
+			fill(arc.Add(center), color.RGBA{A: 255})
+		}
+		if i+1 == r.position {
+			for _, arc := range r.layout.WheelArcs {
+				fill(arc.Add(center), selectionColor)
+			}
+		}
+	}
+	if r.position != 1 {
+		// The recorded list belongs to position 1's fiction in this
+		// replay; every other position is an empty list with a
+		// full-length thumb (top and bottom at once).
+		for i := range r.layout.Slots {
+			fill(r.layout.BarRect(i), color.RGBA{A: 255})
+			fill(r.layout.BorderRect(i), color.RGBA{A: 255})
+		}
+		track := r.layout.ScrollTrack
+		fill(image.Rect(track.Min.X, track.Min.Y, track.Max.X, track.Max.Y), color.RGBA{R: 200, G: 200, B: 200, A: 255})
+	}
+	r.cached, r.cacheKey = dst, key
+	return dst
 }
 
 func (r *fieldReplay) dispatch(op platform.InputOp) platform.InputResult {
@@ -318,10 +390,30 @@ func (r *fieldReplay) dispatch(op platform.InputOp) platform.InputResult {
 	r.ops = append(r.ops, op)
 	now := time.Now()
 	if op.Kind == platform.InputClick {
-		for slot, rect := range r.layout.Slots {
-			if op.At.In(rect) {
-				r.current = slot + 1
-				break
+		switch {
+		case r.panel:
+			if op.At.Eq(r.layout.PanelClose) {
+				r.panel = false
+			}
+		case op.At.Eq(r.layout.FilterButton):
+			r.panel = true
+		default:
+			switched := false
+			for i, center := range r.layout.Wheel {
+				if op.At.Eq(center) {
+					r.position = i + 1
+					r.current = 0
+					switched = true
+					break
+				}
+			}
+			if !switched {
+				for slot, rect := range r.layout.Slots {
+					if op.At.In(rect) {
+						r.current = slot + 1
+						break
+					}
+				}
 			}
 		}
 	}
@@ -351,10 +443,13 @@ func (m bottomMatcher) Match(f platform.Frame) collect.PageMatch {
 	return pm
 }
 
-// TestReplayViewportFromFieldFrames walks the recorded wheel-2 viewport:
-// the initial list plus the 20 clicked cell frames, in reading order. The
-// initial selection is admitted as an initial read; each later slot is a
-// verified transition; the walk completes on the forced end evidence.
+// TestReplayViewportFromFieldFrames walks the recorded wheel-2 viewport as
+// position 1's list: the initial list plus the 20 clicked cell frames, in
+// reading order. The replay repaints the wheel selection and synthesizes
+// empty lists for positions 2–6; the 20 real frames are admitted only in
+// position 1. The initial selection is admitted as an initial read; each
+// later slot is a verified transition; the walk completes on the forced
+// end evidence.
 func TestReplayViewportFromFieldFrames(t *testing.T) {
 	root := sampleRoot(t)
 	replay := newFieldReplay(t, root)
@@ -371,6 +466,7 @@ func TestReplayViewportFromFieldFrames(t *testing.T) {
 			Layout:           l,
 			Matcher:          bottomMatcher{Matcher: collect.NewPixelMatcher(l, collect.MacCloudCalibration())},
 			ActionBudget:     120 * time.Millisecond,
+			ScrollBudget:     120 * time.Millisecond,
 			StableFrames:     3,
 			DetailStableSpan: -1,
 			MaxRetries:       2,
@@ -387,8 +483,9 @@ func TestReplayViewportFromFieldFrames(t *testing.T) {
 		t.Fatalf("admitted %d, want 20: %v", len(obs), positions(obs))
 	}
 	for i, o := range obs {
-		if o.Viewport != 0 || o.Row != i/4 || o.Column != i%4 {
-			t.Fatalf("observation %d at %v, want slot %d", i+1, [3]int{o.Viewport, o.Row, o.Column}, i)
+		if o.Position != 1 || o.Viewport != 0 || o.Row != i/4 || o.Column != i%4 {
+			t.Fatalf("observation %d at position %d %v, want position 1 slot %d",
+				i+1, o.Position, [3]int{o.Viewport, o.Row, o.Column}, i)
 		}
 		wantAssoc := collect.AssociationTransition
 		if i == 0 {
@@ -402,13 +499,19 @@ func TestReplayViewportFromFieldFrames(t *testing.T) {
 		}
 	}
 	ops := replay.opsSnapshot()
-	if clicks := countOps(ops, platform.InputClick, image.Point{}, image.Point{}); clicks != 19 {
-		t.Fatalf("%d clicks, want 19 (slot 0 is the initial read)", clicks)
+	if clicks := countSlotClicks(ops, l); clicks != 19 {
+		t.Fatalf("%d slot clicks, want 19 (slot 0 is the initial read)", clicks)
 	}
-	if drags := countOps(ops, platform.InputDrag, l.ScrollFrom, l.ScrollTo); drags != 1 {
-		t.Fatalf("%d advance drags, want the bottom confirmation", drags)
+	if clicks := countWheelClicks(ops, l); clicks != 6 {
+		t.Fatalf("%d wheel clicks, want 6 switches from the recorded position 2 through every position", clicks)
 	}
-	if drags := countOps(ops, platform.InputDrag, l.TopFrom, l.TopTo); drags != 1 {
-		t.Fatalf("%d top drags, want 1", drags)
+	if clicks := countFilterClicks(ops, l); clicks != 6*3 {
+		t.Fatalf("%d filter-control clicks, want the reset flow for every position", clicks)
+	}
+	if drags := countOps(ops, platform.InputDrag, l.ScrollFrom, l.ScrollTo); drags != 6 {
+		t.Fatalf("%d advance drags, want one bottom confirmation per position", drags)
+	}
+	if drags := countOps(ops, platform.InputDrag, l.TopFrom, l.TopTo); drags != 6 {
+		t.Fatalf("%d top drags, want one per position", drags)
 	}
 }
