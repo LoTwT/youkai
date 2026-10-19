@@ -606,7 +606,7 @@ func (m *Model) submitReview(recordID string, seq, expectedRevision int64, data 
 				}
 				return
 			}
-			m.applySavedItem(result.Item)
+			m.applySavedItem(result.Item, result.Generation)
 			m.recLoad++ // invalidate an older load started before the save
 			if m.edit != nil && m.edit.recordID == recordID && m.edit.seq == seq {
 				m.edit = nil
@@ -654,8 +654,10 @@ func (m *Model) handleReviewError(recordID string, err error) {
 }
 
 // applySavedItem replaces the saved item's row in place, locating it by
-// its capture sequence rather than by the current selection.
-func (m *Model) applySavedItem(item record.ItemRecord) {
+// its capture sequence rather than by the current selection. The frozen
+// export snapshot advances with the same revision, so a following export
+// uses exactly what the save persisted.
+func (m *Model) applySavedItem(item record.ItemRecord, generation int64) {
 	if m.rec == nil {
 		return
 	}
@@ -664,6 +666,17 @@ func (m *Model) applySavedItem(item record.ItemRecord) {
 		return
 	}
 	m.rec.Rows[index] = buildRow(&item)
+	if m.recData == nil || m.recData.Checkpoint.Session.SessionID != m.rec.ID {
+		return
+	}
+	for i := range m.recData.Checkpoint.Items {
+		if m.recData.Checkpoint.Items[i].Sequence == item.Sequence {
+			m.recData.Checkpoint.Items[i] = item
+			break
+		}
+	}
+	m.recData.Checkpoint.SavedRevision = generation
+	m.rebuildExport()
 }
 
 // pendingCount counts the produced structured rows whose review is not

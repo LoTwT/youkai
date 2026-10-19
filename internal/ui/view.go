@@ -245,8 +245,12 @@ func (m *Model) resultsArea(c *ui.Context, t *ui.Theme) {
 		if m.recErr != "" {
 			ui.Text(c, "记录读取失败："+m.recErr).TextColor(t.Danger)
 		} else if m.rec == nil || len(m.rec.Rows) == 0 {
+			if m.rec != nil {
+				m.exportArea(c, t)
+			}
 			ui.Text(c, m.emptyResultsText()).TextColor(t.TextMuted)
 		} else {
+			m.exportArea(c, t)
 			ui.Split(c, &m.split,
 				func() { m.tablePane(c) },
 				func() { m.detailPane(c) },
