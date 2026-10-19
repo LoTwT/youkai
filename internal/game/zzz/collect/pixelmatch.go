@@ -203,6 +203,17 @@ func (m *PixelMatcher) scrollEnds(img *image.RGBA) (top, bottom bool) {
 	return start <= m.C.ScrollbarTopStartMax, end >= m.C.ScrollbarBottomEndMin
 }
 
+// ThumbStart reports the scrollbar thumb's first row in a frame. The
+// traversal uses it to prove that a fling toward the top actually moved
+// the thumb upward; a missing or unusable frame reports false.
+func (m *PixelMatcher) ThumbStart(f platform.Frame) (int, bool) {
+	if m == nil || !m.valid || !m.frameFits(f) {
+		return 0, false
+	}
+	start, _, ok := m.thumbSegment(f.Image)
+	return start, ok
+}
+
 // thumbSegment finds the longest bright run in the scrollbar's thumb
 // column. The track rect excludes the two end caps.
 func (m *PixelMatcher) thumbSegment(img *image.RGBA) (start, end int, ok bool) {

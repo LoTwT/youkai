@@ -39,16 +39,24 @@ type scriptedGame struct {
 
 	layout     collect.Layout
 	rows, cols int
-	items      []bool
-	globalRows int
+	// lists holds each wheel position's items in reading order; lists[0]
+	// is position 1. newScriptedGame fills position 1 only, so a test that
+	// wants several populated positions calls setList.
+	lists [6][]bool
+	// viewport and selected are the current position's state.
+	viewport int
+	selected int // current position's global index; -1 none
+	// viewportByPos and selectedByPos persist each position's state
+	// across wheel switches, as the game does.
+	viewportByPos [6]int
+	selectedByPos [6]int
+	// detailGlobal is the detail pane's content key; -1 unpopulated.
+	detailGlobal int
 
 	// the scene
-	page         pageKind
-	wheel        int
-	filter       string // clear, active, unknown
-	viewport     int
-	selected     int // global position index; -1 none
-	detailGlobal int // the detail pane's content key; -1 unpopulated
+	page   pageKind
+	wheel  int
+	filter string // clear, active, unknown
 
 	// scripting knobs (see the tests that set them)
 	frameInterval     time.Duration
@@ -56,21 +64,28 @@ type scriptedGame struct {
 	effectLag         int  // frame calls until a click's selection shows
 	detailLagExtra    int  // extra frame calls until the detail shows
 	ignoreClicks      int  // clicks that silently do nothing
+	ignoreWheelClicks int  // wheel clicks that silently do nothing
 	clickOpensSlot    int  // >=0: clicking any slot selects this visible slot
 	clickOpensUnknown bool // the click makes the page undecidable
 	scrollRows        int  // rows per advance drag; 0 means 4
 	scrollStuck       bool // the advance drag does not move the list
 	scrollJump        int  // non-zero: the advance drag jumps this many rows
-	sameDetail        bool // a new selection keeps the old detail content
-	detailFlicker     bool // the detail content alternates every frame
-	qualityUnknown    bool // no gold badge (A/B/unknown rarity)
-	substatsUnknown   bool // the fourth row's value column is between tiers
-	substats4         bool // four substat rows (default true)
-	forceBottom       bool // the scrollbar claims the end while mid-list
-	geometryAfter     int  // 0: never; else serve geometry 2 from this frame call on
-	abortScrollDrag   bool // the next advance drag reports Aborted
-	denyNextDispatch  bool // the next dispatch is refused
-	content           image.Rectangle
+	topStuck          bool // the top fling does not move the list
+	topJumpRows       int  // non-zero: the top fling moves up this many rows
+	resetClearsFilter bool // the panel reset clears the funnel (default true)
+	// resetLeavesActiveAt, when non-zero, makes the filter reset leave
+	// the funnel active at that wheel position only.
+	resetLeavesActiveAt int
+	sameDetail          bool // a new selection keeps the old detail content
+	detailFlicker       bool // the detail content alternates every frame
+	qualityUnknown      bool // no gold badge (A/B/unknown rarity)
+	substatsUnknown     bool // the fourth row's value column is between tiers
+	substats4           bool // four substat rows (default true)
+	forceBottom         bool // the scrollbar claims the end while mid-list
+	geometryAfter       int  // 0: never; else serve geometry 2 from this frame call on
+	abortScrollDrag     bool // the next advance drag reports Aborted
+	denyNextDispatch    bool // the next dispatch is refused
+	content             image.Rectangle
 
 	// records
 	ops           []platform.InputOp
@@ -95,37 +110,59 @@ func newScriptedGame(items ...bool) *scriptedGame {
 		}
 	}
 	g := &scriptedGame{
-		layout:         l,
-		rows:           l.Rows,
-		cols:           l.Columns,
-		items:          append([]bool(nil), items...),
-		page:           pageWarehouse,
-		wheel:          1,
-		filter:         "clear",
-		selected:       -1,
-		detailGlobal:   -1,
-		clickOpensSlot: -1,
-		substats4:      true,
-		frameInterval:  time.Millisecond,
-		content:        l.Content,
+		layout:            l,
+		rows:              l.Rows,
+		cols:              l.Columns,
+		page:              pageWarehouse,
+		wheel:             1,
+		filter:            "clear",
+		selected:          -1,
+		detailGlobal:      -1,
+		clickOpensSlot:    -1,
+		resetClearsFilter: true,
+		substats4:         true,
+		frameInterval:     time.Millisecond,
+		content:           l.Content,
 	}
-	g.globalRows = (len(g.items) + g.cols - 1) / g.cols
-	if g.globalRows < g.rows {
-		g.globalRows = g.rows
+	g.lists[0] = append([]bool(nil), items...)
+	for i := range g.selectedByPos {
+		g.selectedByPos[i] = -1
 	}
 	return g
+}
+
+// setList replaces one wheel position's items (pos is 1..6).
+func (g *scriptedGame) setList(pos int, items []bool) {
+	g.lists[pos-1] = append([]bool(nil), items...)
+}
+
+// list returns the current position's items.
+func (g *scriptedGame) list() []bool {
+	if g.wheel < 1 || g.wheel > 6 {
+		return nil
+	}
+	return g.lists[g.wheel-1]
 }
 
 func (g *scriptedGame) selectInitially(global int) {
 	g.selected = global
 	g.detailGlobal = global
+	g.selectedByPos[g.wheel-1] = global
 }
 
 func (g *scriptedGame) maxTop() int {
-	if g.globalRows <= g.rows {
+	if g.globalRows() <= g.rows {
 		return 0
 	}
-	return g.globalRows - g.rows
+	return g.globalRows() - g.rows
+}
+
+func (g *scriptedGame) globalRows() int {
+	n := (len(g.list()) + g.cols - 1) / g.cols
+	if n < g.rows {
+		n = g.rows
+	}
+	return n
 }
 
 func (g *scriptedGame) globalForSlot(slot int) int {
@@ -133,7 +170,8 @@ func (g *scriptedGame) globalForSlot(slot int) int {
 }
 
 func (g *scriptedGame) occupied(global int) bool {
-	return global >= 0 && global < len(g.items) && g.items[global]
+	list := g.list()
+	return global >= 0 && global < len(list) && list[global]
 }
 
 func (g *scriptedGame) observe() (platform.Observation, error) {
@@ -205,9 +243,18 @@ func (g *scriptedGame) signature(geo platform.GeometryVersion) string {
 	if g.detailFlicker && g.frameCalls%2 == 1 {
 		flicker = 1
 	}
-	return fmt.Sprintf("%d|%d|%s|%d|%d|%d|%d|%d|%v|%v|%v|%v|%v|%v",
+	// Hash the current position's occupancy so lists with the same length
+	// but different contents produce different frames.
+	var listHash uint64 = 1469598103934665603
+	for _, occupied := range g.list() {
+		if occupied {
+			listHash ^= 1099511628211
+		}
+		listHash *= 1099511628211
+	}
+	return fmt.Sprintf("%d|%d|%s|%d|%d|%d|%d|%d|%v|%v|%v|%v|%v|%v|%x",
 		g.page, g.wheel, g.filter, g.viewport, g.selected, g.detailGlobal, flicker, geo,
-		g.qualityUnknown, g.substatsUnknown, g.substats4, g.forceBottom, g.content, g.globalRows)
+		g.qualityUnknown, g.substatsUnknown, g.substats4, g.forceBottom, g.content, g.globalRows(), listHash)
 }
 
 func (g *scriptedGame) render() *image.RGBA {
@@ -260,10 +307,13 @@ func (g *scriptedGame) render() *image.RGBA {
 	for slot := 0; slot < g.rows*g.cols; slot++ {
 		global := g.globalForSlot(slot)
 		if g.occupied(global) {
-			fill(l.BarRect(slot), barColor)
-			center := slotCenter(l, slot)
+			// Fill the whole slot with the item's grayscale pattern: the
+			// real cells are visually dense, and a sparse pattern would
+			// let a one-row shift fall below the scroll matcher's
+			// stationary threshold in the scripted viewport.
 			v := uint8(40 + (global*37)%160)
-			fill(image.Rect(center.X-20, center.Y-20, center.X+20, center.Y+20), color.RGBA{R: v, G: v, B: v, A: 255})
+			fill(l.Slots[slot], color.RGBA{R: v, G: v, B: v, A: 255})
+			fill(l.BarRect(slot), barColor)
 		}
 		if g.selected == global {
 			fill(l.BorderRect(slot), selectionColor)
@@ -279,7 +329,7 @@ func (g *scriptedGame) renderScrollbar(img *image.RGBA) {
 	x := track.Min.X
 	start, end := track.Min.Y, track.Max.Y-1
 	if !g.forceBottom && g.maxTop() > 0 {
-		length := track.Dy() * g.rows / g.globalRows
+		length := track.Dy() * g.rows / g.globalRows()
 		if length < 40 {
 			length = 40
 		}
@@ -367,7 +417,52 @@ func (g *scriptedGame) dispatch(op platform.InputOp) platform.InputResult {
 	lag := g.frameCalls + g.effectLag
 	switch op.Kind {
 	case platform.InputClick:
+		if g.page == pagePanel {
+			switch {
+			case op.At.Eq(g.layout.PanelReset):
+				if g.resetClearsFilter && (g.resetLeavesActiveAt == 0 || g.wheel != g.resetLeavesActiveAt) {
+					g.pending = append(g.pending, pendingEffect{dueAt: lag, apply: func(g *scriptedGame) {
+						g.filter = "clear"
+					}})
+				} else if g.resetLeavesActiveAt != 0 && g.wheel == g.resetLeavesActiveAt {
+					g.pending = append(g.pending, pendingEffect{dueAt: lag, apply: func(g *scriptedGame) {
+						g.filter = "active"
+					}})
+				}
+			case op.At.Eq(g.layout.PanelClose):
+				g.pending = append(g.pending, pendingEffect{dueAt: lag, apply: func(g *scriptedGame) {
+					g.page = pageWarehouse
+				}})
+			}
+			return posted(now)
+		}
 		if g.page != pageWarehouse {
+			return posted(now)
+		}
+		if pos := g.wheelAt(op.At); pos != 0 {
+			if g.ignoreWheelClicks > 0 {
+				g.ignoreWheelClicks--
+				return posted(now)
+			}
+			from := g.wheel
+			g.pending = append(g.pending, pendingEffect{dueAt: lag, apply: func(g *scriptedGame) {
+				g.selectedByPos[from-1] = g.selected
+				g.viewportByPos[from-1] = g.viewport
+				g.wheel = pos
+				g.selected = g.selectedByPos[pos-1]
+				g.viewport = g.viewportByPos[pos-1]
+				if g.selected >= 0 {
+					g.detailGlobal = g.selected
+				} else {
+					g.detailGlobal = -1
+				}
+			}})
+			return posted(now)
+		}
+		if op.At.Eq(g.layout.FilterButton) {
+			g.pending = append(g.pending, pendingEffect{dueAt: lag, apply: func(g *scriptedGame) {
+				g.page = pagePanel
+			}})
 			return posted(now)
 		}
 		slot, ok := g.slotAt(op.At)
@@ -425,9 +520,19 @@ func (g *scriptedGame) dispatch(op platform.InputOp) platform.InputResult {
 				}})
 			}
 		case op.At.Eq(g.layout.TopFrom) && op.To.Eq(g.layout.TopTo):
-			if g.viewport != 0 {
+			if g.topStuck || g.viewport == 0 {
+				return posted(now)
+			}
+			target := 0
+			if g.topJumpRows > 0 {
+				target = g.viewport - g.topJumpRows
+				if target < 0 {
+					target = 0
+				}
+			}
+			if target != g.viewport {
 				g.pending = append(g.pending, pendingEffect{dueAt: lag, apply: func(g *scriptedGame) {
-					g.viewport = 0
+					g.viewport = target
 				}})
 			}
 		}
@@ -447,6 +552,16 @@ func (g *scriptedGame) slotAt(p image.Point) (int, bool) {
 		}
 	}
 	return 0, false
+}
+
+// wheelAt returns the wheel position (1..6) whose center is p, or 0.
+func (g *scriptedGame) wheelAt(p image.Point) int {
+	for i, center := range g.layout.Wheel {
+		if p.Eq(center) {
+			return i + 1
+		}
+	}
+	return 0
 }
 
 func (g *scriptedGame) opsSnapshot() []platform.InputOp {
@@ -507,6 +622,7 @@ func newTraversalHarness(t *testing.T, game *scriptedGame) *traversalHarness {
 			Layout:           l,
 			Matcher:          collect.NewPixelMatcher(l, collect.MacCloudCalibration()),
 			ActionBudget:     300 * time.Millisecond,
+			ScrollBudget:     300 * time.Millisecond,
 			StableFrames:     3,
 			DetailStableSpan: -1,
 			MaxRetries:       2,
@@ -551,7 +667,12 @@ func (h *traversalHarness) end() scan.Snapshot {
 	select {
 	case <-h.kernel.Done():
 	case <-time.After(15 * time.Second):
-		h.t.Fatalf("timed out waiting for the session to end; ops so far: %d", len(h.game.opsSnapshot()))
+		ops := h.game.opsSnapshot()
+		tail := ops
+		if len(tail) > 12 {
+			tail = tail[len(tail)-12:]
+		}
+		h.t.Fatalf("timed out waiting for the session to end; %d ops so far; last: %+v", len(ops), tail)
 	}
 	return h.kernel.Snapshot()
 }
@@ -623,6 +744,48 @@ func countOps(ops []platform.InputOp, kind platform.InputKind, at, to image.Poin
 	return n
 }
 
+// countWheelClicks counts clicks on any wheel position's center.
+func countWheelClicks(ops []platform.InputOp, l collect.Layout) int {
+	n := 0
+	for _, op := range ops {
+		if op.Kind != platform.InputClick {
+			continue
+		}
+		for _, center := range l.Wheel {
+			if op.At.Eq(center) {
+				n++
+				break
+			}
+		}
+	}
+	return n
+}
+
+// countFilterClicks counts the filter button, reset and close clicks.
+func countFilterClicks(ops []platform.InputOp, l collect.Layout) int {
+	return countOps(ops, platform.InputClick, l.FilterButton, image.Point{}) +
+		countOps(ops, platform.InputClick, l.PanelReset, image.Point{}) +
+		countOps(ops, platform.InputClick, l.PanelClose, image.Point{})
+}
+
+// countSlotClicks counts clicks on the list grid, excluding wheel and
+// filter-panel controls.
+func countSlotClicks(ops []platform.InputOp, l collect.Layout) int {
+	n := 0
+	for _, op := range ops {
+		if op.Kind != platform.InputClick {
+			continue
+		}
+		for _, r := range l.Slots {
+			if op.At.In(r) {
+				n++
+				break
+			}
+		}
+	}
+	return n
+}
+
 // ---- the tests ----
 
 // T1: one full viewport completes on the scrollbar's bottom evidence,
@@ -639,8 +802,13 @@ func TestSinglePageCompletesOneViewport(t *testing.T) {
 		t.Fatalf("admitted %d, want 20: %v", len(obs), positions(obs))
 	}
 	for i, o := range obs {
-		if o.Viewport != 0 || o.Row != i/4 || o.Column != i%4 {
-			t.Fatalf("observation %d at %v, want viewport 0 slot %d", i+1, [3]int{o.Viewport, o.Row, o.Column}, i)
+		if o.Position != 1 || o.Viewport != 0 || o.Row != i/4 || o.Column != i%4 {
+			t.Fatalf("observation %d at position %d %v, want position 1 viewport 0 slot %d",
+				i+1, o.Position, [3]int{o.Viewport, o.Row, o.Column}, i)
+		}
+		if o.Quality != collect.QualityS || len(o.Lines) != 7 || len(o.Context) != 2 {
+			t.Fatalf("observation %d lacks its quality/lines/context: quality %q lines %d context %d",
+				i+1, o.Quality, len(o.Lines), len(o.Context))
 		}
 		if o.Association != collect.AssociationTransition {
 			t.Fatalf("observation %d association %s, want transition", i+1, o.Association)
@@ -657,14 +825,20 @@ func TestSinglePageCompletesOneViewport(t *testing.T) {
 	}
 
 	ops := game.opsSnapshot()
-	if clicks := countOps(ops, platform.InputClick, image.Point{}, image.Point{}); clicks != 20 {
-		t.Fatalf("%d clicks, want 20", clicks)
+	if clicks := countOps(ops, platform.InputClick, image.Point{}, image.Point{}); clicks != 20+5+3*6 {
+		t.Fatalf("%d clicks, want 20 slot clicks, 5 wheel switches and 18 filter-control clicks", clicks)
 	}
-	if drags := countOps(ops, platform.InputDrag, game.layout.ScrollFrom, game.layout.ScrollTo); drags != 1 {
-		t.Fatalf("%d advance drags, want the bottom confirmation only", drags)
+	if wheelClicks := countWheelClicks(ops, game.layout); wheelClicks != 5 {
+		t.Fatalf("%d wheel clicks, want 5", wheelClicks)
 	}
-	if drags := countOps(ops, platform.InputDrag, game.layout.TopFrom, game.layout.TopTo); drags != 1 {
-		t.Fatalf("%d top drags, want 1", drags)
+	if filterClicks := countFilterClicks(ops, game.layout); filterClicks != 18 {
+		t.Fatalf("%d filter-control clicks, want 3 per position", filterClicks)
+	}
+	if drags := countOps(ops, platform.InputDrag, game.layout.ScrollFrom, game.layout.ScrollTo); drags != 6 {
+		t.Fatalf("%d advance drags, want one per position's bottom confirmation", drags)
+	}
+	if drags := countOps(ops, platform.InputDrag, game.layout.TopFrom, game.layout.TopTo); drags != 6 {
+		t.Fatalf("%d top drags, want one per position", drags)
 	}
 	// The observed-scope report carries what the precheck established.
 	scope := string(h.inv.ObservedScope())
@@ -688,8 +862,8 @@ func TestSinglePageShortList(t *testing.T) {
 	if fmt.Sprint(positions(obs)) != fmt.Sprint(want) {
 		t.Fatalf("positions %v, want %v", positions(obs), want)
 	}
-	if drags := countOps(game.opsSnapshot(), platform.InputDrag, game.layout.ScrollFrom, game.layout.ScrollTo); drags != 1 {
-		t.Fatalf("%d advance drags, want the bottom confirmation", drags)
+	if drags := countOps(game.opsSnapshot(), platform.InputDrag, game.layout.ScrollFrom, game.layout.ScrollTo); drags != 6 {
+		t.Fatalf("%d advance drags, want one bottom confirmation per position", drags)
 	}
 }
 
@@ -725,8 +899,8 @@ func TestSinglePageEmptyList(t *testing.T) {
 	if got := len(h.observations()); got != 0 {
 		t.Fatalf("admitted %d, want 0", got)
 	}
-	if clicks := countOps(game.opsSnapshot(), platform.InputClick, image.Point{}, image.Point{}); clicks != 0 {
-		t.Fatalf("%d clicks on an empty list", clicks)
+	if clicks := countSlotClicks(game.opsSnapshot(), game.layout); clicks != 0 {
+		t.Fatalf("%d slot clicks on an empty list", clicks)
 	}
 }
 
@@ -767,11 +941,11 @@ func TestSinglePageScrollCarriesOverlap(t *testing.T) {
 	}
 
 	ops := game.opsSnapshot()
-	if drags := countOps(ops, platform.InputDrag, game.layout.ScrollFrom, game.layout.ScrollTo); drags != 2 {
-		t.Fatalf("%d advance drags, want one scroll + one bottom confirmation", drags)
+	if drags := countOps(ops, platform.InputDrag, game.layout.ScrollFrom, game.layout.ScrollTo); drags != 7 {
+		t.Fatalf("%d advance drags, want one scroll + one bottom confirmation per position", drags)
 	}
-	if drags := countOps(ops, platform.InputDrag, game.layout.TopFrom, game.layout.TopTo); drags != 1 {
-		t.Fatalf("%d top drags, want 1", drags)
+	if drags := countOps(ops, platform.InputDrag, game.layout.TopFrom, game.layout.TopTo); drags != 6 {
+		t.Fatalf("%d top drags, want one per position", drags)
 	}
 }
 
@@ -821,8 +995,8 @@ func TestSinglePageInitialRead(t *testing.T) {
 			t.Fatalf("later admission %+v, want a verified transition", o)
 		}
 	}
-	if clicks := countOps(game.opsSnapshot(), platform.InputClick, image.Point{}, image.Point{}); clicks != 3 {
-		t.Fatalf("%d clicks, want 3 after the initial read", clicks)
+	if clicks := countSlotClicks(game.opsSnapshot(), game.layout); clicks != 3 {
+		t.Fatalf("%d slot clicks, want 3 after the initial read", clicks)
 	}
 }
 
@@ -839,8 +1013,8 @@ func TestSinglePageClickEffectLag(t *testing.T) {
 	if got := len(h.observations()); got != 3 {
 		t.Fatalf("admitted %d, want 3", got)
 	}
-	if clicks := countOps(game.opsSnapshot(), platform.InputClick, image.Point{}, image.Point{}); clicks != 3 {
-		t.Fatalf("%d clicks, want one per item", clicks)
+	if clicks := countSlotClicks(game.opsSnapshot(), game.layout); clicks != 3 {
+		t.Fatalf("%d slot clicks, want one per item", clicks)
 	}
 }
 
@@ -889,8 +1063,8 @@ func TestSinglePageClickNeverTakesStops(t *testing.T) {
 	if snap.Counts.Captured != 0 {
 		t.Fatalf("an ineffective click admits nothing: %+v", snap.Counts)
 	}
-	if clicks := countOps(game.opsSnapshot(), platform.InputClick, image.Point{}, image.Point{}); clicks != 3 {
-		t.Fatalf("%d clicks, want 3 (1 + 2 retries)", clicks)
+	if clicks := countSlotClicks(game.opsSnapshot(), game.layout); clicks != 3 {
+		t.Fatalf("%d slot clicks, want 3 (1 + 2 retries)", clicks)
 	}
 }
 
@@ -902,8 +1076,8 @@ func TestSinglePageUnknownPageStopsWithoutRetry(t *testing.T) {
 	h := newTraversalHarness(t, game)
 	h.start()
 	h.endFailed(collect.CodeNavigationMismatch)
-	if clicks := countOps(game.opsSnapshot(), platform.InputClick, image.Point{}, image.Point{}); clicks != 1 {
-		t.Fatalf("%d clicks, want 1", clicks)
+	if clicks := countSlotClicks(game.opsSnapshot(), game.layout); clicks != 1 {
+		t.Fatalf("%d slot clicks, want 1", clicks)
 	}
 }
 
@@ -943,8 +1117,8 @@ func TestSinglePageDetailFlickerStopsUnattributed(t *testing.T) {
 	if snap.Counts.Captured != 0 {
 		t.Fatalf("an unsettled detail admits nothing: %+v", snap.Counts)
 	}
-	if clicks := countOps(game.opsSnapshot(), platform.InputClick, image.Point{}, image.Point{}); clicks != 1 {
-		t.Fatalf("%d clicks, want 1", clicks)
+	if clicks := countSlotClicks(game.opsSnapshot(), game.layout); clicks != 1 {
+		t.Fatalf("%d slot clicks, want 1", clicks)
 	}
 }
 
@@ -999,8 +1173,8 @@ func TestSinglePageNotSSkipsWithoutAdmission(t *testing.T) {
 	if got := len(h.observations()); got != 0 {
 		t.Fatalf("a NotS disc admitted a record: %d", got)
 	}
-	if clicks := countOps(game.opsSnapshot(), platform.InputClick, image.Point{}, image.Point{}); clicks != 3 {
-		t.Fatalf("%d clicks, want 3", clicks)
+	if clicks := countSlotClicks(game.opsSnapshot(), game.layout); clicks != 3 {
+		t.Fatalf("%d slot clicks, want 3", clicks)
 	}
 }
 
@@ -1026,15 +1200,11 @@ func TestSinglePagePrecheckRefusals(t *testing.T) {
 		{"filter panel open", func(g *scriptedGame, inv *collect.Inventory) {
 			g.page = pagePanel
 		}, collect.CodePageUnverified},
-		{"filter active", func(g *scriptedGame, inv *collect.Inventory) {
-			g.filter = "active"
-		}, collect.CodePageUnverified},
 		{"undecidable funnel", func(g *scriptedGame, inv *collect.Inventory) {
 			g.filter = "unknown"
 		}, collect.CodePageUnverified},
-		{"mid-list start", func(g *scriptedGame, inv *collect.Inventory) {
-			g.globalRows = 9
-			g.viewport = 1
+		{"no wheel position", func(g *scriptedGame, inv *collect.Inventory) {
+			g.wheel = 0
 		}, collect.CodePageUnverified},
 	}
 	for _, tc := range cases {
@@ -1232,9 +1402,9 @@ func TestSinglePageStopCancelsPromptly(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("the first item never reached the recognizer")
 	}
-	clicksBefore := countOps(game.opsSnapshot(), platform.InputClick, image.Point{}, image.Point{})
+	clicksBefore := countSlotClicks(game.opsSnapshot(), game.layout)
 	if clicksBefore != 1 {
-		t.Fatalf("clicks before the stop: %d, want 1", clicksBefore)
+		t.Fatalf("slot clicks before the stop: %d, want 1", clicksBefore)
 	}
 	started := time.Now()
 	h.kernel.Cancel()
@@ -1247,7 +1417,7 @@ func TestSinglePageStopCancelsPromptly(t *testing.T) {
 		t.Fatalf("the stop must unwind promptly, took %s", d)
 	}
 	time.Sleep(20 * time.Millisecond)
-	if after := countOps(game.opsSnapshot(), platform.InputClick, image.Point{}, image.Point{}); after != clicksBefore {
+	if after := countSlotClicks(game.opsSnapshot(), game.layout); after != clicksBefore {
 		t.Fatalf("the stopped machine dispatched further: %d → %d", clicksBefore, after)
 	}
 }
@@ -1269,8 +1439,8 @@ func TestSinglePageWaitsForPipelineCapacity(t *testing.T) {
 	}
 	deadline := time.Now().Add(200 * time.Millisecond)
 	for time.Now().Before(deadline) {
-		if clicks := countOps(game.opsSnapshot(), platform.InputClick, image.Point{}, image.Point{}); clicks > 1 {
-			t.Fatalf("clicked ahead of a full pipeline: %d clicks", clicks)
+		if clicks := countSlotClicks(game.opsSnapshot(), game.layout); clicks > 1 {
+			t.Fatalf("clicked ahead of a full pipeline: %d slot clicks", clicks)
 		}
 		time.Sleep(2 * time.Millisecond)
 	}
@@ -1278,5 +1448,329 @@ func TestSinglePageWaitsForPipelineCapacity(t *testing.T) {
 	snap := h.endCompleted()
 	if snap.Counts.Captured != 2 || len(h.observations()) != 2 {
 		t.Fatalf("end %s, captured %+v, observations %d; want completed with 2", snap.End, snap.Counts, len(h.observations()))
+	}
+}
+
+// ---- the two-layer traversal (4b-2) ----
+
+// listOf returns n occupied slots in reading order.
+func listOf(n int) []bool {
+	out := make([]bool, n)
+	for i := range out {
+		out[i] = true
+	}
+	return out
+}
+
+// loseNextScrollMatcher reports one scripted Lost verdict for the first
+// scroll after arming, then delegates. It pins the "Lost during the
+// return-to-top flings is allowed" branch without depending on whether a
+// particular scripted jump happens to fall inside the matcher's search
+// radius.
+type loseNextScrollMatcher struct {
+	collect.Matcher
+	armed bool
+}
+
+func (m *loseNextScrollMatcher) MatchScroll(before, after platform.Frame) collect.ScrollMatch {
+	if m.armed {
+		m.armed = false
+		return collect.ScrollMatch{Lost: true, Evidence: "scripted lost during the return to top"}
+	}
+	return m.Matcher.MatchScroll(before, after)
+}
+
+// T29: six wheel positions are prepared and walked in order; each
+// position restarts its viewport numbering, and only its own list is
+// visited. Position 2 needs one verified scroll; position 3 is empty.
+func TestTraverseWalksSixPositions(t *testing.T) {
+	game := newScriptedGame()
+	game.setList(1, listOf(3))
+	game.setList(2, listOf(24)) // six rows: one four-row scroll
+	game.setList(4, listOf(1))
+	game.setList(5, listOf(2))
+	game.setList(6, listOf(1))
+	h := newTraversalHarness(t, game)
+	h.start()
+	h.endCompleted()
+
+	obs := h.observations()
+	wantCount := map[int]int{1: 3, 2: 24, 3: 0, 4: 1, 5: 2, 6: 1}
+	gotCount := make(map[int]int, 6)
+	viewports := make(map[int]map[int]bool, 6)
+	lastPos := 0
+	for _, o := range obs {
+		if o.Position < 1 || o.Position > 6 {
+			t.Fatalf("observation at position %d, want 1..6", o.Position)
+		}
+		if o.Position < lastPos {
+			t.Fatalf("positions went backwards: %d after %d", o.Position, lastPos)
+		}
+		lastPos = o.Position
+		gotCount[o.Position]++
+		if viewports[o.Position] == nil {
+			viewports[o.Position] = make(map[int]bool)
+		}
+		viewports[o.Position][o.Viewport] = true
+	}
+	for pos, want := range wantCount {
+		if gotCount[pos] != want {
+			t.Fatalf("position %d admitted %d, want %d", pos, gotCount[pos], want)
+		}
+	}
+	if len(viewports[1]) != 1 || !viewports[1][0] {
+		t.Fatalf("position 1 viewports = %v, want only 0", viewports[1])
+	}
+	if len(viewports[2]) != 2 || !viewports[2][0] || !viewports[2][1] {
+		t.Fatalf("position 2 viewports = %v, want 0 and 1", viewports[2])
+	}
+	if _, ok := viewports[3]; ok {
+		t.Fatalf("an empty position admitted observations: %v", viewports[3])
+	}
+	for _, o := range obs {
+		if o.Position == 2 && o.Viewport == 1 && o.Row < 1 {
+			t.Fatalf("position 2 viewport 1 admitted an overlap row: %+v", o)
+		}
+	}
+
+	ops := game.opsSnapshot()
+	if clicks := countWheelClicks(ops, game.layout); clicks != 5 {
+		t.Fatalf("%d wheel clicks, want 5 switches after the initial position", clicks)
+	}
+	if clicks := countFilterClicks(ops, game.layout); clicks != 6*3 {
+		t.Fatalf("%d filter-control clicks, want reset flow for every position", clicks)
+	}
+	if drags := countOps(ops, platform.InputDrag, game.layout.TopFrom, game.layout.TopTo); drags != 6 {
+		t.Fatalf("%d top drags, want one confirmation per position", drags)
+	}
+	if drags := countOps(ops, platform.InputDrag, game.layout.ScrollFrom, game.layout.ScrollTo); drags != 6 {
+		t.Fatalf("%d advance drags, want one per position (position 2's partial scroll is its end evidence)", drags)
+	}
+}
+
+// T30: an ineffective wheel click is retried within the bound and the
+// switch then succeeds.
+func TestTraverseWheelSwitchRetriesThenSucceeds(t *testing.T) {
+	game := newScriptedGame()
+	game.setList(1, listOf(1))
+	game.wheel = 2
+	game.ignoreWheelClicks = 2
+	h := newTraversalHarness(t, game)
+	h.start()
+	h.endCompleted()
+	obs := h.observations()
+	if len(obs) != 1 || obs[0].Position != 1 {
+		t.Fatalf("observations = %v, want one at position 1", positions(obs))
+	}
+	if clicks := countOps(game.opsSnapshot(), platform.InputClick, game.layout.Wheel[0], image.Point{}); clicks != 3 {
+		t.Fatalf("%d clicks on wheel position 1, want 3 (1 + 2 retries)", clicks)
+	}
+}
+
+// T31: a wheel click that never takes effect stops with
+// navigationMismatch after the retry bound.
+func TestTraverseWheelSwitchRetriesExhausted(t *testing.T) {
+	game := newScriptedGame()
+	game.wheel = 2
+	game.ignoreWheelClicks = 99
+	h := newTraversalHarness(t, game)
+	h.start()
+	snap := h.endFailed(collect.CodeNavigationMismatch)
+	if snap.Counts.Captured != 0 {
+		t.Fatalf("a failed switch admits nothing: %+v", snap.Counts)
+	}
+	if clicks := countOps(game.opsSnapshot(), platform.InputClick, game.layout.Wheel[0], image.Point{}); clicks != 3 {
+		t.Fatalf("%d clicks on wheel position 1, want 3 (1 + 2 retries)", clicks)
+	}
+}
+
+// T32: a funnel that stays active after the reset stops the walk before
+// any list visit; the precheck accepts the active filter and reports it.
+func TestTraverseFilterResetLeavesFunnelActiveStops(t *testing.T) {
+	game := newScriptedGame(true)
+	game.filter = "active"
+	game.resetClearsFilter = false
+	h := newTraversalHarness(t, game)
+	h.start()
+	snap := h.endFailed(collect.CodeNavigationMismatch)
+	if snap.Counts.Captured != 0 {
+		t.Fatalf("a failed reset admits nothing: %+v", snap.Counts)
+	}
+	ops := game.opsSnapshot()
+	if clicks := countSlotClicks(ops, game.layout); clicks != 0 {
+		t.Fatalf("%d slot clicks before the funnel check", clicks)
+	}
+	if clicks := countFilterClicks(ops, game.layout); clicks != 3 {
+		t.Fatalf("%d filter-control clicks, want open, reset and close", clicks)
+	}
+	if drags := countOps(ops, platform.InputDrag, game.layout.TopFrom, game.layout.TopTo); drags != 0 {
+		t.Fatalf("%d top drags, want none before the funnel check", drags)
+	}
+	if scope := string(h.inv.ObservedScope()); !strings.Contains(scope, `"filterAtStart":"active"`) {
+		t.Fatalf("observed scope %s lacks the active filter at start", scope)
+	}
+}
+
+// T33: two return-to-top flings without progress stop with
+// navigationMismatch; mid-list starts are accepted by the precheck.
+func TestTraverseTopWithoutProgressStops(t *testing.T) {
+	game := newScriptedGame(listOf(36)...) // nine rows
+	game.viewport = 3
+	game.topStuck = true
+	h := newTraversalHarness(t, game)
+	h.start()
+	snap := h.endFailed(collect.CodeNavigationMismatch)
+	if snap.Counts.Captured != 0 {
+		t.Fatalf("a failed return to top admits nothing: %+v", snap.Counts)
+	}
+	if drags := countOps(game.opsSnapshot(), platform.InputDrag, game.layout.TopFrom, game.layout.TopTo); drags != 2 {
+		t.Fatalf("%d top drags, want 2 before stopping on no progress", drags)
+	}
+	if clicks := countSlotClicks(game.opsSnapshot(), game.layout); clicks != 0 {
+		t.Fatalf("%d slot clicks before the top was reached", clicks)
+	}
+}
+
+// T34: a Lost verdict during the return-to-top flings is allowed and the
+// walk continues to the top and the list's end.
+func TestTraverseTopLostThenContinues(t *testing.T) {
+	game := newScriptedGame(listOf(24)...) // six rows
+	game.viewport = 5
+	game.topJumpRows = 5
+	h := newTraversalHarness(t, game)
+	lost := new(loseNextScrollMatcher)
+	lost.Matcher = h.inv.Matcher
+	lost.armed = true
+	h.inv.Matcher = lost
+	h.start()
+	h.endCompleted()
+	if got := len(h.observations()); got != 24 {
+		t.Fatalf("admitted %d, want all 24 after the lost fling", got)
+	}
+	if drags := countOps(game.opsSnapshot(), platform.InputDrag, game.layout.TopFrom, game.layout.TopTo); drags != 7 {
+		t.Fatalf("%d top drags, want two at position 1 and one per empty position", drags)
+	}
+}
+
+// T35: a mid-list start is prepared automatically: the precheck accepts
+// it and the walk begins at the top.
+func TestTraversePrecheckAcceptsMidListStart(t *testing.T) {
+	game := newScriptedGame(listOf(24)...) // six rows
+	game.viewport = 5
+	h := newTraversalHarness(t, game)
+	h.start()
+	h.endCompleted()
+	obs := h.observations()
+	if len(obs) != 24 {
+		t.Fatalf("admitted %d, want all 24", len(obs))
+	}
+	if obs[0].Viewport != 0 || obs[0].Row != 0 || obs[0].Column != 0 {
+		t.Fatalf("first admission = %+v, want the top of the list", obs[0])
+	}
+	if scope := string(h.inv.ObservedScope()); !strings.Contains(scope, `"startPosition":1`) {
+		t.Fatalf("observed scope %s lacks the start position", scope)
+	}
+}
+
+// T36: delayed wheel and panel effects still settle within the budgets.
+func TestTraversePreparationAnimationLag(t *testing.T) {
+	game := newScriptedGame(make([]bool, 20)...)
+	game.effectLag = 8
+	h := newTraversalHarness(t, game)
+	h.start()
+	h.endCompleted()
+	if got := len(h.observations()); got != 0 {
+		t.Fatalf("an all-empty inventory admitted %d", got)
+	}
+	if clicks := countFilterClicks(game.opsSnapshot(), game.layout); clicks != 6*3 {
+		t.Fatalf("%d filter-control clicks, want every position prepared", clicks)
+	}
+}
+
+// T37: a later position's failed preparation keeps the earlier position's
+// admissions.
+func TestTraverseRetainsAdmittedOnLaterPositionFailure(t *testing.T) {
+	game := newScriptedGame(listOf(2)...)
+	game.setList(2, listOf(1))
+	game.resetLeavesActiveAt = 2
+	h := newTraversalHarness(t, game)
+	h.start()
+	snap := h.endFailed(collect.CodeNavigationMismatch)
+	if snap.Counts.Captured != 2 {
+		t.Fatalf("captured = %+v, want the first position's two admissions", snap.Counts)
+	}
+	obs := h.observations()
+	if len(obs) != 2 || obs[0].Position != 1 || obs[1].Position != 1 {
+		t.Fatalf("observations = %v, want two at position 1", positions(obs))
+	}
+}
+
+// T38: a three-substat disc's observation carries no sub4 line; the
+// context still carries the badge and the selected border.
+func TestTraverseThreeSubstatObservationOmitsSub4(t *testing.T) {
+	game := newScriptedGame(true)
+	game.substats4 = false
+	h := newTraversalHarness(t, game)
+	h.start()
+	h.endCompleted()
+	obs := h.observations()
+	if len(obs) != 1 {
+		t.Fatalf("admitted %d, want 1", len(obs))
+	}
+	if len(obs[0].Lines) != 6 {
+		t.Fatalf("lines = %d, want name/level/main/sub1..3", len(obs[0].Lines))
+	}
+	for _, line := range obs[0].Lines {
+		if line.Role == collect.LineSub4 {
+			t.Fatalf("a three-substat observation carries sub4: %+v", obs[0].Lines)
+		}
+	}
+	if len(obs[0].Context) != 2 ||
+		obs[0].Context[0].Role != collect.LineQualityBadge ||
+		obs[0].Context[1].Role != collect.LineSelectedCell {
+		t.Fatalf("context = %+v, want qualityBadge and selectedCell", obs[0].Context)
+	}
+}
+
+// T39: the injected projection runs once per admission and its result is
+// what the kernel carries.
+func TestTraverseProjectInjection(t *testing.T) {
+	game := newScriptedGame(true, true)
+	h := newTraversalHarness(t, game)
+	var seen []collect.Observation
+	h.inv.Project = func(obs collect.Observation) (any, error) {
+		seen = append(seen, obs)
+		return obs, nil
+	}
+	h.start()
+	h.endCompleted()
+	if len(seen) != 2 {
+		t.Fatalf("project ran %d times, want one per admission", len(seen))
+	}
+	for i, obs := range seen {
+		if obs.Position != 1 || obs.Quality != collect.QualityS || len(obs.Lines) != 7 {
+			t.Fatalf("projected observation %d = %+v", i+1, obs)
+		}
+	}
+	if got := len(h.observations()); got != 2 {
+		t.Fatalf("admitted %d, want 2", got)
+	}
+}
+
+// T40: a projection error fails that admission and stops the walk without
+// admitting anything.
+func TestTraverseProjectErrorStops(t *testing.T) {
+	game := newScriptedGame(true)
+	h := newTraversalHarness(t, game)
+	h.inv.Project = func(obs collect.Observation) (any, error) {
+		return nil, fmt.Errorf("projection refused")
+	}
+	h.start()
+	snap := h.endFailed(scan.CodeControllerFailed)
+	if snap.Counts.Captured != 0 {
+		t.Fatalf("a failed projection admits nothing: %+v", snap.Counts)
+	}
+	if clicks := countSlotClicks(game.opsSnapshot(), game.layout); clicks != 1 {
+		t.Fatalf("%d slot clicks, want the one refused admission", clicks)
 	}
 }

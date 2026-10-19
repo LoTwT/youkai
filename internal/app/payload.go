@@ -34,6 +34,15 @@ type LineCrop struct {
 // interpreted here.
 type Observation struct {
 	Lines []LineCrop
+	// Context are the admission's non-recognition crops: the rarity badge
+	// and the selected cell's border. The deliverer writes them as
+	// evidence; the recognizer never reads them.
+	Context []LineCrop
+	// Capture is the traversal's own capture record, verbatim. Its pixels
+	// are omitted by the collect side and live only in the evidence
+	// files; the payload keeps the navigation provenance (position,
+	// quality, lines, context, frame and visit identifiers).
+	Capture json.RawMessage
 }
 
 // observedLine is the persisted projection of one LineCrop: everything
@@ -44,22 +53,27 @@ type observedLine struct {
 }
 
 // observedPayload renders an Observation as the JSON the record's
-// observed-payload field stores: the line metadata in observation order,
-// matching the evidence ids of the item.
-func observedPayload(obs Observation) json.RawMessage {
+// observed-payload field stores: the line and context metadata in
+// observation order, matching the evidence ids of the item, plus the
+// traversal's capture record.
+func observedPayload(obs Observation) (json.RawMessage, error) {
 	lines := make([]observedLine, len(obs.Lines))
 	for i, crop := range obs.Lines {
 		lines[i] = observedLine{Role: crop.Role, Source: crop.Source}
 	}
-	raw, err := json.Marshal(struct {
-		Lines []observedLine `json:"lines"`
-	}{Lines: lines})
-	if err != nil {
-		// A struct of strings always marshals; this is a programming
-		// error, not an input condition.
-		panic(fmt.Sprintf("app: marshal observed payload: %v", err))
+	context := make([]observedLine, len(obs.Context))
+	for i, crop := range obs.Context {
+		context[i] = observedLine{Role: crop.Role, Source: crop.Source}
 	}
-	return raw
+	raw, err := json.Marshal(struct {
+		Lines   []observedLine  `json:"lines"`
+		Context []observedLine  `json:"context,omitempty"`
+		Capture json.RawMessage `json:"capture,omitempty"`
+	}{Lines: lines, Context: context, Capture: obs.Capture})
+	if err != nil {
+		return nil, fmt.Errorf("app: marshal observed payload: %w", err)
+	}
+	return raw, nil
 }
 
 // RecognizedLine is one recognized text line of an observation.

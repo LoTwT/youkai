@@ -143,7 +143,7 @@
 | `processing` | `{ "status": "produced" 或 "failed" 或 "unprocessed", "reason": string 或 null }`。后两种须有原因；公共档案不存在排队、运行。 |
 | `observed` | 原始规范化 `data` 对象或 `null`，与当前字段采用相同结构；失败时仍可保留部分结果。 |
 | `originalQuality` / `originalIssues` | 原始质量与问题，结构同当前字段。原始质量不能是人工确认。 |
-| `capture` | `{ "frameId": string, "frameReceivedAt": timestamp, "geometryRevision": integer, "visitIndex": integer, "viewportIndex": integer, "row": integer, "column": integer, "association": string, "evidenceIds": string[] }`。时间是平台收到帧的时间，不冒充云端渲染时间；访问序号引用下方遍历账目，包含明确非 S 的跳过位置，所以不等于采集序号。几何版本、行列和视口从 0 开始，不以它们代替物品身份。 |
+| `capture` | `{ "frameId": string, "frameReceivedAt": timestamp, "geometryRevision": integer, "visitIndex": integer, "position": integer, "viewportIndex": integer, "row": integer, "column": integer, "association": string, "evidenceIds": string[] }`。时间是平台收到帧的时间，不冒充云端渲染时间；访问序号引用下方遍历账目，包含明确非 S 的跳过位置，所以不等于采集序号。几何版本、行列和视口从 0 开始，不以它们代替物品身份。`position` 是转盘位置 1–6；`viewportIndex` 在每个位置内重新从 0 计数，不能跨位置当作全局视口。 |
 | `observations` | 字段证据数组，元素结构见下文。识别未运行可为空，已得出的文字或图标结果不能因后续任务失败被清空。 |
 | `revisions` | 人工修订数组，按修订号递增；无人工操作时为 `[]`。 |
 
@@ -182,7 +182,7 @@
 
 ### 遍历账目
 
-`visits` 每项为 `{visitIndex,geometryRevision,viewportIndex,row,column,outcome,rarity,sequence,evidenceIds}`。只有确认是新的占用位置并开始处理它，才分配从 1 连续递增的 `visitIndex`；重叠重见、参照核验和同位置等待不增加访问数。位置是该次已核验视口中的非负行列，必须属于记录的几何版本。封存时 `outcome` 只取以下三种：
+`visits` 每项为 `{visitIndex,geometryRevision,position,viewportIndex,row,column,outcome,rarity,sequence,evidenceIds}`。只有确认是新的占用位置并开始处理它，才分配从 1 连续递增的 `visitIndex`；重叠重见、参照核验和同位置等待不增加访问数。`position` 是转盘位置 1–6；`viewportIndex` 在每个位置内从 0 重新计数，位置是该次已核验视口中的非负行列，必须属于记录的几何版本。封存时 `outcome` 只取以下三种：
 
 | `outcome` | 必需关系 |
 | --- | --- |
@@ -194,7 +194,7 @@
 
 进行中的访问只存在于内部检查点，按[公共保存与恢复规则](scanner-architecture.md#保存校对与导出)终结后才能进入公共档案；取消或中断不能留下没有 `outcome` 的访问项，也不能把已接纳的 `capturedS` 改成 `unresolved` 来删除物品。
 
-`transitions` 每项为 `{geometryRevision,fromViewportIndex,toViewportIndex,matches,evidenceIds}`，只记录成功核验的视口移动。初始视口为 0，每次已核实移动递增 1；`matches` 是非空的 `{fromRow,fromColumn,toRow,toColumn}` 数组，保存唯一、一一对应的重叠位置，非负坐标均受布局约束。证据须含前后列表画面及实际位移依据，不能用滚轮次数补齐对应。访问到非零视口须有从 0 到该视口的连续衔接；几何改变不在旧会话内续接。移动失败留事件和证据，不添加一个猜测成功的衔接。
+`transitions` 每项为 `{geometryRevision,fromViewportIndex,toViewportIndex,matches,evidenceIds}`，只记录成功核验的视口移动。每个转盘位置的初始视口为 0，每次已核实移动递增 1；`matches` 是非空的 `{fromRow,fromColumn,toRow,toColumn}` 数组，保存唯一、一一对应的重叠位置，非负坐标均受布局约束。证据须含前后列表画面及实际位移依据，不能用滚轮次数补齐对应。访问到非零视口须有从 0 到该视口的连续衔接；几何改变不在旧会话内续接。移动失败留事件和证据，不添加一个猜测成功的衔接。
 
 账目按 [T5](t5-zzz-inventory-traversal.md#6-保存什么证据怎样验收)随检查点保存，封存后只读。结构对账只排除矛盾，不能单凭账目完整宣布扫全；范围、起点、全部占用位置和末端仍需对应的视觉证据。空库存允许零访问，但必须有独立空列表依据。此结构不保存可执行输入脚本，也不增加常驻录像或事件服务。
 
