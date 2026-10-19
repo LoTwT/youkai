@@ -21,15 +21,19 @@
 // resources, no generator script. When the game adds sets or agents,
 // extend the tables against fairy by hand and bump CatalogRevision. The
 // zh-CN attribute display names of affixes.go come from the six-disc
-// sample of internal/recognition/testdata plus nine names supplied by the
-// user on 2026-10-18 (see there).
+// sample of internal/recognition/testdata plus nine names supplied by
+// the user on 2026-10-18 and verified name-by-name against real client
+// screens in the 2026-10-19 macOS sample round, which corrected ether
+// to 以太伤害加成 (see there).
 package zzz
 
 // CatalogRevision identifies the revision of these data tables. It is the
 // version the scan JSON contract records as catalog.revision and
 // validationRules.version: bump it whenever table content changes, for
-// example when new sets or agents are added after a game update.
-const CatalogRevision = "1"
+// example when new sets or agents are added after a game update, or a
+// display name is corrected against real screens (revision 2: the ether
+// correction of 2026-10-19).
+const CatalogRevision = "2"
 
 // Set is one drive-disc set of the catalog. ID is the stable youkai
 // identifier generated from the fairy English name (never reused or
