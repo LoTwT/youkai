@@ -468,9 +468,10 @@ func TestParseDetailUnknownPartsStayUnknown(t *testing.T) {
 }
 
 // TestParseDetailUserSuppliedNames covers the slot-5 and slot-6 display
-// names the samples do not show: the six element damage bonuses and the
-// three slot-6 attributes supplied by the user (pending field
-// verification, see affixes.go).
+// names the Windows sample does not show: the six element damage bonuses
+// and the three slot-6 attributes, first supplied by the user on
+// 2026-10-18 and verified name-by-name against real client screens in the
+// 2026-10-19 macOS sample round (see affixes.go).
 func TestParseDetailUserSuppliedNames(t *testing.T) {
 	cases := []struct {
 		slot int
@@ -481,7 +482,7 @@ func TestParseDetailUserSuppliedNames(t *testing.T) {
 		{5, "火属性伤害加成 30%", Stat{AttrFireDamage, "30", UnitPercent}},
 		{5, "冰属性伤害加成 30%", Stat{AttrIceDamage, "30", UnitPercent}},
 		{5, "电属性伤害加成 30%", Stat{AttrElectricDamage, "30", UnitPercent}},
-		{5, "以太属性伤害加成 30%", Stat{AttrEtherDamage, "30", UnitPercent}},
+		{5, "以太伤害加成 30%", Stat{AttrEtherDamage, "30", UnitPercent}},
 		{5, "风属性伤害加成 30%", Stat{AttrWindDamage, "30", UnitPercent}},
 		{6, "异常掌控 30%", Stat{AttrAnomalyMastery, "30", UnitPercent}},
 		{6, "冲击力 18%", Stat{AttrImpact, "18", UnitPercent}},
@@ -508,7 +509,7 @@ func TestParseDetailUserSuppliedNames(t *testing.T) {
 	// An element damage bonus is not a legal slot-4 main stat, and a
 	// slot-6-only attribute is not one of the ten substats.
 	if _, issues := ParseDetail(DetailLines{
-		Set: "如影相随[4]", Level: "等级15/15", Main: "以太属性伤害加成 30%",
+		Set: "如影相随[4]", Level: "等级15/15", Main: "以太伤害加成 30%",
 		Subs: []string{"攻击力 9%", "防御力 30", "穿透值 9", "暴击率 2.4%"},
 	}); !hasIssue(issues, "mainStat", CodeMainStatNotAllowed) {
 		t.Fatalf("issues = %+v, want mainStatNotAllowed", issues)
