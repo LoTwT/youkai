@@ -109,7 +109,8 @@ type Config struct {
 // One start request occupies the single active slot. The slot frees when
 // the session ended and its final save succeeded; a failed save keeps it
 // occupied — results not yet saved forbid a new session — until a retry
-// persists them or the explicit exit accepts the loss.
+// persists them. An explicit quit does not accept the loss: it reports
+// the unsaved result and leaves the process running.
 type Service struct {
 	cfg           Config
 	store         recordStore
@@ -583,17 +584,27 @@ func (s *Service) wrapUp(a *activeSession) {
 		log.Printf("youkai: scan %s: release scan occupancy: %v", a.id, lockErr)
 	}
 	s.mu.Lock()
-	a.saveErr = nil
-	if err != nil {
+	if err != nil && a.wrapped {
+		// A retry persisted the final generation while this attempt was
+		// failing. The newer success is the outcome: do not revive the
+		// stale failure, which would keep the slot occupied and make Quit
+		// refuse an exit whose save is already complete.
+		a.saveErr = nil
+		log.Printf("youkai: scan %s ended (%s): final save completed on a concurrent retry",
+			a.id, final.End)
+	} else if err != nil {
 		a.saveErr = err
 		log.Printf("youkai: scan %s ended (%s): final save failed: %v (retry available)",
 			a.id, final.End, err)
 	} else {
-		a.wrapped = true
-		log.Printf("youkai: scan %s ended (%s): %d captured, %d produced, %d unprocessed; checkpoint %s",
-			a.id, final.End, final.Counts.Captured, final.Counts.Produced, final.Counts.Unprocessed,
-			filepath.Join(s.cfg.Paths.Data, "sessions", string(a.id), "checkpoints",
-				fmt.Sprintf("%d.json", a.deliverer.generation())))
+		a.saveErr = nil
+		if !a.wrapped {
+			a.wrapped = true
+			log.Printf("youkai: scan %s ended (%s): %d captured, %d produced, %d unprocessed; checkpoint %s",
+				a.id, final.End, final.Counts.Captured, final.Counts.Produced, final.Counts.Unprocessed,
+				filepath.Join(s.cfg.Paths.Data, "sessions", string(a.id), "checkpoints",
+					fmt.Sprintf("%d.json", a.deliverer.generation())))
+		}
 	}
 	close(a.wrapDone)
 	a.kernelSub.Close()
