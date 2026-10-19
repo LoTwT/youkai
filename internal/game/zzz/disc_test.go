@@ -13,7 +13,11 @@ import (
 // internal/recognition/testdata: its lines.tsv carries the human-
 // transcribed expected text of every crop (file, source sha256, crop
 // rectangle, expected text), which is exactly the seven-line detail page
-// input this parser consumes.
+// input this parser consumes. The macOS cloud-client group
+// (internal/recognition/testdata/macos-cloud, 27 discs from the
+// 2026-10-19 sample round) replays the same pipeline with real cloud-video
+// screen text, including the verified slot-5/6 main-stat names, level-0
+// discs and 3-substat detail pages.
 
 // fixtureLine is one row of the recognition fixture.
 type fixtureLine struct {
@@ -21,13 +25,14 @@ type fixtureLine struct {
 	expected string
 }
 
-// loadFixtureLines reads ../recognition/testdata/lines.tsv and keeps the
-// file name and expected text per row.
-func loadFixtureLines(t *testing.T) []fixtureLine {
+// readFixtureManifest parses one recognition fixture manifest (file,
+// source sha256, x0, y0, x1, y1, expected text) and keeps the file name
+// and expected text per row.
+func readFixtureManifest(t *testing.T, path string) []fixtureLine {
 	t.Helper()
-	raw, err := os.ReadFile(filepath.Join("..", "..", "recognition", "testdata", "lines.tsv"))
+	raw, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatalf("reading recognition fixture: %v", err)
+		t.Fatalf("reading recognition fixture %s: %v", path, err)
 	}
 	var lines []fixtureLine
 	for i, row := range strings.Split(string(raw), "\n") {
@@ -37,10 +42,18 @@ func loadFixtureLines(t *testing.T) []fixtureLine {
 		}
 		fields := strings.Split(row, "\t")
 		if len(fields) != 7 {
-			t.Fatalf("lines.tsv row %d has %d fields, want 7", i+1, len(fields))
+			t.Fatalf("%s row %d has %d fields, want 7", path, i+1, len(fields))
 		}
 		lines = append(lines, fixtureLine{file: fields[0], expected: fields[6]})
 	}
+	return lines
+}
+
+// loadFixtureLines reads ../recognition/testdata/lines.tsv and keeps the
+// file name and expected text per row.
+func loadFixtureLines(t *testing.T) []fixtureLine {
+	t.Helper()
+	lines := readFixtureManifest(t, filepath.Join("..", "..", "recognition", "testdata", "lines.tsv"))
 	if len(lines) != 42 {
 		t.Fatalf("lines.tsv has %d rows, want 42 (6 discs × 7 lines)", len(lines))
 	}
@@ -471,7 +484,8 @@ func TestParseDetailUnknownPartsStayUnknown(t *testing.T) {
 // names the Windows sample does not show: the six element damage bonuses
 // and the three slot-6 attributes, first supplied by the user on
 // 2026-10-18 and verified name-by-name against real client screens in the
-// 2026-10-19 macOS sample round (see affixes.go).
+// 2026-10-19 macOS sample round (see affixes.go); the macOS fixture below
+// replays the same names as real screen text.
 func TestParseDetailUserSuppliedNames(t *testing.T) {
 	cases := []struct {
 		slot int
@@ -563,5 +577,180 @@ func TestParseDetailLevelZero(t *testing.T) {
 	}
 	if rec.Level == nil || *rec.Level != 0 {
 		t.Fatalf("level = %v, want 0", rec.Level)
+	}
+}
+
+// loadMacCloudLines reads the macOS cloud-client fixture manifest of
+// internal/recognition/testdata/macos-cloud (same seven-column shape as
+// the Windows group; crop rectangles refer to the 1920×1080 rawstream
+// frame — see that directory's README).
+func loadMacCloudLines(t *testing.T) []fixtureLine {
+	t.Helper()
+	lines := readFixtureManifest(t, filepath.Join("..", "..", "recognition", "testdata", "macos-cloud", "lines.tsv"))
+	if len(lines) != 183 {
+		t.Fatalf("macos-cloud lines.tsv has %d rows, want 183 (21 discs × 7 lines + 6 discs × 6 lines)", len(lines))
+	}
+	return lines
+}
+
+// macCloudDiscs groups the macOS fixture rows into detail pages. A level-0
+// disc may show three or four substat lines on the real screen, so pages
+// are complete with either count (the sample round caught both shapes:
+// 3-substat s2-n6-AM-cell-r0c1 and s2-d1-discarded-r0c1, 4-substat
+// s2-n5-WIND2-cell-r0c1 and s2-wBL-top-cell-r1c1).
+func macCloudDiscs(t *testing.T) map[string]DetailLines {
+	t.Helper()
+	discs := make(map[string]DetailLines)
+	for _, line := range loadMacCloudLines(t) {
+		disc, role, ok := strings.Cut(strings.TrimSuffix(line.file, ".png"), "_")
+		if !ok {
+			t.Fatalf("fixture file %q is not <disc>_<role>.png", line.file)
+		}
+		page := discs[disc]
+		switch role {
+		case "name":
+			page.Set = line.expected
+		case "level":
+			page.Level = line.expected
+		case "main":
+			page.Main = line.expected
+		case "sub1", "sub2", "sub3", "sub4":
+			page.Subs = append(page.Subs, line.expected)
+		default:
+			t.Fatalf("fixture file %q has unknown role %q", line.file, role)
+		}
+		discs[disc] = page
+	}
+	if len(discs) != 27 {
+		t.Fatalf("macos-cloud fixture has %d discs, want 27", len(discs))
+	}
+	for disc, page := range discs {
+		if page.Set == "" || page.Level == "" || page.Main == "" ||
+			(len(page.Subs) != 3 && len(page.Subs) != 4) {
+			t.Fatalf("disc %s is incomplete: %+v", disc, page)
+		}
+	}
+	return discs
+}
+
+// discWant builds one expected record for the macOS fixture table below.
+func discWant(set string, slot, level int, main Stat, subs ...Substat) DiscRecord {
+	return DiscRecord{
+		SetID:    set,
+		Slot:     slot,
+		Level:    &level,
+		MainStat: main,
+		Substats: subs,
+	}
+}
+
+// subWant builds one expected substat entry: attribute, canonical value,
+// unit and the displayed enhancement roll (0 for a line without "+N").
+func subWant(a Attribute, v string, u Unit, roll int) Substat {
+	return Substat{Stat{a, v, u}, &roll}
+}
+
+// macCloudWant is the expected record of every macOS fixture disc,
+// transcribed from testdata/macos-cloud/README.md and lines.tsv (the
+// 2026-10-19 sample round; per-disc evidence directories are listed in
+// that README).
+var macCloudWant = map[string]DiscRecord{
+	"maccloud1":  discWant("yunkuiTales", 1, 15, Stat{AttrHealth, "2200", UnitFlat}, subWant(AttrAnomalyProficiency, "9", UnitFlat, 0), subWant(AttrCritRate, "12", UnitPercent, 4), subWant(AttrDefense, "4.8", UnitPercent, 0), subWant(AttrCritDamage, "9.6", UnitPercent, 1)),
+	"maccloud2":  discWant("phaethonSMelody", 1, 0, Stat{AttrHealth, "550", UnitFlat}, subWant(AttrHealth, "3", UnitPercent, 0), subWant(AttrPenetration, "9", UnitFlat, 0), subWant(AttrAttack, "3", UnitPercent, 0)),
+	"maccloud3":  discWant("phaethonSMelody", 1, 0, Stat{AttrHealth, "550", UnitFlat}, subWant(AttrHealth, "3", UnitPercent, 0), subWant(AttrAttack, "19", UnitFlat, 0), subWant(AttrAnomalyProficiency, "9", UnitFlat, 0)),
+	"maccloud4":  discWant("moonlightLullaby", 1, 15, Stat{AttrHealth, "2200", UnitFlat}, subWant(AttrAttack, "9", UnitPercent, 2), subWant(AttrAnomalyProficiency, "27", UnitFlat, 2), subWant(AttrCritDamage, "4.8", UnitPercent, 0), subWant(AttrAttack, "19", UnitFlat, 0)),
+	"maccloud5":  discWant("chaosJazz", 1, 15, Stat{AttrHealth, "2200", UnitFlat}, subWant(AttrDefense, "30", UnitFlat, 1), subWant(AttrAnomalyProficiency, "27", UnitFlat, 2), subWant(AttrHealth, "3", UnitPercent, 0), subWant(AttrAttack, "9", UnitPercent, 2)),
+	"maccloud6":  discWant("woodpeckerElectro", 1, 15, Stat{AttrHealth, "2200", UnitFlat}, subWant(AttrAnomalyProficiency, "18", UnitFlat, 1), subWant(AttrPenetration, "18", UnitFlat, 1), subWant(AttrAttack, "9", UnitPercent, 2), subWant(AttrCritRate, "4.8", UnitPercent, 1)),
+	"maccloud7":  discWant("branchBladeSong", 2, 15, Stat{AttrAttack, "316", UnitFlat}, subWant(AttrCritRate, "7.2", UnitPercent, 2), subWant(AttrDefense, "4.8", UnitPercent, 0), subWant(AttrCritDamage, "19.2", UnitPercent, 3), subWant(AttrDefense, "15", UnitFlat, 0)),
+	"maccloud8":  discWant("yunkuiTales", 2, 15, Stat{AttrAttack, "316", UnitFlat}, subWant(AttrPenetration, "18", UnitFlat, 1), subWant(AttrHealth, "6", UnitPercent, 1), subWant(AttrCritDamage, "9.6", UnitPercent, 1), subWant(AttrCritRate, "7.2", UnitPercent, 2)),
+	"maccloud9":  discWant("yunkuiTales", 3, 15, Stat{AttrDefense, "184", UnitFlat}, subWant(AttrCritDamage, "14.4", UnitPercent, 2), subWant(AttrHealth, "12", UnitPercent, 3), subWant(AttrAnomalyProficiency, "9", UnitFlat, 0), subWant(AttrCritRate, "2.4", UnitPercent, 0)),
+	"maccloud10": discWant("yunkuiTales", 3, 0, Stat{AttrDefense, "46", UnitFlat}, subWant(AttrAnomalyProficiency, "9", UnitFlat, 0), subWant(AttrHealth, "3", UnitPercent, 0), subWant(AttrDefense, "4.8", UnitPercent, 0), subWant(AttrHealth, "112", UnitFlat, 0)),
+	"maccloud11": discWant("yunkuiTales", 4, 15, Stat{AttrCritDamage, "48", UnitPercent}, subWant(AttrHealth, "15", UnitPercent, 4), subWant(AttrHealth, "112", UnitFlat, 0), subWant(AttrPenetration, "9", UnitFlat, 0), subWant(AttrCritRate, "2.4", UnitPercent, 0)),
+	"maccloud12": discWant("yunkuiTales", 4, 15, Stat{AttrCritRate, "24", UnitPercent}, subWant(AttrCritDamage, "9.6", UnitPercent, 1), subWant(AttrHealth, "3", UnitPercent, 0), subWant(AttrPenetration, "27", UnitFlat, 2), subWant(AttrDefense, "30", UnitFlat, 1)),
+	"maccloud13": discWant("yunkuiTales", 4, 0, Stat{AttrCritDamage, "12", UnitPercent}, subWant(AttrHealth, "112", UnitFlat, 0), subWant(AttrPenetration, "9", UnitFlat, 0), subWant(AttrHealth, "3", UnitPercent, 0)),
+	"maccloud14": discWant("yunkuiTales", 4, 0, Stat{AttrDefense, "12", UnitPercent}, subWant(AttrCritRate, "2.4", UnitPercent, 0), subWant(AttrCritDamage, "4.8", UnitPercent, 0), subWant(AttrHealth, "3", UnitPercent, 0)),
+	"maccloud15": discWant("branchBladeSong", 5, 15, Stat{AttrEtherDamage, "30", UnitPercent}, subWant(AttrAnomalyProficiency, "9", UnitFlat, 0), subWant(AttrCritRate, "2.4", UnitPercent, 0), subWant(AttrHealth, "3", UnitPercent, 0), subWant(AttrCritDamage, "24", UnitPercent, 4)),
+	"maccloud16": discWant("yunkuiTales", 5, 0, Stat{AttrAttack, "7.5", UnitPercent}, subWant(AttrCritRate, "2.4", UnitPercent, 0), subWant(AttrCritDamage, "4.8", UnitPercent, 0), subWant(AttrHealth, "3", UnitPercent, 0)),
+	"maccloud17": discWant("yunkuiTales", 6, 15, Stat{AttrHealth, "30", UnitPercent}, subWant(AttrAttack, "9", UnitPercent, 2), subWant(AttrPenetration, "9", UnitFlat, 0), subWant(AttrCritRate, "9.6", UnitPercent, 3), subWant(AttrCritDamage, "4.8", UnitPercent, 0)),
+	"maccloud18": discWant("yunkuiTales", 6, 15, Stat{AttrImpact, "18", UnitPercent}, subWant(AttrDefense, "45", UnitFlat, 2), subWant(AttrPenetration, "18", UnitFlat, 1), subWant(AttrAttack, "6", UnitPercent, 1), subWant(AttrHealth, "6", UnitPercent, 1)),
+	"maccloud19": discWant("yunkuiTales", 5, 15, Stat{AttrPhysicalDamage, "30", UnitPercent}, subWant(AttrAnomalyProficiency, "9", UnitFlat, 0), subWant(AttrCritDamage, "4.8", UnitPercent, 0), subWant(AttrCritRate, "9.6", UnitPercent, 3), subWant(AttrAttack, "38", UnitFlat, 1)),
+	"maccloud20": discWant("yunkuiTales", 5, 15, Stat{AttrFireDamage, "30", UnitPercent}, subWant(AttrCritDamage, "4.8", UnitPercent, 0), subWant(AttrHealth, "6", UnitPercent, 1), subWant(AttrCritRate, "7.2", UnitPercent, 2), subWant(AttrAttack, "6", UnitPercent, 1)),
+	"maccloud21": discWant("yunkuiTales", 5, 15, Stat{AttrIceDamage, "30", UnitPercent}, subWant(AttrCritRate, "7.2", UnitPercent, 2), subWant(AttrDefense, "4.8", UnitPercent, 0), subWant(AttrCritDamage, "4.8", UnitPercent, 0), subWant(AttrHealth, "9", UnitPercent, 2)),
+	"maccloud22": discWant("branchBladeSong", 5, 15, Stat{AttrElectricDamage, "30", UnitPercent}, subWant(AttrHealth, "112", UnitFlat, 0), subWant(AttrCritRate, "4.8", UnitPercent, 1), subWant(AttrCritDamage, "14.4", UnitPercent, 2), subWant(AttrAttack, "38", UnitFlat, 1)),
+	"maccloud23": discWant("phaethonSMelody", 5, 15, Stat{AttrEtherDamage, "30", UnitPercent}, subWant(AttrAttack, "3", UnitPercent, 0), subWant(AttrCritRate, "7.2", UnitPercent, 2), subWant(AttrCritDamage, "9.6", UnitPercent, 1), subWant(AttrHealth, "6", UnitPercent, 1)),
+	"maccloud24": discWant("yunkuiTales", 5, 0, Stat{AttrWindDamage, "7.5", UnitPercent}, subWant(AttrCritRate, "2.4", UnitPercent, 0), subWant(AttrHealth, "112", UnitFlat, 0), subWant(AttrHealth, "3", UnitPercent, 0), subWant(AttrAttack, "3", UnitPercent, 0)),
+	"maccloud25": discWant("yunkuiTales", 6, 0, Stat{AttrAnomalyMastery, "7.5", UnitPercent}, subWant(AttrCritDamage, "4.8", UnitPercent, 0), subWant(AttrAttack, "3", UnitPercent, 0), subWant(AttrCritRate, "2.4", UnitPercent, 0)),
+	"maccloud26": discWant("yunkuiTales", 6, 15, Stat{AttrImpact, "18", UnitPercent}, subWant(AttrCritRate, "7.2", UnitPercent, 2), subWant(AttrAttack, "6", UnitPercent, 1), subWant(AttrPenetration, "18", UnitFlat, 1), subWant(AttrCritDamage, "9.6", UnitPercent, 1)),
+	"maccloud27": discWant("yunkuiTales", 6, 15, Stat{AttrEnergyRegen, "60", UnitPercent}, subWant(AttrHealth, "224", UnitFlat, 1), subWant(AttrHealth, "9", UnitPercent, 2), subWant(AttrPenetration, "18", UnitFlat, 1), subWant(AttrCritRate, "4.8", UnitPercent, 1)),
+}
+
+// TestParseDetailMacCloudFixture parses every disc of the macOS
+// cloud-client fixture: real screen text at level 0 and 15, three- and
+// four-substat pages, the verified slot-5/6 main-stat names (including
+// 以太伤害加成 without 属性) and percent mains that share a display name
+// with flat ones. The spaceless variant re-parses each page without ASCII
+// spaces, as the recognition model emits the lines.
+func TestParseDetailMacCloudFixture(t *testing.T) {
+	discs := macCloudDiscs(t)
+	if len(discs) != len(macCloudWant) {
+		t.Fatalf("fixture has %d discs, expected records for %d", len(discs), len(macCloudWant))
+	}
+	for discName := range macCloudWant {
+		if _, ok := discs[discName]; !ok {
+			t.Fatalf("expected record for %s has no fixture disc", discName)
+		}
+	}
+	for discName, page := range discs {
+		t.Run(discName, func(t *testing.T) {
+			rec, issues := ParseDetail(page)
+			if len(issues) != 0 {
+				t.Fatalf("macos disc %s produced issues, want none: %+v", discName, issues)
+			}
+			if !reflect.DeepEqual(rec, macCloudWant[discName]) {
+				t.Fatalf("record = %+v, want %+v", rec, macCloudWant[discName])
+			}
+			spaceless := DetailLines{
+				Set:   strings.ReplaceAll(page.Set, " ", ""),
+				Level: strings.ReplaceAll(page.Level, " ", ""),
+				Main:  strings.ReplaceAll(page.Main, " ", ""),
+			}
+			for _, s := range page.Subs {
+				spaceless.Subs = append(spaceless.Subs, strings.ReplaceAll(s, " ", ""))
+			}
+			rec, issues = ParseDetail(spaceless)
+			if len(issues) != 0 {
+				t.Fatalf("spaceless %s produced issues, want none: %+v", discName, issues)
+			}
+			if !reflect.DeepEqual(rec, macCloudWant[discName]) {
+				t.Fatalf("spaceless record = %+v, want %+v", rec, macCloudWant[discName])
+			}
+		})
+	}
+}
+
+// TestParseDetailLevelZeroThreeSubstats pins the real level-0 shape the
+// round evidenced: a detail page may show exactly three substat lines
+// (s2-n6-AM-cell-r0c1, also s2-d1-discarded-r0c1/r0c2), while other
+// level-0 discs show four (s2-n5-WIND2-cell-r0c1, maccloud24) — parsing
+// and validation must not assume a fixed count; the JSON contract allows
+// three or four.
+func TestParseDetailLevelZeroThreeSubstats(t *testing.T) {
+	rec, issues := ParseDetail(DetailLines{
+		Set:   "云岿如我[6]",
+		Level: "等级0/15",
+		Main:  "异常掌控 7.5%",
+		Subs:  []string{"暴击伤害 4.8%", "攻击力 3%", "暴击率 2.4%"},
+	})
+	if len(issues) != 0 {
+		t.Fatalf("issues = %+v, want none", issues)
+	}
+	if rec.Level == nil || *rec.Level != 0 {
+		t.Fatalf("level = %v, want 0", rec.Level)
+	}
+	if len(rec.Substats) != 3 {
+		t.Fatalf("substats = %d entries, want 3", len(rec.Substats))
+	}
+	if rec.MainStat != (Stat{AttrAnomalyMastery, "7.5", UnitPercent}) {
+		t.Fatalf("main stat = %+v", rec.MainStat)
 	}
 }

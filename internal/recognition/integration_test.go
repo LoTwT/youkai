@@ -302,7 +302,7 @@ func TestSelfCheck(t *testing.T) {
 	}
 }
 
-// testLine is one row of testdata/lines.tsv.
+// testLine is one row of a recognition fixture manifest.
 type testLine struct {
 	file     string
 	source   string // sha256 of the source screenshot
@@ -311,14 +311,30 @@ type testLine struct {
 	expected string
 }
 
-// loadTestLines parses testdata/lines.tsv (file, source sha256, x0, y0, x1,
-// y1, expected text). The rectangle is recorded in the 1280×739 uploaded
-// screenshot; see testdata/README.md.
-func loadTestLines(t *testing.T) []testLine {
+// fixtureGroup is one client's crop set: the manifest file and the
+// directory holding the crops, both relative to testdata/.
+type fixtureGroup struct {
+	name     string
+	manifest string
+	dir      string
+}
+
+// fixtureGroups are the crop sets the integration test recognizes: the
+// Windows full-client sample (rects in the 1280×739 uploaded screenshot)
+// and the macOS cloud-client sample (rects in the 1920×1080 rawstream
+// frame); provenance per group in the group's README.
+var fixtureGroups = []fixtureGroup{
+	{name: "windows-local", manifest: "lines.tsv", dir: "."},
+	{name: "macos-cloud", manifest: filepath.Join("macos-cloud", "lines.tsv"), dir: "macos-cloud"},
+}
+
+// loadTestLines parses one fixture manifest (file, source sha256, x0, y0,
+// x1, y1, expected text).
+func loadTestLines(t *testing.T, manifest string) []testLine {
 	t.Helper()
-	raw, err := os.ReadFile(filepath.Join("testdata", "lines.tsv"))
+	raw, err := os.ReadFile(filepath.Join("testdata", manifest))
 	if err != nil {
-		t.Fatalf("reading testdata/lines.tsv: %v", err)
+		t.Fatalf("reading testdata/%s: %v", manifest, err)
 	}
 	var lines []testLine
 	for i, row := range strings.Split(string(raw), "\n") {
@@ -327,28 +343,43 @@ func loadTestLines(t *testing.T) []testLine {
 		}
 		f := strings.Split(row, "\t")
 		if len(f) != 7 {
-			t.Fatalf("lines.tsv row %d has %d fields, want 7: %q", i+1, len(f), row)
+			t.Fatalf("%s row %d has %d fields, want 7: %q", manifest, i+1, len(f), row)
 		}
 		var tl testLine
 		tl.file, tl.source, tl.expected = f[0], f[1], f[6]
 		if _, err := fmt.Sscanf(f[2], "%d", &tl.x0); err != nil {
-			t.Fatalf("lines.tsv row %d: bad x0: %v", i+1, err)
+			t.Fatalf("%s row %d: bad x0: %v", manifest, i+1, err)
 		}
 		if _, err := fmt.Sscanf(f[3], "%d", &tl.y0); err != nil {
-			t.Fatalf("lines.tsv row %d: bad y0: %v", i+1, err)
+			t.Fatalf("%s row %d: bad y0: %v", manifest, i+1, err)
 		}
 		if _, err := fmt.Sscanf(f[4], "%d", &tl.x1); err != nil {
-			t.Fatalf("lines.tsv row %d: bad x1: %v", i+1, err)
+			t.Fatalf("%s row %d: bad x1: %v", manifest, i+1, err)
 		}
 		if _, err := fmt.Sscanf(f[5], "%d", &tl.y1); err != nil {
-			t.Fatalf("lines.tsv row %d: bad y1: %v", i+1, err)
+			t.Fatalf("%s row %d: bad y1: %v", manifest, i+1, err)
 		}
 		lines = append(lines, tl)
 	}
 	if len(lines) == 0 {
-		t.Fatal("testdata/lines.tsv has no rows")
+		t.Fatalf("testdata/%s has no rows", manifest)
 	}
 	return lines
+}
+
+// loadGroupImage opens one crop of a fixture group.
+func loadGroupImage(t *testing.T, group fixtureGroup, name string) image.Image {
+	t.Helper()
+	f, err := os.Open(filepath.Join("testdata", group.dir, name))
+	if err != nil {
+		t.Fatalf("opening %s/%s: %v", group.dir, name, err)
+	}
+	defer f.Close()
+	img, err := png.Decode(f)
+	if err != nil {
+		t.Fatalf("decoding %s/%s: %v", group.dir, name, err)
+	}
+	return img
 }
 
 func loadTestImage(t *testing.T, name string) image.Image {
@@ -365,46 +396,46 @@ func loadTestImage(t *testing.T, name string) image.Image {
 	return img
 }
 
-// exactMatchLines are the crops asserted to decode to the expected text
-// exactly: the six set-name lines and six level lines, which decode cleanly
-// on the development machine. The stat lines decode the same characters but
-// without the space the two-column layout shows to a human reader (the model
-// does not emit the wide inter-column gap as a space), so they are reported
-// with a space-insensitive comparison instead of asserted. This milestone
-// proves the pipeline (model + preprocessing + decoding) runs and yields
+// exactAsserted reports whether a crop is asserted to decode to the
+// expected text exactly: the set-name and level lines of both fixture
+// groups, which decode cleanly on the development machine (verified with
+// the pinned model for all 33 discs — 6 Windows + 27 macOS). The stat
+// lines decode the same characters but without the space the two-column
+// layout shows to a human reader (the model does not emit the wide
+// inter-column gap as a space), so they are reported with a
+// space-insensitive comparison instead of asserted. This milestone proves
+// the pipeline (model + preprocessing + decoding) runs and yields
 // readable text on both platforms — not an accuracy gate (that is T3 §4).
-var exactMatchLines = map[string]bool{
-	"disc1_name.png":  true,
-	"disc1_level.png": true,
-	"disc2_name.png":  true,
-	"disc2_level.png": true,
-	"disc3_name.png":  true,
-	"disc3_level.png": true,
-	"disc4_name.png":  true,
-	"disc4_level.png": true,
-	"disc5_name.png":  true,
-	"disc5_level.png": true,
-	"disc6_name.png":  true,
-	"disc6_level.png": true,
+func exactAsserted(file string) bool {
+	_, role, _ := strings.Cut(file, "_")
+	role = strings.TrimSuffix(role, ".png")
+	return role == "name" || role == "level"
 }
 
-// recognizeTestdata recognizes every crop in testdata and reports the full
-// expected/actual/score table.
+// recognizeTestdata recognizes every crop of every fixture group and
+// reports the full expected/actual/score table; the macOS cloud-client
+// crops come from compressed cloud video and their stat lines are
+// reported, not asserted.
 func recognizeTestdata(t *testing.T, rec *Recognizer) {
 	t.Helper()
-	lines := loadTestLines(t)
-	t.Logf("%-18s %-24s %-24s %6s  %-7s %s", "file", "expected", "actual", "score", "exact", "no-space")
-	for _, tl := range lines {
-		res, err := rec.Recognize(context.Background(), loadTestImage(t, tl.file))
-		if err != nil {
-			t.Errorf("%s: recognize: %v", tl.file, err)
-			continue
-		}
-		exact := res.Text == tl.expected
-		noSpace := strings.ReplaceAll(res.Text, " ", "") == strings.ReplaceAll(tl.expected, " ", "")
-		t.Logf("%-18s %-24s %-24s %6.4f  %-7t %t", tl.file, tl.expected, res.Text, res.Score, exact, noSpace)
-		if exactMatchLines[tl.file] && !exact {
-			t.Errorf("%s: decoded %q, want %q", tl.file, res.Text, tl.expected)
+	for _, group := range fixtureGroups {
+		lines := loadTestLines(t, group.manifest)
+		t.Logf("group %s: %d lines", group.name, len(lines))
+		for _, tl := range lines {
+			res, err := rec.Recognize(context.Background(), loadGroupImage(t, group, tl.file))
+			if err != nil {
+				t.Errorf("%s/%s: recognize: %v", group.dir, tl.file, err)
+				continue
+			}
+			exact := res.Text == tl.expected
+			noSpace := strings.ReplaceAll(res.Text, " ", "") == strings.ReplaceAll(tl.expected, " ", "")
+			t.Logf("%-18s %-24s %-24s %6.4f  %-7t %t", tl.file, tl.expected, res.Text, res.Score, exact, noSpace)
+			if exactAsserted(tl.file) && !exact {
+				t.Errorf("%s: decoded %q, want %q", tl.file, res.Text, tl.expected)
+			}
+			if !noSpace {
+				t.Errorf("%s: decoded %q, want %q (space-insensitive mismatch)", tl.file, res.Text, tl.expected)
+			}
 		}
 	}
 }
