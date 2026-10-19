@@ -269,7 +269,10 @@ func openTestRecord(t *testing.T, ev EvidenceSource, cacheLimit int) (*Model, *q
 		loads: map[string]*record.Recovery{"r1": testRecord()},
 	}
 	m, q := newTestModel(t, Config{Service: svc, Evidence: ev, EvidenceCacheLimit: cacheLimit})
-	tt := ui.NewTester(m.View, 1020, 700)
+	// The evidence sits below the structured form; a taller test window
+	// keeps it in the rendered viewport without changing the product's
+	// scrollable detail pane.
+	tt := ui.NewTester(m.View, 1020, 900)
 	settle(t, m, q, tt)
 	m.OpenHistory()
 	settle(t, m, q, tt)
