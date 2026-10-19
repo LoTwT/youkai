@@ -110,6 +110,13 @@ func (s *recordSink) len() int {
 	return len(s.records)
 }
 
+// recordsSnapshot returns the terminal records collected so far.
+func (s *recordSink) recordsSnapshot() []scan.Record {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]scan.Record(nil), s.records...)
+}
+
 // readySession is the standard ready fake session.
 func readySession() *platformfake.Session { return platformfake.NewSession() }
 
