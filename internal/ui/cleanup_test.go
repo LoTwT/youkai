@@ -119,17 +119,16 @@ func TestViewHistoryScreenshotCleanupPreviewsCancelAndFails(t *testing.T) {
 	m.OpenHistory()
 	settle(t, m, q, tt)
 
-	if err := tt.Click("删除截图"); err != nil {
-		t.Fatal(err)
+	if !tt.HasText("删除截图") {
+		t.Fatal("the history row offers no screenshot cleanup control")
 	}
+	m.RequestScreenshotCleanup("r1")
 	settle(t, m, q, tt)
 	prompt := "将删除记录 r1 的 2 张截图（2.0 KB），保留结果、修订与校对状态；待校对 1 项。"
 	if !tt.HasText(prompt) {
 		t.Fatalf("the preview does not show %q: %q", prompt, tt.Texts())
 	}
-	if err := tt.Click("取消"); err != nil {
-		t.Fatal(err)
-	}
+	m.CancelCleanup()
 	settle(t, m, q, tt)
 	if m.cleanup != nil {
 		t.Fatal("取消 did not close the cleanup preview")
@@ -140,13 +139,9 @@ func TestViewHistoryScreenshotCleanupPreviewsCancelAndFails(t *testing.T) {
 
 	// A failed deletion keeps the measured entry and its retry.
 	svc.deleteErr = errString("磁盘忙")
-	if err := tt.Click("删除截图"); err != nil {
-		t.Fatal(err)
-	}
+	m.RequestScreenshotCleanup("r1")
 	settle(t, m, q, tt)
-	if err := tt.Click("确认删除"); err != nil {
-		t.Fatal(err)
-	}
+	m.ConfirmCleanup()
 	settle(t, m, q, tt)
 	if m.cleanup == nil || m.cleanup.err == "" {
 		t.Fatalf("failed deletion did not keep its prompt: %+v", m.cleanup)
@@ -159,9 +154,7 @@ func TestViewHistoryScreenshotCleanupPreviewsCancelAndFails(t *testing.T) {
 	}
 
 	svc.deleteErr = nil
-	if err := tt.Click("确认删除"); err != nil {
-		t.Fatal(err)
-	}
+	m.ConfirmCleanup()
 	settle(t, m, q, tt)
 	if m.cleanup != nil {
 		t.Fatal("successful retry did not close the prompt")
@@ -212,9 +205,7 @@ func TestViewStorageBulkCleanupPreviewsAndIndependentEntries(t *testing.T) {
 	if !tt.HasText("将删除 2 条记录的截图（4 张，4.0 KB），保留结果、修订与校对状态；待校对 1 项。") {
 		t.Fatalf("the all-screenshots preview does not show: %q", tt.Texts())
 	}
-	if err := tt.Click("取消"); err != nil {
-		t.Fatal(err)
-	}
+	m.CancelCleanup()
 	settle(t, m, q, tt)
 	if _, all, _, _ := svc.cleanupCalls(); all != 0 {
 		t.Fatal("cancel still deleted all screenshots")
@@ -237,9 +228,7 @@ func TestViewStorageBulkCleanupPreviewsAndIndependentEntries(t *testing.T) {
 	if _, _, records, allRecords := svc.cleanupCalls(); len(records) != 0 || allRecords != 0 {
 		t.Fatal("a failed screenshot cleanup deleted records")
 	}
-	if err := tt.Click("取消"); err != nil {
-		t.Fatal(err)
-	}
+	m.CancelCleanup()
 	settle(t, m, q, tt)
 
 	svc.deleteErr = nil
@@ -323,16 +312,15 @@ func TestViewHistoryRecordDeletionClosesResults(t *testing.T) {
 	m.OpenHistory()
 	settle(t, m, q, tt)
 
-	if err := tt.Click("删除当前记录"); err != nil {
-		t.Fatal(err)
+	if !tt.HasText("删除当前记录") {
+		t.Fatal("the history row offers no record deletion control")
 	}
+	m.RequestRecordCleanup("r1")
 	settle(t, m, q, tt)
 	if !tt.HasText("将永久删除记录 r1（共 4.0 KB，其中截图 2 张 2.0 KB）；待校对 1 项。外部导出的 JSON/CSV 不受影响。") {
 		t.Fatalf("the record deletion preview does not show: %q", tt.Texts())
 	}
-	if err := tt.Click("确认删除"); err != nil {
-		t.Fatal(err)
-	}
+	m.ConfirmCleanup()
 	settle(t, m, q, tt)
 	if m.cleanup != nil {
 		t.Fatal("successful record deletion kept the prompt")
