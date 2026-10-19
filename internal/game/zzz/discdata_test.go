@@ -1,0 +1,235 @@
+package zzz
+
+import (
+	"encoding/json"
+	"testing"
+)
+
+// TestToStructuredJSONShape pins the public structured shape for a
+// complete four-substat disc: numeric fairy set id, S rarity from the
+// capture, numeric slot/level, string decimal values, rolls in display
+// order, explicit null management/equipper and an unavailable validation.
+func TestToStructuredJSONShape(t *testing.T) {
+	rec, issues := ParseDetail(DetailLines{
+		Set:   "河豚电音[1]",
+		Level: "等级15/15",
+		Main:  "生命值 2200",
+		Subs:  []string{"暴击伤害 +3 19.2%", "穿透值 9", "攻击力 +1 6%", "暴击率 2.4%"},
+	})
+	if len(issues) != 0 {
+		t.Fatalf("issues = %+v, want none", issues)
+	}
+	structured := ToStructured(rec, RarityS, issues)
+	if structured.Data.SetID == nil || *structured.Data.SetID != 31100 {
+		t.Fatalf("setId = %v, want 31100", structured.Data.SetID)
+	}
+	if structured.Data.Rarity == nil || *structured.Data.Rarity != RarityS {
+		t.Fatalf("rarity = %v, want S", structured.Data.Rarity)
+	}
+	if structured.Data.ManagementState != nil || structured.Data.Equipped != nil {
+		t.Fatalf("management/equipped = %v/%v, want both null",
+			structured.Data.ManagementState, structured.Data.Equipped)
+	}
+	if structured.Validation.Status != ValidationUnavailable {
+		t.Fatalf("validation = %+v, want unavailable", structured.Validation)
+	}
+	if len(structured.Issues) != 0 {
+		t.Fatalf("structured issues = %+v, want empty", structured.Issues)
+	}
+	for _, issue := range structured.Validation.Issues {
+		if issue.Severity != SeverityError {
+			t.Fatalf("validation issue %+v is not an error", issue)
+		}
+	}
+
+	raw, err := json.Marshal(structured)
+	if err != nil {
+		t.Fatalf("marshal structured: %v", err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("structured is not a JSON object: %v", err)
+	}
+	data, ok := doc["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("data = %v, want an object", doc["data"])
+	}
+	if data["setId"].(float64) != 31100 {
+		t.Fatalf("data.setId = %v, want the numeric fairy id 31100", data["setId"])
+	}
+	if data["rarity"] != RarityS {
+		t.Fatalf("data.rarity = %v, want S", data["rarity"])
+	}
+	if data["slot"].(float64) != 1 || data["level"].(float64) != 15 {
+		t.Fatalf("slot/level = %v/%v, want 1/15", data["slot"], data["level"])
+	}
+	main, ok := data["mainStat"].(map[string]any)
+	if !ok || main["attribute"] != "health" || main["value"] != "2200" || main["unit"] != "flat" {
+		t.Fatalf("data.mainStat = %v", data["mainStat"])
+	}
+	subs, ok := data["substats"].([]any)
+	if !ok || len(subs) != 4 {
+		t.Fatalf("data.substats = %v, want four entries", data["substats"])
+	}
+	first := subs[0].(map[string]any)
+	if first["attribute"] != "critDamage" || first["value"] != "19.2" ||
+		first["unit"] != "percent" || first["enhancementRolls"].(float64) != 3 {
+		t.Fatalf("data.substats[0] = %v", first)
+	}
+	second := subs[1].(map[string]any)
+	if second["enhancementRolls"].(float64) != 0 {
+		t.Fatalf("data.substats[1] = %v, want no-roll 0", second)
+	}
+	if data["managementState"] != nil || data["equipped"] != nil {
+		t.Fatalf("data.managementState/equipped = %v/%v, want null",
+			data["managementState"], data["equipped"])
+	}
+	if _, ok := doc["issues"].([]any); !ok {
+		t.Fatalf("issues = %v, want an array", doc["issues"])
+	}
+	validation := doc["validation"].(map[string]any)
+	if validation["status"] != ValidationUnavailable {
+		t.Fatalf("validation = %v, want unavailable", validation)
+	}
+	if vissues := validation["issues"].([]any); len(vissues) != 2 {
+		t.Fatalf("validation issues = %v, want the two data gaps", vissues)
+	}
+}
+
+// TestToStructuredLevelZeroThreeSubstats covers the real level-0 shape:
+// level 0 is a known value (not null), and three visible substats stay
+// three entries in screen order.
+func TestToStructuredLevelZeroThreeSubstats(t *testing.T) {
+	rec, issues := ParseDetail(DetailLines{
+		Set:   "云岿如我[6]",
+		Level: "等级0/15",
+		Main:  "异常掌控 7.5%",
+		Subs:  []string{"暴击伤害 4.8%", "攻击力 3%", "暴击率 2.4%"},
+	})
+	if len(issues) != 0 {
+		t.Fatalf("issues = %+v, want none", issues)
+	}
+	structured := ToStructured(rec, RarityS, issues)
+	if structured.Data.Level == nil || *structured.Data.Level != 0 {
+		t.Fatalf("level = %v, want known 0", structured.Data.Level)
+	}
+	if len(structured.Data.Substats) != 3 {
+		t.Fatalf("substats = %d, want 3", len(structured.Data.Substats))
+	}
+	if structured.Data.SetID == nil || *structured.Data.SetID != 33100 {
+		t.Fatalf("setId = %v, want 33100", structured.Data.SetID)
+	}
+	for i, want := range []Attribute{AttrCritDamage, AttrAttack, AttrCritRate} {
+		if got := structured.Data.Substats[i].Attribute; got == nil || *got != string(want) {
+			t.Fatalf("substats[%d].attribute = %v, want %s", i, got, want)
+		}
+	}
+}
+
+// TestToStructuredUnknownPartsStayNull covers unknown set, unread
+// substat line and unread main stat: each stays an explicit null (or an
+// object of nulls for a present line) with error-severity issues, and
+// validation fails instead of pretending to pass.
+func TestToStructuredUnknownPartsStayNull(t *testing.T) {
+	rec, issues := ParseDetail(DetailLines{
+		Set:   "无名的套装[1]",
+		Level: "等级15/15",
+		Main:  "元素精通 92",
+		Subs:  []string{"", "攻击力 9%"},
+	})
+	structured := ToStructured(rec, RarityS, issues)
+	if structured.Data.SetID != nil {
+		t.Fatalf("setId = %v, want null", structured.Data.SetID)
+	}
+	if structured.Data.MainStat != nil {
+		t.Fatalf("mainStat = %+v, want null", structured.Data.MainStat)
+	}
+	if len(structured.Data.Substats) != 2 {
+		t.Fatalf("substats = %d, want the two visible lines kept", len(structured.Data.Substats))
+	}
+	unread := structured.Data.Substats[0]
+	if unread.Attribute != nil || unread.Value != nil || unread.Unit != nil || unread.EnhancementRolls != nil {
+		t.Fatalf("unread substat = %+v, want all nulls", unread)
+	}
+	if structured.Data.Substats[1].Attribute == nil || *structured.Data.Substats[1].Attribute != "attack" {
+		t.Fatalf("readable substat = %+v", structured.Data.Substats[1])
+	}
+	if !hasIssue(structured.Issues, "setId", CodeUnknownSet) ||
+		!hasIssue(structured.Issues, "mainStat", CodeAffixNameUnknown) ||
+		!hasIssue(structured.Issues, "substats[0]", CodeLineEmpty) {
+		t.Fatalf("issues = %+v, want the unknown-set/main/unread-substat errors", structured.Issues)
+	}
+	for _, issue := range structured.Issues {
+		if issue.Severity != SeverityError {
+			t.Fatalf("issue %+v is not an error", issue)
+		}
+	}
+	if structured.Validation.Status != ValidationFailed {
+		t.Fatalf("validation = %+v, want failed", structured.Validation)
+	}
+	if len(structured.Validation.Issues) == 0 {
+		t.Fatal("failed validation carries no issues")
+	}
+}
+
+// TestToStructuredSubstatCountUnknownVsEmpty pins the difference between
+// an unknown line count (null) and a confirmed empty list ([]).
+func TestToStructuredSubstatCountUnknownVsEmpty(t *testing.T) {
+	unknown, _ := ParseDetail(DetailLines{
+		Set: "河豚电音[1]", Level: "等级15/15", Main: "生命值 2200",
+	})
+	if unknown.Substats != nil {
+		t.Fatalf("unknown substat count = %#v, want nil", unknown.Substats)
+	}
+	unknownData := ToStructured(unknown, RarityS, nil)
+	raw, err := json.Marshal(unknownData.Data)
+	if err != nil {
+		t.Fatalf("marshal unknown data: %v", err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("unknown data is not JSON: %v", err)
+	}
+	if doc["substats"] != nil {
+		t.Fatalf("unknown substats = %v, want null", doc["substats"])
+	}
+
+	empty, _ := ParseDetail(DetailLines{
+		Set: "河豚电音[1]", Level: "等级15/15", Main: "生命值 2200", Subs: []string{},
+	})
+	if empty.Substats == nil || len(empty.Substats) != 0 {
+		t.Fatalf("confirmed-empty substats = %#v, want an empty non-nil slice", empty.Substats)
+	}
+	emptyData := ToStructured(empty, RarityS, nil)
+	raw, err = json.Marshal(emptyData.Data)
+	if err != nil {
+		t.Fatalf("marshal empty data: %v", err)
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("empty data is not JSON: %v", err)
+	}
+	if subs, ok := doc["substats"].([]any); !ok || len(subs) != 0 {
+		t.Fatalf("confirmed-empty substats = %v, want []", doc["substats"])
+	}
+}
+
+// TestToStructuredRarityUnverified keeps a missing capture verdict as
+// null and records an error instead of guessing from the set name.
+func TestToStructuredRarityUnverified(t *testing.T) {
+	rec, issues := ParseDetail(DetailLines{
+		Set:   "河豚电音[1]",
+		Level: "等级15/15",
+		Main:  "生命值 2200",
+		Subs:  []string{"攻击力 9%"},
+	})
+	structured := ToStructured(rec, "", issues)
+	if structured.Data.Rarity != nil {
+		t.Fatalf("rarity = %v, want null", structured.Data.Rarity)
+	}
+	if !hasIssue(structured.Issues, "rarity", CodeRarityUnverified) {
+		t.Fatalf("issues = %+v, want rarityUnverified", structured.Issues)
+	}
+	if structured.Validation.Status != ValidationFailed {
+		t.Fatalf("validation = %+v, want failed", structured.Validation)
+	}
+}

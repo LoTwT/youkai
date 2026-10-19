@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"runtime"
 
+	"github.com/LoTwT/youkai/internal/game/zzz"
+	"github.com/LoTwT/youkai/internal/game/zzz/collect"
 	"github.com/LoTwT/youkai/internal/recognition"
 	"github.com/LoTwT/youkai/internal/scan"
 )
@@ -83,8 +85,10 @@ func newOCRRecognizer(resourcesRoot string) (Recognizer, error) {
 // lineRecognizer adapts the OCR recognizer to the scan kernel's
 // Recognizer: one observation — the text-line crops of one item — is
 // recognized line by line, and the per-line texts and scores travel on as
-// the task's result payload. Interpreting the lines (drive-disc fields,
-// units) is M2's game adapter; nothing here judges a decoded line.
+// the task's result payload. After recognition the lines are assembled by
+// role into the drive-disc parser's input, and the parsed structured
+// payload rides beside the untouched raw lines. The parser judges field
+// values; recognition itself still does not guess at a decoded line.
 //
 // The wrapped *recognition.Recognizer belongs to the application's
 // lifetime: it is created once for the first scan and closed once by the
@@ -130,8 +134,49 @@ func (r *lineRecognizer) Recognize(ctx context.Context, task scan.Task, submit s
 		}
 		result.Lines = append(result.Lines, RecognizedLine{Role: crop.Role, Text: line.Text, Score: line.Score})
 	}
+	result.Structured = structuredDisc(obs, result.Lines)
 	log.Printf("youkai: scan %s item %d recognized: %s", task.SessionID, task.Seq, formatLines(result.Lines))
 	return submit(task.SessionID, task.Seq, scan.Recognition{Result: result})
+}
+
+// structuredDisc interprets the recognized lines of one observation as a
+// drive-disc detail page. The detail-line parser consumes the name, level,
+// main and sub1..sub4 roles; rarity comes from the observation's verified
+// capture evidence, never from the text. A result without any detail-line
+// role (for example a context-only observation) carries no structured
+// payload rather than a fabricated empty disc.
+func structuredDisc(obs Observation, lines []RecognizedLine) *zzz.StructuredDisc {
+	detail, ok := discDetailLines(lines)
+	if !ok {
+		return nil
+	}
+	rec, issues := zzz.ParseDetail(detail)
+	structured := zzz.ToStructured(rec, obs.Rarity, issues)
+	return &structured
+}
+
+// discDetailLines assembles the fixed detail-line roles in observation
+// order. The second result is false when no drive-disc role is present.
+func discDetailLines(lines []RecognizedLine) (zzz.DetailLines, bool) {
+	var detail zzz.DetailLines
+	found := false
+	for _, line := range lines {
+		switch line.Role {
+		case collect.LineName:
+			detail.Set = line.Text
+			found = true
+		case collect.LineLevel:
+			detail.Level = line.Text
+			found = true
+		case collect.LineMain:
+			detail.Main = line.Text
+			found = true
+		case collect.LineSub1, collect.LineSub2, collect.LineSub3, collect.LineSub4:
+			detail.Subs = append(detail.Subs, line.Text)
+			found = true
+		}
+	}
+	return detail, found
 }
 
 // Close releases the model session; the process-wide environment stays

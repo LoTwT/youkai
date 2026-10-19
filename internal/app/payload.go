@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"image"
+
+	"github.com/LoTwT/youkai/internal/game/zzz"
 )
 
 // LineCrop is one text-line crop of an observation, as the collection
@@ -38,6 +40,11 @@ type Observation struct {
 	// and the selected cell's border. The deliverer writes them as
 	// evidence; the recognizer never reads them.
 	Context []LineCrop
+	// Rarity is the capture's verified rarity evidence, copied from the
+	// traversal's quality verdict ("S" when calibrated). It is empty when
+	// the observation carries no such evidence; the recognizer never
+	// infers rarity from the recognized text.
+	Rarity string
 	// Capture is the traversal's own capture record, verbatim. Its pixels
 	// are omitted by the collect side and live only in the evidence
 	// files; the payload keeps the navigation provenance (position,
@@ -84,9 +91,18 @@ type RecognizedLine struct {
 }
 
 // RecognitionResult is the recognizer adapter's result payload: the
-// recognized lines of one observation, in observation order. The score is
-// the raw model confidence of the line (see the recognition package); it
-// is not the probability that the field is correct.
+// recognized lines of one observation, in observation order, and the
+// structured drive-disc interpretation derived from them. The raw lines
+// (text, role and model score) are never replaced by the structured
+// payload: they remain the evidence and audit trail for every field. The
+// score is the raw model confidence of the line (see the recognition
+// package); it is not the probability that the field is correct.
+//
+// Structured is present exactly when recognition produced a payload that
+// went through the drive-disc parser, even when parsing reported issues.
+// Failed and unprocessed items carry no result and therefore no
+// structured payload.
 type RecognitionResult struct {
-	Lines []RecognizedLine `json:"lines"`
+	Lines      []RecognizedLine    `json:"lines"`
+	Structured *zzz.StructuredDisc `json:"structured,omitempty"`
 }
