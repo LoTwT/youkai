@@ -7,6 +7,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -311,65 +312,78 @@ func selfTest(root string) {
 	log.Printf("youkai: self-test passed: text=%q score=%.3f", got.Text, got.Score)
 }
 
-// scanSource wires the scan source the environment selects, and
-// returns its UI label:
+// scanSource wires the scan source the environment selects, and returns
+// its UI label:
 //
 //   - YOUKAI_DEV_SOURCE names the development fixture directory (the
 //     development and testing stand-in of M1);
 //   - YOUKAI_GAME_SOURCE=observe wires the observe-only game rehearsal
 //     through the unified platform port — a session opens the platform,
-//     observes the target and waits; no input is dispatched (the real
-//     traversal arrives with 4b/4c);
-//   - both set at once is a wiring error the entry point refuses;
+//     observes the target and waits; no input is dispatched;
+//   - YOUKAI_GAME_SOURCE=traverse wires the calibrated macOS cloud
+//     inventory traversal (darwin only; Windows has no calibrated
+//     layout);
+//   - both environment variables set at once is a wiring error the entry
+//     point refuses;
 //   - neither leaves the production state: no source, starts refused
 //     with the documented reason.
 func scanSource() (app.ScanSource, string) {
-	devDir := os.Getenv("YOUKAI_DEV_SOURCE")
-	gameMode := os.Getenv("YOUKAI_GAME_SOURCE")
-	if devDir != "" && gameMode != "" {
-		log.Fatalf("youkai: YOUKAI_DEV_SOURCE and YOUKAI_GAME_SOURCE are both set; pick one scan source")
+	source, label, err := scanSourceFrom(os.Getenv, runtime.GOOS, platform.Host)
+	if err != nil {
+		log.Fatalf("youkai: %v", err)
 	}
-	if devDir != "" {
-		return devScanSource(), "开发数据源"
-	}
-	if gameMode != "" {
-		if gameMode != "observe" {
-			log.Fatalf("youkai: YOUKAI_GAME_SOURCE=%q is not supported (only \"observe\")", gameMode)
-		}
-		return gameScanSource(), "游戏窗口（仅观测演练，不发送输入）"
-	}
-	return nil, "开发数据源"
+	return source, label
 }
 
-// gameScanSource wires the observe-only game rehearsal for this
-// platform. The macOS target is the App Store cloud client field round
-// ① identified; the Windows target identity waits for field round ②
-// and must be provided explicitly (YOUKAI_GAME_EXE plus
-// YOUKAI_GAME_CLIENT=local|cloud) — a guessed identity could act on the
-// wrong window, so the wiring refuses instead. The stop hotkeys follow
-// the field rounds: ⌃⌥⌘S on macOS (verified), Ctrl+Alt+Shift+S on
-// Windows (unverified, deliberately avoiding the Win key); customization
-// arrives with the settings of M3.
-func gameScanSource() app.ScanSource {
-	port, err := platform.Host()
+// scanSourceFrom is scanSource with its environment, platform and host
+// resolution injected, so the wiring and the platform split are testable
+// without reading the process environment or touching a real display.
+func scanSourceFrom(getenv func(string) string, goos string, host func() (platform.Port, error)) (app.ScanSource, string, error) {
+	devDir := getenv("YOUKAI_DEV_SOURCE")
+	gameMode := getenv("YOUKAI_GAME_SOURCE")
+	if devDir != "" && gameMode != "" {
+		return nil, "", errors.New("YOUKAI_DEV_SOURCE and YOUKAI_GAME_SOURCE are both set; pick one scan source")
+	}
+	if devDir != "" {
+		return devScanSourceFrom(devDir, getenv)
+	}
+	if gameMode != "" {
+		return gameScanSourceFrom(gameMode, goos, getenv, host)
+	}
+	return nil, "开发数据源", nil
+}
+
+// gameScanSourceFrom wires the game source for one mode and platform. The
+// traverse mode is refused outside darwin: only the macOS cloud client has
+// a calibrated layout, and guessing anchors would act on the wrong pixels.
+func gameScanSourceFrom(mode, goos string, getenv func(string) string, host func() (platform.Port, error)) (app.ScanSource, string, error) {
+	switch mode {
+	case "observe", "traverse":
+	default:
+		return nil, "", fmt.Errorf("YOUKAI_GAME_SOURCE=%q is not supported (use \"observe\" or \"traverse\")", mode)
+	}
+	if mode == "traverse" && goos != "darwin" {
+		return nil, "", fmt.Errorf("YOUKAI_GAME_SOURCE=traverse needs a calibrated layout; only the macOS cloud client has one (%s has none yet)", goos)
+	}
+	port, err := host()
 	if err != nil {
-		log.Fatalf("youkai: platform: %v", err)
+		return nil, "", fmt.Errorf("platform: %w", err)
 	}
 	var (
 		target platform.TargetSpec
 		client record.Client
 		hotkey platform.HotkeySpec
 	)
-	switch runtime.GOOS {
+	switch goos {
 	case "darwin":
 		target = collect.MacCloudTarget
 		client = record.ClientMacOSCloud
 		hotkey = platform.HotkeySpec{Key: platform.KeyS, Ctrl: true, Alt: true, Meta: true}
 	case "windows":
-		exe := os.Getenv("YOUKAI_GAME_EXE")
-		kind := os.Getenv("YOUKAI_GAME_CLIENT")
+		exe := getenv("YOUKAI_GAME_EXE")
+		kind := getenv("YOUKAI_GAME_CLIENT")
 		if exe == "" || (kind != "local" && kind != "cloud") {
-			log.Fatalf("youkai: the Windows game target needs YOUKAI_GAME_EXE=<game exe path> and YOUKAI_GAME_CLIENT=local|cloud (the real window identity is measured in field round ②; refusing to guess), got exe=%q client=%q", exe, kind)
+			return nil, "", fmt.Errorf("the Windows game target needs YOUKAI_GAME_EXE=<game exe path> and YOUKAI_GAME_CLIENT=local|cloud (the real window identity is measured in field round ②; refusing to guess), got exe=%q client=%q", exe, kind)
 		}
 		target = platform.TargetSpec{ExecutablePath: exe}
 		client = record.ClientWindowsCloud
@@ -378,44 +392,57 @@ func gameScanSource() app.ScanSource {
 		}
 		hotkey = platform.HotkeySpec{Key: platform.KeyS, Ctrl: true, Alt: true, Shift: true}
 	default:
-		log.Fatalf("youkai: no game platform on %s", runtime.GOOS)
+		return nil, "", fmt.Errorf("no game platform on %s", goos)
 	}
-	log.Printf("youkai: game scan source wired (observe-only): client=%s target=%+v", client, target)
-	return &app.GameScanSource{
+	src := &app.GameScanSource{
 		Port:   port,
 		Target: target,
 		Hotkey: hotkey,
 		Client: client,
 	}
+	if mode == "observe" {
+		src.Mode = "observeOnly"
+		log.Printf("youkai: game scan source wired (observe-only): client=%s target=%+v", client, target)
+		return src, "游戏窗口（仅观测演练，不发送输入）", nil
+	}
+	// The calibrated traverse: one immutable layout shared by the session
+	// traversals; each session gets its own matcher and Inventory.
+	layout := collect.MacCloudLayout()
+	src.Mode = "traverse"
+	src.Traversal = func() collect.Traversal {
+		return &collect.Inventory{
+			Layout:  layout,
+			Matcher: collect.NewPixelMatcher(layout, collect.MacCloudCalibration()),
+			Project: app.ProjectDiscObservation,
+		}
+	}
+	log.Printf("youkai: game scan source wired (traverse): client=%s target=%+v", client, target)
+	return src, "游戏窗口（自动遍历）", nil
 }
 
-// devScanSource wires the development data source when the explicit
+// devScanSourceFrom wires the development data source when the explicit
 // environment switch names an observations directory (its lines.tsv and
 // the crop images it lists). It exists so a scan can be driven before the
 // game adapters of M2 exist — development and tests only; installed
 // builds run without it and the service then refuses starts with a clear
 // error. It is not a user-facing image import feature.
-func devScanSource() app.ScanSource {
-	dir := os.Getenv("YOUKAI_DEV_SOURCE")
-	if dir == "" {
-		return nil
-	}
+func devScanSourceFrom(dir string, getenv func(string) string) (app.ScanSource, string, error) {
 	src, err := app.LoadDevScanSource(dir)
 	if err != nil {
-		log.Fatalf("youkai: dev scan source %q: %v", dir, err)
+		return nil, "", fmt.Errorf("dev scan source %q: %w", dir, err)
 	}
 	// A development-only pace override (a Go duration like "3s"), for
 	// manual runs that need the scan to last long enough to stop it
 	// midway.
-	if raw := os.Getenv("YOUKAI_DEV_PACE"); raw != "" {
+	if raw := getenv("YOUKAI_DEV_PACE"); raw != "" {
 		pace, err := time.ParseDuration(raw)
 		if err != nil || pace < 0 {
-			log.Fatalf("youkai: dev pace %q: %v", raw, err)
+			return nil, "", fmt.Errorf("dev pace %q: %v", raw, err)
 		}
 		src.Pace = pace
 	}
 	log.Printf("youkai: dev scan source wired to %q (pace %s)", dir, src.Pace)
-	return src
+	return src, "开发数据源", nil
 }
 
 // resourcesRoot returns the app's shipped-resources directory as the
