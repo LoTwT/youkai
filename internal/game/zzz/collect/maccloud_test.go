@@ -318,7 +318,7 @@ var detailCases = []detailCase{
 	{"adjacent wheel rows", "s2-wL-top-cell-r0c0", "s2-wL-top-cell-r0c1", collect.DetailDifferent},
 	// The known near-duplicate pair (0.62): Same is the honest answer at
 	// pixel resolution, and the transition rule still needs another piece
-	// of evidence (a unique 1:1 neighbor round trip, 4b-2).
+	// of evidence (a unique 1:1 neighbor round trip, not yet implemented).
 	{"near duplicate", "s2-s6-top-cell-r4c0", "s2-s6-top-cell-r4c1", collect.DetailSame},
 	// The known 3.72 pair is diagonal (non-adjacent) and sits between the
 	// bands: undecided, not rounded into either answer.

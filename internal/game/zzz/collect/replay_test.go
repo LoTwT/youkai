@@ -282,6 +282,9 @@ type fieldReplay struct {
 	// panel reports that the filter panel is open; panel frames are the
 	// current base frame with the open probes painted.
 	panel bool
+	// sFilter reports that the panel's S rarity control was selected; the
+	// closed warehouse then paints the active funnel.
+	sFilter bool
 	// cached is the rendered frame for the current synthetic state; its
 	// pixels are immutable once built, like the recorded frames.
 	cached   *image.RGBA
@@ -332,7 +335,7 @@ func (r *fieldReplay) frame(ctx context.Context, req platform.FrameRequest) (pla
 // for positions other than the recorded one, an empty list with a
 // full-length thumb. The recorded pixels outside these probes are kept.
 func (r *fieldReplay) render(src *image.RGBA) *image.RGBA {
-	key := fmt.Sprintf("%d|%d|%v", r.current, r.position, r.panel)
+	key := fmt.Sprintf("%d|%d|%v|%v", r.current, r.position, r.panel, r.sFilter)
 	if r.cached != nil && r.cacheKey == key {
 		return r.cached
 	}
@@ -356,7 +359,11 @@ func (r *fieldReplay) render(src *image.RGBA) *image.RGBA {
 	for _, probe := range r.layout.PanelOpen {
 		fill(probe.At, probe.Colors["closed"])
 	}
-	fill(r.layout.Funnel.At, r.layout.Funnel.Colors["clear"])
+	if r.sFilter {
+		fill(r.layout.Funnel.At, r.layout.Funnel.Colors["active"])
+	} else {
+		fill(r.layout.Funnel.At, r.layout.Funnel.Colors["clear"])
+	}
 	// Repaint the wheel selection: clear every arc, then paint the current
 	// position's four arcs with the selection color.
 	for i, center := range r.layout.Wheel {
@@ -392,7 +399,12 @@ func (r *fieldReplay) dispatch(op platform.InputOp) platform.InputResult {
 	if op.Kind == platform.InputClick {
 		switch {
 		case r.panel:
-			if op.At.Eq(r.layout.PanelClose) {
+			switch {
+			case op.At.Eq(r.layout.PanelReset):
+				r.sFilter = false
+			case op.At.Eq(r.layout.PanelS):
+				r.sFilter = true
+			case op.At.Eq(r.layout.PanelClose):
 				r.panel = false
 			}
 		case op.At.Eq(r.layout.FilterButton):
@@ -505,7 +517,7 @@ func TestReplayViewportFromFieldFrames(t *testing.T) {
 	if clicks := countWheelClicks(ops, l); clicks != 6 {
 		t.Fatalf("%d wheel clicks, want 6 switches from the recorded position 2 through every position", clicks)
 	}
-	if clicks := countFilterClicks(ops, l); clicks != 6*3 {
+	if clicks := countFilterClicks(ops, l); clicks != 6*6 {
 		t.Fatalf("%d filter-control clicks, want the reset flow for every position", clicks)
 	}
 	if drags := countOps(ops, platform.InputDrag, l.ScrollFrom, l.ScrollTo); drags != 6 {

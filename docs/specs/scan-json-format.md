@@ -51,7 +51,7 @@
 | `coverage` | `{ "status": "complete" 或 "partial" 或 "unknown", "expectedCount": integer 或 null }`。总数只有同范围可信证据时才填；覆盖依据在档案中保留。 |
 | `capturedCount` | 已接纳的 S 级物品观测数，包括后来失败或未处理项。导航尝试、参照物截图和明确非 S 项不计入。 |
 
-`termination.code` 为非空诊断代码，建议使用 `verifiedEnd`、`userCancelled`、`focusLost`、`geometryChanged`、`permissionRevoked`、`navigationMismatch`、`runtimeFailure`、`storageFailure` 或 `interrupted`。它只用于解释，不授权额外动作；读取端可展示不认识的代码，不能因此把 `kind` 改为正常完成。后续故障不会覆盖首个触发。
+`termination.code` 为非空诊断代码，建议使用 `verifiedEnd`、`userCancelled`、`focusLost`、`geometryChanged`、`permissionRevoked`、`navigationMismatch`、`evidenceFailed`、`runtimeFailure`、`storageFailure` 或 `interrupted`。`evidenceFailed` 表示已接纳截图的投影或入队失败，保留原始错误；它只用于解释，不授权额外动作；读取端可展示不认识的代码，不能因此把 `kind` 改为正常完成。后续故障不会覆盖首个触发。
 
 `termination.phase` 是首个结束触发所在的阶段，不是文件导出时的状态。正常遍历到末尾通常为 `completed + capturing`；准备阶段已验证空库存可为 `completed + preparing`，不统一改写成 `finalizing`。
 
@@ -143,7 +143,7 @@
 | `processing` | `{ "status": "produced" 或 "failed" 或 "unprocessed", "reason": string 或 null }`。后两种须有原因；公共档案不存在排队、运行。 |
 | `observed` | 原始规范化 `data` 对象或 `null`，与当前字段采用相同结构；失败时仍可保留部分结果。 |
 | `originalQuality` / `originalIssues` | 原始质量与问题，结构同当前字段。原始质量不能是人工确认。 |
-| `capture` | `{ "frameId": string, "frameReceivedAt": timestamp, "geometryRevision": integer, "visitIndex": integer, "position": integer, "viewportIndex": integer, "row": integer, "column": integer, "association": string, "evidenceIds": string[] }`。时间是平台收到帧的时间，不冒充云端渲染时间；访问序号引用下方遍历账目，包含明确非 S 的跳过位置，所以不等于采集序号。几何版本、行列和视口从 0 开始，不以它们代替物品身份。`position` 是转盘位置 1–6；`viewportIndex` 在每个位置内重新从 0 计数，不能跨位置当作全局视口。 |
+| `capture` | `{ "frameId": string, "frameReceivedAt": timestamp, "geometryRevision": integer, "visitIndex": integer, "position": integer, "viewportIndex": integer, "row": integer, "column": integer, "association": string, "rarityFilter": "S"（可选）, "scrollEvidence": string（可选）, "evidenceIds": string[] }`。时间是平台收到帧的时间，不冒充云端渲染时间；访问序号引用下方遍历账目，包含明确非 S 的跳过位置，所以不等于采集序号。几何版本、行列和视口从 0 开始，不以它们代替物品身份。`position` 是转盘位置 1–6；`viewportIndex` 在每个位置内重新从 0 计数，不能跨位置当作全局视口。`rarityFilter` 仅在准备阶段已确认漏斗 Active 且本件为 S 时写 `S`；`scrollEvidence` 仅在进入该视口的最近一次已核实滚动后、由该视口的第一个接纳件携带一次，内容为前后 frame id、rows、matches 数量与 matcher evidence 的可读字符串。二者都是可选 provenance，不替代详情归属证据。 |
 | `observations` | 字段证据数组，元素结构见下文。识别未运行可为空，已得出的文字或图标结果不能因后续任务失败被清空。 |
 | `revisions` | 人工修订数组，按修订号递增；无人工操作时为 `[]`。 |
 
@@ -175,7 +175,7 @@
 
 - `resources`：`{role,id,version,sha256}` 数组，记录实际使用的适配器、布局、模型和字典；校验规则由顶层 `validationRules` 记录。`role` 取 `adapter`、`layout`、`model`、`dictionary`；同一 `role + id` 唯一，摘要为 64 位小写十六进制。预检未运行到的资源不虚构记录；适配器可对构建制品或固定资源清单求摘要。
 - `captureProfile`：`{id,osVersion,description,resourceId,evidenceIds}`，前三项为非空字符串，标识所用显示配置并保留可读描述；`resourceId` 指向 `assets` 中随包的配置 JSON，`evidenceIds` 为设置证据。配置 JSON 保存 T2 要求的实际点/像素、视频区域、DPI 等记录，结构随所标明布局资源版本解释，不凭描述文字重新建立扫描坐标。尚未建立配置便准备失败时，此字段为 `null`；已有采集记录时不得为空。
-- `inventorySetup`：`{rarityFilter,otherFilters,sortLabel,verified,evidenceIds}`。品质筛选为 `S`、`all` 或 `unknown`；其他筛选为 `all` 或 `unknown`；排序标签为实际可读文本或 `null`；`verified` 为布尔值。声明范围和实际筛选分开，混合列表可以只接纳已确认 S 项。未验证范围不能声称完整覆盖。
+- `inventorySetup`：`{rarityFilter,otherFilters,sortLabel,verified,evidenceIds}`。品质筛选为 `S`、`all` 或 `unknown`；其他筛选为 `all` 或 `unknown`；排序标签为实际可读文本或 `null`；`verified` 为布尔值。声明范围和实际筛选分开，混合列表可以只接纳已确认 S 项。`rarityFilter` 仍按 `S/all/unknown` 契约记录会话级声明，不因每件 `capture.rarityFilter` 的出现而改写；后者是准备完成后逐件观测到的 S 筛选证据。未验证范围不能声称完整覆盖。
 - `coverageEvidenceIds`：遍历、衔接与末尾依据的证据 ID 数组。完整结论必须具有 T5 规定的证据，不只核对数组非空。
 - `traversal`：`{visits,transitions}`，结构化的访问与视口衔接账目，规则见下节；尚未开始访问时两数组为空。
 - `events`：`{at,phase,code,message,evidenceIds}` 数组，保留后续故障、未被接纳的导航异常及品质未知等问题。只承担解释和追溯，不建立可重放的输入指令服务。

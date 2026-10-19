@@ -73,27 +73,42 @@ type scriptedGame struct {
 	topStuck          bool // the top fling does not move the list
 	topJumpRows       int  // non-zero: the top fling moves up this many rows
 	resetClearsFilter bool // the panel reset clears the funnel (default true)
-	// resetLeavesActiveAt, when non-zero, makes the filter reset leave
-	// the funnel active at that wheel position only.
-	resetLeavesActiveAt int
-	sameDetail          bool // a new selection keeps the old detail content
-	detailFlicker       bool // the detail content alternates every frame
-	qualityUnknown      bool // no gold badge (A/B/unknown rarity)
-	substatsUnknown     bool // the fourth row's value column is between tiers
-	substats4           bool // four substat rows (default true)
-	forceBottom         bool // the scrollbar claims the end while mid-list
-	geometryAfter       int  // 0: never; else serve geometry 2 from this frame call on
-	abortScrollDrag     bool // the next advance drag reports Aborted
-	denyNextDispatch    bool // the next dispatch is refused
-	content             image.Rectangle
+	// resetLeavesActive makes the reset leave the funnel active, as if the
+	// reset did not remove an existing filter.
+	resetLeavesActive bool
+	// sClickDoesNothing makes every S rarity click a no-op;
+	// sClickDoesNothingAt does so only at one wheel position. The funnel
+	// then stays clear after the panel closes.
+	sClickDoesNothing   bool
+	sClickDoesNothingAt int
+	scrollExtraRows     int // >0: the advance drag keeps moving this many more rows
+	scrollExtraDelay    int // frame calls between the two displacement stages (default 2)
+	// respectDispatchCursor serves the pre-action frame to any Frame request
+	// whose After predates the last dispatch's FinishedAt. The real platform
+	// uses the same contract; the production traversal must never ask with
+	// an earlier lower bound.
+	respectDispatchCursor bool
+	sameDetail            bool // a new selection keeps the old detail content
+	detailFlicker         bool // the detail content alternates every frame
+	qualityUnknown        bool // no gold badge (A/B/unknown rarity)
+	substatsUnknown       bool // the fourth row's value column is between tiers
+	substats4             bool // four substat rows (default true)
+	forceBottom           bool // the scrollbar claims the end while mid-list
+	geometryAfter         int  // 0: never; else serve geometry 2 from this frame call on
+	abortScrollDrag       bool // the next advance drag reports Aborted
+	denyNextDispatch      bool // the next dispatch is refused
+	content               image.Rectangle
 
 	// records
-	ops           []platform.InputOp
-	frameCalls    int
-	pending       []pendingEffect
-	lastFrame     platform.Frame
-	lastSignature string
-	nextID        uint64
+	ops               []platform.InputOp
+	frameCalls        int
+	pending           []pendingEffect
+	lastFrame         platform.Frame
+	lastSignature     string
+	nextID            uint64
+	preActionFrame    platform.Frame
+	actionFinishedAt  time.Time
+	staleFramesServed int
 }
 
 type pendingEffect struct {
@@ -199,6 +214,19 @@ func (g *scriptedGame) frame(ctx context.Context, req platform.FrameRequest) (pl
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	if g.respectDispatchCursor && !g.actionFinishedAt.IsZero() &&
+		req.After.Before(g.actionFinishedAt) && g.preActionFrame.Image != nil {
+		// The platform may still deliver the pre-action content to a
+		// request whose lower bound predates the dispatch. The traversal
+		// must never ask that way after an action.
+		g.staleFramesServed++
+		g.nextID++
+		f := g.preActionFrame
+		f.ID = g.nextID
+		f.ArrivedAt = g.actionFinishedAt.Add(-time.Millisecond)
+		f.Reused = false
+		return f, nil
+	}
 	g.frameCalls++
 	for len(g.pending) > 0 && g.pending[0].dueAt <= g.frameCalls {
 		effect := g.pending[0]
@@ -414,17 +442,25 @@ func (g *scriptedGame) dispatch(op platform.InputOp) platform.InputResult {
 		return platform.InputResult{Status: platform.InputPartial, Aborted: true,
 			EventsPlanned: 12, EventsPosted: 5, StartedAt: now, FinishedAt: now}
 	}
+	g.preActionFrame = g.lastFrame
+	g.actionFinishedAt = now
 	lag := g.frameCalls + g.effectLag
 	switch op.Kind {
 	case platform.InputClick:
 		if g.page == pagePanel {
 			switch {
 			case op.At.Eq(g.layout.PanelReset):
-				if g.resetClearsFilter && (g.resetLeavesActiveAt == 0 || g.wheel != g.resetLeavesActiveAt) {
+				if g.resetClearsFilter {
+					next := "clear"
+					if g.resetLeavesActive {
+						next = "active"
+					}
 					g.pending = append(g.pending, pendingEffect{dueAt: lag, apply: func(g *scriptedGame) {
-						g.filter = "clear"
+						g.filter = next
 					}})
-				} else if g.resetLeavesActiveAt != 0 && g.wheel == g.resetLeavesActiveAt {
+				}
+			case op.At.Eq(g.layout.PanelS):
+				if !g.sClickDoesNothing && g.wheel != g.sClickDoesNothingAt {
 					g.pending = append(g.pending, pendingEffect{dueAt: lag, apply: func(g *scriptedGame) {
 						g.filter = "active"
 					}})
@@ -519,6 +555,21 @@ func (g *scriptedGame) dispatch(op platform.InputOp) platform.InputResult {
 					g.viewport = target
 				}})
 			}
+			if g.scrollExtraRows > 0 {
+				extraTarget := target + g.scrollExtraRows
+				if extraTarget > g.maxTop() {
+					extraTarget = g.maxTop()
+				}
+				if extraTarget != target {
+					delay := g.scrollExtraDelay
+					if delay <= 0 {
+						delay = 2
+					}
+					g.pending = append(g.pending, pendingEffect{dueAt: lag + delay, apply: func(g *scriptedGame) {
+						g.viewport = extraTarget
+					}})
+				}
+			}
 		case op.At.Eq(g.layout.TopFrom) && op.To.Eq(g.layout.TopTo):
 			if g.topStuck || g.viewport == 0 {
 				return posted(now)
@@ -570,6 +621,12 @@ func (g *scriptedGame) opsSnapshot() []platform.InputOp {
 	return append([]platform.InputOp(nil), g.ops...)
 }
 
+func (g *scriptedGame) filterState() string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.filter
+}
+
 var (
 	selectionColor = color.RGBA{R: 224, G: 208, B: 67, A: 255}
 	barColor       = color.RGBA{R: 240, G: 240, B: 240, A: 255}
@@ -610,6 +667,15 @@ type traversalHarness struct {
 func newTraversalHarness(t *testing.T, game *scriptedGame) *traversalHarness {
 	t.Helper()
 	l := collect.MacCloudLayout()
+	calibration := collect.MacCloudCalibration()
+	if testRace {
+		// The race detector instruments the matcher's per-pixel loops; a
+		// coarser sampling grid keeps one correspondence search inside the
+		// bounded scroll wait without changing the navigation semantics.
+		calibration.ScrollStepX = 9
+		calibration.ScrollStepY = 8
+		calibration.ScrollMinSamples = 500
+	}
 	session := &platformfake.Session{}
 	session.ObserveFn = game.observe
 	session.FrameFn = game.frame
@@ -620,7 +686,7 @@ func newTraversalHarness(t *testing.T, game *scriptedGame) *traversalHarness {
 		session: session,
 		inv: &collect.Inventory{
 			Layout:           l,
-			Matcher:          collect.NewPixelMatcher(l, collect.MacCloudCalibration()),
+			Matcher:          collect.NewPixelMatcher(l, calibration),
 			ActionBudget:     300 * time.Millisecond,
 			ScrollBudget:     300 * time.Millisecond,
 			StableFrames:     3,
@@ -666,7 +732,7 @@ func (h *traversalHarness) end() scan.Snapshot {
 	h.t.Helper()
 	select {
 	case <-h.kernel.Done():
-	case <-time.After(15 * time.Second):
+	case <-time.After(60 * time.Second):
 		ops := h.game.opsSnapshot()
 		tail := ops
 		if len(tail) > 12 {
@@ -761,10 +827,11 @@ func countWheelClicks(ops []platform.InputOp, l collect.Layout) int {
 	return n
 }
 
-// countFilterClicks counts the filter button, reset and close clicks.
+// countFilterClicks counts the filter button, reset, S and close clicks.
 func countFilterClicks(ops []platform.InputOp, l collect.Layout) int {
 	return countOps(ops, platform.InputClick, l.FilterButton, image.Point{}) +
 		countOps(ops, platform.InputClick, l.PanelReset, image.Point{}) +
+		countOps(ops, platform.InputClick, l.PanelS, image.Point{}) +
 		countOps(ops, platform.InputClick, l.PanelClose, image.Point{})
 }
 
@@ -810,6 +877,9 @@ func TestSinglePageCompletesOneViewport(t *testing.T) {
 			t.Fatalf("observation %d lacks its quality/lines/context: quality %q lines %d context %d",
 				i+1, o.Quality, len(o.Lines), len(o.Context))
 		}
+		if o.RarityFilter != "S" {
+			t.Fatalf("observation %d rarityFilter %q, want S", i+1, o.RarityFilter)
+		}
 		if o.Association != collect.AssociationTransition {
 			t.Fatalf("observation %d association %s, want transition", i+1, o.Association)
 		}
@@ -825,14 +895,14 @@ func TestSinglePageCompletesOneViewport(t *testing.T) {
 	}
 
 	ops := game.opsSnapshot()
-	if clicks := countOps(ops, platform.InputClick, image.Point{}, image.Point{}); clicks != 20+5+3*6 {
-		t.Fatalf("%d clicks, want 20 slot clicks, 5 wheel switches and 18 filter-control clicks", clicks)
+	if clicks := countOps(ops, platform.InputClick, image.Point{}, image.Point{}); clicks != 20+5+6*6 {
+		t.Fatalf("%d clicks, want 20 slot clicks, 5 wheel switches and 36 filter-control clicks", clicks)
 	}
 	if wheelClicks := countWheelClicks(ops, game.layout); wheelClicks != 5 {
 		t.Fatalf("%d wheel clicks, want 5", wheelClicks)
 	}
-	if filterClicks := countFilterClicks(ops, game.layout); filterClicks != 18 {
-		t.Fatalf("%d filter-control clicks, want 3 per position", filterClicks)
+	if filterClicks := countFilterClicks(ops, game.layout); filterClicks != 36 {
+		t.Fatalf("%d filter-control clicks, want 6 per position", filterClicks)
 	}
 	if drags := countOps(ops, platform.InputDrag, game.layout.ScrollFrom, game.layout.ScrollTo); drags != 6 {
 		t.Fatalf("%d advance drags, want one per position's bottom confirmation", drags)
@@ -846,6 +916,26 @@ func TestSinglePageCompletesOneViewport(t *testing.T) {
 		if !strings.Contains(scope, want) {
 			t.Fatalf("observed scope %s lacks %s", scope, want)
 		}
+	}
+}
+
+// T1b: after every dispatched action the next Frame request's lower bound
+// is the action's FinishedAt. The fake serves the pre-action frame to any
+// request that predates it; a traversal that consumed such a frame would
+// stall in the detail wait or fail to verify the scroll. The list needs
+// one advance scroll, so both waits are exercised.
+func TestTraverseFrameCursorUsesFinishedAt(t *testing.T) {
+	game := newScriptedGame(listOf(24)...)
+	game.respectDispatchCursor = true
+	h := newTraversalHarness(t, game)
+	h.inv.ScrollBudget = 800 * time.Millisecond
+	h.start()
+	h.endCompleted()
+	if game.staleFramesServed != 0 {
+		t.Fatalf("the traversal requested %d frames predating the action's FinishedAt", game.staleFramesServed)
+	}
+	if obs := h.observations(); len(obs) != 24 {
+		t.Fatalf("admitted %d, want 24", len(obs))
 	}
 }
 
@@ -915,6 +1005,9 @@ func TestSinglePageScrollCarriesOverlap(t *testing.T) {
 	items[3] = false
 	game := newScriptedGame(items...)
 	h := newTraversalHarness(t, game)
+	// The pixel matcher's full-list search is deliberately expensive; the
+	// race detector multiplies it. Keep the settle wait above one pass.
+	h.inv.ScrollBudget = 800 * time.Millisecond
 	h.start()
 	h.endCompleted()
 
@@ -939,6 +1032,14 @@ func TestSinglePageScrollCarriesOverlap(t *testing.T) {
 	if !strings.Contains(obs[19].Evidence, "pre-click list frame") {
 		t.Fatalf("the first post-scroll admission lacks its pre-click evidence: %s", obs[19].Evidence)
 	}
+	if obs[19].ScrollEvidence == "" || !strings.Contains(obs[19].ScrollEvidence, "4 rows") {
+		t.Fatalf("the first post-scroll admission lacks its scroll evidence: %q", obs[19].ScrollEvidence)
+	}
+	for i, o := range obs[20:] {
+		if o.ScrollEvidence != "" {
+			t.Fatalf("observation %d repeats the viewport's scroll evidence: %q", i+21, o.ScrollEvidence)
+		}
+	}
 
 	ops := game.opsSnapshot()
 	if drags := countOps(ops, platform.InputDrag, game.layout.ScrollFrom, game.layout.ScrollTo); drags != 7 {
@@ -959,6 +1060,7 @@ func TestSinglePageThreeRowScroll(t *testing.T) {
 	game := newScriptedGame(items...)
 	game.scrollRows = 3
 	h := newTraversalHarness(t, game)
+	h.inv.ScrollBudget = 800 * time.Millisecond
 	h.start()
 	h.endCompleted()
 	obs := h.observations()
@@ -972,6 +1074,41 @@ func TestSinglePageThreeRowScroll(t *testing.T) {
 			t.Fatalf("duplicate position %v", key)
 		}
 		seen[key] = true
+	}
+}
+
+// T6b: an inertial second displacement replaces the scroll candidate; the
+// traversal commits the latest total (four rows) only after the frames
+// settle relative to that candidate.
+func TestSinglePageScrollCandidateFollowsInertia(t *testing.T) {
+	items := listOf(36) // nine rows: the four-row step reaches the end
+	game := newScriptedGame(items...)
+	game.scrollRows = 3
+	game.scrollExtraRows = 1
+	game.scrollExtraDelay = 2
+	h := newTraversalHarness(t, game)
+	// The staged displacement needs several matcher passes; the race
+	// detector multiplies each full-list correspondence search.
+	h.inv.ScrollBudget = 1200 * time.Millisecond
+	if testRace {
+		h.inv.ScrollBudget = 3 * time.Second
+	}
+	h.start()
+	h.endCompleted()
+	obs := h.observations()
+	if len(obs) != 36 {
+		t.Fatalf("admitted %d, want 36: %v", len(obs), positions(obs))
+	}
+	seen := make(map[[3]int]bool, len(obs))
+	for _, o := range obs {
+		key := [3]int{o.Viewport, o.Row, o.Column}
+		if seen[key] {
+			t.Fatalf("duplicate position %v", key)
+		}
+		seen[key] = true
+	}
+	if obs[20].ScrollEvidence == "" || !strings.Contains(obs[20].ScrollEvidence, "4 rows") {
+		t.Fatalf("the first post-scroll admission did not commit the settled total: %q", obs[20].ScrollEvidence)
 	}
 }
 
@@ -1094,7 +1231,8 @@ func TestSinglePageWrongSelectionStopsUnattributed(t *testing.T) {
 }
 
 // T14: a selection transition whose detail content stays the same is not
-// attributable — the same-detail neighbor needs the 4b-2 round trip.
+// attributable — the same-detail neighbor round trip is not implemented
+// yet (it needs real duplicate-disc samples).
 func TestSinglePageSameDetailStopsUnattributed(t *testing.T) {
 	game := newScriptedGame(true, true)
 	game.sameDetail = true
@@ -1147,9 +1285,9 @@ func TestSinglePageSubstatsUnknownStopsUnresolved(t *testing.T) {
 	}
 }
 
-// notSMatcher flips a settled S detail to the calibrated NotS verdict,
-// the skip path the 4b-2 rarity classifier will produce. The pixel
-// matcher itself only knows S and unknown.
+// notSMatcher flips a settled S detail to the NotS verdict. The pixel
+// matcher itself only knows S and unknown; A/B classification is not
+// implemented, so this pins the defensive skip path without claiming it.
 type notSMatcher struct {
 	collect.Matcher
 }
@@ -1261,6 +1399,7 @@ func TestSinglePageBottomConfirmationMustBeStationary(t *testing.T) {
 	game := newScriptedGame(items...)
 	game.forceBottom = true
 	h := newTraversalHarness(t, game)
+	h.inv.ScrollBudget = 800 * time.Millisecond
 	h.start()
 	snap := h.endFailed(collect.CodeNavigationMismatch)
 	if snap.Counts.Captured != 20 {
@@ -1281,6 +1420,7 @@ func TestSinglePageScrollLostStops(t *testing.T) {
 	game := newScriptedGame(items...)
 	game.scrollJump = 10
 	h := newTraversalHarness(t, game)
+	h.inv.ScrollBudget = 800 * time.Millisecond
 	h.start()
 	snap := h.endFailed(collect.CodePositionLost)
 	if snap.Counts.Captured != 20 {
@@ -1491,6 +1631,7 @@ func TestTraverseWalksSixPositions(t *testing.T) {
 	game.setList(5, listOf(2))
 	game.setList(6, listOf(1))
 	h := newTraversalHarness(t, game)
+	h.inv.ScrollBudget = 800 * time.Millisecond
 	h.start()
 	h.endCompleted()
 
@@ -1537,7 +1678,7 @@ func TestTraverseWalksSixPositions(t *testing.T) {
 	if clicks := countWheelClicks(ops, game.layout); clicks != 5 {
 		t.Fatalf("%d wheel clicks, want 5 switches after the initial position", clicks)
 	}
-	if clicks := countFilterClicks(ops, game.layout); clicks != 6*3 {
+	if clicks := countFilterClicks(ops, game.layout); clicks != 6*6 {
 		t.Fatalf("%d filter-control clicks, want reset flow for every position", clicks)
 	}
 	if drags := countOps(ops, platform.InputDrag, game.layout.TopFrom, game.layout.TopTo); drags != 6 {
@@ -1545,6 +1686,37 @@ func TestTraverseWalksSixPositions(t *testing.T) {
 	}
 	if drags := countOps(ops, platform.InputDrag, game.layout.ScrollFrom, game.layout.ScrollTo); drags != 6 {
 		t.Fatalf("%d advance drags, want one per position (position 2's partial scroll is its end evidence)", drags)
+	}
+}
+
+// T29b: a verified scroll at the end of position 1 whose new viewport holds
+// no admitted disc must not leak its scrollEvidence into position 2's first
+// capture.
+func TestTraverseScrollEvidenceDoesNotLeakAcrossPositions(t *testing.T) {
+	items := make([]bool, 36)
+	for i := 0; i < 20; i++ {
+		items[i] = true // rows 0..4; rows 5..8 are empty
+	}
+	game := newScriptedGame(items...)
+	game.setList(2, listOf(1))
+	h := newTraversalHarness(t, game)
+	h.inv.ScrollBudget = 800 * time.Millisecond
+	h.start()
+	h.endCompleted()
+
+	obs := h.observations()
+	if len(obs) != 21 {
+		t.Fatalf("admitted %d, want 20 at position 1 and 1 at position 2", len(obs))
+	}
+	first := obs[20]
+	if first.Position != 2 || first.ScrollEvidence != "" {
+		t.Fatalf("position 2's first capture = %+v, want no inherited scrollEvidence", first)
+	}
+	// Position 1 spent one advance drag and its bottom confirmation; every
+	// later position contributes its bottom confirmation only.
+	drags := countOps(game.opsSnapshot(), platform.InputDrag, game.layout.ScrollFrom, game.layout.ScrollTo)
+	if drags != 7 {
+		t.Fatalf("%d advance drags, want position 1's verified scroll plus six bottom confirmations", drags)
 	}
 }
 
@@ -1584,12 +1756,42 @@ func TestTraverseWheelSwitchRetriesExhausted(t *testing.T) {
 	}
 }
 
-// T32: a funnel that stays active after the reset stops the walk before
-// any list visit; the precheck accepts the active filter and reports it.
-func TestTraverseFilterResetLeavesFunnelActiveStops(t *testing.T) {
+// T32: an S rarity click whose effect never appears leaves the funnel
+// clear after the panel closes; the walk stops before any list visit. The
+// precheck accepted the active filter that was present at the start, and
+// the observed scope still reports that pre-preparation state.
+func TestTraverseSFilterNotActiveStops(t *testing.T) {
 	game := newScriptedGame(true)
 	game.filter = "active"
-	game.resetClearsFilter = false
+	game.sClickDoesNothing = true
+	h := newTraversalHarness(t, game)
+	h.start()
+	snap := h.endFailed(collect.CodeNavigationMismatch)
+	if snap.Counts.Captured != 0 {
+		t.Fatalf("a failed S selection admits nothing: %+v", snap.Counts)
+	}
+	ops := game.opsSnapshot()
+	if clicks := countSlotClicks(ops, game.layout); clicks != 0 {
+		t.Fatalf("%d slot clicks before the funnel check", clicks)
+	}
+	if clicks := countFilterClicks(ops, game.layout); clicks != 6 {
+		t.Fatalf("%d filter-control clicks, want open/reset/close then open/S/close", clicks)
+	}
+	if drags := countOps(ops, platform.InputDrag, game.layout.TopFrom, game.layout.TopTo); drags != 0 {
+		t.Fatalf("%d top drags, want none before the funnel check", drags)
+	}
+	if scope := string(h.inv.ObservedScope()); !strings.Contains(scope, `"filterAtStart":"active"`) {
+		t.Fatalf("observed scope %s lacks the active filter at start", scope)
+	}
+}
+
+// T32b: a reset that leaves the funnel active means old filters may still
+// hide S discs. The first close must prove Clear; the S selection later
+// cannot substitute for that evidence.
+func TestTraverseFilterResetNotClearStops(t *testing.T) {
+	game := newScriptedGame(true)
+	game.filter = "active"
+	game.resetLeavesActive = true
 	h := newTraversalHarness(t, game)
 	h.start()
 	snap := h.endFailed(collect.CodeNavigationMismatch)
@@ -1597,17 +1799,32 @@ func TestTraverseFilterResetLeavesFunnelActiveStops(t *testing.T) {
 		t.Fatalf("a failed reset admits nothing: %+v", snap.Counts)
 	}
 	ops := game.opsSnapshot()
-	if clicks := countSlotClicks(ops, game.layout); clicks != 0 {
-		t.Fatalf("%d slot clicks before the funnel check", clicks)
-	}
 	if clicks := countFilterClicks(ops, game.layout); clicks != 3 {
-		t.Fatalf("%d filter-control clicks, want open, reset and close", clicks)
+		t.Fatalf("%d filter-control clicks, want open, reset and close before the clear check", clicks)
+	}
+	if clicks := countSlotClicks(ops, game.layout); clicks != 0 {
+		t.Fatalf("%d slot clicks before the reset check", clicks)
 	}
 	if drags := countOps(ops, platform.InputDrag, game.layout.TopFrom, game.layout.TopTo); drags != 0 {
-		t.Fatalf("%d top drags, want none before the funnel check", drags)
+		t.Fatalf("%d top drags, want none before the reset check", drags)
 	}
-	if scope := string(h.inv.ObservedScope()); !strings.Contains(scope, `"filterAtStart":"active"`) {
-		t.Fatalf("observed scope %s lacks the active filter at start", scope)
+}
+
+// T32c: the normal preparation applies S after a verified clear reset and
+// keeps walking with the funnel active.
+func TestTraverseSFilterActiveContinues(t *testing.T) {
+	game := newScriptedGame(true)
+	h := newTraversalHarness(t, game)
+	h.start()
+	h.endCompleted()
+	if obs := h.observations(); len(obs) != 1 {
+		t.Fatalf("admitted %d, want 1", len(obs))
+	}
+	if got := game.filterState(); got != "active" {
+		t.Fatalf("funnel %q after preparation, want active", got)
+	}
+	if clicks := countFilterClicks(game.opsSnapshot(), game.layout); clicks != 6*6 {
+		t.Fatalf("%d filter-control clicks, want open/reset/close then open/S/close for every position", clicks)
 	}
 }
 
@@ -1638,6 +1855,7 @@ func TestTraverseTopLostThenContinues(t *testing.T) {
 	game.viewport = 5
 	game.topJumpRows = 5
 	h := newTraversalHarness(t, game)
+	h.inv.ScrollBudget = 800 * time.Millisecond
 	lost := new(loseNextScrollMatcher)
 	lost.Matcher = h.inv.Matcher
 	lost.armed = true
@@ -1658,6 +1876,7 @@ func TestTraversePrecheckAcceptsMidListStart(t *testing.T) {
 	game := newScriptedGame(listOf(24)...) // six rows
 	game.viewport = 5
 	h := newTraversalHarness(t, game)
+	h.inv.ScrollBudget = 800 * time.Millisecond
 	h.start()
 	h.endCompleted()
 	obs := h.observations()
@@ -1682,7 +1901,7 @@ func TestTraversePreparationAnimationLag(t *testing.T) {
 	if got := len(h.observations()); got != 0 {
 		t.Fatalf("an all-empty inventory admitted %d", got)
 	}
-	if clicks := countFilterClicks(game.opsSnapshot(), game.layout); clicks != 6*3 {
+	if clicks := countFilterClicks(game.opsSnapshot(), game.layout); clicks != 6*6 {
 		t.Fatalf("%d filter-control clicks, want every position prepared", clicks)
 	}
 }
@@ -1692,7 +1911,7 @@ func TestTraversePreparationAnimationLag(t *testing.T) {
 func TestTraverseRetainsAdmittedOnLaterPositionFailure(t *testing.T) {
 	game := newScriptedGame(listOf(2)...)
 	game.setList(2, listOf(1))
-	game.resetLeavesActiveAt = 2
+	game.sClickDoesNothingAt = 2
 	h := newTraversalHarness(t, game)
 	h.start()
 	snap := h.endFailed(collect.CodeNavigationMismatch)
@@ -1766,7 +1985,7 @@ func TestTraverseProjectErrorStops(t *testing.T) {
 		return nil, fmt.Errorf("projection refused")
 	}
 	h.start()
-	snap := h.endFailed(scan.CodeControllerFailed)
+	snap := h.endFailed(collect.CodeEvidenceFailed)
 	if snap.Counts.Captured != 0 {
 		t.Fatalf("a failed projection admits nothing: %+v", snap.Counts)
 	}

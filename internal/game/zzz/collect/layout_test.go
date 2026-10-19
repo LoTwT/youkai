@@ -30,6 +30,9 @@ func TestMacCloudLayoutValidatesAndFitsContent(t *testing.T) {
 	if l.Rows != 5 || l.Columns != 4 || len(l.Slots) != 20 {
 		t.Fatalf("grid %d×%d with %d slots, want 5×4 with 20", l.Rows, l.Columns, len(l.Slots))
 	}
+	if l.PanelS != image.Pt(1225, 615) {
+		t.Fatalf("panel S control %v, want the sample frame's (1225,615)", l.PanelS)
+	}
 	if m := collect.NewPixelMatcher(l, collect.MacCloudCalibration()); m == nil {
 		t.Fatal("the matcher must construct")
 	}
@@ -81,6 +84,8 @@ func TestLayoutValidateRefusesBroken(t *testing.T) {
 		{"empty detail line", func(l *collect.Layout) { l.DetailLines[0].Rect = image.Rectangle{} }},
 		{"empty quality badge", func(l *collect.Layout) { l.QualityBadge = image.Rectangle{} }},
 		{"empty substat-4 probe", func(l *collect.Layout) { l.Substat4Probe = image.Rectangle{} }},
+		{"missing S control", func(l *collect.Layout) { l.PanelS = image.Point{} }},
+		{"S control outside content", func(l *collect.Layout) { l.PanelS = image.Pt(1700, 615) }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -116,6 +121,12 @@ func TestLayoutFitsContent(t *testing.T) {
 	below.DetailLines[0].Rect = image.Rect(526, 1000, 706, 1100)
 	if below.FitsContent(content) {
 		t.Fatalf("a detail line below the content region must not fit")
+	}
+
+	outsideS := l
+	outsideS.PanelS = image.Pt(1700, 615)
+	if outsideS.FitsContent(content) {
+		t.Fatal("an S control outside the content region must not fit")
 	}
 }
 

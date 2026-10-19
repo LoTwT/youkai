@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"image"
+	"log"
 	"time"
 
 	"github.com/LoTwT/youkai/internal/platform"
@@ -171,6 +172,15 @@ type Observation struct {
 	Position int `json:"position"`
 	// Quality is the calibrated rarity evidence the admission rested on.
 	Quality Quality `json:"quality"`
+	// RarityFilter is the rarity filter the position's preparation verified
+	// before this capture: "S" when the S-only filter was active on the
+	// funnel. It records the observed preparation state, not the declared
+	// range (that stays in the session scope's filterAtStart).
+	RarityFilter string `json:"rarityFilter,omitempty"`
+	// ScrollEvidence records the latest verified viewport transition that
+	// preceded this admission in the same position, if any, and is empty
+	// once a capture has carried it.
+	ScrollEvidence string `json:"scrollEvidence,omitempty"`
 	// Lines are the detail pane's line regions actually present on this
 	// disc, in reading order: name, level, main, sub1..sub3 and, only for
 	// a four-substat disc, sub4.
@@ -203,8 +213,8 @@ type Observation struct {
 
 // scopePayload is the observed-range report Precheck assembles: only the
 // facts its evidence actually established. Quantity and the sort order
-// stay unverified (sort is recorded as "unverified"); the 4b-2 preparation
-// round owns reading them.
+// stay unverified (sort is recorded as "unverified"); the traversal neither
+// reads nor infers them.
 type scopePayload struct {
 	Kind          string `json:"kind"`
 	Page          string `json:"page"`
@@ -327,8 +337,11 @@ type inventoryRun struct {
 	// geo is the geometry version the anchors are bound to; every input
 	// names it and every evidence frame must carry it.
 	geo platform.GeometryVersion
-	// lastArrived is the arrival time of the newest frame observed — the
-	// After of “current content” requests.
+	// lastArrived is the arrival time of the newest frame observed and the
+	// lower bound for the next Frame request. Before a dispatch it is the
+	// current content's arrival; after a posted (or unaborted partial)
+	// action it is advanced to the action's FinishedAt, so no frame
+	// predating the action can be consumed as its effect.
 	lastArrived time.Time
 	// position is the wheel position (1..6) currently being traversed.
 	position int
@@ -359,6 +372,10 @@ type inventoryRun struct {
 	listMatch PageMatch
 	// lastFrame is the newest stable warehouse frame observed.
 	lastFrame platform.Frame
+	// lastScrollEvidence describes the latest verified scroll of this
+	// position; the next admitted observation carries it, then it is
+	// cleared so one viewport transition is not repeated on every item.
+	lastScrollEvidence string
 }
 
 // maxTopFlings bounds one position's automatic return-to-top.
@@ -392,6 +409,7 @@ func (run *inventoryRun) preparePosition(ctx context.Context, pos int) error {
 	run.visited = make([]bool, len(run.inv.Layout.Slots))
 	run.allowInitial = true
 	run.lastScrollRows = 0
+	run.lastScrollEvidence = ""
 
 	if err := run.establishList(ctx); err != nil {
 		return err
@@ -402,7 +420,11 @@ func (run *inventoryRun) preparePosition(ctx context.Context, pos int) error {
 	if err := run.resetFilters(ctx); err != nil {
 		return err
 	}
-	return run.scrollToTop(ctx)
+	if err := run.scrollToTop(ctx); err != nil {
+		return err
+	}
+	log.Printf("youkai: collect: position %d prepared: S filter active, top confirmed", pos)
+	return nil
 }
 
 // collectPosition walks the current wheel position's list: visit every
@@ -502,11 +524,15 @@ func (run *inventoryRun) switchWheel(ctx context.Context, pos int) error {
 	}
 }
 
-// resetFilters opens the filter panel, resets it, closes it and requires
-// the funnel to be clear. The reset is executed for every wheel position
-// because the panel's state persists across positions and sessions; a
-// funnel that stays active stops the walk, since proceeding could traverse
-// a hidden subset (T5 §3 范围).
+// resetFilters verifies the reset and the S selection as two separate
+// effects. It opens the panel, resets it, closes the panel and requires the
+// funnel to be clear — the only independent check that the reset really
+// removed other filters. Only then does it reopen the panel, select S,
+// close and require the funnel to be active. The selected state of the S
+// control has no calibrated pixel probe, so one Active reading cannot prove
+// both that the reset removed old filters and that S was applied; the
+// intermediate Clear check is therefore mandatory. A failed step stops the
+// walk and keeps admitted results.
 func (run *inventoryRun) resetFilters(ctx context.Context) error {
 	if err := run.openFilterPanel(ctx); err != nil {
 		return err
@@ -517,10 +543,8 @@ func (run *inventoryRun) resetFilters(ctx context.Context) error {
 	if err := run.closeFilterPanel(ctx); err != nil {
 		return err
 	}
-	if run.listMatch.Wheel == nil || run.listMatch.Wheel.Position != run.position {
-		return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
-			"collect: wheel position %d: the wheel moved during the filter reset: %s",
-			run.position, run.listMatch.Evidence))
+	if err := run.requireWheelPosition("filter reset"); err != nil {
+		return err
 	}
 	if run.listMatch.Filter == nil || run.listMatch.Filter.State != FilterClear {
 		state := FilterUnknown
@@ -528,10 +552,48 @@ func (run *inventoryRun) resetFilters(ctx context.Context) error {
 			state = run.listMatch.Filter.State
 		}
 		return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
-			"collect: wheel position %d: the funnel is %q after the filter reset; refusing to continue while a filter may hide discs",
+			"collect: wheel position %d: the filter reset did not take effect; the funnel is %q, not clear — refusing to continue",
+			run.position, state))
+	}
+
+	if err := run.openFilterPanel(ctx); err != nil {
+		return err
+	}
+	if err := run.selectRarityS(ctx); err != nil {
+		return err
+	}
+	if err := run.closeFilterPanel(ctx); err != nil {
+		return err
+	}
+	if err := run.requireWheelPosition("S filter selection"); err != nil {
+		return err
+	}
+	if run.listMatch.Filter == nil || run.listMatch.Filter.State != FilterActive {
+		state := FilterUnknown
+		if run.listMatch.Filter != nil {
+			state = run.listMatch.Filter.State
+		}
+		if state == FilterClear {
+			return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
+				"collect: wheel position %d: the S rarity filter did not take effect; the funnel is still clear — refusing to continue so A/B discs cannot be scanned",
+				run.position))
+		}
+		return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
+			"collect: wheel position %d: the funnel is %q after selecting the S rarity filter; refusing to continue while the filter state is unverified",
 			run.position, state))
 	}
 	return nil
+}
+
+// requireWheelPosition keeps every close of the filter panel tied to the
+// wheel position the position's preparation started on.
+func (run *inventoryRun) requireWheelPosition(step string) error {
+	if run.listMatch.Wheel != nil && run.listMatch.Wheel.Position == run.position {
+		return nil
+	}
+	return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
+		"collect: wheel position %d: the wheel moved during the %s: %s",
+		run.position, step, run.listMatch.Evidence))
 }
 
 // openFilterPanel clicks the funnel and waits for the panel page to settle.
@@ -581,6 +643,56 @@ func (run *inventoryRun) resetFilterPanel(ctx context.Context) error {
 			}
 			return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
 				"collect: wheel position %d: the filter panel did not stay open while resetting (last verdict %s): %s",
+				run.position, out.match.Page, out.match.Evidence))
+		}
+	}
+}
+
+// selectRarityS clicks the panel's S rarity control and waits for the
+// still-open panel to settle. The selected state itself has no calibrated
+// pixel probe yet; the effect is verified after closing through the funnel
+// (active) and the first admitted disc's S badge. A panel that unexpectedly
+// closes is a failure, not something to click around.
+func (run *inventoryRun) selectRarityS(ctx context.Context) error {
+	for attempt := 0; ; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if !run.h.InputPermitted() {
+			return ctx.Err()
+		}
+		if err := run.observeReady(ctx); err != nil {
+			return err
+		}
+		res := run.view.Dispatch(platform.InputOp{
+			Kind:     platform.InputClick,
+			Geometry: run.geo,
+			FrameID:  run.lastFrame.ID,
+			At:       run.inv.Layout.PanelS,
+		})
+		if err := run.dispatchOutcome(ctx, res); err != nil {
+			return err
+		}
+		out := run.awaitSettled(ctx, run.panelVerdict)
+		switch out.class {
+		case awaitStable:
+			run.listMatch = out.match
+			run.lastFrame = out.frame
+			return nil
+		case awaitCanceled, awaitFrameErr:
+			return out.err
+		case awaitGeometry:
+			return run.geometryChanged(out.frame)
+		default:
+			if run.panelVerdict(out.match) {
+				if attempt < run.inv.maxRetries() {
+					continue
+				}
+				return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
+					"collect: wheel position %d: the filter panel never settled after selecting S (attempt %d)", run.position, attempt+1))
+			}
+			return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
+				"collect: wheel position %d: the filter panel did not stay open while selecting S (last verdict %s): %s",
 				run.position, out.match.Page, out.match.Evidence))
 		}
 	}
@@ -1167,6 +1279,8 @@ func (run *inventoryRun) admit(slot *scan.Slot, out detailOutcome, pre platform.
 		Column:          col,
 		Position:        run.position,
 		Quality:         out.match.Detail.Quality,
+		RarityFilter:    "S",
+		ScrollEvidence:  run.lastScrollEvidence,
 		Lines:           run.inv.Layout.detailLines(out.match.Detail.Substats),
 		Context:         run.inv.Layout.contextLines(i),
 		VisitIndex:      run.visitIndex,
@@ -1179,16 +1293,19 @@ func (run *inventoryRun) admit(slot *scan.Slot, out detailOutcome, pre platform.
 		projected, err := run.inv.Project(obs)
 		if err != nil {
 			slot.Discard()
-			return err
+			return scan.NewFault(CodeEvidenceFailed, fmt.Errorf(
+				"collect: project %s: %w", target, err))
 		}
 		payload = projected
 	}
 	if _, err := slot.Admit(payload); err != nil {
 		slot.Discard()
-		return fmt.Errorf("collect: admit %s: %w", target, err)
+		return scan.NewFault(CodeEvidenceFailed, fmt.Errorf(
+			"collect: admit %s: %w", target, err))
 	}
 	run.listMatch = out.match
 	run.lastFrame = out.frame
+	run.lastScrollEvidence = ""
 	return nil
 }
 
@@ -1348,6 +1465,11 @@ func (run *inventoryRun) scroll(ctx context.Context) error {
 		}
 		switch {
 		case out.lost:
+			if out.unsettled {
+				return scan.NewFault(CodePositionLost, fmt.Errorf(
+					"collect: the list displaced but did not settle within the scroll budget, so its final position is unverified (last candidate frame %d): %s",
+					out.after.ID, out.match.Evidence))
+			}
 			return scan.NewFault(CodePositionLost, fmt.Errorf(
 				"collect: the list displaced but no unique correspondence verified where it went (frame %d): %s",
 				out.after.ID, out.match.Evidence))
@@ -1362,6 +1484,11 @@ func (run *inventoryRun) scroll(ctx context.Context) error {
 			run.listMatch = out.afterMatch
 			run.lastFrame = out.after
 			run.lastScrollRows = out.match.Rows
+			run.lastScrollEvidence = fmt.Sprintf(
+				"frame %d -> %d: %d rows, %d correspondences; matcher: %s",
+				before.ID, out.after.ID, out.match.Rows, len(out.match.Matches), out.match.Evidence)
+			log.Printf("youkai: collect: position %d scroll %d -> %d: %d rows, %d correspondences",
+				run.position, before.ID, out.after.ID, out.match.Rows, len(out.match.Matches))
 			return nil
 		case out.stationary:
 			if attempt < run.inv.maxRetries() {
@@ -1402,27 +1529,59 @@ func (run *inventoryRun) currentList(ctx context.Context) (platform.Frame, error
 	return f, nil
 }
 
+// sameFrameContent is a fast path for callers that may reuse one immutable
+// frame image (the scripted tests and the replay do). Production adapters
+// create a new image for every Frame, so the identical-pointer check only
+// short-circuits the equal-object case; MatchScroll remains the primary
+// evidence for every other pair.
+func sameFrameContent(a, b platform.Frame) bool {
+	return a.Image != nil && a.Image == b.Image && a.Content == b.Content
+}
+
 // scrollOutcome is one awaitScroll's terminal result.
 type scrollOutcome struct {
 	stationary bool
 	displaced  bool
 	lost       bool
+	// unsettled reports a displacement that never settled relative to its
+	// candidate within the budget. It is a Lost outcome, but the position
+	// was verified to have moved; only where it finally stopped is unknown.
+	unsettled  bool
 	after      platform.Frame
 	afterMatch PageMatch
 	match      ScrollMatch
 }
 
-// awaitScroll waits for the scroll's effect on a fresh warehouse frame.
-// Only fresh frames count as verdicts: a Reused confirmation carries the
-// content the next request already saw, so it cannot prove the drag moved
-// the list. Stationary is a deadline verdict, not an early one — the
-// drag's effect may still be in flight right after the dispatch.
+// awaitScroll waits for the scroll's effect and its settling on fresh
+// warehouse frames. A displacement is only a candidate: the matcher may
+// still be watching an inertial or snapping animation, so a second
+// observation relative to the candidate must be Stationary before the
+// traversal commits anything. A later total displacement relative to the
+// pre-drag frame replaces the candidate; a total Lost keeps the wait alive
+// to the budget (the list may still settle) but ends as Lost when no
+// settling confirmation arrives. Reused confirmations carry unchanged
+// content, so they can prove the candidate stayed still but never create a
+// displacement of their own. Without a candidate, Stationary remains a
+// deadline verdict, not an early one (the drag's effect may still be in
+// flight).
 func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame) (scrollOutcome, error) {
 	deadline := time.Now().Add(run.inv.scrollBudget())
 	after := run.lastArrived
 	out := scrollOutcome{}
-	sawDisplaced := false
-	sawStationary := false
+	var (
+		candidate       platform.Frame
+		candidateMatch  PageMatch
+		candidateScroll ScrollMatch
+		haveCandidate   bool
+		sawStationary   bool
+		sawLost         bool
+		sawAmbiguous    bool
+	)
+	settle := func() (scrollOutcome, error) {
+		out.displaced = true
+		out.after, out.afterMatch, out.match = candidate, candidateMatch, candidateScroll
+		return out, nil
+	}
 	for {
 		fctx, cancel := context.WithDeadline(ctx, deadline)
 		f, err := run.view.Frame(fctx, platform.FrameRequest{After: after})
@@ -1433,15 +1592,17 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 				return scrollOutcome{}, ctx.Err()
 			case errors.Is(err, context.DeadlineExceeded):
 				switch {
-				case sawDisplaced:
+				case haveCandidate:
+					// A displacement was seen but never settled: commit
+					// nothing and stop at the unverified position (T5 §5).
+					out.lost, out.unsettled = true, true
+					out.after, out.afterMatch, out.match = candidate, candidateMatch, candidateScroll
+				case sawLost || sawAmbiguous:
 					out.lost = true
-					return out, nil
 				case sawStationary:
 					out.stationary = true
-					return out, nil
-				default:
-					return out, nil
 				}
+				return out, nil
 			default:
 				return scrollOutcome{}, wrapObservationErr(err)
 			}
@@ -1451,23 +1612,32 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 		}
 		m := run.inv.matcher().Match(f)
 		if f.Reused {
-			// An idle confirmation carries the last fresh content. It can
-			// prove "still stationary" (the content is unchanged), but it
-			// cannot prove a displacement that has not appeared fresh; the
-			// deadline decides.
+			// Unchanged content can prove the candidate stayed still; it
+			// cannot prove a displacement not yet seen fresh.
 			if run.listVerdict(m) {
 				out.after, out.afterMatch = f, m
-				sm := run.inv.matcher().MatchScroll(before, f)
-				out.match = sm
-				switch {
-				case sm.Displaced && len(sm.Matches) > 0:
-					out.displaced = true
-					return out, nil
-				case sm.Lost:
-					out.lost = true
-					return out, nil
-				case sm.Stationary:
-					sawStationary = true
+				if haveCandidate {
+					if sameFrameContent(candidate, f) {
+						return settle()
+					}
+					rel := run.inv.matcher().MatchScroll(candidate, f)
+					out.match = rel
+					if rel.Stationary {
+						return settle()
+					}
+				} else {
+					if sameFrameContent(before, f) {
+						sawStationary = true
+					} else {
+						sm := run.inv.matcher().MatchScroll(before, f)
+						out.match = sm
+						if sm.Stationary {
+							sawStationary = true
+						}
+						if sm.Lost {
+							sawLost = true
+						}
+					}
 				}
 			}
 			if err := sleepCtx(ctx, run.inv.recheckEvery()); err != nil {
@@ -1483,19 +1653,65 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 			// deadline.
 			continue
 		}
+		if haveCandidate {
+			if sameFrameContent(candidate, f) {
+				return settle()
+			}
+			rel := run.inv.matcher().MatchScroll(candidate, f)
+			out.match = rel
+			if rel.Stationary {
+				return settle()
+			}
+			total := run.inv.matcher().MatchScroll(before, f)
+			switch {
+			case total.Displaced && len(total.Matches) > 0:
+				// The list moved further: the latest total displacement is
+				// the candidate, still uncommitted until it settles.
+				candidate, candidateMatch, candidateScroll = f, m, total
+				out.match = total
+				sawLost, sawAmbiguous = false, false
+			case total.Lost:
+				// Possibly still mid-animation; wait to the budget for a
+				// settling confirmation.
+				sawLost, sawAmbiguous = true, false
+				out.match = total
+			case total.Stationary:
+				// The list returned to the pre-drag position: there is no
+				// displacement to commit.
+				haveCandidate = false
+				sawStationary, sawLost, sawAmbiguous = true, false, false
+			case total.Displaced:
+				// Moved, but without a unique correspondence: cannot keep
+				// updating the candidate; a later verified total may still
+				// produce one.
+				haveCandidate = false
+				sawAmbiguous, sawLost, sawStationary = true, false, false
+				out.match = total
+			}
+			continue
+		}
+		if sameFrameContent(before, f) {
+			// The same immutable frame content as the pre-drag frame is
+			// proof the list did not move; Stationary is still a deadline
+			// verdict, so keep observing.
+			out.match = ScrollMatch{Stationary: true, Evidence: fmt.Sprintf(
+				"frames %d → %d: the same immutable frame content — the list did not move", before.ID, f.ID)}
+			sawStationary, sawLost, sawAmbiguous = true, false, false
+			continue
+		}
 		sm := run.inv.matcher().MatchScroll(before, f)
 		out.match = sm
 		switch {
 		case sm.Displaced && len(sm.Matches) > 0:
-			out.displaced = true
-			return out, nil
+			haveCandidate = true
+			candidate, candidateMatch, candidateScroll = f, m, sm
+			sawStationary, sawLost, sawAmbiguous = false, false, false
 		case sm.Lost:
-			out.lost = true
-			return out, nil
+			sawLost, sawStationary, sawAmbiguous = true, false, false
 		case sm.Stationary:
-			sawStationary = true
+			sawStationary, sawLost, sawAmbiguous = true, false, false
 		case sm.Displaced:
-			sawDisplaced = true
+			sawAmbiguous, sawLost, sawStationary = true, false, false
 		}
 	}
 }
@@ -1707,6 +1923,7 @@ func (run *inventoryRun) observeReady(ctx context.Context) error {
 func (run *inventoryRun) dispatchOutcome(ctx context.Context, res platform.InputResult) error {
 	switch res.Status {
 	case platform.InputPosted:
+		run.advanceFrameCursor(res.FinishedAt)
 		return nil
 	case platform.InputPartial:
 		if res.Aborted {
@@ -1716,7 +1933,9 @@ func (run *inventoryRun) dispatchOutcome(ctx context.Context, res platform.Input
 			return scan.NewFault(platform.CodePermitClosed, errors.New(
 				"collect: the drag aborted because the input gate closed"))
 		}
-		// Some events ran; the effect evidence decides.
+		// Some events ran; the effect evidence decides, but no frame may
+		// predate the events that did run.
+		run.advanceFrameCursor(res.FinishedAt)
 		return nil
 	case platform.InputNotDispatched, platform.InputFailed:
 		if res.Denial != nil {
@@ -1727,6 +1946,16 @@ func (run *inventoryRun) dispatchOutcome(ctx context.Context, res platform.Input
 	default:
 		return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
 			"collect: dispatch reported unknown status %q", res.Status))
+	}
+}
+
+// advanceFrameCursor moves the next Frame request's lower bound past a
+// dispatched action (the platform contract's FinishedAt): the action's
+// effect cannot be observed in a frame that predates its last event. The
+// cursor never moves backwards.
+func (run *inventoryRun) advanceFrameCursor(finished time.Time) {
+	if finished.After(run.lastArrived) {
+		run.lastArrived = finished
 	}
 }
 

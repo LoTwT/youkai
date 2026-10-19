@@ -88,11 +88,15 @@ const (
 	// click it has to prove a content change.
 	CodeDetailUnattributed = "detailUnattributed"
 	// CodeDetailUnresolved: the detail was attributed but the pane did not
-	// yield a decidable rarity or substat row count — for example an A/B
-	// badge or a fourth row that is neither empty nor a calibrated value.
-	// The position stays unresolved; the collection stops and keeps the
-	// admitted results.
+	// yield a decidable rarity or substat row count. The position stays
+	// unresolved; the collection stops and keeps the admitted results.
 	CodeDetailUnresolved = "detailUnresolved"
+	// CodeEvidenceFailed: the accepted capture could not be turned into
+	// evidence or admitted by the kernel — the projection failed or the
+	// session stopped admitting between acquisition and admission. The
+	// original error is preserved. Stopping semantics: keep the admitted
+	// results and invent nothing.
+	CodeEvidenceFailed = "evidenceFailed"
 	// CodePositionLost: a scroll's position correspondence could not be
 	// established (T5 §5) — the list moved but no unique overlap
 	// correspondence verifies where it moved to. The machine stops rather

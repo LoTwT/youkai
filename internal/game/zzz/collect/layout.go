@@ -151,10 +151,12 @@ type Layout struct {
 	// the warehouse. Both must report "open" for PageFilterPanel and both
 	// "closed" before the warehouse checks run.
 	PanelOpen []ColorProbe
-	// PanelReset and PanelClose are the panel's click points. They are
-	// declared here for the preparation step (4b-2); the pixel matcher
-	// never reads them.
-	PanelReset, PanelClose image.Point
+	// PanelReset, PanelClose and PanelS are the panel's click points. The
+	// pixel matcher never reads them. PanelS selects the S rarity filter;
+	// its selected state has no calibrated pixel probe yet, so the effect is
+	// verified after closing through the active funnel and the first
+	// admitted S badge (T5 §3).
+	PanelReset, PanelClose, PanelS image.Point
 
 	// Wheel are the six wheel position centers, numbered from the
 	// top-left counter-clockwise 1..6.
@@ -240,6 +242,10 @@ func (l Layout) Validate() error {
 		if err := p.validate(fmt.Sprintf("panel probe %d", i)); err != nil {
 			return err
 		}
+	}
+	if l.PanelS == (image.Point{}) || !ptIn(l.Content, l.PanelS) {
+		return fmt.Errorf("collect: layout: the S rarity control point %v is empty or outside the content region %v",
+			l.PanelS, l.Content)
 	}
 	if l.Wheel == [6]image.Point{} {
 		return fmt.Errorf("collect: layout: the wheel positions are not calibrated")
@@ -336,7 +342,8 @@ func (l Layout) FitsContent(content image.Rectangle) bool {
 	}
 	return ptIn(content, l.ScrollFrom) && ptIn(content, l.ScrollTo) &&
 		ptIn(content, l.TopFrom) && ptIn(content, l.TopTo) &&
-		ptIn(content, l.FilterButton) && ptIn(content, l.PanelReset) && ptIn(content, l.PanelClose)
+		ptIn(content, l.FilterButton) && ptIn(content, l.PanelReset) &&
+		ptIn(content, l.PanelClose) && ptIn(content, l.PanelS)
 }
 
 // ReadRegions returns every region the pixel matcher reads, in frame

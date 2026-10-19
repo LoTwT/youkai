@@ -133,6 +133,10 @@ func MacCloudLayout() Layout {
 		},
 		PanelReset: image.Pt(1230, 985),
 		PanelClose: image.Pt(1550, 143),
+		// The S rarity chip: the white S tile at about (1225,615) in
+		// /tmp/m2-samples/s2-02-panel-slot1-after-reset/frame-0001.png
+		// (T5 §3). Only S is wired; A/B classification is not implemented.
+		PanelS: image.Pt(1225, 615),
 
 		Wheel:     maccloudWheelCenters,
 		WheelArcs: append([]image.Rectangle(nil), maccloudWheelArcs...),
