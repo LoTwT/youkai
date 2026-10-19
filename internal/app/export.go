@@ -445,15 +445,14 @@ func (e *UsableExport) CSV() ([]byte, error) {
 		row := []string{
 			strconv.FormatInt(item.Sequence, 10),
 			e.session.ID,
+			strconv.FormatInt(item.Revision, 10),
+			string(item.Quality),
+			string(item.Validation.Status),
 			intString(item.Data.SetID),
 			setName,
+			stringString(item.Data.Rarity),
 			intString(item.Data.Slot),
 			intString(item.Data.Level),
-			stringString(item.Data.Rarity),
-			stringString(item.Data.ManagementState),
-			equippedState(item.Data.Equipped),
-			agentID(item.Data.Equipped),
-			agentName,
 			statPart(item.Data.MainStat, func(s *zzz.StatData) *string { return s.Attribute }),
 			statPart(item.Data.MainStat, func(s *zzz.StatData) *string { return s.Value }),
 			statPart(item.Data.MainStat, func(s *zzz.StatData) *string { return s.Unit }),
@@ -471,9 +470,10 @@ func (e *UsableExport) CSV() ([]byte, error) {
 			)
 		}
 		row = append(row,
-			string(item.Quality),
-			string(item.Validation.Status),
-			strconv.FormatInt(item.Revision, 10),
+			stringString(item.Data.ManagementState),
+			equippedState(item.Data.Equipped),
+			agentID(item.Data.Equipped),
+			agentName,
 		)
 		if err := w.Write(row); err != nil {
 			return nil, fmt.Errorf("app: export: write CSV row %d: %w", item.Sequence, err)
@@ -493,17 +493,15 @@ func (e *UsableExport) CSV() ([]byte, error) {
 // column.
 func csvHeader() []string {
 	header := []string{
-		"sequence", "sessionId",
-		"setId", "setName",
-		"slot", "level", "rarity",
-		"managementState", "equippedState", "agentId", "agentName",
-		"mainAttribute", "mainValue", "mainUnit",
+		"sequence", "sessionId", "revision", "quality", "validationStatus",
+		"setId", "setName", "rarity", "slot", "level",
+		"mainStatAttribute", "mainStatValue", "mainStatUnit",
 	}
 	for i := 1; i <= 4; i++ {
 		prefix := "sub" + strconv.Itoa(i)
 		header = append(header, prefix+"Attribute", prefix+"Value", prefix+"Unit", prefix+"Rolls")
 	}
-	return append(header, "quality", "validationStatus", "revision")
+	return append(header, "managementState", "equippedState", "equippedAgentId", "agentName")
 }
 
 // DefaultExportName suggests a file name carrying the scan date and a

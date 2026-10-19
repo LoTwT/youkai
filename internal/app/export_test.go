@@ -327,14 +327,14 @@ func TestCSVExportIsSameSourceAndReadable(t *testing.T) {
 		t.Fatalf("CSV rows = %d, want header + 2", len(rows))
 	}
 	wantHeader := []string{
-		"sequence", "sessionId", "setId", "setName", "slot", "level", "rarity",
-		"managementState", "equippedState", "agentId", "agentName",
-		"mainAttribute", "mainValue", "mainUnit",
+		"sequence", "sessionId", "revision", "quality", "validationStatus",
+		"setId", "setName", "rarity", "slot", "level",
+		"mainStatAttribute", "mainStatValue", "mainStatUnit",
 		"sub1Attribute", "sub1Value", "sub1Unit", "sub1Rolls",
 		"sub2Attribute", "sub2Value", "sub2Unit", "sub2Rolls",
 		"sub3Attribute", "sub3Value", "sub3Unit", "sub3Rolls",
 		"sub4Attribute", "sub4Value", "sub4Unit", "sub4Rolls",
-		"quality", "validationStatus", "revision",
+		"managementState", "equippedState", "equippedAgentId", "agentName",
 	}
 	if !reflect.DeepEqual(rows[0], wantHeader) {
 		t.Fatalf("header = %v", rows[0])
@@ -344,34 +344,34 @@ func TestCSVExportIsSameSourceAndReadable(t *testing.T) {
 	}
 	first := rows[1]
 	if first[0] != "1" || first[1] != "d95a372b-3726-46c9-a73f-1210c369145a" ||
-		first[2] != "31100" || first[3] != "河豚电音" || first[4] != "4" || first[5] != "15" || first[6] != "S" {
-		t.Fatalf("first row identity = %v", first[:7])
+		first[2] != "0" || first[3] != "autoAccepted" || first[4] != "passed" {
+		t.Fatalf("first row identity = %v", first[:5])
 	}
-	if first[7] != "none" || first[8] != "unequipped" || first[9] != "" || first[10] != "" {
-		t.Fatalf("first row state = %v", first[7:11])
+	if first[5] != "31100" || first[6] != "河豚电音" || first[7] != "S" || first[8] != "4" || first[9] != "15" {
+		t.Fatalf("first row set/slot = %v", first[5:10])
 	}
-	if first[11] != "critRate" || first[12] != "24" || first[13] != "percent" {
-		t.Fatalf("first main stat = %v", first[11:14])
+	if first[10] != "critRate" || first[11] != "24" || first[12] != "percent" {
+		t.Fatalf("first main stat = %v", first[10:13])
 	}
-	if first[14] != "critDamage" || first[15] != "19.2" || first[16] != "percent" || first[17] != "3" {
-		t.Fatalf("first sub1 = %v", first[14:18])
+	if first[13] != "critDamage" || first[14] != "19.2" || first[15] != "percent" || first[16] != "3" {
+		t.Fatalf("first sub1 = %v", first[13:17])
 	}
-	if first[18] != "attack" || first[19] != "38" || first[20] != "flat" || first[21] != "1" {
-		t.Fatalf("first sub2 = %v", first[18:22])
+	if first[17] != "attack" || first[18] != "38" || first[19] != "flat" || first[20] != "1" {
+		t.Fatalf("first sub2 = %v", first[17:21])
 	}
 	if strings.Contains(strings.Join(first, ","), "19.2%") {
 		t.Fatal("CSV turned a percent value into a display string")
 	}
-	if first[len(first)-3] != "autoAccepted" || first[len(first)-2] != "passed" || first[len(first)-1] != "0" {
-		t.Fatalf("first row tail = %v", first[len(first)-3:])
+	if first[29] != "none" || first[30] != "unequipped" || first[31] != "" || first[32] != "" {
+		t.Fatalf("first row state = %v", first[29:33])
 	}
 	second := rows[2]
-	if second[2] != "31000" || second[3] != "啄木鸟电音" || second[8] != "equipped" ||
-		second[9] != "1311" || second[10] != "耀嘉音" {
-		t.Fatalf("second row = %v", second[:11])
+	if second[5] != "31000" || second[6] != "啄木鸟电音" || second[30] != "equipped" ||
+		second[31] != "1311" || second[32] != "耀嘉音" {
+		t.Fatalf("second row = %v", second[5:])
 	}
-	if second[len(second)-3] != "humanConfirmed" || second[len(second)-2] != "passed" {
-		t.Fatalf("second row tail = %v", second[len(second)-3:])
+	if second[3] != "humanConfirmed" || second[4] != "passed" {
+		t.Fatalf("second row quality = %v", second[2:5])
 	}
 }
 
