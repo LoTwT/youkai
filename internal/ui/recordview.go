@@ -30,6 +30,10 @@ type RecordView struct {
 	// Shell is the session's bookkeeping (client, times, termination,
 	// coverage).
 	Shell record.SessionShell
+	// EvidenceRemoved reports that the checkpoint cites no evidence at
+	// all while it holds items: the screenshots were deleted (or are
+	// missing). The field-quality and review state stay authoritative.
+	EvidenceRemoved bool
 	// Rows are the captured items in capture order; no item disappears
 	// for its status.
 	Rows []Row
@@ -114,11 +118,31 @@ func BuildRecordView(id string, rec *record.Recovery, live bool) *RecordView {
 		Interrupted:      len(rec.Interrupted) > 0,
 		InterruptedCount: len(rec.Interrupted),
 		Shell:            cp.Session,
+		EvidenceRemoved:  evidenceWasRemoved(cp),
 	}
 	for i := range cp.Items {
 		view.Rows = append(view.Rows, buildRow(&cp.Items[i]))
 	}
 	return view
+}
+
+// evidenceWasRemoved reports that the checkpoint holds items but cites no
+// evidence at all. A record captured without any crops (a development
+// source) looks the same; both are shown as "已删除或缺失" rather than
+// inventing images.
+func evidenceWasRemoved(cp *record.Checkpoint) bool {
+	if len(cp.Items) == 0 {
+		return false
+	}
+	if len(cp.Evidence) > 0 || len(cp.Session.CoverageEvidenceIDs) > 0 {
+		return false
+	}
+	for _, item := range cp.Items {
+		if len(item.EvidenceIDs) > 0 {
+			return false
+		}
+	}
+	return true
 }
 
 // buildRow flattens one item into its results row. BuildRecordView and
@@ -606,6 +630,14 @@ func unitText(unit *string) string {
 	default:
 		return fmt.Sprintf("未知单位（%s）", *unit)
 	}
+}
+
+// MissingEvidence reports that no image backs this row. The record may
+// have had its screenshots deleted; a produced row with lines but no
+// images is marked as missing in the detail pane instead of showing an
+// empty frame.
+func (r Row) MissingEvidence() bool {
+	return len(r.EvidenceIDs) == 0
 }
 
 // PendingReview reports whether the row is a produced structured item

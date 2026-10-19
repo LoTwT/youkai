@@ -17,6 +17,10 @@ type FS interface {
 	MkdirAll(dir string, perm fs.FileMode) error
 	// Stat reports the file info of path, like os.Stat.
 	Stat(path string) (fs.FileInfo, error)
+	// Lstat is Stat without following a final symbolic link, like
+	// os.Lstat; deletion uses it to refuse a record directory that is a
+	// link instead of removing its target.
+	Lstat(path string) (fs.FileInfo, error)
 	// ReadDir lists dir, like os.ReadDir.
 	ReadDir(dir string) ([]fs.DirEntry, error)
 	// OpenFile opens path with os flag semantics, like os.OpenFile.
@@ -25,6 +29,9 @@ type FS interface {
 	OpenFile(path string, flag int, perm fs.FileMode) (File, error)
 	// Remove deletes path, like os.Remove.
 	Remove(path string) error
+	// RemoveAll deletes path and everything below it, like os.RemoveAll.
+	// It removes symbolic links themselves instead of following them.
+	RemoveAll(path string) error
 }
 
 // File is the handle the store reads and writes through. Besides the io
@@ -46,6 +53,8 @@ func (osFS) MkdirAll(dir string, perm fs.FileMode) error { return os.MkdirAll(di
 
 func (osFS) Stat(path string) (fs.FileInfo, error) { return os.Stat(path) }
 
+func (osFS) Lstat(path string) (fs.FileInfo, error) { return os.Lstat(path) }
+
 func (osFS) ReadDir(dir string) ([]fs.DirEntry, error) { return os.ReadDir(dir) }
 
 func (osFS) OpenFile(path string, flag int, perm fs.FileMode) (File, error) {
@@ -53,3 +62,5 @@ func (osFS) OpenFile(path string, flag int, perm fs.FileMode) (File, error) {
 }
 
 func (osFS) Remove(path string) error { return os.Remove(path) }
+
+func (osFS) RemoveAll(path string) error { return os.RemoveAll(path) }

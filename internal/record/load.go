@@ -66,6 +66,18 @@ func (s *Store) Load(recordID string) (*Recovery, error) {
 // loadLocked is Load's body without the memo bookkeeping, so the
 // revision path can reuse it. Callers hold mu.
 func (s *Store) loadLocked(recordID string, state *recordState) (*Recovery, error) {
+	cp, err := s.loadCheckpointLocked(recordID, state)
+	if err != nil {
+		return nil, err
+	}
+	return applyInterruptionMarks(cp), nil
+}
+
+// loadCheckpointLocked returns the newest verifiable checkpoint without
+// the recovery view's interruption marks, so operations that rewrite the
+// stored document (screenshot removal, for one) preserve the states as
+// they were persisted. Callers hold mu.
+func (s *Store) loadCheckpointLocked(recordID string, state *recordState) (*Checkpoint, error) {
 	gens, err := s.generations(recordID)
 	if err != nil {
 		return nil, err
@@ -80,7 +92,7 @@ func (s *Store) loadLocked(recordID string, state *recordState) (*Recovery, erro
 			continue
 		}
 		state.valid[g.revision] = true
-		return applyInterruptionMarks(cp), nil
+		return cp, nil
 	}
 	return nil, fmt.Errorf("record: load %q: %w after %d generation(s)",
 		recordID, ErrNoValidCheckpoint, len(gens))

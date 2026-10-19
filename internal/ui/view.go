@@ -61,6 +61,8 @@ func (m *Model) View(c *ui.Context) {
 		ui.Divider(c)
 		m.resultsArea(c, t)
 		ui.Divider(c)
+		m.storageArea(c, t)
+		ui.Divider(c)
 		m.updateArea(c, t)
 		if m.exitState != exitIdle {
 			ui.Divider(c)
@@ -228,6 +230,12 @@ func (m *Model) resultsArea(c *ui.Context, t *ui.Theme) {
 					m.ShowLive()
 				}
 			}
+			if m.rec != nil && m.rec.ID != m.historyID(m.histChoice) {
+				blocked := m.cleanupBlockedReason()
+				if ui.Button(c, "删除当前记录").Disabled(blocked != "").Clicked() {
+					m.RequestRecordCleanup(m.rec.ID)
+				}
+			}
 			ui.Box(c).Grow(1)
 			if labels := m.HistoryLabels(); len(labels) > 0 {
 				ui.Text(c, "历史记录").TextColor(t.TextMuted)
@@ -239,8 +247,18 @@ func (m *Model) resultsArea(c *ui.Context, t *ui.Theme) {
 				ui.Text(c, "历史记录："+m.historyEmptyText()).TextColor(t.TextMuted)
 			}
 		})
+		m.savePromptArea(c, t)
+		if len(m.history) > 0 {
+			m.historyActions(c, t)
+		}
 		if m.histErr != "" {
 			ui.Text(c, "历史记录读取失败："+m.histErr).TextColor(t.Danger)
+		}
+		if m.cleanupNotice != "" {
+			ui.Text(c, m.cleanupNotice)
+		}
+		if m.cleanup != nil && !m.cleanup.target.all() {
+			m.cleanupPromptArea(c, t)
 		}
 		if m.recErr != "" {
 			ui.Text(c, "记录读取失败："+m.recErr).TextColor(t.Danger)
@@ -259,6 +277,42 @@ func (m *Model) resultsArea(c *ui.Context, t *ui.Theme) {
 	})
 }
 
+// historyActions lists every saved record with its own open and cleanup
+// entries. The picker above stays for keyboard selection; this list is
+// the per-record entry point T6 requires, kept compact with a bounded
+// scroll.
+func (m *Model) historyActions(c *ui.Context, t *ui.Theme) {
+	blocked := m.cleanupBlockedReason()
+	ui.ScrollBoth(c).MaxHeight(120).Children(func() {
+		for _, entry := range m.history {
+			m.historyRow(c, t, entry, blocked)
+		}
+	})
+	if blocked != "" {
+		ui.Text(c, blocked).TextColor(t.TextMuted).FontSize(t.FontSize * 0.9)
+	}
+}
+
+func (m *Model) historyRow(c *ui.Context, t *ui.Theme, entry HistoryEntry, blocked string) {
+	label := entry.Label
+	if m.rec != nil && m.rec.ID == entry.ID {
+		label += "（当前）"
+	}
+	ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
+		ui.Text(c, label).TextColor(t.TextMuted).SingleLine()
+		if ui.Button(c, "打开 "+entry.ID).Clicked() {
+			m.histChoice = entry.Label
+			m.OpenHistory()
+		}
+		if ui.Button(c, "删除截图 "+entry.ID).Disabled(blocked != "").Clicked() {
+			m.RequestScreenshotCleanup(entry.ID)
+		}
+		if ui.Button(c, "删除当前记录 "+entry.ID).Disabled(blocked != "").Clicked() {
+			m.RequestRecordCleanup(entry.ID)
+		}
+	})
+}
+
 func (m *Model) historyEmptyText() string {
 	if m.histErr != "" {
 		return "读取失败。"
@@ -272,14 +326,18 @@ func (m *Model) resultsTitle() string {
 	if m.rec == nil {
 		return "结果"
 	}
+	evidence := ""
+	if m.rec.EvidenceRemoved {
+		evidence = "，截图已删除或缺失"
+	}
 	if m.rec.Live {
-		return fmt.Sprintf("结果：本次扫描（已保存 %d 条）", len(m.rec.Rows))
+		return fmt.Sprintf("结果：本次扫描（已保存 %d 条%s）", len(m.rec.Rows), evidence)
 	}
 	mark := ""
 	if m.rec.Interrupted {
 		mark = fmt.Sprintf("，中断恢复 %d 条", m.rec.InterruptedCount)
 	}
-	return fmt.Sprintf("结果：历史记录 %s（%d 条%s）", m.rec.ID, len(m.rec.Rows), mark)
+	return fmt.Sprintf("结果：历史记录 %s（%d 条%s%s）", m.rec.ID, len(m.rec.Rows), mark, evidence)
 }
 
 func (m *Model) emptyResultsText() string {
@@ -366,6 +424,9 @@ func (m *Model) detailPane(c *ui.Context) {
 func (m *Model) detailHeader(c *ui.Context, t *ui.Theme, row *Row) {
 	ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
 		ui.Textf(c, "序号 %d · %s · 质量：%s", row.Seq, row.StatusText(), row.QualityText()).FontWeight(600)
+		if row.MissingEvidence() {
+			ui.Text(c, "截图已删除或缺失").TextColor(t.TextMuted).FontSize(t.FontSize * 0.9)
+		}
 		ui.Box(c).Grow(1)
 		if len(row.Lines) == 0 && len(row.EvidenceIDs) == 0 {
 			return
@@ -787,6 +848,10 @@ func (m *Model) evidenceArea(c *ui.Context, t *ui.Theme, row *Row) {
 	}
 	ui.Divider(c)
 	ui.Text(c, "证据（原始 OCR）").FontWeight(600)
+	if m.rec != nil && m.rec.EvidenceRemoved {
+		ui.Text(c, "该记录的截图已删除或缺失，无法显示图像；识别文本与字段数据仍保留。").
+			TextColor(t.TextMuted)
+	}
 	for i := range row.Lines {
 		m.lineDetail(c, t, row, i)
 	}
@@ -831,6 +896,8 @@ func (m *Model) lineDetail(c *ui.Context, t *ui.Theme, row *Row, i int) {
 		})
 		if i < len(row.EvidenceIDs) {
 			m.evidenceImage(c, t, m.rec.ID, row.EvidenceIDs[i])
+		} else if row.MissingEvidence() {
+			ui.Text(c, "截图已删除或缺失").TextColor(t.TextMuted).FontSize(t.FontSize * 0.9)
 		}
 		ui.Column(c).Grow(1).Gap(t.Space(0.5)).Children(func() {
 			switch {

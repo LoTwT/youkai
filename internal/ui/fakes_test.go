@@ -108,6 +108,15 @@ type fakeService struct {
 
 	saves  []saveCall
 	saveFn func(recordID string, sequence, expectedRevision int64, edit app.ItemRevisionEdit) (app.ItemRevisionResult, error)
+
+	previewFn      func(kind, recordID string) (app.CleanupPreview, error)
+	storage        app.StorageUsage
+	storageErr     error
+	deleteErr      error
+	screenshotDels []string
+	allScreenshot  int
+	recordDels     []string
+	allRecords     int
 }
 
 // saveCall is one recorded SaveItemRevision request.
@@ -185,6 +194,114 @@ func (f *fakeService) saveCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return len(f.saves)
+}
+
+func (f *fakeService) previewFor(kind, recordID string) (app.CleanupPreview, error) {
+	f.mu.Lock()
+	fn := f.previewFn
+	f.mu.Unlock()
+	if fn != nil {
+		return fn(kind, recordID)
+	}
+	return app.CleanupPreview{}, nil
+}
+
+func (f *fakeService) PreviewRecordScreenshots(recordID string) (app.CleanupPreview, error) {
+	return f.previewFor("screenshots", recordID)
+}
+
+func (f *fakeService) PreviewAllScreenshots() (app.CleanupPreview, error) {
+	return f.previewFor("all-screenshots", "")
+}
+
+func (f *fakeService) PreviewRecordDeletion(recordID string) (app.CleanupPreview, error) {
+	return f.previewFor("record", recordID)
+}
+
+func (f *fakeService) PreviewAllRecords() (app.CleanupPreview, error) {
+	return f.previewFor("all-records", "")
+}
+
+func (f *fakeService) DeleteRecordScreenshots(recordID string) (record.EvidenceRemoval, error) {
+	f.mu.Lock()
+	f.screenshotDels = append(f.screenshotDels, recordID)
+	err := f.deleteErr
+	f.mu.Unlock()
+	preview, _ := f.previewFor("screenshots", recordID)
+	removal := record.EvidenceRemoval{
+		RecordID:      recordID,
+		EvidenceFiles: preview.EvidenceFiles,
+		EvidenceBytes: preview.EvidenceBytes,
+		RemovedFiles:  preview.EvidenceFiles,
+		RemovedBytes:  preview.EvidenceBytes,
+	}
+	if err != nil {
+		return removal, err
+	}
+	return removal, nil
+}
+
+func (f *fakeService) DeleteAllScreenshots() (record.EvidenceBatch, error) {
+	f.mu.Lock()
+	f.allScreenshot++
+	err := f.deleteErr
+	f.mu.Unlock()
+	preview, _ := f.previewFor("all-screenshots", "")
+	batch := record.EvidenceBatch{
+		Records:       preview.Records,
+		EvidenceFiles: preview.EvidenceFiles,
+		EvidenceBytes: preview.EvidenceBytes,
+		RemovedFiles:  preview.EvidenceFiles,
+		RemovedBytes:  preview.EvidenceBytes,
+	}
+	for i := 0; i < preview.Records; i++ {
+		batch.Results = append(batch.Results, record.EvidenceRemoval{RecordID: fmt.Sprintf("rec-%d", i)})
+	}
+	if err != nil {
+		batch.Failed = append(batch.Failed, record.RecordFailure{RecordID: "rec-0", Err: err})
+		return batch, err
+	}
+	return batch, nil
+}
+
+func (f *fakeService) DeleteRecord(recordID string) (record.RecordDeletion, error) {
+	f.mu.Lock()
+	f.recordDels = append(f.recordDels, recordID)
+	err := f.deleteErr
+	f.mu.Unlock()
+	preview, _ := f.previewFor("record", recordID)
+	deletion := record.RecordDeletion{RecordID: recordID, Bytes: preview.TotalBytes}
+	return deletion, err
+}
+
+func (f *fakeService) DeleteAllRecords() (record.RecordDeletionBatch, error) {
+	f.mu.Lock()
+	f.allRecords++
+	err := f.deleteErr
+	f.mu.Unlock()
+	preview, _ := f.previewFor("all-records", "")
+	batch := record.RecordDeletionBatch{Bytes: preview.TotalBytes}
+	if err == nil {
+		batch.Records = preview.Records
+	}
+	if err != nil {
+		batch.Failed = append(batch.Failed, record.RecordFailure{RecordID: "rec-0", Err: err})
+		return batch, err
+	}
+	return batch, nil
+}
+
+func (f *fakeService) StorageUsage() (app.StorageUsage, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.storage, f.storageErr
+}
+
+func (f *fakeService) cleanupCalls() (screenshots []string, allScreenshots int, records []string, allRecords int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.screenshotDels...), f.allScreenshot,
+		append([]string(nil), f.recordDels...), f.allRecords
 }
 
 func (f *fakeService) Quit() error {
