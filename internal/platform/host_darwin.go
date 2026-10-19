@@ -12,13 +12,14 @@ import (
 // hotkey, mach clock).
 func Host() (Port, error) {
 	adapter, err := NewMacAdapter(MacNatives{
-		Enum:   macos.NewWindowEnumerator(),
-		Runner: macos.NewStreamRunner(),
-		Poster: macos.NewInputPoster(),
-		FG:     macos.NewForegroundProbe(),
-		Perms:  macos.NewPermissionProbe(),
-		Hotkey: macos.NewHotKeyRegistrar(),
-		Clock:  macos.NewMachClockSource(),
+		Enum:     macos.NewWindowEnumerator(),
+		Runner:   macos.NewStreamRunner(),
+		Poster:   macos.NewInputPoster(),
+		FG:       macos.NewForegroundProbe(),
+		Activate: macos.NewAppActivator(),
+		Perms:    macos.NewPermissionProbe(),
+		Hotkey:   macos.NewHotKeyRegistrar(),
+		Clock:    macos.NewMachClockSource(),
 	})
 	if err != nil {
 		return nil, err

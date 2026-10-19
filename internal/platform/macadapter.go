@@ -40,13 +40,14 @@ import (
 // Every field is required; Host (on darwin) wires the real
 // implementations, tests inject fakes.
 type MacNatives struct {
-	Enum   macos.WindowEnumerator
-	Runner macos.NativeStreamRunner
-	Poster macos.InputPoster
-	FG     macos.ForegroundProbe
-	Perms  macos.PermissionProbe
-	Hotkey macos.NativeHotKeyRegistrar
-	Clock  macos.MachClockSource
+	Enum     macos.WindowEnumerator
+	Runner   macos.NativeStreamRunner
+	Poster   macos.InputPoster
+	FG       macos.ForegroundProbe
+	Activate macos.AppActivator
+	Perms    macos.PermissionProbe
+	Hotkey   macos.NativeHotKeyRegistrar
+	Clock    macos.MachClockSource
 	// OwnPID partitions the screen-recording evidence (windows of other
 	// processes are the meaningful signal); zero means os.Getpid().
 	OwnPID int32
@@ -160,7 +161,7 @@ func (a *MacAdapter) Open(ctx context.Context, cfg SessionConfig) (Session, erro
 	if len(candidates) == 0 {
 		unregisterHotkey()
 		return nil, NewFault(CodeTargetNotFound, fmt.Sprintf(
-			"no window of %q passed the target filter (bundle, layer 0, on screen, fully inside one display)", cfg.Target.BundleID))
+			"the game is not running or has no eligible window (bundle %q, normal layer, on screen, fully inside one display); open the game first", cfg.Target.BundleID))
 	}
 	if len(candidates) > 1 {
 		// The candidate list is the field-round diagnostic: 实测核对 is
@@ -289,6 +290,16 @@ type macSession struct {
 }
 
 func (s *macSession) Target() TargetInfo { return s.targetInfo }
+
+// Activate brings the locked target application to the foreground. The
+// controller calls it once for a user-started scan; every input still
+// re-checks readiness, and losing focus during scanning stops the walk.
+func (s *macSession) Activate() error {
+	if s.adapter.natives.Activate == nil {
+		return errors.New("macos: target activation is not configured")
+	}
+	return s.adapter.natives.Activate.ActivatePID(s.selector.PID)
+}
 
 // onStreamEvent runs on the capture stream's callback thread: it must
 // never block. Events queue for the watcher (after the baseline) and for

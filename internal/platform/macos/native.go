@@ -30,6 +30,14 @@ type ForegroundProbe interface {
 	FrontmostPID() (int32, error)
 }
 
+// AppActivator brings a running application to the foreground. It is a
+// user-intent action (the user pressed Start), not an input primitive:
+// readiness still requires the target to be frontmost before every
+// dispatch, and a focus loss during scanning remains a stop condition.
+type AppActivator interface {
+	ActivatePID(pid int32) error
+}
+
 // AXFocusProbe queries the system-wide AXFocusedWindow with a bounded
 // messaging timeout. The timeout is a per-call bound: an AX query that
 // exceeds it fails (TimedOut), and a failed query denies input rather

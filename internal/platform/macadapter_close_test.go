@@ -31,7 +31,7 @@ func TestMacWatcherReportsEachCodeOnce(t *testing.T) {
 		sess := w.openReady(t)
 		defer sess.Close()
 		moved := smallGeo()
-		moved.WindowFrame = macos.PointRect{X: 300, Y: 50, W: 200, H: 100}
+		moved.WindowFrame = macos.PointRect{X: 300, Y: 50, W: 320, H: 240}
 		w.runner.frame(smallFrame(moved, 0))
 		waitFor(t, 2*time.Second, "geometryChanged", func() bool { return w.faultCount(CodeGeometryChanged) > 0 })
 		time.Sleep(50 * time.Millisecond)

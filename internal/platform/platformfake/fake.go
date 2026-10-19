@@ -107,6 +107,8 @@ type Session struct {
 	FrameFn func(ctx context.Context, req platform.FrameRequest) (platform.Frame, error)
 	// DispatchFn, when set, replaces the default posted result.
 	DispatchFn func(op platform.InputOp) platform.InputResult
+	// ActivateFn, when set, replaces the default successful activation.
+	ActivateFn func() error
 	// CloseFault joins into the close report's Err.
 	CloseFault error
 	// CloseSleep runs inside Close — the dwell stand-in.
@@ -123,6 +125,7 @@ type Session struct {
 	observeCalls    int
 	lockCalls       int
 	frameCalls      int
+	activateCalls   int
 	dispatchOps     []platform.InputOp
 	closeCalls      int
 	closed          bool
@@ -147,6 +150,18 @@ func (s *Session) Configure(cfg platform.SessionConfig) {
 // Target implements platform.Session.
 func (s *Session) Target() platform.TargetInfo {
 	return platform.TargetInfo{BundleID: "fake.bundle", PID: 1, WindowID: 2}
+}
+
+// Activate implements platform.Activator: the fake counts calls and
+// reports the configured outcome.
+func (s *Session) Activate() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.activateCalls++
+	if s.ActivateFn != nil {
+		return s.ActivateFn()
+	}
+	return nil
 }
 
 // Observe implements platform.Session.
@@ -282,6 +297,13 @@ func (s *Session) Counters() (observe, lock, frames, dispatch, close int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.observeCalls, s.lockCalls, s.frameCalls, len(s.dispatchOps), s.closeCalls
+}
+
+// Activations returns the number of Activate calls.
+func (s *Session) Activations() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.activateCalls
 }
 
 // DispatchedOps returns the recorded dispatch operations.
