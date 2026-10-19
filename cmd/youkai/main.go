@@ -2,8 +2,9 @@
 // assembles the application service and the main window: the service owns
 // sessions, saving and the exit wrap-up, the window's model (internal/ui)
 // renders its snapshots, and this file wires the two — the subscription
-// pump, the evidence loader, the start availability and the close-as-
-// explicit-exit behavior.
+// pump, the evidence loader, the start availability and the window
+// lifecycle (single instance, close-to-tray or close-to-exit, tray menu and
+// deep links).
 package main
 
 import (
@@ -57,25 +58,57 @@ func main() {
 	log.Printf("youkai: data=%q cache=%q logs=%q resources=%q",
 		paths.Data, paths.Cache, paths.Logs, paths.Resources)
 
-	// The data-root occupancy must be held before Run and everything
-	// after it: the framework reads from PathUserData as Run starts, and
-	// the service reads settings, checkpoints and history under the same
-	// root. A second youkai process on the same data root — under any
-	// path alias — fails here and exits; MyGo's own single-instance lock
-	// does not cover this occupancy. The service takes over the lock for
-	// the explicit-exit wrap-up; the deferred release stays as the crash
-	// fallback (Close is idempotent).
-	dataLock, err := app.AcquireDataRootLock(paths.Data)
+	// A launch that reaches the single-instance socket hands its command
+	// line to the running process and exits there, before it can touch the
+	// data root: otherwise the occupancy below would reject it first and no
+	// restore or deep link could be forwarded. The data-root occupancy must
+	// then be held before Run and everything after it: the framework reads
+	// from PathUserData as Run starts, and the service reads settings,
+	// checkpoints and history under the same root. A second youkai process
+	// on the same data root — under any path alias — fails the occupancy and
+	// exits; MyGo's single-instance lock does not cover this occupancy. The
+	// service takes over the occupancy for the explicit-exit wrap-up; the
+	// deferred release stays as the crash fallback (Close is idempotent).
+	dataLock, err := acquireInstanceLocks(paths.Data, instanceLockOps{
+		requestSingleInstance: mygo.App.RequestSingleInstanceLock,
+		acquireDataRoot:       app.AcquireDataRootLock,
+	})
+	if errors.Is(err, errSecondInstance) {
+		log.Printf("youkai: another instance is running; this launch was handed over to it")
+		return
+	}
 	if err != nil {
 		log.Fatalf("youkai: %v", err)
 	}
 	defer dataLock.Close()
 	log.Printf("youkai: data-root lock acquired on %q", paths.Data)
 
+	// The single-instance handlers must be registered before Run so the
+	// URLs of the launch reach the existing entry points. The lifecycle is
+	// created with the model below; callbacks run on the UI thread after
+	// this function's setup, so the deferred assignment is safe.
+	var life *windowLifecycle
+	mygo.App.OnSecondInstance(func(args []string, workingDir string) {
+		if life != nil {
+			life.OnSecondInstance(args, workingDir)
+		}
+	})
+	mygo.App.OnOpenURL(func(raw string) {
+		if life != nil {
+			life.OnOpenURL(raw)
+		}
+	})
+	mygo.App.OnActivate(func(hasVisibleWindows bool) {
+		if life != nil {
+			life.OnActivate(hasVisibleWindows)
+		}
+	})
+
 	// The diagnostic log file is opened only now, under the data-root
-	// occupancy: a second instance fails the acquire above and exits
-	// before touching the log directory, so two processes never interleave
-	// or truncate each other's lines. The alternative — per-process file
+	// occupancy: a second instance exits at the single-instance lock above
+	// (or, under another app name, at the data-root acquire) before touching
+	// the log directory, so two processes never interleave or truncate each
+	// other's lines. The alternative — per-process file
 	// names — would leave one file per start in the directory and make
 	// "attach the log" mean picking among many. The cost is that the lines
 	// above, and lock failures, reach stderr only. The sink becomes the
@@ -104,6 +137,15 @@ func main() {
 	}
 	log.Printf("youkai: version=%s commit=%s platform=%s/%s data=%q",
 		mygo.App.Version(), commit, runtime.GOOS, runtime.GOARCH, paths.Data)
+
+	// The persisted preferences. A missing file is the default; a broken
+	// one is logged and the defaults apply, so a bad preference can never
+	// keep the application from starting.
+	settings, err := app.LoadSettings(paths.Data)
+	if err != nil {
+		log.Printf("youkai: settings: %v (using defaults)", err)
+	}
+	log.Printf("youkai: close behavior=%s", settings.CloseBehavior)
 
 	// "应用和功能" lists the app from the NSIS-written uninstall entry, and
 	// the in-place updater never refreshes that registry value (MyGo
@@ -164,6 +206,17 @@ func main() {
 		Updates:        mygoUpdates{},
 		AppVersion:     mygo.App.Version(),
 		DevAutoInstall: os.Getenv("YOUKAI_DEV_AUTOUPDATE") != "",
+		// The close preference is read at startup and persisted in the data
+		// root; the window's setting row changes it. Closing hides by
+		// default; quitting always runs the explicit-exit wrap-up.
+		CloseBehavior: settings.CloseBehavior,
+		SaveCloseBehavior: func(behavior app.CloseBehavior) error {
+			err := app.SaveSettings(paths.Data, app.Settings{CloseBehavior: behavior})
+			if err != nil {
+				log.Printf("youkai: save settings: %v", err)
+			}
+			return err
+		},
 		// After a successful install the application restarts into the new
 		// version: this first Relaunch only starts the exit — the close
 		// interception cancels it (see updateInstalled above) after firing
@@ -183,6 +236,7 @@ func main() {
 		// installed. A failed wrap-up never reaches here — the window
 		// stays with the save failure instead.
 		OnExitSettled: func() {
+			life.Refresh()
 			if updateInstalled {
 				log.Printf("youkai: exit settled, relaunching into the installed update")
 				mygo.App.Relaunch()
@@ -190,7 +244,14 @@ func main() {
 			}
 			mygo.App.Quit()
 		},
+		// A failed final save leaves the process alive. The restore entry
+		// must become visible again even when the exit was requested from
+		// the tray while the window was hidden.
+		OnExitFailed: func() {
+			life.OnExitFailed()
+		},
 	})
+	life = newWindowLifecycle(model)
 
 	// The explicit-exit wrap-up. The quit event only triggers it
 	// asynchronously — a quit callback must not block the main thread on
@@ -209,14 +270,12 @@ func main() {
 			}
 		})
 	}
-	// M1 treats closing the main window as the explicit exit (the two
-	// close modes, the tray and deep links are M3): every close and quit
-	// attempt joins the one wrap-up, which shows its progress in the
-	// window and may refuse to close until the final save settled.
+	// Every explicit quit — menu, ⌘Q, the tray's exit and the updater's
+	// restart — runs the one wrap-up regardless of the close preference.
+	// The window's close handler applies the preference separately; a quit
+	// already in progress is never turned into a hide.
 	mygo.App.OnBeforeQuit(func(e *mygo.QuitEvent) {
-		if !model.AllowClose() {
-			e.PreventDefault()
-		}
+		life.OnBeforeQuit(e)
 	})
 
 	mygo.App.WhenReady(func() {
@@ -229,11 +288,15 @@ func main() {
 			Content:   mgui.View(model.View),
 		})
 		win.OnClose(func(e *mygo.CloseEvent) {
-			if !model.AllowClose() {
-				e.PreventDefault()
-			}
+			life.OnWindowClose(e)
 		})
 		model.Attach(win)
+		// The window exists now: replay any restore that a second instance
+		// or a launch-time deep link requested before ready, then add the
+		// tray/menu bar entry (the fallback to close-to-exit is handled by
+		// the lifecycle if creation fails).
+		life.AttachWindow(win)
+		life.CreateTray()
 
 		// The update-check schedule (2026-10-17 决定): the startup check
 		// stays, and a running application re-checks every
@@ -251,11 +314,17 @@ func main() {
 		// the window — Update only redraws.
 		sub := svc.Subscribe()
 		initial := sub.Initial
-		win.Update(func() { model.Apply(initial) })
+		win.Update(func() {
+			model.Apply(initial)
+			life.Refresh()
+		})
 		go func() {
 			for range sub.Changes {
 				snap := svc.Snapshot()
-				win.Update(func() { model.Apply(snap) })
+				win.Update(func() {
+					model.Apply(snap)
+					life.Refresh()
+				})
 			}
 		}()
 	})

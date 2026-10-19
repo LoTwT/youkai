@@ -50,6 +50,55 @@ func countColor(img *image.RGBA, c color.RGBA) int {
 	return n
 }
 
+// TestViewCloseBehaviorPreference checks that the close preference is
+// visible, toggles both ways and persists each change, and that a window
+// notice explains a missing tray entry.
+func TestViewCloseBehaviorPreference(t *testing.T) {
+	var saved []app.CloseBehavior
+	m, q := newTestModel(t, Config{Service: &fakeService{}, SaveCloseBehavior: func(behavior app.CloseBehavior) error {
+		saved = append(saved, behavior)
+		return nil
+	}})
+	tt := ui.NewTester(m.View, 1020, 700)
+	settle(t, m, q, tt)
+
+	const label = "关闭窗口时停止扫描并退出应用"
+	if !tt.HasText(label) {
+		t.Fatal("the close preference does not show")
+	}
+	if !tt.HasText("默认：关闭窗口隐藏到托盘/菜单栏，应用继续运行。") {
+		t.Fatal("the close preference does not explain the default")
+	}
+	if err := tt.Click(label); err != nil {
+		t.Fatal(err)
+	}
+	drainAll(t, m, q)
+	if m.CloseBehavior() != app.CloseBehaviorExit {
+		t.Fatalf("close behavior = %q after the click", m.CloseBehavior())
+	}
+	if len(saved) != 1 || saved[0] != app.CloseBehaviorExit {
+		t.Fatalf("saved preferences = %v", saved)
+	}
+
+	tt.Frame()
+	if err := tt.Click(label); err != nil {
+		t.Fatal(err)
+	}
+	drainAll(t, m, q)
+	if m.CloseBehavior() != app.CloseBehaviorHide {
+		t.Fatalf("close behavior = %q after the second click", m.CloseBehavior())
+	}
+	if len(saved) != 2 || saved[1] != app.CloseBehaviorHide {
+		t.Fatalf("saved preferences = %v", saved)
+	}
+
+	m.SetWindowNotice("托盘/菜单栏入口不可用（test）。关闭窗口将停止扫描并退出应用。")
+	tt.Frame()
+	if !tt.HasText("托盘/菜单栏入口不可用") {
+		t.Fatal("the tray-unavailable notice does not show")
+	}
+}
+
 // TestViewStartAndStopByPhase drives the prepare and progress areas
 // through the phases: the confirmed hint shows, the start button follows
 // availability, a double click cannot issue two starts, the stop button

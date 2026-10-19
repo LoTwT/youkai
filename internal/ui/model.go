@@ -127,6 +127,27 @@ type Config struct {
 	// succeeded — the entry point quits the application in it. A failed
 	// wrap-up (an unsaved result) keeps the window instead.
 	OnExitSettled func()
+	// OnExitFailed runs on the UI thread after an explicit exit failed and
+	// the window stays. The entry point restores the window here: an exit
+	// requested from the tray while the window was hidden must not leave
+	// the failure invisible.
+	OnExitFailed func()
+	// CloseBehavior is the persisted preference loaded at startup; empty
+	// means CloseBehaviorHide.
+	CloseBehavior app.CloseBehavior
+	// SaveCloseBehavior persists a preference change from the window. Nil
+	// keeps changes in memory only (tests and builds without a data root).
+	SaveCloseBehavior func(app.CloseBehavior) error
+}
+
+// LifecycleStatus is the state the tray/menu bar shows: a short label and
+// whether an active session can still be stopped. It is read on the UI
+// thread.
+type LifecycleStatus struct {
+	// Text is one of 就绪, 扫描中, 收尾中 or 保存失败.
+	Text string
+	// Busy is whether a scan session is still active and stoppable.
+	Busy bool
 }
 
 // exitState is where the explicit-exit flow stands.
@@ -232,6 +253,14 @@ type Model struct {
 	exitState exitState
 	exitErr   string
 
+	// The close-window preference and the last persistence failure, plus a
+	// notice the entry point sets when the tray/menu bar entry is
+	// unavailable — the close-to-tray default must not hide the only way
+	// back into the app.
+	closeBehavior    app.CloseBehavior
+	closeBehaviorErr string
+	windowNotice     string
+
 	// The auto-update corner's state (update.go); updatesEnabled is cached
 	// from Updates at construction — Enabled probes the install location,
 	// too costly to repeat every frame, and the answer cannot change
@@ -261,12 +290,17 @@ func New(cfg Config) *Model {
 	if limit <= 0 {
 		limit = evidenceCacheLimit
 	}
+	closeBehavior := cfg.CloseBehavior
+	if closeBehavior != app.CloseBehaviorExit {
+		closeBehavior = app.CloseBehaviorHide
+	}
 	m := &Model{
 		cfg:              cfg,
 		source:           cfg.ScanSource,
 		split:            520,
 		cache:            newEvidenceCache(cfg.Evidence, limit),
 		promptedSessions: make(map[string]bool),
+		closeBehavior:    closeBehavior,
 	}
 	if cfg.Updates != nil {
 		m.updates = cfg.Updates
@@ -608,12 +642,96 @@ func (m *Model) RetrySave() {
 	m.goAsync(func() { _ = m.cfg.Service.RetrySave() })
 }
 
+// CloseBehavior returns the current close-window preference. The entry
+// point reads it on the UI thread to decide between hiding the window and
+// running the explicit-exit wrap-up.
+func (m *Model) CloseBehavior() app.CloseBehavior {
+	if m.closeBehavior == app.CloseBehaviorExit {
+		return app.CloseBehaviorExit
+	}
+	return app.CloseBehaviorHide
+}
+
+// SetCloseBehavior applies and persists the close-window preference. The
+// change takes effect immediately even when persistence fails; the failure
+// is shown next to the setting so the user knows it will not survive a
+// restart. The save is a small file write, deliberately synchronous: it
+// finishes before the user can quit, so no settings write can outlive the
+// data-root occupancy the exit wrap-up releases.
+func (m *Model) SetCloseBehavior(behavior app.CloseBehavior) {
+	if behavior != app.CloseBehaviorExit {
+		behavior = app.CloseBehaviorHide
+	}
+	if behavior == m.closeBehavior {
+		return
+	}
+	m.closeBehavior = behavior
+	m.closeBehaviorErr = ""
+	if m.cfg.SaveCloseBehavior == nil {
+		return
+	}
+	if err := m.cfg.SaveCloseBehavior(behavior); err != nil {
+		m.closeBehaviorErr = "保存设置失败：" + err.Error()
+	}
+}
+
+// Exiting reports whether an explicit exit is running or already settled.
+// The window's close handler must not turn that exit into a hide.
+func (m *Model) Exiting() bool {
+	return m.exitState == exitRunning || m.exitState == exitDone
+}
+
+// PrepareRestore is the restore entry every route uses (tray, Dock, second
+// instance, deep links): an active session is stopped before the window
+// becomes interactive again. It never starts a scan. The stop is the same
+// idempotent request as the window's stop button; saving continues after
+// it.
+//
+// The request is issued synchronously, unlike the stop button's background
+// call: the entry point shows the window right after this returns, and
+// Service.Stop only takes the service lock and closes input permission — it
+// does not wait for collection, recognition or a save. An accepted start
+// still in preparation has no Busy snapshot yet, so the in-flight request
+// is stopped too (the service records it and applies it at commit).
+func (m *Model) PrepareRestore() {
+	if !m.snap.Busy && m.startReqID == "" {
+		return
+	}
+	m.cfg.Service.Stop()
+}
+
+// LifecycleStatus renders the tray/menu bar state from the authoritative
+// snapshot and the exit flow.
+func (m *Model) LifecycleStatus() LifecycleStatus {
+	switch {
+	case m.exitState == exitRunning:
+		return LifecycleStatus{Text: "收尾中", Busy: false}
+	case m.exitState == exitFailed || m.snap.SaveError != "":
+		return LifecycleStatus{Text: "保存失败", Busy: m.snap.Busy && !m.Exiting()}
+	case m.snap.Busy:
+		return LifecycleStatus{Text: "扫描中", Busy: true}
+	default:
+		return LifecycleStatus{Text: "就绪", Busy: false}
+	}
+}
+
+// SetWindowNotice sets a persistent notice about the window lifecycle, for
+// example that the tray entry is unavailable and closing will therefore
+// quit instead of hiding. Empty clears it.
+func (m *Model) SetWindowNotice(notice string) {
+	m.windowNotice = notice
+}
+
 // AllowClose reports whether the window may close now. The first ask
 // starts the explicit-exit wrap-up asynchronously and refuses the close;
 // the wrap-up shows its progress in the window. A failed wrap-up (an
 // unsaved result) keeps the window with the save failure and its retry;
 // once the save settled, the next ask runs the wrap-up again. A completed
 // wrap-up allows every later ask.
+//
+// This is the explicit-exit path, used by the window close when the user
+// chose close-to-exit, and by every quit event regardless of the close
+// preference. The close-to-tray default must not call it.
 func (m *Model) AllowClose() bool {
 	switch m.exitState {
 	case exitDone:
@@ -652,6 +770,9 @@ func (m *Model) beginExit() {
 			if err != nil {
 				m.exitState = exitFailed
 				m.exitErr = err.Error()
+				if m.cfg.OnExitFailed != nil {
+					m.cfg.OnExitFailed()
+				}
 				return
 			}
 			m.exitState = exitDone
