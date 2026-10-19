@@ -7,10 +7,31 @@ package zzz
 // recognized lines remain in the enclosing recognition payload for
 // evidence and audit (see internal/app.RecognitionResult).
 //
-// Management state and the equipper are deliberately not recognized yet:
-// this revision always writes managementState=null and equipped=null and
-// reports validation as unavailable unless parsing already failed. A
-// later revision fills both and may then allow auto-acceptance.
+// Management state and equipment presence now come from the collector's
+// calibrated badge/avatar evidence. The equipper's identity is deliberately
+// still not recognized: this revision writes agentId=null and keeps
+// validation unavailable, so no record can be auto-accepted yet. A later
+// revision fills the identity and may then allow auto-acceptance.
+
+// ManagementState and equipment-presence values of an observation, as the
+// collector confirmed them. Empty means the collector could not read the
+// field or its evidence conflicted; it is never guessed here.
+const (
+	ManagementLocked    = "locked"
+	ManagementDiscarded = "discarded"
+	ManagementNone      = "none"
+
+	EquippedStateEquipped   = "equipped"
+	EquippedStateUnequipped = "unequipped"
+)
+
+// CaptureState is the non-text evidence the collector confirmed for one
+// observation. Empty fields stay JSON null. This revision fills presence
+// only; Equipped.AgentID remains null until PR 6b.
+type CaptureState struct {
+	ManagementState string
+	EquippedState   string
+}
 
 // RarityS is the only rarity this revision can assert, because it comes
 // from the calibrated S badge of a verified capture rather than from the
@@ -22,11 +43,12 @@ const (
 	// CodeRarityUnverified: the observation carried no verified S
 	// capture, so rarity is unknown rather than guessed.
 	CodeRarityUnverified = "rarityUnverified"
-	// CodeManagementStateUnavailable: management state recognition is not
-	// implemented yet.
+	// CodeManagementStateUnavailable: the observation carried no
+	// confirmed management state.
 	CodeManagementStateUnavailable = "managementStateUnavailable"
-	// CodeEquippedStateUnavailable: equipper recognition is not
-	// implemented yet.
+	// CodeEquippedStateUnavailable: the observation carried no confirmed
+	// equipment-presence state, or its equipper identity is not recognized
+	// yet (agentId=null).
 	CodeEquippedStateUnavailable = "equippedStateUnavailable"
 )
 
@@ -46,9 +68,10 @@ type SubstatData struct {
 	EnhancementRolls *int `json:"enhancementRolls"`
 }
 
-// Equipped is the public equipper shape. This revision never produces
-// one; it is defined now so the later recognition work fills the same
-// contract without reshaping persisted records.
+// Equipped is the public equipper shape. This revision fills State with
+// the confirmed presence ("equipped" or "unequipped") and always leaves
+// AgentID null; PR 6b fills the identity without reshaping persisted
+// records.
 type Equipped struct {
 	State   string `json:"state"`
 	AgentID *int   `json:"agentId"`
@@ -70,8 +93,9 @@ type DiscData struct {
 }
 
 // Validation is the record-level revalidation result. This revision does
-// not claim passed: parsing errors make it failed, and otherwise the
-// missing management/equipper data keeps it unavailable.
+// not claim passed: parsing errors make it failed, and otherwise an
+// unconfirmed management/equipment state or the still-missing equipper
+// identity keeps it unavailable.
 type Validation struct {
 	Status string  `json:"status"`
 	Issues []Issue `json:"issues"`
@@ -94,28 +118,44 @@ type StructuredDisc struct {
 }
 
 // ToStructured converts a parsed detail record into the public structured
-// payload. rarity is the verified capture rarity ("S") or "" when the
-// observation carried none; it is never inferred from the set or level.
-// The returned issue and validation arrays are always present (empty
-// arrays rather than null).
+// payload without capture-state evidence. rarity is the verified capture
+// rarity ("S") or "" when the observation carried none; it is never
+// inferred from the set or level. Management state and equipment presence
+// stay null. The returned issue and validation arrays are always present
+// (empty arrays rather than null).
 func ToStructured(rec DiscRecord, rarity string, issues []Issue) StructuredDisc {
+	return ToStructuredWithState(rec, rarity, CaptureState{}, issues)
+}
+
+// ToStructuredWithState is ToStructured plus the collector's confirmed
+// management state and equipment presence. Unrecognized values stay null
+// and are reported; they are never coerced into a legal state.
+func ToStructuredWithState(rec DiscRecord, rarity string, state CaptureState, issues []Issue) StructuredDisc {
 	allIssues := append([]Issue(nil), issues...)
 	if rarity != RarityS {
 		allIssues = append(allIssues, newIssue("rarity", CodeRarityUnverified,
 			"本次捕获没有已验证的 S 稀有度证据，rarity 保留为 null"))
 	}
 	return StructuredDisc{
-		Data:       ToData(rec, rarity),
+		Data:       ToDataWithState(rec, rarity, state),
 		Issues:     normalizeIssues(allIssues),
-		Validation: validate(allIssues),
+		Validation: validate(allIssues, state),
 	}
 }
 
-// ToData converts a parsed detail record into the public data object.
-// rarity is the verified capture rarity ("S") or ""; only a verified S
-// becomes non-null. Management state and the equipper are always null in
-// this revision.
+// ToData converts a parsed detail record into the public data object
+// without capture-state evidence. rarity is the verified capture rarity
+// ("S") or ""; only a verified S becomes non-null. Management state and
+// equipment presence stay null.
 func ToData(rec DiscRecord, rarity string) DiscData {
+	return ToDataWithState(rec, rarity, CaptureState{})
+}
+
+// ToDataWithState converts a parsed detail record plus confirmed capture
+// state into the public data object. Empty or unrecognized state remains
+// null. An equipped/unequipped object always carries agentId=null in this
+// revision.
+func ToDataWithState(rec DiscRecord, rarity string, state CaptureState) DiscData {
 	var rarityValue *string
 	if rarity == RarityS {
 		value := RarityS
@@ -146,6 +186,17 @@ func ToData(rec DiscRecord, rarity string) DiscData {
 		}
 	}
 
+	var managementState *string
+	if validManagementState(state.ManagementState) {
+		value := state.ManagementState
+		managementState = &value
+	}
+	var equipped *Equipped
+	switch state.EquippedState {
+	case EquippedStateEquipped, EquippedStateUnequipped:
+		equipped = &Equipped{State: state.EquippedState}
+	}
+
 	return DiscData{
 		SetID:           setID,
 		Rarity:          rarityValue,
@@ -153,8 +204,8 @@ func ToData(rec DiscRecord, rarity string) DiscData {
 		Level:           level,
 		MainStat:        mainStatData(rec.MainStat),
 		Substats:        substats,
-		ManagementState: nil,
-		Equipped:        nil,
+		ManagementState: managementState,
+		Equipped:        equipped,
 	}
 }
 
@@ -194,21 +245,40 @@ func mainStatData(stat Stat) *StatData {
 }
 
 // validate derives the current validation status. Parsing errors mean
-// failed. Without them the record is still unavailable because management
-// state and the equipper are not recognized in this revision; that gap is
-// reported as an error rather than hidden behind a passed status.
-func validate(issues []Issue) Validation {
+// failed. Without them the record is still unavailable: a missing
+// management state is a data gap, and equipment presence never makes the
+// record complete while the equipper identity (agentId) is not recognized.
+// That gap is reported as an error rather than hidden behind a passed
+// status.
+func validate(issues []Issue, state CaptureState) Validation {
 	if hasError(issues) {
 		return Validation{Status: ValidationFailed, Issues: normalizeIssues(issues)}
 	}
-	return Validation{
-		Status: ValidationUnavailable,
-		Issues: normalizeIssues([]Issue{
-			newIssue("managementState", CodeManagementStateUnavailable,
-				"本修订尚未识别管理状态（锁定/弃置），无法完成校验"),
-			newIssue("equipped", CodeEquippedStateUnavailable,
-				"本修订尚未识别装备者，无法完成校验"),
-		}),
+	gaps := make([]Issue, 0, 2)
+	if !validManagementState(state.ManagementState) {
+		gaps = append(gaps, newIssue("managementState", CodeManagementStateUnavailable,
+			"本观测没有可确认的管理状态证据，无法完成校验"))
+	}
+	switch state.EquippedState {
+	case EquippedStateEquipped:
+		gaps = append(gaps, newIssue("equipped", CodeEquippedStateUnavailable,
+			"本修订已确认装备存在性，但尚未识别装备者身份（agentId 为 null），无法完成校验"))
+	case EquippedStateUnequipped:
+		gaps = append(gaps, newIssue("equipped", CodeEquippedStateUnavailable,
+			"本修订已确认未装备，但装备者身份识别尚未实现，校验保持不可用"))
+	default:
+		gaps = append(gaps, newIssue("equipped", CodeEquippedStateUnavailable,
+			"本观测没有可确认的装备存在性证据，无法完成校验"))
+	}
+	return Validation{Status: ValidationUnavailable, Issues: normalizeIssues(gaps)}
+}
+
+func validManagementState(state string) bool {
+	switch state {
+	case ManagementLocked, ManagementDiscarded, ManagementNone:
+		return true
+	default:
+		return false
 	}
 }
 

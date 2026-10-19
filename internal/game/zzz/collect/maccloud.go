@@ -85,6 +85,14 @@ func MacCloudLayout() Layout {
 		Cell: CellProbes{
 			Border: image.Rect(-55, -30, -50, 30),
 			Bar:    image.Rect(-30, 38, 30, 46),
+			// The management badge sits in the cell's bottom-right
+			// corner: gray lock, red trash or nothing. The region is
+			// centered on the badge (measured center +35,+19 from the
+			// slot center).
+			Management: image.Rect(20, 4, 50, 34),
+			// The equipped-agent avatar sits in the top-right corner;
+			// the probe is centered on it (measured center +36,-38).
+			Avatar: image.Rect(20, -54, 52, -22),
 		},
 		RowPitch: 147, // report §5: 588 frame pixels per four-row step.
 
@@ -143,6 +151,13 @@ func MacCloudLayout() Layout {
 
 		DetailLines:  append([]LineRegion(nil), maccloudDetailLines...),
 		QualityBadge: image.Rect(532, 256, 564, 286),
+		// The equipped-agent avatar immediately right of the level line
+		// (measured circle at about x804–843, y255–286 in the M2 frames).
+		DetailAvatar: image.Rect(800, 250, 844, 294),
+		// The lock/state indicator immediately left of the detail page's
+		// dismantle control; the filled circle means locked (measured at
+		// about 1104–1148, 123–161).
+		TopManagement: image.Rect(1102, 118, 1152, 166),
 		// The value column of the fourth row: a four-substat disc's value
 		// reaches here, a three-substat disc's set-effect label does not.
 		Substat4Probe: image.Rect(781, 558, 826, 578),
@@ -184,6 +199,44 @@ type Calibration struct {
 	Substat3InkMax     int // ≤: three substats (measured 0–21)
 	DetailPopulatedInk int // name line ink of a populated pane (measured 2400+)
 
+	// Management badge (cell bottom-right). The lock is a bright neutral
+	// annulus around a mostly dark center; the trash is a red glyph; an
+	// unmarked cell has neither. Counts are over the badge probe's
+	// 30×30 region. Measured across the labelled M2 samples: lock ring
+	// 226–260 with only 15–37 bright center pixels, discarded red
+	// 279–282, no badge ring ≤29 and red 0. The lock's flash (dark
+	// phase) is not in the recorded samples; callers union multiple
+	// frames so one dim frame cannot erase a lock.
+	ManagementLockRingMin   int // ≥: gray lock annulus
+	ManagementLockCoreMax   int // ≤: hollow lock center (rejects a solid bright block)
+	ManagementDiscardRedMin int // ≥: red trash glyph
+	ManagementClearRingMax  int // ≤: no management icon
+	ManagementClearRedMax   int // ≤: no red trash pixels
+
+	// Avatar (cell top-right and detail level-right). A bright neutral
+	// ring covers most directions around a portrait core whose mean
+	// brightness and range distinguish it from the empty placeholder.
+	// Measured: present ring 168–423 (dim portraits ~137–170 after
+	// fixture quantization), 7–8 covered sectors, core mean 105–233 and
+	// range ≥162; absent ring ≤116 with an empty core (mean 19–22); a
+	// selected-cell corner glow reaches ring 173 but only 5 sectors, so it
+	// stays unreadable instead of becoming "present".
+	AvatarRingMin           int // ≥: sanity floor for the annulus
+	AvatarRingSectorsMin    int // ≥: covered 45° sectors (of 8)
+	AvatarCoreMeanMin       int // ≥: portrait core mean brightness
+	AvatarCoreRangeMin      int // ≥: portrait core brightness range
+	AvatarAbsentRingMax     int // ≤: no avatar ring
+	AvatarAbsentCoreMeanMax int // ≤: empty placeholder core
+
+	// Top management indicator (detail page, left of the dismantle
+	// control). Counts are over the indicator's disk. Locked is the
+	// filled (dim) circle; unlocked is the open circle with a bright
+	// glyph. Measured: locked dim 760–763 and bright 6–9; unlocked dim
+	// ~327 and bright ~300.
+	TopLockedDimMin      int // ≥: filled locked indicator
+	TopUnlockedBrightMin int // ≥: open indicator's bright glyph
+	TopUnlockedDimMax    int // ≤: open indicator's dim background
+
 	// Quality: gold pixels in the badge probe; every S sample counted
 	// 251–256, dimmed panel frames 0.
 	QualityGoldMin int
@@ -210,19 +263,37 @@ type Calibration struct {
 // (TestReplayFieldSamples) printed.
 func MacCloudCalibration() Calibration {
 	return Calibration{
-		BarEmptyMax:           40,
-		BarOccupiedMin:        120,
-		SelectionHitMin:       40,
-		SelectionClearMax:     10,
-		WheelSelectedMin:      150,
-		WheelOtherMax:         60,
-		DetailSameMax:         2.0,
-		DetailDifferentMin:    4.0,
-		InkThreshold:          60,
-		Substat4InkMin:        80,
-		Substat3InkMax:        50,
-		DetailPopulatedInk:    500,
-		QualityGoldMin:        150,
+		BarEmptyMax:        40,
+		BarOccupiedMin:     120,
+		SelectionHitMin:    40,
+		SelectionClearMax:  10,
+		WheelSelectedMin:   150,
+		WheelOtherMax:      60,
+		DetailSameMax:      2.0,
+		DetailDifferentMin: 4.0,
+		InkThreshold:       60,
+		Substat4InkMin:     80,
+		Substat3InkMax:     50,
+		DetailPopulatedInk: 500,
+		QualityGoldMin:     150,
+
+		ManagementLockRingMin:   120,
+		ManagementLockCoreMax:   70,
+		ManagementDiscardRedMin: 100,
+		ManagementClearRingMax:  60,
+		ManagementClearRedMax:   30,
+
+		AvatarRingMin:           40,
+		AvatarRingSectorsMin:    7,
+		AvatarCoreMeanMin:       60,
+		AvatarCoreRangeMin:      40,
+		AvatarAbsentRingMax:     120,
+		AvatarAbsentCoreMeanMax: 45,
+
+		TopLockedDimMin:      650,
+		TopUnlockedBrightMin: 200,
+		TopUnlockedDimMax:    450,
+
 		ScrollStepX:           3,
 		ScrollStepY:           2,
 		ScrollSearchRadius:    720,
@@ -256,6 +327,18 @@ func (c Calibration) validate() error {
 		return errCalibration("substat row count")
 	case c.QualityGoldMin <= 0:
 		return errCalibration("quality badge")
+	case c.ManagementClearRingMax < 0 || c.ManagementLockRingMin <= c.ManagementClearRingMax ||
+		c.ManagementLockCoreMax <= 0 || c.ManagementClearRedMax < 0 ||
+		c.ManagementDiscardRedMin <= c.ManagementClearRedMax:
+		return errCalibration("management badge")
+	case c.AvatarAbsentRingMax < 0 || c.AvatarRingMin <= 0 ||
+		c.AvatarRingSectorsMin < 1 || c.AvatarRingSectorsMin > 8 ||
+		c.AvatarAbsentCoreMeanMax < 0 || c.AvatarCoreMeanMin <= c.AvatarAbsentCoreMeanMax ||
+		c.AvatarCoreRangeMin <= 0:
+		return errCalibration("equipped avatar")
+	case c.TopLockedDimMin <= 0 || c.TopUnlockedBrightMin <= 0 ||
+		c.TopUnlockedDimMax < 0 || c.TopLockedDimMin <= c.TopUnlockedDimMax:
+		return errCalibration("top management indicator")
 	case c.ScrollStepX <= 0 || c.ScrollStepY <= 0 || c.ScrollSearchRadius <= 0 || c.ScrollMinSamples <= 0:
 		return errCalibration("scroll sampling")
 	case c.ScrollStationaryMax <= 0 || c.ScrollDisplacedMax <= c.ScrollStationaryMax || c.ScrollDisplacedMargin < 0:

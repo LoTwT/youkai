@@ -92,6 +92,58 @@ func TestStructuredDiscRarityFromCapture(t *testing.T) {
 	}
 }
 
+// TestStructuredDiscCarriesCaptureState checks the adapter's non-text
+// fields: management state and equipment presence come from the capture,
+// the equipped object keeps agentId null until PR 6b, and validation stays
+// unavailable instead of auto-accepting the record.
+func TestStructuredDiscCarriesCaptureState(t *testing.T) {
+	lines := detailLines()
+	structured := structuredDisc(Observation{
+		Rarity:             zzz.RarityS,
+		ManagementState:    zzz.ManagementLocked,
+		EquippedState:      zzz.EquippedStateEquipped,
+		ManagementEvidence: "list badge locked",
+		EquippedEvidence:   "detail and list avatar present",
+	}, lines)
+	if structured == nil {
+		t.Fatal("recognized disc has no structured payload")
+	}
+	if structured.Data.ManagementState == nil || *structured.Data.ManagementState != zzz.ManagementLocked {
+		t.Fatalf("managementState = %v, want locked", structured.Data.ManagementState)
+	}
+	if structured.Data.Equipped == nil || structured.Data.Equipped.State != zzz.EquippedStateEquipped {
+		t.Fatalf("equipped = %+v, want equipped", structured.Data.Equipped)
+	}
+	if structured.Data.Equipped.AgentID != nil {
+		t.Fatalf("equipped.agentId = %v, want null in this revision", structured.Data.Equipped.AgentID)
+	}
+	if structured.Validation.Status != zzz.ValidationUnavailable {
+		t.Fatalf("validation = %+v, want unavailable while agentId is unresolved", structured.Validation)
+	}
+
+	unequipped := structuredDisc(Observation{
+		Rarity:          zzz.RarityS,
+		ManagementState: zzz.ManagementDiscarded,
+		EquippedState:   zzz.EquippedStateUnequipped,
+	}, lines)
+	if unequipped == nil || unequipped.Data.Equipped == nil ||
+		unequipped.Data.Equipped.State != zzz.EquippedStateUnequipped ||
+		unequipped.Data.Equipped.AgentID != nil {
+		t.Fatalf("unequipped = %+v, want state unequipped with agentId null", unequipped)
+	}
+	if unequipped.Data.ManagementState == nil || *unequipped.Data.ManagementState != zzz.ManagementDiscarded {
+		t.Fatalf("managementState = %v, want discarded", unequipped.Data.ManagementState)
+	}
+	if unequipped.Validation.Status != zzz.ValidationUnavailable {
+		t.Fatalf("validation = %+v, want unavailable", unequipped.Validation)
+	}
+
+	legacy := structuredDisc(Observation{Rarity: zzz.RarityS}, lines)
+	if legacy == nil || legacy.Data.ManagementState != nil || legacy.Data.Equipped != nil {
+		t.Fatalf("legacy observation = %+v, want null management and equipped", legacy)
+	}
+}
+
 // TestStructuredDiscWithoutDetailRoles checks that a non-disc observation
 // gets no fabricated structured payload.
 func TestStructuredDiscWithoutDetailRoles(t *testing.T) {
@@ -102,13 +154,18 @@ func TestStructuredDiscWithoutDetailRoles(t *testing.T) {
 
 // TestDelivererPersistsRawAndStructured drives the terminal update and
 // checks that a produced item keeps the raw lines and the structured
-// payload in one data document, is marked needsReview, and never becomes
-// auto-accepted before management/equipper recognition exists.
+// payload in one data document, is marked needsReview even with confirmed
+// management/equipment presence, and never becomes auto-accepted while the
+// equipper identity is unresolved.
 func TestDelivererPersistsRawAndStructured(t *testing.T) {
 	lines := detailLines()
 	result := RecognitionResult{
-		Lines:      lines,
-		Structured: structuredDisc(Observation{Rarity: zzz.RarityS}, lines),
+		Lines: lines,
+		Structured: structuredDisc(Observation{
+			Rarity:          zzz.RarityS,
+			ManagementState: zzz.ManagementLocked,
+			EquippedState:   zzz.EquippedStateEquipped,
+		}, lines),
 	}
 	item := record.ItemRecord{
 		Sequence: 1,
@@ -136,6 +193,13 @@ func TestDelivererPersistsRawAndStructured(t *testing.T) {
 	}
 	if doc.Structured == nil || doc.Structured.Data.SetID == nil || *doc.Structured.Data.SetID != 31100 {
 		t.Fatalf("structured payload = %+v", doc.Structured)
+	}
+	if doc.Structured.Data.ManagementState == nil || *doc.Structured.Data.ManagementState != zzz.ManagementLocked {
+		t.Fatalf("persisted managementState = %v, want locked", doc.Structured.Data.ManagementState)
+	}
+	if doc.Structured.Data.Equipped == nil || doc.Structured.Data.Equipped.State != zzz.EquippedStateEquipped ||
+		doc.Structured.Data.Equipped.AgentID != nil {
+		t.Fatalf("persisted equipped = %+v, want equipped/null", doc.Structured.Data.Equipped)
 	}
 
 	failed := record.ItemRecord{Sequence: 2, Status: record.StatusRunning, Quality: record.QualityNotEvaluated}
@@ -181,6 +245,9 @@ func TestBackfillStructuredFromLegacyLines(t *testing.T) {
 	}
 	if doc.Structured.Data.Rarity == nil || *doc.Structured.Data.Rarity != zzz.RarityS {
 		t.Fatalf("rarity = %v, want S from the capture", doc.Structured.Data.Rarity)
+	}
+	if doc.Structured.Data.ManagementState != nil || doc.Structured.Data.Equipped != nil {
+		t.Fatalf("legacy backfill invented state: %+v", doc.Structured.Data)
 	}
 
 	again, changed, err := BackfillStructured(out, observed)

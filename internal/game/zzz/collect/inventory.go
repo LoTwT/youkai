@@ -183,6 +183,22 @@ type Observation struct {
 	// funnel. It records the observed preparation state, not the declared
 	// range (that stays in the session scope's filterAtStart).
 	RarityFilter string `json:"rarityFilter,omitempty"`
+	// ManagementState is the confirmed management state: "locked",
+	// "discarded" or "none". Empty means the list badge and the top
+	// indicator were unreadable or disagreed; it must never be read as
+	// "none".
+	ManagementState string `json:"managementState,omitempty"`
+	// ManagementEvidence describes the per-frame list badges and the top
+	// indicator the state was confirmed from.
+	ManagementEvidence string `json:"managementEvidence,omitempty"`
+	// EquippedState is "equipped" or "unequipped" when the detail avatar
+	// and the list avatar agree. Empty means the evidence was unreadable
+	// or conflicting; it is not unequipped.
+	EquippedState string `json:"equippedState,omitempty"`
+	// EquippedEvidence describes the detail and list avatar verdicts the
+	// presence decision rested on. Agent identity is deliberately absent
+	// (PR 6b).
+	EquippedEvidence string `json:"equippedEvidence,omitempty"`
 	// ScrollEvidence records the latest verified viewport transition that
 	// preceded this admission in the same position, if any, and is empty
 	// once a capture has carried it.
@@ -1173,7 +1189,7 @@ func (run *inventoryRun) visitSlot(ctx context.Context, i int) error {
 			}
 			switch out.class {
 			case awaitStable:
-				return run.admit(slot, out, pre.frame, i, row, col, AssociationInitial, 0, nil, attempt+1, target)
+				return run.admit(slot, out, pre.frame, pre.match, i, row, col, AssociationInitial, 0, nil, attempt+1, target)
 			case awaitCanceled, awaitFrameErr:
 				slot.Discard()
 				return out.err
@@ -1206,7 +1222,7 @@ func (run *inventoryRun) visitSlot(ctx context.Context, i int) error {
 		}
 		switch out.class {
 		case awaitStable:
-			return run.admit(slot, out, pre.frame, i, row, col, AssociationTransition, pre.frame.ID, nil, attempt+1, target)
+			return run.admit(slot, out, pre.frame, pre.match, i, row, col, AssociationTransition, pre.frame.ID, nil, attempt+1, target)
 		case awaitCanceled, awaitFrameErr:
 			slot.Discard()
 			return out.err
@@ -1231,7 +1247,7 @@ func (run *inventoryRun) visitSlot(ctx context.Context, i int) error {
 				// the same as the pre-click frame. One reference round trip
 				// may still prove the target's detail; it is not a retry of
 				// the ineffective click above (T5 §4).
-				return run.referenceRoundTrip(ctx, slot, out, pre.frame, i, preSelected, row, col, attempt, target)
+				return run.referenceRoundTrip(ctx, slot, out, pre.frame, pre.match, i, preSelected, row, col, attempt, target)
 			}
 			slot.Discard()
 			return run.detailFault(out, pre.frame, preSelected, i, false, target)
@@ -1304,7 +1320,7 @@ func (run *inventoryRun) referenceSlot(m PageMatch, target, previous int) (int, 
 // ineffective reference click, the same reference detail, a failed return
 // click or an unstable pane — stops the walk and keeps the already
 // admitted results. There is exactly one round trip: no retry, no scroll.
-func (run *inventoryRun) referenceRoundTrip(ctx context.Context, slot *scan.Slot, targetOut detailOutcome, pre platform.Frame, target, previous, row, column, attempt int, targetName string) error {
+func (run *inventoryRun) referenceRoundTrip(ctx context.Context, slot *scan.Slot, targetOut detailOutcome, pre platform.Frame, preMatch PageMatch, target, previous, row, column, attempt int, targetName string) error {
 	ref, ok := run.referenceSlot(targetOut.match, target, previous)
 	if !ok {
 		slot.Discard()
@@ -1403,7 +1419,7 @@ func (run *inventoryRun) referenceRoundTrip(ctx context.Context, slot *scan.Slot
 	case awaitStable:
 		log.Printf("youkai: collect: %s: return click selected the target and its detail differs from reference frame %d, stable on frame %d",
 			targetName, refOut.frame.ID, backOut.frame.ID)
-		return run.admit(slot, backOut, pre, target, row, column, AssociationReference, pre.ID,
+		return run.admit(slot, backOut, pre, preMatch, target, row, column, AssociationReference, pre.ID,
 			&referenceCapture{slot: ref, row: refRow, column: refColumn, frame: refOut.frame}, attempt+1, targetName)
 	case awaitCanceled, awaitFrameErr:
 		slot.Discard()
@@ -1488,13 +1504,163 @@ type referenceCapture struct {
 	frame             platform.Frame
 }
 
+// mergeManagement unions per-frame badge verdicts. The lock flashes, so a
+// single frame may miss its annulus; a positive lock in any frame wins
+// over none or unknown, and a red trash glyph in any frame wins over none.
+// Locked and discarded together are contradictory and stay unknown.
+func mergeManagement(states ...ManagementState) ManagementState {
+	locked, discarded, none, unknown := false, false, false, false
+	for _, state := range states {
+		switch state {
+		case ManagementLocked:
+			locked = true
+		case ManagementDiscarded:
+			discarded = true
+		case ManagementNone:
+			none = true
+		default:
+			unknown = true
+		}
+	}
+	switch {
+	case locked && discarded:
+		return ManagementUnknown
+	case locked:
+		return ManagementLocked
+	case discarded:
+		return ManagementDiscarded
+	case unknown:
+		return ManagementUnknown
+	case none:
+		return ManagementNone
+	default:
+		return ManagementUnknown
+	}
+}
+
+// managementVerdict combines the list badges from the target's pre-click
+// and final frames with the detail page's top indicator. The list badge is
+// primary: locked must be confirmed by a filled top indicator, and
+// discarded/none by an open one. A missing, unreadable or disagreeing
+// source yields an empty observation state (JSON null), never none.
+func managementVerdict(pre, out PageMatch, slot int) (string, string) {
+	var states []ManagementState
+	for _, match := range []PageMatch{pre, out} {
+		if match.List != nil && slot >= 0 && slot < len(match.List.Management) {
+			states = append(states, match.List.Management[slot])
+		}
+	}
+	listState := mergeManagement(states...)
+	topState := TopManagementUnknown
+	if out.List != nil {
+		topState = out.List.TopManagement
+	}
+	evidence := fmt.Sprintf("list badge %s across %d frame(s), top indicator %s",
+		managementStateName(listState), len(states), topManagementName(topState))
+	if listState == ManagementUnknown {
+		return "", evidence
+	}
+	switch listState {
+	case ManagementLocked:
+		if topState != TopManagementLocked {
+			return "", evidence + ": the top indicator does not confirm locked"
+		}
+	case ManagementDiscarded, ManagementNone:
+		if topState != TopManagementUnlocked {
+			return "", evidence + ": the top indicator does not confirm an unlocked state"
+		}
+	default:
+		return "", evidence
+	}
+	return string(listState), evidence
+}
+
+// mergeAvatar unions per-frame avatar verdicts. A positive avatar wins
+// over an unreadable frame, but present and absent together are
+// contradictory and stay unknown.
+func mergeAvatar(states ...AvatarState) AvatarState {
+	present, absent, unknown := false, false, false
+	for _, state := range states {
+		switch state {
+		case AvatarPresent:
+			present = true
+		case AvatarAbsent:
+			absent = true
+		default:
+			unknown = true
+		}
+	}
+	switch {
+	case present && absent:
+		return AvatarUnknown
+	case present:
+		return AvatarPresent
+	case unknown:
+		return AvatarUnknown
+	case absent:
+		return AvatarAbsent
+	default:
+		return AvatarUnknown
+	}
+}
+
+// equippedVerdict combines the detail avatar (primary) with the target
+// cell's top-right avatar (confirmation). Only present/present becomes
+// equipped and absent/absent unequipped; a conflict or an unreadable
+// source yields an empty observation state (JSON null). Agent identity is
+// not read here (PR 6b).
+func equippedVerdict(pre, out PageMatch, slot int) (string, string) {
+	detail := AvatarUnknown
+	if out.Detail != nil {
+		detail = out.Detail.Avatar
+	}
+	var states []AvatarState
+	for _, match := range []PageMatch{pre, out} {
+		if match.List != nil && slot >= 0 && slot < len(match.List.Avatars) {
+			states = append(states, match.List.Avatars[slot])
+		}
+	}
+	list := mergeAvatar(states...)
+	evidence := fmt.Sprintf("detail avatar %s, list avatar %s across %d frame(s)",
+		avatarName(detail), avatarName(list), len(states))
+	switch {
+	case detail == AvatarPresent && list == AvatarPresent:
+		return EquippedStateEquipped, evidence
+	case detail == AvatarAbsent && list == AvatarAbsent:
+		return EquippedStateUnequipped, evidence
+	default:
+		return "", evidence + ": the detail and list evidence do not agree on presence"
+	}
+}
+
+func managementStateName(state ManagementState) string {
+	if state == ManagementUnknown {
+		return "unknown"
+	}
+	return string(state)
+}
+
+func topManagementName(state TopManagementState) string {
+	if state == TopManagementUnknown {
+		return "unknown"
+	}
+	return string(state)
+}
+
+func avatarName(state AvatarState) string {
+	if state == AvatarUnknown {
+		return "unknown"
+	}
+	return string(state)
+}
+
 // admit checks the admission gates and hands one capture to the kernel:
 // the target is selected, the detail changed and held stable, and the pane
 // shows a calibrated S disc with 3 or 4 substats. A calibrated NotS disc
 // is marked visited and discarded without a record; an undecidable rarity
 // or line count stops the walk with detailUnresolved. ref is non-nil only
 // for a referenceVerified admission.
-func (run *inventoryRun) admit(slot *scan.Slot, out detailOutcome, pre platform.Frame, i, row, col int, assoc Association, preID uint64, ref *referenceCapture, attempt int, target string) error {
+func (run *inventoryRun) admit(slot *scan.Slot, out detailOutcome, pre platform.Frame, preMatch PageMatch, i, row, col int, assoc Association, preID uint64, ref *referenceCapture, attempt int, target string) error {
 	if out.match.Detail == nil {
 		slot.Discard()
 		return scan.NewFault(CodeDetailUnresolved, fmt.Errorf(
@@ -1520,25 +1686,31 @@ func (run *inventoryRun) admit(slot *scan.Slot, out detailOutcome, pre platform.
 	}
 	run.visitIndex++
 	run.visited[i] = true
+	managementState, managementEvidence := managementVerdict(preMatch, out.match, i)
+	equippedState, equippedEvidence := equippedVerdict(preMatch, out.match, i)
 	obs := Observation{
-		Image:           out.frame.Image,
-		Content:         out.frame.Content,
-		FrameID:         out.frame.ID,
-		ArrivedAt:       out.frame.ArrivedAt,
-		Geometry:        out.frame.Geometry,
-		Viewport:        run.viewport,
-		Row:             row,
-		Column:          col,
-		Position:        run.position,
-		Quality:         out.match.Detail.Quality,
-		RarityFilter:    "S",
-		ScrollEvidence:  run.lastScrollEvidence,
-		Lines:           run.inv.Layout.detailLines(out.match.Detail.Substats),
-		Context:         run.inv.Layout.contextLines(i),
-		VisitIndex:      run.visitIndex,
-		Association:     assoc,
-		PreClickFrameID: preID,
-		Evidence:        run.admissionEvidence(target, pre, out, attempt, assoc, ref),
+		Image:              out.frame.Image,
+		Content:            out.frame.Content,
+		FrameID:            out.frame.ID,
+		ArrivedAt:          out.frame.ArrivedAt,
+		Geometry:           out.frame.Geometry,
+		Viewport:           run.viewport,
+		Row:                row,
+		Column:             col,
+		Position:           run.position,
+		Quality:            out.match.Detail.Quality,
+		RarityFilter:       "S",
+		ScrollEvidence:     run.lastScrollEvidence,
+		ManagementState:    managementState,
+		ManagementEvidence: managementEvidence,
+		EquippedState:      equippedState,
+		EquippedEvidence:   equippedEvidence,
+		Lines:              run.inv.Layout.detailLines(out.match.Detail.Substats),
+		Context:            run.inv.Layout.contextLines(i),
+		VisitIndex:         run.visitIndex,
+		Association:        assoc,
+		PreClickFrameID:    preID,
+		Evidence:           run.admissionEvidence(target, pre, out, attempt, assoc, ref),
 	}
 	if ref != nil {
 		obs.Reference = &ReferenceEvidence{

@@ -233,3 +233,82 @@ func TestToStructuredRarityUnverified(t *testing.T) {
 		t.Fatalf("validation = %+v, want failed", structured.Validation)
 	}
 }
+
+// TestToStructuredWithCaptureState pins the new non-text fields: confirmed
+// management state and equipment presence are written, agentId stays null,
+// and validation remains unavailable until the equipper identity exists.
+func TestToStructuredWithCaptureState(t *testing.T) {
+	rec, issues := ParseDetail(DetailLines{
+		Set:   "河豚电音[1]",
+		Level: "等级15/15",
+		Main:  "生命值 2200",
+		Subs:  []string{"暴击伤害 +3 19.2%", "穿透值 9", "攻击力 +1 6%", "暴击率 2.4%"},
+	})
+	structured := ToStructuredWithState(rec, RarityS, CaptureState{
+		ManagementState: ManagementLocked,
+		EquippedState:   EquippedStateEquipped,
+	}, issues)
+	if structured.Data.ManagementState == nil || *structured.Data.ManagementState != ManagementLocked {
+		t.Fatalf("managementState = %v, want locked", structured.Data.ManagementState)
+	}
+	if structured.Data.Equipped == nil || structured.Data.Equipped.State != EquippedStateEquipped {
+		t.Fatalf("equipped = %+v, want equipped", structured.Data.Equipped)
+	}
+	if structured.Data.Equipped.AgentID != nil {
+		t.Fatalf("equipped.agentId = %v, want null", structured.Data.Equipped.AgentID)
+	}
+	if structured.Validation.Status != ValidationUnavailable {
+		t.Fatalf("validation = %+v, want unavailable", structured.Validation)
+	}
+	if len(structured.Validation.Issues) != 1 ||
+		structured.Validation.Issues[0].Field != "equipped" {
+		t.Fatalf("validation issues = %+v, want only the equipper gap", structured.Validation.Issues)
+	}
+
+	unequipped := ToStructuredWithState(rec, RarityS, CaptureState{
+		ManagementState: ManagementDiscarded,
+		EquippedState:   EquippedStateUnequipped,
+	}, issues)
+	if unequipped.Data.ManagementState == nil || *unequipped.Data.ManagementState != ManagementDiscarded {
+		t.Fatalf("managementState = %v, want discarded", unequipped.Data.ManagementState)
+	}
+	if unequipped.Data.Equipped == nil || unequipped.Data.Equipped.State != EquippedStateUnequipped ||
+		unequipped.Data.Equipped.AgentID != nil {
+		t.Fatalf("equipped = %+v, want unequipped with agentId null", unequipped.Data.Equipped)
+	}
+	if unequipped.Validation.Status != ValidationUnavailable {
+		t.Fatalf("validation = %+v, want unavailable", unequipped.Validation)
+	}
+
+	raw, err := json.Marshal(unequipped.Data)
+	if err != nil {
+		t.Fatalf("marshal data: %v", err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("data is not JSON: %v", err)
+	}
+	equipped := doc["equipped"].(map[string]any)
+	if equipped["state"] != EquippedStateUnequipped || equipped["agentId"] != nil {
+		t.Fatalf("data.equipped = %v, want unequipped/null", equipped)
+	}
+
+	legacy := ToStructured(rec, RarityS, issues)
+	if legacy.Data.ManagementState != nil || legacy.Data.Equipped != nil {
+		t.Fatalf("legacy structured data = %+v, want null fields", legacy.Data)
+	}
+	if len(legacy.Validation.Issues) != 2 {
+		t.Fatalf("legacy validation issues = %+v, want the two data gaps", legacy.Validation.Issues)
+	}
+
+	invalid := ToStructuredWithState(rec, RarityS, CaptureState{
+		ManagementState: "unknown-value",
+		EquippedState:   "maybe",
+	}, issues)
+	if invalid.Data.ManagementState != nil || invalid.Data.Equipped != nil {
+		t.Fatalf("invalid state = %+v, want null fields", invalid.Data)
+	}
+	if invalid.Validation.Status != ValidationUnavailable {
+		t.Fatalf("validation = %+v, want unavailable", invalid.Validation)
+	}
+}

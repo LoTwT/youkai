@@ -45,6 +45,20 @@ type Observation struct {
 	// the observation carries no such evidence; the recognizer never
 	// infers rarity from the recognized text.
 	Rarity string
+	// ManagementState is the traversal's confirmed management state
+	// ("locked", "discarded", "none") or empty when its evidence was
+	// unreadable or conflicting.
+	ManagementState string
+	// ManagementEvidence describes the list badges and top indicator the
+	// management state was confirmed from.
+	ManagementEvidence string
+	// EquippedState is the traversal's confirmed equipment presence
+	// ("equipped", "unequipped") or empty when unreadable or conflicting.
+	// Agent identity is not part of this revision.
+	EquippedState string
+	// EquippedEvidence describes the detail and list avatar verdicts the
+	// presence decision rested on.
+	EquippedEvidence string
 	// Capture is the traversal's own capture record, verbatim. Its pixels
 	// are omitted by the collect side and live only in the evidence
 	// files; the payload keeps the navigation provenance (position,

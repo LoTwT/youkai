@@ -276,9 +276,10 @@ func applyTerminalLocked(item *record.ItemRecord, rec scan.Record) error {
 			return err
 		}
 		item.Data = data
-		// Management state and the equipper are not recognized yet, so a
-		// recognized disc always needs review; it must never be treated as
-		// auto-accepted merely because parsing found no issue.
+		// Management state and equipment presence are captured, but the
+		// equipper identity is still unknown, so a recognized disc always
+		// needs review; it must never be treated as auto-accepted merely
+		// because parsing found no issue.
 		if _, ok := rec.Result.(RecognitionResult); ok {
 			item.Quality = record.QualityNeedsReview
 		}

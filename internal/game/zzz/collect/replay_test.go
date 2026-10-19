@@ -74,6 +74,106 @@ func fileExists(p string) bool {
 	return err == nil && !st.IsDir()
 }
 
+// TestReplayManagementAndAvatarSamples replays the labelled M2 frames
+// through the management/avatar classifiers. It is the real-frame
+// counterpart of the masked-fixture tests: the same thresholds must
+// separate lock, discard and none, and the bright, dim and absent avatars
+// on the unmasked captures. The lock's flash dark phase is not in these
+// recordings; that remains a documented gap covered only by the
+// multi-frame union tests.
+func TestReplayManagementAndAvatarSamples(t *testing.T) {
+	root := sampleRoot(t)
+	m := macCloudMatcher()
+	cases := []struct {
+		dir          string
+		selected     int
+		management   collect.ManagementState
+		top          collect.TopManagementState
+		detailAvatar collect.AvatarState
+		listAvatar   collect.AvatarState
+		otherCells   map[int]collect.ManagementState
+		otherAvatars map[int]collect.AvatarState
+	}{
+		{
+			dir: "s2-70-unlocked-equipped", selected: 0,
+			management: collect.ManagementNone, top: collect.TopManagementUnlocked,
+			detailAvatar: collect.AvatarPresent, listAvatar: collect.AvatarPresent,
+		},
+		{
+			dir: "s2-00-start", selected: 0,
+			management: collect.ManagementLocked, top: collect.TopManagementLocked,
+			detailAvatar: collect.AvatarPresent, listAvatar: collect.AvatarPresent,
+		},
+		{
+			dir: "s2-10-slot1-list-top", selected: 19,
+			management: collect.ManagementDiscarded, top: collect.TopManagementUnlocked,
+			detailAvatar: collect.AvatarAbsent, listAvatar: collect.AvatarAbsent,
+			otherCells:   map[int]collect.ManagementState{0: collect.ManagementLocked, 18: collect.ManagementDiscarded},
+			otherAvatars: map[int]collect.AvatarState{1: collect.AvatarUnknown},
+		},
+		{
+			dir: "s2-d1-discarded-r0c1", selected: 1,
+			management: collect.ManagementDiscarded, top: collect.TopManagementUnlocked,
+			detailAvatar: collect.AvatarAbsent, listAvatar: collect.AvatarAbsent,
+			otherCells: map[int]collect.ManagementState{0: collect.ManagementLocked, 2: collect.ManagementDiscarded},
+		},
+		{
+			dir: "s2-s1-bot-cell-r2c0", selected: 8,
+			management: collect.ManagementLocked, top: collect.TopManagementLocked,
+			detailAvatar: collect.AvatarAbsent, listAvatar: collect.AvatarAbsent,
+		},
+		{
+			dir: "s2-wL-top-cell-r0c1", selected: 1,
+			management: collect.ManagementLocked, top: collect.TopManagementLocked,
+			detailAvatar: collect.AvatarPresent, listAvatar: collect.AvatarPresent,
+		},
+		{
+			dir: "s2-n5-PHY-cell-r0c1", selected: 1,
+			management: collect.ManagementLocked, top: collect.TopManagementLocked,
+			detailAvatar: collect.AvatarPresent, listAvatar: collect.AvatarPresent,
+		},
+		{
+			dir: "s2-n5-ICE-cell-r0c1", selected: 1,
+			management: collect.ManagementLocked, top: collect.TopManagementLocked,
+			detailAvatar: collect.AvatarAbsent, listAvatar: collect.AvatarAbsent,
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.dir, func(t *testing.T) {
+			pm := m.Match(loadSourceFrame(t, root, tc.dir))
+			if pm.Page != collect.PageWarehouse || pm.List == nil || pm.Detail == nil {
+				t.Fatalf("not a populated warehouse frame: %s", pm.Evidence)
+			}
+			if pm.List.Selected != tc.selected {
+				t.Fatalf("selected %d, want %d", pm.List.Selected, tc.selected)
+			}
+			if got := pm.List.Management[tc.selected]; got != tc.management {
+				t.Fatalf("slot %d management %q, want %q", tc.selected, got, tc.management)
+			}
+			if got := pm.List.TopManagement; got != tc.top {
+				t.Fatalf("top management %q, want %q", got, tc.top)
+			}
+			if got := pm.Detail.Avatar; got != tc.detailAvatar {
+				t.Fatalf("detail avatar %q, want %q", got, tc.detailAvatar)
+			}
+			if got := pm.List.Avatars[tc.selected]; got != tc.listAvatar {
+				t.Fatalf("list avatar %q, want %q", got, tc.listAvatar)
+			}
+			for slot, want := range tc.otherCells {
+				if got := pm.List.Management[slot]; got != want {
+					t.Fatalf("slot %d management %q, want %q", slot, got, want)
+				}
+			}
+			for slot, want := range tc.otherAvatars {
+				if got := pm.List.Avatars[slot]; got != want {
+					t.Fatalf("slot %d avatar %q, want %q", slot, got, want)
+				}
+			}
+		})
+	}
+}
+
 // TestReplayFieldSamples runs the calibrated matcher over every recorded
 // source frame in the fixture table and the measured scroll/detail pairs.
 // The fixtures prove the same verdicts on the reduced pixels; this replay
