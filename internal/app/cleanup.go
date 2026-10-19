@@ -229,7 +229,7 @@ func (s *Service) cleanupBlockedLocked() error {
 func pendingReviewCount(items []record.ItemRecord) int {
 	count := 0
 	for _, item := range items {
-		if item.Status != record.StatusProduced || !hasStructured(item.Data) {
+		if item.Status != record.StatusProduced || !hasStructured(item) {
 			continue
 		}
 		switch item.Quality {
@@ -241,20 +241,33 @@ func pendingReviewCount(items []record.ItemRecord) int {
 	return count
 }
 
-// hasStructured reports whether a produced payload carries the structured
-// drive-disc interpretation the review flow edits, as opposed to raw
-// recognized lines only.
-func hasStructured(raw json.RawMessage) bool {
-	if len(raw) == 0 {
+// hasStructured reports whether a produced payload carries (or can derive
+// in memory) the structured drive-disc interpretation the review flow
+// edits. Legacy checkpoints have only raw lines; the results view backfills
+// them on load, so cleanup previews must use the same rule or they would
+// report zero pending reviews while the UI shows rows awaiting review.
+func hasStructured(item record.ItemRecord) bool {
+	if len(item.Data) == 0 {
 		return false
 	}
 	var doc struct {
 		Structured json.RawMessage `json:"structured"`
 	}
-	if err := json.Unmarshal(raw, &doc); err != nil {
+	if err := json.Unmarshal(item.Data, &doc); err != nil {
 		return false
 	}
 	value := bytes.TrimSpace(doc.Structured)
+	if len(value) > 0 && !bytes.Equal(value, []byte("null")) && json.Valid(value) {
+		return true
+	}
+	backfilled, changed, err := BackfillStructured(item.Data, item.Observed)
+	if err != nil || !changed {
+		return false
+	}
+	if err := json.Unmarshal(backfilled, &doc); err != nil {
+		return false
+	}
+	value = bytes.TrimSpace(doc.Structured)
 	return len(value) > 0 && !bytes.Equal(value, []byte("null")) && json.Valid(value)
 }
 

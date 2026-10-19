@@ -205,6 +205,34 @@ func TestServiceCleanupBlockedWhileFinalSaveFails(t *testing.T) {
 	}
 }
 
+// TestPendingReviewCountBackfillsLegacyLines mirrors the results view:
+// a legacy produced item with only raw drive-disc lines is still a row the
+// user will see as pending after the in-memory backfill, so cleanup
+// previews must not report zero.
+func TestPendingReviewCountBackfillsLegacyLines(t *testing.T) {
+	legacy := record.ItemRecord{
+		Status:  record.StatusProduced,
+		Quality: record.QualityNotEvaluated,
+		Data: json.RawMessage(`{"lines":[
+			{"role":"name","text":"河豚电音[1]"},
+			{"role":"level","text":"等级15/15"},
+			{"role":"main","text":"生命值 2200"},
+			{"role":"sub1","text":"暴击伤害 +3 19.2%"},
+			{"role":"sub2","text":"穿透值 9"},
+			{"role":"sub3","text":"攻击力 +1 6%"}
+		]}`),
+		Observed: json.RawMessage(`{"capture":{"quality":"S"}}`),
+	}
+	if got := pendingReviewCount([]record.ItemRecord{legacy}); got != 1 {
+		t.Fatalf("legacy pending count = %d, want 1", got)
+	}
+	empty := legacy
+	empty.Data = json.RawMessage(`{"lines":[{"role":"qualityBadge","text":"S"}]}`)
+	if got := pendingReviewCount([]record.ItemRecord{empty}); got != 0 {
+		t.Fatalf("non-disc pending count = %d, want 0", got)
+	}
+}
+
 func TestServiceCleanupPreviewsUnreadableRecord(t *testing.T) {
 	store, paths := cleanupStore(t)
 	cleanupFixture(t, store, "cleanup-1", true)
