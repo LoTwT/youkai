@@ -212,36 +212,41 @@ func (d *recordDeliverer) buildAdmittedLocked(seq scan.Seq, observation any) (re
 	var evidence []record.EvidenceFile
 	var evErr error
 	if obs, ok := observation.(Observation); ok {
-		for i, crop := range obs.Lines {
-			if crop.Image == nil {
-				continue
+		write := func(id string, img image.Image) {
+			if img == nil {
+				return
 			}
-			id, ev, err := d.writeEvidenceLine(seq, i, crop.Image)
+			ev, err := d.writeEvidence(id, img)
 			if err != nil {
 				if evErr == nil {
 					evErr = err
 				}
-				continue
+				return
 			}
 			item.EvidenceIDs = append(item.EvidenceIDs, id)
 			evidence = append(evidence, ev)
+		}
+		for i, crop := range obs.Lines {
+			write(evidenceID(seq, i), crop.Image)
+		}
+		for i, crop := range obs.Context {
+			write(contextEvidenceID(seq, i), crop.Image)
 		}
 	}
 	return item, evidence, evErr
 }
 
-// writeEvidenceLine persists one line crop as a PNG evidence file and
-// returns its id and descriptor.
-func (d *recordDeliverer) writeEvidenceLine(seq scan.Seq, line int, img image.Image) (string, record.EvidenceFile, error) {
+// writeEvidence persists one crop as a PNG evidence file and returns its
+// descriptor.
+func (d *recordDeliverer) writeEvidence(id string, img image.Image) (record.EvidenceFile, error) {
 	var buf bytes.Buffer
 	if err := png.Encode(&buf, img); err != nil {
-		return "", record.EvidenceFile{}, fmt.Errorf("encode evidence: %w", err)
+		return record.EvidenceFile{}, fmt.Errorf("encode evidence: %w", err)
 	}
 	data := buf.Bytes()
-	id := evidenceID(seq, line)
 	ev, err := d.store.WriteEvidence(d.recordID, id, data)
 	if errors.Is(err, record.ErrEvidenceExists) {
-		// A previous attempt already wrote this line (evidence is
+		// A previous attempt already wrote this crop (evidence is
 		// write-once and the store is the only writer below the data
 		// root); the bytes are identical, so the descriptor is
 		// recomputed from them. A mismatching leftover file fails the
@@ -253,9 +258,9 @@ func (d *recordDeliverer) writeEvidenceLine(seq scan.Seq, line int, img image.Im
 			SHA256:     hex.EncodeToString(sum[:]),
 		}
 	} else if err != nil {
-		return "", record.EvidenceFile{}, fmt.Errorf("write evidence %s: %w", id, err)
+		return record.EvidenceFile{}, fmt.Errorf("write evidence %s: %w", id, err)
 	}
-	return id, ev, nil
+	return ev, nil
 }
 
 // applyTerminalLocked updates one item with its terminal record. The
@@ -436,7 +441,7 @@ func observedPayloadOf(observation any) (json.RawMessage, error) {
 	case nil:
 		return nil, nil
 	case Observation:
-		return observedPayload(obs), nil
+		return observedPayload(obs)
 	default:
 		return marshalPayload(obs)
 	}
@@ -461,6 +466,13 @@ func marshalPayload(v any) (json.RawMessage, error) {
 // second attempt addresses the same file.
 func evidenceID(seq scan.Seq, line int) string {
 	return fmt.Sprintf("%06d-line%d", seq, line)
+}
+
+// contextEvidenceID names one non-recognition context crop's evidence
+// file: the capture sequence and the context index. Context evidence is
+// written beside the line crops and never recognized.
+func contextEvidenceID(seq scan.Seq, context int) string {
+	return fmt.Sprintf("%06d-context%d", seq, context)
 }
 
 // terminationFrom maps the kernel's final snapshot onto the record's

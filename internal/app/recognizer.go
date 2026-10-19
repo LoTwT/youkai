@@ -108,6 +108,8 @@ func (r *lineRecognizer) Recognize(ctx context.Context, task scan.Task, submit s
 		return nil
 	}
 	result := RecognitionResult{Lines: make([]RecognizedLine, 0, len(obs.Lines))}
+	// Context (the rarity badge and the selected cell border) is admission
+	// evidence only: it is excluded from recognition on purpose.
 	for _, crop := range obs.Lines {
 		if ctx.Err() != nil {
 			return nil
