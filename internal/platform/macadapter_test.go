@@ -599,6 +599,20 @@ func TestMacSessionActivate(t *testing.T) {
 	}
 }
 
+// A cached frame must not be served to a request whose context already
+// ended: the traversal's bounded waits rely on the context, not on the
+// stream briefly running dry.
+func TestMacFrameHonorsCanceledContext(t *testing.T) {
+	w := newMacWorld(t)
+	sess := w.openReady(t)
+	defer sess.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := sess.Frame(ctx, FrameRequest{}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Frame error = %v, want context.Canceled", err)
+	}
+}
+
 // M3/M4/M1-adapter: open outcomes and rollback.
 func TestMacOpenOutcomesAndRollback(t *testing.T) {
 	t.Run("hotkey failure leaves everything else untouched", func(t *testing.T) {

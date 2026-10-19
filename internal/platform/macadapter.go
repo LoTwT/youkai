@@ -592,6 +592,11 @@ func (s *macSession) Frame(ctx context.Context, req FrameRequest) (Frame, error)
 		poll = 5 * time.Millisecond
 	}
 	for {
+		// A continuously producing stream must not bypass the caller's
+		// deadline: check the context before serving a cached frame.
+		if err := ctx.Err(); err != nil {
+			return Frame{}, err
+		}
 		if s.isClosed() {
 			return Frame{}, &Fault{Code: CodeCaptureStopped, Class: ClassBroken,
 				Message: "the session is closed", At: s.adapter.now()}

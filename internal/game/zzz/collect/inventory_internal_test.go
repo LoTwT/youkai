@@ -24,6 +24,9 @@ type scrollScriptMatcher struct {
 	rows    int
 	columns int
 	verdict map[scrollPair]ScrollMatch
+	// alwaysStationary makes every pair Stationary, for deadline tests
+	// whose frame source keeps producing fresh content.
+	alwaysStationary bool
 }
 
 func (m *scrollScriptMatcher) Match(f platform.Frame) PageMatch {
@@ -40,6 +43,9 @@ func (m *scrollScriptMatcher) Match(f platform.Frame) PageMatch {
 }
 
 func (m *scrollScriptMatcher) MatchScroll(before, after platform.Frame) ScrollMatch {
+	if m.alwaysStationary {
+		return ScrollMatch{Stationary: true, Evidence: "scripted stationary"}
+	}
 	if sm, ok := m.verdict[scrollPair{before: before.ID, after: after.ID}]; ok {
 		return sm
 	}
@@ -59,6 +65,29 @@ type scrollScriptView struct {
 	// blockAfter makes Frame block until the request's deadline after the
 	// scripted frames are exhausted.
 	blockAfter bool
+}
+
+// endlessFrameView keeps producing fresh frames. It models the real live
+// stream: Frame can always return current content, so a wait that only
+// relies on Frame returning DeadlineExceeded would spin forever.
+type endlessFrameView struct {
+	next uint64
+}
+
+func (v *endlessFrameView) Observe() (platform.Observation, error) {
+	return platform.Observation{Ready: true, Geometry: 1}, nil
+}
+
+func (v *endlessFrameView) Dispatch(op platform.InputOp) platform.InputResult {
+	return platform.InputResult{Status: platform.InputPosted}
+}
+
+func (v *endlessFrameView) Frame(ctx context.Context, req platform.FrameRequest) (platform.Frame, error) {
+	if err := ctx.Err(); err != nil {
+		return platform.Frame{}, err
+	}
+	v.next++
+	return platform.Frame{ID: v.next, Geometry: 1, ArrivedAt: time.Now()}, nil
 }
 
 func (v *scrollScriptView) Observe() (platform.Observation, error) {
@@ -263,6 +292,28 @@ func TestAwaitScrollStationaryWaitsForBudget(t *testing.T) {
 	}
 	if view.attempts < 2 {
 		t.Fatalf("only %d frame request(s); a stationary verdict must be rechecked to the budget", view.attempts)
+	}
+}
+
+// TestAwaitScrollContinuousStreamRespectsBudget pins the live-stream
+// case: fresh frames keep arriving, so Frame never returns a deadline
+// error on its own. The wait must still end at its budget.
+func TestAwaitScrollContinuousStreamRespectsBudget(t *testing.T) {
+	l := sixRowScrollLayout()
+	before := scrollFrame(1)
+	m := &scrollScriptMatcher{rows: l.Rows, columns: l.Columns, alwaysStationary: true}
+	budget := 40 * time.Millisecond
+	run := newScrollRun(l, &endlessFrameView{}, m, budget)
+	started := time.Now()
+	out, err := run.awaitScroll(context.Background(), before)
+	if err != nil {
+		t.Fatalf("awaitScroll: %v", err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("awaitScroll ran for %s with a %s budget", elapsed, budget)
+	}
+	if !out.stationary || out.displaced || out.lost {
+		t.Fatalf("outcome %+v, want Stationary at the budget", out)
 	}
 }
 

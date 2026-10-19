@@ -1325,6 +1325,15 @@ func (run *inventoryRun) awaitDetail(ctx context.Context, baseline platform.Fram
 	runLen := 0
 	var runStart time.Time
 	for {
+		// A live stream must not extend the detail wait past its budget.
+		if err := ctx.Err(); err != nil {
+			out.class, out.err = awaitCanceled, err
+			return out, nil
+		}
+		if !time.Now().Before(deadline) {
+			out.class = awaitDeadline
+			return out, nil
+		}
 		fctx, cancel := context.WithDeadline(ctx, deadline)
 		f, err := run.view.Frame(fctx, platform.FrameRequest{After: after})
 		cancel()
@@ -1559,7 +1568,29 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 		out.after, out.afterMatch, out.match = candidate, candidateMatch, candidateScroll
 		return out, nil
 	}
+	finish := func() (scrollOutcome, error) {
+		switch {
+		case haveCandidate:
+			// A displacement was seen but never settled: commit
+			// nothing and stop at the unverified position (T5 §5).
+			out.lost, out.unsettled = true, true
+			out.after, out.afterMatch, out.match = candidate, candidateMatch, candidateScroll
+		case sawLost || sawAmbiguous:
+			out.lost = true
+		case sawStationary:
+			out.stationary = true
+		}
+		return out, nil
+	}
 	for {
+		// A live stream keeps delivering frames; the deadline must be
+		// enforced here as well, not only by Frame's context.
+		if err := ctx.Err(); err != nil {
+			return scrollOutcome{}, err
+		}
+		if !time.Now().Before(deadline) {
+			return finish()
+		}
 		fctx, cancel := context.WithDeadline(ctx, deadline)
 		f, err := run.view.Frame(fctx, platform.FrameRequest{After: after})
 		cancel()
@@ -1568,18 +1599,7 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 			case ctx.Err() != nil:
 				return scrollOutcome{}, ctx.Err()
 			case errors.Is(err, context.DeadlineExceeded):
-				switch {
-				case haveCandidate:
-					// A displacement was seen but never settled: commit
-					// nothing and stop at the unverified position (T5 §5).
-					out.lost, out.unsettled = true, true
-					out.after, out.afterMatch, out.match = candidate, candidateMatch, candidateScroll
-				case sawLost || sawAmbiguous:
-					out.lost = true
-				case sawStationary:
-					out.stationary = true
-				}
-				return out, nil
+				return finish()
 			default:
 				return scrollOutcome{}, wrapObservationErr(err)
 			}
@@ -1816,6 +1836,15 @@ func (run *inventoryRun) awaitSettled(ctx context.Context, expect func(PageMatch
 	out := awaitOutcome{}
 	after := run.lastArrived
 	for {
+		// A live stream must not extend the wait past its budget.
+		if err := ctx.Err(); err != nil {
+			out.class, out.err = awaitCanceled, err
+			return out
+		}
+		if !time.Now().Before(deadline) {
+			out.class = awaitDeadline
+			return out
+		}
 		fctx, cancel := context.WithDeadline(ctx, deadline)
 		f, err := run.view.Frame(fctx, platform.FrameRequest{After: after})
 		cancel()
