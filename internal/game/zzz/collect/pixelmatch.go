@@ -371,17 +371,10 @@ func (m *PixelMatcher) bestShift(before, after *image.RGBA) (int, float64, bool)
 // grayscale MADs, with the calibrated same/different bands. The caller
 // must not read an Undecided verdict as either answer.
 func (m *PixelMatcher) CompareDetail(a, b platform.Frame) DetailComparison {
-	if m == nil || !m.valid || !m.frameFits(a) || !m.frameFits(b) {
+	mean, ok := m.DetailMAD(a, b)
+	if !ok {
 		return DetailUndecided
 	}
-	if len(m.L.DetailLines) == 0 {
-		return DetailUndecided
-	}
-	var sum float64
-	for _, line := range m.L.DetailLines {
-		sum += lineMAD(a.Image, b.Image, line.Rect)
-	}
-	mean := sum / float64(len(m.L.DetailLines))
 	switch {
 	case mean < m.C.DetailSameMax:
 		return DetailSame
@@ -390,6 +383,21 @@ func (m *PixelMatcher) CompareDetail(a, b platform.Frame) DetailComparison {
 	default:
 		return DetailUndecided
 	}
+}
+
+// DetailMAD returns the mean of the seven per-line grayscale MADs and
+// whether the comparison is possible under this matcher's calibration.
+// It is the numeric evidence behind CompareDetail; the field replay uses
+// it to report the measured same-content and adjacent-pair distributions.
+func (m *PixelMatcher) DetailMAD(a, b platform.Frame) (float64, bool) {
+	if m == nil || !m.valid || !m.frameFits(a) || !m.frameFits(b) || len(m.L.DetailLines) == 0 {
+		return 0, false
+	}
+	var sum float64
+	for _, line := range m.L.DetailLines {
+		sum += lineMAD(a.Image, b.Image, line.Rect)
+	}
+	return sum / float64(len(m.L.DetailLines)), true
 }
 
 // classify returns the color tier whose mean is within the probe's

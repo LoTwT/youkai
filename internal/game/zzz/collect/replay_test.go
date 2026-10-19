@@ -9,8 +9,11 @@ import (
 	"image"
 	"image/draw"
 	"image/png"
+	"math"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -38,9 +41,8 @@ func sampleRoot(t *testing.T) string {
 	return root
 }
 
-func loadSourceFrame(t *testing.T, root, dir string) platform.Frame {
+func loadSourcePNG(t *testing.T, p string) platform.Frame {
 	t.Helper()
-	p := filepath.Join(root, dir, "frame-0001.png")
 	raw, err := os.ReadFile(p)
 	if err != nil {
 		t.Fatalf("read source frame %s: %v", p, err)
@@ -53,11 +55,22 @@ func loadSourceFrame(t *testing.T, root, dir string) platform.Frame {
 	rgba := image.NewRGBA(b)
 	draw.Draw(rgba, b, img, b.Min, draw.Src)
 	return platform.Frame{
-		ID:       1,
-		Geometry: 1,
-		Image:    rgba,
-		Content:  collect.MacCloudLayout().Content,
+		Content: collect.MacCloudLayout().Content,
+		Image:   rgba,
 	}
+}
+
+func loadSourceFrame(t *testing.T, root, dir string) platform.Frame {
+	t.Helper()
+	f := loadSourcePNG(t, filepath.Join(root, dir, "frame-0001.png"))
+	f.ID = 1
+	f.Geometry = 1
+	return f
+}
+
+func fileExists(p string) bool {
+	st, err := os.Stat(p)
+	return err == nil && !st.IsDir()
 }
 
 // TestReplayFieldSamples runs the calibrated matcher over every recorded
@@ -98,6 +111,155 @@ func TestReplayFieldSamples(t *testing.T) {
 			}
 		})
 	}
+
+	replayMADDistribution(t, root, m)
+}
+
+// replayMADDistribution measures the detail MAD distribution the 4b-1
+// thresholds were chosen from. The same-content pairs are each evidence
+// directory's frame-0000/frame-0001 (both captured after the click); the
+// adjacent pairs are the orthogonal neighbors inside the six complete
+// 5×4 viewports, using each cell's settled frame-0001. The key safety
+// invariant is that no same-content pair crosses DetailSameMax; known
+// low-MAD adjacent near-duplicates are reported, never asserted away.
+func replayMADDistribution(t *testing.T, root string, m *collect.PixelMatcher) {
+	t.Helper()
+	same := sameContentMADs(t, root, m)
+	if len(same) != 236 {
+		t.Fatalf("same-content pairs: %d, want 236", len(same))
+	}
+	unsafe := 0
+	for _, v := range same {
+		if v > m.C.DetailSameMax {
+			unsafe++
+		}
+	}
+	if unsafe != 0 {
+		t.Fatalf("%d same-content pairs exceed DetailSameMax %.1f; the Same band would falsely admit them",
+			unsafe, m.C.DetailSameMax)
+	}
+	logMADStats(t, "same-content frame-0000/0001", same, m.C.DetailSameMax, m.C.DetailDifferentMin)
+
+	adjacent, low, band := adjacentViewportMADs(t, root, m)
+	if len(adjacent) != 186 {
+		t.Fatalf("adjacent pairs: %d, want 186", len(adjacent))
+	}
+	logMADStats(t, "orthogonally adjacent cells in the six viewports", adjacent, m.C.DetailSameMax, m.C.DetailDifferentMin)
+	if len(low) > 0 {
+		t.Logf("adjacent pairs below DetailSameMax (safe stops, not failures): %s", strings.Join(low, "; "))
+	}
+	if len(band) > 0 {
+		t.Logf("adjacent pairs between the bands (safe stops, not failures): %s", strings.Join(band, "; "))
+	}
+}
+
+func sameContentMADs(t *testing.T, root string, m *collect.PixelMatcher) []float64 {
+	t.Helper()
+	dirs, err := filepath.Glob(filepath.Join(root, "s2-*"))
+	if err != nil {
+		t.Fatalf("list sample directories: %v", err)
+	}
+	sort.Strings(dirs)
+	out := make([]float64, 0, 236)
+	for _, dir := range dirs {
+		a := filepath.Join(dir, "frame-0000.png")
+		b := filepath.Join(dir, "frame-0001.png")
+		if !fileExists(a) || !fileExists(b) {
+			continue
+		}
+		value, ok := m.DetailMAD(loadSourcePNG(t, a), loadSourcePNG(t, b))
+		if !ok {
+			t.Fatalf("%s: DetailMAD is not comparable", dir)
+		}
+		out = append(out, value)
+	}
+	return out
+}
+
+func adjacentViewportMADs(t *testing.T, root string, m *collect.PixelMatcher) ([]float64, []string, []string) {
+	t.Helper()
+	groups := []string{
+		"s2-s1-bot-cell",
+		"s2-wL-top-cell",
+		"s2-wBL-top-cell",
+		"s2-wBR-top-cell",
+		"s2-s5-top-cell",
+		"s2-s6-top-cell",
+	}
+	out := make([]float64, 0, 186)
+	var low, band []string
+	for _, group := range groups {
+		frames := make([]platform.Frame, 20)
+		for r := 0; r < 5; r++ {
+			for c := 0; c < 4; c++ {
+				frames[r*4+c] = loadSourceFrame(t, root, fmt.Sprintf("%s-r%dc%d", group, r, c))
+			}
+		}
+		add := func(i, j int, label string) {
+			value, ok := m.DetailMAD(frames[i], frames[j])
+			if !ok {
+				t.Fatalf("%s: DetailMAD is not comparable", label)
+			}
+			out = append(out, value)
+			switch {
+			case value < m.C.DetailSameMax:
+				low = append(low, fmt.Sprintf("%s %.3f", label, value))
+			case value <= m.C.DetailDifferentMin:
+				band = append(band, fmt.Sprintf("%s %.3f", label, value))
+			}
+		}
+		for r := 0; r < 5; r++ {
+			for c := 0; c < 4; c++ {
+				i := r*4 + c
+				if c < 3 {
+					add(i, i+1, fmt.Sprintf("%s r%dc%d→r%dc%d", group, r, c, r, c+1))
+				}
+				if r < 4 {
+					add(i, i+4, fmt.Sprintf("%s r%dc%d→r%dc%d", group, r, c, r+1, c))
+				}
+			}
+		}
+	}
+	return out, low, band
+}
+
+func logMADStats(t *testing.T, label string, values []float64, sameMax, differentMin float64) {
+	t.Helper()
+	sorted := append([]float64(nil), values...)
+	sort.Float64s(sorted)
+	var above, below, band int
+	aboveMin := math.Inf(1)
+	for _, v := range sorted {
+		switch {
+		case v > differentMin:
+			above++
+			if v < aboveMin {
+				aboveMin = v
+			}
+		case v < sameMax:
+			below++
+		default:
+			band++
+		}
+	}
+	aboveMinText := "n/a"
+	if above > 0 {
+		aboveMinText = fmt.Sprintf("%.3f", aboveMin)
+	}
+	aboveSame := above + band
+	t.Logf("%s: n=%d min=%.3f p50=%.3f p95=%.3f max=%.3f; >%.1f=%d (min %s) >%.1f=%d <%.1f=%d in-band=%d",
+		label, len(sorted), sorted[0], quantile(sorted, 0.50), quantile(sorted, 0.95), sorted[len(sorted)-1],
+		differentMin, above, aboveMinText, sameMax, aboveSame, sameMax, below, band)
+}
+
+func quantile(sorted []float64, p float64) float64 {
+	if len(sorted) == 0 {
+		return 0
+	}
+	// Nearest lower rank over n-1 intervals; this is the convention the
+	// 4b-1 calibration note reports (p95 0.88 on the same pairs).
+	index := int(p * float64(len(sorted)-1))
+	return sorted[index]
 }
 
 // fieldReplay serves the recorded wheel-2 frames as the game's frames: the

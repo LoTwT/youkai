@@ -311,16 +311,17 @@ var detailCases = []detailCase{
 	// Same content under a different navigation step (s1 bottom cell vs
 	// d1 discarded) — measured same-content pairs top out at 1.01.
 	{"same content", "s2-d1-discarded-r0c1", "s2-s1-bot-cell-r4c2", collect.DetailSame},
-	// Adjacent discs with different fields — measured different pairs are
-	// above 4.0 apart from two reported near-duplicates.
+	// Adjacent discs with different fields — 183 of the 186 measured
+	// adjacent pairs are above 4.0; two known near-duplicates are below
+	// 2.0 (0.42, 0.62) and one is in the band (2.38).
 	{"different content", "s2-d1-discarded-r0c1", "s2-d1-discarded-r0c2", collect.DetailDifferent},
 	{"adjacent wheel rows", "s2-wL-top-cell-r0c0", "s2-wL-top-cell-r0c1", collect.DetailDifferent},
 	// The known near-duplicate pair (0.62): Same is the honest answer at
 	// pixel resolution, and the transition rule still needs another piece
 	// of evidence (a unique 1:1 neighbor round trip, 4b-2).
 	{"near duplicate", "s2-s6-top-cell-r4c0", "s2-s6-top-cell-r4c1", collect.DetailSame},
-	// The known 3.72 pair sits between the bands: undecided, not rounded
-	// into either answer.
+	// The known 3.72 pair is diagonal (non-adjacent) and sits between the
+	// bands: undecided, not rounded into either answer.
 	{"between the bands", "s2-s6-top-cell-r3c3", "s2-s6-top-cell-r4c0", collect.DetailUndecided},
 }
 

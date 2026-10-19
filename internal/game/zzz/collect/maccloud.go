@@ -165,9 +165,12 @@ type Calibration struct {
 	WheelOtherMax    int // ≤: the position is not selected
 
 	// Detail comparison: mean of the seven per-line grayscale MADs.
-	// Measured same-content pairs (n=134): max 1.01; different adjacent
-	// pairs (n=115): 98% above 4.0, with one near-duplicate at 0.62 and one
-	// at 3.72 (reported as remaining risk, thresholds not relaxed).
+	// Measured same-content pairs (frame-0000/0001, n=236): max 1.01,
+	// p95 0.88. Adjacent cell pairs in the six full viewports (n=186):
+	// 183 above 4.0 (min 4.07), two below 2.0 (0.42, 0.62), one in the band
+	// (2.38); the 3.72 pair is diagonal, not adjacent. No same-content pair
+	// exceeds 2.0, so the bands do not falsely admit; low-MAD adjacent
+	// pairs only stop safely (detailUnattributed).
 	DetailSameMax      float64
 	DetailDifferentMin float64
 
