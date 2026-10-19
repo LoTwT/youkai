@@ -14,11 +14,14 @@ package zzz
 // Display-name sources: 生命值、攻击力、防御力、暴击率、暴击伤害、穿透值、
 // 穿透率、异常精通 are evidenced by the six-disc sample of
 // internal/recognition/testdata; the six slot-5 damage bonuses (物理伤
-// 害加成 uses 物理, the other elements follow the uniform X属性伤害加成
-// pattern, 以太属性伤害加成 included — the user's 2026-10-18 input had a
-// typo there) and the three slot-6 attributes (异常掌控、冲击力、能量自动
-// 回复) were supplied by the user on 2026-10-18 and are pending a
-// verification pass against the real client screens.
+// 害加成 uses 物理; 火/冰/电/风 follow the uniform X属性伤害加成 pattern,
+// while 以太伤害加成 has no 属性 — asymmetric with the elements, matching
+// 物理; the user's 2026-10-18 supply had assumed the uniform pattern) and
+// the three slot-6 attributes (异常掌控、冲击力、能量自动回复) were
+// verified against real client screens in the 2026-10-19 macOS sample
+// round (detail pages and filter-panel options, evidence directories
+// s2-n5-* and s2-n6-*; see docs/reports/2026-10-19-m2-macos-sample-round.md
+// and the 27-disc fixture in internal/recognition/testdata/macos-cloud).
 
 // Unit distinguishes the two ways a stat value is displayed: fixed points
 // or a percentage.
@@ -52,7 +55,7 @@ const (
 	AttrFireDamage         Attribute = "fireDamage"         // 火属性伤害加成
 	AttrIceDamage          Attribute = "iceDamage"          // 冰属性伤害加成
 	AttrElectricDamage     Attribute = "electricDamage"     // 电属性伤害加成
-	AttrEtherDamage        Attribute = "etherDamage"        // 以太属性伤害加成
+	AttrEtherDamage        Attribute = "etherDamage"        // 以太伤害加成
 	AttrWindDamage         Attribute = "windDamage"         // 风属性伤害加成
 )
 
@@ -94,7 +97,7 @@ var attributeTable = []attributeDef{
 	{attribute: AttrFireDamage, name: "火属性伤害加成", units: []Unit{UnitPercent}},
 	{attribute: AttrIceDamage, name: "冰属性伤害加成", units: []Unit{UnitPercent}},
 	{attribute: AttrElectricDamage, name: "电属性伤害加成", units: []Unit{UnitPercent}},
-	{attribute: AttrEtherDamage, name: "以太属性伤害加成", units: []Unit{UnitPercent}},
+	{attribute: AttrEtherDamage, name: "以太伤害加成", units: []Unit{UnitPercent}},
 	{attribute: AttrWindDamage, name: "风属性伤害加成", units: []Unit{UnitPercent}},
 }
 
