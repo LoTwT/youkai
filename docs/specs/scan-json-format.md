@@ -81,7 +81,7 @@
 | `managementState` | `"locked"`、`"discarded"`、`"none"` 或 `null`。真实游戏状态只有前三态；`null` 表示未读到、不可读或证据冲突。没有 `unknown` 枚举值。 |
 | `equipped` | 整体可为 `null`（未读到）；读到后为 `{ "state": "equipped" 或 "unequipped", "agentId": number 或 null }`。结构上允许 `{ "state": "equipped", "agentId": null }` 作为未完成观测，但 `required` 校验下不能进入可用数据。 |
 
-`managementState` 的三态互斥由图标决定：盘格右下角红色垃圾桶为 `discarded`，灰色锁为 `locked`，无图标为 `none`。列表盘格右下角角标是主要依据，顶部“拆解”左侧指示用于确认弃置；两者冲突或任一不可读时记 `null`。锁定角标带有闪光动画，单帧可能漏检；多帧采样与颜色加形状分类仍是 PR 6a 的待验证项，不得把未验证结果写成 `none`。
+`managementState` 的三态互斥由图标决定：盘格右下角红色垃圾桶为 `discarded`，灰色锁为 `locked`，无图标为 `none`。列表盘格右下角角标是主要依据，顶部“拆解”左侧指示用于确认锁定/弃置状态；两者冲突或任一不可读时记 `null`。锁定角标带有闪光动画，单帧可能漏检；多帧采样与颜色加形状分类仍是 PR 6a 的待验证项，不得把未验证结果写成 `none`。
 
 装备状态从详情页等级右侧头像判断并匹配代理人身份，列表格右上角头像确认；冲突或不可读时整个 `equipped` 记 `null`。当前代理人装备和他人装备都属于 `equipped`，当前装备置顶只影响遍历顺序，不构成额外的数据状态。`unequipped` 时 `agentId` 必须为 `null`；`equipped` 且用于可用数据时，`agentId` 必须是 fairy 代理人数值 ID（例如耀嘉音 `1311`），并能在 `catalog.agents` 中解析。
 
