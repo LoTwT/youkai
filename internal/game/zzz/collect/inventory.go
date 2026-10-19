@@ -417,9 +417,11 @@ func (run *inventoryRun) preparePosition(ctx context.Context, pos int) error {
 	if err := run.switchWheel(ctx, pos); err != nil {
 		return err
 	}
+	log.Printf("youkai: collect: position %d: wheel selected", pos)
 	if err := run.resetFilters(ctx); err != nil {
 		return err
 	}
+	log.Printf("youkai: collect: position %d: filter reset and S selected", pos)
 	if err := run.scrollToTop(ctx); err != nil {
 		return err
 	}
@@ -524,39 +526,19 @@ func (run *inventoryRun) switchWheel(ctx context.Context, pos int) error {
 	}
 }
 
-// resetFilters verifies the reset and the S selection as two separate
-// effects. It opens the panel, resets it, closes the panel and requires the
-// funnel to be clear — the only independent check that the reset really
-// removed other filters. Only then does it reopen the panel, select S,
-// close and require the funnel to be active. The selected state of the S
-// control has no calibrated pixel probe, so one Active reading cannot prove
-// both that the reset removed old filters and that S was applied; the
-// intermediate Clear check is therefore mandatory. A failed step stops the
-// walk and keeps admitted results.
+// resetFilters applies the S rarity filter in one panel visit: open,
+// reset, select S, close, require the funnel to be active. The Reset and
+// S clicks are separate actions, but their effects cannot be observed
+// separately without closing the panel between them. The user decided on
+// 2026-10-19 to save that extra open/close per position: the Active
+// reading after closing proves the S filter is in effect, while a reset
+// that failed to remove an older filter is a documented residual risk
+// (T5 §3). A clear or unverifiable funnel stops the walk.
 func (run *inventoryRun) resetFilters(ctx context.Context) error {
 	if err := run.openFilterPanel(ctx); err != nil {
 		return err
 	}
 	if err := run.resetFilterPanel(ctx); err != nil {
-		return err
-	}
-	if err := run.closeFilterPanel(ctx); err != nil {
-		return err
-	}
-	if err := run.requireWheelPosition("filter reset"); err != nil {
-		return err
-	}
-	if run.listMatch.Filter == nil || run.listMatch.Filter.State != FilterClear {
-		state := FilterUnknown
-		if run.listMatch.Filter != nil {
-			state = run.listMatch.Filter.State
-		}
-		return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
-			"collect: wheel position %d: the filter reset did not take effect; the funnel is %q, not clear — refusing to continue",
-			run.position, state))
-	}
-
-	if err := run.openFilterPanel(ctx); err != nil {
 		return err
 	}
 	if err := run.selectRarityS(ctx); err != nil {
@@ -573,13 +555,8 @@ func (run *inventoryRun) resetFilters(ctx context.Context) error {
 		if run.listMatch.Filter != nil {
 			state = run.listMatch.Filter.State
 		}
-		if state == FilterClear {
-			return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
-				"collect: wheel position %d: the S rarity filter did not take effect; the funnel is still clear — refusing to continue so A/B discs cannot be scanned",
-				run.position))
-		}
 		return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
-			"collect: wheel position %d: the funnel is %q after selecting the S rarity filter; refusing to continue while the filter state is unverified",
+			"collect: wheel position %d: the S rarity filter did not take effect; the funnel is %q, not active — refusing to continue so A/B discs cannot be scanned",
 			run.position, state))
 	}
 	return nil
