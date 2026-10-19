@@ -13,20 +13,13 @@ import (
 )
 
 // Inventory is the ZZZ drive-disc inventory traversal (T5): the
-// navigation state machine over a calibrated layout and a page matcher
-// — select a disc, open its detail, wait for the action's effect to
-// verify and the page to settle, capture, attribute the detail to the
-// clicked target, admit, close back, next; scroll by drag when the
-// viewport is exhausted, advancing only on verified position
-// correspondences; complete only on independent end evidence.
-//
-// PR 4c ships the skeleton: the machine, its evidence rules and its
-// failure semantics, all driven through the Matcher and Layout
-// contracts. The anchors' pixel values and the matcher's real
-// implementation arrive with 4b's field calibration; until then an
-// empty layout fails the precheck (anchorsMissing) and the Uncalibrated
-// matcher fails it with pageUnverified — the skeleton never runs on
-// guessed evidence.
+// navigation state machine over a calibrated layout and a page matcher.
+// The macOS cloud client shows the warehouse as one page — list, detail
+// pane and wheel share the frame — so a visit selects a disc, waits for
+// the selection and the detail to settle in the same page, captures and
+// attributes the detail to the clicked target, admits, and moves on; no
+// close step exists. Scrolls advance only on verified position
+// correspondences; the walk completes only on independent end evidence.
 //
 // One Inventory serves one session (the controller's Traversal factory
 // builds a fresh one per start); Precheck and Collect run on the
@@ -43,9 +36,16 @@ type Inventory struct {
 	// from the dispatch to the stable expected verdict. Zero takes the
 	// default.
 	ActionBudget time.Duration
-	// StableFrames is the consecutive same-verdict observation count
-	// that counts as settled. Zero takes the default.
+	// StableFrames is the consecutive same-verdict observation count that
+	// counts as settled. Zero takes the default.
 	StableFrames int
+	// DetailStableSpan is the wall-clock span over which the detail pane
+	// must stay unchanged after a selection transition (or before an
+	// initial read). Wall-clock, not Frame.ArrivedAt: platform idle
+	// confirmations (Reused) carry the last fresh frame's arrival time.
+	// Zero takes DefaultDetailStableSpan; negative disables the span check
+	// (tests use that to keep scripted sequences fast).
+	DetailStableSpan time.Duration
 	// MaxRetries bounds re-dispatches of one action whose effect the
 	// evidence showed never happened (the pre-action page still held at
 	// the deadline). Zero takes the default; negative disables retries —
@@ -64,21 +64,15 @@ type Inventory struct {
 	observedScope json.RawMessage
 }
 
-// Traversal pacing and bound defaults — starting points for the skeleton
-// era, to be tuned from the field rounds' timing data (T5 §7: 超时时间、
-// 稳定采样跨度与相似阈值来自三种场景的调参资料，并用未参与调整的序列验收).
+// Traversal pacing and bound defaults. The detail window's provisional
+// value comes from the sample round's click-to-detail timings (change
+// starts at 167–212ms, settles at 374–415ms; T5 §4).
 const (
-	// DefaultActionBudget bounds one action's effect-and-settle wait:
-	// cloud latency plus a page transition, generous for the cloud
-	// clients.
-	DefaultActionBudget = 2 * time.Second
-	// DefaultStableFrames is the consecutive same-verdict observation
-	// count that counts as settled.
-	DefaultStableFrames = 3
-	// DefaultMaxRetries bounds re-dispatches of one ineffective action.
-	DefaultMaxRetries = 2
-	// DefaultRecheckEvery paces re-observation after an idle frame.
-	DefaultRecheckEvery = 20 * time.Millisecond
+	DefaultActionBudget     = 2 * time.Second
+	DefaultStableFrames     = 3
+	DefaultDetailStableSpan = 200 * time.Millisecond
+	DefaultMaxRetries       = 2
+	DefaultRecheckEvery     = 20 * time.Millisecond
 )
 
 func (inv *Inventory) actionBudget() time.Duration {
@@ -93,6 +87,16 @@ func (inv *Inventory) stableFrames() int {
 		return inv.StableFrames
 	}
 	return DefaultStableFrames
+}
+
+func (inv *Inventory) detailStableSpan() time.Duration {
+	if inv.DetailStableSpan < 0 {
+		return 0
+	}
+	if inv.DetailStableSpan > 0 {
+		return inv.DetailStableSpan
+	}
+	return DefaultDetailStableSpan
 }
 
 func (inv *Inventory) maxRetries() int {
@@ -148,10 +152,14 @@ type Observation struct {
 	// ledger — numbering every started visit, including unresolved and
 	// non-S skips — lands with the ledger persistence work.
 	VisitIndex int `json:"visitIndex"`
-	// Association says how the detail was attributed to the target.
+	// Association says how the detail was attributed to the target:
+	// initialVerified when the target already carried the selection
+	// border before any click, transitionVerified when the selection
+	// moved after a click.
 	Association Association `json:"association"`
 	// PreClickFrameID is the pre-action list frame the click derived
-	// from — the page-pair evidence's other half.
+	// from — the page-pair evidence's other half. It is 0 for an initial
+	// read: no click and no pre-click frame exist.
 	PreClickFrameID uint64 `json:"preClickFrameId"`
 	// Evidence is the admission's grounds in prose: the page pair, the
 	// selection association, the stability and the matcher's own
@@ -160,25 +168,29 @@ type Observation struct {
 	Evidence string `json:"evidence"`
 }
 
-// scopePayload is the observed-range report the skeleton's precheck
-// assembles: only the facts its evidence actually established. The
-// filters, sort order and count label T5 §3 demands stay absent until
-// the recognition pipeline can read them (4b) — absence is explicit,
-// never a guessed default.
+// scopePayload is the observed-range report Precheck assembles: only the
+// facts its evidence actually established. Quantity and the sort order
+// stay unverified (sort is recorded as "unverified"); the 4b-2 preparation
+// round owns reading them.
 type scopePayload struct {
-	Kind     string `json:"kind"`
-	Page     string `json:"page"`
-	Geometry uint64 `json:"geometry"`
-	Slots    int    `json:"slots"`
-	Top      bool   `json:"top"`
+	Kind          string `json:"kind"`
+	Page          string `json:"page"`
+	Layout        string `json:"layout,omitempty"`
+	Geometry      uint64 `json:"geometry"`
+	Slots         int    `json:"slots"`
+	StartPosition int    `json:"startPosition"`
+	FilterAtStart string `json:"filterAtStart"`
+	Sort          string `json:"sort"`
 }
 
 // Precheck implements Traversal: verify, without dispatching any input,
 // the page preconditions T5 §3 demands — the anchors are structurally
-// sound and fit the captured content region, the session's baseline
-// geometry is bound to them, and the current frame is the warehouse
-// list at its top with a grid-shaped occupancy verdict. Failures carry
-// anchorsMissing or pageUnverified; the matcher's evidence rides along.
+// sound and exactly match the captured display configuration, the
+// session's baseline geometry is bound to them, and the current frame is
+// the warehouse page with a grid-shaped occupancy verdict, a unique wheel
+// position, an unambiguously clear funnel and the list at its top.
+// Failures carry anchorsMissing or pageUnverified; the matcher's evidence
+// rides along.
 func (inv *Inventory) Precheck(ctx context.Context, sess platform.Session) error {
 	if err := inv.Layout.Validate(); err != nil {
 		return scan.NewFault(CodeAnchorsMissing, err)
@@ -210,6 +222,11 @@ func (inv *Inventory) Precheck(ctx context.Context, sess platform.Session) error
 			"collect: precheck: frame %d arrived under geometry %d while the observation bound %d",
 			frame.ID, frame.Geometry, geo))
 	}
+	if !inv.Layout.MatchesFrame(frame.Image.Bounds().Size(), frame.Content) {
+		return scan.NewFault(CodeAnchorsMissing, fmt.Errorf(
+			"collect: precheck: the captured configuration (image %v, content %v) is not this layout's (image %v, content %v)",
+			boundsOrNil(frame.Image), frame.Content, inv.Layout.Image, inv.Layout.Content))
+	}
 	if !inv.Layout.FitsContent(frame.Content) {
 		return scan.NewFault(CodeAnchorsMissing, fmt.Errorf(
 			"collect: precheck: the anchors do not fit the captured content region %v — not this geometry's calibration",
@@ -221,16 +238,27 @@ func (inv *Inventory) Precheck(ctx context.Context, sess platform.Session) error
 			"collect: precheck: the current frame is not a verifiable warehouse list (verdict %s): %s",
 			m.Page, m.Evidence))
 	}
+	if m.Wheel == nil || m.Wheel.Position < 1 || m.Wheel.Position > 6 {
+		return scan.NewFault(CodePageUnverified, fmt.Errorf(
+			"collect: precheck: no unique wheel position is selected: %s", m.Evidence))
+	}
+	if m.Filter == nil || m.Filter.State != FilterClear {
+		return scan.NewFault(CodePageUnverified, fmt.Errorf(
+			"collect: precheck: the funnel is not verifiably clear: %s", m.Evidence))
+	}
 	if !m.List.Top {
 		return scan.NewFault(CodePageUnverified, errors.New(
 			"collect: precheck: no top evidence — the list may be mid-scroll, and a mid-list start cannot be marked as covering the inventory"))
 	}
 	scope, err := json.Marshal(scopePayload{
-		Kind:     "zzzInventory",
-		Page:     string(PageWarehouse),
-		Geometry: uint64(geo),
-		Slots:    len(inv.Layout.Slots),
-		Top:      true,
+		Kind:          "zzzInventory",
+		Page:          string(PageWarehouse),
+		Layout:        inv.Layout.Name,
+		Geometry:      uint64(geo),
+		Slots:         len(inv.Layout.Slots),
+		StartPosition: m.Wheel.Position,
+		FilterAtStart: string(m.Filter.State),
+		Sort:          "unverified",
 	})
 	if err != nil {
 		return fmt.Errorf("collect: precheck: marshal observed scope: %w", err)
@@ -284,19 +312,29 @@ type inventoryRun struct {
 	// visitIndex counts admitted visits; the next admission takes
 	// visitIndex+1.
 	visitIndex int
+	// clicked records whether any click has been dispatched in this
+	// position. The initial-read path is only available before the first
+	// click: without one, a target that already carries the selection
+	// border can only be a pre-existing selection, not a transition.
+	clicked bool
 	// listMatch is the current list state: the stable warehouse verdict
 	// the next step builds on (its frame is re-taken fresh whenever a
 	// click needs pre-action provenance).
 	listMatch PageMatch
+	// lastFrame is the newest stable warehouse frame observed.
+	lastFrame platform.Frame
 }
 
-// run is the collection loop: visit every occupied, unvisited position
-// of the current viewport in reading order; when the viewport is
-// exhausted, complete on independent end evidence or advance by one
-// verified scroll (T5 §5). It returns nil only on that end evidence —
-// never because the frames stopped changing.
+// run is the collection loop: confirm the top with a stationary drag,
+// visit every occupied, unvisited position of the current viewport in
+// reading order; when the viewport is exhausted, complete on independent
+// end evidence or advance by one verified scroll (T5 §5). It returns nil
+// only on that end evidence — never because the frames stopped changing.
 func (run *inventoryRun) run(ctx context.Context) error {
 	if err := run.establishList(ctx); err != nil {
+		return err
+	}
+	if err := run.confirmTop(ctx); err != nil {
 		return err
 	}
 	for {
@@ -312,10 +350,14 @@ func (run *inventoryRun) run(ctx context.Context) error {
 			// unoccupied. Unoccupied slots are not visits (T5 §5: 空格
 			// 不产生物品记录).
 			if run.listMatch.List.Bottom {
-				// Independent end evidence (T5 §5: 末端证据) — the walk
-				// is complete. The coverage conclusion itself is the
-				// record layer's to draw; this return only says the
-				// machine finished its walk.
+				// The scrollbar's bottom evidence is paired with one more
+				// drag that must leave the list stationary (T5 §5: 末端
+				// 证据). The coverage conclusion itself is the record
+				// layer's to draw; this return only says the machine
+				// finished its walk.
+				if err := run.confirmBottom(ctx); err != nil {
+					return err
+				}
 				return nil
 			}
 			if err := run.scroll(ctx); err != nil {
@@ -342,14 +384,14 @@ func (run *inventoryRun) nextSlot() int {
 }
 
 // establishList waits for the warehouse list to show stably — the state
-// every click builds its pre-click evidence on. The top evidence
-// itself was Precheck's to verify; the machine has not scrolled, so it
-// does not re-demand it here.
+// every click builds its pre-click evidence on. The top evidence itself
+// was Precheck's to verify; Collect confirms it with one stationary drag.
 func (run *inventoryRun) establishList(ctx context.Context) error {
 	out := run.awaitSettled(ctx, run.listVerdict)
 	switch out.class {
 	case awaitStable:
 		run.listMatch = out.match
+		run.lastFrame = out.frame
 		return nil
 	case awaitCanceled, awaitFrameErr:
 		return out.err
@@ -362,28 +404,128 @@ func (run *inventoryRun) establishList(ctx context.Context) error {
 	}
 }
 
-// listVerdict is the structural predicate of a usable warehouse
-// verdict: the warehouse page with an occupancy verdict shaped like the
-// layout's grid. A matcher reporting another shape is a contract
-// violation, surfaced as a fault rather than papered over.
+// confirmTop performs one drag toward the list's beginning and requires a
+// stationary verdict: the single-frame top evidence Precheck accepted is
+// paired with "drag again and nothing changes" (T5 §5). The 4b-2
+// preparation loop owns the repeated flings that reach the top; this round
+// only confirms a claimed top.
+func (run *inventoryRun) confirmTop(ctx context.Context) error {
+	for attempt := 0; ; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if !run.h.InputPermitted() {
+			return ctx.Err()
+		}
+		if err := run.observeReady(ctx); err != nil {
+			return err
+		}
+		res := run.view.Dispatch(platform.InputOp{
+			Kind:     platform.InputDrag,
+			Geometry: run.geo,
+			FrameID:  run.lastFrame.ID,
+			At:       run.inv.Layout.TopFrom,
+			To:       run.inv.Layout.TopTo,
+			Duration: run.inv.Layout.TopDuration,
+		})
+		if err := run.dispatchOutcome(ctx, res); err != nil {
+			return err
+		}
+		out, err := run.awaitScroll(ctx, run.lastFrame)
+		if err != nil {
+			return err
+		}
+		switch {
+		case out.stationary:
+			run.listMatch = out.afterMatch
+			run.lastFrame = out.after
+			return nil
+		case out.lost:
+			return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
+				"collect: the top confirmation could not verify that the list stayed at the top: %s", out.match.Evidence))
+		case out.displaced:
+			return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
+				"collect: the top confirmation moved the list, contradicting the precheck's top evidence: %s", out.match.Evidence))
+		default:
+			if attempt < run.inv.maxRetries() {
+				continue
+			}
+			return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
+				"collect: the top confirmation produced no verifiable verdict within the budget (attempt %d)", attempt+1))
+		}
+	}
+}
+
+// confirmBottom pairs the scrollbar's bottom evidence with one more drag
+// in the advance direction that must leave the list stationary: at the
+// list's end the content cannot move further (T5 §5's "再拖一次，前后帧
+// 列表区误差 < 4"). The complete walk needs both kinds of evidence.
+func (run *inventoryRun) confirmBottom(ctx context.Context) error {
+	for attempt := 0; ; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if !run.h.InputPermitted() {
+			return ctx.Err()
+		}
+		if err := run.observeReady(ctx); err != nil {
+			return err
+		}
+		res := run.view.Dispatch(platform.InputOp{
+			Kind:     platform.InputDrag,
+			Geometry: run.geo,
+			FrameID:  run.lastFrame.ID,
+			At:       run.inv.Layout.ScrollFrom,
+			To:       run.inv.Layout.ScrollTo,
+			Duration: run.inv.Layout.ScrollDuration,
+		})
+		if err := run.dispatchOutcome(ctx, res); err != nil {
+			return err
+		}
+		out, err := run.awaitScroll(ctx, run.lastFrame)
+		if err != nil {
+			return err
+		}
+		switch {
+		case out.stationary:
+			run.listMatch = out.afterMatch
+			run.lastFrame = out.after
+			return nil
+		case out.lost:
+			return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
+				"collect: the bottom confirmation could not verify that the list stayed at the end: %s", out.match.Evidence))
+		case out.displaced:
+			return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
+				"collect: the bottom confirmation moved the list, contradicting the scrollbar's bottom evidence: %s", out.match.Evidence))
+		default:
+			if attempt < run.inv.maxRetries() {
+				continue
+			}
+			return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
+				"collect: the bottom confirmation produced no verifiable verdict within the budget (attempt %d)", attempt+1))
+		}
+	}
+}
+
+// listVerdict is the structural predicate of a usable warehouse verdict:
+// the warehouse page with a grid-shaped occupancy verdict. A matcher
+// reporting another shape is a contract violation, surfaced as a fault
+// rather than papered over.
 func (run *inventoryRun) listVerdict(m PageMatch) bool {
 	return m.Page == PageWarehouse && m.List != nil && len(m.List.Occupied) == len(run.inv.Layout.Slots)
 }
 
 // visitSlot processes one occupied, unvisited slot: acquire capacity,
-// re-check the premises, verify the pre-click list evidence, click,
-// wait for the detail to settle on the target, admit the capture with
-// its evidence, and close back to the list — one verified action at a
-// time (T5 §4).
+// re-check the premises, verify the pre-click list evidence, click (or
+// take the initial read when the target already carries the selection),
+// wait for the detail to settle on the target with a content change as the
+// association evidence, admit the capture and continue in the same page.
 func (run *inventoryRun) visitSlot(ctx context.Context, i int) error {
 	row, col := run.inv.Layout.slotPosition(i)
 	target := fmt.Sprintf("viewport %d slot %d (row %d, column %d)", run.viewport, i, row, col)
-	expectDetail := func(m PageMatch) bool {
-		return m.Page == PageDiscDetail && m.Detail != nil && m.Detail.Selected != nil && *m.Detail.Selected == i
-	}
-	expectList := func(m PageMatch) bool {
-		return run.listVerdict(m) && m.List.Occupied[i]
-	}
+	// The initial-read path is per position: a click from an earlier
+	// position says nothing about this one.
+	run.clicked = false
 	for attempt := 0; ; attempt++ {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -403,8 +545,10 @@ func (run *inventoryRun) visitSlot(ctx context.Context, i int) error {
 		}
 		// The pre-click evidence: the list shows stably with the target
 		// slot occupied (T5 §4.1: 列表仍属于同一范围，目标格位有物品且位置
-		// 可对应).
-		pre := run.awaitSettled(ctx, expectList)
+		// 可对应). The frame is re-taken before every click.
+		pre := run.awaitSettled(ctx, func(m PageMatch) bool {
+			return run.listVerdict(m) && m.List.Occupied[i]
+		})
 		switch pre.class {
 		case awaitStable:
 		case awaitCanceled, awaitFrameErr:
@@ -424,6 +568,41 @@ func (run *inventoryRun) visitSlot(ctx context.Context, i int) error {
 				"collect: the list never showed %s occupied and stable within the budget (last verdict %s)",
 				target, pre.match.Page))
 		}
+		run.listMatch = pre.match
+		run.lastFrame = pre.frame
+		preSelected := pre.match.List.Selected
+
+		// Initial read: the target already carries the selection border
+		// and no click has been sent yet in this position. Clicking an
+		// already-selected target cannot produce the content change the
+		// transition rule requires, so this is the only path that admits
+		// it.
+		if preSelected == i {
+			if run.clicked {
+				slot.Discard()
+				return scan.NewFault(CodeDetailUnattributed, fmt.Errorf(
+					"collect: %s is already selected after a click was sent earlier in this position; the shown detail cannot be attributed to a transition",
+					target))
+			}
+			out, err := run.awaitDetail(ctx, platform.Frame{}, i, true)
+			if err != nil {
+				slot.Discard()
+				return err
+			}
+			switch out.class {
+			case awaitStable:
+				return run.admit(slot, out, pre.frame, i, row, col, AssociationInitial, 0, attempt+1, target)
+			case awaitCanceled, awaitFrameErr:
+				slot.Discard()
+				return out.err
+			case awaitGeometry:
+				slot.Discard()
+				return run.geometryChanged(out.frame)
+			default:
+				slot.Discard()
+				return run.detailFault(out, pre.frame, preSelected, i, true, target)
+			}
+		}
 
 		// One short click on the target slot (T5 §4: 再发一次短点击).
 		res := run.view.Dispatch(platform.InputOp{
@@ -436,135 +615,271 @@ func (run *inventoryRun) visitSlot(ctx context.Context, i int) error {
 			slot.Discard()
 			return err
 		}
+		run.clicked = true
 
-		// The effect wait: the action's finish time is the frame time
-		// lower bound (Frame(After)), and the page verdict — never the
-		// dispatch result — confirms the effect (T5 §4.2/4.3).
-		out := run.awaitSettled(ctx, expectDetail)
+		out, err := run.awaitDetail(ctx, pre.frame, i, false)
+		if err != nil {
+			slot.Discard()
+			return err
+		}
 		switch out.class {
 		case awaitStable:
-			// The T5 §4 gate held: the page pair (warehouse list →
-			// detail of the target), the selection on the target, the
-			// geometry bound, the verdict settled. Admit the capture
-			// with its evidence.
-			run.visitIndex++
-			run.visited[i] = true
-			obs := Observation{
-				Image:           out.frame.Image,
-				Content:         out.frame.Content,
-				FrameID:         out.frame.ID,
-				ArrivedAt:       out.frame.ArrivedAt,
-				Geometry:        out.frame.Geometry,
-				Viewport:        run.viewport,
-				Row:             row,
-				Column:          col,
-				VisitIndex:      run.visitIndex,
-				Association:     AssociationTransition,
-				PreClickFrameID: pre.frame.ID,
-				Evidence:        run.admissionEvidence(target, pre.frame, out, attempt+1),
-			}
-			if _, err := slot.Admit(obs); err != nil {
+			return run.admit(slot, out, pre.frame, i, row, col, AssociationTransition, pre.frame.ID, attempt+1, target)
+		case awaitCanceled, awaitFrameErr:
+			slot.Discard()
+			return out.err
+		case awaitGeometry:
+			slot.Discard()
+			return run.geometryChanged(out.frame)
+		default: // awaitDeadline
+			if run.ineffectiveClick(out, pre.frame, preSelected) {
+				if attempt < run.inv.maxRetries() {
+					// The click verifiably did nothing: re-establish every
+					// precondition and re-dispatch within the bound.
+					slot.Discard()
+					continue
+				}
 				slot.Discard()
-				return fmt.Errorf("collect: admit %s: %w", target, err)
-			}
-			// Close back to the list; the close wait's stable verdict
-			// becomes the current list state.
-			return run.closeDetail(ctx, out.frame)
-		case awaitCanceled, awaitFrameErr:
-			slot.Discard()
-			return out.err
-		case awaitGeometry:
-			slot.Discard()
-			return run.geometryChanged(out.frame)
-		default: // awaitDeadline
-			slot.Discard()
-			switch {
-			case out.expected:
-				// The detail appeared but never settled on the target:
-				// the action took effect, so re-clicking is not the
-				// remedy — the position stays unresolved (T5 §4: 完成
-				// 有界观察…仍无法确认详情归属时停止本次采集，按未解决
-				// 位置记账，不跳到下一件).
-				return scan.NewFault(CodeDetailUnattributed, fmt.Errorf(
-					"collect: the detail of %s appeared but never settled: last verdict %s: %s",
-					target, out.match.Page, out.match.Evidence))
-			case out.match.Page == PageDiscDetail:
-				// A detail shows but its selection evidence does not
-				// attribute it to the target.
-				return scan.NewFault(CodeDetailUnattributed, fmt.Errorf(
-					"collect: the shown detail does not attribute to %s (selection %s): %s",
-					target, selectionOf(out.match), out.match.Evidence))
-			case out.match.Page == PageWarehouse && run.listVerdict(out.match) && attempt < run.inv.maxRetries():
-				// The click never took effect — the pre-action page held
-				// to the deadline. Retry within the bound; the next
-				// attempt re-establishes every precondition.
-				continue
-			default:
-				// Unknown page or retries exhausted: re-clicking would be
-				// blind (T5: 不因到期而盲目补点) — stop with the evidence.
 				return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
-					"collect: clicking %s never opened its detail within the budget (last verdict %s, attempt %d): %s",
-					target, out.match.Page, attempt+1, out.match.Evidence))
+					"collect: clicking %s never took effect within the budget (attempt %d): %s",
+					target, attempt+1, out.match.Evidence))
 			}
+			slot.Discard()
+			return run.detailFault(out, pre.frame, preSelected, i, false, target)
 		}
 	}
 }
 
-// selectionOf renders a detail verdict's selection evidence for
-// diagnostics.
-func selectionOf(m PageMatch) string {
-	if m.Detail == nil || m.Detail.Selected == nil {
-		return "none"
+// ineffectiveClick reports the deadline case the table calls "选中框没动，
+// 详情 Same": the selection is still where it was before the click and the
+// detail did not change, so re-clicking cannot skip a position. A page
+// that became undecidable is never retried blindly.
+func (run *inventoryRun) ineffectiveClick(out detailOutcome, pre platform.Frame, preSelected int) bool {
+	if !run.listVerdict(out.match) {
+		return false
 	}
-	return fmt.Sprintf("slot %d", *m.Detail.Selected)
+	if out.lastSelected != preSelected || out.sawDifferent {
+		return false
+	}
+	return run.inv.matcher().CompareDetail(pre, out.frame) == DetailSame
 }
 
-// closeDetail returns from the admitted detail to the warehouse list:
-// click the close control and wait for the list to show stably — that
-// stable verdict becomes the current list state — with bounded retries
-// when the close never took.
-func (run *inventoryRun) closeDetail(ctx context.Context, detailFrame platform.Frame) error {
-	frameID := detailFrame.ID
-	for attempt := 0; ; attempt++ {
-		if err := ctx.Err(); err != nil {
-			return err
+// detailFault classifies a detail wait that ended without a stable,
+// attributable detail (design §3's deadline table).
+func (run *inventoryRun) detailFault(out detailOutcome, pre platform.Frame, preSelected, target int, initial bool, targetName string) error {
+	if !run.listVerdict(out.match) {
+		return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
+			"collect: the page became undecidable while waiting for the detail of %s (last verdict %s): %s",
+			targetName, out.match.Page, out.match.Evidence))
+	}
+	selected := out.match.List.Selected
+	if initial {
+		switch {
+		case selected != target:
+			return scan.NewFault(CodeDetailUnattributed, fmt.Errorf(
+				"collect: the initially selected target %s lost its selection border while its detail settled (now slot %d)",
+				targetName, selected))
+		case !out.sawPopulated:
+			return scan.NewFault(CodeDetailUnresolved, fmt.Errorf(
+				"collect: the detail pane of the initially selected %s never became decidable within the budget: %s",
+				targetName, out.match.Evidence))
+		default:
+			return scan.NewFault(CodeDetailUnattributed, fmt.Errorf(
+				"collect: the initial detail of %s never held stable within the budget: %s",
+				targetName, out.match.Evidence))
 		}
-		if !run.h.InputPermitted() {
-			return ctx.Err()
-		}
-		if err := run.observeReady(ctx); err != nil {
-			return err
-		}
-		res := run.view.Dispatch(platform.InputOp{
-			Kind:     platform.InputClick,
-			Geometry: run.geo,
-			FrameID:  frameID,
-			At:       run.inv.Layout.closeCenter(),
-		})
-		if err := run.dispatchOutcome(ctx, res); err != nil {
-			return err
-		}
-		out := run.awaitSettled(ctx, run.listVerdict)
-		switch out.class {
-		case awaitStable:
-			run.listMatch = out.match
-			return nil
-		case awaitCanceled, awaitFrameErr:
-			return out.err
-		case awaitGeometry:
-			return run.geometryChanged(out.frame)
-		default: // awaitDeadline
-			frameID = out.frame.ID
+	}
+	switch {
+	case selected == target && !out.sawPopulated:
+		return scan.NewFault(CodeDetailUnresolved, fmt.Errorf(
+			"collect: the detail pane of %s never became decidable within the budget: %s",
+			targetName, out.match.Evidence))
+	case selected == target && !out.sawDifferent:
+		return scan.NewFault(CodeDetailUnattributed, fmt.Errorf(
+			"collect: the selection reached %s but the detail never changed from the pre-click frame — the same-detail neighbor round-trip verification is not implemented yet (T5 §4): %s",
+			targetName, out.match.Evidence))
+	case selected == target:
+		return scan.NewFault(CodeDetailUnattributed, fmt.Errorf(
+			"collect: the detail of %s changed but never held stable for the required window: %s",
+			targetName, out.match.Evidence))
+	case selected == preSelected:
+		return scan.NewFault(CodeDetailUnattributed, fmt.Errorf(
+			"collect: the selection's effect from clicking %s could not be verified (still slot %d, detail evidence %v): %s",
+			targetName, selected, run.inv.matcher().CompareDetail(pre, out.frame), out.match.Evidence))
+	default:
+		return scan.NewFault(CodeDetailUnattributed, fmt.Errorf(
+			"collect: the selection landed on slot %d instead of %s: %s",
+			selected, targetName, out.match.Evidence))
+	}
+}
+
+// admit checks the admission gates and hands one capture to the kernel:
+// the target is selected, the detail changed and held stable, and the pane
+// shows a calibrated S disc with 3 or 4 substats. A calibrated NotS disc
+// is marked visited and discarded without a record; an undecidable rarity
+// or line count stops the walk with detailUnresolved.
+func (run *inventoryRun) admit(slot *scan.Slot, out detailOutcome, pre platform.Frame, i, row, col int, assoc Association, preID uint64, attempt int, target string) error {
+	if out.match.Detail == nil {
+		slot.Discard()
+		return scan.NewFault(CodeDetailUnresolved, fmt.Errorf(
+			"collect: %s settled without a decidable detail pane: %s", target, out.match.Evidence))
+	}
+	switch out.match.Detail.Quality {
+	case QualityNotS:
+		run.visited[i] = true
+		run.listMatch = out.match
+		run.lastFrame = out.frame
+		slot.Discard()
+		return nil
+	case QualityS:
+	default:
+		slot.Discard()
+		return scan.NewFault(CodeDetailUnresolved, fmt.Errorf(
+			"collect: %s settled with an undecidable rarity: %s", target, out.match.Evidence))
+	}
+	if out.match.Detail.Substats != 3 && out.match.Detail.Substats != 4 {
+		slot.Discard()
+		return scan.NewFault(CodeDetailUnresolved, fmt.Errorf(
+			"collect: %s settled with an undecidable substat row count: %s", target, out.match.Evidence))
+	}
+	run.visitIndex++
+	run.visited[i] = true
+	obs := Observation{
+		Image:           out.frame.Image,
+		Content:         out.frame.Content,
+		FrameID:         out.frame.ID,
+		ArrivedAt:       out.frame.ArrivedAt,
+		Geometry:        out.frame.Geometry,
+		Viewport:        run.viewport,
+		Row:             row,
+		Column:          col,
+		VisitIndex:      run.visitIndex,
+		Association:     assoc,
+		PreClickFrameID: preID,
+		Evidence:        run.admissionEvidence(target, pre, out, attempt, assoc),
+	}
+	if _, err := slot.Admit(obs); err != nil {
+		slot.Discard()
+		return fmt.Errorf("collect: admit %s: %w", target, err)
+	}
+	run.listMatch = out.match
+	run.lastFrame = out.frame
+	return nil
+}
+
+// admissionEvidence assembles one admission's prose grounds: the page
+// pair, the selection association, the stability and the matcher's own
+// confidence description (T5 §6).
+func (run *inventoryRun) admissionEvidence(target string, pre platform.Frame, out detailOutcome, attempts int, assoc Association) string {
+	lead := fmt.Sprintf("%s admitted after %d attempt(s): the selection border was already on the target before any click (initial read); the detail held stable on frame %d (geometry %d)",
+		target, attempts, out.frame.ID, out.frame.Geometry)
+	if assoc == AssociationTransition {
+		lead = fmt.Sprintf("%s admitted after %d attempt(s): pre-click list frame %d showed the target occupied; the detail changed after the click and held stable on frame %d (geometry %d)",
+			target, attempts, pre.ID, out.frame.ID, out.frame.Geometry)
+	}
+	stability := ""
+	if span := run.inv.detailStableSpan(); span > 0 {
+		stability = fmt.Sprintf(" for at least %s", span)
+	}
+	return fmt.Sprintf("%s%s; matcher: %s", lead, stability, out.match.Evidence)
+}
+
+// awaitDetail waits for the detail pane to become attributable to the
+// target.
+//
+// Transition: the frame must show the target selected and a decidable
+// detail; at least one observation must differ from the pre-click frame;
+// after that, adjacent observations must stay the same for StableFrames
+// samples and a wall-clock span of DetailStableSpan. Wall-clock, not
+// Frame.ArrivedAt: Reused confirmations carry the last fresh frame's
+// arrival time but still prove the content is unchanged now.
+//
+// Initial: no pre-click frame exists; consecutive observations must stay
+// the same over the same window, starting from the first decidable frame.
+func (run *inventoryRun) awaitDetail(ctx context.Context, baseline platform.Frame, target int, initial bool) (detailOutcome, error) {
+	deadline := time.Now().Add(run.inv.actionBudget())
+	span := run.inv.detailStableSpan()
+	out := detailOutcome{lastSelected: -2}
+	after := run.lastArrived
+	var last platform.Frame
+	lastSet := false
+	runLen := 0
+	var runStart time.Time
+	for {
+		fctx, cancel := context.WithDeadline(ctx, deadline)
+		f, err := run.view.Frame(fctx, platform.FrameRequest{After: after})
+		cancel()
+		if err != nil {
 			switch {
-			case out.expected:
-				return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
-					"collect: the list returned after the close but never settled: %s", out.match.Evidence))
-			case out.match.Page == PageDiscDetail && attempt < run.inv.maxRetries():
-				continue // the close never took; retry within the bound
+			case ctx.Err() != nil:
+				out.class, out.err = awaitCanceled, ctx.Err()
+			case errors.Is(err, context.DeadlineExceeded):
+				out.class = awaitDeadline
 			default:
-				return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
-					"collect: the close never returned the list within the budget (last verdict %s, attempt %d)",
-					out.match.Page, attempt+1))
+				out.class, out.err = awaitFrameErr, wrapObservationErr(err)
+			}
+			return out, nil
+		}
+		if f.Geometry != run.geo {
+			out.class, out.frame = awaitGeometry, f
+			return out, nil
+		}
+		m := run.inv.matcher().Match(f)
+		out.frame, out.match = f, m
+		if !f.Reused {
+			run.lastArrived = f.ArrivedAt
+			after = f.ArrivedAt
+		}
+		usable := false
+		if run.listVerdict(m) {
+			out.lastSelected = m.List.Selected
+			if m.List.Selected == target {
+				out.sawTarget = true
+				if m.Detail != nil {
+					out.sawPopulated = true
+					usable = true
+				}
+			}
+		}
+		if !usable {
+			runLen, lastSet = 0, false
+		} else if initial {
+			if !lastSet {
+				runLen, runStart, last, lastSet = 1, time.Now(), f, true
+			} else if run.inv.matcher().CompareDetail(last, f) == DetailSame {
+				runLen++
+				last = f
+			} else {
+				runLen, runStart, last = 1, time.Now(), f
+			}
+		} else if !out.sawDifferent {
+			if run.inv.matcher().CompareDetail(baseline, f) == DetailDifferent {
+				out.sawDifferent = true
+				runLen, runStart, last, lastSet = 1, time.Now(), f, true
+			} else {
+				// Same or undecided: the click may not have taken effect
+				// yet. Nothing can be called stable before a change.
+				runLen, lastSet = 0, false
+			}
+		} else if !lastSet {
+			runLen, runStart, last, lastSet = 1, time.Now(), f, true
+		} else if run.inv.matcher().CompareDetail(last, f) == DetailSame {
+			runLen++
+			last = f
+		} else {
+			// Another change or an undecidable comparison: restart the
+			// stable run at this frame.
+			runLen, runStart, last = 1, time.Now(), f
+		}
+		if runLen >= run.inv.stableFrames() && (span <= 0 || time.Since(runStart) >= span) {
+			out.class = awaitStable
+			out.stable = true
+			return out, nil
+		}
+		if f.Reused {
+			if err := sleepCtx(ctx, run.inv.recheckEvery()); err != nil {
+				out.class, out.err = awaitCanceled, err
+				return out, nil
 			}
 		}
 	}
@@ -576,7 +891,6 @@ func (run *inventoryRun) closeDetail(ctx context.Context, detailFrame platform.F
 // prove where the list went — a stable warehouse verdict alone proves
 // nothing.
 func (run *inventoryRun) scroll(ctx context.Context) error {
-	// The before-state: the current list frame and verdict.
 	before, err := run.currentList(ctx)
 	if err != nil {
 		return err
@@ -597,35 +911,49 @@ func (run *inventoryRun) scroll(ctx context.Context) error {
 			FrameID:  before.ID,
 			At:       run.inv.Layout.ScrollFrom,
 			To:       run.inv.Layout.ScrollTo,
+			Duration: run.inv.Layout.ScrollDuration,
 		})
 		if err := run.dispatchOutcome(ctx, res); err != nil {
 			return err
 		}
-		verdict, err := run.awaitScroll(ctx, before)
+		out, err := run.awaitScroll(ctx, before)
 		if err != nil {
 			return err
 		}
-		if !verdict.corresponded {
-			// The list verifiably did not move: the position is safe, so
-			// the same drag may be retried within the bound. (No
-			// displacement is not end evidence — T5 §5 — so exhausting
-			// the retries stops the walk rather than completing it.)
+		switch {
+		case out.lost:
+			return scan.NewFault(CodePositionLost, fmt.Errorf(
+				"collect: the list displaced but no unique correspondence verified where it went (frame %d): %s",
+				out.after.ID, out.match.Evidence))
+		case out.displaced:
+			if len(out.match.Matches) == 0 {
+				return scan.NewFault(CodePositionLost, errors.New(
+					"collect: the list displaced but the matcher reported no correspondences"))
+			}
+			if err := run.applyTransition(before, out.after, run.listMatch, out.afterMatch, out.match); err != nil {
+				return err
+			}
+			run.listMatch = out.afterMatch
+			run.lastFrame = out.after
+			return nil
+		case out.stationary:
 			if attempt < run.inv.maxRetries() {
 				continue
 			}
 			return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
 				"collect: the drag never displaced the list within the budget (attempt %d) and no end evidence held", attempt+1))
+		default:
+			if attempt < run.inv.maxRetries() {
+				continue
+			}
+			return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
+				"collect: the scroll drag produced no verifiable verdict within the budget (attempt %d)", attempt+1))
 		}
-		if err := run.applyTransition(before, verdict.after, run.listMatch, verdict.afterMatch, verdict.match); err != nil {
-			return err
-		}
-		run.listMatch = verdict.afterMatch
-		return nil
 	}
 }
 
-// currentList takes the current list frame — the latest content, fresh
-// or idle-reused — and requires a usable warehouse verdict on it.
+// currentList takes the current list frame — the latest content, fresh or
+// idle-reused — and requires a usable warehouse verdict on it.
 func (run *inventoryRun) currentList(ctx context.Context) (platform.Frame, error) {
 	f, err := run.view.Frame(ctx, platform.FrameRequest{After: run.lastArrived})
 	if err != nil {
@@ -643,36 +971,31 @@ func (run *inventoryRun) currentList(ctx context.Context) (platform.Frame, error
 			"collect: the current list frame (id %d) is not a verifiable warehouse list: %s", f.ID, m.Evidence))
 	}
 	run.listMatch = m
+	run.lastFrame = f
 	return f, nil
 }
 
-// scrollOutcome is one awaitScroll's terminal result: a correspondence
-// the matcher reported (still to be validated by applyTransition), or
-// the verifiable non-effect of the drag.
+// scrollOutcome is one awaitScroll's terminal result.
 type scrollOutcome struct {
-	corresponded bool
-	after        platform.Frame
-	afterMatch   PageMatch
-	match        ScrollMatch
+	stationary bool
+	displaced  bool
+	lost       bool
+	after      platform.Frame
+	afterMatch PageMatch
+	match      ScrollMatch
 }
 
-// awaitScroll waits for the scroll's effect: a fresh warehouse frame
-// whose correspondence with the before-frame the matcher reports. Only
-// fresh frames count — the pages before and after are the same
-// warehouse, so an idle re-confirmation of the before-frame proves
-// nothing moved — and every fresh warehouse frame gets a correspondence
-// verdict: a reporting verdict is itself the settle evidence, since
-// correspondences are only readable on a settled overlap.
-//
-// Deadline classification: displacement was seen but never verified →
-// positionLost (the position is at risk; stop — no more drags, no
-// guessing how far the list went); no displacement at all → the caller
-// may retry the same drag, because the list verifiably did not move and
-// a retry cannot skip positions.
+// awaitScroll waits for the scroll's effect on a fresh warehouse frame.
+// Only fresh frames count as verdicts: a Reused confirmation carries the
+// content the next request already saw, so it cannot prove the drag moved
+// the list. Stationary is a deadline verdict, not an early one — the
+// drag's effect may still be in flight right after the dispatch.
 func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame) (scrollOutcome, error) {
 	deadline := time.Now().Add(run.inv.actionBudget())
-	after := before.ArrivedAt
-	displaced := false
+	after := run.lastArrived
+	out := scrollOutcome{}
+	sawDisplaced := false
+	sawStationary := false
 	for {
 		fctx, cancel := context.WithDeadline(ctx, deadline)
 		f, err := run.view.Frame(fctx, platform.FrameRequest{After: after})
@@ -682,11 +1005,16 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 			case ctx.Err() != nil:
 				return scrollOutcome{}, ctx.Err()
 			case errors.Is(err, context.DeadlineExceeded):
-				if displaced {
-					return scrollOutcome{}, scan.NewFault(CodePositionLost, errors.New(
-						"collect: the list displaced but no unique correspondence verified where it went"))
+				switch {
+				case sawDisplaced:
+					out.lost = true
+					return out, nil
+				case sawStationary:
+					out.stationary = true
+					return out, nil
+				default:
+					return out, nil
 				}
-				return scrollOutcome{}, nil
 			default:
 				return scrollOutcome{}, wrapObservationErr(err)
 			}
@@ -694,52 +1022,65 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 		if f.Geometry != run.geo {
 			return scrollOutcome{}, run.geometryChanged(f)
 		}
-		if !f.Reused {
-			run.lastArrived = f.ArrivedAt
-			after = f.ArrivedAt
-		}
 		m := run.inv.matcher().Match(f)
-		if m.Page == PageDiscDetail {
-			// A drag does not open details in this machine's model; the
-			// navigation diverged from reality.
-			return scrollOutcome{}, scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
-				"collect: a detail page showed after the scroll drag: %s", m.Evidence))
-		}
-		if !run.listVerdict(m) {
-			// Transition or animation frame: keep observing within the
-			// deadline.
-			if f.Reused {
-				if err := sleepCtx(ctx, run.inv.recheckEvery()); err != nil {
-					return scrollOutcome{}, err
+		if f.Reused {
+			// An idle confirmation carries the last fresh content. It can
+			// prove "still stationary" (the content is unchanged), but it
+			// cannot prove a displacement that has not appeared fresh; the
+			// deadline decides.
+			if run.listVerdict(m) {
+				out.after, out.afterMatch = f, m
+				sm := run.inv.matcher().MatchScroll(before, f)
+				out.match = sm
+				switch {
+				case sm.Displaced && len(sm.Matches) > 0:
+					out.displaced = true
+					return out, nil
+				case sm.Lost:
+					out.lost = true
+					return out, nil
+				case sm.Stationary:
+					sawStationary = true
 				}
 			}
-			continue
-		}
-		sm := run.inv.matcher().MatchScroll(before, f)
-		if sm.Displaced {
-			displaced = true
-		}
-		if sm.Displaced && len(sm.Matches) > 0 {
-			return scrollOutcome{corresponded: true, after: f, afterMatch: m, match: sm}, nil
-		}
-		if f.Reused {
 			if err := sleepCtx(ctx, run.inv.recheckEvery()); err != nil {
 				return scrollOutcome{}, err
 			}
+			continue
+		}
+		run.lastArrived = f.ArrivedAt
+		after = f.ArrivedAt
+		out.after, out.afterMatch = f, m
+		if !run.listVerdict(m) {
+			// Transition or animation frame: keep observing within the
+			// deadline.
+			continue
+		}
+		sm := run.inv.matcher().MatchScroll(before, f)
+		out.match = sm
+		switch {
+		case sm.Displaced && len(sm.Matches) > 0:
+			out.displaced = true
+			return out, nil
+		case sm.Lost:
+			out.lost = true
+			return out, nil
+		case sm.Stationary:
+			sawStationary = true
+		case sm.Displaced:
+			sawDisplaced = true
 		}
 	}
 }
 
-// applyTransition validates one scroll correspondence (T5 §5) and
-// carries the visited bookkeeping across it. A correspondence is
-// accepted only when it is complete and consistent: every pair in
-// bounds and one-to-one, columns preserved, the row displacement
-// uniform and within one small step that keeps at least a full row of
-// overlap, the overlap fully accounted for (an unaccounted overlap
-// position could hold an old or a new item — the machine does not guess
-// which), and the same item's occupancy agreeing on both sides.
-// Anything else is positionLost: the machine stops rather than guessing
-// how far the list went.
+// applyTransition validates one scroll correspondence (T5 §5) and carries
+// the visited bookkeeping across it. A correspondence is accepted only
+// when it is complete and consistent: every pair in bounds and one-to-one,
+// columns preserved, the forward row displacement uniform and equal to the
+// matcher's verified row count, and the overlap fully accounted for (an
+// unaccounted overlap position could hold an old or a new item — the
+// machine does not guess which). Anything else is positionLost: the
+// machine stops rather than guessing how far the list went.
 func (run *inventoryRun) applyTransition(before, after platform.Frame, beforeMatch, afterMatch PageMatch, sm ScrollMatch) error {
 	l := run.inv.Layout
 	fail := func(reason string) error {
@@ -747,12 +1088,14 @@ func (run *inventoryRun) applyTransition(before, after platform.Frame, beforeMat
 			"collect: the scroll transition %d → %d was rejected: %s (correspondence evidence: %s)",
 			before.ID, after.ID, reason, sm.Evidence))
 	}
+	if sm.Rows < 1 || sm.Rows > l.Rows-1 {
+		return fail(fmt.Sprintf("the verified row count %d is outside 1..%d", sm.Rows, l.Rows-1))
+	}
 	if len(sm.Matches) == 0 {
 		return fail("no correspondences")
 	}
 	fromSeen := make(map[int]bool, len(sm.Matches))
 	toSeen := make(map[int]bool, len(sm.Matches))
-	shift := -1
 	for _, p := range sm.Matches {
 		if p.FromRow < 0 || p.FromRow >= l.Rows || p.FromColumn < 0 || p.FromColumn >= l.Columns ||
 			p.ToRow < 0 || p.ToRow >= l.Rows || p.ToColumn < 0 || p.ToColumn >= l.Columns {
@@ -768,15 +1111,9 @@ func (run *inventoryRun) applyTransition(before, after platform.Frame, beforeMat
 			return fail(fmt.Sprintf("the pair (%d,%d)→(%d,%d) changes column",
 				p.FromRow, p.FromColumn, p.ToRow, p.ToColumn))
 		}
-		pairShift := p.FromRow - p.ToRow
-		if pairShift < 1 || pairShift > l.Rows-1 {
-			return fail(fmt.Sprintf("the row shift %d of the pair (%d,%d)→(%d,%d) is not one small step that keeps a full row of overlap",
-				pairShift, p.FromRow, p.FromColumn, p.ToRow, p.ToColumn))
-		}
-		if shift == -1 {
-			shift = pairShift
-		} else if shift != pairShift {
-			return fail("the correspondences disagree on how far the list moved")
+		if p.FromRow-p.ToRow != sm.Rows {
+			return fail(fmt.Sprintf("the pair (%d,%d)→(%d,%d) disagrees with the verified %d-row displacement",
+				p.FromRow, p.FromColumn, p.ToRow, p.ToColumn, sm.Rows))
 		}
 		// The same item cannot appear or disappear: occupancy must agree
 		// on both sides of a correspondence.
@@ -787,7 +1124,7 @@ func (run *inventoryRun) applyTransition(before, after platform.Frame, beforeMat
 	}
 	// Full overlap coverage: the after-viewport's overlap rows must be
 	// exactly the matched to-positions.
-	for row := 0; row < l.Rows-shift; row++ {
+	for row := 0; row < l.Rows-sm.Rows; row++ {
 		for col := 0; col < l.Columns; col++ {
 			if !toSeen[l.positionSlot(row, col)] {
 				return fail(fmt.Sprintf("the overlap position (%d,%d) has no correspondence — the machine cannot tell old from new there",
@@ -818,10 +1155,10 @@ const (
 	awaitGeometry                   // a frame arrived under a different geometry version
 )
 
-// awaitOutcome is one bounded wait's result: the class, the last
-// observed frame and verdict (set for every class but awaitCanceled),
-// the error for the error classes, and whether any observation carried
-// the expected verdict.
+// awaitOutcome is one bounded wait's result: the class, the last observed
+// frame and verdict (set for every class but awaitCanceled), the error for
+// the error classes, and whether any observation carried the expected
+// verdict.
 type awaitOutcome struct {
 	class    awaitClass
 	frame    platform.Frame
@@ -830,20 +1167,29 @@ type awaitOutcome struct {
 	expected bool
 }
 
+// detailOutcome is one detail wait's result. lastSelected is -2 until a
+// warehouse list verdict with the layout's slot count is seen.
+type detailOutcome struct {
+	class        awaitClass
+	frame        platform.Frame
+	match        PageMatch
+	err          error
+	sawTarget    bool
+	sawPopulated bool
+	sawDifferent bool
+	lastSelected int
+	stable       bool
+}
+
 // awaitSettled waits for the expected page verdict to hold stably:
 // StableFrames consecutive observations with the verdict, where an
 // observation is a fresh frame or an idle (Reused) confirmation of the
-// frame the previous observation rested on — unchanged content is
-// still current content, so an idle confirmation is stability evidence
-// too. A contradicting observation resets the count (a transition
-// frame, an animation frame, another page). The whole wait is bounded
-// by the action budget; Frame runs under a deadline-bounded context so
-// a silent stream cannot outlive the budget.
-//
-// Tradeoff, noted for 4b: whole-verdict stability is coarser than T5
-// §4.2's 文字和图标区域的稳定性 — a background animation under a settled
-// detail region would not reset this count. The refined per-region rule
-// belongs to the calibrated matcher.
+// frame the previous observation rested on — unchanged content is still
+// current content, so an idle confirmation is stability evidence too. A
+// contradicting observation resets the count (a transition frame, an
+// animation frame, another page). The whole wait is bounded by the action
+// budget; Frame runs under a deadline-bounded context so a silent stream
+// cannot outlive the budget.
 func (run *inventoryRun) awaitSettled(ctx context.Context, expect func(PageMatch) bool) awaitOutcome {
 	deadline := time.Now().Add(run.inv.actionBudget())
 	samples := 0
@@ -965,15 +1311,6 @@ func (run *inventoryRun) geometryChanged(f platform.Frame) error {
 	return scan.NewFault(platform.CodeGeometryChanged, fmt.Errorf(
 		"collect: frame %d arrived under geometry %d; the anchors are bound to %d",
 		f.ID, f.Geometry, run.geo))
-}
-
-// admissionEvidence assembles one admission's prose grounds: the page
-// pair, the selection association, the stability and the matcher's own
-// confidence description (T5 §6).
-func (run *inventoryRun) admissionEvidence(target string, preFrame platform.Frame, out awaitOutcome, attempts int) string {
-	return fmt.Sprintf(
-		"%s admitted after %d attempt(s): list frame %d showed the target occupied; the detail settled on frame %d (geometry %d) with the selection on the target; matcher: %s",
-		target, attempts, preFrame.ID, out.frame.ID, out.frame.Geometry, out.match.Evidence)
 }
 
 // wrapObservationErr wraps a non-fault frame/observation error as an
