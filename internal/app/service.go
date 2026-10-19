@@ -346,6 +346,12 @@ func (s *Service) Start(req StartRequest) (StartOutcome, error) {
 		defer s.mu.Unlock()
 		s.notifyLocked()
 	})
+	// A controller whose traversal reports the range it observed during
+	// preparation (T5 §3) gets the deliverer's sink wired in before the
+	// session starts, so the observed range reaches the record.
+	if relay, ok := spec.Controller.(scopeRelay); ok {
+		relay.SetScopeSink(deliverer.observeScope)
+	}
 	kernel, err := scan.Start(scan.Config{
 		ID:         scan.ID(recordID),
 		Capacity:   scanPipelineCapacity,

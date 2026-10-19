@@ -2,7 +2,9 @@ package collect_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -439,4 +441,157 @@ func TestReleaseOnceAndErrorPassthrough(t *testing.T) {
 	if _, _, _, _, closeCalls := sess.Counters(); closeCalls != 1 {
 		t.Fatalf("close calls: %d, want 1", closeCalls)
 	}
+}
+
+// C10: the controller relays the traversal's observed scope (T5 §3)
+// once — after a successful precheck, before Collect — and only when
+// the traversal both implements the capability and has a report; a
+// failed precheck never relays.
+type scopeReportingTraversal struct {
+	scope       json.RawMessage
+	precheckErr error
+	events      []string
+	mu          sync.Mutex
+}
+
+func (t *scopeReportingTraversal) Precheck(ctx context.Context, sess platform.Session) error {
+	t.mu.Lock()
+	t.events = append(t.events, "precheck")
+	err := t.precheckErr
+	t.mu.Unlock()
+	return err
+}
+
+func (t *scopeReportingTraversal) Collect(ctx context.Context, sess platform.Session, h *scan.ControllerHandle) error {
+	t.mu.Lock()
+	t.events = append(t.events, "collect")
+	t.mu.Unlock()
+	return nil
+}
+
+func (t *scopeReportingTraversal) ObservedScope() json.RawMessage {
+	t.mu.Lock()
+	t.events = append(t.events, "observedScope")
+	s := t.scope
+	t.mu.Unlock()
+	return s
+}
+
+func (t *scopeReportingTraversal) snapshot() []string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return append([]string(nil), t.events...)
+}
+
+func TestScopeRelayAfterPrecheck(t *testing.T) {
+	payload := json.RawMessage(`{"kind":"zzzInventory","page":"warehouse"}`)
+	trav := &scopeReportingTraversal{scope: payload}
+	sess := readySession()
+	port := &platformfake.Port{NewSession: func() *platformfake.Session { return sess }}
+	var mu sync.Mutex
+	var relayed []json.RawMessage
+	ctrl := &collect.Controller{
+		Port: port, Target: platform.TargetSpec{BundleID: "com.example.game"},
+		Hotkey:    platform.HotkeySpec{Key: platform.KeyS},
+		Traversal: func() collect.Traversal { return trav },
+	}
+	ctrl.SetScopeSink(func(scope json.RawMessage) {
+		mu.Lock()
+		defer mu.Unlock()
+		relayed = append(relayed, append(json.RawMessage(nil), scope...))
+	})
+	snap := kernelSession(t, ctrl)
+	if snap.End != scan.EndCompleted {
+		t.Fatalf("end %s, want completed", snap.End)
+	}
+	if len(relayed) != 1 || string(relayed[0]) != string(payload) {
+		t.Fatalf("relayed %q, want exactly the traversal's report", relayed)
+	}
+	// The relay sits between the precheck and the collection, on the
+	// producer goroutine.
+	if got, want := trav.snapshot(), []string{"precheck", "observedScope", "collect"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("event order %v, want %v", got, want)
+	}
+}
+
+func TestScopeRelayNegativePaths(t *testing.T) {
+	// A traversal without the ScopeReporter capability never fires the
+	// sink; the observe-only session holds until cancelled.
+	t.Run("no capability", func(t *testing.T) {
+		sess := readySession()
+		port := &platformfake.Port{NewSession: func() *platformfake.Session { return sess }}
+		var mu sync.Mutex
+		relayed := 0
+		ctrl := &collect.Controller{
+			Port: port, Target: platform.TargetSpec{BundleID: "com.example.game"},
+			Hotkey:    platform.HotkeySpec{Key: platform.KeyS},
+			Traversal: func() collect.Traversal { return collect.ObserveOnly{} },
+		}
+		ctrl.SetScopeSink(func(json.RawMessage) {
+			mu.Lock()
+			defer mu.Unlock()
+			relayed++
+		})
+		kernel, err := scan.Start(scan.Config{
+			ID: scan.ID("collect-scope-none"), Capacity: 2, Workers: 1,
+			Controller: ctrl, Recognizer: waitRecognizer{}, Deliverer: &recordSink{},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		waitUntil(t, "capturing", func() bool {
+			return kernel.Snapshot().Phase == scan.PhaseCapturing
+		})
+		kernel.Cancel()
+		select {
+		case <-kernel.Done():
+		case <-time.After(3 * time.Second):
+			t.Fatal("the cancel must end the session")
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if relayed != 0 {
+			t.Fatalf("a traversal without the capability must not relay, fired %d times", relayed)
+		}
+	})
+
+	// A failed precheck never relays, and an empty report is skipped.
+	t.Run("failed precheck and empty report", func(t *testing.T) {
+		for _, tc := range []struct {
+			name  string
+			trav  *scopeReportingTraversal
+			fails bool
+		}{
+			{"failed precheck", &scopeReportingTraversal{
+				scope:       json.RawMessage(`{"kind":"zzzInventory"}`),
+				precheckErr: errors.New("the page does not verify"),
+			}, true},
+			{"empty report", &scopeReportingTraversal{}, false},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				port := &platformfake.Port{NewSession: func() *platformfake.Session { return readySession() }}
+				var mu sync.Mutex
+				relayed := 0
+				ctrl := &collect.Controller{
+					Port: port, Target: platform.TargetSpec{BundleID: "com.example.game"},
+					Hotkey:    platform.HotkeySpec{Key: platform.KeyS},
+					Traversal: func() collect.Traversal { return tc.trav },
+				}
+				ctrl.SetScopeSink(func(json.RawMessage) {
+					mu.Lock()
+					defer mu.Unlock()
+					relayed++
+				})
+				snap := kernelSession(t, ctrl)
+				if tc.fails && snap.End != scan.EndFailed {
+					t.Fatalf("end %s, want failed", snap.End)
+				}
+				mu.Lock()
+				defer mu.Unlock()
+				if relayed != 0 {
+					t.Fatalf("the sink must not fire, fired %d times", relayed)
+				}
+			})
+		}
+	})
 }

@@ -13,6 +13,7 @@ package collect
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -56,6 +57,14 @@ type Controller struct {
 	// Stop). The registered hotkey triggers it; a late trigger after
 	// Release is ignored so it cannot cut the next session.
 	Stop func()
+	// OnScopeObserved, when set, receives the observed-scope payload of
+	// the session's traversal (the ScopeReporter capability) once its
+	// precheck succeeded — the application's record wiring persists it
+	// as the session's observed range (T5 §3). It runs once, on the
+	// producer goroutine, right after the precheck; a traversal without
+	// the capability or with an empty report never triggers it. Wire it
+	// via SetScopeSink before the session starts.
+	OnScopeObserved func(scope json.RawMessage)
 
 	// PrepareBudget bounds the whole preparation wait; zero takes the
 	// default. ObserveEvery paces the wait loop; zero takes the default.
@@ -171,7 +180,11 @@ func (c *Controller) Prepare(ctx context.Context, h *scan.ControllerHandle) erro
 				c.trav = c.newTraversal()
 				trav := c.trav
 				c.mu.Unlock()
-				return trav.Precheck(ctx, sess)
+				if err := trav.Precheck(ctx, sess); err != nil {
+					return err
+				}
+				c.relayScope(trav)
+				return nil
 			}
 			if fault, ok := portFault(err); ok {
 				switch fault.Class {
@@ -200,12 +213,35 @@ func (c *Controller) Prepare(ctx context.Context, h *scan.ControllerHandle) erro
 	}
 }
 
+// SetScopeSink wires OnScopeObserved; the application calls it between
+// building the controller and starting the session (the service does it
+// right after the scan source handed over the spec). The field is
+// written before the kernel starts the producer goroutine and only read
+// there, so no synchronization is needed.
+func (c *Controller) SetScopeSink(sink func(json.RawMessage)) { c.OnScopeObserved = sink }
+
 // newTraversal builds this session's traversal.
 func (c *Controller) newTraversal() Traversal {
 	if c.Traversal != nil {
 		return c.Traversal()
 	}
 	return ObserveOnly{}
+}
+
+// relayScope hands the traversal's observed-scope report (T5 §3) to the
+// application's sink. It runs once, after a successful precheck, on the
+// producer goroutine.
+func (c *Controller) relayScope(trav Traversal) {
+	if c.OnScopeObserved == nil {
+		return
+	}
+	r, ok := trav.(ScopeReporter)
+	if !ok {
+		return
+	}
+	if scope := r.ObservedScope(); len(scope) > 0 {
+		c.OnScopeObserved(scope)
+	}
 }
 
 // Collect implements scan.Controller: the traversal runs the collection

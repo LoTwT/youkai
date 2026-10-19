@@ -2,6 +2,7 @@ package collect
 
 import (
 	"context"
+	"encoding/json"
 
 	"github.com/LoTwT/youkai/internal/platform"
 	"github.com/LoTwT/youkai/internal/scan"
@@ -47,6 +48,16 @@ type SessionView interface {
 	Observe() (platform.Observation, error)
 	Frame(ctx context.Context, req platform.FrameRequest) (platform.Frame, error)
 	Dispatch(op platform.InputOp) platform.InputResult
+}
+
+// ScopeReporter is the optional Traversal capability that publishes the
+// range its precheck actually observed (T5 §3's 筛选、排序、数量 — what
+// the page evidence really established, as opposed to the declared
+// scope the application fixed at acceptance). The controller relays the
+// report once the precheck succeeded; the application's record wiring
+// persists it as the session's observed range. Inventory implements it.
+type ScopeReporter interface {
+	ObservedScope() json.RawMessage
 }
 
 // Diagnostic codes of the inventory traversal. navigationMismatch

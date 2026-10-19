@@ -1,6 +1,9 @@
 package app
 
 import (
+	"context"
+	"encoding/json"
+	"reflect"
 	"testing"
 	"time"
 
@@ -280,5 +283,75 @@ func TestGameScanSourceBindStopSeam(t *testing.T) {
 	}
 	if _, ok := interface{}(staticSource{}).(interface{ bindStop(func()) }); ok {
 		t.Fatal("ordinary sources must not grow the hook")
+	}
+}
+
+// jsonEq compares two JSON documents semantically (the checkpoint
+// writer pretty-prints).
+func jsonEq(a, b []byte) bool {
+	var va, vb any
+	if err := json.Unmarshal(a, &va); err != nil {
+		return false
+	}
+	if err := json.Unmarshal(b, &vb); err != nil {
+		return false
+	}
+	return reflect.DeepEqual(va, vb)
+}
+
+// reportingTraversal prechecks clean, reports a fixed observed scope
+// (T5 §3) and completes immediately — the traversal stand-in for the
+// observed-scope seam test.
+type reportingTraversal struct {
+	scope json.RawMessage
+}
+
+func (t *reportingTraversal) Precheck(ctx context.Context, sess platform.Session) error { return nil }
+func (t *reportingTraversal) Collect(ctx context.Context, sess platform.Session, h *scan.ControllerHandle) error {
+	return nil
+}
+func (t *reportingTraversal) ObservedScope() json.RawMessage { return t.scope }
+
+// The observed-scope seam end to end (A9): the traversal's precheck
+// report reaches the session's record — the service wires the
+// deliverer's sink into the collect controller, the controller relays
+// after the precheck, and the finished checkpoint carries the observed
+// range beside the untouched declared scope.
+func TestObservedScopeReachesTheRecord(t *testing.T) {
+	paths := newTestPaths(t)
+	sess := platformfake.NewSession()
+	port := &platformfake.Port{NewSession: func() *platformfake.Session { return sess }}
+	payload := json.RawMessage(`{"kind":"zzzInventory","page":"warehouse","geometry":1,"slots":6,"top":true}`)
+	ctrl := &collect.Controller{
+		Port:   port,
+		Target: collect.MacCloudTarget,
+		Hotkey: platform.HotkeySpec{Key: platform.KeyS},
+		Traversal: func() collect.Traversal {
+			return &reportingTraversal{scope: payload}
+		},
+	}
+	svc, _ := newTestService(t, paths, staticSource{spec: specOf(ctrl)}, func() (Recognizer, error) { return newFakeRecognizer(), nil })
+	outcome, err := svc.Start(StartRequest{ID: "observed-scope"})
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	waitWrapped(t, svc)
+
+	reopened, err := record.Open(paths.Data)
+	if err != nil {
+		t.Fatalf("reopen store: %v", err)
+	}
+	rec, err := reopened.Load(string(outcome.SessionID))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if !jsonEq(rec.Checkpoint.Session.ObservedScope, payload) {
+		t.Fatalf("observedScope = %s, want %s", rec.Checkpoint.Session.ObservedScope, payload)
+	}
+	if !jsonEq(rec.Checkpoint.Session.Scope, []byte(`{"kind":"test"}`)) {
+		t.Fatalf("the declared scope must stay untouched, got %s", rec.Checkpoint.Session.Scope)
+	}
+	if snap := svc.Snapshot().Scan; snap.End != scan.EndCompleted {
+		t.Fatalf("end %s, want completed", snap.End)
 	}
 }
