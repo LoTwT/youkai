@@ -94,8 +94,10 @@ func TestStructuredDiscRarityFromCapture(t *testing.T) {
 
 // TestStructuredDiscCarriesCaptureState checks the adapter's non-text
 // fields: management state and equipment presence come from the capture,
-// the equipped object keeps agentId null until PR 6b, and validation stays
-// unavailable instead of auto-accepting the record.
+// the equipped object keeps agentId null until PR 6b, equipped records stay
+// unavailable until identity exists, and explicitly unequipped records can
+// validate once their management state is known (still needing human
+// confirmation).
 func TestStructuredDiscCarriesCaptureState(t *testing.T) {
 	lines := detailLines()
 	structured := structuredDisc(Observation{
@@ -134,8 +136,11 @@ func TestStructuredDiscCarriesCaptureState(t *testing.T) {
 	if unequipped.Data.ManagementState == nil || *unequipped.Data.ManagementState != zzz.ManagementDiscarded {
 		t.Fatalf("managementState = %v, want discarded", unequipped.Data.ManagementState)
 	}
-	if unequipped.Validation.Status != zzz.ValidationUnavailable {
-		t.Fatalf("validation = %+v, want unavailable", unequipped.Validation)
+	if unequipped.Validation.Status != zzz.ValidationPassed {
+		t.Fatalf("validation = %+v, want passed", unequipped.Validation)
+	}
+	if len(unequipped.Validation.Issues) != 0 {
+		t.Fatalf("unequipped validation issues = %+v, want none", unequipped.Validation.Issues)
 	}
 
 	legacy := structuredDisc(Observation{Rarity: zzz.RarityS}, lines)

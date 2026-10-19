@@ -236,7 +236,8 @@ func TestToStructuredRarityUnverified(t *testing.T) {
 
 // TestToStructuredWithCaptureState pins the new non-text fields: confirmed
 // management state and equipment presence are written, agentId stays null,
-// and validation remains unavailable until the equipper identity exists.
+// equipped records remain unavailable until the equipper identity exists,
+// and unequipped records can pass once their management state is known.
 func TestToStructuredWithCaptureState(t *testing.T) {
 	rec, issues := ParseDetail(DetailLines{
 		Set:   "河豚电音[1]",
@@ -276,8 +277,11 @@ func TestToStructuredWithCaptureState(t *testing.T) {
 		unequipped.Data.Equipped.AgentID != nil {
 		t.Fatalf("equipped = %+v, want unequipped with agentId null", unequipped.Data.Equipped)
 	}
-	if unequipped.Validation.Status != ValidationUnavailable {
-		t.Fatalf("validation = %+v, want unavailable", unequipped.Validation)
+	if unequipped.Validation.Status != ValidationPassed {
+		t.Fatalf("validation = %+v, want passed", unequipped.Validation)
+	}
+	if len(unequipped.Validation.Issues) != 0 {
+		t.Fatalf("unequipped validation issues = %+v, want none", unequipped.Validation.Issues)
 	}
 
 	raw, err := json.Marshal(unequipped.Data)

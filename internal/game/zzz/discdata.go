@@ -245,11 +245,12 @@ func mainStatData(stat Stat) *StatData {
 }
 
 // validate derives the current validation status. Parsing errors mean
-// failed. Without them the record is still unavailable: a missing
-// management state is a data gap, and equipment presence never makes the
-// record complete while the equipper identity (agentId) is not recognized.
-// That gap is reported as an error rather than hidden behind a passed
-// status.
+// failed. Without them, a missing management state is a data gap, and an
+// equipped record is still incomplete while the equipper identity
+// (agentId) is not recognized. An explicitly unequipped record has no
+// equipper to identify, so a confirmed management state is enough for
+// validation to pass; the record still needs human confirmation because
+// this revision never marks a scan auto-accepted.
 func validate(issues []Issue, state CaptureState) Validation {
 	if hasError(issues) {
 		return Validation{Status: ValidationFailed, Issues: normalizeIssues(issues)}
@@ -264,11 +265,18 @@ func validate(issues []Issue, state CaptureState) Validation {
 		gaps = append(gaps, newIssue("equipped", CodeEquippedStateUnavailable,
 			"本修订已确认装备存在性，但尚未识别装备者身份（agentId 为 null），无法完成校验"))
 	case EquippedStateUnequipped:
-		gaps = append(gaps, newIssue("equipped", CodeEquippedStateUnavailable,
-			"本修订已确认未装备，但装备者身份识别尚未实现，校验保持不可用"))
-	default:
+		// No equipper to identify; the state itself is complete.
+	case "":
 		gaps = append(gaps, newIssue("equipped", CodeEquippedStateUnavailable,
 			"本观测没有可确认的装备存在性证据，无法完成校验"))
+	default:
+		// The collector produced an unrecognized value; treat it like a
+		// missing observation instead of accepting an unknown state.
+		gaps = append(gaps, newIssue("equipped", CodeEquippedStateUnavailable,
+			"本观测的装备存在性状态无法识别，无法完成校验"))
+	}
+	if len(gaps) == 0 {
+		return Validation{Status: ValidationPassed, Issues: []Issue{}}
 	}
 	return Validation{Status: ValidationUnavailable, Issues: normalizeIssues(gaps)}
 }
