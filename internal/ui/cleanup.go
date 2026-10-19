@@ -600,6 +600,7 @@ func (m *Model) storageArea(c *ui.Context, t *ui.Theme) {
 		if m.cleanup != nil && m.cleanup.target.all() {
 			m.cleanupPromptArea(c, t)
 		}
+		m.closeBehaviorArea(c, t)
 	})
 }
 

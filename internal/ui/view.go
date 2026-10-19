@@ -85,7 +85,6 @@ func (m *Model) prepareArea(c *ui.Context, t *ui.Theme) {
 			}
 		})
 		ui.Text(c, stopMeans).TextColor(t.TextMuted).FontSize(t.FontSize * 0.9)
-		m.closeBehaviorArea(c, t)
 	})
 }
 
