@@ -316,3 +316,97 @@ func TestToStructuredWithCaptureState(t *testing.T) {
 		t.Fatalf("validation = %+v, want unavailable", invalid.Validation)
 	}
 }
+
+// TestAgentIdentityGatesValidation pins the identity rules: a reliable,
+// catalog-resolvable agent id completes an equipped record's validation; a
+// missing or stale id keeps agentId null and validation unavailable; an
+// unequipped record never carries an id, even if one is supplied.
+func TestAgentIdentityGatesValidation(t *testing.T) {
+	rec, issues := ParseDetail(DetailLines{
+		Set:   "河豚电音[1]",
+		Level: "等级15/15",
+		Main:  "生命值 2200",
+		Subs:  []string{"暴击伤害 +3 19.2%", "穿透值 9", "攻击力 +1 6%", "暴击率 2.4%"},
+	})
+	if len(issues) != 0 {
+		t.Fatalf("issues = %+v, want none", issues)
+	}
+	cases := []struct {
+		name       string
+		state      CaptureState
+		wantID     *int
+		wantStatus string
+	}{
+		{
+			name:       "equipped with a catalog id passes",
+			state:      CaptureState{ManagementState: ManagementNone, EquippedState: EquippedStateEquipped, AgentID: 1311},
+			wantID:     intPtr(1311),
+			wantStatus: ValidationPassed,
+		},
+		{
+			name:       "equipped without an id stays unavailable",
+			state:      CaptureState{ManagementState: ManagementNone, EquippedState: EquippedStateEquipped},
+			wantStatus: ValidationUnavailable,
+		},
+		{
+			name:       "equipped with an unknown id stays unavailable",
+			state:      CaptureState{ManagementState: ManagementNone, EquippedState: EquippedStateEquipped, AgentID: 9999},
+			wantStatus: ValidationUnavailable,
+		},
+		{
+			name:       "unequipped ignores a supplied id",
+			state:      CaptureState{ManagementState: ManagementDiscarded, EquippedState: EquippedStateUnequipped, AgentID: 1311},
+			wantStatus: ValidationPassed,
+		},
+		{
+			name:       "a known id without management evidence stays unavailable",
+			state:      CaptureState{EquippedState: EquippedStateEquipped, AgentID: 1311},
+			wantID:     intPtr(1311),
+			wantStatus: ValidationUnavailable,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			structured := ToStructuredWithState(rec, RarityS, tc.state, issues)
+			got := structured.Data.Equipped
+			if got == nil {
+				t.Fatalf("equipped = nil, want a state object")
+			}
+			if tc.wantID == nil {
+				if got.AgentID != nil {
+					t.Fatalf("agentId = %d, want null", *got.AgentID)
+				}
+			} else if got.AgentID == nil || *got.AgentID != *tc.wantID {
+				t.Fatalf("agentId = %v, want %d", got.AgentID, *tc.wantID)
+			}
+			if structured.Validation.Status != tc.wantStatus {
+				t.Fatalf("validation = %+v, want %s", structured.Validation, tc.wantStatus)
+			}
+			if tc.wantStatus == ValidationPassed && len(structured.Validation.Issues) != 0 {
+				t.Fatalf("passed validation carries issues: %+v", structured.Validation.Issues)
+			}
+		})
+	}
+
+	// The public shape keeps the id numeric and null when unknown.
+	raw, err := json.Marshal(ToStructuredWithState(rec, RarityS,
+		CaptureState{ManagementState: ManagementNone, EquippedState: EquippedStateEquipped, AgentID: 1311}, issues))
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var doc struct {
+		Data struct {
+			Equipped struct {
+				AgentID *int `json:"agentId"`
+			} `json:"equipped"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if doc.Data.Equipped.AgentID == nil || *doc.Data.Equipped.AgentID != 1311 {
+		t.Fatalf("persisted agentId = %v, want 1311", doc.Data.Equipped.AgentID)
+	}
+}
+
+func intPtr(v int) *int { return &v }

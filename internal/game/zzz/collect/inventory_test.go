@@ -950,9 +950,12 @@ func TestSinglePageCompletesOneViewport(t *testing.T) {
 			t.Fatalf("observation %d at position %d %v, want position 1 viewport 0 slot %d",
 				i+1, o.Position, [3]int{o.Viewport, o.Row, o.Column}, i)
 		}
-		if o.Quality != collect.QualityS || len(o.Lines) != 7 || len(o.Context) != 2 {
+		if o.Quality != collect.QualityS || len(o.Lines) != 7 || len(o.Context) != 4 {
 			t.Fatalf("observation %d lacks its quality/lines/context: quality %q lines %d context %d",
 				i+1, o.Quality, len(o.Lines), len(o.Context))
+		}
+		if o.Context[2].Role != collect.LineDetailAvatar || o.Context[3].Role != collect.LineListAvatar {
+			t.Fatalf("observation %d context lacks the avatar crops: %+v", i+1, o.Context)
 		}
 		if o.RarityFilter != "S" {
 			t.Fatalf("observation %d rarityFilter %q, want S", i+1, o.RarityFilter)
@@ -2321,10 +2324,12 @@ func TestTraverseThreeSubstatObservationOmitsSub4(t *testing.T) {
 			t.Fatalf("a three-substat observation carries sub4: %+v", obs[0].Lines)
 		}
 	}
-	if len(obs[0].Context) != 2 ||
+	if len(obs[0].Context) != 4 ||
 		obs[0].Context[0].Role != collect.LineQualityBadge ||
-		obs[0].Context[1].Role != collect.LineSelectedCell {
-		t.Fatalf("context = %+v, want qualityBadge and selectedCell", obs[0].Context)
+		obs[0].Context[1].Role != collect.LineSelectedCell ||
+		obs[0].Context[2].Role != collect.LineDetailAvatar ||
+		obs[0].Context[3].Role != collect.LineListAvatar {
+		t.Fatalf("context = %+v, want qualityBadge, selectedCell, detailAvatar and listAvatar", obs[0].Context)
 	}
 }
 

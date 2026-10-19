@@ -32,8 +32,9 @@ package zzz
 // validationRules.version: bump it whenever table content changes, for
 // example when new sets or agents are added after a game update, or a
 // display name is corrected against real screens (revision 2: the ether
-// correction of 2026-10-19).
-const CatalogRevision = "2"
+// correction of 2026-10-19; revision 3: the embedded circular-avatar
+// association of 2026-10-20).
+const CatalogRevision = "3"
 
 // Set is one drive-disc set of the catalog. ID is fairy's numeric entity
 // id and the public structured identity; Key is the internal readable
@@ -48,12 +49,21 @@ type Set struct {
 }
 
 // Agent is one equipper agent of the catalog, addressed the same way as
-// Set. Agents are not parsed by the detail-line parser of this package
-// yet; the table exists so set and agent resolution share one catalog.
+// Set. Agents are not parsed by the detail-line parser of this package;
+// the table exists so set and agent resolution share one catalog, and so
+// the avatar matcher can associate a fairy numeric id with its embedded
+// circular icon.
 type Agent struct {
 	ID   int
 	Key  string
 	Name string
+	// Avatar is the embedded circular-icon resource's base name from
+	// fairy's partnerInfo.iconPath (the directory and .png suffix are
+	// dropped), or empty when fairy has no IconRoleCircle for the agent.
+	// The agentavatars package embeds one webp per non-empty value; an
+	// empty value means identity matching must report unknown, never a
+	// nearby id.
+	Avatar string
 }
 
 // sets and agents are the full Nanoka 3.2 catalogs, in fairy source-id
@@ -98,66 +108,69 @@ var sets = []Set{
 }
 
 var agents = []Agent{
-	{ID: 1011, Key: "anby", Name: "安比"},              // Anby
-	{ID: 1021, Key: "nekomata", Name: "猫又"},          // Nekomata
-	{ID: 1031, Key: "nicole", Name: "妮可"},            // Nicole
-	{ID: 1041, Key: "soldier11", Name: "「11号」"},      // Soldier 11
-	{ID: 1051, Key: "yidhari", Name: "伊德海莉"},         // Yidhari
-	{ID: 1061, Key: "corin", Name: "可琳"},             // Corin
-	{ID: 1071, Key: "caesar", Name: "凯撒"},            // Caesar
-	{ID: 1081, Key: "billy", Name: "比利"},             // Billy
-	{ID: 1091, Key: "miyabi", Name: "雅"},             // Miyabi
-	{ID: 1101, Key: "koleda", Name: "珂蕾妲"},           // Koleda
-	{ID: 1111, Key: "anton", Name: "安东"},             // Anton
-	{ID: 1121, Key: "ben", Name: "本"},                // Ben
-	{ID: 1131, Key: "soukaku", Name: "苍角"},           // Soukaku
-	{ID: 1141, Key: "lycaon", Name: "莱卡恩"},           // Lycaon
-	{ID: 1151, Key: "lucy", Name: "露西"},              // Lucy
-	{ID: 1161, Key: "lighter", Name: "莱特"},           // Lighter
-	{ID: 1171, Key: "burnice", Name: "柏妮思"},          // Burnice
-	{ID: 1181, Key: "grace", Name: "格莉丝"},            // Grace
-	{ID: 1191, Key: "ellen", Name: "艾莲"},             // Ellen
-	{ID: 1201, Key: "harumasa", Name: "悠真"},          // Harumasa
-	{ID: 1211, Key: "rina", Name: "丽娜"},              // Rina
-	{ID: 1221, Key: "yanagi", Name: "柳"},             // Yanagi
-	{ID: 1241, Key: "zhuYuan", Name: "朱鸢"},           // Zhu Yuan
-	{ID: 1251, Key: "qingyi", Name: "青衣"},            // Qingyi
-	{ID: 1261, Key: "jane", Name: "简"},               // Jane
-	{ID: 1271, Key: "seth", Name: "赛斯"},              // Seth
-	{ID: 1281, Key: "piper", Name: "派派"},             // Piper
-	{ID: 1291, Key: "hugo", Name: "雨果"},              // Hugo
-	{ID: 1301, Key: "orphieMagus", Name: "奥菲丝&「鬼火」"}, // Orphie & Magus
-	{ID: 1311, Key: "astraYao", Name: "耀嘉音"},         // Astra Yao
-	{ID: 1321, Key: "evelyn", Name: "伊芙琳"},           // Evelyn
-	{ID: 1331, Key: "vivian", Name: "薇薇安"},           // Vivian
-	{ID: 1341, Key: "zhao", Name: "照"},               // Zhao
-	{ID: 1351, Key: "pulchra", Name: "波可娜"},          // Pulchra
-	{ID: 1361, Key: "trigger", Name: "「扳机」"},         // Trigger
-	{ID: 1371, Key: "yixuan", Name: "仪玄"},            // Yixuan
-	{ID: 1381, Key: "soldier0Anby", Name: "零号·安比"},   // Soldier 0 - Anby
-	{ID: 1391, Key: "juFufu", Name: "橘福福"},           // Ju Fufu
-	{ID: 1401, Key: "alice", Name: "爱丽丝"},            // Alice
-	{ID: 1411, Key: "yuzuha", Name: "柚叶"},            // Yuzuha
-	{ID: 1421, Key: "panYinhu", Name: "潘引壶"},         // Pan Yinhu
-	{ID: 1431, Key: "yeShunguang", Name: "叶瞬光"},      // Ye Shunguang
-	{ID: 1441, Key: "manato", Name: "真斗"},            // Manato
-	{ID: 1451, Key: "lucia", Name: "卢西娅"},            // Lucia
-	{ID: 1461, Key: "seed", Name: "「席德」"},            // Seed
-	{ID: 1471, Key: "banyue", Name: "般岳"},            // Banyue
-	{ID: 1481, Key: "dialyn", Name: "琉音"},            // Dialyn
-	{ID: 1491, Key: "sunna", Name: "千夏"},             // Sunna
-	{ID: 1501, Key: "aria", Name: "爱芮"},              // Aria
-	{ID: 1511, Key: "nangongYu", Name: "南宫羽"},        // Nangong Yu
-	{ID: 1521, Key: "cissia", Name: "希希芙"},           // Cissia
-	{ID: 1531, Key: "starlightBilly", Name: "星徽·比利"}, // Starlight - Billy
-	{ID: 1541, Key: "promeia", Name: "普罗米娅"},         // Promeia
-	{ID: 1551, Key: "pyrois", Name: "佩洛伊斯"},          // Pyrois
-	{ID: 1561, Key: "velina", Name: "维琳娜"},           // Velina
-	{ID: 1571, Key: "norma", Name: "诺姆"},             // Norma
-	{ID: 1581, Key: "remielle", Name: "蕾米埃尔"},        // Remielle
-	{ID: 1591, Key: "sigrid", Name: "希格莉德"},          // Sigrid
-	{ID: 1611, Key: "claret", Name: "克拉蕾"},           // Claret
-	{ID: 1621, Key: "roxy", Name: "洛克茜"},             // Roxy
+	{ID: 1011, Key: "anby", Name: "安比", Avatar: "IconRoleCircle01"},              // Anby
+	{ID: 1021, Key: "nekomata", Name: "猫又", Avatar: "IconRoleCircle11"},          // Nekomata
+	{ID: 1031, Key: "nicole", Name: "妮可", Avatar: "IconRoleCircle12"},            // Nicole
+	{ID: 1041, Key: "soldier11", Name: "「11号」", Avatar: "IconRoleCircle05"},      // Soldier 11
+	{ID: 1051, Key: "yidhari", Name: "伊德海莉", Avatar: "IconRoleCircle52"},         // Yidhari
+	{ID: 1061, Key: "corin", Name: "可琳", Avatar: "IconRoleCircle09"},             // Corin
+	{ID: 1071, Key: "caesar", Name: "凯撒", Avatar: "IconRoleCircle25"},            // Caesar
+	{ID: 1081, Key: "billy", Name: "比利", Avatar: "IconRoleCircle10"},             // Billy
+	{ID: 1091, Key: "miyabi", Name: "雅", Avatar: "IconRoleCircle13"},             // Miyabi
+	{ID: 1101, Key: "koleda", Name: "珂蕾妲", Avatar: "IconRoleCircle14"},           // Koleda
+	{ID: 1111, Key: "anton", Name: "安东", Avatar: "IconRoleCircle15"},             // Anton
+	{ID: 1121, Key: "ben", Name: "本", Avatar: "IconRoleCircle16"},                // Ben
+	{ID: 1131, Key: "soukaku", Name: "苍角", Avatar: "IconRoleCircle17"},           // Soukaku
+	{ID: 1141, Key: "lycaon", Name: "莱卡恩", Avatar: "IconRoleCircle18"},           // Lycaon
+	{ID: 1151, Key: "lucy", Name: "露西", Avatar: "IconRoleCircle27"},              // Lucy
+	{ID: 1161, Key: "lighter", Name: "莱特", Avatar: "IconRoleCircle26"},           // Lighter
+	{ID: 1171, Key: "burnice", Name: "柏妮思", Avatar: "IconRoleCircle32"},          // Burnice
+	{ID: 1181, Key: "grace", Name: "格莉丝", Avatar: "IconRoleCircle20"},            // Grace
+	{ID: 1191, Key: "ellen", Name: "艾莲", Avatar: "IconRoleCircle21"},             // Ellen
+	{ID: 1201, Key: "harumasa", Name: "悠真", Avatar: "IconRoleCircle35"},          // Harumasa
+	{ID: 1211, Key: "rina", Name: "丽娜", Avatar: "IconRoleCircle22"},              // Rina
+	{ID: 1221, Key: "yanagi", Name: "柳", Avatar: "IconRoleCircle31"},             // Yanagi
+	{ID: 1241, Key: "zhuYuan", Name: "朱鸢", Avatar: "IconRoleCircle23"},           // Zhu Yuan
+	{ID: 1251, Key: "qingyi", Name: "青衣", Avatar: "IconRoleCircle29"},            // Qingyi
+	{ID: 1261, Key: "jane", Name: "简", Avatar: "IconRoleCircle24"},               // Jane
+	{ID: 1271, Key: "seth", Name: "赛斯", Avatar: "IconRoleCircle30"},              // Seth
+	{ID: 1281, Key: "piper", Name: "派派", Avatar: "IconRoleCircle28"},             // Piper
+	{ID: 1291, Key: "hugo", Name: "雨果", Avatar: "IconRoleCircle42"},              // Hugo
+	{ID: 1301, Key: "orphieMagus", Name: "奥菲丝&「鬼火」", Avatar: "IconRoleCircle49"}, // Orphie & Magus
+	{ID: 1311, Key: "astraYao", Name: "耀嘉音", Avatar: "IconRoleCircle36"},         // Astra Yao
+	{ID: 1321, Key: "evelyn", Name: "伊芙琳", Avatar: "IconRoleCircle37"},           // Evelyn
+	{ID: 1331, Key: "vivian", Name: "薇薇安", Avatar: "IconRoleCircle41"},           // Vivian
+	{ID: 1341, Key: "zhao", Name: "照", Avatar: "IconRoleCircle56"},               // Zhao
+	{ID: 1351, Key: "pulchra", Name: "波可娜", Avatar: "IconRoleCircle38"},          // Pulchra
+	{ID: 1361, Key: "trigger", Name: "「扳机」", Avatar: "IconRoleCircle39"},         // Trigger
+	{ID: 1371, Key: "yixuan", Name: "仪玄", Avatar: "IconRoleCircle44"},            // Yixuan
+	// Soldier 0 - Anby: fairy carries no partnerInfo.iconPath.
+	{ID: 1381, Key: "soldier0Anby", Name: "零号·安比"},                          // Soldier 0 - Anby
+	{ID: 1391, Key: "juFufu", Name: "橘福福", Avatar: "IconRoleCircle43"},      // Ju Fufu
+	{ID: 1401, Key: "alice", Name: "爱丽丝", Avatar: "IconRoleCircle46"},       // Alice
+	{ID: 1411, Key: "yuzuha", Name: "柚叶", Avatar: "IconRoleCircle47"},       // Yuzuha
+	{ID: 1421, Key: "panYinhu", Name: "潘引壶", Avatar: "IconRoleCircle45"},    // Pan Yinhu
+	{ID: 1431, Key: "yeShunguang", Name: "叶瞬光", Avatar: "IconRoleCircle55"}, // Ye Shunguang
+	{ID: 1441, Key: "manato", Name: "真斗", Avatar: "IconRoleCircle51"},       // Manato
+	{ID: 1451, Key: "lucia", Name: "卢西娅", Avatar: "IconRoleCircle50"},       // Lucia
+	{ID: 1461, Key: "seed", Name: "「席德」", Avatar: "IconRoleCircle48"},       // Seed
+	{ID: 1471, Key: "banyue", Name: "般岳", Avatar: "IconRoleCircle53"},       // Banyue
+	{ID: 1481, Key: "dialyn", Name: "琉音", Avatar: "IconRoleCircle54"},       // Dialyn
+	{ID: 1491, Key: "sunna", Name: "千夏", Avatar: "IconRoleCircle58"},        // Sunna
+	{ID: 1501, Key: "aria", Name: "爱芮", Avatar: "IconRoleCircle57"},         // Aria
+	{ID: 1511, Key: "nangongYu", Name: "南宫羽", Avatar: "IconRoleCircle59"},   // Nangong Yu
+	{ID: 1521, Key: "cissia", Name: "希希芙", Avatar: "IconRoleCircle60"},      // Cissia
+	// Starlight - Billy: fairy carries no partnerInfo.iconPath.
+	{ID: 1531, Key: "starlightBilly", Name: "星徽·比利"},                     // Starlight - Billy
+	{ID: 1541, Key: "promeia", Name: "普罗米娅", Avatar: "IconRoleCircle61"}, // Promeia
+	// Pyrois: fairy carries no partnerInfo.iconPath.
+	{ID: 1551, Key: "pyrois", Name: "佩洛伊斯"},                               // Pyrois
+	{ID: 1561, Key: "velina", Name: "维琳娜", Avatar: "IconRoleCircle64"},    // Velina
+	{ID: 1571, Key: "norma", Name: "诺姆", Avatar: "IconRoleCircle65"},      // Norma
+	{ID: 1581, Key: "remielle", Name: "蕾米埃尔", Avatar: "IconRoleCircle67"}, // Remielle
+	{ID: 1591, Key: "sigrid", Name: "希格莉德", Avatar: "IconRoleCircle66"},   // Sigrid
+	{ID: 1611, Key: "claret", Name: "克拉蕾", Avatar: "IconRoleCircle1611"},  // Claret
+	{ID: 1621, Key: "roxy", Name: "洛克茜", Avatar: "IconRoleCircle68"},      // Roxy
 }
 
 // setByName, setByID and setByKey index the set table; agentByName,
@@ -223,4 +236,13 @@ func LookupAgentByID(id int) (Agent, bool) {
 func LookupAgentByKey(key string) (Agent, bool) {
 	a, ok := agentByKey[key]
 	return a, ok
+}
+
+// Agents returns a copy of the complete agent table in fairy source-id
+// order. The avatar matcher uses it to bind embedded icons to ids without
+// duplicating the catalog.
+func Agents() []Agent {
+	out := make([]Agent, len(agents))
+	copy(out, agents)
+	return out
 }
