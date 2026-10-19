@@ -417,9 +417,11 @@ func (run *inventoryRun) preparePosition(ctx context.Context, pos int) error {
 	if err := run.switchWheel(ctx, pos); err != nil {
 		return err
 	}
+	log.Printf("youkai: collect: position %d: wheel selected", pos)
 	if err := run.resetFilters(ctx); err != nil {
 		return err
 	}
+	log.Printf("youkai: collect: position %d: filter reset and S selected", pos)
 	if err := run.scrollToTop(ctx); err != nil {
 		return err
 	}
@@ -524,39 +526,19 @@ func (run *inventoryRun) switchWheel(ctx context.Context, pos int) error {
 	}
 }
 
-// resetFilters verifies the reset and the S selection as two separate
-// effects. It opens the panel, resets it, closes the panel and requires the
-// funnel to be clear — the only independent check that the reset really
-// removed other filters. Only then does it reopen the panel, select S,
-// close and require the funnel to be active. The selected state of the S
-// control has no calibrated pixel probe, so one Active reading cannot prove
-// both that the reset removed old filters and that S was applied; the
-// intermediate Clear check is therefore mandatory. A failed step stops the
-// walk and keeps admitted results.
+// resetFilters applies the S rarity filter in one panel visit: open,
+// reset, select S, close, require the funnel to be active. The Reset and
+// S clicks are separate actions, but their effects cannot be observed
+// separately without closing the panel between them. The user decided on
+// 2026-10-19 to save that extra open/close per position: the Active
+// reading after closing proves the S filter is in effect, while a reset
+// that failed to remove an older filter is a documented residual risk
+// (T5 §3). A clear or unverifiable funnel stops the walk.
 func (run *inventoryRun) resetFilters(ctx context.Context) error {
 	if err := run.openFilterPanel(ctx); err != nil {
 		return err
 	}
 	if err := run.resetFilterPanel(ctx); err != nil {
-		return err
-	}
-	if err := run.closeFilterPanel(ctx); err != nil {
-		return err
-	}
-	if err := run.requireWheelPosition("filter reset"); err != nil {
-		return err
-	}
-	if run.listMatch.Filter == nil || run.listMatch.Filter.State != FilterClear {
-		state := FilterUnknown
-		if run.listMatch.Filter != nil {
-			state = run.listMatch.Filter.State
-		}
-		return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
-			"collect: wheel position %d: the filter reset did not take effect; the funnel is %q, not clear — refusing to continue",
-			run.position, state))
-	}
-
-	if err := run.openFilterPanel(ctx); err != nil {
 		return err
 	}
 	if err := run.selectRarityS(ctx); err != nil {
@@ -573,13 +555,8 @@ func (run *inventoryRun) resetFilters(ctx context.Context) error {
 		if run.listMatch.Filter != nil {
 			state = run.listMatch.Filter.State
 		}
-		if state == FilterClear {
-			return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
-				"collect: wheel position %d: the S rarity filter did not take effect; the funnel is still clear — refusing to continue so A/B discs cannot be scanned",
-				run.position))
-		}
 		return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
-			"collect: wheel position %d: the funnel is %q after selecting the S rarity filter; refusing to continue while the filter state is unverified",
+			"collect: wheel position %d: the S rarity filter did not take effect; the funnel is %q, not active — refusing to continue so A/B discs cannot be scanned",
 			run.position, state))
 	}
 	return nil
@@ -867,6 +844,10 @@ func (run *inventoryRun) scrollToTop(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+		afterStart, afterOK := run.thumbStart(out.after)
+		log.Printf("youkai: collect: position %d: top fling %d: thumb %d/%t -> %d/%t, stationary=%t displaced=%t lost=%t rows=%d",
+			run.position, flings+1, beforeStart, beforeOK, afterStart, afterOK,
+			out.stationary, out.displaced, out.lost, out.match.Rows)
 		flings++
 		progressed := false
 		switch {
@@ -942,6 +923,7 @@ func (run *inventoryRun) confirmTop(ctx context.Context) error {
 		if err := run.observeReady(ctx); err != nil {
 			return err
 		}
+		beforeStart, beforeOK := run.thumbStart(run.lastFrame)
 		res := run.view.Dispatch(platform.InputOp{
 			Kind:     platform.InputDrag,
 			Geometry: run.geo,
@@ -957,6 +939,23 @@ func (run *inventoryRun) confirmTop(ctx context.Context) error {
 		out, err := run.awaitScroll(ctx, run.lastFrame)
 		if err != nil {
 			return err
+		}
+		afterStart, afterOK := run.thumbStart(out.after)
+		log.Printf("youkai: collect: position %d: top confirmation attempt %d: top=%t thumb %d/%t -> %d/%t stationary=%t displaced=%t lost=%t evidence=%s",
+			run.position, attempt+1,
+			run.listMatch.List != nil && run.listMatch.List.Top,
+			beforeStart, beforeOK, afterStart, afterOK,
+			out.stationary, out.displaced, out.lost, out.match.Evidence)
+		// The scrollbar is independent of the animated list pixels: if it
+		// stayed at the top with the same thumb start, the drag did not
+		// scroll the list even when the pixel verdict is undecided because
+		// of live UI animation or rubber-band noise.
+		if beforeOK && afterOK && absInt(afterStart-beforeStart) <= 2 &&
+			run.listVerdict(out.afterMatch) && out.afterMatch.List != nil && out.afterMatch.List.Top {
+			log.Printf("youkai: collect: position %d: top confirmation accepted: the thumb stayed at the top", run.position)
+			run.listMatch = out.afterMatch
+			run.lastFrame = out.after
+			return nil
 		}
 		switch {
 		case out.stationary:
@@ -1348,6 +1347,15 @@ func (run *inventoryRun) awaitDetail(ctx context.Context, baseline platform.Fram
 	runLen := 0
 	var runStart time.Time
 	for {
+		// A live stream must not extend the detail wait past its budget.
+		if err := ctx.Err(); err != nil {
+			out.class, out.err = awaitCanceled, err
+			return out, nil
+		}
+		if !time.Now().Before(deadline) {
+			out.class = awaitDeadline
+			return out, nil
+		}
 		fctx, cancel := context.WithDeadline(ctx, deadline)
 		f, err := run.view.Frame(fctx, platform.FrameRequest{After: after})
 		cancel()
@@ -1582,7 +1590,29 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 		out.after, out.afterMatch, out.match = candidate, candidateMatch, candidateScroll
 		return out, nil
 	}
+	finish := func() (scrollOutcome, error) {
+		switch {
+		case haveCandidate:
+			// A displacement was seen but never settled: commit
+			// nothing and stop at the unverified position (T5 §5).
+			out.lost, out.unsettled = true, true
+			out.after, out.afterMatch, out.match = candidate, candidateMatch, candidateScroll
+		case sawLost || sawAmbiguous:
+			out.lost = true
+		case sawStationary:
+			out.stationary = true
+		}
+		return out, nil
+	}
 	for {
+		// A live stream keeps delivering frames; the deadline must be
+		// enforced here as well, not only by Frame's context.
+		if err := ctx.Err(); err != nil {
+			return scrollOutcome{}, err
+		}
+		if !time.Now().Before(deadline) {
+			return finish()
+		}
 		fctx, cancel := context.WithDeadline(ctx, deadline)
 		f, err := run.view.Frame(fctx, platform.FrameRequest{After: after})
 		cancel()
@@ -1591,18 +1621,7 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 			case ctx.Err() != nil:
 				return scrollOutcome{}, ctx.Err()
 			case errors.Is(err, context.DeadlineExceeded):
-				switch {
-				case haveCandidate:
-					// A displacement was seen but never settled: commit
-					// nothing and stop at the unverified position (T5 §5).
-					out.lost, out.unsettled = true, true
-					out.after, out.afterMatch, out.match = candidate, candidateMatch, candidateScroll
-				case sawLost || sawAmbiguous:
-					out.lost = true
-				case sawStationary:
-					out.stationary = true
-				}
-				return out, nil
+				return finish()
 			default:
 				return scrollOutcome{}, wrapObservationErr(err)
 			}
@@ -1839,6 +1858,15 @@ func (run *inventoryRun) awaitSettled(ctx context.Context, expect func(PageMatch
 	out := awaitOutcome{}
 	after := run.lastArrived
 	for {
+		// A live stream must not extend the wait past its budget.
+		if err := ctx.Err(); err != nil {
+			out.class, out.err = awaitCanceled, err
+			return out
+		}
+		if !time.Now().Before(deadline) {
+			out.class = awaitDeadline
+			return out
+		}
 		fctx, cancel := context.WithDeadline(ctx, deadline)
 		f, err := run.view.Frame(fctx, platform.FrameRequest{After: after})
 		cancel()

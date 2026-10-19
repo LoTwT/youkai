@@ -68,6 +68,17 @@ func TestFilterTargetCandidates(t *testing.T) {
 		}
 	})
 
+	t.Run("tiny status chip is not a candidate", func(t *testing.T) {
+		// Field round 2 saw a transient 66x20 same-process chip at the
+		// game window's top-left while the client was frontmost. It
+		// cannot be the game surface and must not resolve as a target.
+		ws := cloudWindows(true, true, macos.PointRect{X: 206, Y: 156, W: 66, H: 20})
+		got := macos.FilterTargetCandidates(cloudBundle, ws, displays)
+		if len(got) != 1 || got[0].WindowID != 100 {
+			t.Fatalf("the status chip must not enter the candidate set, got %+v", got)
+		}
+	})
+
 	t.Run("no candidate when the main window is off screen", func(t *testing.T) {
 		ws := cloudWindows(false, false, macos.PointRect{X: 300, Y: 300, W: 500, H: 500})
 		if got := macos.FilterTargetCandidates(cloudBundle, ws, displays); len(got) != 0 {
@@ -137,6 +148,13 @@ func TestFilterAmbiguitySiblings(t *testing.T) {
 		got := macos.FilterAmbiguitySiblings(selector, ws, displays)
 		if len(got) != 1 || got[0].WindowID != 105 {
 			t.Fatalf("the qualifying overlay must be the only ambiguity source, got %+v", got)
+		}
+	})
+
+	t.Run("tiny status chip is not ambiguity", func(t *testing.T) {
+		ws := cloudWindows(true, true, macos.PointRect{X: 206, Y: 156, W: 66, H: 20})
+		if got := macos.FilterAmbiguitySiblings(selector, ws, displays); len(got) != 0 {
+			t.Fatalf("a status chip must not block input to the locked window, got %+v", got)
 		}
 	})
 

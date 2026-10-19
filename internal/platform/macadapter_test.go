@@ -192,6 +192,32 @@ type fakeMacFG struct {
 	err error
 }
 
+type fakeMacActivator struct {
+	mu    sync.Mutex
+	pid   int32
+	calls int
+	err   error
+}
+
+func (a *fakeMacActivator) setErr(err error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.err = err
+}
+
+func (a *fakeMacActivator) counts() (pid int32, calls int, err error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.pid, a.calls, a.err
+}
+
+func (a *fakeMacActivator) ActivatePID(pid int32) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.pid, a.calls = pid, a.calls+1
+	return a.err
+}
+
 func (f *fakeMacFG) set(pid int32, err error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -330,7 +356,7 @@ func testDisplays() []macos.NativeDisplay {
 }
 
 func mainWindowFrame() macos.PointRect {
-	return macos.PointRect{X: 100, Y: 50, W: 200, H: 100}
+	return macos.PointRect{X: 100, Y: 50, W: 320, H: 240}
 }
 
 func targetWindow() macos.NativeWindow {
@@ -360,32 +386,35 @@ type macWorld struct {
 	faultsMu sync.Mutex
 	faults   []*Fault
 	stops    int
+	activate *fakeMacActivator
 }
 
 func newMacWorld(t *testing.T) *macWorld {
 	t.Helper()
 	w := &macWorld{
-		enum:   &fakeMacEnum{},
-		runner: &fakeMacRunner{},
-		poster: &fakeMacPoster{},
-		fg:     &fakeMacFG{pid: testPID},
-		perms:  &fakeMacPerms{trusted: true, allowed: true},
-		hotkey: &fakeMacHotkey{},
-		gate:   &fakeGate{open: true},
-		sleeps: &sleepRecorder{},
+		enum:     &fakeMacEnum{},
+		runner:   &fakeMacRunner{},
+		poster:   &fakeMacPoster{},
+		fg:       &fakeMacFG{pid: testPID},
+		perms:    &fakeMacPerms{trusted: true, allowed: true},
+		hotkey:   &fakeMacHotkey{},
+		gate:     &fakeGate{open: true},
+		sleeps:   &sleepRecorder{},
+		activate: &fakeMacActivator{},
 	}
 	w.enum.push(enumSnapshot{
 		windows:  []macos.NativeWindow{targetWindow(), bystanderWindow()},
 		displays: testDisplays(),
 	})
 	adapter, err := NewMacAdapter(MacNatives{
-		Enum:   w.enum,
-		Runner: w.runner,
-		Poster: w.poster,
-		FG:     w.fg,
-		Perms:  w.perms,
-		Hotkey: w.hotkey,
-		Clock:  &fakeMachClock{ticks: 12345},
+		Enum:     w.enum,
+		Runner:   w.runner,
+		Poster:   w.poster,
+		FG:       w.fg,
+		Activate: w.activate,
+		Perms:    w.perms,
+		Hotkey:   w.hotkey,
+		Clock:    &fakeMachClock{ticks: 12345},
 	})
 	if err != nil {
 		t.Fatalf("adapter: %v", err)
@@ -433,12 +462,13 @@ func (w *macWorld) faultCount(code string) int {
 	return n
 }
 
-// smallGeo is a consistent frame geometry: surface 200×100 px at scale
-// 1, content the whole surface, window at (100,50) 200×100 pt.
+// smallGeo is a consistent frame geometry: surface 320×240 px at scale
+// 1, content the whole surface, window at (100,50) 320×240 pt. The size
+// is the smallest target candidate the platform accepts.
 func smallGeo() macos.FrameGeometry {
 	return macos.FrameGeometry{
-		SurfaceWidth: 200, SurfaceHeight: 100, BytesPerRow: 800,
-		ContentRect:  macos.PointRect{X: 0, Y: 0, W: 200, H: 100},
+		SurfaceWidth: 320, SurfaceHeight: 240, BytesPerRow: 1280,
+		ContentRect:  macos.PointRect{X: 0, Y: 0, W: 320, H: 240},
 		ContentScale: 1, ScaleFactor: 1,
 		WindowFrame: mainWindowFrame(),
 	}
@@ -543,6 +573,44 @@ func index(s, sub string) int {
 		}
 	}
 	return -1
+}
+
+// The macOS session exposes the optional Activator capability: a
+// user-started scan activates the locked target's process once, and a
+// refused activation surfaces as an error the controller can log.
+func TestMacSessionActivate(t *testing.T) {
+	w := newMacWorld(t)
+	sess := w.openReady(t)
+	defer sess.Close()
+	activator, ok := sess.(Activator)
+	if !ok {
+		t.Fatal("the mac session must implement Activator")
+	}
+	if err := activator.Activate(); err != nil {
+		t.Fatalf("Activate: %v", err)
+	}
+	pid, calls, _ := w.activate.counts()
+	if pid != testPID || calls != 1 {
+		t.Fatalf("activation pid=%d calls=%d, want pid=%d calls=1", pid, calls, testPID)
+	}
+	w.activate.setErr(errors.New("activation refused"))
+	if err := activator.Activate(); err == nil {
+		t.Fatal("a refused activation must surface")
+	}
+}
+
+// A cached frame must not be served to a request whose context already
+// ended: the traversal's bounded waits rely on the context, not on the
+// stream briefly running dry.
+func TestMacFrameHonorsCanceledContext(t *testing.T) {
+	w := newMacWorld(t)
+	sess := w.openReady(t)
+	defer sess.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := sess.Frame(ctx, FrameRequest{}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Frame error = %v, want context.Canceled", err)
+	}
 }
 
 // M3/M4/M1-adapter: open outcomes and rollback.
@@ -679,14 +747,14 @@ func TestMacFrame(t *testing.T) {
 		if err != nil {
 			t.Fatalf("frame: %v", err)
 		}
-		if frame.Image == nil || frame.Image.Bounds().Dx() != 200 || frame.Image.Bounds().Dy() != 100 {
+		if frame.Image == nil || frame.Image.Bounds().Dx() != 320 || frame.Image.Bounds().Dy() != 240 {
 			t.Fatalf("image bounds: %v", frame.Image.Bounds())
 		}
 		c := frame.Image.RGBAAt(0, 0)
 		if c.R != 30 || c.G != 20 || c.B != 10 || c.A != 255 {
 			t.Fatalf("BGRA→RGBA at (0,0): got (%d,%d,%d,%d)", c.R, c.G, c.B, c.A)
 		}
-		if frame.Content != image.Rect(0, 0, 200, 100) {
+		if frame.Content != image.Rect(0, 0, 320, 240) {
 			t.Fatalf("content: %v", frame.Content)
 		}
 		// Mutating the returned image must not touch the cache.

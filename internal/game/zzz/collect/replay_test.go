@@ -517,8 +517,8 @@ func TestReplayViewportFromFieldFrames(t *testing.T) {
 	if clicks := countWheelClicks(ops, l); clicks != 6 {
 		t.Fatalf("%d wheel clicks, want 6 switches from the recorded position 2 through every position", clicks)
 	}
-	if clicks := countFilterClicks(ops, l); clicks != 6*6 {
-		t.Fatalf("%d filter-control clicks, want the reset flow for every position", clicks)
+	if clicks := countFilterClicks(ops, l); clicks != 6*4 {
+		t.Fatalf("%d filter-control clicks, want the reset and S flow for every position", clicks)
 	}
 	if drags := countOps(ops, platform.InputDrag, l.ScrollFrom, l.ScrollTo); drags != 6 {
 		t.Fatalf("%d advance drags, want one bottom confirmation per position", drags)

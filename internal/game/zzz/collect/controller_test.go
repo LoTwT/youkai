@@ -167,6 +167,38 @@ func TestPrepareOrderAndNoDispatch(t *testing.T) {
 	}
 }
 
+// C1b: a user-started scan brings the target forward exactly once before
+// waiting for readiness; a failed activation is only logged and the
+// readiness wait still gives the user the preparation budget.
+func TestPrepareActivatesTargetOnce(t *testing.T) {
+	sess := readySession()
+	h := newHarness(t, sess)
+	h.start()
+	waitUntil(t, "capturing", func() bool {
+		return h.kernel.Snapshot().Phase == scan.PhaseCapturing
+	})
+	if got := sess.Activations(); got != 1 {
+		t.Fatalf("Activate calls: %d, want 1", got)
+	}
+	h.kernel.Cancel()
+	h.end()
+}
+
+func TestPrepareActivationFailureFallsBackToReadinessWait(t *testing.T) {
+	sess := readySession()
+	sess.ActivateFn = func() error { return errors.New("activation refused") }
+	h := newHarness(t, sess)
+	h.start()
+	waitUntil(t, "capturing", func() bool {
+		return h.kernel.Snapshot().Phase == scan.PhaseCapturing
+	})
+	if got := sess.Activations(); got != 1 {
+		t.Fatalf("Activate calls: %d, want 1", got)
+	}
+	h.kernel.Cancel()
+	h.end()
+}
+
 // C2: a failing preflight never opens the port.
 func TestPreflightFailureSkipsOpen(t *testing.T) {
 	sess := readySession()

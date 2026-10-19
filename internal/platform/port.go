@@ -110,3 +110,12 @@ type Session interface {
 	// later calls return the first report.
 	Close() CloseReport
 }
+
+// Activator is an optional Session capability: bring the locked target
+// application to the foreground. A user-initiated scan calls it once
+// before waiting for readiness, so the user does not have to click back
+// to the game. It is never used during scanning: losing focus there is a
+// stop condition, not something to repair.
+type Activator interface {
+	Activate() error
+}

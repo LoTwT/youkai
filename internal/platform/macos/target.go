@@ -214,16 +214,31 @@ func WindowFullyInsideDisplays(frame PointRect, displays []NativeDisplay) bool {
 	return false
 }
 
+// Minimum size of a target candidate, in screen points. The cloud
+// client creates transient same-process status chips (field round 2 saw
+// a 66x20 chip at the window's top-left while the game was frontmost);
+// such a window cannot carry a game surface and must not turn a valid
+// target into an ambiguous one. The bound is far below any usable game
+// window and far above these chips.
+const (
+	minCandidateWidth  = 320
+	minCandidateHeight = 240
+)
+
 // IsTargetCandidate reports whether w passes the target-resolution
 // predicate: it belongs to bundleID, sits in the normal window layer
-// (0), is on screen, and lies fully inside one display. Layer, onScreen
-// and in-display each exclude a class of windows the field round ①
-// observed around the cloud client (system overlays, minimized or parked
+// (0), is on screen, is at least minCandidateWidth × minCandidateHeight,
+// and lies fully inside one display. Layer, onScreen, size and in-display
+// each exclude a class of windows the field rounds observed around the
+// cloud client (system overlays, status chips, minimized or parked
 // windows, partially dragged-off windows); the predicate is a resolution
 // rule, not a health report — a healthy window that fails it is simply
 // not a resolvable target right now.
 func IsTargetCandidate(bundleID string, w NativeWindow, displays []NativeDisplay) bool {
 	if w.BundleID != bundleID || w.Layer != 0 || !w.OnScreen {
+		return false
+	}
+	if w.Frame.W < minCandidateWidth || w.Frame.H < minCandidateHeight {
 		return false
 	}
 	return WindowFullyInsideDisplays(w.Frame, displays)

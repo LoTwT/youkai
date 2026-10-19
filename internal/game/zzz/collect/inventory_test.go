@@ -72,10 +72,6 @@ type scriptedGame struct {
 	scrollJump        int  // non-zero: the advance drag jumps this many rows
 	topStuck          bool // the top fling does not move the list
 	topJumpRows       int  // non-zero: the top fling moves up this many rows
-	resetClearsFilter bool // the panel reset clears the funnel (default true)
-	// resetLeavesActive makes the reset leave the funnel active, as if the
-	// reset did not remove an existing filter.
-	resetLeavesActive bool
 	// sClickDoesNothing makes every S rarity click a no-op;
 	// sClickDoesNothingAt does so only at one wheel position. The funnel
 	// then stays clear after the panel closes.
@@ -125,19 +121,18 @@ func newScriptedGame(items ...bool) *scriptedGame {
 		}
 	}
 	g := &scriptedGame{
-		layout:            l,
-		rows:              l.Rows,
-		cols:              l.Columns,
-		page:              pageWarehouse,
-		wheel:             1,
-		filter:            "clear",
-		selected:          -1,
-		detailGlobal:      -1,
-		clickOpensSlot:    -1,
-		resetClearsFilter: true,
-		substats4:         true,
-		frameInterval:     time.Millisecond,
-		content:           l.Content,
+		layout:         l,
+		rows:           l.Rows,
+		cols:           l.Columns,
+		page:           pageWarehouse,
+		wheel:          1,
+		filter:         "clear",
+		selected:       -1,
+		detailGlobal:   -1,
+		clickOpensSlot: -1,
+		substats4:      true,
+		frameInterval:  time.Millisecond,
+		content:        l.Content,
 	}
 	g.lists[0] = append([]bool(nil), items...)
 	for i := range g.selectedByPos {
@@ -450,15 +445,9 @@ func (g *scriptedGame) dispatch(op platform.InputOp) platform.InputResult {
 		if g.page == pagePanel {
 			switch {
 			case op.At.Eq(g.layout.PanelReset):
-				if g.resetClearsFilter {
-					next := "clear"
-					if g.resetLeavesActive {
-						next = "active"
-					}
-					g.pending = append(g.pending, pendingEffect{dueAt: lag, apply: func(g *scriptedGame) {
-						g.filter = next
-					}})
-				}
+				g.pending = append(g.pending, pendingEffect{dueAt: lag, apply: func(g *scriptedGame) {
+					g.filter = "clear"
+				}})
 			case op.At.Eq(g.layout.PanelS):
 				if !g.sClickDoesNothing && g.wheel != g.sClickDoesNothingAt {
 					g.pending = append(g.pending, pendingEffect{dueAt: lag, apply: func(g *scriptedGame) {
@@ -895,14 +884,14 @@ func TestSinglePageCompletesOneViewport(t *testing.T) {
 	}
 
 	ops := game.opsSnapshot()
-	if clicks := countOps(ops, platform.InputClick, image.Point{}, image.Point{}); clicks != 20+5+6*6 {
-		t.Fatalf("%d clicks, want 20 slot clicks, 5 wheel switches and 36 filter-control clicks", clicks)
+	if clicks := countOps(ops, platform.InputClick, image.Point{}, image.Point{}); clicks != 20+5+4*6 {
+		t.Fatalf("%d clicks, want 20 slot clicks, 5 wheel switches and 24 filter-control clicks", clicks)
 	}
 	if wheelClicks := countWheelClicks(ops, game.layout); wheelClicks != 5 {
 		t.Fatalf("%d wheel clicks, want 5", wheelClicks)
 	}
-	if filterClicks := countFilterClicks(ops, game.layout); filterClicks != 36 {
-		t.Fatalf("%d filter-control clicks, want 6 per position", filterClicks)
+	if filterClicks := countFilterClicks(ops, game.layout); filterClicks != 24 {
+		t.Fatalf("%d filter-control clicks, want 4 per position", filterClicks)
 	}
 	if drags := countOps(ops, platform.InputDrag, game.layout.ScrollFrom, game.layout.ScrollTo); drags != 6 {
 		t.Fatalf("%d advance drags, want one per position's bottom confirmation", drags)
@@ -1678,8 +1667,8 @@ func TestTraverseWalksSixPositions(t *testing.T) {
 	if clicks := countWheelClicks(ops, game.layout); clicks != 5 {
 		t.Fatalf("%d wheel clicks, want 5 switches after the initial position", clicks)
 	}
-	if clicks := countFilterClicks(ops, game.layout); clicks != 6*6 {
-		t.Fatalf("%d filter-control clicks, want reset flow for every position", clicks)
+	if clicks := countFilterClicks(ops, game.layout); clicks != 6*4 {
+		t.Fatalf("%d filter-control clicks, want reset and S flow for every position", clicks)
 	}
 	if drags := countOps(ops, platform.InputDrag, game.layout.TopFrom, game.layout.TopTo); drags != 6 {
 		t.Fatalf("%d top drags, want one confirmation per position", drags)
@@ -1774,8 +1763,8 @@ func TestTraverseSFilterNotActiveStops(t *testing.T) {
 	if clicks := countSlotClicks(ops, game.layout); clicks != 0 {
 		t.Fatalf("%d slot clicks before the funnel check", clicks)
 	}
-	if clicks := countFilterClicks(ops, game.layout); clicks != 6 {
-		t.Fatalf("%d filter-control clicks, want open/reset/close then open/S/close", clicks)
+	if clicks := countFilterClicks(ops, game.layout); clicks != 4 {
+		t.Fatalf("%d filter-control clicks, want open/reset/S/close", clicks)
 	}
 	if drags := countOps(ops, platform.InputDrag, game.layout.TopFrom, game.layout.TopTo); drags != 0 {
 		t.Fatalf("%d top drags, want none before the funnel check", drags)
@@ -1785,33 +1774,9 @@ func TestTraverseSFilterNotActiveStops(t *testing.T) {
 	}
 }
 
-// T32b: a reset that leaves the funnel active means old filters may still
-// hide S discs. The first close must prove Clear; the S selection later
-// cannot substitute for that evidence.
-func TestTraverseFilterResetNotClearStops(t *testing.T) {
-	game := newScriptedGame(true)
-	game.filter = "active"
-	game.resetLeavesActive = true
-	h := newTraversalHarness(t, game)
-	h.start()
-	snap := h.endFailed(collect.CodeNavigationMismatch)
-	if snap.Counts.Captured != 0 {
-		t.Fatalf("a failed reset admits nothing: %+v", snap.Counts)
-	}
-	ops := game.opsSnapshot()
-	if clicks := countFilterClicks(ops, game.layout); clicks != 3 {
-		t.Fatalf("%d filter-control clicks, want open, reset and close before the clear check", clicks)
-	}
-	if clicks := countSlotClicks(ops, game.layout); clicks != 0 {
-		t.Fatalf("%d slot clicks before the reset check", clicks)
-	}
-	if drags := countOps(ops, platform.InputDrag, game.layout.TopFrom, game.layout.TopTo); drags != 0 {
-		t.Fatalf("%d top drags, want none before the reset check", drags)
-	}
-}
-
-// T32c: the normal preparation applies S after a verified clear reset and
-// keeps walking with the funnel active.
+// T32b: the combined reset and S selection is accepted: after the panel
+// closes, an active funnel is the only evidence available, so the walk
+// continues. A clear funnel still stops (T32).
 func TestTraverseSFilterActiveContinues(t *testing.T) {
 	game := newScriptedGame(true)
 	h := newTraversalHarness(t, game)
@@ -1823,8 +1788,8 @@ func TestTraverseSFilterActiveContinues(t *testing.T) {
 	if got := game.filterState(); got != "active" {
 		t.Fatalf("funnel %q after preparation, want active", got)
 	}
-	if clicks := countFilterClicks(game.opsSnapshot(), game.layout); clicks != 6*6 {
-		t.Fatalf("%d filter-control clicks, want open/reset/close then open/S/close for every position", clicks)
+	if clicks := countFilterClicks(game.opsSnapshot(), game.layout); clicks != 6*4 {
+		t.Fatalf("%d filter-control clicks, want open/reset/S/close for every position", clicks)
 	}
 }
 
@@ -1901,7 +1866,7 @@ func TestTraversePreparationAnimationLag(t *testing.T) {
 	if got := len(h.observations()); got != 0 {
 		t.Fatalf("an all-empty inventory admitted %d", got)
 	}
-	if clicks := countFilterClicks(game.opsSnapshot(), game.layout); clicks != 6*6 {
+	if clicks := countFilterClicks(game.opsSnapshot(), game.layout); clicks != 6*4 {
 		t.Fatalf("%d filter-control clicks, want every position prepared", clicks)
 	}
 }

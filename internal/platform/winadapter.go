@@ -446,6 +446,9 @@ func (s *winSession) isClosed() bool {
 // construction — Reused is always false — and an After in the future
 // simply delays the capture until then.
 func (s *winSession) Frame(ctx context.Context, req FrameRequest) (Frame, error) {
+	if err := ctx.Err(); err != nil {
+		return Frame{}, err
+	}
 	if s.isClosed() {
 		return Frame{}, &Fault{Code: CodeCaptureStopped, Class: ClassBroken,
 			Message: "the session is closed", At: s.adapter.now()}

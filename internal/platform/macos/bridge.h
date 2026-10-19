@@ -95,6 +95,12 @@ typedef struct YKAXFocus {
  * (the query is routed through the application's main thread). */
 int32_t yk_frontmost_pid(double timeoutSec);
 
+/* Brings the application with pid to the foreground. Returns 0 when the
+ * activation was accepted, 1 when the application is gone, 2 when the
+ * application refused activation, and -1 when the main run loop did not
+ * serve the request within timeoutSec. */
+int32_t yk_activate_pid(int32_t pid, double timeoutSec);
+
 /* Queries the system-wide focused window with a bounded messaging
  * timeout. Returns 0 on success; on failure out->axError carries the
  * AXError code and the remaining fields are void. */

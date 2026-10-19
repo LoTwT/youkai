@@ -52,6 +52,38 @@ int32_t yk_frontmost_pid(double timeoutSec) {
 	return pid;
 }
 
+/* ---- Target activation ---- */
+
+static int32_t yk_activate_pid_on_main(int32_t pid) {
+	NSRunningApplication *app =
+	    [NSRunningApplication runningApplicationWithProcessIdentifier:(pid_t)pid];
+	if (app == nil) return 1;
+	// The app's minimum system version is 14.0, where the
+	// application-attributed variant replaces the deprecated
+	// activateWithOptions:.
+	BOOL ok = [app activateFromApplication:[NSRunningApplication currentApplication]
+	                               options:NSApplicationActivateAllWindows];
+	return ok ? 0 : 2;
+}
+
+int32_t yk_activate_pid(int32_t pid, double timeoutSec) {
+	if ([NSThread isMainThread]) {
+		return yk_activate_pid_on_main(pid);
+	}
+	__block int32_t rc = -1;
+	dispatch_semaphore_t done = dispatch_semaphore_create(0);
+	dispatch_async(dispatch_get_main_queue(), ^{
+		rc = yk_activate_pid_on_main(pid);
+		dispatch_semaphore_signal(done);
+	});
+	dispatch_time_t deadline =
+	    dispatch_time(DISPATCH_TIME_NOW, (int64_t)(timeoutSec * NSEC_PER_SEC));
+	if (dispatch_semaphore_wait(done, deadline) != 0) {
+		return -1;
+	}
+	return rc;
+}
+
 /* ---- AX focused window ---- */
 
 int32_t yk_ax_focused_window(double timeoutSec, YKAXFocus *out) {

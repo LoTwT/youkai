@@ -518,6 +518,43 @@ func (p darwinForegroundProbe) FrontmostPID() (int32, error) {
 	}
 }
 
+type darwinAppActivator struct {
+	timeout time.Duration
+}
+
+// NewAppActivator returns the NSRunningApplication-based activator. The
+// call is routed through the application's main thread with a bounded
+// wait, like the frontmost query; without a serving main run loop it
+// fails instead of hanging.
+func NewAppActivator() AppActivator {
+	return darwinAppActivator{timeout: 2 * time.Second}
+}
+
+func (a darwinAppActivator) ActivatePID(pid int32) error {
+	if pid <= 0 {
+		return errors.New("macos: target activation needs a positive pid")
+	}
+	if err := mainDispatchGate.acquire("target activation"); err != nil {
+		return err
+	}
+	rc := int32(C.yk_activate_pid(C.int32_t(pid), C.double(a.timeout.Seconds())))
+	if rc == -1 {
+		// Timed out: the activation block is still queued; keep the
+		// marker and let the recovery probe clear it.
+		go mainDispatchGate.awaitRecovery(probeMainQueueServed)
+		return errors.New("macos: main run loop unavailable for target activation")
+	}
+	mainDispatchGate.release()
+	switch rc {
+	case 0:
+		return nil
+	case 1:
+		return errors.New("macos: target application is no longer running")
+	default:
+		return errors.New("macos: the target application refused activation")
+	}
+}
+
 type darwinAXProbe struct{}
 
 // NewAXProbe returns the AXFocusedWindow probe with bounded messaging
