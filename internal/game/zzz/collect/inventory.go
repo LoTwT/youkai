@@ -62,6 +62,12 @@ type Inventory struct {
 	// the deadline). Zero takes the default; negative disables retries —
 	// the first ineffective action already stops the walk.
 	MaxRetries int
+	// IndependentClear enables the acceptance-only filter preparation:
+	// after the reset, close the panel and require a clear funnel, then
+	// reopen it to select S. The default false keeps the daily one-visit
+	// preparation (open, reset, select S, close, require Active); the extra
+	// open/close exists only to prove the old filters were cleared.
+	IndependentClear bool
 	// RecheckEvery paces re-observation after an idle (Reused) frame.
 	// Zero takes the default.
 	RecheckEvery time.Duration
@@ -526,20 +532,42 @@ func (run *inventoryRun) switchWheel(ctx context.Context, pos int) error {
 	}
 }
 
-// resetFilters applies the S rarity filter in one panel visit: open,
-// reset, select S, close, require the funnel to be active. The Reset and
-// S clicks are separate actions, but their effects cannot be observed
-// separately without closing the panel between them. The user decided on
-// 2026-10-19 to save that extra open/close per position: the Active
-// reading after closing proves the S filter is in effect, while a reset
-// that failed to remove an older filter is a documented residual risk
-// (T5 §3). A clear or unverifiable funnel stops the walk.
+// resetFilters applies the S rarity filter. The daily path makes one panel
+// visit: open, reset, select S, close and require the funnel to be active.
+// The Reset and S clicks are separate actions, but their effects cannot be
+// observed separately without closing the panel between them. The user
+// decided on 2026-10-19 to save that extra open/close per position: the
+// Active reading after closing proves the S filter is in effect, while a
+// reset that failed to remove an older filter is a documented residual risk
+// (T5 §3).
+//
+// IndependentClear is the acceptance-only alternative. It closes after the
+// reset and requires a clear funnel, which is independent evidence that the
+// old filters (including an older S selection) were cleared; only then does
+// it reopen the panel, select S, close and require Active. That costs one
+// extra panel open/close per position and never runs in the default path.
+// A funnel that does not match the expected state at either checkpoint, or
+// an unconfirmed S selection, stops the walk instead of guessing.
 func (run *inventoryRun) resetFilters(ctx context.Context) error {
 	if err := run.openFilterPanel(ctx); err != nil {
 		return err
 	}
 	if err := run.resetFilterPanel(ctx); err != nil {
 		return err
+	}
+	if run.inv.IndependentClear {
+		if err := run.closeFilterPanel(ctx); err != nil {
+			return err
+		}
+		if err := run.requireWheelPosition("independent clear verification"); err != nil {
+			return err
+		}
+		if err := run.requireFilterState(FilterClear, "the independent CLEAR check failed"); err != nil {
+			return err
+		}
+		if err := run.openFilterPanel(ctx); err != nil {
+			return err
+		}
 	}
 	if err := run.selectRarityS(ctx); err != nil {
 		return err
@@ -550,16 +578,26 @@ func (run *inventoryRun) resetFilters(ctx context.Context) error {
 	if err := run.requireWheelPosition("S filter selection"); err != nil {
 		return err
 	}
-	if run.listMatch.Filter == nil || run.listMatch.Filter.State != FilterActive {
-		state := FilterUnknown
-		if run.listMatch.Filter != nil {
-			state = run.listMatch.Filter.State
-		}
-		return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
-			"collect: wheel position %d: the S rarity filter did not take effect; the funnel is %q, not active — refusing to continue so A/B discs cannot be scanned",
-			run.position, state))
+	if err := run.requireFilterState(FilterActive, "the S rarity filter selection was not confirmed"); err != nil {
+		return err
 	}
 	return nil
+}
+
+// requireFilterState accepts only the exact funnel verdict the preparation
+// asked for. Unknown and the opposite state both stop the walk: a missing
+// verdict is not evidence that the filters are in the wanted state.
+func (run *inventoryRun) requireFilterState(want FilterState, what string) error {
+	state := FilterUnknown
+	if run.listMatch.Filter != nil {
+		state = run.listMatch.Filter.State
+	}
+	if state == want {
+		return nil
+	}
+	return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
+		"collect: wheel position %d: %s; the funnel is %q, not %q — refusing to continue so filters cannot be assumed",
+		run.position, what, state, want))
 }
 
 // requireWheelPosition keeps every close of the filter panel tied to the

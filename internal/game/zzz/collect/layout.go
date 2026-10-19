@@ -153,9 +153,10 @@ type Layout struct {
 	PanelOpen []ColorProbe
 	// PanelReset, PanelClose and PanelS are the panel's click points. The
 	// pixel matcher never reads them. PanelS selects the S rarity filter;
-	// its selected state has no calibrated pixel probe yet, so the effect is
-	// verified after closing through the active funnel and the first
-	// admitted S badge (T5 §3).
+	// the recorded frames contain no selected-S sample, so no selected-state
+	// probe is calibrated. The daily path verifies the effect through the
+	// active funnel after closing; the acceptance-only IndependentClear path
+	// additionally proves the reset base is clear before selecting S (T5 §3).
 	PanelReset, PanelClose, PanelS image.Point
 
 	// Wheel are the six wheel position centers, numbered from the

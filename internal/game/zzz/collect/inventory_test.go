@@ -77,8 +77,19 @@ type scriptedGame struct {
 	// then stays clear after the panel closes.
 	sClickDoesNothing   bool
 	sClickDoesNothingAt int
-	scrollExtraRows     int // >0: the advance drag keeps moving this many more rows
-	scrollExtraDelay    int // frame calls between the two displacement stages (default 2)
+	// resetDoesNothing leaves the current filter (and its S selection) in
+	// place, modelling a reset that silently failed. resetMakesUnknown
+	// instead makes the panel page undecidable after the reset.
+	resetDoesNothing  bool
+	resetMakesUnknown bool
+	// sSelected is the panel's S rarity selection. It is test state only:
+	// the current layout has no calibrated pixel probe for this control.
+	sSelected bool
+	// panelOpenSStates records the S selection at every panel opening, so
+	// the strict test can prove the reopen followed the reset.
+	panelOpenSStates []bool
+	scrollExtraRows  int // >0: the advance drag keeps moving this many more rows
+	scrollExtraDelay int // frame calls between the two displacement stages (default 2)
 	// respectDispatchCursor serves the pre-action frame to any Frame request
 	// whose After predates the last dispatch's FinishedAt. The real platform
 	// uses the same contract; the production traversal must never ask with
@@ -446,12 +457,23 @@ func (g *scriptedGame) dispatch(op platform.InputOp) platform.InputResult {
 			switch {
 			case op.At.Eq(g.layout.PanelReset):
 				g.pending = append(g.pending, pendingEffect{dueAt: lag, apply: func(g *scriptedGame) {
+					if g.resetMakesUnknown {
+						g.page = pageUnknown
+						g.filter = "unknown"
+						g.sSelected = false
+						return
+					}
+					if g.resetDoesNothing {
+						return
+					}
 					g.filter = "clear"
+					g.sSelected = false
 				}})
 			case op.At.Eq(g.layout.PanelS):
 				if !g.sClickDoesNothing && g.wheel != g.sClickDoesNothingAt {
 					g.pending = append(g.pending, pendingEffect{dueAt: lag, apply: func(g *scriptedGame) {
 						g.filter = "active"
+						g.sSelected = true
 					}})
 				}
 			case op.At.Eq(g.layout.PanelClose):
@@ -485,6 +507,7 @@ func (g *scriptedGame) dispatch(op platform.InputOp) platform.InputResult {
 			return posted(now)
 		}
 		if op.At.Eq(g.layout.FilterButton) {
+			g.panelOpenSStates = append(g.panelOpenSStates, g.sSelected)
 			g.pending = append(g.pending, pendingEffect{dueAt: lag, apply: func(g *scriptedGame) {
 				g.page = pagePanel
 			}})
@@ -614,6 +637,18 @@ func (g *scriptedGame) filterState() string {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	return g.filter
+}
+
+func (g *scriptedGame) sSelectedState() bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.sSelected
+}
+
+func (g *scriptedGame) panelOpenSStatesSnapshot() []bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return append([]bool(nil), g.panelOpenSStates...)
 }
 
 var (
@@ -822,6 +857,28 @@ func countFilterClicks(ops []platform.InputOp, l collect.Layout) int {
 		countOps(ops, platform.InputClick, l.PanelReset, image.Point{}) +
 		countOps(ops, platform.InputClick, l.PanelS, image.Point{}) +
 		countOps(ops, platform.InputClick, l.PanelClose, image.Point{})
+}
+
+// filterControlSequence names the filter-panel clicks in dispatch order, so
+// a test can pin the visit structure (and not only the click counts).
+func filterControlSequence(ops []platform.InputOp, l collect.Layout) []string {
+	var out []string
+	for _, op := range ops {
+		if op.Kind != platform.InputClick {
+			continue
+		}
+		switch {
+		case op.At.Eq(l.FilterButton):
+			out = append(out, "open")
+		case op.At.Eq(l.PanelReset):
+			out = append(out, "reset")
+		case op.At.Eq(l.PanelS):
+			out = append(out, "s")
+		case op.At.Eq(l.PanelClose):
+			out = append(out, "close")
+		}
+	}
+	return out
 }
 
 // countSlotClicks counts clicks on the list grid, excluding wheel and
@@ -1790,6 +1847,163 @@ func TestTraverseSFilterActiveContinues(t *testing.T) {
 	}
 	if clicks := countFilterClicks(game.opsSnapshot(), game.layout); clicks != 6*4 {
 		t.Fatalf("%d filter-control clicks, want open/reset/S/close for every position", clicks)
+	}
+}
+
+// T32c: the default daily preparation keeps one panel visit per position.
+func TestTraverseDailyFilterPreparationKeepsOnePanelVisit(t *testing.T) {
+	game := newScriptedGame(true)
+	h := newTraversalHarness(t, game)
+	h.inv.ScrollBudget = 80 * time.Millisecond
+	h.start()
+	h.endCompleted()
+
+	ops := game.opsSnapshot()
+	if got := countOps(ops, platform.InputClick, game.layout.FilterButton, image.Point{}); got != 6 {
+		t.Fatalf("%d panel opens, want one per position", got)
+	}
+	if got := countOps(ops, platform.InputClick, game.layout.PanelClose, image.Point{}); got != 6 {
+		t.Fatalf("%d panel closes, want one per position", got)
+	}
+	sequence := filterControlSequence(ops, game.layout)
+	want := []string{"open", "reset", "s", "close"}
+	if len(sequence) != 6*len(want) || fmt.Sprint(sequence[:len(want)]) != fmt.Sprint(want) {
+		t.Fatalf("filter sequence starts %v, want %v repeated for every position", sequence, want)
+	}
+}
+
+// T32d: the independent Clear path verifies the reset base before selecting
+// S. With an old S selection active, the reset clears it, the closed funnel
+// reports clear, and only the reopened panel selects S again.
+func TestTraverseIndependentClearSelectsSAfterVerifiedClear(t *testing.T) {
+	game := newScriptedGame(true)
+	game.filter = "active"
+	game.sSelected = true
+	h := newTraversalHarness(t, game)
+	h.inv.IndependentClear = true
+	h.inv.ScrollBudget = 80 * time.Millisecond
+	h.start()
+	h.endCompleted()
+
+	if got := len(h.observations()); got != 1 {
+		t.Fatalf("admitted %d, want 1", got)
+	}
+	if got := game.filterState(); got != "active" {
+		t.Fatalf("funnel %q after preparation, want active", got)
+	}
+	if !game.sSelectedState() {
+		t.Fatal("the S rarity control is not selected after the strict preparation")
+	}
+	opens := game.panelOpenSStatesSnapshot()
+	if len(opens) < 2 || !opens[0] || opens[1] {
+		t.Fatalf("S selection at panel openings = %v, want old selection, then reset-cleared before the S pass", opens)
+	}
+	ops := game.opsSnapshot()
+	if got := countOps(ops, platform.InputClick, game.layout.FilterButton, image.Point{}); got != 6*2 {
+		t.Fatalf("%d panel opens, want reset and S visits for every position", got)
+	}
+	if got := countOps(ops, platform.InputClick, game.layout.PanelClose, image.Point{}); got != 6*2 {
+		t.Fatalf("%d panel closes, want reset and S visits for every position", got)
+	}
+	if got := countFilterClicks(ops, game.layout); got != 6*6 {
+		t.Fatalf("%d filter-control clicks, want two visits per position", got)
+	}
+	sequence := filterControlSequence(ops, game.layout)
+	want := []string{"open", "reset", "close", "open", "s", "close"}
+	if len(sequence) != 6*len(want) || fmt.Sprint(sequence[:len(want)]) != fmt.Sprint(want) {
+		t.Fatalf("filter sequence starts %v, want %v repeated for every position", sequence, want)
+	}
+}
+
+// T32e: an old filter that survives the reset is Active at the funnel, so
+// the daily Active check cannot see it. The independent Clear check rejects
+// it before S selection and keeps the walk at zero admissions.
+func TestTraverseIndependentClearRejectsResidualActiveFilter(t *testing.T) {
+	game := newScriptedGame(true)
+	game.filter = "active"
+	game.sSelected = true
+	game.resetDoesNothing = true
+	h := newTraversalHarness(t, game)
+	h.inv.IndependentClear = true
+	h.inv.ActionBudget = 100 * time.Millisecond
+	h.start()
+	snap := h.endFailed(collect.CodeNavigationMismatch)
+	if snap.Counts.Captured != 0 {
+		t.Fatalf("a failed Clear check admits nothing: %+v", snap.Counts)
+	}
+	ops := game.opsSnapshot()
+	if got := countOps(ops, platform.InputClick, game.layout.FilterButton, image.Point{}); got != 1 {
+		t.Fatalf("%d panel opens, want only the reset visit before stopping", got)
+	}
+	if got := countOps(ops, platform.InputClick, game.layout.PanelS, image.Point{}); got != 0 {
+		t.Fatalf("%d S clicks after an unverified Clear", got)
+	}
+	if got := countFilterClicks(ops, game.layout); got != 3 {
+		t.Fatalf("%d filter-control clicks, want open/reset/close only", got)
+	}
+}
+
+// T32f: a clear reset followed by an S click that does not take effect stops
+// on the missing Active verdict instead of admitting the unfiltered list.
+func TestTraverseIndependentClearStopsWithoutSSelection(t *testing.T) {
+	game := newScriptedGame(true)
+	game.sClickDoesNothing = true
+	h := newTraversalHarness(t, game)
+	h.inv.IndependentClear = true
+	h.inv.ActionBudget = 100 * time.Millisecond
+	h.start()
+	snap := h.endFailed(collect.CodeNavigationMismatch)
+	if snap.Counts.Captured != 0 {
+		t.Fatalf("a failed S selection admits nothing: %+v", snap.Counts)
+	}
+	if game.sSelectedState() {
+		t.Fatal("the fake S control is selected although its click was a no-op")
+	}
+	if got := countFilterClicks(game.opsSnapshot(), game.layout); got != 6 {
+		t.Fatalf("%d filter-control clicks, want two complete visits before stopping", got)
+	}
+}
+
+// T32g: a reset that makes the panel page undecidable stops the strict path
+// with navigationMismatch; the traversal never closes or clicks around it.
+func TestTraverseIndependentClearStopsOnUndecidableResetPage(t *testing.T) {
+	game := newScriptedGame(true)
+	game.resetMakesUnknown = true
+	h := newTraversalHarness(t, game)
+	h.inv.IndependentClear = true
+	h.inv.ActionBudget = 100 * time.Millisecond
+	h.start()
+	snap := h.endFailed(collect.CodeNavigationMismatch)
+	if snap.Counts.Captured != 0 {
+		t.Fatalf("an undecidable reset page admits nothing: %+v", snap.Counts)
+	}
+	ops := game.opsSnapshot()
+	if got := countFilterClicks(ops, game.layout); got != 2 {
+		t.Fatalf("%d filter-control clicks, want only open/reset before stopping", got)
+	}
+	if got := countOps(ops, platform.InputClick, game.layout.PanelClose, image.Point{}); got != 0 {
+		t.Fatalf("%d close clicks after the reset page became undecidable", got)
+	}
+}
+
+// T32h: a later position's failed strict preparation keeps the earlier
+// position's admissions.
+func TestTraverseIndependentClearRetainsAdmittedOnLaterFailure(t *testing.T) {
+	game := newScriptedGame(listOf(2)...)
+	game.setList(2, listOf(1))
+	game.sClickDoesNothingAt = 2
+	h := newTraversalHarness(t, game)
+	h.inv.IndependentClear = true
+	h.inv.ActionBudget = 100 * time.Millisecond
+	h.inv.ScrollBudget = 80 * time.Millisecond
+	h.start()
+	snap := h.endFailed(collect.CodeNavigationMismatch)
+	if snap.Counts.Captured != 2 {
+		t.Fatalf("captured = %+v, want the first position's two admissions", snap.Counts)
+	}
+	obs := h.observations()
+	if len(obs) != 2 || obs[0].Position != 1 || obs[1].Position != 1 {
+		t.Fatalf("observations = %v, want two at position 1", positions(obs))
 	}
 }
 
