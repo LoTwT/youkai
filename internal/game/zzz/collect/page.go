@@ -54,6 +54,15 @@ const (
 	// pre-click frame, the click, and the post-click detail whose
 	// selection evidence rests on the clicked slot (T5 §4's 选中切换).
 	AssociationTransition Association = "transitionVerified"
+	// AssociationReference: the target's click changed the selection but
+	// its detail stayed the same as the pre-click frame, so one reference
+	// round trip proved the attribution: a different visible occupied slot
+	// showed a distinct, stable detail, and the return click on the target
+	// showed a detail different from the reference and stable (T5 §4's
+	// 相邻相同详情参照往返). The Observation's Reference carries the
+	// reference slot and frame; PreClickFrameID remains the target's
+	// original pre-click frame.
+	AssociationReference Association = "referenceVerified"
 )
 
 // PageMatch is one matcher verdict over one frame: which page the frame

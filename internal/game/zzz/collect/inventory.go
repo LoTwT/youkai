@@ -204,17 +204,38 @@ type Observation struct {
 	// Association says how the detail was attributed to the target:
 	// initialVerified when the target already carried the selection
 	// border before any click, transitionVerified when the selection
-	// moved after a click.
+	// moved after a click, referenceVerified when a same-detail
+	// transition was resolved by one reference round trip.
 	Association Association `json:"association"`
+	// Reference carries the reference round trip this admission rested
+	// on: which visible occupied slot was selected as the distinguishable
+	// reference and the stable frame its detail was read from. It is nil
+	// for every other association.
+	Reference *ReferenceEvidence `json:"reference,omitempty"`
 	// PreClickFrameID is the pre-action list frame the click derived
 	// from — the page-pair evidence's other half. It is 0 for an initial
-	// read: no click and no pre-click frame exist.
+	// read: no click and no pre-click frame exist. For a reference
+	// admission it is the target's original pre-click frame; the return
+	// click's pre-click frame is Reference.FrameID.
 	PreClickFrameID uint64 `json:"preClickFrameId"`
 	// Evidence is the admission's grounds in prose: the page pair, the
 	// selection association, the stability and the matcher's own
 	// confidence description (T5 §6: 每件保留…另附目标格位、对应的导航
 	// 步骤与接纳理由).
 	Evidence string `json:"evidence"`
+}
+
+// ReferenceEvidence is the machine-readable half of a
+// referenceVerified admission: the distinguishable reference slot, its
+// grid position in the viewport and the stable frame that showed its
+// distinct detail. That frame is also the return click's pre-click
+// frame, so the target's returned detail is tied to the frame that
+// showed the reference.
+type ReferenceEvidence struct {
+	Slot    int    `json:"slot"`
+	Row     int    `json:"row"`
+	Column  int    `json:"column"`
+	FrameID uint64 `json:"frameId"`
 }
 
 // scopePayload is the observed-range report Precheck assembles: only the
@@ -1152,7 +1173,7 @@ func (run *inventoryRun) visitSlot(ctx context.Context, i int) error {
 			}
 			switch out.class {
 			case awaitStable:
-				return run.admit(slot, out, pre.frame, i, row, col, AssociationInitial, 0, attempt+1, target)
+				return run.admit(slot, out, pre.frame, i, row, col, AssociationInitial, 0, nil, attempt+1, target)
 			case awaitCanceled, awaitFrameErr:
 				slot.Discard()
 				return out.err
@@ -1185,7 +1206,7 @@ func (run *inventoryRun) visitSlot(ctx context.Context, i int) error {
 		}
 		switch out.class {
 		case awaitStable:
-			return run.admit(slot, out, pre.frame, i, row, col, AssociationTransition, pre.frame.ID, attempt+1, target)
+			return run.admit(slot, out, pre.frame, i, row, col, AssociationTransition, pre.frame.ID, nil, attempt+1, target)
 		case awaitCanceled, awaitFrameErr:
 			slot.Discard()
 			return out.err
@@ -1205,6 +1226,13 @@ func (run *inventoryRun) visitSlot(ctx context.Context, i int) error {
 					"collect: clicking %s never took effect within the budget (attempt %d): %s",
 					target, attempt+1, out.match.Evidence))
 			}
+			if run.sameDetailSelection(out, i) {
+				// The selection reached the target but the detail stayed
+				// the same as the pre-click frame. One reference round trip
+				// may still prove the target's detail; it is not a retry of
+				// the ineffective click above (T5 §4).
+				return run.referenceRoundTrip(ctx, slot, out, pre.frame, i, preSelected, row, col, attempt, target)
+			}
 			slot.Discard()
 			return run.detailFault(out, pre.frame, preSelected, i, false, target)
 		}
@@ -1223,6 +1251,185 @@ func (run *inventoryRun) ineffectiveClick(out detailOutcome, pre platform.Frame,
 		return false
 	}
 	return run.inv.matcher().CompareDetail(pre, out.frame) == DetailSame
+}
+
+// sameDetailSelection reports the deadline case the attribution rule
+// sends to one reference round trip: the selection reached the target and
+// every detail comparison against the pre-click frame decided Same. An
+// undecidable pane, an undecided comparison, or a pane that never decided
+// Same is unclear rather than "same", and a click that never moved the
+// selection is an ineffective click with its own retry path. Sending a
+// verification click while the first click's effect is still unclear would
+// violate T5 §4's rule against a next action from an unclear result.
+func (run *inventoryRun) sameDetailSelection(out detailOutcome, target int) bool {
+	return run.listVerdict(out.match) && out.match.List.Selected == target &&
+		out.sawPopulated && out.sawSame && !out.sawDifferent && !out.sawUndecided
+}
+
+// referenceSlot picks the one visible occupied slot used as the
+// distinguishable reference for a same-detail target. The target is
+// excluded, and so is the slot selected before the target's click: the
+// pre-click frame carried exactly the detail the target repeated, so
+// clicking that slot back would only repeat the same ambiguity. Among the
+// remaining occupied slots the nearest grid neighbor wins (reading order
+// breaks ties), keeping the click inside the current viewport. No scroll is
+// ever used to find a reference.
+func (run *inventoryRun) referenceSlot(m PageMatch, target, previous int) (int, bool) {
+	if !run.listVerdict(m) {
+		return 0, false
+	}
+	l := run.inv.Layout
+	targetRow, targetColumn := l.slotPosition(target)
+	best, bestDistance := -1, 0
+	for i, occupied := range m.List.Occupied {
+		if !occupied || i == target || i == previous {
+			continue
+		}
+		row, column := l.slotPosition(i)
+		distance := absInt(row-targetRow) + absInt(column-targetColumn)
+		if best < 0 || distance < bestDistance {
+			best, bestDistance = i, distance
+		}
+	}
+	return best, best >= 0
+}
+
+// referenceRoundTrip resolves one same-detail target with the single
+// round trip T5 §4 allows: click a different visible occupied slot, prove
+// its detail differs from the target's and holds stable, then click the
+// target back and prove the returned detail differs from the reference and
+// holds stable. Success admits the target once, with the reference slot
+// and frame as evidence; the reference slot itself is never admitted and
+// never consumes a visited position. Any failure — no usable reference, an
+// ineffective reference click, the same reference detail, a failed return
+// click or an unstable pane — stops the walk and keeps the already
+// admitted results. There is exactly one round trip: no retry, no scroll.
+func (run *inventoryRun) referenceRoundTrip(ctx context.Context, slot *scan.Slot, targetOut detailOutcome, pre platform.Frame, target, previous, row, column, attempt int, targetName string) error {
+	ref, ok := run.referenceSlot(targetOut.match, target, previous)
+	if !ok {
+		slot.Discard()
+		return scan.NewFault(CodeDetailUnattributed, fmt.Errorf(
+			"collect: the selection reached %s but its detail never changed from pre-click frame %d, and no other visible occupied slot is available as a distinguishable reference (T5 §4): %s",
+			targetName, pre.ID, targetOut.match.Evidence))
+	}
+	refRow, refColumn := run.inv.Layout.slotPosition(ref)
+	log.Printf("youkai: collect: %s: same detail after the click; trying one reference round trip via slot %d (row %d, column %d)",
+		targetName, ref, refRow, refColumn)
+
+	// The reference click needs its own stable pre-click frame with the
+	// target still selected; this only re-observes, it never scrolls.
+	preRef := run.awaitSettled(ctx, func(m PageMatch) bool {
+		return run.listVerdict(m) && m.List.Selected == target && m.List.Occupied[ref] && m.Detail != nil
+	})
+	switch preRef.class {
+	case awaitStable:
+	case awaitCanceled, awaitFrameErr:
+		slot.Discard()
+		return preRef.err
+	case awaitGeometry:
+		slot.Discard()
+		return run.geometryChanged(preRef.frame)
+	default:
+		slot.Discard()
+		return scan.NewFault(CodeDetailUnattributed, fmt.Errorf(
+			"collect: the same-detail reference round trip for %s could not establish a stable pre-reference frame with the target selected and reference slot %d occupied: %s",
+			targetName, ref, preRef.match.Evidence))
+	}
+	run.listMatch = preRef.match
+	run.lastFrame = preRef.frame
+	if got := run.inv.matcher().CompareDetail(targetOut.frame, preRef.frame); got != DetailSame {
+		slot.Discard()
+		return scan.NewFault(CodeDetailUnattributed, fmt.Errorf(
+			"collect: the target %s's detail changed while preparing the reference (frames %d -> %d compare %v); one round trip can no longer attribute the click",
+			targetName, targetOut.frame.ID, preRef.frame.ID, got))
+	}
+
+	if err := run.observeReady(ctx); err != nil {
+		slot.Discard()
+		return err
+	}
+	res := run.view.Dispatch(platform.InputOp{
+		Kind:     platform.InputClick,
+		Geometry: run.geo,
+		FrameID:  preRef.frame.ID,
+		At:       run.inv.Layout.slotCenter(ref),
+	})
+	if err := run.dispatchOutcome(ctx, res); err != nil {
+		slot.Discard()
+		return err
+	}
+	refOut, err := run.awaitDetail(ctx, preRef.frame, ref, false)
+	if err != nil {
+		slot.Discard()
+		return err
+	}
+	switch refOut.class {
+	case awaitStable:
+	case awaitCanceled, awaitFrameErr:
+		slot.Discard()
+		return refOut.err
+	case awaitGeometry:
+		slot.Discard()
+		return run.geometryChanged(refOut.frame)
+	default:
+		slot.Discard()
+		return run.referenceFault("the reference click", refOut, targetName, ref)
+	}
+	run.listMatch = refOut.match
+	run.lastFrame = refOut.frame
+	log.Printf("youkai: collect: %s: reference slot %d selected, its detail differs from the target's and held stable on frame %d",
+		targetName, ref, refOut.frame.ID)
+
+	if err := run.observeReady(ctx); err != nil {
+		slot.Discard()
+		return err
+	}
+	res = run.view.Dispatch(platform.InputOp{
+		Kind:     platform.InputClick,
+		Geometry: run.geo,
+		FrameID:  refOut.frame.ID,
+		At:       run.inv.Layout.slotCenter(target),
+	})
+	if err := run.dispatchOutcome(ctx, res); err != nil {
+		slot.Discard()
+		return err
+	}
+	backOut, err := run.awaitDetail(ctx, refOut.frame, target, false)
+	if err != nil {
+		slot.Discard()
+		return err
+	}
+	switch backOut.class {
+	case awaitStable:
+		log.Printf("youkai: collect: %s: return click selected the target and its detail differs from reference frame %d, stable on frame %d",
+			targetName, refOut.frame.ID, backOut.frame.ID)
+		return run.admit(slot, backOut, pre, target, row, column, AssociationReference, pre.ID,
+			&referenceCapture{slot: ref, row: refRow, column: refColumn, frame: refOut.frame}, attempt+1, targetName)
+	case awaitCanceled, awaitFrameErr:
+		slot.Discard()
+		return backOut.err
+	case awaitGeometry:
+		slot.Discard()
+		return run.geometryChanged(backOut.frame)
+	default:
+		slot.Discard()
+		return run.referenceFault("the return click on the target", backOut, targetName, ref)
+	}
+}
+
+// referenceFault classifies a failed leg of the reference round trip. A
+// page that stopped being a warehouse verdict is a navigation fault; every
+// other outcome is unattributed, because the target's detail was never
+// proven distinct from the reference with a stable pair.
+func (run *inventoryRun) referenceFault(step string, out detailOutcome, target string, ref int) error {
+	if !run.listVerdict(out.match) {
+		return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
+			"collect: the page became undecidable during %s of the same-detail reference round trip for %s (last verdict %s): %s",
+			step, target, out.match.Page, out.match.Evidence))
+	}
+	return scan.NewFault(CodeDetailUnattributed, fmt.Errorf(
+		"collect: the same-detail reference round trip for %s failed at %s (reference slot %d, last selection %d, detail decidable %t, detail changed %t): %s",
+		target, step, ref, out.lastSelected, out.sawPopulated, out.sawDifferent, out.match.Evidence))
 }
 
 // detailFault classifies a detail wait that ended without a stable,
@@ -1257,7 +1464,7 @@ func (run *inventoryRun) detailFault(out detailOutcome, pre platform.Frame, preS
 			targetName, out.match.Evidence))
 	case selected == target && !out.sawDifferent:
 		return scan.NewFault(CodeDetailUnattributed, fmt.Errorf(
-			"collect: the selection reached %s but the detail never changed from the pre-click frame — the same-detail neighbor round-trip verification is not implemented yet (T5 §4): %s",
+			"collect: the selection reached %s but the detail never changed from the pre-click frame and no reference round trip resolved it (T5 §4): %s",
 			targetName, out.match.Evidence))
 	case selected == target:
 		return scan.NewFault(CodeDetailUnattributed, fmt.Errorf(
@@ -1274,12 +1481,20 @@ func (run *inventoryRun) detailFault(out detailOutcome, pre platform.Frame, preS
 	}
 }
 
+// referenceCapture is one successful reference round trip's provenance
+// before it becomes the Observation's public ReferenceEvidence.
+type referenceCapture struct {
+	slot, row, column int
+	frame             platform.Frame
+}
+
 // admit checks the admission gates and hands one capture to the kernel:
 // the target is selected, the detail changed and held stable, and the pane
 // shows a calibrated S disc with 3 or 4 substats. A calibrated NotS disc
 // is marked visited and discarded without a record; an undecidable rarity
-// or line count stops the walk with detailUnresolved.
-func (run *inventoryRun) admit(slot *scan.Slot, out detailOutcome, pre platform.Frame, i, row, col int, assoc Association, preID uint64, attempt int, target string) error {
+// or line count stops the walk with detailUnresolved. ref is non-nil only
+// for a referenceVerified admission.
+func (run *inventoryRun) admit(slot *scan.Slot, out detailOutcome, pre platform.Frame, i, row, col int, assoc Association, preID uint64, ref *referenceCapture, attempt int, target string) error {
 	if out.match.Detail == nil {
 		slot.Discard()
 		return scan.NewFault(CodeDetailUnresolved, fmt.Errorf(
@@ -1323,7 +1538,15 @@ func (run *inventoryRun) admit(slot *scan.Slot, out detailOutcome, pre platform.
 		VisitIndex:      run.visitIndex,
 		Association:     assoc,
 		PreClickFrameID: preID,
-		Evidence:        run.admissionEvidence(target, pre, out, attempt, assoc),
+		Evidence:        run.admissionEvidence(target, pre, out, attempt, assoc, ref),
+	}
+	if ref != nil {
+		obs.Reference = &ReferenceEvidence{
+			Slot:    ref.slot,
+			Row:     ref.row,
+			Column:  ref.column,
+			FrameID: ref.frame.ID,
+		}
 	}
 	payload := any(obs)
 	if run.inv.Project != nil {
@@ -1349,12 +1572,23 @@ func (run *inventoryRun) admit(slot *scan.Slot, out detailOutcome, pre platform.
 // admissionEvidence assembles one admission's prose grounds: the page
 // pair, the selection association, the stability and the matcher's own
 // confidence description (T5 §6).
-func (run *inventoryRun) admissionEvidence(target string, pre platform.Frame, out detailOutcome, attempts int, assoc Association) string {
+func (run *inventoryRun) admissionEvidence(target string, pre platform.Frame, out detailOutcome, attempts int, assoc Association, ref *referenceCapture) string {
 	lead := fmt.Sprintf("%s admitted after %d attempt(s): the selection border was already on the target before any click (initial read); the detail held stable on frame %d (geometry %d)",
 		target, attempts, out.frame.ID, out.frame.Geometry)
-	if assoc == AssociationTransition {
+	switch assoc {
+	case AssociationTransition:
 		lead = fmt.Sprintf("%s admitted after %d attempt(s): pre-click list frame %d showed the target occupied; the detail changed after the click and held stable on frame %d (geometry %d)",
 			target, attempts, pre.ID, out.frame.ID, out.frame.Geometry)
+	case AssociationReference:
+		if ref == nil {
+			// admit enforces the pairing; this is only a defensive fallback
+			// so evidence never silently loses its provenance.
+			lead = fmt.Sprintf("%s admitted after %d attempt(s): a same-detail reference round trip resolved the target; the returned detail held stable on frame %d (geometry %d)",
+				target, attempts, out.frame.ID, out.frame.Geometry)
+			break
+		}
+		lead = fmt.Sprintf("%s admitted after %d attempt(s): pre-click frame %d showed the target occupied but the detail stayed the same; one reference round trip selected reference slot %d (row %d, column %d), whose detail differed and held stable on frame %d, then the return click on the target showed a detail different from that reference and stable on frame %d (geometry %d)",
+			target, attempts, pre.ID, ref.slot, ref.row, ref.column, ref.frame.ID, out.frame.ID, out.frame.Geometry)
 	}
 	stability := ""
 	if span := run.inv.detailStableSpan(); span > 0 {
@@ -1441,12 +1675,19 @@ func (run *inventoryRun) awaitDetail(ctx context.Context, baseline platform.Fram
 				runLen, runStart, last = 1, time.Now(), f
 			}
 		} else if !out.sawDifferent {
-			if run.inv.matcher().CompareDetail(baseline, f) == DetailDifferent {
+			switch run.inv.matcher().CompareDetail(baseline, f) {
+			case DetailDifferent:
 				out.sawDifferent = true
 				runLen, runStart, last, lastSet = 1, time.Now(), f, true
-			} else {
-				// Same or undecided: the click may not have taken effect
-				// yet. Nothing can be called stable before a change.
+			case DetailSame:
+				out.sawSame = true
+				// The click may not have taken effect yet. Nothing can be
+				// called stable before a change.
+				runLen, lastSet = 0, false
+			default:
+				out.sawUndecided = true
+				// Undecided: the pane or the comparison is unclear, so this
+				// is neither evidence of a change nor of sameness.
 				runLen, lastSet = 0, false
 			}
 		} else if !lastSet {
@@ -1868,7 +2109,9 @@ type awaitOutcome struct {
 }
 
 // detailOutcome is one detail wait's result. lastSelected is -2 until a
-// warehouse list verdict with the layout's slot count is seen.
+// warehouse list verdict with the layout's slot count is seen. sawSame and
+// sawUndecided record the pre-change comparisons against the baseline, so
+// the same-detail round trip starts only from an unambiguous Same pane.
 type detailOutcome struct {
 	class        awaitClass
 	frame        platform.Frame
@@ -1877,6 +2120,8 @@ type detailOutcome struct {
 	sawTarget    bool
 	sawPopulated bool
 	sawDifferent bool
+	sawSame      bool
+	sawUndecided bool
 	lastSelected int
 	stable       bool
 }
