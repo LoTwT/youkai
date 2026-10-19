@@ -91,6 +91,8 @@ MyGo UI
 - 采集后端的最新帧缓存与内核已接纳的证据任务分开管理，后者不能被后续帧覆盖；旧流回调和迟到任务不得写入新会话。
 - 输入许可关闭、采集流停止、在途回调结束、OCR 返回和结果保存分别记录；窗口或权限故障直接触发统一停止，不等待 UI 或 OCR。
 
+ZZZ 侧消费这些约束的遍历骨架（页面匹配契约、导航状态机与详情归属规则）位于 `internal/game/zzz/collect`：它只面向端口的值类型与自己的窄会话接口，布局锚点与像素匹配实现随 [T5](t5-zzz-inventory-traversal.md) 的标定接入（4b）。
+
 ## 4. OCR、原生资源与构建
 
 推荐本地 CPU ONNX Runtime 加一个经过固定资源验证的识别模型。首轮组合为 yalue v1.36.0 + ORT 1.29.0 CPU + PP-OCRv6 small，版本、摘要、模型形状与字符表见 [T3](t3-ocr-runtime-model-samples.md#固定组合与制品静态核查)；Microsoft 官方 Go 包为替代，用同一运行库和资源比较。不选 GPU、Python 服务或自写 ORT FFI；实测确认 OCR 是瓶颈后再评估加速。
