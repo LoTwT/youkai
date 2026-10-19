@@ -3,9 +3,53 @@ package collect
 import (
 	"fmt"
 	"image"
+	"image/color"
+	"time"
 
 	"github.com/LoTwT/youkai/internal/platform"
 )
+
+// LineRegion is one calibrated text line of the detail pane: the role the
+// line plays (name, level, main, sub1..sub4) and the region the matcher
+// reads. Roles are stable identifiers for evidence and for the
+// recognition pipeline's later projection; they are not UI labels.
+type LineRegion struct {
+	Role string
+	Rect image.Rectangle
+}
+
+// Detail line roles. The first six always exist on a populated pane; sub4
+// only exists for four-substat discs, but its region is calibrated for
+// every layout because the matcher must be able to tell the two line
+// counts apart (T5 §4).
+const (
+	LineName  = "name"
+	LineLevel = "level"
+	LineMain  = "main"
+	LineSub1  = "sub1"
+	LineSub2  = "sub2"
+	LineSub3  = "sub3"
+	LineSub4  = "sub4"
+)
+
+// ColorProbe is one small region classified by its mean color: the colors
+// name the calibrated tiers (for example "clear"/"active" on the funnel
+// and "closed"/"open" on the panel probes) and Tol is the per-channel
+// tolerance. A mean outside every tier is "cannot determine", never the
+// nearest tier.
+type ColorProbe struct {
+	At     image.Rectangle
+	Colors map[string]color.RGBA
+	Tol    int
+}
+
+// CellProbes are the per-cell evidence regions, relative to the cell's
+// center: the selection border immediately left of the cell and the
+// rarity bar along its bottom edge.
+type CellProbes struct {
+	Border image.Rectangle
+	Bar    image.Rectangle
+}
 
 // Layout is one display configuration's calibrated anchor set (T5 §3
 // 可操作位置): every region is in frame-image pixels — the pixels of a
@@ -14,41 +58,108 @@ import (
 // during Precheck, naming that version in every input it derives from
 // them.
 //
-// PR 4c defines the structure with deliberately empty defaults: the
-// values arrive with 4b's field calibration (real sampled coordinates
-// per supported display configuration), and an empty or inconsistent
-// Layout makes Precheck fail with anchorsMissing — the traversal never
-// guesses a coordinate or treats "somewhere in the frame" as an anchor.
+// The layout is one page: the same frame carries the list, the detail pane
+// and the wheel (T5 §1). Image and Content identify the display
+// configuration exactly: a frame whose image size or content region
+// differs is not this calibration's frame. The pixel matcher only reads
+// the regions declared here.
 type Layout struct {
+	// Name identifies the display configuration in diagnostics and the
+	// observed-range report.
+	Name string
+	// Image is the full frame size and Content the valid video region
+	// inside it. Both must match a frame exactly for the layout to apply;
+	// a scaled window changes Content and invalidates the calibration.
+	Image   image.Point
+	Content image.Rectangle
+
 	// Rows and Columns describe the visible warehouse grid: the grid has
 	// Rows*Columns slots and Slots lists them in reading order
 	// (row-major). A scroll advances the list by whole rows; the overlap
 	// between two viewports is at least one row (T5 §5).
 	Rows, Columns int
-	// Slots are the clickable grid regions in reading order; the
-	// traversal clicks a slot's center and the matcher reports per-slot
-	// occupancy against the same order. len(Slots) == Rows*Columns.
+	// Slots are the clickable grid regions in reading order; the traversal
+	// clicks a slot's center and the matcher reports per-slot evidence
+	// against the same order. len(Slots) == Rows*Columns.
 	Slots []image.Rectangle
-	// Close is the detail page's close control: the region whose click
-	// returns from the disc detail to the warehouse list.
-	Close image.Rectangle
+	// Cell holds the per-cell evidence regions, relative to a slot center.
+	Cell CellProbes
+	// RowPitch is the list's row pitch in frame pixels. The scroll
+	// matcher accepts a displacement only when it is a whole number of
+	// row pitches within tolerance, and the traversal applies only
+	// displacements that keep at least one row of overlap.
+	RowPitch int
+
+	// ListViewport is the list area compared across a scroll: grayscale
+	// overlap matching establishes the displacement and the unique
+	// correspondences between two viewports (T5 §5).
+	ListViewport image.Rectangle
+	// ScrollTrack is the scrollbar's thumb column. Top and Bottom rest on
+	// the thumb resting at the track's extremes; the two end caps are not
+	// part of the track.
+	ScrollTrack image.Rectangle
 	// ScrollFrom and ScrollTo are the drag's endpoints for one small
 	// scroll step (the synthesized wheel is not an option on the macOS
 	// cloud client, so scrolling is a drag on both platforms). One step
 	// advances the list by whole rows; how many is the correspondence
 	// evidence's verdict, not this pair's business.
 	ScrollFrom, ScrollTo image.Point
+	ScrollDuration       time.Duration
+	// TopFrom and TopTo are the drag's endpoints for a fling toward the
+	// list's beginning. The traversal uses them only to confirm the top
+	// with a stationary verdict in this round.
+	TopFrom, TopTo image.Point
+	TopDuration    time.Duration
+
+	// FilterButton is the funnel button's click point.
+	FilterButton image.Point
+	// Funnel is the funnel icon probe: clear (dark) and active (blue)
+	// tiers (report §4).
+	Funnel ColorProbe
+	// PanelOpen are the probes that recognize the filter panel overlaying
+	// the warehouse. Both must report "open" for PageFilterPanel and both
+	// "closed" before the warehouse checks run.
+	PanelOpen []ColorProbe
+	// PanelReset and PanelClose are the panel's click points. They are
+	// declared here for the preparation step (4b-2); the pixel matcher
+	// never reads them.
+	PanelReset, PanelClose image.Point
+
+	// Wheel are the six wheel position centers, numbered from the
+	// top-left counter-clockwise 1..6.
+	Wheel [6]image.Point
+	// WheelArcs are the selection-color probe regions around each wheel
+	// center, relative to the center. They are the narrowed form of the
+	// draft's ±95 ring: the fixture keeps four small arc blocks instead of
+	// six full ring boxes (design §2).
+	WheelArcs []image.Rectangle
+
+	// DetailLines are the detail pane's calibrated line regions in reading
+	// order (name, level, main, sub1..sub4). The comparison averages the
+	// per-line grayscale MADs.
+	DetailLines []LineRegion
+	// QualityBadge is the rarity badge next to the level line. Only S is
+	// calibrated; every sample of the macOS cloud client was S.
+	QualityBadge image.Rectangle
+	// Substat4Probe is the value column of the fourth substat row. A
+	// three-substat disc shows the set-effect label there instead, so this
+	// probe distinguishes 3 from 4 substats (design §2).
+	Substat4Probe image.Rectangle
 }
 
-// validate checks the layout's structural sanity. The pixel values
+// Validate checks the layout's structural sanity. The pixel values
 // themselves are calibration data this check cannot judge; what it
-// refuses is a layout the traversal could only use by guessing: a
-// missing grid, slots that do not add up, empty regions, or a drag that
-// goes nowhere.
-// Validate checks the layout's structural sanity; see the Layout doc.
-// Exported because the calibration side (4b) validates a layout before
-// injecting it, and the traversal's precheck runs the same check.
+// refuses is a layout the matcher or traversal could only use by
+// guessing: a missing grid, slots or probes that do not add up, empty
+// regions, or drags that go nowhere. PixelMatcher construction and the
+// traversal's precheck both run this check.
 func (l Layout) Validate() error {
+	if l.Image.X <= 0 || l.Image.Y <= 0 {
+		return fmt.Errorf("collect: layout: image size is %dx%d; a calibrated layout needs a positive frame size", l.Image.X, l.Image.Y)
+	}
+	if l.Content.Empty() || !l.Content.In(image.Rectangle{Max: l.Image}) {
+		return fmt.Errorf("collect: layout: content region %v is empty or outside the %dx%d frame", l.Content, l.Image.X, l.Image.Y)
+	}
 	if l.Rows <= 0 || l.Columns <= 0 {
 		return fmt.Errorf("collect: layout: grid is %d×%d; the calibrated grid must be positive", l.Rows, l.Columns)
 	}
@@ -61,46 +172,186 @@ func (l Layout) Validate() error {
 			return fmt.Errorf("collect: layout: slot %d is empty; every anchor region must be a real region", i)
 		}
 	}
-	if l.Close.Empty() {
-		return fmt.Errorf("collect: layout: the close anchor is empty; every anchor region must be a real region")
+	if l.Cell.Border.Empty() {
+		return fmt.Errorf("collect: layout: the selection-border probe is empty")
+	}
+	if l.Cell.Bar.Empty() {
+		return fmt.Errorf("collect: layout: the occupancy-bar probe is empty")
+	}
+	if l.RowPitch <= 0 {
+		return fmt.Errorf("collect: layout: row pitch is %d; it must be positive", l.RowPitch)
+	}
+	if l.ListViewport.Empty() {
+		return fmt.Errorf("collect: layout: the list viewport is empty")
+	}
+	if l.ScrollTrack.Empty() {
+		return fmt.Errorf("collect: layout: the scrollbar track is empty")
 	}
 	if l.ScrollFrom.Eq(l.ScrollTo) {
 		return fmt.Errorf("collect: layout: the scroll drag goes nowhere; ScrollFrom and ScrollTo must differ")
 	}
+	if l.ScrollDuration <= 0 {
+		return fmt.Errorf("collect: layout: the scroll duration is not positive")
+	}
+	if l.TopFrom.Eq(l.TopTo) {
+		return fmt.Errorf("collect: layout: the top drag goes nowhere; TopFrom and TopTo must differ")
+	}
+	if l.TopDuration <= 0 {
+		return fmt.Errorf("collect: layout: the top duration is not positive")
+	}
+	if err := l.Funnel.validate("funnel"); err != nil {
+		return err
+	}
+	if len(l.PanelOpen) < 2 {
+		return fmt.Errorf("collect: layout: %d panel probes; the panel needs both calibrated probes", len(l.PanelOpen))
+	}
+	for i, p := range l.PanelOpen {
+		if err := p.validate(fmt.Sprintf("panel probe %d", i)); err != nil {
+			return err
+		}
+	}
+	if l.Wheel == [6]image.Point{} {
+		return fmt.Errorf("collect: layout: the wheel positions are not calibrated")
+	}
+	if len(l.WheelArcs) == 0 {
+		return fmt.Errorf("collect: layout: the wheel probes are empty")
+	}
+	for i, r := range l.WheelArcs {
+		if r.Empty() {
+			return fmt.Errorf("collect: layout: wheel probe %d is empty", i)
+		}
+	}
+	if len(l.DetailLines) == 0 {
+		return fmt.Errorf("collect: layout: the detail lines are not calibrated")
+	}
+	for i, line := range l.DetailLines {
+		if line.Role == "" || line.Rect.Empty() {
+			return fmt.Errorf("collect: layout: detail line %d is empty or has no role", i)
+		}
+	}
+	if l.QualityBadge.Empty() {
+		return fmt.Errorf("collect: layout: the quality badge probe is empty")
+	}
+	if l.Substat4Probe.Empty() {
+		return fmt.Errorf("collect: layout: the substat-4 probe is empty")
+	}
 	return nil
 }
 
-// fitsContent reports whether every anchor lies inside the frame's
-// valid content region (image pixels): input derived from an anchor
-// outside the content region would be refused by the platform, and a
-// calibration that does not fit the captured content is not this
-// geometry's calibration.
-// FitsContent reports whether every anchor lies inside a frame's valid
-// content region; see the Layout doc. Exported for the same reason as
-// Validate.
+func (p ColorProbe) validate(what string) error {
+	if p.At.Empty() {
+		return fmt.Errorf("collect: layout: %s region is empty", what)
+	}
+	if len(p.Colors) == 0 {
+		return fmt.Errorf("collect: layout: %s has no calibrated colors", what)
+	}
+	if p.Tol < 0 {
+		return fmt.Errorf("collect: layout: %s tolerance is negative", what)
+	}
+	return nil
+}
+
+// MatchesFrame reports whether a frame's image size and content region are
+// exactly the calibration's. Content is compared for equality, not
+// containment: a scaled window makes the pixel anchors a different
+// display configuration's calibration.
+func (l Layout) MatchesFrame(imageSize image.Point, content image.Rectangle) bool {
+	return l.Image == imageSize && l.Content == content
+}
+
+// FitsContent reports whether every anchor lies inside the frame's valid
+// content region (image pixels): input derived from an anchor outside the
+// content region would be refused by the platform, and a calibration that
+// does not fit the captured content is not this geometry's calibration.
 func (l Layout) FitsContent(content image.Rectangle) bool {
-	inside := func(r image.Rectangle) bool { return r.In(content) }
+	inside := func(r image.Rectangle) bool { return r != image.Rectangle{} && r.In(content) }
 	for _, s := range l.Slots {
 		if !inside(s) {
 			return false
 		}
 	}
-	return inside(l.Close) &&
-		ptIn(content, l.ScrollFrom) && ptIn(content, l.ScrollTo)
+	for i := range l.Slots {
+		if !inside(l.BorderRect(i)) || !inside(l.BarRect(i)) {
+			return false
+		}
+	}
+	if !inside(l.ListViewport) || !inside(l.ScrollTrack) || !inside(l.Funnel.At) {
+		return false
+	}
+	if !inside(l.QualityBadge) || !inside(l.Substat4Probe) {
+		return false
+	}
+	for _, p := range l.PanelOpen {
+		if !inside(p.At) {
+			return false
+		}
+	}
+	for _, line := range l.DetailLines {
+		if !inside(line.Rect) {
+			return false
+		}
+	}
+	for _, c := range l.Wheel {
+		if !ptIn(content, c) {
+			return false
+		}
+	}
+	for i := range l.Wheel {
+		for _, rel := range l.WheelArcs {
+			if !inside(rel.Add(l.Wheel[i])) {
+				return false
+			}
+		}
+	}
+	return ptIn(content, l.ScrollFrom) && ptIn(content, l.ScrollTo) &&
+		ptIn(content, l.TopFrom) && ptIn(content, l.TopTo) &&
+		ptIn(content, l.FilterButton) && ptIn(content, l.PanelReset) && ptIn(content, l.PanelClose)
 }
 
-func ptIn(r image.Rectangle, p image.Point) bool { return p.In(r) }
+// ReadRegions returns every region the pixel matcher reads, in frame
+// pixels. The fixture tool blacks out everything else; the test that
+// guards the "only declared regions" constraint corrupts everything else
+// and expects the same verdict. MatchScroll additionally reads
+// ListViewport, which is a declared layout field and is included here.
+func (l Layout) ReadRegions() []image.Rectangle {
+	regions := make([]image.Rectangle, 0, len(l.Slots)*2+len(l.DetailLines)+len(l.PanelOpen)+len(l.Wheel)*len(l.WheelArcs)+6)
+	for i := range l.Slots {
+		regions = append(regions, l.BorderRect(i), l.BarRect(i))
+	}
+	regions = append(regions, l.ListViewport, l.ScrollTrack, l.Funnel.At)
+	for _, p := range l.PanelOpen {
+		regions = append(regions, p.At)
+	}
+	for _, c := range l.Wheel {
+		for _, rel := range l.WheelArcs {
+			regions = append(regions, rel.Add(c))
+		}
+	}
+	for _, line := range l.DetailLines {
+		regions = append(regions, line.Rect)
+	}
+	return append(regions, l.QualityBadge, l.Substat4Probe)
+}
+
+// BorderRect is slot i's selection-border probe in frame pixels.
+func (l Layout) BorderRect(i int) image.Rectangle {
+	return l.Cell.Border.Add(slotCenterOf(l.Slots[i]))
+}
+
+// BarRect is slot i's occupancy-bar probe in frame pixels.
+func (l Layout) BarRect(i int) image.Rectangle {
+	return l.Cell.Bar.Add(slotCenterOf(l.Slots[i]))
+}
 
 // slotCenter is the click point of slot i: the region's center. The
 // calibration encodes any "avoid this part of the cell" knowledge in the
 // region itself; the traversal does not second-guess it.
 func (l Layout) slotCenter(i int) image.Point {
-	return rectCenter(l.Slots[i])
+	return slotCenterOf(l.Slots[i])
 }
 
-// closeCenter is the click point of the close control.
-func (l Layout) closeCenter() image.Point {
-	return rectCenter(l.Close)
+func slotCenterOf(r image.Rectangle) image.Point {
+	return r.Min.Add(r.Size().Div(2))
 }
 
 // rectCenter is one region's center point, rounded towards Min.
@@ -117,6 +368,8 @@ func (l Layout) slotPosition(i int) (row, column int) {
 func (l Layout) positionSlot(row, column int) int {
 	return row*l.Columns + column
 }
+
+func ptIn(r image.Rectangle, p image.Point) bool { return p.In(r) }
 
 // bindGeometry returns the geometry version the anchors are bound to
 // for this session: the observed baseline version (Precheck runs after

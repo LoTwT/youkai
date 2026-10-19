@@ -4,7 +4,7 @@
 // ready target, lock the geometry baseline, hand over to the traversal
 // (see traversal.go) — while the traversal owns T5's navigation and
 // admission rules. PR 4a wired the lifecycle with the observe-only
-// traversal; PR 4c adds the inventory traversal skeleton beside it.
+// traversal; Inventory is the calibrated single-page traversal beside it.
 //
 // The pure ZZZ field semantics (catalog, disc validation) stay in the
 // parent game/zzz package, which must not grow this package's platform

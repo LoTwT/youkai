@@ -11,10 +11,10 @@ import (
 // Traversal is the seam between the session controller and the ZZZ
 // inventory traversal (T5). Precheck verifies the page and range
 // preconditions of the locked session; Collect runs the traversal loop
-// under the kernel's capacity and input-permission rules. PR 4a's only
-// implementation is ObserveOnly; PR 4c adds Inventory, and the real
-// traversal (anchors calibrated, recognition wired) keeps working
-// through the same seam.
+// under the kernel's capacity and input-permission rules. ObserveOnly is
+// the no-input path; Inventory is the calibrated single-page traversal.
+// Recognition wiring and the 4b-2 preparation loop keep working through
+// the same seam.
 type Traversal interface {
 	Precheck(ctx context.Context, sess platform.Session) error
 	Collect(ctx context.Context, sess platform.Session, h *scan.ControllerHandle) error
@@ -65,26 +65,34 @@ type ScopeReporter interface {
 // the traversal's own stable identifiers.
 const (
 	// CodeAnchorsMissing: the layout anchors are absent or structurally
-	// invalid (the PR 4c skeleton era — 4b's field calibration supplies
-	// the values), so no honest input coordinate or page evidence
-	// exists. Reported in the preparing phase.
+	// invalid, or the captured image size/content region is not the
+	// calibrated display configuration, so no honest input coordinate or
+	// page evidence exists. Reported in the preparing phase.
 	CodeAnchorsMissing = "anchorsMissing"
 	// CodePageUnverified: the precheck's frames did not establish the
 	// warehouse page preconditions (the page, the top evidence or the
 	// grid occupancy does not verify). Reported in the preparing phase.
 	CodePageUnverified = "pageUnverified"
 	// CodeNavigationMismatch: a dispatched action's effect could not be
-	// verified within its retry budget — the click, close or drag never
-	// moved the page where the navigation expected it, or the page became
+	// verified within its retry budget — the click or drag never moved the
+	// page where the navigation expected it, or the page became
 	// undecidable. Stopping semantics: keep what was admitted, keep the
 	// navigation-failure evidence, invent nothing.
 	CodeNavigationMismatch = "navigationMismatch"
 	// CodeDetailUnattributed: the detail could not be attributed to the
 	// clicked target within the bounded observation (T5 §4) — the
-	// selection evidence points elsewhere or never settles. The position
-	// stays unresolved; the collection stops rather than skipping to the
-	// next item.
+	// selection evidence points elsewhere, the detail never changed or
+	// never settled. The position stays unresolved; the collection stops
+	// rather than skipping to the next item. A target that was already
+	// selected before any click is admitted as an initial read; after a
+	// click it has to prove a content change.
 	CodeDetailUnattributed = "detailUnattributed"
+	// CodeDetailUnresolved: the detail was attributed but the pane did not
+	// yield a decidable rarity or substat row count — for example an A/B
+	// badge or a fourth row that is neither empty nor a calibrated value.
+	// The position stays unresolved; the collection stops and keeps the
+	// admitted results.
+	CodeDetailUnresolved = "detailUnresolved"
 	// CodePositionLost: a scroll's position correspondence could not be
 	// established (T5 §5) — the list moved but no unique overlap
 	// correspondence verifies where it moved to. The machine stops rather

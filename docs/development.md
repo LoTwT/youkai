@@ -60,10 +60,13 @@ M2 平台会话集成后可用另一组开关接入真实游戏窗口做仅观�
 | `go build ./...` | 编译全部包。 |
 | `go test ./...` | 运行测试；`internal/recognition` 与 `internal/app` 的集成测试在 OCR 资源缺失时自动跳过，本地需先运行 fetchdeps。 |
 | `go test -race ./internal/recognition` | 识别包的竞态检查（含取消与生命周期并发路径）。 |
+| `YOUKAI_M2_SAMPLES=/tmp/m2-samples go test ./internal/game/zzz/collect` | 像素匹配器与单页遍历在完整未掩码源帧上的回放；样本目录不入库，未设置时自动跳过。 |
 | `go tool mygo vet .` | 先运行 `go vet ./...`，再检查原生 UI 生命周期问题；参数是应用目录（项目根），不能写成 `./...`。 |
 | `go tool mygo dev` | 开发运行，编辑 Go 代码、配置或资源后自动重建重启；开发应用名为 `Youkai Dev`（标识 `com.lotwt.youkai.dev`，位于 `.mygo/dev`），与正式安装的数据和权限隔离。退出应用或 Ctrl+C 结束。 |
 | `go tool mygo build` | 打包本机平台制品到 `build/<os>-<arch>/`：macOS 生成 ad-hoc 签名的 `Youkai.app` 与 DMG。须显式 `CGO_ENABLED=1`，macOS 另设部署目标，完整命令与说明见[打包与安装包](#打包与安装包)。 |
 | `CGO_ENABLED=1 CC=x86_64-w64-mingw32-gcc GOOS=windows GOARCH=amd64 go build ./...` | Windows 交叉编译检查（OCR 绑定需要 cgo 与 mingw-w64）；只证明能编译，不代表能在 Windows 上运行。需要交叉编译识别测试二进制时把 `build` 换成 `test -c -o <path> ./internal/recognition`。 |
+
+`internal/game/zzz/collect/testdata/maccloud` 的掩码夹具由 `go run ./tools/zzzframemask -src /tmp/m2-samples` 重新生成；来源 SHA、掩码与量化口径见该目录 README。
 
 `go tool mygo build` 亦接受 `-platform` 指定目标，如 `-platform windows/amd64`（在 macOS 上产出 EXE，装有 makensis 时同时产出 NSIS 安装包）。按已确认的测试方式，交给用户测试的 Windows 安装包仍以 GitHub Actions 产物为准，见下节。
 

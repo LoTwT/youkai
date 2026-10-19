@@ -6,24 +6,26 @@ import (
 	"github.com/LoTwT/youkai/internal/platform"
 )
 
-// The page model follows the prescribed navigation sequence over T5's
-// page vocabulary: the warehouse list page (T5 §3's 驱动盘仓库, the grid
-// the machine selects from) and the disc detail page (T5 §4's detail the
-// admission reads), with every other frame — login, cloud queue,
-// reconnect, popups, transition animations, a page the anchors cannot
-// decide — falling to PageUnknown. The matcher owns the judgment of
-// what a frame shows; the state machine only follows verdicts.
+// The page model follows the macOS cloud client's warehouse screen: the
+// list, the detail pane and the wheel share one page (T5 §1/§4). A click
+// only moves the selection border and swaps the detail content, so the
+// matcher reports the list, detail, wheel and funnel evidence of the same
+// frame. The filter panel overlays that page and is the only other page
+// kind; every frame the anchors cannot decide — login, cloud queue,
+// reconnect, popups, transition animations — is PageUnknown. The matcher
+// owns the judgment; the state machine only follows verdicts.
 
 // PageKind identifies one page of the ZZZ drive-disc warehouse.
 type PageKind string
 
 const (
-	// PageWarehouse is the drive-disc warehouse list page: the grid of
-	// discs the traversal selects from.
+	// PageWarehouse: list (left), detail pane (center) and wheel (right)
+	// share one screen on the macOS cloud client; a click only moves the
+	// selection border and swaps the detail content.
 	PageWarehouse PageKind = "warehouse"
-	// PageDiscDetail is the detail view of the selected drive disc — the
-	// page whose stable, attributed capture the traversal admits.
-	PageDiscDetail PageKind = "discDetail"
+	// PageFilterPanel: the filter panel overlays the warehouse; the list is
+	// dimmed and the funnel is unreadable while it is open.
+	PageFilterPanel PageKind = "filterPanel"
 	// PageUnknown is every frame the matcher cannot attribute to a known
 	// page with the evidence it has. It is the zero value on purpose: an
 	// absent verdict must never read as a page.
@@ -43,12 +45,14 @@ func (p PageKind) String() string {
 type Association string
 
 const (
+	// AssociationInitial: the target already carried the selection border
+	// when the position's preparation finished and no click had been sent
+	// yet; the detail was admitted from the stable initial page (T5 §4's
+	// 首次读取已经选中的物品).
+	AssociationInitial Association = "initialVerified"
 	// AssociationTransition: the selection transition was verified — the
-	// pre-click list frame, the click, and the post-click detail whose
+	// pre-click frame, the click, and the post-click detail whose
 	// selection evidence rests on the clicked slot (T5 §4's 选中切换).
-	// Every skeleton admission carries it: the machine always clicks
-	// before it reads, so there is no initial read and no neighbor
-	// round-trip yet (both are calibrated-layout work).
 	AssociationTransition Association = "transitionVerified"
 )
 
@@ -64,9 +68,18 @@ type PageMatch struct {
 	// List carries the warehouse evidence when Page is PageWarehouse;
 	// nil otherwise.
 	List *ListEvidence
-	// Detail carries the detail evidence when Page is PageDiscDetail;
-	// nil otherwise.
+	// Detail carries the detail evidence when Page is PageWarehouse and
+	// the detail pane is decidable; nil otherwise.
 	Detail *DetailEvidence
+	// Wheel carries the wheel position when Page is PageWarehouse; nil
+	// otherwise.
+	Wheel *WheelEvidence
+	// Filter carries the funnel state when Page is PageWarehouse; nil
+	// otherwise. The funnel is unreadable while the panel is open.
+	Filter *FilterEvidence
+	// Panel carries the panel evidence when Page is PageFilterPanel; nil
+	// otherwise.
+	Panel *PanelEvidence
 	// Evidence describes what the verdict rests on — the anchors
 	// consulted and what they showed — for logs, diagnostics and the
 	// admission record. Empty is allowed but unhelpful.
@@ -82,33 +95,67 @@ type ListEvidence struct {
 	// traversal clicks only occupied slots; an unoccupied slot is not a
 	// visit and produces no record (T5 §5's 空格不产生物品记录).
 	Occupied []bool
-	// Top reports visible top evidence — the scrollbar or list structure
-	// that proves the list is at its beginning (T5 §3's 起点: “向上滚动
-	// 很多次”与画面不再变化都不能单独证明顶部). Without it the traversal
-	// refuses to start: a mid-list start cannot be marked as covering
-	// the inventory.
-	Top bool
-	// Bottom reports independent end evidence — the scrollbar bottomed,
-	// the list tail structure, the last occupied slot (T5 §5's 末端证据).
-	// A scroll that changes nothing is not such evidence; only Bottom
-	// completes the walk.
-	Bottom bool
+	// Selected is the slot carrying the selection border; -1 when no slot
+	// in the viewport carries it (the selected item scrolled away). Two
+	// bordered slots make the whole verdict PageUnknown, never a pick.
+	Selected int
+	// Top/Bottom: the scrollbar thumb rests at the track's extremes —
+	// single-frame supporting evidence; the traversal pairs it with a
+	// stationary drag before it believes an end.
+	Top, Bottom bool
 }
 
-// DetailEvidence is what a disc-detail match reports about the shown
-// detail.
+// Quality is the drive disc's rarity as the detail pane shows it. Only S
+// is calibrated: every sample of the macOS cloud client was S, and the
+// A/B badges have no samples yet. QualityNotS exists for the calibrated
+// matcher that eventually learns them; the current matcher never returns
+// it and reports QualityUnknown instead of guessing.
+type Quality string
+
+const (
+	QualityUnknown Quality = ""
+	QualityS       Quality = "S"
+	QualityNotS    Quality = "notS" // only after the A/B badges are calibrated
+)
+
+// DetailEvidence is what the warehouse match reports about the shown
+// detail pane.
 type DetailEvidence struct {
-	// Selected is the layout slot the matcher attributes the shown
-	// detail to — the association evidence between the click's target
-	// and the detail content (T5 §4.1's 选中标记位于该目标 and §4.3's
-	// 选中与详情之间的关联证据). For a layout whose selection marker stays
-	// visible it is the slot the marker rests on; what a separate
-	// detail-page layout uses as its sample-verified association is its
-	// calibrated matcher's business, mapped into the same slot
-	// coordinate. nil means the matcher holds no association evidence:
-	// the detail is not attributable and not admissible.
-	Selected *int
+	Quality  Quality
+	Substats int // 3 or 4; 0 when the line count cannot be determined
 }
+
+// WheelEvidence is the wheel's selected position.
+type WheelEvidence struct{ Position int } // 1..6; 0 when undecidable
+
+// FilterState is the funnel's verdict.
+type FilterState string
+
+const (
+	FilterUnknown FilterState = ""
+	FilterClear   FilterState = "clear"
+	FilterActive  FilterState = "active"
+)
+
+// FilterEvidence is the funnel's state on the warehouse page.
+type FilterEvidence struct{ State FilterState }
+
+// PanelEvidence marks the filter panel as open. The first version only
+// recognizes that the panel is open; its controls are the preparation
+// step's business (4b-2).
+type PanelEvidence struct{}
+
+// DetailComparison is the verdict over the detail-pane line regions of
+// two frames.
+type DetailComparison int
+
+const (
+	// DetailUndecided: the comparison falls between the same and different
+	// thresholds; the caller must not treat it as either.
+	DetailUndecided DetailComparison = iota
+	DetailSame
+	DetailDifferent
+)
 
 // PositionPair is one unique overlap correspondence of a verified
 // scroll (the scan JSON contract's transitions.matches element): the
@@ -122,10 +169,18 @@ type PositionPair struct {
 // ScrollMatch is the matcher's verdict over one scroll transition
 // between the stable warehouse frames before and after a drag.
 type ScrollMatch struct {
+	// Stationary: the list verifiably did not move — the list region's
+	// error at zero displacement is below the stationary threshold. This
+	// is the evidence behind "drag again and nothing changes", but it is
+	// not end evidence by itself (T5 §5).
+	Stationary bool
 	// Displaced reports the list actually moved — real displacement
 	// evidence from the overlap regions (T5 §5: 滚轮刻度、滚动时长或
 	// “图变了”都不算位移证据). A drag that changed nothing leaves it false.
 	Displaced bool
+	// Rows is the verified displacement in whole rows (1..Rows-1); 0 when
+	// the verdict is not Displaced.
+	Rows int
 	// Matches are the unique one-to-one correspondences of the overlap
 	// positions. They are the only thing that lets the traversal carry
 	// its visited-position bookkeeping across the scroll; without them
@@ -133,6 +188,10 @@ type ScrollMatch struct {
 	// ones and the machine stops rather than guessing (T5 §5's 存在多个
 	// 可能对应关系时不任选一个).
 	Matches []PositionPair
+	// Lost: the list moved but no acceptable alignment was found in the
+	// overlap range (a fling overshot it). The position is at risk; the
+	// machine stops rather than guessing how far it went.
+	Lost bool
 	// Evidence describes what the verdict rests on, in prose.
 	Evidence string
 }
@@ -140,11 +199,9 @@ type ScrollMatch struct {
 // Matcher is the traversal's evidence engine: it turns frames into the
 // page verdicts and position evidence T5's navigation and admission
 // rules consume. The interface is the contract; implementations may
-// hold per-session state (a calibrated matcher tracks the list position
-// across frames, for example), and PR 4c ships only the honest empty
-// semantics (Uncalibrated). The real implementation — pixel anchors
-// sampled from the supported display configurations — arrives with
-// 4b's field calibration and is injected through the Inventory.
+// hold per-session state. PixelMatcher is the calibrated implementation
+// for the macOS cloud layout; Uncalibrated remains the honest fallback
+// when no calibration is injected.
 type Matcher interface {
 	// Match reports which page the frame shows. It consumes the whole
 	// frame — image, content region and geometry version — and never
@@ -158,12 +215,16 @@ type Matcher interface {
 	// back (bounds, one-to-one, uniform displacement, full overlap
 	// coverage) and refuses the transition otherwise.
 	MatchScroll(before, after platform.Frame) ScrollMatch
+	// CompareDetail compares the detail-pane line regions of two frames.
+	// The comparison is the association evidence between the pre-click
+	// frame and the frame after the click; it never substitutes for the
+	// selection border.
+	CompareDetail(a, b platform.Frame) DetailComparison
 }
 
-// Uncalibrated is the matcher of the pre-calibration era: without the
-// anchors 4b's field sampling still has to produce, there is no honest
-// page or correspondence evidence, so every verdict is “cannot
-// determine”. A traversal running on it fails its precheck
+// Uncalibrated is the no-calibration fallback: without the anchors there
+// is no honest page, correspondence or detail evidence, so every verdict
+// is “cannot determine”. A traversal running on it fails its precheck
 // (pageUnverified) instead of guessing — the empty-value semantics the
 // layout contract promises.
 type Uncalibrated struct{}
@@ -183,4 +244,9 @@ func (Uncalibrated) MatchScroll(before, after platform.Frame) ScrollMatch {
 		Evidence: fmt.Sprintf("no calibrated matcher: frames %d → %d cannot be given a displacement verdict without sampled anchors",
 			before.ID, after.ID),
 	}
+}
+
+// CompareDetail implements Matcher: no calibration, no comparison.
+func (Uncalibrated) CompareDetail(a, b platform.Frame) DetailComparison {
+	return DetailUndecided
 }
