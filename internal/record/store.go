@@ -201,6 +201,16 @@ type RecordInfo struct {
 	// SavedAt is the modification time of the newest generation file;
 	// the zero time when none exists.
 	SavedAt time.Time
+	// TotalBytes is the record directory's regular-file footprint,
+	// checkpoints, resources and evidence included; symbolic links are
+	// not followed. It is measured while listing, so a caller lists on a
+	// background goroutine.
+	TotalBytes int64
+	// EvidenceBytes is the footprint of the evidence directory, and
+	// EvidenceFiles its regular-file count. These are what deleting the
+	// screenshots can reclaim.
+	EvidenceBytes int64
+	EvidenceFiles int
 }
 
 // ListRecords lists the saved records below the root, newest save first
@@ -213,6 +223,12 @@ type RecordInfo struct {
 func (s *Store) ListRecords() ([]RecordInfo, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.listRecordsLocked()
+}
+
+// listRecordsLocked is ListRecords without the lock, so other store
+// operations can share the listing. Callers hold mu.
+func (s *Store) listRecordsLocked() ([]RecordInfo, error) {
 	entries, err := s.fs.ReadDir(s.recordDirParent())
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
@@ -239,6 +255,13 @@ func (s *Store) ListRecords() ([]RecordInfo, error) {
 			// the listing stays best-effort, and Load is the operation
 			// that reports unreadable generations properly.
 		}
+		usage, err := s.usageLocked(e.Name())
+		if err != nil {
+			return nil, fmt.Errorf("record: list records: usage of %q: %w", e.Name(), err)
+		}
+		info.TotalBytes = usage.TotalBytes
+		info.EvidenceBytes = usage.EvidenceBytes
+		info.EvidenceFiles = usage.EvidenceFiles
 		infos = append(infos, info)
 	}
 	slices.SortFunc(infos, func(a, b RecordInfo) int {

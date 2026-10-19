@@ -32,6 +32,7 @@ const (
 	faultSync
 	faultClose
 	faultRemove
+	faultRemoveAll
 )
 
 type faultRule struct {
@@ -74,6 +75,8 @@ func (f *faultFS) MkdirAll(dir string, perm fs.FileMode) error { return f.inner.
 
 func (f *faultFS) Stat(path string) (fs.FileInfo, error) { return f.inner.Stat(path) }
 
+func (f *faultFS) Lstat(path string) (fs.FileInfo, error) { return f.inner.Lstat(path) }
+
 func (f *faultFS) ReadDir(dir string) ([]fs.DirEntry, error) { return f.inner.ReadDir(dir) }
 
 func (f *faultFS) Remove(path string) error {
@@ -81,6 +84,13 @@ func (f *faultFS) Remove(path string) error {
 		return r.err
 	}
 	return f.inner.Remove(path)
+}
+
+func (f *faultFS) RemoveAll(path string) error {
+	if r := f.rule(faultRemoveAll, path); r != nil {
+		return r.err
+	}
+	return f.inner.RemoveAll(path)
 }
 
 func (f *faultFS) OpenFile(path string, flag int, perm fs.FileMode) (File, error) {

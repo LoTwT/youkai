@@ -42,6 +42,26 @@ type Service interface {
 	// SaveItemRevision appends one manual revision to a produced item and
 	// returns the updated item.
 	SaveItemRevision(recordID string, sequence, expectedRevision int64, edit app.ItemRevisionEdit) (app.ItemRevisionResult, error)
+	// DeleteRecordScreenshots deletes one record's screenshots while
+	// keeping its data, revisions and review state.
+	DeleteRecordScreenshots(recordID string) (record.EvidenceRemoval, error)
+	// DeleteAllScreenshots deletes every record's screenshots.
+	DeleteAllScreenshots() (record.EvidenceBatch, error)
+	// DeleteRecord permanently deletes one record and its screenshots.
+	DeleteRecord(recordID string) (record.RecordDeletion, error)
+	// DeleteAllRecords permanently deletes every record.
+	DeleteAllRecords() (record.RecordDeletionBatch, error)
+	// PreviewRecordScreenshots measures one record's screenshot deletion.
+	PreviewRecordScreenshots(recordID string) (app.CleanupPreview, error)
+	// PreviewAllScreenshots measures deleting every record's screenshots.
+	PreviewAllScreenshots() (app.CleanupPreview, error)
+	// PreviewRecordDeletion measures deleting one record.
+	PreviewRecordDeletion(recordID string) (app.CleanupPreview, error)
+	// PreviewAllRecords measures deleting every record.
+	PreviewAllRecords() (app.CleanupPreview, error)
+	// StorageUsage measures records, screenshots, cache, logs and the
+	// free space of the data volume.
+	StorageUsage() (app.StorageUsage, error)
 	// Quit runs the explicit-exit wrap-up; it blocks until it is done.
 	Quit() error
 }
@@ -163,6 +183,20 @@ type Model struct {
 	recData *record.Recovery
 	recErr  string
 
+	// Screenshot/history cleanup. savePrompt is the post-save three-way
+	// choice; promptedSessions remembers the sessions it was settled for,
+	// so "稍后处理" never reopens it. cleanup is the preview awaiting
+	// confirmation, and storage is the storeroom view's last successful
+	// measurement (nil after a failure — old numbers are never shown as
+	// exact).
+	savePrompt       *savePrompt
+	promptedSessions map[string]bool
+	cleanup          *cleanupPrompt
+	cleanupNotice    string
+	storage          *app.StorageUsage
+	storageErr       string
+	storageLoading   bool
+
 	// The export controls' frozen usable-data snapshot and outcome. The
 	// snapshot is rebuilt on every record load and saved item, and both
 	// formats are rendered from it.
@@ -228,10 +262,11 @@ func New(cfg Config) *Model {
 		limit = evidenceCacheLimit
 	}
 	m := &Model{
-		cfg:    cfg,
-		source: cfg.ScanSource,
-		split:  520,
-		cache:  newEvidenceCache(cfg.Evidence, limit),
+		cfg:              cfg,
+		source:           cfg.ScanSource,
+		split:            520,
+		cache:            newEvidenceCache(cfg.Evidence, limit),
+		promptedSessions: make(map[string]bool),
 	}
 	if cfg.Updates != nil {
 		m.updates = cfg.Updates
@@ -252,6 +287,7 @@ func (m *Model) Attach(upd Updater) {
 	}
 	m.upd = upd
 	m.loadHistory()
+	m.refreshStorage()
 }
 
 // update applies fn on the UI thread: in the window through Updater, which
@@ -300,6 +336,13 @@ func (m *Model) Apply(snap app.Snapshot) {
 	// thrown away by a scan starting behind the user's back.
 	if snap.SessionID != "" && snap.SessionID != prevSession {
 		busyEditing := m.reviewSaving || m.editingDirty()
+		if m.savePrompt != nil && m.savePrompt.recordID != string(snap.SessionID) {
+			// A new scan replaces the results view; the old session's
+			// prompt is settled as postponed instead of floating over
+			// unrelated content.
+			m.promptedSessions[m.savePrompt.recordID] = true
+			m.savePrompt = nil
+		}
 		if busyEditing && m.rec != nil && m.rec.ID != string(snap.SessionID) {
 			m.rec.Live = false // the previous session's record is history now
 			m.reviewNotice = "新的扫描已开始；保存或放弃当前编辑后可查看本次扫描。"
@@ -325,7 +368,11 @@ func (m *Model) Apply(snap app.Snapshot) {
 	// termination and saved revision are the final ones. The idle snapshot
 	// at startup loads history once via Attach.
 	if prevBusy && !snap.Busy && snap.SessionID != "" {
+		if snap.SaveError == "" && snap.Scan.Phase == scan.PhaseEnded {
+			m.requestSavePrompt(string(snap.SessionID))
+		}
 		m.loadHistory()
+		m.refreshStorage()
 		if !reloadedLive && m.rec != nil && m.rec.Live && m.rec.ID == string(snap.SessionID) &&
 			!m.editingDirty() && !m.reviewSaving {
 			m.liveSavedShown = snap.SavedCount
