@@ -1465,6 +1465,11 @@ func (run *inventoryRun) scroll(ctx context.Context) error {
 		}
 		switch {
 		case out.lost:
+			if out.unsettled {
+				return scan.NewFault(CodePositionLost, fmt.Errorf(
+					"collect: the list displaced but did not settle within the scroll budget, so its final position is unverified (last candidate frame %d): %s",
+					out.after.ID, out.match.Evidence))
+			}
 			return scan.NewFault(CodePositionLost, fmt.Errorf(
 				"collect: the list displaced but no unique correspondence verified where it went (frame %d): %s",
 				out.after.ID, out.match.Evidence))
@@ -1538,6 +1543,10 @@ type scrollOutcome struct {
 	stationary bool
 	displaced  bool
 	lost       bool
+	// unsettled reports a displacement that never settled relative to its
+	// candidate within the budget. It is a Lost outcome, but the position
+	// was verified to have moved; only where it finally stopped is unknown.
+	unsettled  bool
 	after      platform.Frame
 	afterMatch PageMatch
 	match      ScrollMatch
@@ -1586,7 +1595,7 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 				case haveCandidate:
 					// A displacement was seen but never settled: commit
 					// nothing and stop at the unverified position (T5 §5).
-					out.lost = true
+					out.lost, out.unsettled = true, true
 					out.after, out.afterMatch, out.match = candidate, candidateMatch, candidateScroll
 				case sawLost || sawAmbiguous:
 					out.lost = true

@@ -228,6 +228,9 @@ func TestAwaitScrollWithoutSettlingIsLost(t *testing.T) {
 	if !out.lost || out.displaced || out.stationary {
 		t.Fatalf("outcome %+v, want Lost and no commit", out)
 	}
+	if !out.unsettled {
+		t.Fatalf("outcome %+v, want the lost displacement marked as unsettled", out)
+	}
 	if run.viewport != 0 {
 		t.Fatalf("viewport advanced to %d without a settling confirmation", run.viewport)
 	}
