@@ -362,7 +362,7 @@ func (c *admitFailureController) Collect(ctx context.Context, h *scan.Controller
 			Detail: &DetailEvidence{Quality: QualityS, Substats: 3},
 		},
 	}
-	err := run.admit(slot, out, platform.Frame{}, 0, 0, 0, AssociationTransition, 0, nil, 1, "scripted slot")
+	err := run.admit(slot, out, platform.Frame{}, PageMatch{}, 0, 0, 0, AssociationTransition, 0, nil, 1, "scripted slot")
 	c.errCh <- err
 	return err
 }

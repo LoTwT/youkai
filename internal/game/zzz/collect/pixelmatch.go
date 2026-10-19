@@ -100,6 +100,16 @@ func (m *PixelMatcher) Match(f platform.Frame) PageMatch {
 				f.ID, i, bar, m.C.BarEmptyMax, m.C.BarOccupiedMin)
 		}
 	}
+	// Management badges and equipped-agent avatars are per-cell evidence.
+	// An unreadable badge or avatar stays unknown; it never becomes none or
+	// absent.
+	management := make([]ManagementState, len(m.L.Slots))
+	avatars := make([]AvatarState, len(m.L.Slots))
+	for i := range m.L.Slots {
+		management[i] = m.managementState(f.Image, m.L.ManagementRect(i))
+		avatars[i] = m.avatarState(f.Image, m.L.AvatarRect(i))
+	}
+	topManagement := m.topManagement(f.Image)
 	selected := -1
 	for i := range m.L.Slots {
 		hits := countSelectionPixels(f.Image, m.L.BorderRect(i))
@@ -126,8 +136,16 @@ func (m *PixelMatcher) Match(f platform.Frame) PageMatch {
 	}
 	evidence += ")"
 	return PageMatch{
-		Page:     PageWarehouse,
-		List:     &ListEvidence{Occupied: occupied, Selected: selected, Top: top, Bottom: bottom},
+		Page: PageWarehouse,
+		List: &ListEvidence{
+			Occupied:      occupied,
+			Selected:      selected,
+			Management:    management,
+			Avatars:       avatars,
+			TopManagement: topManagement,
+			Top:           top,
+			Bottom:        bottom,
+		},
 		Detail:   detail,
 		Wheel:    &WheelEvidence{Position: position},
 		Filter:   &FilterEvidence{State: filter},
@@ -149,6 +167,7 @@ func (m *PixelMatcher) detailEvidence(img *image.RGBA) *DetailEvidence {
 	if m.goldCount(img, m.L.QualityBadge) >= m.C.QualityGoldMin {
 		ev.Quality = QualityS
 	}
+	ev.Avatar = m.avatarState(img, m.L.DetailAvatar)
 	switch ink := m.inkCount(img, m.L.Substat4Probe, m.C.InkThreshold); {
 	case ink >= m.C.Substat4InkMin:
 		ev.Substats = 4
@@ -167,6 +186,171 @@ func (m *PixelMatcher) detailLine(role string) image.Rectangle {
 		}
 	}
 	return image.Rectangle{}
+}
+
+// managementState classifies one cell's bottom-right management badge.
+// A red trash glyph is discarded; a bright neutral annulus around a
+// mostly hollow center is the lock; neither is none. Counts that fall
+// between the calibrated tiers, or a region that shows both a lock ring
+// and red trash pixels, are unknown. The lock's flash means one frame can
+// lose the annulus; callers combine several frames rather than treating a
+// single dim frame as none.
+func (m *PixelMatcher) managementState(img *image.RGBA, r image.Rectangle) ManagementState {
+	c := rectCenter(r)
+	red, ring, core := 0, 0, 0
+	for y := r.Min.Y; y < r.Max.Y; y++ {
+		for x := r.Min.X; x < r.Max.X; x++ {
+			i := img.PixOffset(x, y)
+			redValue, green, blue := int(img.Pix[i]), int(img.Pix[i+1]), int(img.Pix[i+2])
+			if redValue > 90 && redValue > green+40 && redValue > blue+40 && green < 80 {
+				red++
+			}
+			dx, dy := x-c.X, y-c.Y
+			d2 := dx*dx + dy*dy
+			if neutral(redValue, green, blue, 110, 50) {
+				if d2 >= 49 && d2 <= 169 {
+					ring++
+				}
+				if d2 <= 36 {
+					core++
+				}
+			}
+		}
+	}
+	switch {
+	case red >= m.C.ManagementDiscardRedMin && ring < m.C.ManagementLockRingMin:
+		return ManagementDiscarded
+	case red <= m.C.ManagementClearRedMax && ring >= m.C.ManagementLockRingMin &&
+		core <= m.C.ManagementLockCoreMax:
+		return ManagementLocked
+	case red <= m.C.ManagementClearRedMax && ring <= m.C.ManagementClearRingMax:
+		return ManagementNone
+	default:
+		return ManagementUnknown
+	}
+}
+
+// avatarState classifies an equipped-agent avatar probe. Present requires
+// a bright neutral annulus covering most directions around a portrait-like
+// core (bright enough and with enough internal range); absent requires
+// both a missing ring and an empty core. Everything else is unknown: a
+// selection corner glow or a partially covered avatar must not become
+// either answer.
+func (m *PixelMatcher) avatarState(img *image.RGBA, r image.Rectangle) AvatarState {
+	c := rectCenter(r)
+	var sectors [8]int
+	ring := 0
+	coreN, coreSum, coreMin, coreMax := 0, 0, 255, 0
+	for y := r.Min.Y; y < r.Max.Y; y++ {
+		for x := r.Min.X; x < r.Max.X; x++ {
+			i := img.PixOffset(x, y)
+			red, green, blue := int(img.Pix[i]), int(img.Pix[i+1]), int(img.Pix[i+2])
+			dx, dy := x-c.X, y-c.Y
+			d2 := dx*dx + dy*dy
+			if d2 >= 81 && d2 <= 225 && neutral(red, green, blue, 100, 65) {
+				ring++
+				angle := math.Atan2(float64(dy), float64(dx)) + math.Pi
+				sector := int(angle / (math.Pi / 4))
+				if sector > 7 {
+					sector = 7
+				}
+				sectors[sector]++
+			}
+			if d2 <= 64 {
+				value := (red + green + blue) / 3
+				coreN++
+				coreSum += value
+				if value < coreMin {
+					coreMin = value
+				}
+				if value > coreMax {
+					coreMax = value
+				}
+			}
+		}
+	}
+	if coreN == 0 {
+		return AvatarUnknown
+	}
+	mean := coreSum / coreN
+	covered := 0
+	for _, n := range sectors {
+		if n >= 4 {
+			covered++
+		}
+	}
+	switch {
+	case ring >= m.C.AvatarRingMin && covered >= m.C.AvatarRingSectorsMin &&
+		mean >= m.C.AvatarCoreMeanMin && coreMax-coreMin >= m.C.AvatarCoreRangeMin:
+		return AvatarPresent
+	case ring <= m.C.AvatarAbsentRingMax && mean <= m.C.AvatarAbsentCoreMeanMax:
+		return AvatarAbsent
+	default:
+		return AvatarUnknown
+	}
+}
+
+// topManagement classifies the detail page's lock indicator: a filled
+// dim circle means locked, an open circle with a bright glyph means
+// unlocked. The indicator only confirms the locked dimension; the list
+// badge remains the source of discarded versus none.
+func (m *PixelMatcher) topManagement(img *image.RGBA) TopManagementState {
+	r := m.L.TopManagement
+	c := rectCenter(r)
+	radius := r.Dx()
+	if r.Dy() < radius {
+		radius = r.Dy()
+	}
+	radius = radius/2 - 2
+	if radius <= 0 {
+		return TopManagementUnknown
+	}
+	dim, bright := 0, 0
+	for y := r.Min.Y; y < r.Max.Y; y++ {
+		for x := r.Min.X; x < r.Max.X; x++ {
+			dx, dy := x-c.X, y-c.Y
+			if dx*dx+dy*dy > radius*radius {
+				continue
+			}
+			i := img.PixOffset(x, y)
+			red, green, blue := int(img.Pix[i]), int(img.Pix[i+1]), int(img.Pix[i+2])
+			if neutral(red, green, blue, 150, 50) {
+				bright++
+			}
+			if neutral(red, green, blue, 80, 60) {
+				dim++
+			}
+		}
+	}
+	switch {
+	case dim >= m.C.TopLockedDimMin:
+		return TopManagementLocked
+	case bright >= m.C.TopUnlockedBrightMin && dim <= m.C.TopUnlockedDimMax:
+		return TopManagementUnlocked
+	default:
+		return TopManagementUnknown
+	}
+}
+
+// neutral reports whether a pixel reaches a brightness floor with little
+// channel spread, the property shared by the lock annulus, avatar ring and
+// top indicator's neutral UI.
+func neutral(r, g, b, minBrightness, maxSpread int) bool {
+	max := r
+	if g > max {
+		max = g
+	}
+	if b > max {
+		max = b
+	}
+	min := r
+	if g < min {
+		min = g
+	}
+	if b < min {
+		min = b
+	}
+	return max >= minBrightness && max-min <= maxSpread
 }
 
 // wheelPosition counts selection-colored pixels in the four arc probes of

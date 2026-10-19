@@ -33,6 +33,10 @@ func TestMacCloudLayoutValidatesAndFitsContent(t *testing.T) {
 	if l.PanelS != image.Pt(1225, 615) {
 		t.Fatalf("panel S control %v, want the sample frame's (1225,615)", l.PanelS)
 	}
+	if l.Cell.Management.Empty() || l.Cell.Avatar.Empty() ||
+		l.DetailAvatar.Empty() || l.TopManagement.Empty() {
+		t.Fatalf("management/avatar probes must be calibrated: %+v", l)
+	}
 	if m := collect.NewPixelMatcher(l, collect.MacCloudCalibration()); m == nil {
 		t.Fatal("the matcher must construct")
 	}
@@ -66,6 +70,8 @@ func TestLayoutValidateRefusesBroken(t *testing.T) {
 		{"empty slot", func(l *collect.Layout) { l.Slots[0] = image.Rect(0, 0, 0, 0) }},
 		{"empty border probe", func(l *collect.Layout) { l.Cell.Border = image.Rectangle{} }},
 		{"empty bar probe", func(l *collect.Layout) { l.Cell.Bar = image.Rectangle{} }},
+		{"empty management probe", func(l *collect.Layout) { l.Cell.Management = image.Rectangle{} }},
+		{"empty avatar probe", func(l *collect.Layout) { l.Cell.Avatar = image.Rectangle{} }},
 		{"zero row pitch", func(l *collect.Layout) { l.RowPitch = 0 }},
 		{"empty viewport", func(l *collect.Layout) { l.ListViewport = image.Rectangle{} }},
 		{"empty scroll track", func(l *collect.Layout) { l.ScrollTrack = image.Rectangle{} }},
@@ -83,6 +89,8 @@ func TestLayoutValidateRefusesBroken(t *testing.T) {
 		{"detail line without role", func(l *collect.Layout) { l.DetailLines[0].Role = "" }},
 		{"empty detail line", func(l *collect.Layout) { l.DetailLines[0].Rect = image.Rectangle{} }},
 		{"empty quality badge", func(l *collect.Layout) { l.QualityBadge = image.Rectangle{} }},
+		{"empty detail avatar", func(l *collect.Layout) { l.DetailAvatar = image.Rectangle{} }},
+		{"empty top management", func(l *collect.Layout) { l.TopManagement = image.Rectangle{} }},
 		{"empty substat-4 probe", func(l *collect.Layout) { l.Substat4Probe = image.Rectangle{} }},
 		{"missing S control", func(l *collect.Layout) { l.PanelS = image.Point{} }},
 		{"S control outside content", func(l *collect.Layout) { l.PanelS = image.Pt(1700, 615) }},
@@ -123,6 +131,24 @@ func TestLayoutFitsContent(t *testing.T) {
 		t.Fatalf("a detail line below the content region must not fit")
 	}
 
+	outsideDetailAvatar := l
+	outsideDetailAvatar.DetailAvatar = image.Rect(1600, 250, 1700, 294)
+	if outsideDetailAvatar.FitsContent(content) {
+		t.Fatal("a detail avatar outside the content region must not fit")
+	}
+
+	outsideTop := l
+	outsideTop.TopManagement = image.Rect(1600, 118, 1700, 166)
+	if outsideTop.FitsContent(content) {
+		t.Fatal("a top management indicator outside the content region must not fit")
+	}
+
+	outsideCell := l
+	outsideCell.Cell.Management = image.Rect(1200, 4, 1230, 34)
+	if outsideCell.FitsContent(content) {
+		t.Fatal("a per-cell badge outside the content region must not fit")
+	}
+
 	outsideS := l
 	outsideS.PanelS = image.Pt(1700, 615)
 	if outsideS.FitsContent(content) {
@@ -140,6 +166,12 @@ func TestMacCloudCalibrationRejectsUnorderedTiers(t *testing.T) {
 		{"wheel overlap", func(c *collect.Calibration) { c.WheelSelectedMin = c.WheelOtherMax }},
 		{"detail bands overlap", func(c *collect.Calibration) { c.DetailDifferentMin = c.DetailSameMax }},
 		{"substat bands overlap", func(c *collect.Calibration) { c.Substat4InkMin = c.Substat3InkMax }},
+		{"management bands overlap", func(c *collect.Calibration) { c.ManagementLockRingMin = c.ManagementClearRingMax }},
+		{"management red bands overlap", func(c *collect.Calibration) { c.ManagementDiscardRedMin = c.ManagementClearRedMax }},
+		{"avatar ring missing", func(c *collect.Calibration) { c.AvatarRingMin = 0 }},
+		{"avatar sectors out of range", func(c *collect.Calibration) { c.AvatarRingSectorsMin = 9 }},
+		{"avatar core bands overlap", func(c *collect.Calibration) { c.AvatarCoreMeanMin = c.AvatarAbsentCoreMeanMax }},
+		{"top management bands overlap", func(c *collect.Calibration) { c.TopLockedDimMin = c.TopUnlockedDimMax }},
 		{"scroll thresholds unordered", func(c *collect.Calibration) { c.ScrollDisplacedMax = c.ScrollStationaryMax }},
 	}
 	for _, tc := range cases {

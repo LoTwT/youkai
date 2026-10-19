@@ -151,7 +151,10 @@ func structuredDisc(obs Observation, lines []RecognizedLine) *zzz.StructuredDisc
 		return nil
 	}
 	rec, issues := zzz.ParseDetail(detail)
-	structured := zzz.ToStructured(rec, obs.Rarity, issues)
+	structured := zzz.ToStructuredWithState(rec, obs.Rarity, zzz.CaptureState{
+		ManagementState: obs.ManagementState,
+		EquippedState:   obs.EquippedState,
+	}, issues)
 	return &structured
 }
 

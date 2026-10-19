@@ -75,11 +75,14 @@ type ColorProbe struct {
 }
 
 // CellProbes are the per-cell evidence regions, relative to the cell's
-// center: the selection border immediately left of the cell and the
-// rarity bar along its bottom edge.
+// center: the selection border immediately left of the cell, the rarity
+// bar along its bottom edge, the management badge in the bottom-right
+// corner and the equipped-agent avatar in the top-right corner.
 type CellProbes struct {
-	Border image.Rectangle
-	Bar    image.Rectangle
+	Border     image.Rectangle
+	Bar        image.Rectangle
+	Management image.Rectangle
+	Avatar     image.Rectangle
 }
 
 // Layout is one display configuration's calibrated anchor set (T5 §3
@@ -175,6 +178,15 @@ type Layout struct {
 	// QualityBadge is the rarity badge next to the level line. Only S is
 	// calibrated; every sample of the macOS cloud client was S.
 	QualityBadge image.Rectangle
+	// DetailAvatar is the equipped-agent avatar immediately right of the
+	// level line. Its presence is the primary equipment evidence; the
+	// list cell's top-right avatar confirms it.
+	DetailAvatar image.Rectangle
+	// TopManagement is the lock/state indicator immediately left of the
+	// detail page's dismantle control. It confirms the list badge's
+	// locked/not-locked dimension; the icon cannot distinguish discarded
+	// from none, so the list badge remains the source of that distinction.
+	TopManagement image.Rectangle
 	// Substat4Probe is the value column of the fourth substat row. A
 	// three-substat disc shows the set-effect label there instead, so this
 	// probe distinguishes 3 from 4 substats (design §2).
@@ -211,6 +223,12 @@ func (l Layout) Validate() error {
 	}
 	if l.Cell.Bar.Empty() {
 		return fmt.Errorf("collect: layout: the occupancy-bar probe is empty")
+	}
+	if l.Cell.Management.Empty() {
+		return fmt.Errorf("collect: layout: the management-badge probe is empty")
+	}
+	if l.Cell.Avatar.Empty() {
+		return fmt.Errorf("collect: layout: the cell-avatar probe is empty")
 	}
 	if l.RowPitch <= 0 {
 		return fmt.Errorf("collect: layout: row pitch is %d; it must be positive", l.RowPitch)
@@ -270,6 +288,12 @@ func (l Layout) Validate() error {
 	if l.QualityBadge.Empty() {
 		return fmt.Errorf("collect: layout: the quality badge probe is empty")
 	}
+	if l.DetailAvatar.Empty() {
+		return fmt.Errorf("collect: layout: the detail-avatar probe is empty")
+	}
+	if l.TopManagement.Empty() {
+		return fmt.Errorf("collect: layout: the top management-indicator probe is empty")
+	}
 	if l.Substat4Probe.Empty() {
 		return fmt.Errorf("collect: layout: the substat-4 probe is empty")
 	}
@@ -309,14 +333,15 @@ func (l Layout) FitsContent(content image.Rectangle) bool {
 		}
 	}
 	for i := range l.Slots {
-		if !inside(l.BorderRect(i)) || !inside(l.BarRect(i)) {
+		if !inside(l.BorderRect(i)) || !inside(l.BarRect(i)) ||
+			!inside(l.ManagementRect(i)) || !inside(l.AvatarRect(i)) {
 			return false
 		}
 	}
 	if !inside(l.ListViewport) || !inside(l.ScrollTrack) || !inside(l.Funnel.At) {
 		return false
 	}
-	if !inside(l.QualityBadge) || !inside(l.Substat4Probe) {
+	if !inside(l.QualityBadge) || !inside(l.DetailAvatar) || !inside(l.TopManagement) || !inside(l.Substat4Probe) {
 		return false
 	}
 	for _, p := range l.PanelOpen {
@@ -353,9 +378,9 @@ func (l Layout) FitsContent(content image.Rectangle) bool {
 // and expects the same verdict. MatchScroll additionally reads
 // ListViewport, which is a declared layout field and is included here.
 func (l Layout) ReadRegions() []image.Rectangle {
-	regions := make([]image.Rectangle, 0, len(l.Slots)*2+len(l.DetailLines)+len(l.PanelOpen)+len(l.Wheel)*len(l.WheelArcs)+6)
+	regions := make([]image.Rectangle, 0, len(l.Slots)*4+len(l.DetailLines)+len(l.PanelOpen)+len(l.Wheel)*len(l.WheelArcs)+8)
 	for i := range l.Slots {
-		regions = append(regions, l.BorderRect(i), l.BarRect(i))
+		regions = append(regions, l.BorderRect(i), l.BarRect(i), l.ManagementRect(i), l.AvatarRect(i))
 	}
 	regions = append(regions, l.ListViewport, l.ScrollTrack, l.Funnel.At)
 	for _, p := range l.PanelOpen {
@@ -369,7 +394,7 @@ func (l Layout) ReadRegions() []image.Rectangle {
 	for _, line := range l.DetailLines {
 		regions = append(regions, line.Rect)
 	}
-	return append(regions, l.QualityBadge, l.Substat4Probe)
+	return append(regions, l.QualityBadge, l.DetailAvatar, l.TopManagement, l.Substat4Probe)
 }
 
 // BorderRect is slot i's selection-border probe in frame pixels.
@@ -380,6 +405,16 @@ func (l Layout) BorderRect(i int) image.Rectangle {
 // BarRect is slot i's occupancy-bar probe in frame pixels.
 func (l Layout) BarRect(i int) image.Rectangle {
 	return l.Cell.Bar.Add(slotCenterOf(l.Slots[i]))
+}
+
+// ManagementRect is slot i's management-badge probe in frame pixels.
+func (l Layout) ManagementRect(i int) image.Rectangle {
+	return l.Cell.Management.Add(slotCenterOf(l.Slots[i]))
+}
+
+// AvatarRect is slot i's equipped-agent avatar probe in frame pixels.
+func (l Layout) AvatarRect(i int) image.Rectangle {
+	return l.Cell.Avatar.Add(slotCenterOf(l.Slots[i]))
 }
 
 // slotCenter is the click point of slot i: the region's center. The

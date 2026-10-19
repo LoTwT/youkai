@@ -2,6 +2,7 @@
 # Sources: the 2026-10-19 macOS cloud sample round (report §7).
 # sha256 is the full 1920x1080 source frame; regenerate with tools/zzzframemask.
 s2-70-unlocked-equipped	s2-70-unlocked-equipped	frame-0001.png	item	37507eed8f92e5587a2886f89a2beee763a8aa566f2ade21e02761de96a0d64f	role=item;page=warehouse;selected=0;wheel=1;filter=active;quality=S;substats=4
+s2-10-slot1-list-top	s2-10-slot1-list-top	frame-0001.png	item	7e21f613d3052a08219d08ae85e7b135f6d02a58d20406a56ebe8a56c06ec640	role=item;page=warehouse;selected=19;wheel=1;filter=clear;quality=S;substats=3
 s2-d1-discarded-r0c1	s2-d1-discarded-r0c1	frame-0001.png	item	54252c616b9478b8dc3e7d1eb0030c1655377f152c90a0001e3f593eab513193	role=item;page=warehouse;selected=1;wheel=1;filter=active;quality=S;substats=3
 s2-d1-discarded-r0c2	s2-d1-discarded-r0c2	frame-0001.png	item	e7dea2b521ac35d19aff37a540c1946e9d8d701aa3fb24550a7fd078ceeaa91a	role=item;page=warehouse;selected=2;wheel=1;filter=active;quality=S;substats=3
 s2-s1-bot-cell-r0c0	s2-s1-bot-cell-r0c0	frame-0001.png	item	428a0ff9ebc3096636e4a4bfe16530694c2afe0a7ba9d6bb5ef1d646cb6e6d50	role=item;page=warehouse;selected=0;wheel=1;filter=clear;quality=S;substats=4

@@ -489,3 +489,46 @@ func TestGameScanSourceModeInScope(t *testing.T) {
 		}
 	}
 }
+
+// TestProjectDiscObservationCarriesCaptureState checks that the collect
+// side's management/equipment presence and their evidence survive the
+// projection into the app observation; the recognizer must not have to
+// re-read them from the capture JSON.
+func TestProjectDiscObservationCarriesCaptureState(t *testing.T) {
+	l := collect.MacCloudLayout()
+	obs := collect.Observation{
+		Image:    image.NewRGBA(image.Rect(0, 0, 1920, 1080)),
+		Content:  l.Content,
+		FrameID:  7,
+		Geometry: 1,
+		Lines:    []collect.LineRegion{l.DetailLines[0]},
+		Context: []collect.LineRegion{
+			{Role: collect.LineQualityBadge, Rect: l.QualityBadge},
+			{Role: collect.LineSelectedCell, Rect: l.BorderRect(0)},
+		},
+		Quality:            collect.QualityS,
+		ManagementState:    string(collect.ManagementLocked),
+		ManagementEvidence: "list badge locked; top indicator locked",
+		EquippedState:      collect.EquippedStateEquipped,
+		EquippedEvidence:   "detail and list avatar present",
+	}
+	projected, err := ProjectDiscObservation(obs)
+	if err != nil {
+		t.Fatalf("project: %v", err)
+	}
+	got, ok := projected.(Observation)
+	if !ok {
+		t.Fatalf("projected %T, want app.Observation", projected)
+	}
+	if got.ManagementState != obs.ManagementState ||
+		got.ManagementEvidence != obs.ManagementEvidence ||
+		got.EquippedState != obs.EquippedState ||
+		got.EquippedEvidence != obs.EquippedEvidence {
+		t.Fatalf("capture state = %q/%q/%q/%q, want %q/%q/%q/%q",
+			got.ManagementState, got.ManagementEvidence, got.EquippedState, got.EquippedEvidence,
+			obs.ManagementState, obs.ManagementEvidence, obs.EquippedState, obs.EquippedEvidence)
+	}
+	if len(got.Lines) != 1 || len(got.Context) != 2 {
+		t.Fatalf("crops = %d lines/%d context, want 1/2", len(got.Lines), len(got.Context))
+	}
+}

@@ -108,11 +108,64 @@ type ListEvidence struct {
 	// in the viewport carries it (the selected item scrolled away). Two
 	// bordered slots make the whole verdict PageUnknown, never a pick.
 	Selected int
+	// Management is the bottom-right badge verdict per slot, in reading
+	// order: locked, discarded, none, or unknown. Unknown is never none:
+	// a badge the matcher cannot read stays undecided, and the traversal
+	// combines several frames to cover the lock's flash.
+	Management []ManagementState
+	// Avatars is the top-right equipped-agent avatar verdict per slot, in
+	// reading order. Present means the avatar badge is visible; absent
+	// means the corner is a readable empty placeholder; unknown means the
+	// corner is obscured or falls between tiers.
+	Avatars []AvatarState
+	// TopManagement is the detail page's lock indicator for the selected
+	// item, the confirmation evidence for the list badge's locked
+	// dimension. The indicator cannot distinguish discarded from none.
+	TopManagement TopManagementState
 	// Top/Bottom: the scrollbar thumb rests at the track's extremes —
 	// single-frame supporting evidence; the traversal pairs it with a
 	// stationary drag before it believes an end.
 	Top, Bottom bool
 }
+
+// ManagementState is one cell's management badge: the mutually exclusive
+// locked/discarded/none states, or unknown when the badge cannot be read.
+// Unknown must never be collapsed into none.
+type ManagementState string
+
+const (
+	ManagementUnknown   ManagementState = ""
+	ManagementLocked    ManagementState = "locked"
+	ManagementDiscarded ManagementState = "discarded"
+	ManagementNone      ManagementState = "none"
+)
+
+// AvatarState is one avatar probe's verdict. Present and absent are
+// readable answers; unknown is not absent.
+type AvatarState string
+
+const (
+	AvatarUnknown AvatarState = ""
+	AvatarPresent AvatarState = "present"
+	AvatarAbsent  AvatarState = "absent"
+)
+
+// TopManagementState is the detail page's lock indicator: locked (filled
+// circle), unlocked (open circle with a bright glyph), or unknown.
+type TopManagementState string
+
+const (
+	TopManagementUnknown  TopManagementState = ""
+	TopManagementLocked   TopManagementState = "locked"
+	TopManagementUnlocked TopManagementState = "unlocked"
+)
+
+// Equipment-presence vocabulary of an admission. Empty means the
+// evidence was unreadable or conflicting; it is not unequipped.
+const (
+	EquippedStateEquipped   = "equipped"
+	EquippedStateUnequipped = "unequipped"
+)
 
 // Quality is the drive disc's rarity as the detail pane shows it. Only S
 // is calibrated: every sample of the macOS cloud client was S, and the
@@ -132,6 +185,9 @@ const (
 type DetailEvidence struct {
 	Quality  Quality
 	Substats int // 3 or 4; 0 when the line count cannot be determined
+	// Avatar is the level-right equipped-agent avatar: the primary
+	// equipment-presence evidence. Unknown is not absent.
+	Avatar AvatarState
 }
 
 // WheelEvidence is the wheel's selected position.

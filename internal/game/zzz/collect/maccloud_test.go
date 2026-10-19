@@ -122,6 +122,80 @@ func TestMacCloudFixturesAgreeWithRecordedExpectations(t *testing.T) {
 	}
 }
 
+// TestMacCloudManagementAndAvatarVerdicts pins the masked fixtures'
+// management badges, top indicator and avatar presence. The fixtures are
+// quantized, so these assertions also prove the thresholds survive the
+// reduction the checked-in files apply.
+func TestMacCloudManagementAndAvatarVerdicts(t *testing.T) {
+	m := macCloudMatcher()
+	cases := []struct {
+		fixture      string
+		selected     int
+		management   collect.ManagementState
+		top          collect.TopManagementState
+		detailAvatar collect.AvatarState
+		listAvatar   collect.AvatarState
+		otherCells   map[int]collect.ManagementState
+	}{
+		{
+			fixture: "s2-70-unlocked-equipped", selected: 0,
+			management: collect.ManagementNone, top: collect.TopManagementUnlocked,
+			detailAvatar: collect.AvatarPresent, listAvatar: collect.AvatarPresent,
+		},
+		{
+			fixture: "s2-d1-discarded-r0c1", selected: 1,
+			management: collect.ManagementDiscarded, top: collect.TopManagementUnlocked,
+			detailAvatar: collect.AvatarAbsent, listAvatar: collect.AvatarAbsent,
+			otherCells: map[int]collect.ManagementState{0: collect.ManagementLocked, 2: collect.ManagementDiscarded},
+		},
+		{
+			fixture: "s2-s1-bot-cell-r2c0", selected: 8,
+			management: collect.ManagementLocked, top: collect.TopManagementLocked,
+			detailAvatar: collect.AvatarAbsent, listAvatar: collect.AvatarAbsent,
+		},
+		{
+			fixture: "s2-wL-top-cell-r0c1", selected: 1,
+			management: collect.ManagementLocked, top: collect.TopManagementLocked,
+			detailAvatar: collect.AvatarPresent, listAvatar: collect.AvatarPresent,
+		},
+		{
+			fixture: "s2-10-slot1-list-top", selected: 19,
+			management: collect.ManagementDiscarded, top: collect.TopManagementUnlocked,
+			detailAvatar: collect.AvatarAbsent, listAvatar: collect.AvatarAbsent,
+			otherCells: map[int]collect.ManagementState{0: collect.ManagementLocked, 18: collect.ManagementDiscarded},
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.fixture, func(t *testing.T) {
+			pm := m.Match(loadMaskedFrame(t, tc.fixture))
+			if pm.Page != collect.PageWarehouse || pm.List == nil || pm.Detail == nil {
+				t.Fatalf("not a populated warehouse frame: %s", pm.Evidence)
+			}
+			if pm.List.Selected != tc.selected {
+				t.Fatalf("selected %d, want %d", pm.List.Selected, tc.selected)
+			}
+			if got := pm.List.Management[tc.selected]; got != tc.management {
+				t.Fatalf("slot %d management %q, want %q", tc.selected, got, tc.management)
+			}
+			if got := pm.List.TopManagement; got != tc.top {
+				t.Fatalf("top management %q, want %q", got, tc.top)
+			}
+			if got := pm.Detail.Avatar; got != tc.detailAvatar {
+				t.Fatalf("detail avatar %q, want %q", got, tc.detailAvatar)
+			}
+			if got := pm.List.Avatars[tc.selected]; got != tc.listAvatar {
+				t.Fatalf("list avatar %q, want %q", got, tc.listAvatar)
+			}
+			for slot, want := range tc.otherCells {
+				if got := pm.List.Management[slot]; got != want {
+					t.Fatalf("slot %d management %q, want %q", slot, got, want)
+				}
+			}
+		})
+	}
+}
+
 // assertMatchExpectations checks one frame's page evidence against the
 // fixture table's recorded expectations.
 func assertMatchExpectations(t *testing.T, m *collect.PixelMatcher, f platform.Frame, expect map[string]string) {
@@ -435,10 +509,10 @@ func TestMacCloudManifestProvenance(t *testing.T) {
 			t.Fatalf("fixture %s has no expectations", row.name)
 		}
 	}
-	if len(rows) != 69 {
-		t.Fatalf("%d fixtures, want 69 (27 items + panels/filters + wheel + scroll + detail extras + wheel-L cells)", len(rows))
+	if len(rows) != 70 {
+		t.Fatalf("%d fixtures, want 70 (27 items + mixed-badge item + panels/filters + wheel + scroll + detail extras + wheel-L cells)", len(rows))
 	}
-	if roles["item"] != 31 || roles["cell"] != 18 || roles["filter"] != 2 || roles["panel"] != 3 || roles["wheel"] != 5 || roles["scroll"] != 10 {
+	if roles["item"] != 32 || roles["cell"] != 18 || roles["filter"] != 2 || roles["panel"] != 3 || roles["wheel"] != 5 || roles["scroll"] != 10 {
 		t.Fatalf("fixture roles %v do not cover the planned sample groups", roles)
 	}
 	for pos := 1; pos <= 6; pos++ {

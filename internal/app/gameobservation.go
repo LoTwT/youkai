@@ -37,7 +37,16 @@ func ProjectDiscObservation(obs collect.Observation) (any, error) {
 	// Rarity is the traversal's calibrated quality verdict. It is copied
 	// explicitly so the recognizer can attach it without parsing the
 	// capture JSON or inferring a rarity from the recognized text.
-	return Observation{Lines: lines, Context: context, Rarity: string(obs.Quality), Capture: capture}, nil
+	return Observation{
+		Lines:              lines,
+		Context:            context,
+		Rarity:             string(obs.Quality),
+		ManagementState:    obs.ManagementState,
+		ManagementEvidence: obs.ManagementEvidence,
+		EquippedState:      obs.EquippedState,
+		EquippedEvidence:   obs.EquippedEvidence,
+		Capture:            capture,
+	}, nil
 }
 
 // projectRegions copies each region out of the captured frame. The source

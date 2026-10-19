@@ -7,9 +7,11 @@
 // declared probes read (Layout.ReadRegions), paints everything else opaque
 // black, and quantizes the kept pixels so the checked-in PNGs fit the
 // testdata budget. The detail lines and the scroll viewport use a coarser
-// step than the color probes; the rarity badge, the fourth-substat probe and
-// the selection-colored border pixels stay exact because their thresholds
-// are tight.
+// step than the color probes; the management/avatar/top-indicator probes
+// use an even coarser step because their verdicts rest on shape and coarse
+// color counts. The rarity badge, the fourth-substat probe and the
+// selection-colored border pixels stay exact because their thresholds are
+// tight.
 //
 // sources.tsv is the fixture table: one row per source frame with its
 // provenance directory, full-frame SHA-256 and the expectations the
@@ -52,12 +54,13 @@ type fixture struct {
 func main() {
 	src := flag.String("src", "/tmp/m2-samples", "directory holding the recorded s2-* sample directories")
 	out := flag.String("out", filepath.Join("internal", "game", "zzz", "collect", "testdata", "maccloud"), "output fixture directory")
-	step := flag.Int("step", 8, "quantization step for kept pixels")
+	step := flag.Int("step", 16, "quantization step for kept pixels")
 	detailStep := flag.Int("detail-step", 16, "quantization step for the detail text lines")
 	viewportStep := flag.Int("viewport-step", 16, "quantization step for the list viewport of scroll fixtures")
+	stateStep := flag.Int("state-step", 32, "quantization step for per-cell management/avatar probes")
 	flag.Parse()
-	if *step < 1 || *detailStep < 1 || *viewportStep < 1 {
-		fatal("-step, -detail-step and -viewport-step must be positive")
+	if *step < 1 || *detailStep < 1 || *viewportStep < 1 || *stateStep < 1 {
+		fatal("-step, -detail-step, -viewport-step and -state-step must be positive")
 	}
 
 	fixtures, err := readSources()
@@ -91,7 +94,7 @@ func main() {
 		if img.Bounds() != (image.Rectangle{Max: layout.Image}) {
 			fatal("%s: source is %v, want %dx%d", fx.Name, img.Bounds(), layout.Image.X, layout.Image.Y)
 		}
-		masked := mask(img, layout, fx.Mode == "scroll", uint8(*step), uint8(*detailStep), uint8(*viewportStep))
+		masked := mask(img, layout, fx.Mode == "scroll", uint8(*step), uint8(*detailStep), uint8(*viewportStep), uint8(*stateStep))
 		var buf bytes.Buffer
 		enc := png.Encoder{CompressionLevel: png.BestCompression}
 		if err := enc.Encode(&buf, masked); err != nil {
@@ -141,10 +144,12 @@ func readSources() ([]fixture, error) {
 // is the shift matcher's input; item fixtures keep their per-cell probes
 // (which are separate regions inside the viewport) and drop the rest of the
 // grid. The color probes are quantized by step, the detail lines by
-// detailStep, and the scroll viewport by viewportStep; the badge, the
-// fourth-substat probe and the selection-colored border pixels stay exact
-// because their thresholds are tight.
-func mask(src image.Image, layout collect.Layout, keepViewport bool, step, detailStep, viewportStep uint8) *image.RGBA {
+// detailStep, and the scroll viewport by viewportStep; the management,
+// avatar and top-indicator probes use stateStep (they only need coarse
+// shape/color counts, and this keeps the fixture set near its size budget).
+// The badge, the fourth-substat probe and the selection-colored border
+// pixels stay exact because their thresholds are tight.
+func mask(src image.Image, layout collect.Layout, keepViewport bool, step, detailStep, viewportStep, stateStep uint8) *image.RGBA {
 	dst := image.NewRGBA(image.Rectangle{Max: layout.Image})
 	for i := 3; i < len(dst.Pix); i += 4 {
 		dst.Pix[i] = 0xFF
@@ -152,10 +157,21 @@ func mask(src image.Image, layout collect.Layout, keepViewport bool, step, detai
 	exact := map[image.Rectangle]bool{
 		layout.QualityBadge:  true,
 		layout.Substat4Probe: true,
+		layout.Funnel.At:     true,
+	}
+	for _, probe := range layout.PanelOpen {
+		exact[probe.At] = true
 	}
 	borders := make(map[image.Rectangle]bool, len(layout.Slots))
+	cellState := make(map[image.Rectangle]bool, len(layout.Slots)*2)
+	detailState := map[image.Rectangle]bool{
+		layout.DetailAvatar:  true,
+		layout.TopManagement: true,
+	}
 	for i := range layout.Slots {
 		borders[layout.BorderRect(i)] = true
+		cellState[layout.ManagementRect(i)] = true
+		cellState[layout.AvatarRect(i)] = true
 	}
 	detail := make(map[image.Rectangle]bool, len(layout.DetailLines))
 	for _, line := range layout.DetailLines {
@@ -175,6 +191,10 @@ func mask(src image.Image, layout collect.Layout, keepViewport bool, step, detai
 			copyRegion(dst, src, r, 1)
 		case detail[r]:
 			copyRegion(dst, src, r, detailStep)
+		case detailState[r]:
+			copyRegion(dst, src, r, detailStep)
+		case cellState[r]:
+			copyRegion(dst, src, r, stateStep)
 		default:
 			copyRegion(dst, src, r, step)
 		}
