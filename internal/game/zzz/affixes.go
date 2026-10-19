@@ -59,6 +59,18 @@ const (
 	AttrWindDamage         Attribute = "windDamage"         // 风属性伤害加成
 )
 
+// LookupAttributeName resolves an attribute identifier to the zh-CN
+// display name the detail page shows. Unknown identifiers report false;
+// callers keep the identifier itself rather than inventing a name.
+func LookupAttributeName(attribute Attribute) (string, bool) {
+	for i := range attributeTable {
+		if attributeTable[i].attribute == attribute {
+			return attributeTable[i].name, true
+		}
+	}
+	return "", false
+}
+
 // Affix is the identity of one stat kind in one unit — what a main-stat
 // slot may carry and what a substat line may show. health, attack and
 // defense exist in both units; every other attribute has exactly one.
