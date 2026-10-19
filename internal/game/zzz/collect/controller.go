@@ -1,11 +1,10 @@
 // Package collect is the ZZZ game adapter's session controller: the
 // scan.Controller that drives one scan through the unified platform
-// port. PR 4a wires the lifecycle — preflight, open, wait for a ready
-// target, lock the geometry baseline, hand over to the traversal — and
-// provides only the observe-only traversal: no input is dispatched and
-// nothing is admitted; the session exists to rehearse the platform
-// integration end to end. The real traversal (T5) arrives with 4c and
-// works through the same Traversal seam.
+// port. The controller owns the lifecycle — preflight, open, wait for a
+// ready target, lock the geometry baseline, hand over to the traversal
+// (see traversal.go) — while the traversal owns T5's navigation and
+// admission rules. PR 4a wired the lifecycle with the observe-only
+// traversal; PR 4c adds the inventory traversal skeleton beside it.
 //
 // The pure ZZZ field semantics (catalog, disc validation) stay in the
 // parent game/zzz package, which must not grow this package's platform
@@ -23,34 +22,6 @@ import (
 	"github.com/LoTwT/youkai/internal/platform"
 	"github.com/LoTwT/youkai/internal/scan"
 )
-
-// Traversal is the seam between the session controller and the ZZZ
-// inventory traversal (T5). Precheck verifies the page and range
-// preconditions of the locked session; Collect runs the traversal loop
-// under the kernel's capacity and input-permission rules. PR 4a's only
-// implementation is ObserveOnly.
-type Traversal interface {
-	Precheck(ctx context.Context, sess platform.Session) error
-	Collect(ctx context.Context, sess platform.Session, h *scan.ControllerHandle) error
-}
-
-// ObserveOnly is the PR 4a traversal: it dispatches no input, admits no
-// observation and simply holds the session open until the scan context
-// ends — a user stop, a fault or the quit path all arrive through
-// there. Its Precheck deliberately checks nothing: no page evidence
-// exists yet.
-type ObserveOnly struct{}
-
-// Precheck implements Traversal: PR 4a checks nothing.
-func (ObserveOnly) Precheck(ctx context.Context, sess platform.Session) error {
-	return nil
-}
-
-// Collect implements Traversal: wait for the end of the scan.
-func (ObserveOnly) Collect(ctx context.Context, sess platform.Session, h *scan.ControllerHandle) error {
-	<-ctx.Done()
-	return ctx.Err()
-}
 
 // MacCloudTarget is the App Store cloud client's target on macOS, as
 // field round ① identified it (bundle com.miHoYo.cloudgames.Nap).
