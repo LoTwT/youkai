@@ -109,6 +109,7 @@ type scriptedGame struct {
 	// records
 	ops               []platform.InputOp
 	frameCalls        int
+	slotClicks        int
 	pending           []pendingEffect
 	lastFrame         platform.Frame
 	lastSignature     string
@@ -116,6 +117,18 @@ type scriptedGame struct {
 	preActionFrame    platform.Frame
 	actionFinishedAt  time.Time
 	staleFramesServed int
+	// detailKeys maps an item's global index to its rendered detail
+	// content. Two items may share a key, modelling adjacent discs whose
+	// detail pixels are identical. An absent key renders the global index
+	// itself, the original behavior.
+	detailKeys map[int]int
+	// flickerGlobals makes the detail of the given items alternate every
+	// frame, so its comparison never holds a stable run.
+	flickerGlobals map[int]bool
+	// ignoreSlotClickAt silently ignores the Nth grid click (1-based,
+	// counting every position). It models one click that verifiably did
+	// nothing at a chosen point in the sequence.
+	ignoreSlotClickAt int
 }
 
 type pendingEffect struct {
@@ -169,6 +182,16 @@ func (g *scriptedGame) selectInitially(global int) {
 	g.selected = global
 	g.detailGlobal = global
 	g.selectedByPos[g.wheel-1] = global
+}
+
+// detailKey returns the rendered detail content for a selected item.
+func (g *scriptedGame) detailKey(global int) int {
+	if global >= 0 {
+		if key, ok := g.detailKeys[global]; ok {
+			return key
+		}
+	}
+	return global
 }
 
 func (g *scriptedGame) maxTop() int {
@@ -277,6 +300,10 @@ func (g *scriptedGame) signature(geo platform.GeometryVersion) string {
 	if g.detailFlicker && g.frameCalls%2 == 1 {
 		flicker = 1
 	}
+	if g.detailGlobal >= 0 && g.flickerGlobals[g.detailGlobal] && g.frameCalls%2 == 1 {
+		flicker = 1
+	}
+	detail := g.detailKey(g.detailGlobal)
 	// Hash the current position's occupancy so lists with the same length
 	// but different contents produce different frames.
 	var listHash uint64 = 1469598103934665603
@@ -287,7 +314,7 @@ func (g *scriptedGame) signature(geo platform.GeometryVersion) string {
 		listHash *= 1099511628211
 	}
 	return fmt.Sprintf("%d|%d|%s|%d|%d|%d|%d|%d|%v|%v|%v|%v|%v|%v|%x",
-		g.page, g.wheel, g.filter, g.viewport, g.selected, g.detailGlobal, flicker, geo,
+		g.page, g.wheel, g.filter, g.viewport, g.selected, detail, flicker, geo,
 		g.qualityUnknown, g.substatsUnknown, g.substats4, g.forceBottom, g.content, g.globalRows(), listHash)
 }
 
@@ -391,8 +418,8 @@ func (g *scriptedGame) renderDetail(img *image.RGBA) {
 			}
 		}
 	}
-	id := g.detailGlobal
-	if g.detailFlicker && g.frameCalls%2 == 1 {
+	id := g.detailKey(g.detailGlobal)
+	if (g.detailFlicker || g.flickerGlobals[g.detailGlobal]) && g.frameCalls%2 == 1 {
 		id ^= 0x7F
 	}
 	// Seven horizontal bands encode the content key. Every band is ink
@@ -517,6 +544,10 @@ func (g *scriptedGame) dispatch(op platform.InputOp) platform.InputResult {
 		if !ok {
 			return posted(now)
 		}
+		g.slotClicks++
+		if g.ignoreSlotClickAt == g.slotClicks {
+			return posted(now)
+		}
 		if g.clickOpensUnknown {
 			g.pending = append(g.pending, pendingEffect{dueAt: lag, apply: func(g *scriptedGame) {
 				g.page = pageUnknown
@@ -531,7 +562,7 @@ func (g *scriptedGame) dispatch(op platform.InputOp) platform.InputResult {
 		if g.clickOpensSlot >= 0 {
 			target = g.globalForSlot(g.clickOpensSlot)
 		}
-		previousDetail := g.detailGlobal
+		previousDetail := g.detailKey(g.detailGlobal)
 		g.pending = append(g.pending, pendingEffect{dueAt: lag, apply: func(g *scriptedGame) {
 			g.selected = target
 		}})
@@ -1276,9 +1307,8 @@ func TestSinglePageWrongSelectionStopsUnattributed(t *testing.T) {
 	}
 }
 
-// T14: a selection transition whose detail content stays the same is not
-// attributable — the same-detail neighbor round trip is not implemented
-// yet (it needs real duplicate-disc samples).
+// T14: a same-detail neighbor with no usable reference stops unattributed;
+// the first admission stands.
 func TestSinglePageSameDetailStopsUnattributed(t *testing.T) {
 	game := newScriptedGame(true, true)
 	game.sameDetail = true
@@ -1287,6 +1317,174 @@ func TestSinglePageSameDetailStopsUnattributed(t *testing.T) {
 	snap := h.endFailed(collect.CodeDetailUnattributed)
 	if snap.Counts.Captured != 1 {
 		t.Fatalf("the first admission must stand: %+v", snap.Counts)
+	}
+}
+
+// T14b: a target whose detail repeats its neighbor's pixels is admitted
+// through one reference round trip. The reference slot is selected, shows a
+// different stable detail, and the return click proves the target's own
+// detail; both duplicate discs stay in the output, never merged by detail
+// pixels or text.
+func TestSinglePageSameDetailReferenceRoundTripAdmitsDuplicates(t *testing.T) {
+	game := newScriptedGame(true, true, true)
+	// Items 0 and 1 are the duplicate pair; item 2 is the distinguishable
+	// reference.
+	game.detailKeys = map[int]int{0: 41, 1: 41, 2: 7}
+	h := newTraversalHarness(t, game)
+	h.start()
+	h.endCompleted()
+
+	obs := h.observations()
+	if len(obs) != 3 {
+		t.Fatalf("admitted %d, want 3 (both duplicates plus the reference item): %v", len(obs), positions(obs))
+	}
+	if got := fmt.Sprint(positions(obs)); got != fmt.Sprint([][3]int{{0, 0, 0}, {0, 0, 1}, {0, 0, 2}}) {
+		t.Fatalf("positions %s, want the reading-order slots", got)
+	}
+	if obs[0].Association != collect.AssociationTransition || obs[2].Association != collect.AssociationTransition {
+		t.Fatalf("the non-reference admissions lost their transition association: %q, %q",
+			obs[0].Association, obs[2].Association)
+	}
+	refObs := obs[1]
+	if refObs.Association != collect.AssociationReference {
+		t.Fatalf("the same-detail target association = %q, want %q", refObs.Association, collect.AssociationReference)
+	}
+	if refObs.Reference == nil {
+		t.Fatal("the reference admission carries no reference evidence")
+	}
+	if ref := refObs.Reference; ref.Slot != 2 || ref.Row != 0 || ref.Column != 2 || ref.FrameID == 0 {
+		t.Fatalf("reference evidence = %+v, want visible slot 2 (row 0, column 2) with a frame", ref)
+	}
+	if refObs.PreClickFrameID == 0 || refObs.PreClickFrameID >= refObs.Reference.FrameID ||
+		refObs.Reference.FrameID >= refObs.FrameID {
+		t.Fatalf("reference frames are not ordered: pre-click %d, reference %d, returned target %d",
+			refObs.PreClickFrameID, refObs.Reference.FrameID, refObs.FrameID)
+	}
+	for _, want := range []string{"reference slot 2", "return click", "differed", "stable"} {
+		if !strings.Contains(refObs.Evidence, want) {
+			t.Fatalf("reference evidence %q lacks %q", refObs.Evidence, want)
+		}
+	}
+	if refObs.VisitIndex != 2 || refObs.PreClickFrameID == 0 {
+		t.Fatalf("the reference admission must consume exactly one visit and keep its pre-click frame: %+v", refObs)
+	}
+	if obs[0].VisitIndex != 1 || obs[2].VisitIndex != 3 {
+		t.Fatalf("visit indices %d, %d, %d, want 1, 2, 3", obs[0].VisitIndex, obs[1].VisitIndex, obs[2].VisitIndex)
+	}
+
+	// The duplicate pair's detail pixels are identical, yet both records
+	// remain: the traversal never deduplicates by text or image content.
+	matcher := collect.NewPixelMatcher(collect.MacCloudLayout(), collect.MacCloudCalibration())
+	frameOf := func(o collect.Observation) platform.Frame {
+		return platform.Frame{Image: o.Image, Content: o.Content}
+	}
+	if got := matcher.CompareDetail(frameOf(obs[0]), frameOf(obs[1])); got != collect.DetailSame {
+		t.Fatalf("the duplicate pair's detail comparison = %v, want Same", got)
+	}
+	if got := matcher.CompareDetail(frameOf(obs[1]), frameOf(obs[2])); got != collect.DetailDifferent {
+		t.Fatalf("the reference item's detail comparison = %v, want Different", got)
+	}
+
+	ops := game.opsSnapshot()
+	for slot, want := range map[int]int{0: 1, 1: 2, 2: 2} {
+		if got := countOps(ops, platform.InputClick, slotCenter(game.layout, slot), image.Point{}); got != want {
+			t.Fatalf("slot %d clicked %d times, want %d (reference and return are separate clicks)", slot, got, want)
+		}
+	}
+}
+
+// T14c: a same-detail target with no other occupied slot has no possible
+// reference; the walk stops without admitting it.
+func TestSinglePageSameDetailWithoutReferenceStops(t *testing.T) {
+	game := newScriptedGame(true)
+	game.detailGlobal = 9
+	game.sameDetail = true
+	h := newTraversalHarness(t, game)
+	h.start()
+	snap := h.endFailed(collect.CodeDetailUnattributed)
+	if snap.Counts.Captured != 0 {
+		t.Fatalf("a same-detail target without a reference admits nothing: %+v", snap.Counts)
+	}
+	if clicks := countSlotClicks(game.opsSnapshot(), game.layout); clicks != 1 {
+		t.Fatalf("%d slot clicks, want only the target click", clicks)
+	}
+}
+
+// T14d: a reference whose detail also repeats the target's cannot
+// distinguish it; the walk stops after that one reference click.
+func TestSinglePageReferenceDetailSameStops(t *testing.T) {
+	game := newScriptedGame(true, true, true)
+	game.detailKeys = map[int]int{0: 5, 1: 5, 2: 5}
+	h := newTraversalHarness(t, game)
+	h.start()
+	snap := h.endFailed(collect.CodeDetailUnattributed)
+	if snap.Counts.Captured != 1 {
+		t.Fatalf("the earlier admission must stand: %+v", snap.Counts)
+	}
+	obs := h.observations()
+	if len(obs) != 1 || obs[0].Association != collect.AssociationTransition {
+		t.Fatalf("a same reference detail admitted a target: %+v", obs)
+	}
+	ops := game.opsSnapshot()
+	if got := countOps(ops, platform.InputClick, slotCenter(game.layout, 1), image.Point{}); got != 1 {
+		t.Fatalf("the target was clicked %d times, want one; no return click may follow an indistinguishable reference", got)
+	}
+	if got := countOps(ops, platform.InputClick, slotCenter(game.layout, 2), image.Point{}); got != 1 {
+		t.Fatalf("the reference was clicked %d times, want one", got)
+	}
+}
+
+// T14e: each failed leg of the reference round trip stops without an
+// admission and keeps the earlier result.
+func TestSinglePageReferenceRoundTripFailures(t *testing.T) {
+	cases := []struct {
+		name string
+		set  func(*scriptedGame)
+	}{
+		{"reference click ignored", func(g *scriptedGame) { g.ignoreSlotClickAt = 3 }},
+		{"return click ignored", func(g *scriptedGame) { g.ignoreSlotClickAt = 4 }},
+		{"reference detail unstable", func(g *scriptedGame) { g.flickerGlobals = map[int]bool{2: true} }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			game := newScriptedGame(true, true, true)
+			game.detailKeys = map[int]int{0: 5, 1: 5, 2: 9}
+			tc.set(game)
+			h := newTraversalHarness(t, game)
+			h.start()
+			snap := h.endFailed(collect.CodeDetailUnattributed)
+			if snap.Counts.Captured != 1 {
+				t.Fatalf("the earlier admission must stand: %+v", snap.Counts)
+			}
+			obs := h.observations()
+			if len(obs) != 1 || obs[0].Association != collect.AssociationTransition {
+				t.Fatalf("a failed round trip admitted another record: %+v", obs)
+			}
+			if got := countOps(game.opsSnapshot(), platform.InputClick, slotCenter(game.layout, 1), image.Point{}); got > 2 {
+				t.Fatalf("the target was clicked %d times, want at most the initial click and one return", got)
+			}
+		})
+	}
+}
+
+// T14f: a detail that changes normally never takes the reference path.
+func TestSinglePageDifferentDetailDoesNotRoundTrip(t *testing.T) {
+	game := newScriptedGame(true, true, true)
+	game.detailKeys = map[int]int{0: 1, 1: 2, 2: 3}
+	h := newTraversalHarness(t, game)
+	h.start()
+	h.endCompleted()
+	obs := h.observations()
+	if len(obs) != 3 {
+		t.Fatalf("admitted %d, want 3", len(obs))
+	}
+	for i, o := range obs {
+		if o.Association != collect.AssociationTransition || o.Reference != nil {
+			t.Fatalf("observation %d took the reference path for a changed detail: %+v", i+1, o)
+		}
+	}
+	if clicks := countSlotClicks(game.opsSnapshot(), game.layout); clicks != 3 {
+		t.Fatalf("%d slot clicks, want one per item and no reference round trip", clicks)
 	}
 }
 
