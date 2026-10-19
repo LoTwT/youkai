@@ -1,6 +1,7 @@
 package record
 
 import (
+	"bytes"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -68,6 +69,35 @@ func validDoc() *Checkpoint {
 func TestValidateAcceptsValidDoc(t *testing.T) {
 	if err := validDoc().validate(); err != nil {
 		t.Fatalf("validate: %v", err)
+	}
+}
+
+// TestLegacyDataPayloadRoundTrips pins the compatibility boundary for
+// checkpoints written before structured drive-disc data existed: the old
+// {"lines":[...]} payload carries no "structured" member, still validates,
+// and survives a JSON round trip byte-for-byte. The record package never
+// interprets the payload, so the offline backfill in the app layer can add
+// the structured object later without losing the raw recognition lines.
+func TestLegacyDataPayloadRoundTrips(t *testing.T) {
+	legacy := json.RawMessage(`{"lines":[{"role":"name","text":"河豚电音[1]","score":0.99},{"role":"level","text":"等级15/15","score":0.98}]}`)
+	cp := validDoc()
+	cp.Items[0].Data = legacy
+	if err := cp.validate(); err != nil {
+		t.Fatalf("legacy payload rejected: %v", err)
+	}
+	encoded, err := json.Marshal(cp)
+	if err != nil {
+		t.Fatalf("marshal checkpoint: %v", err)
+	}
+	var loaded Checkpoint
+	if err := json.Unmarshal(encoded, &loaded); err != nil {
+		t.Fatalf("unmarshal checkpoint: %v", err)
+	}
+	if !bytes.Equal(loaded.Items[0].Data, legacy) {
+		t.Fatalf("legacy data changed: %s, want %s", loaded.Items[0].Data, legacy)
+	}
+	if err := loaded.validate(); err != nil {
+		t.Fatalf("loaded legacy checkpoint: %v", err)
 	}
 }
 

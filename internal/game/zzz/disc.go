@@ -44,14 +44,14 @@ type Substat struct {
 
 // DiscRecord is the structured result of parsing one detail page's
 // lines: the resolved set identity, the slot, the level, the main stat
-// and the substats in display order. Unknown parts stay zero (empty
-// set id, slot 0, nil level, empty attribute); rarity, management
-// states and the equipper are not part of these lines and belong to the
-// rest of the game adapter.
+// and the substats in display order. Unknown parts stay zero (nil set
+// id, slot 0, nil level, empty attribute); rarity, management states and
+// the equipper are not part of these lines and belong to the rest of the
+// game adapter.
 type DiscRecord struct {
-	// SetID is the youkai set key, or "" when the set name did not
-	// resolve in the catalog.
-	SetID string
+	// SetID is the fairy numeric set id, or nil when the set name did
+	// not resolve in the catalog.
+	SetID *int
 	// Slot is 1–6, or 0 when unknown or out of range.
 	Slot int
 	// Level is 0–15, or nil when unknown.
@@ -60,18 +60,32 @@ type DiscRecord struct {
 	Substats []Substat
 }
 
+// Severity is the scan JSON contract's issue severity. Parser issues are
+// errors: they keep the record out of auto-accept.
+type Severity string
+
+const (
+	SeverityError   Severity = "error"
+	SeverityWarning Severity = "warning"
+)
+
 // Issue reports one parsing or validation problem of a detail page.
 // Field names the record field — "" for the whole record, "substats[2]"
 // for one substat line — using the scan JSON contract's data field
 // names. Code is a stable diagnostic code; Message is a human-readable
 // explanation that quotes the raw line text, so a failed line never
-// loses its original observation. All parser issues are errors in the
-// contract's terms: they keep the record out of auto-accept, and no
-// issue ever substitutes a nearby legal value.
+// loses its original observation. Every parser issue is an error in the
+// contract's terms; no issue ever substitutes a nearby legal value.
 type Issue struct {
-	Field   string
-	Code    string
-	Message string
+	Field    string   `json:"field"`
+	Code     string   `json:"code"`
+	Severity Severity `json:"severity"`
+	Message  string   `json:"message"`
+}
+
+// newIssue builds an error-severity parser issue.
+func newIssue(field, code, message string) Issue {
+	return Issue{Field: field, Code: code, Severity: SeverityError, Message: message}
 }
 
 // Issue codes of the detail-line parser.
@@ -129,23 +143,24 @@ func ParseDetail(lines DetailLines) (DiscRecord, []Issue) {
 	name, slot, ok := splitNameLine(lines.Set)
 	switch {
 	case !ok && strings.TrimSpace(lines.Set) == "":
-		issues = append(issues, Issue{"", CodeLineEmpty,
-			"套装名行没有读出文本"})
+		issues = append(issues, newIssue("", CodeLineEmpty,
+			"套装名行没有读出文本"))
 	case !ok:
-		issues = append(issues, Issue{"", CodeNameLineUnparsed,
-			fmt.Sprintf("套装名行 %q 无法按 套装名[N] 拆出套装名与槽位", lines.Set)})
+		issues = append(issues, newIssue("", CodeNameLineUnparsed,
+			fmt.Sprintf("套装名行 %q 无法按 套装名[N] 拆出套装名与槽位", lines.Set)))
 	default:
 		if slot < 1 || slot > 6 {
-			issues = append(issues, Issue{"slot", CodeSlotOutOfRange,
-				fmt.Sprintf("槽位 %d 越界（合法 1–6）：%q", slot, lines.Set)})
+			issues = append(issues, newIssue("slot", CodeSlotOutOfRange,
+				fmt.Sprintf("槽位 %d 越界（合法 1–6）：%q", slot, lines.Set)))
 		} else {
 			rec.Slot = slot
 		}
 		if set, found := LookupSetByName(name); found {
-			rec.SetID = set.ID
+			id := set.ID
+			rec.SetID = &id
 		} else {
-			issues = append(issues, Issue{"setId", CodeUnknownSet,
-				fmt.Sprintf("套装名 %q 不在资料表中", name)})
+			issues = append(issues, newIssue("setId", CodeUnknownSet,
+				fmt.Sprintf("套装名 %q 不在资料表中", name)))
 		}
 	}
 
@@ -153,19 +168,19 @@ func ParseDetail(lines DetailLines) (DiscRecord, []Issue) {
 	level, denominator, ok := splitLevelLine(lines.Level)
 	switch {
 	case !ok && strings.TrimSpace(lines.Level) == "":
-		issues = append(issues, Issue{"level", CodeLineEmpty,
-			"等级行没有读出文本"})
+		issues = append(issues, newIssue("level", CodeLineEmpty,
+			"等级行没有读出文本"))
 	case !ok:
-		issues = append(issues, Issue{"level", CodeLevelLineUnparsed,
-			fmt.Sprintf("等级行 %q 无法按 等级N/15 解析", lines.Level)})
+		issues = append(issues, newIssue("level", CodeLevelLineUnparsed,
+			fmt.Sprintf("等级行 %q 无法按 等级N/15 解析", lines.Level)))
 	default:
 		if denominator != 15 {
-			issues = append(issues, Issue{"level", CodeLevelDenominatorInvalid,
-				fmt.Sprintf("等级分母为 %d，应为 15：%q", denominator, lines.Level)})
+			issues = append(issues, newIssue("level", CodeLevelDenominatorInvalid,
+				fmt.Sprintf("等级分母为 %d，应为 15：%q", denominator, lines.Level)))
 		}
 		if level > 15 {
-			issues = append(issues, Issue{"level", CodeLevelOutOfRange,
-				fmt.Sprintf("等级 %d 越界（合法 0–15）：%q", level, lines.Level)})
+			issues = append(issues, newIssue("level", CodeLevelOutOfRange,
+				fmt.Sprintf("等级 %d 越界（合法 0–15）：%q", level, lines.Level)))
 		}
 		if denominator == 15 && level <= 15 {
 			rec.Level = &level
@@ -176,15 +191,15 @@ func ParseDetail(lines DetailLines) (DiscRecord, []Issue) {
 	split, problem := splitAffixLine(lines.Main)
 	switch {
 	case problem != nil:
-		issues = append(issues, Issue{"mainStat", problem.code, problem.message})
+		issues = append(issues, newIssue("mainStat", problem.code, problem.message))
 	default:
 		if split.roll != nil {
-			issues = append(issues, Issue{"mainStat", CodeUnexpectedRoll,
-				fmt.Sprintf("主词条行不应有强化档位：%q", lines.Main)})
+			issues = append(issues, newIssue("mainStat", CodeUnexpectedRoll,
+				fmt.Sprintf("主词条行不应有强化档位：%q", lines.Main)))
 		}
 		if rec.Slot != 0 && !mainAffixAllowed(rec.Slot, Affix{split.attribute, split.unit}) {
-			issues = append(issues, Issue{"mainStat", CodeMainStatNotAllowed,
-				fmt.Sprintf("槽位 %d 不允许主词条 %s+%s：%q", rec.Slot, split.attribute, split.unit, lines.Main)})
+			issues = append(issues, newIssue("mainStat", CodeMainStatNotAllowed,
+				fmt.Sprintf("槽位 %d 不允许主词条 %s+%s：%q", rec.Slot, split.attribute, split.unit, lines.Main)))
 		}
 		rec.MainStat = Stat{Attribute: split.attribute, Value: split.value, Unit: split.unit}
 	}
@@ -192,8 +207,8 @@ func ParseDetail(lines DetailLines) (DiscRecord, []Issue) {
 	// Substats: at most four lines, each with its raw roll observation.
 	subs := lines.Subs
 	if len(subs) > 4 {
-		issues = append(issues, Issue{"substats", CodeTooManySubstats,
-			fmt.Sprintf("读出 %d 条副词条，最多四条；多余行原文：%q", len(subs), strings.Join(subs[4:], "、"))})
+		issues = append(issues, newIssue("substats", CodeTooManySubstats,
+			fmt.Sprintf("读出 %d 条副词条，最多四条；多余行原文：%q", len(subs), strings.Join(subs[4:], "、"))))
 		subs = subs[:4]
 	}
 	seen := make(map[Affix]bool, len(subs))
@@ -202,17 +217,17 @@ func ParseDetail(lines DetailLines) (DiscRecord, []Issue) {
 		split, problem := splitAffixLine(text)
 		if problem != nil {
 			rec.Substats = append(rec.Substats, Substat{})
-			issues = append(issues, Issue{field, problem.code, problem.message})
+			issues = append(issues, newIssue(field, problem.code, problem.message))
 			continue
 		}
 		identity := Affix{split.attribute, split.unit}
 		if !subAffixAllowed(identity) {
-			issues = append(issues, Issue{field, CodeSubstatNotAllowed,
-				fmt.Sprintf("副词条 %s+%s 不在十种合法类型内：%q", split.attribute, split.unit, text)})
+			issues = append(issues, newIssue(field, CodeSubstatNotAllowed,
+				fmt.Sprintf("副词条 %s+%s 不在十种合法类型内：%q", split.attribute, split.unit, text)))
 		}
 		if seen[identity] {
-			issues = append(issues, Issue{field, CodeSubstatDuplicated,
-				fmt.Sprintf("副词条 %s+%s 与前面的词条重复：%q", split.attribute, split.unit, text)})
+			issues = append(issues, newIssue(field, CodeSubstatDuplicated,
+				fmt.Sprintf("副词条 %s+%s 与前面的词条重复：%q", split.attribute, split.unit, text)))
 		}
 		seen[identity] = true
 		rolls := 0
@@ -223,6 +238,11 @@ func ParseDetail(lines DetailLines) (DiscRecord, []Issue) {
 			Stat:             Stat{Attribute: split.attribute, Value: split.value, Unit: split.unit},
 			EnhancementRolls: &rolls,
 		})
+	}
+	// A nil line list means the substat count is unknown; an explicitly
+	// empty list is the confirmed "no visible substats" case.
+	if len(subs) == 0 && lines.Subs != nil {
+		rec.Substats = []Substat{}
 	}
 
 	return rec, issues

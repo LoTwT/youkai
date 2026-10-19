@@ -300,6 +300,9 @@ func TestProjectDiscObservationCaptureJSON(t *testing.T) {
 		t.Fatalf("project: %v", err)
 	}
 	got := projected.(Observation)
+	if got.Rarity != string(collect.QualityS) {
+		t.Fatalf("observation rarity = %q, want %q from the capture quality", got.Rarity, collect.QualityS)
+	}
 	var capture map[string]any
 	if err := json.Unmarshal(got.Capture, &capture); err != nil {
 		t.Fatalf("capture is not a JSON object: %v", err)

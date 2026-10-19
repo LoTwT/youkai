@@ -34,7 +34,10 @@ func ProjectDiscObservation(obs collect.Observation) (any, error) {
 	if err != nil {
 		return nil, fmt.Errorf("app: project disc observation: marshal capture: %w", err)
 	}
-	return Observation{Lines: lines, Context: context, Capture: capture}, nil
+	// Rarity is the traversal's calibrated quality verdict. It is copied
+	// explicitly so the recognizer can attach it without parsing the
+	// capture JSON or inferring a rarity from the recognized text.
+	return Observation{Lines: lines, Context: context, Rarity: string(obs.Quality), Capture: capture}, nil
 }
 
 // projectRegions copies each region out of the captured frame. The source

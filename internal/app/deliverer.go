@@ -199,8 +199,9 @@ func (d *recordDeliverer) buildAdmittedLocked(seq scan.Seq, observation any) (re
 	item := record.ItemRecord{
 		Sequence: int64(seq),
 		Status:   record.StatusQueued,
-		// M1 persists raw observations; field quality is not evaluated
-		// until M2's game adapter owns the field semantics.
+		// Admission itself carries no field verdict; the terminal
+		// produced update moves the item to needsReview once the
+		// structured interpretation exists.
 		Quality: record.QualityNotEvaluated,
 	}
 	observed, err := observedPayloadOf(observation)
@@ -275,6 +276,12 @@ func applyTerminalLocked(item *record.ItemRecord, rec scan.Record) error {
 			return err
 		}
 		item.Data = data
+		// Management state and the equipper are not recognized yet, so a
+		// recognized disc always needs review; it must never be treated as
+		// auto-accepted merely because parsing found no issue.
+		if _, ok := rec.Result.(RecognitionResult); ok {
+			item.Quality = record.QualityNeedsReview
+		}
 	case scan.StateFailed:
 		item.Status = record.StatusFailed
 		item.Failure = rec.Reason

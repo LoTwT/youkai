@@ -100,11 +100,25 @@ func fixtureDiscs(t *testing.T) map[string]DetailLines {
 // rolls builds an expected EnhancementRolls value.
 func rolls(n int) *int { return &n }
 
+// setID resolves an internal catalog key to the numeric fairy id expected
+// in records and structured data.
+func setID(key string) *int {
+	// Read the table directly: test-package variables such as sampleWant
+	// initialize before the package's init builds the lookup maps.
+	for _, set := range sets {
+		if set.Key == key {
+			id := set.ID
+			return &id
+		}
+	}
+	panic("unknown set key in test table: " + key)
+}
+
 // wantDisc describes one expected complete record.
 func wantDisc(set string, slot int, main Stat, subs []Substat) DiscRecord {
 	level := 15
 	return DiscRecord{
-		SetID:    set,
+		SetID:    setID(set),
 		Slot:     slot,
 		Level:    &level,
 		MainStat: main,
@@ -230,47 +244,82 @@ func TestCatalog(t *testing.T) {
 	if len(agents) != 60 {
 		t.Fatalf("catalog has %d agents, want 60", len(agents))
 	}
-	seenSets := map[string]bool{}
-	seenAgents := map[string]bool{}
+	seenSets := map[int]bool{}
+	seenSetKeys := map[string]bool{}
+	seenAgents := map[int]bool{}
+	seenAgentKeys := map[string]bool{}
 	for _, s := range sets {
+		if s.ID == 0 {
+			t.Fatalf("set %q has no numeric fairy id", s.Key)
+		}
 		if seenSets[s.ID] {
-			t.Fatalf("duplicate set id %q", s.ID)
+			t.Fatalf("duplicate set id %d", s.ID)
 		}
 		seenSets[s.ID] = true
-		if _, ok := LookupSetByID(s.ID); !ok {
-			t.Fatalf("set id %q does not resolve", s.ID)
+		if seenSetKeys[s.Key] {
+			t.Fatalf("duplicate set key %q", s.Key)
+		}
+		seenSetKeys[s.Key] = true
+		if got, ok := LookupSetByID(s.ID); !ok || got != s {
+			t.Fatalf("set id %d resolves to %+v, want %+v", s.ID, got, s)
+		}
+		if got, ok := LookupSetByKey(s.Key); !ok || got != s {
+			t.Fatalf("set key %q resolves to %+v, want %+v", s.Key, got, s)
 		}
 		got, ok := LookupSetByName(s.Name)
-		if !ok || got.ID != s.ID || got.FairyID != s.FairyID {
+		if !ok || got != s {
 			t.Fatalf("set name %q resolves to %+v", s.Name, got)
 		}
 	}
 	for _, a := range agents {
+		if a.ID == 0 {
+			t.Fatalf("agent %q has no numeric fairy id", a.Key)
+		}
 		if seenAgents[a.ID] {
-			t.Fatalf("duplicate agent id %q", a.ID)
+			t.Fatalf("duplicate agent id %d", a.ID)
 		}
 		seenAgents[a.ID] = true
-		if got, ok := LookupAgentByName(a.Name); !ok || got.ID != a.ID {
+		if seenAgentKeys[a.Key] {
+			t.Fatalf("duplicate agent key %q", a.Key)
+		}
+		seenAgentKeys[a.Key] = true
+		if got, ok := LookupAgentByID(a.ID); !ok || got != a {
+			t.Fatalf("agent id %d resolves to %+v, want %+v", a.ID, got, a)
+		}
+		if got, ok := LookupAgentByKey(a.Key); !ok || got != a {
+			t.Fatalf("agent key %q resolves to %+v, want %+v", a.Key, got, a)
+		}
+		if got, ok := LookupAgentByName(a.Name); !ok || got != a {
 			t.Fatalf("agent name %q resolves to %+v", a.Name, got)
 		}
 	}
 
 	// Spot checks against the sources: the fixture sets and the doc's
-	// example identifier.
-	if s, _ := LookupSetByName("河豚电音"); s.ID != "pufferElectro" || s.FairyID != "31100" {
+	// example identifier. The numeric fairy id is the public identity; the
+	// readable key is an internal alias.
+	if s, _ := LookupSetByName("河豚电音"); s.ID != 31100 || s.Key != "pufferElectro" {
 		t.Fatalf("河豚电音 = %+v", s)
 	}
-	if s, _ := LookupSetByName("如影相随"); s.ID != "shadowHarmony" || s.FairyID != "32900" {
+	if s, _ := LookupSetByName("如影相随"); s.ID != 32900 || s.Key != "shadowHarmony" {
 		t.Fatalf("如影相随 = %+v", s)
 	}
-	if s, _ := LookupSetByID("woodpeckerElectro"); s.FairyID != "31000" || s.Name != "啄木鸟电音" {
-		t.Fatalf("woodpeckerElectro = %+v", s)
+	if s, _ := LookupSetByID(31000); s.Key != "woodpeckerElectro" || s.Name != "啄木鸟电音" {
+		t.Fatalf("31000 = %+v", s)
 	}
-	if a, _ := LookupAgentByName("耀嘉音"); a.ID != "astraYao" || a.FairyID != "1311" {
+	if a, _ := LookupAgentByName("耀嘉音"); a.ID != 1311 || a.Key != "astraYao" {
 		t.Fatalf("耀嘉音 = %+v", a)
+	}
+	if a, _ := LookupAgentByID(1311); a.Name != "耀嘉音" {
+		t.Fatalf("agent 1311 = %+v", a)
 	}
 	if _, ok := LookupSetByName("不存在的套装"); ok {
 		t.Fatal("unknown set name resolved")
+	}
+	if _, ok := LookupSetByID(99999); ok {
+		t.Fatal("unknown set id resolved")
+	}
+	if _, ok := LookupAgentByID(9999); ok {
+		t.Fatal("unknown agent id resolved")
 	}
 }
 
@@ -431,6 +480,11 @@ func TestParseDetailNegativeCases(t *testing.T) {
 					t.Fatalf("issues %+v miss %s/%s (record %+v)", issues, tc.fields[i], tc.fields[i+1], rec)
 				}
 			}
+			for _, issue := range issues {
+				if issue.Severity != SeverityError {
+					t.Fatalf("parser issue %+v is not an error", issue)
+				}
+			}
 		})
 	}
 }
@@ -456,8 +510,8 @@ func TestParseDetailUnknownPartsStayUnknown(t *testing.T) {
 			t.Fatalf("issues %+v miss %s/%s", issues, want[0], want[1])
 		}
 	}
-	if rec.SetID != "" {
-		t.Fatalf("set id = %q, want empty", rec.SetID)
+	if rec.SetID != nil {
+		t.Fatalf("set id = %d, want nil", *rec.SetID)
 	}
 	if rec.Slot != 1 {
 		t.Fatalf("slot = %d, want 1 (the slot itself was readable)", rec.Slot)
@@ -636,7 +690,7 @@ func macCloudDiscs(t *testing.T) map[string]DetailLines {
 // discWant builds one expected record for the macOS fixture table below.
 func discWant(set string, slot, level int, main Stat, subs ...Substat) DiscRecord {
 	return DiscRecord{
-		SetID:    set,
+		SetID:    setID(set),
 		Slot:     slot,
 		Level:    &level,
 		MainStat: main,

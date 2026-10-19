@@ -412,12 +412,14 @@ type ItemRecord struct {
 	// revisions.
 	Revision int64 `json:"revision"`
 	// Observed is the original normalized payload, immutable after the
-	// observation was accepted. Opaque json.RawMessage until M2's
-	// internal/game/zzz owns the drive-disc field types; this package
-	// only checks that it is a JSON document.
+	// observation was accepted. The application owns its shape; this
+	// package only checks that it is a JSON document.
 	Observed json.RawMessage `json:"observed,omitempty"`
 	// Data is the item's current payload; unset until a normalized
-	// result exists. Same opacity as Observed.
+	// result exists. A produced drive disc carries the raw recognized
+	// lines plus the structured interpretation; older checkpoints carry
+	// only the raw lines and remain readable because the payload stays
+	// opaque here.
 	Data json.RawMessage `json:"data,omitempty"`
 	// EvidenceIDs are the images backing this observation; every one
 	// must be indexed in the checkpoint and on disk.
