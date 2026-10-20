@@ -1302,10 +1302,12 @@ func (run *inventoryRun) visitSlot(ctx context.Context, i int) error {
 		}
 		// The pre-click evidence: the list shows stably with the target
 		// slot occupied (T5 §4.1: 列表仍属于同一范围，目标格位有物品且位置
-		// 可对应). The frame is re-taken before every click.
-		pre := run.awaitSettled(ctx, func(m PageMatch) bool {
+		// 可对应). The last admitted frame is already a stable observation
+		// made after the previous action, so it can seed this wait; fresh
+		// frames still have to confirm the current list before the click.
+		pre := run.awaitSettledSeeded(ctx, func(m PageMatch) bool {
 			return run.listVerdict(m) && m.List.Occupied[i]
-		})
+		}, run.preClickSeed(i))
 		switch pre.class {
 		case awaitStable:
 		case awaitCanceled, awaitFrameErr:
@@ -1415,6 +1417,24 @@ func (run *inventoryRun) visitSlot(ctx context.Context, i int) error {
 	}
 }
 
+// preClickSeed returns the last admitted frame as the first stability
+// sample for the next pre-click wait when it still proves the target
+// occupied in the same wheel position. No input happened after that frame,
+// so it is a valid action-before observation; the wait still requires
+// fresh observations to confirm the list is current.
+func (run *inventoryRun) preClickSeed(i int) *awaitOutcome {
+	if run.lastFrame.ID == 0 || run.lastFrame.Geometry != run.geo {
+		return nil
+	}
+	if !run.listVerdict(run.listMatch) || !run.listMatch.List.Occupied[i] {
+		return nil
+	}
+	if run.listMatch.Wheel == nil || run.listMatch.Wheel.Position != run.position {
+		return nil
+	}
+	return &awaitOutcome{frame: run.lastFrame, match: run.listMatch, expected: true}
+}
+
 // detailBaseline chooses the detail comparison frame for the next click.
 // The last admitted detail is a known item and is not subject to the
 // pre-click list frame's cloud-video lag; fall back to the fresh
@@ -1508,9 +1528,9 @@ func (run *inventoryRun) referenceRoundTrip(ctx context.Context, slot *scan.Slot
 
 	// The reference click needs its own stable pre-click frame with the
 	// target still selected; this only re-observes, it never scrolls.
-	preRef := run.awaitSettled(ctx, func(m PageMatch) bool {
+	preRef := run.awaitSettledSeeded(ctx, func(m PageMatch) bool {
 		return run.listVerdict(m) && m.List.Selected == target && m.List.Occupied[ref] && m.Detail != nil
-	})
+	}, &awaitOutcome{frame: targetOut.frame, match: targetOut.match, expected: true})
 	switch preRef.class {
 	case awaitStable:
 	case awaitCanceled, awaitFrameErr:
@@ -2501,9 +2521,23 @@ type detailOutcome struct {
 // budget; Frame runs under a deadline-bounded context so a silent stream
 // cannot outlive the budget.
 func (run *inventoryRun) awaitSettled(ctx context.Context, expect func(PageMatch) bool) awaitOutcome {
+	return run.awaitSettledSeeded(ctx, expect, nil)
+}
+
+// awaitSettledSeeded is awaitSettled with one optional prior observation.
+// A seed must already carry the expected verdict and the current geometry;
+// it counts as the first stable sample, so the remaining samples still
+// come from fresh or reused frames returned by the session. This preserves
+// the "current content" proof while avoiding a duplicate settle after an
+// action whose resulting frame is already known and unchanged.
+func (run *inventoryRun) awaitSettledSeeded(ctx context.Context, expect func(PageMatch) bool, seed *awaitOutcome) awaitOutcome {
 	deadline := time.Now().Add(run.inv.actionBudget())
 	samples := 0
 	out := awaitOutcome{}
+	if seed != nil && seed.frame.ID != 0 && seed.frame.Geometry == run.geo && expect(seed.match) {
+		out.frame, out.match, out.expected = seed.frame, seed.match, true
+		samples = 1
+	}
 	after := run.lastArrived
 	for {
 		// A live stream must not extend the wait past its budget.
