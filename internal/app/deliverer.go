@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/LoTwT/youkai/internal/game/zzz"
 	"github.com/LoTwT/youkai/internal/record"
 	"github.com/LoTwT/youkai/internal/scan"
 )
@@ -213,8 +214,8 @@ func (d *recordDeliverer) buildAdmittedLocked(seq scan.Seq, observation any) (re
 		Sequence: int64(seq),
 		Status:   record.StatusQueued,
 		// Admission itself carries no field verdict; the terminal
-		// produced update moves the item to needsReview once the
-		// structured interpretation exists.
+		// produced update decides needsReview versus autoAccepted from
+		// the structured validation.
 		Quality: record.QualityNotEvaluated,
 	}
 	observed, err := observedPayloadOf(observation)
@@ -277,6 +278,18 @@ func (d *recordDeliverer) writeEvidence(id string, img image.Image) (record.Evid
 	return ev, nil
 }
 
+// autoAcceptable reports whether a recognized disc passed every current
+// required-field check without an error issue. It deliberately does not
+// use the raw OCR score as a correctness probability: T6's confirmed
+// policy is to accept records whose current validation passed and to
+// leave incomplete or conflicting records for review.
+func autoAcceptable(structured *zzz.StructuredDisc) bool {
+	return structured != nil &&
+		structured.Validation.Status == zzz.ValidationPassed &&
+		!hasIssueError(structured.Issues) &&
+		!hasIssueError(structured.Validation.Issues)
+}
+
 // applyTerminalLocked updates one item with its terminal record. The
 // state mapping mirrors the kernel's: produced carries the result
 // payload, failed the failure text, unprocessed the interrupt cause.
@@ -289,12 +302,15 @@ func applyTerminalLocked(item *record.ItemRecord, rec scan.Record) error {
 			return err
 		}
 		item.Data = data
-		// Management state, equipment presence and (when reliable) the
-		// equipper identity are captured, but a recognized disc always
-		// needs review; it must never be treated as auto-accepted merely
-		// because parsing found no issue.
-		if _, ok := rec.Result.(RecognitionResult); ok {
+		// A fully validated disc is auto-accepted; any missing required
+		// field, parse error or unavailable validation stays pending.
+		// Auto-accept means the current checks found no problem, not that
+		// the OCR reading is guaranteed correct.
+		if result, ok := rec.Result.(RecognitionResult); ok {
 			item.Quality = record.QualityNeedsReview
+			if autoAcceptable(result.Structured) {
+				item.Quality = record.QualityAutoAccepted
+			}
 		}
 	case scan.StateFailed:
 		item.Status = record.StatusFailed

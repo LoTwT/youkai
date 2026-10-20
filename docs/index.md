@@ -10,7 +10,7 @@
 - T4：扫描会话与结果契约：直接在[架构第 5 节](specs/scanner-architecture.md#5-扫描会话与结果语义)维护。
 - [T5：绝区零仓库遍历与详情归属](specs/t5-zzz-inventory-traversal.md)：页面预检、选中与详情归属、滚动衔接、末尾判断和完整性验收；macOS 云客户端的布局、阈值、单页流程（4b-1）与位置×列表两层遍历（4b-2）已标定并实现。
 - [T6：用户操作、结果校对与导出](specs/t6-review-export-workflow.md)：准备到导出的操作流程、逐件校对、JSON/CSV 两种导出、历史与截图/记录清理。
-- [扫描结果 JSON/CSV v1](specs/scan-json-format.md)：自有可用数据文件契约（JSON 与同源 CSV），附[合成示例](examples/scan-usable-v1.json)；导出已实现并合并，自动接受与真机验收待完成。
+- [扫描结果 JSON/CSV v1](specs/scan-json-format.md)：自有可用数据文件契约（JSON 与同源 CSV），附[合成示例](examples/scan-usable-v1.json)；导出与自动接受已实现并合并，真机验收待完成。
 - [T7：构建打包与交付验收](specs/t7-public-release-acceptance.md)：首版交付门槛、无付费证书的打包路线、最低系统候选。
 - [扫描器背景与参考实现](scanner-handoff.md)：项目起因、参考扫描器研究结论和与 fairy 的边界。
 - [开发指南](development.md)：环境要求与当前实际可用的构建、测试、MyGo 开发命令。

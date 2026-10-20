@@ -208,9 +208,8 @@ func TestStructuredDiscWithoutDetailRoles(t *testing.T) {
 
 // TestDelivererPersistsRawAndStructured drives the terminal update and
 // checks that a produced item keeps the raw lines and the structured
-// payload in one data document, carries a matched agent id while still
-// being marked needsReview, and never becomes auto-accepted merely because
-// validation passed.
+// payload in one data document, carries a matched agent id, and is
+// auto-accepted once its current validation passes.
 func TestDelivererPersistsRawAndStructured(t *testing.T) {
 	lines := detailLines()
 	result := RecognitionResult{
@@ -233,8 +232,8 @@ func TestDelivererPersistsRawAndStructured(t *testing.T) {
 	if item.Status != record.StatusProduced {
 		t.Fatalf("status = %s, want produced", item.Status)
 	}
-	if item.Quality != record.QualityNeedsReview {
-		t.Fatalf("quality = %s, want needsReview", item.Quality)
+	if item.Quality != record.QualityAutoAccepted {
+		t.Fatalf("quality = %s, want autoAccepted", item.Quality)
 	}
 	var doc struct {
 		Lines      []RecognizedLine    `json:"lines"`
@@ -266,6 +265,96 @@ func TestDelivererPersistsRawAndStructured(t *testing.T) {
 	}
 	if len(failed.Data) != 0 || failed.Quality != record.QualityNotEvaluated {
 		t.Fatalf("failed item data/quality = %s/%s, want empty/notEvaluated", failed.Data, failed.Quality)
+	}
+}
+
+// TestDelivererLeavesIncompleteDiscsForReview checks the other side of
+// auto-accept: missing required evidence, an equipped disc without an
+// accepted agent id, and a result without structured data all stay
+// needsReview. A complete unequipped disc is the control that passes.
+func TestDelivererLeavesIncompleteDiscsForReview(t *testing.T) {
+	lines := detailLines()
+	cases := []struct {
+		name string
+		obs  Observation
+	}{
+		{
+			name: "missing management state",
+			obs:  Observation{Rarity: zzz.RarityS, EquippedState: zzz.EquippedStateUnequipped},
+		},
+		{
+			name: "equipped without agent identity",
+			obs: Observation{
+				Rarity:          zzz.RarityS,
+				ManagementState: zzz.ManagementLocked,
+				EquippedState:   zzz.EquippedStateEquipped,
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := RecognitionResult{Lines: lines, Structured: structuredDisc(tc.obs, lines)}
+			item := record.ItemRecord{Sequence: 1, Status: record.StatusRunning, Quality: record.QualityNotEvaluated}
+			if err := applyTerminalLocked(&item, scan.Record{State: scan.StateProduced, Result: result}); err != nil {
+				t.Fatalf("apply terminal: %v", err)
+			}
+			if item.Quality != record.QualityNeedsReview {
+				t.Fatalf("quality = %s, want needsReview", item.Quality)
+			}
+		})
+	}
+
+	complete := RecognitionResult{
+		Lines: lines,
+		Structured: structuredDisc(Observation{
+			Rarity:          zzz.RarityS,
+			ManagementState: zzz.ManagementLocked,
+			EquippedState:   zzz.EquippedStateUnequipped,
+		}, lines),
+	}
+	item := record.ItemRecord{Sequence: 1, Status: record.StatusRunning, Quality: record.QualityNotEvaluated}
+	if err := applyTerminalLocked(&item, scan.Record{State: scan.StateProduced, Result: complete}); err != nil {
+		t.Fatalf("apply complete terminal: %v", err)
+	}
+	if item.Quality != record.QualityAutoAccepted {
+		t.Fatalf("complete unequipped quality = %s, want autoAccepted", item.Quality)
+	}
+
+	item = record.ItemRecord{Sequence: 1, Status: record.StatusRunning, Quality: record.QualityNotEvaluated}
+	if err := applyTerminalLocked(&item, scan.Record{
+		State:  scan.StateProduced,
+		Result: RecognitionResult{Lines: lines},
+	}); err != nil {
+		t.Fatalf("apply line-only terminal: %v", err)
+	}
+	if item.Quality != record.QualityNeedsReview {
+		t.Fatalf("line-only quality = %s, want needsReview", item.Quality)
+	}
+}
+
+// TestAutoAcceptableRequiresPassedValidationWithoutErrorIssues pins the
+// acceptance predicate independently of the deliverer state machine.
+func TestAutoAcceptableRequiresPassedValidationWithoutErrorIssues(t *testing.T) {
+	passed := &zzz.StructuredDisc{Validation: zzz.Validation{Status: zzz.ValidationPassed}}
+	errIssue := zzz.Issue{Severity: zzz.SeverityError}
+	cases := []struct {
+		name       string
+		structured *zzz.StructuredDisc
+		want       bool
+	}{
+		{"nil", nil, false},
+		{"passed", passed, true},
+		{"unavailable", &zzz.StructuredDisc{Validation: zzz.Validation{Status: zzz.ValidationUnavailable}}, false},
+		{"failed", &zzz.StructuredDisc{Validation: zzz.Validation{Status: zzz.ValidationFailed}}, false},
+		{"error issue", &zzz.StructuredDisc{Issues: []zzz.Issue{errIssue}, Validation: zzz.Validation{Status: zzz.ValidationPassed}}, false},
+		{"error validation issue", &zzz.StructuredDisc{Validation: zzz.Validation{Status: zzz.ValidationPassed, Issues: []zzz.Issue{errIssue}}}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := autoAcceptable(tc.structured); got != tc.want {
+				t.Fatalf("autoAcceptable = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
 

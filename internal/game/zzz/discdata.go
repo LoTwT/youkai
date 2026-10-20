@@ -11,8 +11,9 @@ package zzz
 // from the collector's calibrated badge/avatar evidence. The identity is
 // written only when the avatar matcher reports a reliable fairy numeric
 // id; an absent, ambiguous or unreliable match keeps agentId=null and
-// validation unavailable. No record is ever auto-accepted: quality stays
-// needsReview even when the identity is filled.
+// validation unavailable. A record whose required fields all pass is
+// eligible for auto-accept; incomplete or conflicting records stay
+// needsReview.
 
 // ManagementState and equipment-presence values of an observation, as the
 // collector confirmed them. Empty means the collector could not read the
@@ -95,10 +96,9 @@ type DiscData struct {
 	Equipped        *Equipped     `json:"equipped"`
 }
 
-// Validation is the record-level revalidation result. This revision does
-// not claim passed: parsing errors make it failed, and otherwise an
-// unconfirmed management/equipment state or the still-missing equipper
-// identity keeps it unavailable.
+// Validation is the record-level revalidation result. Parsing errors make
+// it failed; missing management/equipment state or the still-missing
+// equipper identity keeps it unavailable; a complete record passes.
 type Validation struct {
 	Status string  `json:"status"`
 	Issues []Issue `json:"issues"`
@@ -113,7 +113,7 @@ const (
 
 // StructuredDisc is the persisted structured payload of one produced
 // item: the data object and the parsing issues, plus the validation that
-// explains why this revision is not auto-accepted.
+// determines whether the revision is eligible for auto-accept.
 type StructuredDisc struct {
 	Data       DiscData   `json:"data"`
 	Issues     []Issue    `json:"issues"`
@@ -261,8 +261,8 @@ func mainStatData(stat Stat) *StatData {
 // not reliably recognized. An equipped record with a confirmed management
 // state and a catalog-resolvable agent id passes validation; an explicitly
 // unequipped record has no equipper to identify, so a confirmed management
-// state is enough. The record still needs human confirmation because this
-// revision never marks a scan auto-accepted.
+// state is enough. A passed validation makes the record eligible for
+// auto-accept; it does not claim the OCR reading is guaranteed correct.
 func validate(issues []Issue, state CaptureState) Validation {
 	if hasError(issues) {
 		return Validation{Status: ValidationFailed, Issues: normalizeIssues(issues)}
