@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -110,24 +111,65 @@ func resolveExisting(path string) string {
 	}
 }
 
+// exportFile is the slice of *os.File the atomic export writer uses. It is
+// an interface so tests can inject ENOSPC and delayed write errors without
+// needing a real full volume.
+type exportFile interface {
+	io.Writer
+	Name() string
+	Sync() error
+	Close() error
+}
+
+// exportFileOps are the filesystem operations the atomic export writer
+// needs. Production uses os; tests replace individual steps to exercise
+// failure paths deterministically.
+type exportFileOps struct {
+	createTemp func(dir, pattern string) (exportFile, error)
+	chmod      func(name string, mode os.FileMode) error
+	rename     func(oldpath, newpath string) error
+	remove     func(name string) error
+}
+
+var defaultExportFileOps = exportFileOps{
+	createTemp: func(dir, pattern string) (exportFile, error) {
+		return os.CreateTemp(dir, pattern)
+	},
+	chmod:  os.Chmod,
+	rename: os.Rename,
+	remove: os.Remove,
+}
+
 // writeExportFile writes data beside the target, syncs and closes it, then
 // renames it into place. An error removes the temporary file and leaves
 // any existing target unchanged.
-func writeExportFile(path string, data []byte) (err error) {
+func writeExportFile(path string, data []byte) error {
+	return writeExportFileWith(path, data, defaultExportFileOps)
+}
+
+func writeExportFileWith(path string, data []byte, ops exportFileOps) (err error) {
 	dir := filepath.Dir(path)
-	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
+	tmp, err := ops.createTemp(dir, "."+filepath.Base(path)+".tmp-*")
 	if err != nil {
 		return err
 	}
 	tmpName := tmp.Name()
 	defer func() {
-		if err != nil {
-			_ = os.Remove(tmpName)
+		if err == nil {
+			return
+		}
+		if rmErr := ops.remove(tmpName); rmErr != nil {
+			err = fmt.Errorf("%w; 临时文件 %q 未删除: %v", err, tmpName, rmErr)
 		}
 	}()
-	if _, err = tmp.Write(data); err != nil {
+	n, err := tmp.Write(data)
+	if err != nil {
 		_ = tmp.Close()
 		return err
+	}
+	if n != len(data) {
+		_ = tmp.Close()
+		return io.ErrShortWrite
 	}
 	if err = tmp.Sync(); err != nil {
 		_ = tmp.Close()
@@ -137,10 +179,10 @@ func writeExportFile(path string, data []byte) (err error) {
 		return err
 	}
 	// CreateTemp uses 0600; exports are ordinary user files.
-	if err = os.Chmod(tmpName, 0o644); err != nil {
+	if err = ops.chmod(tmpName, 0o644); err != nil {
 		return err
 	}
-	if err = os.Rename(tmpName, path); err != nil {
+	if err = ops.rename(tmpName, path); err != nil {
 		return err
 	}
 	return nil
