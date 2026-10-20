@@ -1,6 +1,6 @@
 # Youkai 扫描结果 JSON 与 CSV v1
 
-更新日期：2026-10-20。状态：v1 契约已冻结；结构化解析、结果浏览与 JSON/CSV 导出已实现并合并到 `main`，自动接受、真实六位置与 Windows 验收仍未完成。2026-10-20 冻结首版数据模型与导出：管理状态合并为 `managementState`，套装与代理人使用 fairy 数值 ID；首版只导出可用数据 JSON 与 CSV，不提供 archive 视图、ZIP 或档案导入导出。首版文件契约按 v1 发布，无既有导出文件需要兼容迁移。用户已确认先做 youkai 自有文件，外部工具接入等具体需求出现后再评估。会话、保存与物品身份以[公共架构第 5 节](scanner-architecture.md#5-扫描会话与结果语义)为准；操作流程见 [T6](t6-review-export-workflow.md)。
+更新日期：2026-10-20。状态：v1 契约已冻结；结构化解析、结果浏览、自动接受与 JSON/CSV 导出已实现并合并到 `main`，真实六位置与 Windows 验收仍未完成。2026-10-20 冻结首版数据模型与导出：管理状态合并为 `managementState`，套装与代理人使用 fairy 数值 ID；首版只导出可用数据 JSON 与 CSV，不提供 archive 视图、ZIP 或档案导入导出。首版文件契约按 v1 发布，无既有导出文件需要兼容迁移。用户已确认先做 youkai 自有文件，外部工具接入等具体需求出现后再评估。会话、保存与物品身份以[公共架构第 5 节](scanner-architecture.md#5-扫描会话与结果语义)为准；操作流程见 [T6](t6-review-export-workflow.md)。
 
 ## 1. 两种导出格式，同一数据源
 
