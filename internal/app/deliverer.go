@@ -47,6 +47,7 @@ type recordStore interface {
 	SaveRevision(recordID string, sequence, expectedRevision int64, edit record.ItemEdit) (record.ItemRecord, int64, error)
 	ListRecords() ([]record.RecordInfo, error)
 	Load(recordID string) (*record.Recovery, error)
+	Peek(recordID string) (*record.Checkpoint, error)
 	// Evidence and record cleanup: screenshots are removed by rewriting
 	// the checkpoint first, records by removing their directory. The
 	// service exposes both with its own activity guards.
