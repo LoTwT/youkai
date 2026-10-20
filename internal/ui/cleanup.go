@@ -51,6 +51,26 @@ type cleanupPrompt struct {
 	err        string
 }
 
+// storageClearTarget names the two rebuildable housekeeping entries. They
+// never touch records, revisions, review state or the active log.
+type storageClearTarget int
+
+const (
+	storageClearNone storageClearTarget = iota
+	storageClearCache
+	storageClearOldLogs
+)
+
+// storagePrompt is one measured cache/log clear awaiting confirmation.
+type storagePrompt struct {
+	target     storageClearTarget
+	preview    app.StorageClearPreview
+	previewing bool
+	ready      bool
+	running    bool
+	err        string
+}
+
 // requestSavePrompt measures the just-finished session and opens the
 // post-save choice. A failed measurement is reported instead of showing
 // zero as exact; nothing is deleted without the user's choice.
@@ -267,6 +287,199 @@ func (m *Model) ConfirmCleanup() {
 		p.running = false
 		p.err = "未知的清理操作。"
 	}
+}
+
+// RequestCacheClear opens the measured confirmation for the rebuildable
+// cache.
+func (m *Model) RequestCacheClear() { m.requestStorageClear(storageClearCache) }
+
+// RequestOldLogClear opens the measured confirmation for rotated log
+// backups.
+func (m *Model) RequestOldLogClear() { m.requestStorageClear(storageClearOldLogs) }
+
+func (m *Model) requestStorageClear(target storageClearTarget) {
+	if target == storageClearNone {
+		return
+	}
+	m.cleanupNotice = ""
+	if reason := m.storageClearBlockedReason(target); reason != "" {
+		m.storagePrompt = nil
+		m.cleanupNotice = reason
+		return
+	}
+	m.storagePrompt = &storagePrompt{target: target, previewing: true}
+	m.goAsync(func() {
+		preview, err := m.previewStorageClear(target)
+		m.update(func() {
+			p := m.storagePrompt
+			if p == nil || p.target != target {
+				return
+			}
+			p.previewing = false
+			if err != nil {
+				p.err = "无法生成清理预览：" + err.Error()
+				return
+			}
+			p.preview = preview
+			if preview.Files == 0 {
+				m.storagePrompt = nil
+				m.cleanupNotice = storageClearNothingNotice(target)
+				return
+			}
+			p.ready = true
+		})
+	})
+}
+
+func (m *Model) previewStorageClear(target storageClearTarget) (app.StorageClearPreview, error) {
+	switch target {
+	case storageClearCache:
+		return m.cfg.Service.PreviewCacheClear()
+	case storageClearOldLogs:
+		return m.cfg.Service.PreviewOldLogClear()
+	default:
+		return app.StorageClearPreview{}, fmt.Errorf("unknown storage clear target")
+	}
+}
+
+// CancelStorageClear closes the confirmation without touching anything.
+func (m *Model) CancelStorageClear() {
+	if m.storagePrompt == nil || m.storagePrompt.running {
+		return
+	}
+	m.storagePrompt = nil
+}
+
+// ConfirmStorageClear executes the previewed cache or old-log clear. A
+// failure keeps the prompt open with its error so the action can be
+// retried. The storage measurements are refreshed either way.
+func (m *Model) ConfirmStorageClear() {
+	p := m.storagePrompt
+	if p == nil || p.running || p.previewing || !p.ready {
+		return
+	}
+	if reason := m.storageClearBlockedReason(p.target); reason != "" {
+		p.err = reason
+		return
+	}
+	p.running = true
+	p.err = ""
+	target := p.target
+	m.goAsync(func() {
+		var preview app.StorageClearPreview
+		var err error
+		switch target {
+		case storageClearCache:
+			preview, err = m.cfg.Service.ClearCache()
+		case storageClearOldLogs:
+			preview, err = m.cfg.Service.ClearOldLogs()
+		default:
+			err = fmt.Errorf("unknown storage clear target")
+		}
+		m.update(func() {
+			p.running = false
+			if m.storagePrompt != p {
+				m.refreshStorage()
+				return
+			}
+			if err != nil {
+				p.err = "清理失败：" + err.Error()
+				m.refreshStorage()
+				return
+			}
+			m.storagePrompt = nil
+			m.cleanupNotice = storageClearSuccessNotice(target, preview)
+			m.refreshStorage()
+		})
+	})
+}
+
+func (m *Model) storageClearBlockedReason(target storageClearTarget) string {
+	switch {
+	case m.exitState == exitRunning || m.exitState == exitDone:
+		return "正在退出应用，不能清理。"
+	case m.storagePrompt != nil && m.storagePrompt.running:
+		return "正在执行清理，完成前不能开始另一项。"
+	case target == storageClearCache && m.snap.Busy:
+		return "扫描会话进行中，结束后才能清理缓存。"
+	case target == storageClearCache && m.exporting:
+		return "正在导出，完成前不能清理缓存。"
+	case target == storageClearCache && (m.updatesState == updateInstalling || m.updatesState == updateInstalled):
+		return "正在更新，完成前不能清理缓存。"
+	default:
+		return ""
+	}
+}
+
+// OpenDataDirectory asks the entry point to reveal the managed data root.
+// The callback is deliberately absent in tests that do not exercise the
+// system file manager.
+func (m *Model) OpenDataDirectory() {
+	if m.cfg.OpenDataDirectory == nil {
+		return
+	}
+	if err := m.cfg.OpenDataDirectory(); err != nil {
+		m.cleanupNotice = "打开数据目录失败：" + err.Error()
+		return
+	}
+	m.cleanupNotice = "已打开数据目录。"
+}
+
+func storageClearNothingNotice(target storageClearTarget) string {
+	if target == storageClearOldLogs {
+		return "没有可清理的旧日志备份。"
+	}
+	return "没有可清理的缓存文件。"
+}
+
+func storageClearSuccessNotice(target storageClearTarget, preview app.StorageClearPreview) string {
+	if target == storageClearOldLogs {
+		return fmt.Sprintf("已清理 %d 个旧日志备份（%s）；当前日志文件保留。",
+			preview.Files, formatBytes(preview.Bytes))
+	}
+	return fmt.Sprintf("已清理缓存 %d 个文件（%s）；历史记录与校对状态不受影响。",
+		preview.Files, formatBytes(preview.Bytes))
+}
+
+func storagePromptText(p *storagePrompt) string {
+	if p.target == storageClearOldLogs {
+		return fmt.Sprintf("将删除 %d 个旧日志备份（%s）；当前日志文件保留。",
+			p.preview.Files, formatBytes(p.preview.Bytes))
+	}
+	return fmt.Sprintf("将删除缓存 %d 个文件（%s）；历史记录、修订与校对状态不受影响。",
+		p.preview.Files, formatBytes(p.preview.Bytes))
+}
+
+// storagePromptArea is the measured confirmation for cache and old-log
+// housekeeping. It is separate from the record/screenshot prompt because
+// it never reports record or review counts.
+func (m *Model) storagePromptArea(c *ui.Context, t *ui.Theme) {
+	p := m.storagePrompt
+	if p == nil {
+		return
+	}
+	ui.Column(c).Gap(t.Space(1)).Children(func() {
+		if p.previewing {
+			ui.Text(c, "正在计算清理预览……").TextColor(t.TextMuted)
+		} else if p.ready {
+			ui.Text(c, storagePromptText(p))
+		}
+		ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
+			confirm := ui.Button(c, "确认清理").Disabled(p.running || p.previewing || !p.ready)
+			if confirm.Clicked() {
+				m.ConfirmStorageClear()
+			}
+			if ui.Button(c, "取消").Disabled(p.running).Clicked() {
+				m.CancelStorageClear()
+			}
+			if p.running {
+				ui.Text(c, "正在清理……").TextColor(t.TextMuted)
+			}
+		})
+		if p.err != "" {
+			ui.Text(c, p.err).TextColor(t.Danger)
+		}
+	})
 }
 
 func (m *Model) finishScreenshotCleanup(p *cleanupPrompt, removal record.EvidenceRemoval, err error) {
@@ -579,6 +792,22 @@ func (m *Model) storageArea(c *ui.Context, t *ui.Theme) {
 		case m.storage != nil:
 			ui.Text(c, m.storageSummary()).TextColor(t.TextMuted)
 		}
+		ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
+			if m.cfg.OpenDataDirectory != nil {
+				if ui.Button(c, "打开数据目录").Clicked() {
+					m.OpenDataDirectory()
+				}
+			}
+			if ui.Button(c, "清缓存").Disabled(m.storageLoading).Clicked() {
+				m.RequestCacheClear()
+			}
+			if ui.Button(c, "清旧日志").Disabled(m.storageLoading).Clicked() {
+				m.RequestOldLogClear()
+			}
+			if ui.Button(c, "刷新占用").Disabled(m.storageLoading).Clicked() {
+				m.refreshStorage()
+			}
+		})
 		blocked := m.cleanupBlockedReason()
 		ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
 			if ui.Button(c, "删除全部截图").Disabled(blocked != "").Clicked() {
@@ -587,9 +816,6 @@ func (m *Model) storageArea(c *ui.Context, t *ui.Theme) {
 			if ui.Button(c, "删除全部记录").Disabled(blocked != "").Clicked() {
 				m.RequestAllRecordCleanup()
 			}
-			if ui.Button(c, "刷新占用").Disabled(m.storageLoading).Clicked() {
-				m.refreshStorage()
-			}
 			if blocked != "" {
 				ui.Text(c, blocked).TextColor(t.TextMuted).FontSize(t.FontSize * 0.9)
 			}
@@ -597,6 +823,7 @@ func (m *Model) storageArea(c *ui.Context, t *ui.Theme) {
 		if m.cleanupNotice != "" {
 			ui.Text(c, m.cleanupNotice)
 		}
+		m.storagePromptArea(c, t)
 		if m.cleanup != nil && m.cleanup.target.all() {
 			m.cleanupPromptArea(c, t)
 		}

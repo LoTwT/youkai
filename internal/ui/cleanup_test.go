@@ -379,6 +379,128 @@ func TestViewCleanupBlockedByExportAndUnsavedEdit(t *testing.T) {
 	}
 }
 
+func TestViewStorageHousekeepingPreviewsAndClears(t *testing.T) {
+	svc := &fakeService{
+		cachePreview: app.StorageClearPreview{Files: 2, Bytes: 2048},
+		logPreview:   app.StorageClearPreview{Files: 2, Bytes: 3072},
+		storage:      app.StorageUsage{Records: 1, CacheBytes: 2048, LogBytes: 3072},
+	}
+	opened := 0
+	m, q := newTestModel(t, Config{
+		Service: svc,
+		OpenDataDirectory: func() error {
+			opened++
+			return nil
+		},
+	})
+	tt := ui.NewTester(m.View, 1020, 900)
+	settle(t, m, q, tt)
+
+	if err := tt.Click("打开数据目录"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
+	if opened != 1 || !tt.HasText("已打开数据目录。") {
+		t.Fatalf("opened=%d texts=%q", opened, tt.Texts())
+	}
+
+	if err := tt.Click("清缓存"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
+	if !tt.HasText("将删除缓存 2 个文件（2.0 KB）；历史记录、修订与校对状态不受影响。") {
+		t.Fatalf("cache preview does not show: %q", tt.Texts())
+	}
+	if err := tt.Click("确认清理"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
+	if cache, _ := svc.storageClearCalls(); cache != 1 {
+		t.Fatalf("cache clears = %d, want 1", cache)
+	}
+	if !tt.HasText("已清理缓存 2 个文件（2.0 KB）；历史记录与校对状态不受影响。") {
+		t.Fatalf("cache result does not show: %q", tt.Texts())
+	}
+
+	if err := tt.Click("清旧日志"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
+	if !tt.HasText("将删除 2 个旧日志备份（3.0 KB）；当前日志文件保留。") {
+		t.Fatalf("log preview does not show: %q", tt.Texts())
+	}
+	m.CancelStorageClear()
+	settle(t, m, q, tt)
+	if _, logs := svc.storageClearCalls(); logs != 0 {
+		t.Fatalf("cancel still cleared logs: %d", logs)
+	}
+
+	if err := tt.Click("清旧日志"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
+	if err := tt.Click("确认清理"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
+	if _, logs := svc.storageClearCalls(); logs != 1 {
+		t.Fatalf("log clears = %d, want 1", logs)
+	}
+	if !tt.HasText("已清理 2 个旧日志备份（3.0 KB）；当前日志文件保留。") {
+		t.Fatalf("log result does not show: %q", tt.Texts())
+	}
+}
+
+func TestViewStorageHousekeepingEmptyAndFailureStates(t *testing.T) {
+	svc := &fakeService{}
+	m, q := newTestModel(t, Config{Service: svc})
+	tt := ui.NewTester(m.View, 1020, 900)
+	settle(t, m, q, tt)
+
+	if err := tt.Click("清缓存"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
+	if !tt.HasText("没有可清理的缓存文件。") || m.storagePrompt != nil {
+		t.Fatalf("empty cache state = %q, prompt=%+v", tt.Texts(), m.storagePrompt)
+	}
+
+	svc.cachePreview = app.StorageClearPreview{Files: 1, Bytes: 1}
+	svc.cacheClearErr = errString("磁盘忙")
+	if err := tt.Click("清缓存"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
+	if err := tt.Click("确认清理"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
+	if m.storagePrompt == nil || m.storagePrompt.err == "" {
+		t.Fatalf("failed cache clear did not keep its prompt: %+v", m.storagePrompt)
+	}
+	if !tt.HasText("清理失败：磁盘忙") {
+		t.Fatalf("cache failure does not show: %q", tt.Texts())
+	}
+}
+
+func TestViewOpenDataDirectoryFailure(t *testing.T) {
+	m, q := newTestModel(t, Config{
+		Service: &fakeService{},
+		OpenDataDirectory: func() error {
+			return errString("没有文件管理器")
+		},
+	})
+	tt := ui.NewTester(m.View, 1020, 900)
+	settle(t, m, q, tt)
+	if err := tt.Click("打开数据目录"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
+	if !tt.HasText("打开数据目录失败：没有文件管理器") {
+		t.Fatalf("open failure does not show: %q", tt.Texts())
+	}
+}
+
 func TestViewStorageUsageFailureDoesNotShowStaleNumbers(t *testing.T) {
 	svc := &fakeService{storageErr: errString("权限不足")}
 	m, q := newTestModel(t, Config{Service: svc, ExportSaver: &fakeExportSaver{}})
