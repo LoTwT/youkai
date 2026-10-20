@@ -298,6 +298,120 @@ func TestServiceStorageUsageMeasuresManagedRoots(t *testing.T) {
 	}
 }
 
+func TestServiceClearCacheKeepsRecordsAndData(t *testing.T) {
+	store, paths := cleanupStore(t)
+	cleanupFixture(t, store, "cleanup-1", true)
+	if err := os.MkdirAll(filepath.Join(paths.Cache, "nested"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(paths.Cache, "thumb.bin"), []byte("12345"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(paths.Cache, "nested", "index.bin"), []byte("abc"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dataFile := filepath.Join(paths.Data, "settings.json")
+	if err := os.WriteFile(dataFile, []byte("keep"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	svc := newServiceWithStore(t, paths, store, nil, func() (Recognizer, error) { return newFakeRecognizer(), nil })
+
+	preview, err := svc.PreviewCacheClear()
+	if err != nil {
+		t.Fatalf("PreviewCacheClear: %v", err)
+	}
+	if preview.Files != 2 || preview.Bytes != 8 {
+		t.Fatalf("cache preview = %+v, want 2 files / 8 bytes", preview)
+	}
+	cleared, err := svc.ClearCache()
+	if err != nil {
+		t.Fatalf("ClearCache: %v", err)
+	}
+	if cleared != preview {
+		t.Errorf("cleared = %+v, want preview %+v", cleared, preview)
+	}
+	if got, err := svc.PreviewCacheClear(); err != nil || got.Files != 0 || got.Bytes != 0 {
+		t.Errorf("cache after clear = %+v, %v", got, err)
+	}
+	if data, err := os.ReadFile(dataFile); err != nil || string(data) != "keep" {
+		t.Errorf("data file changed: %q, %v", data, err)
+	}
+	if _, err := svc.LoadRecord("cleanup-1"); err != nil {
+		t.Errorf("record no longer loads after cache clear: %v", err)
+	}
+}
+
+func TestServiceClearOldLogsKeepsActiveLogAndUnrelatedFiles(t *testing.T) {
+	store, paths := cleanupStore(t)
+	if err := os.MkdirAll(paths.Logs, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	files := map[string]string{
+		"youkai.log":     "active",
+		"youkai.log.1":   "old-1",
+		"youkai.log.2":   "old-22",
+		"youkai.log.tmp": "keep-non-numeric",
+		"notes.txt":      "keep-other",
+	}
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(paths.Logs, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	svc := newServiceWithStore(t, paths, store, nil, func() (Recognizer, error) { return newFakeRecognizer(), nil })
+
+	preview, err := svc.PreviewOldLogClear()
+	if err != nil {
+		t.Fatalf("PreviewOldLogClear: %v", err)
+	}
+	if preview.Files != 2 || preview.Bytes != int64(len("old-1")+len("old-22")) {
+		t.Fatalf("log preview = %+v, want the two numeric backups", preview)
+	}
+	cleared, err := svc.ClearOldLogs()
+	if err != nil {
+		t.Fatalf("ClearOldLogs: %v", err)
+	}
+	if cleared != preview {
+		t.Errorf("cleared = %+v, want preview %+v", cleared, preview)
+	}
+	for _, name := range []string{"youkai.log", "youkai.log.tmp", "notes.txt"} {
+		if _, err := os.Stat(filepath.Join(paths.Logs, name)); err != nil {
+			t.Errorf("%s was removed: %v", name, err)
+		}
+	}
+	for _, name := range []string{"youkai.log.1", "youkai.log.2"} {
+		if _, err := os.Stat(filepath.Join(paths.Logs, name)); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("%s survived (%v), want removed", name, err)
+		}
+	}
+}
+
+func TestServiceClearRejectsTheDataRoot(t *testing.T) {
+	store, paths := cleanupStore(t)
+	paths.Cache = paths.Data
+	paths.Logs = paths.Data
+	svc := newServiceWithStore(t, paths, store, nil, func() (Recognizer, error) { return newFakeRecognizer(), nil })
+
+	if _, err := svc.ClearCache(); err == nil {
+		t.Fatal("ClearCache accepted the data root")
+	}
+	if _, err := svc.ClearOldLogs(); err == nil {
+		t.Fatal("ClearOldLogs accepted the data root")
+	}
+}
+
+func TestServiceClearRejectsASymlinkedRoot(t *testing.T) {
+	store, paths := cleanupStore(t)
+	target := t.TempDir()
+	if err := os.Symlink(target, paths.Cache); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	svc := newServiceWithStore(t, paths, store, nil, func() (Recognizer, error) { return newFakeRecognizer(), nil })
+	if _, err := svc.ClearCache(); err == nil {
+		t.Fatal("ClearCache followed a symlinked cache root")
+	}
+}
+
 func TestCleanupBlockedErrorExplainsReason(t *testing.T) {
 	err := &CleanupBlockedError{Reason: "扫描会话进行中，结束后才能清理。"}
 	if !errors.Is(err, ErrCleanupBlocked) {

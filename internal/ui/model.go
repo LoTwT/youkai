@@ -62,6 +62,14 @@ type Service interface {
 	// StorageUsage measures records, screenshots, cache, logs and the
 	// free space of the data volume.
 	StorageUsage() (app.StorageUsage, error)
+	// PreviewCacheClear measures the rebuildable cache.
+	PreviewCacheClear() (app.StorageClearPreview, error)
+	// ClearCache removes the rebuildable cache only.
+	ClearCache() (app.StorageClearPreview, error)
+	// PreviewOldLogClear measures the rotated diagnostic-log backups.
+	PreviewOldLogClear() (app.StorageClearPreview, error)
+	// ClearOldLogs removes the rotated diagnostic-log backups only.
+	ClearOldLogs() (app.StorageClearPreview, error)
 	// Quit runs the explicit-exit wrap-up; it blocks until it is done.
 	Quit() error
 }
@@ -98,6 +106,9 @@ type Config struct {
 	// ExportSaver chooses and writes the usable-data JSON/CSV files; nil
 	// hides the export controls.
 	ExportSaver ExportSaver
+	// OpenDataDirectory opens the managed data root with the system file
+	// manager; nil hides the action.
+	OpenDataDirectory func() error
 	// EvidenceCacheLimit bounds the decoded evidence bitmaps held at
 	// once; 0 uses evidenceCacheLimit.
 	EvidenceCacheLimit int
@@ -217,6 +228,7 @@ type Model struct {
 	storage          *app.StorageUsage
 	storageErr       string
 	storageLoading   bool
+	storagePrompt    *storagePrompt
 
 	// The export controls' frozen usable-data snapshot and outcome. The
 	// snapshot is rebuilt on every record load and saved item, and both

@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 
 	"github.com/LoTwT/youkai/internal/record"
 	"github.com/LoTwT/youkai/internal/scan"
@@ -288,6 +290,184 @@ type StorageUsage struct {
 	DiskSpaceKnown bool
 }
 
+// StorageClearPreview is what clearing the rebuildable cache or the old
+// diagnostic logs would remove. It never includes records, revisions,
+// review state or the active log file.
+type StorageClearPreview struct {
+	Files int
+	Bytes int64
+}
+
+// PreviewCacheClear measures the cache subtree without deleting anything.
+func (s *Service) PreviewCacheClear() (StorageClearPreview, error) {
+	return previewDirectory(s.cfg.Paths.Cache, nil)
+}
+
+// ClearCache removes every entry below the dedicated cache root. It
+// refuses a root that is the data root or one of its ancestors, and never
+// follows a symlink at the cache root.
+func (s *Service) ClearCache() (StorageClearPreview, error) {
+	root := s.cfg.Paths.Cache
+	if err := clearableRoot(root, s.cfg.Paths.Data, "cache"); err != nil {
+		return StorageClearPreview{}, err
+	}
+	preview, err := previewDirectory(root, nil)
+	if err != nil {
+		return StorageClearPreview{}, fmt.Errorf("app: clear cache: %w", err)
+	}
+	if err := removeDirectoryEntries(root, nil); err != nil {
+		return StorageClearPreview{}, fmt.Errorf("app: clear cache: %w", err)
+	}
+	return preview, nil
+}
+
+// PreviewOldLogClear measures the rotated diagnostic backups. The active
+// youkai.log and unrelated files stay untouched.
+func (s *Service) PreviewOldLogClear() (StorageClearPreview, error) {
+	return previewDirectory(s.cfg.Paths.Logs, isOldLogName)
+}
+
+// ClearOldLogs removes only rotated youkai.log.N backups. The active log
+// file is never deleted, so logging keeps working during and after the
+// clear.
+func (s *Service) ClearOldLogs() (StorageClearPreview, error) {
+	root := s.cfg.Paths.Logs
+	if err := clearableRoot(root, s.cfg.Paths.Data, "logs"); err != nil {
+		return StorageClearPreview{}, err
+	}
+	preview, err := previewDirectory(root, isOldLogName)
+	if err != nil {
+		return StorageClearPreview{}, fmt.Errorf("app: clear old logs: %w", err)
+	}
+	if err := removeDirectoryEntries(root, isOldLogName); err != nil {
+		return StorageClearPreview{}, fmt.Errorf("app: clear old logs: %w", err)
+	}
+	return preview, nil
+}
+
+// isOldLogName matches the diagnostic log's rotated backups, youkai.log.N.
+// The active file has no numeric suffix and is deliberately excluded.
+func isOldLogName(name string) bool {
+	const prefix = "youkai.log."
+	if !strings.HasPrefix(name, prefix) {
+		return false
+	}
+	suffix := strings.TrimPrefix(name, prefix)
+	if suffix == "" {
+		return false
+	}
+	for _, r := range suffix {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// previewDirectory counts regular files below root, optionally filtered.
+// A missing root is empty, not an error; symlinks are not followed. A
+// filter applies to top-level names, which is where the rotated log
+// backups live.
+func previewDirectory(root string, keep func(string) bool) (StorageClearPreview, error) {
+	if keep == nil {
+		files, bytes, err := directoryStats(root)
+		if err != nil {
+			return StorageClearPreview{}, err
+		}
+		return StorageClearPreview{Files: files, Bytes: bytes}, nil
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return StorageClearPreview{}, nil
+		}
+		return StorageClearPreview{}, err
+	}
+	var out StorageClearPreview
+	for _, entry := range entries {
+		if !keep(entry.Name()) || entry.Type()&os.ModeSymlink != 0 {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			return StorageClearPreview{}, err
+		}
+		if info.Mode().IsRegular() {
+			out.Files++
+			out.Bytes += info.Size()
+		}
+	}
+	return out, nil
+}
+
+// removeDirectoryEntries deletes entries below root that keep accepts (all
+// entries when keep is nil). The root itself stays, and a missing root is
+// a no-op. Symlinks are removed as links, never followed.
+func removeDirectoryEntries(root string, keep func(string) bool) error {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	for _, entry := range entries {
+		if keep != nil {
+			if !keep(entry.Name()) || entry.Type()&os.ModeSymlink != 0 {
+				continue
+			}
+			info, err := entry.Info()
+			if err != nil {
+				if errors.Is(err, os.ErrNotExist) {
+					continue
+				}
+				return err
+			}
+			if !info.Mode().IsRegular() {
+				continue
+			}
+		}
+		if err := os.RemoveAll(filepath.Join(root, entry.Name())); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// clearableRoot refuses a destructive root that is the data root itself
+// or one of its ancestors. The cache and log roots may live below Data
+// (Windows), so being a descendant is allowed.
+func clearableRoot(root, data, label string) error {
+	cleanRoot := filepath.Clean(root)
+	cleanData := filepath.Clean(data)
+	if cleanRoot == "." || cleanRoot == string(filepath.Separator) {
+		return fmt.Errorf("app: %s root %q is not a managed directory", label, root)
+	}
+	if samePath(cleanRoot, cleanData) {
+		return fmt.Errorf("app: %s root must not be the data root", label)
+	}
+	if rel, err := filepath.Rel(cleanRoot, cleanData); err == nil &&
+		rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("app: %s root %q contains the data root", label, root)
+	}
+	if info, err := os.Lstat(cleanRoot); err == nil && info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("app: %s root %q is a symlink", label, root)
+	}
+	return nil
+}
+
+// samePath compares cleaned paths, case-insensitively on Windows where
+// the filesystem may preserve a different case than the caller supplied.
+func samePath(a, b string) bool {
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(a, b)
+	}
+	return a == b
+}
+
 // StorageUsage measures the application's managed storage. It walks the
 // record, cache and log trees on the calling goroutine, so callers run it
 // in the background.
@@ -320,10 +500,11 @@ func (s *Service) StorageUsage() (StorageUsage, error) {
 	return out, nil
 }
 
-// directorySize sums the regular files below root without following
-// symbolic links. A missing directory is empty, not an error: cache and
-// logs are created by whoever writes first.
-func directorySize(root string) (int64, error) {
+// directoryStats counts and sums the regular files below root without
+// following symbolic links. A missing directory is empty, not an error:
+// cache and logs are created by whoever writes first.
+func directoryStats(root string) (int, int64, error) {
+	var files int
 	var total int64
 	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
 		if err != nil {
@@ -346,12 +527,20 @@ func directorySize(root string) (int64, error) {
 			return err
 		}
 		if info.Mode().IsRegular() {
+			files++
 			total += info.Size()
 		}
 		return nil
 	})
 	if err != nil && errors.Is(err, os.ErrNotExist) {
-		return 0, nil
+		return 0, 0, nil
 	}
+	return files, total, err
+}
+
+// directorySize sums the regular files below root without following
+// symbolic links. A missing directory is empty, not an error.
+func directorySize(root string) (int64, error) {
+	_, total, err := directoryStats(root)
 	return total, err
 }

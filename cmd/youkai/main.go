@@ -196,7 +196,8 @@ func main() {
 		Evidence: ui.FileEvidence{Root: paths.Data},
 		// Usable-data exports: the system save dialog, then an atomic
 		// write outside the application-managed data root.
-		ExportSaver: fileExportSaver{dataRoot: paths.Data},
+		ExportSaver:       fileExportSaver{dataRoot: paths.Data},
+		OpenDataDirectory: func() error { return mygo.Shell.OpenPath(paths.Data) },
 		// The auto-update corner: MyGo's updater behind the UI's seam. The
 		// running version shows in the area ("当前版本 …"); DevAutoInstall
 		// is the rehearsal switch (YOUKAI_DEV_AUTOUPDATE) that installs a

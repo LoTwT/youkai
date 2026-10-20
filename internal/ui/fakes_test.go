@@ -117,6 +117,15 @@ type fakeService struct {
 	allScreenshot  int
 	recordDels     []string
 	allRecords     int
+
+	cachePreview  app.StorageClearPreview
+	cacheErr      error
+	cacheClearErr error
+	cacheClears   int
+	logPreview    app.StorageClearPreview
+	logErr        error
+	logClearErr   error
+	logClears     int
 }
 
 // saveCall is one recorded SaveItemRevision request.
@@ -295,6 +304,50 @@ func (f *fakeService) StorageUsage() (app.StorageUsage, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.storage, f.storageErr
+}
+
+func (f *fakeService) PreviewCacheClear() (app.StorageClearPreview, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.cachePreview, f.cacheErr
+}
+
+func (f *fakeService) ClearCache() (app.StorageClearPreview, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.cacheClears++
+	if f.cacheClearErr != nil {
+		return app.StorageClearPreview{}, f.cacheClearErr
+	}
+	if f.cacheErr != nil {
+		return app.StorageClearPreview{}, f.cacheErr
+	}
+	return f.cachePreview, nil
+}
+
+func (f *fakeService) PreviewOldLogClear() (app.StorageClearPreview, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.logPreview, f.logErr
+}
+
+func (f *fakeService) ClearOldLogs() (app.StorageClearPreview, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.logClears++
+	if f.logClearErr != nil {
+		return app.StorageClearPreview{}, f.logClearErr
+	}
+	if f.logErr != nil {
+		return app.StorageClearPreview{}, f.logErr
+	}
+	return f.logPreview, nil
+}
+
+func (f *fakeService) storageClearCalls() (cache, logs int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.cacheClears, f.logClears
 }
 
 func (f *fakeService) cleanupCalls() (screenshots []string, allScreenshots int, records []string, allRecords int) {
