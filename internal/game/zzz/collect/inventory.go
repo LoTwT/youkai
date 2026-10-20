@@ -76,9 +76,17 @@ type Inventory struct {
 	// bound the anchors to; Collect's every input names it and every
 	// evidence frame must carry it.
 	boundGeometry platform.GeometryVersion
-	// observedScope is the range report Precheck assembled; ObservedScope
-	// relays it to the controller.
+	// scope is the live observed-range report; observedScope is its
+	// marshaled form, replaced after every scope change so the controller
+	// can relay the final facts after Collect.
+	scope         scopePayload
 	observedScope json.RawMessage
+	// sortChecks and sortVerifiedChecks count every opened filter panel
+	// and those whose sort region matched the reference. One mismatch
+	// keeps the session's sort unverified: a mid-scan change must not be
+	// averaged away.
+	sortChecks         int
+	sortVerifiedChecks int
 }
 
 // Traversal pacing and bound defaults. The detail window's provisional
@@ -91,6 +99,20 @@ const (
 	DefaultDetailStableSpan = 200 * time.Millisecond
 	DefaultMaxRetries       = 2
 	DefaultRecheckEvery     = 20 * time.Millisecond
+)
+
+// Observed-scope vocabulary. Sort stays unverified until every opened
+// panel matched the calibrated reference; coverage stays unknown until a
+// position completes, becomes partial on a stopped or unverified-sort
+// traversal, and becomes complete only for all six verified positions
+// with the sort verified.
+const (
+	scopeSortUnverified   = "unverified"
+	scopeSortVerified     = "verified"
+	scopeCoverageUnknown  = "unknown"
+	scopeCoveragePartial  = "partial"
+	scopeCoverageComplete = "complete"
+	scopePositionCount    = 6
 )
 
 func (inv *Inventory) actionBudget() time.Duration {
@@ -257,19 +279,35 @@ type ReferenceEvidence struct {
 	FrameID uint64 `json:"frameId"`
 }
 
-// scopePayload is the observed-range report Precheck assembles: only the
-// facts its evidence actually established. Quantity and the sort order
-// stay unverified (sort is recorded as "unverified"); the traversal neither
-// reads nor infers them.
+// scopePayload is the observed-range report the traversal assembles:
+// only the facts its evidence actually established. The precheck fills
+// the initial facts and writes sort/coverage as unverified/unknown; the
+// traversal updates them as panel and position evidence arrives.
 type scopePayload struct {
-	Kind          string `json:"kind"`
-	Page          string `json:"page"`
-	Layout        string `json:"layout,omitempty"`
-	Geometry      uint64 `json:"geometry"`
-	Slots         int    `json:"slots"`
-	StartPosition int    `json:"startPosition"`
-	FilterAtStart string `json:"filterAtStart"`
-	Sort          string `json:"sort"`
+	Kind          string          `json:"kind"`
+	Page          string          `json:"page"`
+	Layout        string          `json:"layout,omitempty"`
+	Geometry      uint64          `json:"geometry"`
+	Slots         int             `json:"slots"`
+	StartPosition int             `json:"startPosition"`
+	FilterAtStart string          `json:"filterAtStart"`
+	Sort          string          `json:"sort"`
+	SortLabel     string          `json:"sortLabel,omitempty"`
+	Coverage      string          `json:"coverage,omitempty"`
+	Positions     []positionScope `json:"positions,omitempty"`
+}
+
+// positionScope is one wheel position's ledger entry: how many viewports
+// it traversed, how many occupied slots were visited, and whether the top
+// and bottom evidence completed. Complete is true only when both ends
+// verified; a stopped position keeps its partial counts.
+type positionScope struct {
+	Position  int  `json:"position"`
+	Viewports int  `json:"viewports"`
+	Visits    int  `json:"visits"`
+	Top       bool `json:"topVerified"`
+	Bottom    bool `json:"bottomVerified"`
+	Complete  bool `json:"complete"`
 }
 
 // Precheck implements Traversal: verify, without dispatching any input,
@@ -336,7 +374,7 @@ func (inv *Inventory) Precheck(ctx context.Context, sess platform.Session) error
 	if m.Filter != nil {
 		filterAtStart = m.Filter.State
 	}
-	scope, err := json.Marshal(scopePayload{
+	inv.scope = scopePayload{
 		Kind:          "zzzInventory",
 		Page:          string(PageWarehouse),
 		Layout:        inv.Layout.Name,
@@ -344,20 +382,90 @@ func (inv *Inventory) Precheck(ctx context.Context, sess platform.Session) error
 		Slots:         len(inv.Layout.Slots),
 		StartPosition: m.Wheel.Position,
 		FilterAtStart: string(filterAtStart),
-		Sort:          "unverified",
-	})
-	if err != nil {
-		return fmt.Errorf("collect: precheck: marshal observed scope: %w", err)
+		Sort:          scopeSortUnverified,
+		Coverage:      scopeCoverageUnknown,
 	}
 	inv.boundGeometry = geo
-	inv.observedScope = scope
+	if err := inv.writeScope(); err != nil {
+		return fmt.Errorf("collect: precheck: marshal observed scope: %w", err)
+	}
 	return nil
 }
 
-// ObservedScope implements ScopeReporter: the range facts Precheck
-// actually established. Nil before a successful precheck.
+// ObservedScope implements ScopeReporter: the range facts the traversal
+// has established so far. Nil before a successful precheck. The report is
+// refreshed during Collect, so the controller relays the final facts after
+// the traversal ends as well as the precheck facts before it starts.
 func (inv *Inventory) ObservedScope() json.RawMessage {
 	return append(json.RawMessage(nil), inv.observedScope...)
+}
+
+// writeScope replaces the marshaled observed-scope report. It runs on the
+// producer goroutine only (Precheck, then Collect); the controller reads
+// the result on the same goroutine after each phase.
+func (inv *Inventory) writeScope() error {
+	raw, err := json.Marshal(inv.scope)
+	if err != nil {
+		return err
+	}
+	inv.observedScope = raw
+	return nil
+}
+
+// observeSort records one opened panel's sort evidence. The session's
+// sort is verified only when every checked panel matched the reference;
+// the first mismatch sticks, because a changed order mid-scan cannot be
+// represented by the calibrated label.
+func (inv *Inventory) observeSort(panel *PanelEvidence) {
+	if panel == nil {
+		return
+	}
+	inv.sortChecks++
+	if panel.SortVerified && panel.SortLabel == sortLabelRarity {
+		inv.sortVerifiedChecks++
+	}
+	inv.scope.Sort = scopeSortUnverified
+	inv.scope.SortLabel = ""
+	if inv.sortChecks > 0 && inv.sortVerifiedChecks == inv.sortChecks {
+		inv.scope.Sort = scopeSortVerified
+		inv.scope.SortLabel = sortLabelRarity
+	}
+	inv.updateCoverage()
+	_ = inv.writeScope()
+}
+
+// recordPosition appends one wheel position's ledger entry and refreshes
+// the coverage conclusion. A position is complete only when its top and
+// bottom were verified; the run records an incomplete entry before it
+// returns an error so a stopped traversal still reports where it stopped.
+func (inv *Inventory) recordPosition(p positionScope) {
+	inv.scope.Positions = append(inv.scope.Positions, p)
+	inv.updateCoverage()
+	_ = inv.writeScope()
+}
+
+// updateCoverage derives the conclusion from the ledger and the sort
+// evidence. Complete needs all six positions complete and every panel's
+// sort verified; anything shorter but non-empty is partial; no completed
+// evidence at all stays unknown. Expected count is not inferred here.
+func (inv *Inventory) updateCoverage() {
+	complete := len(inv.scope.Positions) == scopePositionCount && inv.scope.Sort == scopeSortVerified
+	if complete {
+		for i, p := range inv.scope.Positions {
+			if p.Position != i+1 || !p.Complete || !p.Top || !p.Bottom {
+				complete = false
+				break
+			}
+		}
+	}
+	switch {
+	case complete:
+		inv.scope.Coverage = scopeCoverageComplete
+	case len(inv.scope.Positions) > 0:
+		inv.scope.Coverage = scopeCoveragePartial
+	default:
+		inv.scope.Coverage = scopeCoverageUnknown
+	}
 }
 
 // Collect implements Traversal: run the navigation state machine on the
@@ -403,6 +511,15 @@ type inventoryRun struct {
 	// visitIndex counts admitted visits; the next admission takes
 	// visitIndex+1.
 	visitIndex int
+	// positionVisits counts the current wheel position's resolved targets
+	// (admitted S discs and calibrated NotS discs), the ledger's per-
+	// position visit count.
+	positionVisits int
+	// listEstablished and topVerified record how far preparation got; a
+	// stopped position's ledger entry must not claim a viewport or a top
+	// it never verified.
+	listEstablished bool
+	topVerified     bool
 	// allowInitial is true until the first click of the current wheel
 	// position. The initial-read path is only available then: a target
 	// that already carries the selection border after a click can only be
@@ -443,13 +560,34 @@ const maxTopFlings = 16
 func (run *inventoryRun) run(ctx context.Context) error {
 	for pos := 1; pos <= 6; pos++ {
 		if err := run.preparePosition(ctx, pos); err != nil {
+			run.inv.recordPosition(run.positionScope(false))
 			return err
 		}
 		if err := run.collectPosition(ctx); err != nil {
+			run.inv.recordPosition(run.positionScope(false))
 			return err
 		}
+		run.inv.recordPosition(run.positionScope(true))
 	}
 	return nil
+}
+
+// positionScope snapshots the current position's ledger entry. Viewports
+// stays zero when the list was never established; Top and Bottom are only
+// true after the corresponding evidence completed.
+func (run *inventoryRun) positionScope(complete bool) positionScope {
+	viewports := 0
+	if run.listEstablished {
+		viewports = run.viewport + 1
+	}
+	return positionScope{
+		Position:  run.position,
+		Viewports: viewports,
+		Visits:    run.positionVisits,
+		Top:       run.topVerified,
+		Bottom:    complete,
+		Complete:  complete,
+	}
 }
 
 // preparePosition resets one wheel position's traversal state and performs
@@ -460,6 +598,9 @@ func (run *inventoryRun) preparePosition(ctx context.Context, pos int) error {
 	run.viewport = 0
 	run.visited = make([]bool, len(run.inv.Layout.Slots))
 	run.allowInitial = true
+	run.positionVisits = 0
+	run.listEstablished = false
+	run.topVerified = false
 	run.lastScrollRows = 0
 	run.lastScrollEvidence = ""
 	run.lastDetailFrame = platform.Frame{}
@@ -467,6 +608,7 @@ func (run *inventoryRun) preparePosition(ctx context.Context, pos int) error {
 	if err := run.establishList(ctx); err != nil {
 		return err
 	}
+	run.listEstablished = true
 	if err := run.switchWheel(ctx, pos); err != nil {
 		return err
 	}
@@ -478,6 +620,7 @@ func (run *inventoryRun) preparePosition(ctx context.Context, pos int) error {
 	if err := run.scrollToTop(ctx); err != nil {
 		return err
 	}
+	run.topVerified = true
 	log.Printf("youkai: collect: position %d prepared: S filter active, top confirmed", pos)
 	return nil
 }
@@ -659,8 +802,14 @@ func (run *inventoryRun) requireWheelPosition(step string) error {
 }
 
 // openFilterPanel clicks the funnel and waits for the panel page to settle.
+// The settled panel carries the sort evidence; the traversal records every
+// check so a later mismatch cannot be hidden by an earlier match.
 func (run *inventoryRun) openFilterPanel(ctx context.Context) error {
-	return run.clickUntilPage(ctx, run.inv.Layout.FilterButton, PageFilterPanel, "the filter panel never opened")
+	if err := run.clickUntilPage(ctx, run.inv.Layout.FilterButton, PageFilterPanel, "the filter panel never opened"); err != nil {
+		return err
+	}
+	run.inv.observeSort(run.listMatch.Panel)
+	return nil
 }
 
 // resetFilterPanel clicks the panel's reset control and waits for the
@@ -1690,6 +1839,7 @@ func (run *inventoryRun) admit(slot *scan.Slot, out detailOutcome, pre platform.
 	}
 	switch out.match.Detail.Quality {
 	case QualityNotS:
+		run.positionVisits++
 		run.visited[i] = true
 		run.listMatch = out.match
 		run.lastFrame = out.frame
@@ -1708,6 +1858,7 @@ func (run *inventoryRun) admit(slot *scan.Slot, out detailOutcome, pre platform.
 			"collect: %s settled with an undecidable substat row count: %s", target, out.match.Evidence))
 	}
 	run.visitIndex++
+	run.positionVisits++
 	run.visited[i] = true
 	managementState, managementEvidence := managementVerdict(preMatch, out.match, i)
 	equippedState, equippedEvidence := equippedVerdict(preMatch, out.match, i)

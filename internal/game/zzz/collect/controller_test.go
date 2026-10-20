@@ -476,11 +476,12 @@ func TestReleaseOnceAndErrorPassthrough(t *testing.T) {
 }
 
 // C10: the controller relays the traversal's observed scope (T5 §3)
-// once — after a successful precheck, before Collect — and only when
+// after a successful precheck and again after Collect, and only when
 // the traversal both implements the capability and has a report; a
 // failed precheck never relays.
 type scopeReportingTraversal struct {
 	scope       json.RawMessage
+	after       json.RawMessage
 	precheckErr error
 	events      []string
 	mu          sync.Mutex
@@ -497,6 +498,9 @@ func (t *scopeReportingTraversal) Precheck(ctx context.Context, sess platform.Se
 func (t *scopeReportingTraversal) Collect(ctx context.Context, sess platform.Session, h *scan.ControllerHandle) error {
 	t.mu.Lock()
 	t.events = append(t.events, "collect")
+	if len(t.after) > 0 {
+		t.scope = t.after
+	}
 	t.mu.Unlock()
 	return nil
 }
@@ -516,8 +520,9 @@ func (t *scopeReportingTraversal) snapshot() []string {
 }
 
 func TestScopeRelayAfterPrecheck(t *testing.T) {
-	payload := json.RawMessage(`{"kind":"zzzInventory","page":"warehouse"}`)
-	trav := &scopeReportingTraversal{scope: payload}
+	payload := json.RawMessage(`{"kind":"zzzInventory","page":"warehouse","sort":"unverified","coverage":"unknown"}`)
+	final := json.RawMessage(`{"kind":"zzzInventory","page":"warehouse","sort":"verified","coverage":"complete"}`)
+	trav := &scopeReportingTraversal{scope: payload, after: final}
 	sess := readySession()
 	port := &platformfake.Port{NewSession: func() *platformfake.Session { return sess }}
 	var mu sync.Mutex
@@ -536,12 +541,14 @@ func TestScopeRelayAfterPrecheck(t *testing.T) {
 	if snap.End != scan.EndCompleted {
 		t.Fatalf("end %s, want completed", snap.End)
 	}
-	if len(relayed) != 1 || string(relayed[0]) != string(payload) {
-		t.Fatalf("relayed %q, want exactly the traversal's report", relayed)
+	mu.Lock()
+	defer mu.Unlock()
+	if len(relayed) != 2 || string(relayed[0]) != string(payload) || string(relayed[1]) != string(final) {
+		t.Fatalf("relayed %q, want the precheck and final reports", relayed)
 	}
-	// The relay sits between the precheck and the collection, on the
-	// producer goroutine.
-	if got, want := trav.snapshot(), []string{"precheck", "observedScope", "collect"}; !reflect.DeepEqual(got, want) {
+	// The first relay sits between the precheck and the collection; the
+	// second follows the collection, on the producer goroutine.
+	if got, want := trav.snapshot(), []string{"precheck", "observedScope", "collect", "observedScope"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("event order %v, want %v", got, want)
 	}
 }

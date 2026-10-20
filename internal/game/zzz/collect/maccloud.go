@@ -145,6 +145,11 @@ func MacCloudLayout() Layout {
 		// /tmp/m2-samples/s2-02-panel-slot1-after-reset/frame-0001.png
 		// (T5 §3). Only S is wired; A/B classification is not implemented.
 		PanelS: image.Pt(1225, 615),
+		// The panel's sort dropdown label. The M2 panel frames render
+		// "稀有度" at (1138,231,61,22); the surrounding chrome makes the
+		// wider crop stable across the three recorded panel states.
+		SortLabel:    image.Rect(1100, 205, 1260, 275),
+		SortTemplate: maccloudSortLabelTemplate,
 
 		Wheel:     maccloudWheelCenters,
 		WheelArcs: append([]image.Rectangle(nil), maccloudWheelArcs...),
@@ -241,6 +246,14 @@ type Calibration struct {
 	// 251–256, dimmed panel frames 0.
 	QualityGoldMin int
 
+	// Sort label: mean absolute grayscale difference between the panel's
+	// sort region and the calibrated reference. The three recorded panel
+	// frames differ by at most 0.02; a live 1164×762 window capture,
+	// scaled to the calibrated stream, measured 2.76, while a 10-pixel
+	// offset measured 16.5 or more. Five separates the alignment from the
+	// next candidate without admitting a shifted label.
+	SortLabelMADMax float64
+
 	// Scroll matching on ListViewport (x step 3, y step 2).
 	ScrollStepX, ScrollStepY int
 	ScrollSearchRadius       int     // dy ∈ [-720,720]
@@ -276,6 +289,7 @@ func MacCloudCalibration() Calibration {
 		Substat3InkMax:     50,
 		DetailPopulatedInk: 500,
 		QualityGoldMin:     150,
+		SortLabelMADMax:    5.0,
 
 		ManagementLockRingMin:   120,
 		ManagementLockCoreMax:   70,

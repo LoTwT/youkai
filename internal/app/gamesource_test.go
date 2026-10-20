@@ -304,10 +304,14 @@ func jsonEq(a, b []byte) bool {
 // observed-scope seam test.
 type reportingTraversal struct {
 	scope json.RawMessage
+	after json.RawMessage
 }
 
 func (t *reportingTraversal) Precheck(ctx context.Context, sess platform.Session) error { return nil }
 func (t *reportingTraversal) Collect(ctx context.Context, sess platform.Session, h *scan.ControllerHandle) error {
+	if len(t.after) > 0 {
+		t.scope = t.after
+	}
 	return nil
 }
 func (t *reportingTraversal) ObservedScope() json.RawMessage { return t.scope }
@@ -353,5 +357,47 @@ func TestObservedScopeReachesTheRecord(t *testing.T) {
 	}
 	if snap := svc.Snapshot().Scan; snap.End != scan.EndCompleted {
 		t.Fatalf("end %s, want completed", snap.End)
+	}
+}
+
+// The final observed-scope relay (T5 §3): sort and coverage are only known
+// after the traversal ran, so the controller relays again after Collect and
+// the deliverer carries both the final scope and its coverage conclusion
+// into the finished record.
+func TestFinalObservedScopeCoverageReachesTheRecord(t *testing.T) {
+	paths := newTestPaths(t)
+	sess := platformfake.NewSession()
+	port := &platformfake.Port{NewSession: func() *platformfake.Session { return sess }}
+	initial := json.RawMessage(`{"kind":"zzzInventory","page":"warehouse","sort":"unverified","coverage":"unknown"}`)
+	final := json.RawMessage(`{"kind":"zzzInventory","page":"warehouse","sort":"verified","coverage":"complete"}`)
+	ctrl := &collect.Controller{
+		Port:   port,
+		Target: collect.MacCloudTarget,
+		Hotkey: platform.HotkeySpec{Key: platform.KeyS},
+		Traversal: func() collect.Traversal {
+			return &reportingTraversal{scope: initial, after: final}
+		},
+	}
+	svc, _ := newTestService(t, paths, staticSource{spec: specOf(ctrl)}, func() (Recognizer, error) { return newFakeRecognizer(), nil })
+	outcome, err := svc.Start(StartRequest{ID: "final-observed-scope"})
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	waitWrapped(t, svc)
+
+	reopened, err := record.Open(paths.Data)
+	if err != nil {
+		t.Fatalf("reopen store: %v", err)
+	}
+	rec, err := reopened.Load(string(outcome.SessionID))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if !jsonEq(rec.Checkpoint.Session.ObservedScope, final) {
+		t.Fatalf("observedScope = %s, want the final report %s",
+			rec.Checkpoint.Session.ObservedScope, final)
+	}
+	if got := rec.Checkpoint.Session.Coverage.Status; got != record.CoverageComplete {
+		t.Fatalf("coverage = %q, want complete", got)
 	}
 }
