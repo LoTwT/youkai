@@ -397,3 +397,19 @@ func TestAdmitFailureCarriesEvidenceFailed(t *testing.T) {
 		t.Fatal("the session never sealed")
 	}
 }
+
+// TestDetailBaselinePrefersLastAdmittedDetail pins the cloud-video lag
+// guard: a freshly taken pre-click list frame may still show the previous
+// item's stale detail, so a later same-detail click must compare against
+// the last admitted detail frame instead.
+func TestDetailBaselinePrefersLastAdmittedDetail(t *testing.T) {
+	run := &inventoryRun{}
+	pre := platform.Frame{ID: 20}
+	if got := run.detailBaseline(pre); got.ID != pre.ID {
+		t.Fatalf("baseline before any admission = %d, want the pre-click frame %d", got.ID, pre.ID)
+	}
+	run.lastDetailFrame = platform.Frame{ID: 10}
+	if got := run.detailBaseline(pre); got.ID != 10 {
+		t.Fatalf("baseline after admission = %d, want the last admitted detail 10", got.ID)
+	}
+}
