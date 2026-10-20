@@ -1,8 +1,8 @@
 # M3 规模测试与正式验收清单
 
-更新日期：2026-10-20。状态：合成数据与自动化规模检查已完成；macOS 六位置现场轮已执行两次。较早的 `5d3200e3` 轮覆盖 `unknown`、排序 `unverified`；随后的 `5387f071` 干净复跑完成六位置，`coverage:"complete"`，排序标签“稀有度”已验证（仅标签，不读取升降序方向），1005 件、0 失败。2026-10-20 本机 macOS 原生体验（托盘、关窗隐藏、⌘Q/托盘退出、第二实例、`youkai://open`、保存对话框中文输入、文件对话框取消/覆盖/无权限）已执行并通过空闲态验收；扫描中停止/转交与磁盘不足未测。**正式验收仍未通过**：装备者身份、14 件装备状态不一致、相邻同详情保护、滚动 Lost、管理 `none`、Windows 轮 ② 与扫描中托盘/深链接行为仍缺证据；v2 已把装备字段改为可选 warning，不再阻止导出。本文把“已自动化覆盖”“已用合成数据覆盖”“现场执行结果”和“必须真机执行”分开记录，未执行或证据不足的项目不是通过。
+更新日期：2026-10-20。状态：合成数据与自动化规模检查已完成；macOS 六位置现场轮已执行三次。较早的 `5d3200e3` 轮覆盖 `unknown`、排序 `unverified`；`5387f071` 干净复跑完成六位置，`coverage:"complete"`，排序标签“稀有度”已验证（仅标签，不读取升降序方向），1005 件、0 失败。`07682b85` 同详情修复复跑再次完成六位置，1011 件、0 失败，10 次 `referenceVerified`；真实相邻同详情 seq 812/813 已由参照往返确认，seq 813 为 `referenceVerified`。2026-10-20 本机 macOS 原生体验（托盘、关窗隐藏、⌘Q/托盘退出、第二实例、`youkai://open`、保存对话框中文输入、文件对话框取消/覆盖/无权限）已执行并通过空闲态验收；扫描中停止/转交与磁盘不足未测。**正式验收仍未通过**：装备者身份、14 件装备状态不一致、滚动 Lost、管理 `none`、排序方向、Windows 轮 ② 与扫描中托盘/深链接行为仍缺证据；v2 已把装备字段改为可选 warning，不再阻止导出。本文把“已自动化覆盖”“已用合成数据覆盖”“现场执行结果”和“必须真机执行”分开记录，未执行或证据不足的项目不是通过。
 
-- 被测基线：`main` `b4fa6b2`（规模与验收清单已由 PR #49 合并）；较早现场轮运行于 `main` `4c5f014`；干净覆盖复跑运行于 `main` `7609a32` 加排序/覆盖改动的本地构建。
+- 被测基线：`main` `b4fa6b2`（规模与验收清单已由 PR #49 合并）；较早现场轮运行于 `main` `4c5f014`；干净覆盖复跑运行于 `main` `7609a32` 加排序/覆盖改动的本地构建；同详情修复复跑运行于分支 `fix/collect-settled-detail-same` 的 `33c501e` + `b01bf3b`。
 - 本文对应分支：`test/m3-scale-acceptance`。
 - 合成数据只验证界面与数据层在规模下的行为，不证明扫描质量、OCR 正确率、真实库存覆盖或游戏兼容性。
 - 正式验收要求见 [T5 第 6 节](../specs/t5-zzz-inventory-traversal.md#6-保存什么证据怎样验收)、[T6 第 5 节](../specs/t6-review-export-workflow.md#5-正式功能验收与后续)与 [T7 交付门槛](../specs/t7-public-release-acceptance.md#2-首版交付门槛)。
@@ -22,7 +22,7 @@
 | 截图与记录清理 | 已自动化 | 复用现有服务、存储与界面测试；使用临时目录。 |
 | 编辑确认与旧修订冲突 | 已自动化 | 复用现有界面与服务测试；见 §2.2。 |
 | 窗口生命周期、第二实例与深链接 | 已自动化（假窗口/托盘） | PR #48 的 `cmd/youkai/lifecycle_test.go`；真实托盘、系统深链接与窗口行为仍待真机。 |
-| macOS 六位置完整字段验收 | **已现场执行，未通过完整验收** | 2026-10-20，`macosCloud`。`5d3200e3` 轮覆盖 `unknown`、排序 `unverified`，v2 可用导出 1005 件、0 排除；`5387f071` 干净复跑六位置，覆盖 `complete`、排序标签“稀有度”已验证（仅标签），1005 件、0 失败。装备者身份、同详情保护、Lost 与 `none` 样本仍缺证据。见 §4.1、§4.2。 |
+| macOS 六位置完整字段验收 | **已现场执行，未通过完整验收** | 2026-10-20，`macosCloud`。`5d3200e3` 轮覆盖 `unknown`、排序 `unverified`，v2 可用导出 1005 件、0 排除；`5387f071` 干净复跑六位置，覆盖 `complete`、排序标签“稀有度”已验证（仅标签），1005 件、0 失败；`07682b85` 同详情修复复跑覆盖 `complete`，1011 件、0 失败，10 次 `referenceVerified`，相邻同详情 812/813 已确认。装备者身份、排序方向、Lost 与 `none` 样本仍缺证据。见 §4.1、§4.2、§4.4。 |
 | Windows 实测轮 ② | **待用户现场执行** | DPI、GDI、SendInput、托盘、安装包与真实客户端均未验证。 |
 | macOS 托盘/深链接/输入法/文件对话框 | **部分通过（2026-10-20）** | 托盘状态/打开/退出、关窗隐藏、⌘Q/托盘退出、第二实例、`youkai://open`、保存对话框中文输入、取消/覆盖/无权限已验证；扫描中停止/转交与磁盘不足未测。见 §4.3。 |
 
@@ -249,7 +249,7 @@ Windows 实测轮 ② 完成前，不宣称 Windows M3 通过。
 
 同日更早一次运行在位置 1 第 3 视口、48 次访问后因 Lucia 抢占前台报 `focusLost`；`observedScope` 保持 `partial`，位置 1 为 `complete:false`、`bottomVerified:false`，未误报完整覆盖。
 
-本次复跑只验证排序与覆盖账目，不替代 §4.1 的字段、装备者、同详情、Lost、管理与导出验收。
+本次复跑只验证排序与覆盖账目，不替代 §4.1 的字段、装备者、同详情、Lost、管理与导出验收。同详情保护后来由 §4.4 的修复复跑取得真机证据。
 
 ### 4.3 2026-10-20 macOS 原生体验验收（空闲态）
 
@@ -271,7 +271,40 @@ Windows 实测轮 ② 完成前，不宣称 Windows M3 通过。
 
 未测：扫描中的托盘“停止扫描”、扫描中第二实例/深链接的“先停止输入”行为、磁盘不足、Windows 原生行为。这些不能由本轮空闲态结果推出通过。
 
-### 4.4 空白记录模板
+### 4.4 2026-10-20 同详情修复现场复跑（macosCloud）
+
+- 构建：分支 `fix/collect-settled-detail-same`，`33c501e` 加 `b01bf3b`（稳定但未证明不同的详情进入参照往返）；启动参数 `YOUKAI_GAME_SOURCE=traverse`、`YOUKAI_INDEPENDENT_CLEAR=1`。
+- 环境：Apple Silicon Mac；macOS 云客户端 `com.miHoYo.cloudgames.Nap`；布局 `maccloud-1920x1080`，几何版本 1，20 格；游戏窗口 1164×762；扫描前手动将转盘置于位置 1。
+- 会话：`07682b85-71e4-4ac6-ae61-4ccf1647792e`；`startedAt` 2026-10-20T14:42:02Z，`endedAt` 14:58:51Z（本地 22:42:02–22:58:51，约 16 分 49 秒）；起始位置 1，起始筛选 `active`。
+- 检查点：`~/Library/Application Support/Youkai Dev/sessions/07682b85-71e4-4ac6-ae61-4ccf1647792e/checkpoints/129.json`（generation 129）。
+- 结果：1011 captured / 1011 produced / 0 unprocessed / 0 failed；终止 `completed` / `verifiedEnd`；`coverage.status="complete"`。
+- 排序：`observedScope.sort="verified"`、`sortLabel="稀有度"`。该探针只验证标签，不读取升降序方向。
+- 覆盖账目：六位置全部 `complete:true`、`topVerified:true`、`bottomVerified:true`。
+
+| 位置 | 视口 | 访问 | 顶部 | 底部 | 完整 |
+| --- | ---: | ---: | --- | --- | --- |
+| 1 | 6 | 99 | ✓ | ✓ | ✓ |
+| 2 | 7 | 116 | ✓ | ✓ | ✓ |
+| 3 | 7 | 105 | ✓ | ✓ | ✓ |
+| 4 | 14 | 225 | ✓ | ✓ | ✓ |
+| 5 | 16 | 250 | ✓ | ✓ | ✓ |
+| 6 | 14 | 216 | ✓ | ✓ | ✓ |
+
+同详情与参照往返：
+
+- 本轮 `referenceVerified=10`、`transitionVerified=995`、`initialVerified=6`。
+- 位置 4 viewport 11 slot 14 曾在前两次修复后现场轮稳定以 `detailUnattributed` 停止；本轮诊断为详情连续稳定、但与上一件详情的比较落在 `2.0–4.0` 未决带。修复后该槽位经参照 slot 10 完成往返并继续，slot 18 也经 slot 14 完成往返。
+- 真正的相邻同详情样本为 seq 812/813（位置 6，row 4 column 0/1）：两件结构化字段完全相同。seq 812 为 `transitionVerified`；seq 813 为 `referenceVerified`，参照 slot 13（row 3 column 1，frame 45948），返回目标后稳定在 frame 45988。该证据证明同详情保护在真实窗口触发，而不是只通过合成测试。
+- 回归测试 `TestSinglePageUndecidedBaselineStillRoundTrips` 在旧实现上复现 `detailUnattributed`，在 `b01bf3b` 上通过。
+
+其他：
+
+- 本轮未出现 `navigationMismatch`、`detailUnattributed`、`positionLost`、`evidenceFailed`。
+- 正常滚动未触发 Lost；日志中的 `lost=true` 仍全部是顶部确认的零位移误判，随后由滑块起点证据接受。Lost 预算与安全停止仍无真机证据。
+- 本轮库存为 1011 件；库存跨轮可变，不与旧轮 1005 件作基线比较。
+- 排序方向、装备者身份、管理状态 `none`、滚动 Lost、Windows 实测轮 ② 仍未验收。
+
+### 4.5 空白记录模板
 
 每次现场执行复制下表填写；没有证据的行保持“待执行”。
 
