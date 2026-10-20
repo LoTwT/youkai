@@ -67,15 +67,19 @@ type DataCheck struct {
 	// Blocking lists present values that are malformed or outside the
 	// fixed catalog. A save with blocking issues is refused.
 	Blocking []zzz.Issue
-	// Gaps lists fields still explicitly unread or incomplete. They may
-	// be saved as needsReview, but not confirmed.
+	// Gaps lists required fields still explicitly unread or incomplete.
+	// They may be saved as needsReview, but not confirmed, and they keep
+	// the record out of usable export.
 	Gaps []zzz.Issue
-	// Issues is Blocking followed by Gaps, with exact duplicates shown
-	// once. It is empty, not nil, when nothing is wrong.
+	// Warnings lists optional fields that are explicitly incomplete. They
+	// stay visible but do not block saving, confirmation or export.
+	Warnings []zzz.Issue
+	// Issues is Blocking followed by Gaps and Warnings, with exact
+	// duplicates shown once. It is empty, not nil, when nothing is wrong.
 	Issues []zzz.Issue
 	// Validation is the record-level conclusion bound to this data:
 	// failed with blocking issues, unavailable with only gaps, passed
-	// when neither remains.
+	// when neither remains (warnings may still be attached).
 	Validation zzz.Validation
 }
 
@@ -159,15 +163,19 @@ func itemBySequence(rec *record.Recovery, sequence int64) (record.ItemRecord, bo
 // by feeding it a synthetic page, so this validation cannot drift from
 // the recognition-time rules.
 func CheckDiscData(data zzz.DiscData) DataCheck {
-	var blocking, gaps []zzz.Issue
+	var blocking, gaps, warnings []zzz.Issue
 	blockingSeen := make(map[string]struct{})
 	gapsSeen := make(map[string]struct{})
+	warningsSeen := make(map[string]struct{})
 
 	addBlocking := func(issue zzz.Issue) {
 		appendUnique(&blocking, blockingSeen, issue)
 	}
 	addGap := func(issue zzz.Issue) {
 		appendUnique(&gaps, gapsSeen, issue)
+	}
+	addWarning := func(issue zzz.Issue) {
+		appendUnique(&warnings, warningsSeen, issue)
 	}
 
 	setKnown := false
@@ -283,8 +291,8 @@ func CheckDiscData(data zzz.DiscData) DataCheck {
 	}
 
 	if data.Equipped == nil {
-		addGap(newReviewIssue("equipped", zzz.CodeEquippedStateUnavailable,
-			"装备状态未读取，不能确认"))
+		addWarning(newReviewWarning("equipped", zzz.CodeEquippedStateUnavailable,
+			"装备状态未读取；装备字段按可选处理"))
 	} else {
 		switch data.Equipped.State {
 		case zzz.EquippedStateUnequipped:
@@ -294,8 +302,8 @@ func CheckDiscData(data zzz.DiscData) DataCheck {
 			}
 		case zzz.EquippedStateEquipped:
 			if data.Equipped.AgentID == nil {
-				addGap(newReviewIssue("equipped", zzz.CodeEquippedStateUnavailable,
-					"已装备但代理人未读取，不能确认"))
+				addWarning(newReviewWarning("equipped", zzz.CodeEquippedStateUnavailable,
+					"已装备但代理人未读取；装备字段按可选处理"))
 			} else if _, ok := zzz.LookupAgentByID(*data.Equipped.AgentID); !ok {
 				addBlocking(newReviewIssue("equipped", "unknownAgent",
 					fmt.Sprintf("代理人 ID %d 不在资料表中", *data.Equipped.AgentID)))
@@ -347,12 +355,15 @@ func CheckDiscData(data zzz.DiscData) DataCheck {
 	case len(gaps) > 0:
 		status = zzz.ValidationUnavailable
 	}
-	issues := make([]zzz.Issue, 0, len(blocking)+len(gaps))
-	combinedSeen := make(map[string]struct{}, len(blocking)+len(gaps))
+	issues := make([]zzz.Issue, 0, len(blocking)+len(gaps)+len(warnings))
+	combinedSeen := make(map[string]struct{}, len(blocking)+len(gaps)+len(warnings))
 	for _, issue := range blocking {
 		appendUnique(&issues, combinedSeen, issue)
 	}
 	for _, issue := range gaps {
+		appendUnique(&issues, combinedSeen, issue)
+	}
+	for _, issue := range warnings {
 		appendUnique(&issues, combinedSeen, issue)
 	}
 	validationIssues := make([]zzz.Issue, len(issues))
@@ -360,6 +371,7 @@ func CheckDiscData(data zzz.DiscData) DataCheck {
 	return DataCheck{
 		Blocking:   blocking,
 		Gaps:       gaps,
+		Warnings:   warnings,
 		Issues:     issues,
 		Validation: zzz.Validation{Status: status, Issues: validationIssues},
 	}
@@ -457,6 +469,11 @@ func validManagementState(state string) bool {
 // newReviewIssue builds one error-severity review issue.
 func newReviewIssue(field, code, message string) zzz.Issue {
 	return zzz.Issue{Field: field, Code: code, Severity: zzz.SeverityError, Message: message}
+}
+
+// newReviewWarning builds one non-blocking optional-field issue.
+func newReviewWarning(field, code, message string) zzz.Issue {
+	return zzz.Issue{Field: field, Code: code, Severity: zzz.SeverityWarning, Message: message}
 }
 
 // appendUnique appends issue unless an identical issue is already present.

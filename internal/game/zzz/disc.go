@@ -88,6 +88,12 @@ func newIssue(field, code, message string) Issue {
 	return Issue{Field: field, Code: code, Severity: SeverityError, Message: message}
 }
 
+// newWarning builds a non-blocking field issue. Warnings stay visible in
+// the record but do not keep a record out of the current usable data.
+func newWarning(field, code, message string) Issue {
+	return Issue{Field: field, Code: code, Severity: SeverityWarning, Message: message}
+}
+
 // Issue codes of the detail-line parser.
 const (
 	// CodeNameLineUnparsed: the set-name line has no 套装名[N] shape.

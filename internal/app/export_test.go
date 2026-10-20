@@ -194,7 +194,7 @@ func TestJSONExportMatchesContract(t *testing.T) {
 	if got := rawString(t, doc["format"]); got != "youkai.scan" {
 		t.Fatalf("format = %q", got)
 	}
-	if got := rawInt(t, doc["formatVersion"]); got != 1 {
+	if got := rawInt(t, doc["formatVersion"]); got != exportFormatVersion {
 		t.Fatalf("formatVersion = %d", got)
 	}
 	if got := rawString(t, doc["exportedAt"]); got != "2026-10-20T09:30:00.123Z" {
@@ -263,7 +263,7 @@ func TestJSONExportMatchesContract(t *testing.T) {
 
 	var policy exportFieldPolicy
 	decodeRaw(t, doc["fieldPolicy"], &policy)
-	if policy.Management != "required" || policy.Equipped != "required" {
+	if policy.Management != "required" || policy.Equipped != "optional" {
 		t.Fatalf("fieldPolicy = %+v", policy)
 	}
 	var rules exportValidationRules
@@ -570,3 +570,56 @@ func rawInt(t *testing.T, raw json.RawMessage) int64 {
 }
 
 func jsonIntText(value int64) string { return strconv.FormatInt(value, 10) }
+
+// TestBuildUsableExportReclassifiesLegacyOptionalEquipped pins the v2
+// migration: a revision-0 v1 record whose only persisted gap was the old
+// required equipped field enters the snapshot as auto-accepted with a
+// warning. A manual revision with the same shape is not upgraded.
+func TestBuildUsableExportReclassifiesLegacyOptionalEquipped(t *testing.T) {
+	structured := zzz.ToStructuredWithState(
+		testDisc(31100, 4, "critRate", "24", zzz.UnitPercent),
+		zzz.RarityS,
+		zzz.CaptureState{
+			ManagementState: zzz.ManagementLocked,
+			EquippedState:   zzz.EquippedStateEquipped,
+		},
+		nil,
+	)
+	structured.Validation = zzz.Validation{
+		Status: zzz.ValidationUnavailable,
+		Issues: []zzz.Issue{{
+			Field:    "equipped",
+			Code:     zzz.CodeEquippedStateUnavailable,
+			Severity: zzz.SeverityError,
+			Message:  "legacy required equipped gap",
+		}},
+	}
+
+	legacy := exportItemWithStructured(t, 1, record.StatusProduced, record.QualityNeedsReview, structured)
+	export, err := BuildUsableExport(exportTestRecovery(legacy))
+	if err != nil {
+		t.Fatalf("BuildUsableExport legacy: %v", err)
+	}
+	if export.Summary.Included != 1 || export.Summary.Excluded != 0 {
+		t.Fatalf("legacy summary = %+v, want 1 included / 0 excluded", export.Summary)
+	}
+	if got := export.items[0]; got.Quality != record.QualityAutoAccepted ||
+		got.Validation.Status != zzz.ValidationPassed {
+		t.Fatalf("legacy item = quality %s validation %s, want autoAccepted/passed",
+			got.Quality, got.Validation.Status)
+	}
+	if len(export.items[0].Validation.Issues) != 1 ||
+		export.items[0].Validation.Issues[0].Severity != zzz.SeverityWarning {
+		t.Fatalf("legacy warnings = %+v, want one warning", export.items[0].Validation.Issues)
+	}
+
+	manual := legacy
+	manual.Revision = 1
+	export, err = BuildUsableExport(exportTestRecovery(manual))
+	if err != nil {
+		t.Fatalf("BuildUsableExport manual: %v", err)
+	}
+	if export.Summary.Included != 0 || export.Summary.Excluded != 1 {
+		t.Fatalf("manual summary = %+v, want 0 included / 1 excluded", export.Summary)
+	}
+}

@@ -296,10 +296,18 @@ func TestSaveItemRevisionAllowsIncompleteSaveButNotConfirmation(t *testing.T) {
 	if res.Structured == nil || res.Structured.Validation.Status != zzz.ValidationUnavailable {
 		t.Fatalf("validation = %+v, want unavailable (never a fabricated passed)", res.Structured.Validation)
 	}
+	var sawError, sawEquippedWarning bool
 	for _, issue := range res.Structured.Validation.Issues {
-		if issue.Severity != zzz.SeverityError {
-			t.Fatalf("gap issue %+v is not an error", issue)
+		switch {
+		case issue.Severity == zzz.SeverityError:
+			sawError = true
+		case issue.Field == "equipped" && issue.Severity == zzz.SeverityWarning:
+			sawEquippedWarning = true
 		}
+	}
+	if !sawError || !sawEquippedWarning {
+		t.Fatalf("validation issues = %+v, want an error and an equipped warning",
+			res.Structured.Validation.Issues)
 	}
 }
 

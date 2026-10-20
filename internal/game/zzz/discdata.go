@@ -256,18 +256,16 @@ func mainStatData(stat Stat) *StatData {
 }
 
 // validate derives the current validation status. Parsing errors mean
-// failed. Without them, a missing management state is a data gap, and an
-// equipped record is incomplete while the equipper identity (agentId) is
-// not reliably recognized. An equipped record with a confirmed management
-// state and a catalog-resolvable agent id passes validation; an explicitly
-// unequipped record has no equipper to identify, so a confirmed management
-// state is enough. A passed validation makes the record eligible for
-// auto-accept; it does not claim the OCR reading is guaranteed correct.
+// failed. Without them, a missing management state is a data gap, while
+// an unresolved equipped identity or presence is a warning because the
+// v2 export policy treats equipped as optional. A confirmed management
+// state and complete required fields make the record eligible for
+// auto-accept; the equipped warning stays attached to the record.
 func validate(issues []Issue, state CaptureState) Validation {
 	if hasError(issues) {
 		return Validation{Status: ValidationFailed, Issues: normalizeIssues(issues)}
 	}
-	gaps := make([]Issue, 0, 2)
+	var gaps, warnings []Issue
 	if !validManagementState(state.ManagementState) {
 		gaps = append(gaps, newIssue("managementState", CodeManagementStateUnavailable,
 			"本观测没有可确认的管理状态证据，无法完成校验"))
@@ -276,8 +274,8 @@ func validate(issues []Issue, state CaptureState) Validation {
 	case EquippedStateEquipped:
 		switch {
 		case state.AgentID <= 0:
-			gaps = append(gaps, newIssue("equipped", CodeEquippedStateUnavailable,
-				"已确认装备存在性，但未能可靠识别装备者身份（agentId 为 null），无法完成校验"))
+			warnings = append(warnings, newWarning("equipped", CodeEquippedStateUnavailable,
+				"已确认装备存在性，但未能可靠识别装备者身份（agentId 为 null）；装备字段按可选处理"))
 		case !validAgentID(state.AgentID):
 			gaps = append(gaps, newIssue("equipped", CodeEquippedStateUnavailable,
 				"已识别装备者身份，但该 ID 不在 catalog 中，无法完成校验"))
@@ -285,18 +283,22 @@ func validate(issues []Issue, state CaptureState) Validation {
 	case EquippedStateUnequipped:
 		// No equipper to identify; the state itself is complete.
 	case "":
-		gaps = append(gaps, newIssue("equipped", CodeEquippedStateUnavailable,
-			"本观测没有可确认的装备存在性证据，无法完成校验"))
+		warnings = append(warnings, newWarning("equipped", CodeEquippedStateUnavailable,
+			"本观测没有可确认的装备存在性证据；装备字段按可选处理"))
 	default:
-		// The collector produced an unrecognized value; treat it like a
-		// missing observation instead of accepting an unknown state.
-		gaps = append(gaps, newIssue("equipped", CodeEquippedStateUnavailable,
-			"本观测的装备存在性状态无法识别，无法完成校验"))
+		// The collector produced an unrecognized value; keep it visible
+		// as an optional-field warning instead of accepting an unknown
+		// state silently.
+		warnings = append(warnings, newWarning("equipped", CodeEquippedStateUnavailable,
+			"本观测的装备存在性状态无法识别；装备字段按可选处理"))
 	}
-	if len(gaps) == 0 {
-		return Validation{Status: ValidationPassed, Issues: []Issue{}}
+	all := make([]Issue, 0, len(gaps)+len(warnings))
+	all = append(all, gaps...)
+	all = append(all, warnings...)
+	if len(gaps) > 0 {
+		return Validation{Status: ValidationUnavailable, Issues: normalizeIssues(all)}
 	}
-	return Validation{Status: ValidationUnavailable, Issues: normalizeIssues(gaps)}
+	return Validation{Status: ValidationPassed, Issues: normalizeIssues(all)}
 }
 
 func validManagementState(state string) bool {
@@ -332,4 +334,20 @@ func normalizeIssues(issues []Issue) []Issue {
 		return []Issue{}
 	}
 	return issues
+}
+
+// OnlyEquippedStateUnavailable reports whether a v1 validation was
+// unavailable solely because the equipped field was unresolved. The v2
+// policy treats equipped as optional, so a revision-0 record with this
+// exact legacy shape can be reclassified without rewriting the checkpoint.
+func OnlyEquippedStateUnavailable(validation Validation, issues []Issue) bool {
+	if validation.Status != ValidationUnavailable || len(validation.Issues) == 0 || hasError(issues) {
+		return false
+	}
+	for _, issue := range validation.Issues {
+		if issue.Code != CodeEquippedStateUnavailable {
+			return false
+		}
+	}
+	return true
 }

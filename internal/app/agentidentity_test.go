@@ -107,9 +107,12 @@ func TestProjectDiscObservationKeepsUnreliableIdentityNull(t *testing.T) {
 		t.Fatalf("mixed avatars produced agentId %d: %s", mismatch.AgentID, mismatch.AgentIDEvidence)
 	}
 	structured := structuredDisc(mismatch, detailLines())
-	if structured.Data.Equipped.AgentID != nil || structured.Validation.Status != zzz.ValidationUnavailable {
-		t.Fatalf("mixed avatars = %+v/%s, want null/unavailable",
+	if structured.Data.Equipped.AgentID != nil || structured.Validation.Status != zzz.ValidationPassed {
+		t.Fatalf("mixed avatars = %+v/%s, want null/passed with a warning",
 			structured.Data.Equipped, structured.Validation.Status)
+	}
+	if len(structured.Validation.Issues) != 1 || structured.Validation.Issues[0].Severity != zzz.SeverityWarning {
+		t.Fatalf("mixed avatars issues = %+v, want one warning", structured.Validation.Issues)
 	}
 
 	missing := base

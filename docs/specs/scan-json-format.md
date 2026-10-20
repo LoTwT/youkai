@@ -1,6 +1,6 @@
-# Youkai 扫描结果 JSON 与 CSV v1
+# Youkai 扫描结果 JSON 与 CSV v2
 
-更新日期：2026-10-20。状态：v1 契约已冻结；结构化解析、结果浏览、自动接受与 JSON/CSV 导出已实现并合并到 `main`，真实六位置与 Windows 验收仍未完成。2026-10-20 冻结首版数据模型与导出：管理状态合并为 `managementState`，套装与代理人使用 fairy 数值 ID；首版只导出可用数据 JSON 与 CSV，不提供 archive 视图、ZIP 或档案导入导出。首版文件契约按 v1 发布，无既有导出文件需要兼容迁移。用户已确认先做 youkai 自有文件，外部工具接入等具体需求出现后再评估。会话、保存与物品身份以[公共架构第 5 节](scanner-architecture.md#5-扫描会话与结果语义)为准；操作流程见 [T6](t6-review-export-workflow.md)。
+更新日期：2026-10-20。状态：v2 契约已冻结；结构化解析、结果浏览、自动接受与 JSON/CSV 导出已实现并合并到 `main`，真实六位置与 Windows 验收仍未完成。2026-10-20 冻结 v2 数据模型与导出：管理状态合并为 `managementState`，套装与代理人使用 fairy 数值 ID；`equipped` 从必填改为可选，装备状态或装备者未解析只作为字段警告，不再阻止可用导出；导出仍只提供 JSON 与 CSV，不提供 archive 视图、ZIP 或档案导入导出。v1 文件保留原 `equipped: required` 语义；v2 读取端不得把 v1 文件按 v2 解释。会话、保存与物品身份以[公共架构第 5 节](scanner-architecture.md#5-扫描会话与结果语义)为准；操作流程见 [T6](t6-review-export-workflow.md)。
 
 ## 1. 两种导出格式，同一数据源
 
@@ -13,7 +13,7 @@
 
 两种文件都不含截图或原始识别审计，都是单向导出，不是跨次库存同步指令，缺少某件物品不表示应删除它。公共文件仅导出已收尾、封存且保存成功的快照；运行中的排队、运行和取消句柄继续由内部持久化契约维护，不进入公共文件。
 
-所有 JSON 使用 UTF-8、无 BOM、无注释、无重复键，字段名大小写严格匹配。对象键顺序无语义，物品按采集序号递增输出。`formatVersion` 使用整数，未知版本拒绝解释；v1 不接受未定义字段或枚举，新增会改变读取契约的字段时升版，不预设动态插件、任意扩展包或迁移框架。
+所有 JSON 使用 UTF-8、无 BOM、无注释、无重复键，字段名大小写严格匹配。对象键顺序无语义，物品按采集序号递增输出。`formatVersion` 使用整数，未知版本拒绝解释；v2 不接受未定义字段或枚举，新增会改变读取契约的字段时升版，不预设动态插件、任意扩展包或迁移框架。
 
 ## 2. 公共外壳
 
@@ -26,7 +26,7 @@
 | `producer` | `{ "name": "youkai", "version": string }`，版本非空。 |
 | `session` | 下表定义的来源会话。 |
 | `catalog` | `{ "namespace": "youkai.zzz", "revision": string, "sets": object, "agents": object }`。两张对象表均为十进制字符串键到显示名称的映射，只携带本文件实际引用的条目。 |
-| `fieldPolicy` | 固定 `{ "management": "required", "equipped": "required" }`；含义见第 3 节。 |
+| `fieldPolicy` | 固定 `{ "management": "required", "equipped": "optional" }`；含义见第 3 节。 |
 | `validationRules` | `{ "id": string, "version": string }` 或 `null`。本次当前校验所用的应用内置规则，标识与版本非空；`version` 是内置资料表的修订号，表内容变化即递增，与 `catalog.revision` 相同。不是原始识别资源版本，见下方当前校验契约。 |
 | `excludedCount` | 本文件排除的已采集记录数；等于 `session.capturedCount - items.length`。 |
 | `items` | 第 3 节的记录数组。可用项为零时允许空数组，不丢失来源与覆盖信息。 |
@@ -43,9 +43,9 @@
 | --- | --- |
 | `id` | 小写标准 UUID 文本；与 `items[].sequence` 共同标识一次观测。 |
 | `savedRevision` | 已持久化的结果修订号，非负整数；与单件 `revision`、UI 快照版本分开。 |
-| `game` / `entity` | v1 固定 `zzz` / `driveDisc`。一文件只有一种游戏和实体。 |
+| `game` / `entity` | v2 固定 `zzz` / `driveDisc`。一文件只有一种游戏和实体。 |
 | `client` | `windowsLocal`、`windowsCloud`、`macosCloud`，对应三种已确认入口。 |
-| `locale` | v1 固定 `zh-CN`，对应用户已确认的首版游戏识别语言；不表示已经通过识别验收，也不规定应用界面语言。 |
+| `locale` | v2 固定 `zh-CN`，对应用户已确认的首版游戏识别语言；不表示已经通过识别验收，也不规定应用界面语言。 |
 | `startedAt` / `endedAt` | 开始和实际收尾时间；中断恢复且结束时刻不可知时，`endedAt` 为 `null`，不拿恢复时间冒充结束。 |
 | `termination` | `{ "kind": "completed" 或 "cancelled" 或 "failed" 或 "interrupted", "code": string, "phase": "preparing" 或 "capturing" 或 "finalizing" }`。保留首个结束触发。 |
 | `scope` | `{ "rarity": "S", "slots": [1,2,3,4,5,6], "minLevel": 0, "maxLevel": 15, "sets": "all", "locked": "all", "discarded": "all", "equipped": "all" }`。这些是游戏筛选条件与声明范围，不是 `data` 字段。首版范围为全部套装，且不按锁定、弃置或装备状态排除盘；缩小范围须明确更新契约，不能把 UI 临时筛选偷换为来源范围。 |
@@ -79,30 +79,32 @@
 | `mainStat` | 第 4 节的词条对象或 `null`。 |
 | `substats` | 按画面从上至下的词条对象数组（第 4 节，含强化档位），最多四条；数量不明为 `null`，确认没有可见副词条才用 `[]`。已知存在但未读出的行保留带未知值的词条对象，不能删掉该行。 |
 | `managementState` | `"locked"`、`"discarded"`、`"none"` 或 `null`。真实游戏状态只有前三态；`null` 表示未读到、不可读或证据冲突。没有 `unknown` 枚举值。 |
-| `equipped` | 整体可为 `null`（未读到）；读到后为 `{ "state": "equipped" 或 "unequipped", "agentId": number 或 null }`。结构上允许 `{ "state": "equipped", "agentId": null }` 作为未完成观测，但 `required` 校验下不能进入可用数据。 |
+| `equipped` | 整体可为 `null`（未读到）；读到后为 `{ "state": "equipped" 或 "unequipped", "agentId": number 或 null }`。`{ "state": "equipped", "agentId": null }` 是未完成观测，作为可选字段产生 warning 后仍可进入可用数据。 |
 
 `managementState` 的三态互斥由图标决定：盘格右下角红色垃圾桶为 `discarded`，灰色锁为 `locked`，无图标为 `none`。列表盘格右下角角标是主要依据；顶部“拆解”左侧指示只确认锁定/未锁定维度，不能区分弃置与无标记，弃置/无标记仍由列表角标区分。列表与顶部在锁定维度冲突或任一不可读时记 `null`。锁定角标带有闪光动画，单帧可能漏检；多帧采样与颜色加形状分类仍是 PR 6a 的待验证项，不得把未验证结果写成 `none`。
 
-装备状态从详情页等级右侧头像判断并匹配代理人身份，列表格右上角头像确认；冲突或不可读时整个 `equipped` 记 `null`。当前代理人装备和他人装备都属于 `equipped`，当前装备置顶只影响遍历顺序，不构成额外的数据状态。`unequipped` 时 `agentId` 必须为 `null`；`equipped` 且用于可用数据时，`agentId` 必须是 fairy 代理人数值 ID（例如耀嘉音 `1311`），并能在 `catalog.agents` 中解析。
+装备状态从详情页等级右侧头像判断并匹配代理人身份，列表格右上角头像确认；冲突或不可读时整个 `equipped` 记 `null`。当前代理人装备和他人装备都属于 `equipped`，当前装备置顶只影响遍历顺序，不构成额外的数据状态。`unequipped` 时 `agentId` 必须为 `null`；`equipped` 且 `agentId` 非空时，`agentId` 必须是 fairy 代理人数值 ID（例如耀嘉音 `1311`），并能在 `catalog.agents` 中解析；`agentId=null` 只产生 warning，不阻止导出。
 
 未知、否定和空集合不能互换。`managementState=null` 不等于 `none`，`equipped=null` 不等于 `unequipped`，`substats=[]` 只陈述读到了空列表。识别不到装备者不等于未装备；管理状态与装备分别保留，不能仅凭用户回忆的图标位置合并或补默认值。
 
-`fieldPolicy` 在 v1 固定为 `{ "management": "required", "equipped": "required" }`，不再接受按字段拆分的旧组合：
+`fieldPolicy` 在 v2 固定为 `{ "management": "required", "equipped": "optional" }`：
 
 - `management: "required"`：`managementState` 必须为 `locked`、`discarded` 或 `none`，不能为 `null`。
-- `equipped: "required"`：`equipped` 必须非 `null`；`unequipped` 时 `agentId=null`，`equipped` 时 `agentId` 必须是非空 fairy 数值 ID 且可在目录中解析。`{ "state": "equipped", "agentId": null }` 不能进入可用数据。
+- `equipped: "optional"`：`equipped` 可为 `null`，也可为 `{ "state": "equipped", "agentId": null }`；`unequipped` 时 `agentId` 必须为 `null`，`equipped` 且 `agentId` 非空时必须是可在目录中解析的 fairy 数值 ID。装备状态或装备者未解析只产生 warning，不阻止记录进入可用数据；`equipped=null` 仍不等于 `unequipped`，不得补默认值。
 
-按用户已确认的校对方案，可用数据只接受所有必需字段已知、`validation.status=passed`、两处问题数组均没有 `error`，且 `quality` 为 `autoAccepted` 或 `humanConfirmed` 的记录。自动接受记录无需逐件人工确认，问题记录经校对确认后再纳入；说明见 [T6](t6-review-export-workflow.md#导出前校对的已确认规则)。仅保存局部修改不会自动确认整件。修改自动接受或已确认条目后，新修订进入 `needsReview`，整件确认后才可输出。手动补录可使原始失败或未处理记录变为可用，但不得改写其原始处理结局。
+按 v2 的校对方案，可用数据接受所有必需字段已知、`validation.status=passed`、问题数组没有 `error`，且 `quality` 为 `autoAccepted` 或 `humanConfirmed` 的记录。`validation.issues` 中可以保留可选的 `equipped` warning。自动接受记录无需逐件人工确认，问题记录经校对确认后再纳入；说明见 [T6](t6-review-export-workflow.md#导出前校对的已确认规则)。仅保存局部修改不会自动确认整件。修改自动接受或已确认条目后，新修订进入 `needsReview`，整件确认后才可输出。手动补录可使原始失败或未处理记录变为可用，但不得改写其原始处理结局。
+
+v1 的 `equipped: required` 记录如果只有 `equippedStateUnavailable` 这一个持久化缺口、且 `revision=0`，v2 导出会将其重新归类为 `autoAccepted` 并在当前 `validation` 中保留 warning；这是对旧扫描检查点的一次兼容迁移，不修改磁盘上的检查点。`revision>0` 的人工修订不做自动升级，仍需整件确认。
 
 ### 当前校验
 
 `validation` 是对当前数据的可重算结论，与原始识别和人工确认分开。新扫描、保存人工修改或重开历史时，使用应用随包且明确固定的当前规则重新检查字段策略、资料标识、单位、槽位、等级及数值格式；不下载新规则，不用历史确认代替检查。顶层 `validationRules` 记录实际所用规则。
 
-- `passed`：全部必需检查完成且无错误，`validationRules` 必须非空；警告可保留。
+- `passed`：全部必需检查完成且无错误，`validationRules` 必须非空；可选的 `equipped` warning 可以保留。
 - `failed`：已发现缺字段或领域冲突，`validation.issues` 至少有一个 `error`。
-- `unavailable`：尚无已知字段冲突，但缺少资料或规则无法解释该目录版本，不能完成全部检查；至少有一个说明资料缺口的 `error`。没有可用规则时 `validationRules=null`，所有记录均为 `unavailable`。
+- `unavailable`：尚无已知字段冲突，但缺少必需字段或规则无法解释该目录版本，不能完成全部检查；至少有一个说明资料缺口的 `error`。没有可用规则时 `validationRules=null`，所有记录均为 `unavailable`。v2 中 `equipped` 缺失或装备者未解析不属于 `unavailable`，只作为 warning。
 
-重开历史记录时，界面同时显示原确认状态和当前问题，将 `failed/unavailable` 列入待处理；允许查看原图、保存未完成修改，但禁止整件确认与可用导出，直至当前检查通过。校验通过不会把 `needsReview` 或 `notEvaluated` 自动升为自动接受。
+重开历史记录时，界面同时显示原确认状态和当前问题，将 `failed/unavailable` 列入待处理；允许查看原图、保存未完成修改，但禁止整件确认与可用导出，直至当前检查通过。v2 的 `equipped` warning 不阻止整件确认或可用导出。界面不会把人工修订的 `needsReview` 自动升为自动接受；只有 §3 描述的 v1 `revision=0` 装备缺口迁移会在导出快照中重新归类。
 
 仅更新校验而未发生人工修改或确认时，保存只增加 `session.savedRevision`，不增加单件 `revision`；规则和结果均未变则不制造新修订。后台校验绑定所读的物品修订和规则版本，旧回包不得覆盖新值。导出取已保存的同一份规则、校验结果和数据快照；JSON 中每件均为 `passed`，有记录时规则不得为空。只读消费端不能把旧校验当作当前应用的验收结果，重新使用或转换时仍应按自己的校验契约检查。
 
@@ -153,7 +155,7 @@ CSV 只承载物品行，不重复会话外壳、`catalog`、`excludedCount` 或
 
 ## 6. 示例与校验边界
 
-[可用数据示例](../examples/scan-usable-v1.json)为手写合成记录，用于解释格式；资源版本、规则版本、会话和字段均不构成游戏扫描或模型准确性证据。它演示人工确认记录、两类六号位百分比主词条、副词条强化档位、当前校验、三种管理状态、已装备代理人和已取消会话的部分结果。
+[可用数据示例](../examples/scan-usable-v2.json)为手写合成记录，用于解释格式；资源版本、规则版本、会话和字段均不构成游戏扫描或模型准确性证据。它演示人工确认记录、两类六号位百分比主词条、副词条强化档位、当前校验、三种管理状态、已装备代理人和已取消会话的部分结果。
 
 实现时按顺序检查：
 

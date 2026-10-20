@@ -36,10 +36,18 @@ func TestToStructuredJSONShape(t *testing.T) {
 	if len(structured.Issues) != 0 {
 		t.Fatalf("structured issues = %+v, want empty", structured.Issues)
 	}
+	var sawManagementError, sawEquippedWarning bool
 	for _, issue := range structured.Validation.Issues {
-		if issue.Severity != SeverityError {
-			t.Fatalf("validation issue %+v is not an error", issue)
+		switch {
+		case issue.Field == "managementState" && issue.Severity == SeverityError:
+			sawManagementError = true
+		case issue.Field == "equipped" && issue.Severity == SeverityWarning:
+			sawEquippedWarning = true
 		}
+	}
+	if !sawManagementError || !sawEquippedWarning {
+		t.Fatalf("validation issues = %+v, want a management error and an equipped warning",
+			structured.Validation.Issues)
 	}
 
 	raw, err := json.Marshal(structured)
@@ -236,8 +244,8 @@ func TestToStructuredRarityUnverified(t *testing.T) {
 
 // TestToStructuredWithCaptureState pins the new non-text fields: confirmed
 // management state and equipment presence are written, agentId stays null,
-// equipped records remain unavailable until the equipper identity exists,
-// and unequipped records can pass once their management state is known.
+// an unresolved equipper is a non-blocking warning, and unequipped records
+// can pass once their management state is known.
 func TestToStructuredWithCaptureState(t *testing.T) {
 	rec, issues := ParseDetail(DetailLines{
 		Set:   "河豚电音[1]",
@@ -258,12 +266,13 @@ func TestToStructuredWithCaptureState(t *testing.T) {
 	if structured.Data.Equipped.AgentID != nil {
 		t.Fatalf("equipped.agentId = %v, want null", structured.Data.Equipped.AgentID)
 	}
-	if structured.Validation.Status != ValidationUnavailable {
-		t.Fatalf("validation = %+v, want unavailable", structured.Validation)
+	if structured.Validation.Status != ValidationPassed {
+		t.Fatalf("validation = %+v, want passed with an equipped warning", structured.Validation)
 	}
 	if len(structured.Validation.Issues) != 1 ||
-		structured.Validation.Issues[0].Field != "equipped" {
-		t.Fatalf("validation issues = %+v, want only the equipper gap", structured.Validation.Issues)
+		structured.Validation.Issues[0].Field != "equipped" ||
+		structured.Validation.Issues[0].Severity != SeverityWarning {
+		t.Fatalf("validation issues = %+v, want only the equipped warning", structured.Validation.Issues)
 	}
 
 	unequipped := ToStructuredWithState(rec, RarityS, CaptureState{
@@ -318,9 +327,9 @@ func TestToStructuredWithCaptureState(t *testing.T) {
 }
 
 // TestAgentIdentityGatesValidation pins the identity rules: a reliable,
-// catalog-resolvable agent id completes an equipped record's validation; a
-// missing or stale id keeps agentId null and validation unavailable; an
-// unequipped record never carries an id, even if one is supplied.
+// catalog-resolvable agent id completes an equipped record; a missing or
+// stale id keeps agentId null and adds a warning; an unequipped record never
+// carries an id, even if one is supplied.
 func TestAgentIdentityGatesValidation(t *testing.T) {
 	rec, issues := ParseDetail(DetailLines{
 		Set:   "河豚电音[1]",
@@ -332,10 +341,11 @@ func TestAgentIdentityGatesValidation(t *testing.T) {
 		t.Fatalf("issues = %+v, want none", issues)
 	}
 	cases := []struct {
-		name       string
-		state      CaptureState
-		wantID     *int
-		wantStatus string
+		name         string
+		state        CaptureState
+		wantID       *int
+		wantStatus   string
+		wantWarnings int
 	}{
 		{
 			name:       "equipped with a catalog id passes",
@@ -344,9 +354,10 @@ func TestAgentIdentityGatesValidation(t *testing.T) {
 			wantStatus: ValidationPassed,
 		},
 		{
-			name:       "equipped without an id stays unavailable",
-			state:      CaptureState{ManagementState: ManagementNone, EquippedState: EquippedStateEquipped},
-			wantStatus: ValidationUnavailable,
+			name:         "equipped without an id passes with a warning",
+			state:        CaptureState{ManagementState: ManagementNone, EquippedState: EquippedStateEquipped},
+			wantStatus:   ValidationPassed,
+			wantWarnings: 1,
 		},
 		{
 			name:       "equipped with an unknown id stays unavailable",
@@ -382,8 +393,17 @@ func TestAgentIdentityGatesValidation(t *testing.T) {
 			if structured.Validation.Status != tc.wantStatus {
 				t.Fatalf("validation = %+v, want %s", structured.Validation, tc.wantStatus)
 			}
-			if tc.wantStatus == ValidationPassed && len(structured.Validation.Issues) != 0 {
-				t.Fatalf("passed validation carries issues: %+v", structured.Validation.Issues)
+			warnings := 0
+			for _, issue := range structured.Validation.Issues {
+				if issue.Severity == SeverityWarning {
+					warnings++
+				}
+				if issue.Severity == SeverityError && tc.wantStatus == ValidationPassed {
+					t.Fatalf("passed validation carries an error: %+v", issue)
+				}
+			}
+			if warnings != tc.wantWarnings {
+				t.Fatalf("warnings = %d, want %d: %+v", warnings, tc.wantWarnings, structured.Validation.Issues)
 			}
 		})
 	}
