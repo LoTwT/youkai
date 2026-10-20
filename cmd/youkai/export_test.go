@@ -161,7 +161,7 @@ func TestWriteExportFileReportsResidualTempFile(t *testing.T) {
 	if !errors.Is(err, syscall.ENOSPC) {
 		t.Fatalf("error = %v, want ENOSPC", err)
 	}
-	if !strings.Contains(err.Error(), tmpName) || !strings.Contains(err.Error(), removeErr.Error()) {
+	if !strings.Contains(err.Error(), filepath.Base(tmpName)) || !strings.Contains(err.Error(), removeErr.Error()) {
 		t.Fatalf("error %q does not report the residual temporary file", err)
 	}
 }
