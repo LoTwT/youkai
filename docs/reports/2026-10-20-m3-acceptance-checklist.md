@@ -218,7 +218,7 @@ Windows 实测轮 ② 完成前，不宣称 Windows M3 通过。
 | 独立 Clear（`YOUKAI_INDEPENDENT_CLEAR=1`） | 通过（日志级） | 6/6 出现 `filter reset and S selected`，未出现 `navigationMismatch`。 |
 | 顶部滑块确认 | 通过（日志级） | 6/6 在 attempt 1 内接受；每次先出现一次零位移 `lost=true`（best shift 0），随后 `top confirmation accepted`，thumb 位置 226/227，±2 像素内。 |
 | Lost 预算与安全停止 | 未触发 | 6 次 `lost=true` 都是顶部确认尝试中的零位移误判，随后接受；列表滚动期间未触发 Lost。不能据此判定 Lost 行为通过。 |
-| 相邻同详情双盘 | 部分证据，疑似绕过保护 | seq 806/807：位置 6、viewport 0、row 4 col 0/1，文本与结构化字段完全一致，检查点和导出中各计一件（CSV 第 693/694 行）。但两件均为 `transitionVerified`，整轮没有 `referenceVerified`；保存的行裁剪 MAD 仅 0.12–0.57，远低于 `DetailSameMax=2.0`。可能是预点击详情基线未落在紧邻前一件，或云视频压缩噪声导致“详情已变”误判；需受控复现，当前不能判定同详情保护已生效。 |
+| 相邻同详情双盘 | 部分证据，根因已定位、待现场复核 | seq 806/807：位置 6、viewport 0、row 4 col 0/1，文本与结构化字段完全一致，检查点和导出中各计一件（CSV 第 693/694 行）。但两件均为 `transitionVerified`，整轮没有 `referenceVerified`；保存的行裁剪 MAD 仅 0.12–0.61，远低于 `DetailSameMax=2.0`，最终稳定画面并非不同。根因是点击后的过渡帧只要单帧比对为 `Different` 就被永久记为“详情已变”，后续稳定画面即使与上一件相同也按普通切换接纳。离线合成序列已复现旧实现绕过参照往返，新实现改为“先等画面稳定，再与基线比较”，同一序列转为 `referenceVerified` 并通过全量测试；真实云客户端仍需下一次现场轮确认。 |
 | 管理状态三态 | 部分通过 | 全量：`locked=998`、`discarded=7`、`none=0`、`null=0`。7 件弃置均为列表角标 `discarded` + 顶部 `unlocked`；未取得无标记样本，`none` 路径未验证。 |
 | 装备与装备者 | 字段未完成（v2 可选） | 全量：`unequipped=875`、`equipped=116`、`null=14`；116 件已装备的 `agentId` 全部为 `null`。14 件 `null` 都是详情/列表头像存在性不一致，按契约保留为 `null`。v2 将这 130 件作为装备字段 warning 保留，不再阻止导出。 |
 | 覆盖结论 | 未通过（如实为未知） | `coverage.status=unknown`，`sort=unverified`；未错误显示 `complete`，但也没有完成覆盖验收。 |

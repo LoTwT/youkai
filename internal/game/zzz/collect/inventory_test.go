@@ -96,6 +96,7 @@ type scriptedGame struct {
 	// an earlier lower bound.
 	respectDispatchCursor bool
 	sameDetail            bool // a new selection keeps the old detail content
+	detailFlashFrames     int  // >0: a click briefly shows a distinct detail before the target's own
 	detailFlicker         bool // the detail content alternates every frame
 	qualityUnknown        bool // no gold badge (A/B/unknown rarity)
 	substatsUnknown       bool // the fourth row's value column is between tiers
@@ -572,6 +573,18 @@ func (g *scriptedGame) dispatch(op platform.InputOp) platform.InputResult {
 		due := lag
 		if g.detailLagExtra > 0 {
 			due += g.detailLagExtra
+		}
+		if g.detailFlashFrames > 0 && previousDetail >= 0 {
+			// Model a cloud-video crossfade: the pane briefly shows content
+			// unrelated to both the previous and the target disc before the
+			// target's own detail arrives.
+			flash := previousDetail ^ 0x7F
+			g.pending = append(g.pending, pendingEffect{dueAt: lag, apply: func(g *scriptedGame) {
+				g.detailGlobal = flash
+			}})
+			if due <= lag {
+				due = lag + g.detailFlashFrames
+			}
 		}
 		g.pending = append(g.pending, pendingEffect{dueAt: due, apply: func(g *scriptedGame) {
 			g.detailGlobal = target
@@ -1393,6 +1406,63 @@ func TestSinglePageSameDetailReferenceRoundTripAdmitsDuplicates(t *testing.T) {
 		if got := countOps(ops, platform.InputClick, slotCenter(game.layout, slot), image.Point{}); got != want {
 			t.Fatalf("slot %d clicked %d times, want %d (reference and return are separate clicks)", slot, got, want)
 		}
+	}
+}
+
+// T14b2: a cloud-video crossfade frame between the click and the settled
+// duplicate pane must not count as the transition. The earlier baseline
+// fix compared against the previous admitted detail, but a single
+// transient frame that differed still admitted the duplicate as
+// transitionVerified and skipped the reference round trip.
+func TestSinglePageSameDetailTransientFrameStillRoundTrips(t *testing.T) {
+	game := newScriptedGame(true, true, true)
+	game.detailKeys = map[int]int{0: 41, 1: 41, 2: 7}
+	game.detailFlashFrames = 2
+	h := newTraversalHarness(t, game)
+	h.start()
+	h.endCompleted()
+
+	obs := h.observations()
+	if len(obs) != 3 {
+		t.Fatalf("admitted %d, want 3: %v", len(obs), positions(obs))
+	}
+	if obs[1].Association != collect.AssociationReference {
+		t.Fatalf("the duplicate behind a transient frame = %q, want %q; evidence: %s",
+			obs[1].Association, collect.AssociationReference, obs[1].Evidence)
+	}
+	if obs[1].Reference == nil {
+		t.Fatal("the duplicate admission carries no reference evidence")
+	}
+	for _, i := range []int{0, 2} {
+		if obs[i].Association != collect.AssociationTransition || obs[i].Reference != nil {
+			t.Fatalf("observation %d took the reference path: %+v", i+1, obs[i])
+		}
+	}
+}
+
+// T14b3: a detail update that arrives after the stability window must not
+// be mistaken for identical content. The settled pre-update pane is not
+// enough to start a reference round trip while the action budget remains.
+func TestSinglePageDelayedDetailDoesNotRoundTrip(t *testing.T) {
+	game := newScriptedGame(true, true, true)
+	game.detailKeys = map[int]int{0: 1, 1: 2, 2: 3}
+	game.detailLagExtra = 20
+	game.frameInterval = 0
+	h := newTraversalHarness(t, game)
+	h.start()
+	h.endCompleted()
+
+	obs := h.observations()
+	if len(obs) != 3 {
+		t.Fatalf("admitted %d, want 3: %v", len(obs), positions(obs))
+	}
+	for i, o := range obs {
+		if o.Association != collect.AssociationTransition || o.Reference != nil {
+			t.Fatalf("observation %d took the reference path for a delayed update: %+v", i+1, o)
+		}
+	}
+	if clicks := countSlotClicks(game.opsSnapshot(), game.layout); clicks != 3 {
+		t.Fatalf("%d slot clicks, want one per item and no reference round trip", clicks)
 	}
 }
 
