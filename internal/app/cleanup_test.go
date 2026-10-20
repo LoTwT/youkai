@@ -260,6 +260,42 @@ func TestServiceCleanupPreviewsUnreadableRecord(t *testing.T) {
 	}
 }
 
+func TestServiceHistoryRecordsIncludesReviewMetadata(t *testing.T) {
+	store, paths := cleanupStore(t)
+	cleanupFixture(t, store, "cleanup-1", true)
+	svc := newServiceWithStore(t, paths, store, nil, func() (Recognizer, error) { return newFakeRecognizer(), nil })
+
+	records, err := svc.HistoryRecords()
+	if err != nil {
+		t.Fatalf("HistoryRecords: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("records = %+v, want one", records)
+	}
+	rec := records[0]
+	if rec.ID != "cleanup-1" || rec.Client != record.ClientWindowsLocal ||
+		rec.CapturedCount != 1 || rec.Coverage != record.CoveragePartial ||
+		rec.PendingReview != 1 || rec.TotalBytes == 0 || rec.EvidenceFiles != 2 ||
+		rec.Unreadable {
+		t.Fatalf("history record = %+v", rec)
+	}
+}
+
+func TestServiceHistoryRecordsMarksUnreadableMetadata(t *testing.T) {
+	store, paths := cleanupStore(t)
+	if err := store.CreateRecord("cleanup-1"); err != nil {
+		t.Fatalf("CreateRecord: %v", err)
+	}
+	svc := newServiceWithStore(t, paths, store, nil, func() (Recognizer, error) { return newFakeRecognizer(), nil })
+	records, err := svc.HistoryRecords()
+	if err != nil {
+		t.Fatalf("HistoryRecords: %v", err)
+	}
+	if len(records) != 1 || !records[0].Unreadable || records[0].ID != "cleanup-1" {
+		t.Fatalf("records = %+v, want one unreadable entry", records)
+	}
+}
+
 func TestServiceStorageUsageMeasuresManagedRoots(t *testing.T) {
 	store, paths := cleanupStore(t)
 	cleanupFixture(t, store, "cleanup-1", true)

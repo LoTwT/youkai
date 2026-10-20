@@ -45,6 +45,8 @@ func (m *Model) exportBlockedReason() string {
 		return ""
 	case m.exporting:
 		return "正在导出……"
+	case m.historyExporting != "":
+		return "正在导出历史记录，完成前不能导出。"
 	case m.exitState == exitRunning || m.exitState == exitDone:
 		return "正在退出应用，不能导出。"
 	case m.reviewSaving:

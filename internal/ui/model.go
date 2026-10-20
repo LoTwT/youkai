@@ -11,7 +11,9 @@
 package ui
 
 import (
+	"fmt"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -35,8 +37,9 @@ type Service interface {
 	Snapshot() app.Snapshot
 	// RetrySave re-attempts a failed persistence of the active session.
 	RetrySave() error
-	// ListRecords lists the saved records below the data root.
-	ListRecords() ([]record.RecordInfo, error)
+	// HistoryRecords lists saved records with the metadata the history
+	// area shows.
+	HistoryRecords() ([]app.HistoryRecord, error)
 	// LoadRecord loads one saved record with recovery semantics applied.
 	LoadRecord(recordID string) (*record.Recovery, error)
 	// SaveItemRevision appends one manual revision to a produced item and
@@ -201,9 +204,15 @@ type Model struct {
 	startReqID  string
 	startErr    string
 
-	history    []HistoryEntry
-	histChoice string
-	histErr    string
+	history          []HistoryEntry
+	histChoice       string
+	histErr          string
+	historyFilter    string
+	historySelected  map[string]bool
+	historyNotice    string
+	historyError     string
+	historyExporting string
+	historyBulk      *historyBulkPrompt
 
 	// recLoad versions the results area's content: every action that
 	// replaces or refreshes it bumps the counter, and a load's result
@@ -312,6 +321,7 @@ func New(cfg Config) *Model {
 		split:            520,
 		cache:            newEvidenceCache(cfg.Evidence, limit),
 		promptedSessions: make(map[string]bool),
+		historySelected:  make(map[string]bool),
 		closeBehavior:    closeBehavior,
 	}
 	if cfg.Updates != nil {
@@ -469,31 +479,55 @@ func (m *Model) performShowLive() {
 type HistoryEntry struct {
 	// ID is the record identifier to reopen.
 	ID string
-	// Label is the text the history list shows.
+	// Label is the short picker label (date and record id).
 	Label string
+
+	SavedAt       time.Time
+	Client        record.Client
+	CapturedCount int64
+	Coverage      record.CoverageStatus
+	PendingReview int
+	TotalBytes    int64
+	Unreadable    bool
 }
 
 // loadHistory refreshes the history list from the service.
 func (m *Model) loadHistory() {
 	m.goAsync(func() {
-		infos, err := m.cfg.Service.ListRecords()
+		records, err := m.cfg.Service.HistoryRecords()
 		m.update(func() {
 			if err != nil {
 				m.histErr = err.Error()
 				return
 			}
 			m.histErr = ""
-			entries := make([]HistoryEntry, 0, len(infos))
-			for _, info := range infos {
+			entries := make([]HistoryEntry, 0, len(records))
+			for _, info := range records {
 				label := info.ID
 				if !info.SavedAt.IsZero() {
 					label = info.SavedAt.Format("2006-01-02 15:04") + " · " + info.ID
 				}
-				entries = append(entries, HistoryEntry{ID: info.ID, Label: label})
+				entries = append(entries, HistoryEntry{
+					ID:            info.ID,
+					Label:         label,
+					SavedAt:       info.SavedAt,
+					Client:        info.Client,
+					CapturedCount: info.CapturedCount,
+					Coverage:      info.Coverage,
+					PendingReview: info.PendingReview,
+					TotalBytes:    info.TotalBytes,
+					Unreadable:    info.Unreadable,
+				})
 			}
 			m.history = entries
-			if m.histChoice == "" && len(entries) > 0 {
-				m.histChoice = entries[0].Label
+			for id := range m.historySelected {
+				if !m.hasHistoryID(id) {
+					delete(m.historySelected, id)
+				}
+			}
+			labels := m.HistoryLabels()
+			if m.histChoice == "" && len(labels) > 0 {
+				m.histChoice = labels[0]
 			}
 			if m.histChoice != "" && !m.hasHistoryLabel(m.histChoice) {
 				m.histChoice = ""
@@ -502,22 +536,134 @@ func (m *Model) loadHistory() {
 	})
 }
 
-func (m *Model) hasHistoryLabel(label string) bool {
+func (m *Model) hasHistoryID(id string) bool {
 	for _, e := range m.history {
-		if e.Label == label {
+		if e.ID == id {
 			return true
 		}
 	}
 	return false
 }
 
-// HistoryLabels returns the history list's labels for the picker.
+func (m *Model) hasHistoryLabel(label string) bool {
+	for _, e := range m.history {
+		if e.Label == label && m.historyVisible(e) {
+			return true
+		}
+	}
+	return false
+}
+
+// historyFilterTime returns the parsed date filter. Empty means no
+// filter; ok is false when the text is not a valid YYYY-MM-DD date.
+func (m *Model) historyFilterTime() (time.Time, bool) {
+	text := strings.TrimSpace(m.historyFilter)
+	if text == "" {
+		return time.Time{}, true
+	}
+	date, err := time.ParseInLocation("2006-01-02", text, time.Local)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return date, true
+}
+
+func (m *Model) historyVisible(entry HistoryEntry) bool {
+	filter, ok := m.historyFilterTime()
+	if !ok {
+		return false
+	}
+	if filter.IsZero() {
+		return true
+	}
+	saved := entry.SavedAt.In(time.Local)
+	return saved.Year() == filter.Year() && saved.Month() == filter.Month() && saved.Day() == filter.Day()
+}
+
+func (m *Model) visibleHistory() []HistoryEntry {
+	out := make([]HistoryEntry, 0, len(m.history))
+	for _, entry := range m.history {
+		if m.historyVisible(entry) {
+			out = append(out, entry)
+		}
+	}
+	return out
+}
+
+// HistoryLabels returns the visible history labels for the picker.
 func (m *Model) HistoryLabels() []string {
-	labels := make([]string, len(m.history))
-	for i, e := range m.history {
+	entries := m.visibleHistory()
+	labels := make([]string, len(entries))
+	for i, e := range entries {
 		labels[i] = e.Label
 	}
 	return labels
+}
+
+func (m *Model) historyFilterInvalid() bool {
+	_, ok := m.historyFilterTime()
+	return !ok
+}
+
+func (m *Model) historyLabel(id string) string {
+	for _, e := range m.history {
+		if e.ID == id {
+			return e.Label
+		}
+	}
+	return ""
+}
+
+func (m *Model) setHistorySelected(id string, selected bool) {
+	if selected {
+		m.historySelected[id] = true
+		return
+	}
+	delete(m.historySelected, id)
+}
+
+func (m *Model) selectedHistoryIDs() []string {
+	ids := make([]string, 0, len(m.historySelected))
+	for _, entry := range m.visibleHistory() {
+		if m.historySelected[entry.ID] {
+			ids = append(ids, entry.ID)
+		}
+	}
+	return ids
+}
+
+func (m *Model) historyClientText(client record.Client) string {
+	switch client {
+	case record.ClientWindowsLocal:
+		return "Windows 完整客户端"
+	case record.ClientWindowsCloud:
+		return "Windows 云客户端"
+	case record.ClientMacOSCloud:
+		return "macOS 云客户端"
+	default:
+		return "客户端未知"
+	}
+}
+
+func (m *Model) historyRowText(entry HistoryEntry) string {
+	date := "日期未知"
+	if !entry.SavedAt.IsZero() {
+		date = entry.SavedAt.In(time.Local).Format("2006-01-02 15:04")
+	}
+	review := "已校对"
+	count := fmt.Sprintf("%d 件", entry.CapturedCount)
+	coverage := coverageText(entry.Coverage)
+	switch {
+	case entry.Unreadable:
+		review = "记录不可读"
+		count = "件数未知"
+		coverage = "无法确认"
+	case entry.PendingReview > 0:
+		review = fmt.Sprintf("待校对 %d", entry.PendingReview)
+	}
+	return fmt.Sprintf("%s · %s · %s · 覆盖：%s · %s · %s · %s",
+		date, m.historyClientText(entry.Client), count,
+		coverage, review, formatBytes(entry.TotalBytes), entry.ID)
 }
 
 // OpenHistory reopens the chosen history record: its newest verifiable
@@ -546,7 +692,7 @@ func (m *Model) performOpenHistory(id string) {
 }
 
 func (m *Model) historyID(label string) string {
-	for _, e := range m.history {
+	for _, e := range m.visibleHistory() {
 		if e.Label == label {
 			return e.ID
 		}

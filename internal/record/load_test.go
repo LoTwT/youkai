@@ -10,6 +10,30 @@ import (
 	"time"
 )
 
+// TestPeekReadsMetadataWithoutVerifyingEvidence covers the history list's
+// read path: a structurally valid checkpoint stays readable for dates,
+// clients and counts even when opening the record would fail because an
+// evidence file is missing.
+func TestPeekReadsMetadataWithoutVerifyingEvidence(t *testing.T) {
+	st, root := newTestStore(t)
+	id := "rec-1"
+	detail, _ := cleanupRecord(t, st, id)
+	if err := os.Remove(filepath.Join(root, "sessions", id, "evidence", detail.ID+".png")); err != nil {
+		t.Fatalf("remove evidence: %v", err)
+	}
+	cp, err := st.Peek(id)
+	if err != nil {
+		t.Fatalf("Peek: %v", err)
+	}
+	if cp.Session.Client != ClientMacOSCloud || cp.Session.CapturedCount != 1 ||
+		cp.Session.Coverage.Status != CoveragePartial || len(cp.Items) != 1 {
+		t.Fatalf("peek metadata = %+v", cp.Session)
+	}
+	if _, err := st.Load(id); !errors.Is(err, ErrNoValidCheckpoint) {
+		t.Fatalf("Load after evidence removal = %v, want ErrNoValidCheckpoint", err)
+	}
+}
+
 func mustLoad(t *testing.T, st *Store, id string) *Recovery {
 	t.Helper()
 	rec, err := st.Load(id)

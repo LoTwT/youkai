@@ -98,12 +98,54 @@ func (s *Store) loadCheckpointLocked(recordID string, state *recordState) (*Chec
 		recordID, ErrNoValidCheckpoint, len(gens))
 }
 
+// Peek returns the newest structurally valid checkpoint without verifying
+// its indexed evidence. It is the history list's metadata path: reading
+// every evidence digest just to show a date, client and count would make
+// the list as expensive as opening the record. Recovery still uses Load
+// and full evidence verification.
+func (s *Store) Peek(recordID string) (*Checkpoint, error) {
+	if err := checkID("record", recordID); err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.ensureRecord(recordID); err != nil {
+		return nil, err
+	}
+	gens, err := s.generations(recordID)
+	if err != nil {
+		return nil, err
+	}
+	for _, g := range gens {
+		cp, err := s.readGenerationDocument(recordID, g)
+		if err != nil {
+			continue
+		}
+		return cp, nil
+	}
+	return nil, fmt.Errorf("record: peek %q: %w after %d generation(s)",
+		recordID, ErrNoValidCheckpoint, len(gens))
+}
+
 // readGeneration reads and fully verifies one generation file. Any
 // failure — unreadable file, trailing bytes, unknown fields, failed
 // validation, a revision that does not match its file name, missing or
 // mismatched evidence — makes the generation unusable and the caller
 // falls back to an older one.
 func (s *Store) readGeneration(recordID string, g generation) (*Checkpoint, error) {
+	cp, err := s.readGenerationDocument(recordID, g)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.verifyEvidence(recordID, cp.Evidence); err != nil {
+		return nil, err
+	}
+	return cp, nil
+}
+
+// readGenerationDocument decodes, validates and revision-checks one
+// generation without touching its evidence files.
+func (s *Store) readGenerationDocument(recordID string, g generation) (*Checkpoint, error) {
 	path := filepath.Join(s.checkpointsDir(recordID), g.name)
 	file, err := s.fs.OpenFile(path, os.O_RDONLY, 0)
 	if err != nil {
@@ -138,9 +180,6 @@ func (s *Store) readGeneration(recordID string, g generation) (*Checkpoint, erro
 	}
 	if cp.SavedRevision != g.revision {
 		return nil, fmt.Errorf("saved revision %d does not match file name %d", cp.SavedRevision, g.revision)
-	}
-	if err := s.verifyEvidence(recordID, cp.Evidence); err != nil {
-		return nil, err
 	}
 	return &cp, nil
 }

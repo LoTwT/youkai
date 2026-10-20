@@ -100,6 +100,7 @@ type fakeService struct {
 	quitFn  func() error
 
 	list    []record.RecordInfo
+	history []app.HistoryRecord
 	listErr error
 
 	loads   map[string]*record.Recovery
@@ -167,6 +168,25 @@ func (f *fakeService) ListRecords() ([]record.RecordInfo, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.list, f.listErr
+}
+
+func (f *fakeService) HistoryRecords() ([]app.HistoryRecord, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.history != nil || f.listErr != nil {
+		return f.history, f.listErr
+	}
+	out := make([]app.HistoryRecord, 0, len(f.list))
+	for _, info := range f.list {
+		out = append(out, app.HistoryRecord{
+			ID:            info.ID,
+			SavedAt:       info.SavedAt,
+			TotalBytes:    info.TotalBytes,
+			EvidenceBytes: info.EvidenceBytes,
+			EvidenceFiles: info.EvidenceFiles,
+		})
+	}
+	return out, nil
 }
 
 func (f *fakeService) LoadRecord(recordID string) (*record.Recovery, error) {
