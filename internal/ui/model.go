@@ -784,9 +784,12 @@ func (m *Model) updateRestartImminent() bool {
 	return m.updatesState == updateInstalling || m.updatesState == updateInstalled
 }
 
-// Stop requests the idempotent user stop of the active session.
+// Stop requests the idempotent user stop of the active session. A start
+// request already in flight has no Busy snapshot yet, but the service has
+// already placed its placeholder session; stop it too so the request
+// cannot begin collecting behind a disabled button.
 func (m *Model) Stop() {
-	if !m.snap.Busy {
+	if !m.snap.Busy && m.startReqID == "" {
 		return
 	}
 	m.goAsync(func() { m.cfg.Service.Stop() })
@@ -866,7 +869,7 @@ func (m *Model) LifecycleStatus() LifecycleStatus {
 		return LifecycleStatus{Text: "收尾中", Busy: false}
 	case m.exitState == exitFailed || m.snap.SaveError != "":
 		return LifecycleStatus{Text: "保存失败", Busy: m.snap.Busy && !m.Exiting()}
-	case m.snap.Busy:
+	case m.snap.Busy || m.startReqID != "":
 		return LifecycleStatus{Text: "扫描中", Busy: true}
 	default:
 		return LifecycleStatus{Text: "就绪", Busy: false}

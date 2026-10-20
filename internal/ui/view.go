@@ -148,7 +148,7 @@ func (m *Model) progressArea(c *ui.Context, t *ui.Theme) {
 				ui.Text(c, "结束："+end)
 			}
 			ui.Box(c).Grow(1)
-			if ui.Button(c, "停止").Disabled(!snap.Busy).Clicked() {
+			if ui.Button(c, "停止").Disabled(!snap.Busy && m.startReqID == "").Clicked() {
 				m.Stop()
 			}
 		})

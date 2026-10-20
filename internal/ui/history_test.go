@@ -1,6 +1,8 @@
 package ui
 
 import (
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -166,6 +168,37 @@ func TestHistoryBulkPartialFailureKeepsFailedSelectionForRetry(t *testing.T) {
 	}
 	if !tt.HasText("可重试") || !tt.HasText("确认删除选中") {
 		t.Fatalf("retry prompt does not show: %q", tt.Texts())
+	}
+}
+
+func TestHistoryExportCancelAndFailure(t *testing.T) {
+	svc := &fakeService{
+		history: historyMetadata(time.Now(), time.Now().Add(-time.Hour)),
+		loads: map[string]*record.Recovery{
+			"r1": recovery(uiStructuredItem(t, 1, record.QualityAutoAccepted)),
+		},
+	}
+	saver := &fakeExportSaver{}
+	m, q := newTestModel(t, Config{Service: svc, ExportSaver: saver, AppVersion: "test"})
+	tt := ui.NewTester(m.View, 1020, 1000)
+	settle(t, m, q, tt)
+
+	saver.saveFn = func(app.ExportFormat, string, []byte) (string, error) {
+		return "", nil
+	}
+	m.ExportHistory("r1", app.ExportJSON)
+	settle(t, m, q, tt)
+	if m.historyExporting != "" || m.historyError != "" || m.historyNotice != "已取消导出。" {
+		t.Fatalf("cancel state = exporting %q, error %q, notice %q", m.historyExporting, m.historyError, m.historyNotice)
+	}
+
+	saver.saveFn = func(app.ExportFormat, string, []byte) (string, error) {
+		return "", errors.New("no space left on device")
+	}
+	m.ExportHistory("r1", app.ExportJSON)
+	settle(t, m, q, tt)
+	if m.historyExporting != "" || !strings.Contains(m.historyError, "no space left on device") {
+		t.Fatalf("failure state = exporting %q, error %q", m.historyExporting, m.historyError)
 	}
 }
 

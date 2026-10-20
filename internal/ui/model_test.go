@@ -279,6 +279,29 @@ func TestPrepareRestoreStopsWithoutStarting(t *testing.T) {
 	m.startReqID = ""
 }
 
+// Stop must also reach a start request that has no Busy snapshot yet: the
+// service has already placed its placeholder, so the user must be able to
+// cancel preparation instead of waiting for the first snapshot.
+func TestStopStopsInFlightStart(t *testing.T) {
+	svc := &fakeService{}
+	m, q := newTestModel(t, Config{Service: svc})
+	m.startReqID = "ui-in-flight"
+	m.Stop()
+	drainAll(t, m, q)
+	if svc.stops != 1 {
+		t.Fatalf("stop calls = %d, want 1", svc.stops)
+	}
+}
+
+func TestLifecycleStatusIncludesInFlightStart(t *testing.T) {
+	m, _ := newTestModel(t, Config{Service: &fakeService{}})
+	m.startReqID = "ui-in-flight"
+	status := m.LifecycleStatus()
+	if !status.Busy || status.Text != "扫描中" {
+		t.Fatalf("in-flight status = %+v, want busy scan", status)
+	}
+}
+
 // TestExitFailureCallback checks that a failed wrap-up reaches the entry
 // point, which restores the window for the retry.
 func TestExitFailureCallback(t *testing.T) {
