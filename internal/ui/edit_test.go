@@ -676,12 +676,16 @@ func TestNewSessionKeepsDirtyEditor(t *testing.T) {
 		t.Fatal(err)
 	}
 	settle(t, m, q, tt)
+	if m.edit != nil || m.navPrompt != nil {
+		t.Fatalf("discarding did not settle the editor: edit=%+v nav=%+v", m.edit, m.navPrompt)
+	}
 	if err := tt.Click("查看本次扫描"); err != nil {
 		t.Fatal(err)
 	}
 	settle(t, m, q, tt)
 	if m.rec == nil || m.rec.ID != "s2" || !m.rec.Live {
-		t.Fatalf("the live session is not reachable after settling: %+v", m.rec)
+		t.Fatalf("the live session is not reachable after settling: rec=%+v applied=%q edit=%+v nav=%+v exit=%v",
+			m.rec, m.appliedSession, m.edit, m.navPrompt, m.exitState)
 	}
 }
 

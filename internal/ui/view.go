@@ -275,18 +275,6 @@ func (m *Model) resultsArea(c *ui.Context, t *ui.Theme) {
 				ui.Text(c, "历史记录："+m.historyEmptyText()).TextColor(t.TextMuted)
 			}
 		})
-		if len(m.history) > 0 {
-			ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, "日期筛选").TextColor(t.TextMuted)
-				ui.TextInput(c, &m.historyFilter).Width(120).Placeholder("YYYY-MM-DD")
-				if ui.Button(c, "清除筛选").Clicked() {
-					m.historyFilter = ""
-				}
-				if m.historyFilterInvalid() {
-					ui.Text(c, "日期格式应为 YYYY-MM-DD。").TextColor(t.Danger).FontSize(t.FontSize * 0.9)
-				}
-			})
-		}
 		m.savePromptArea(c, t)
 		if len(m.history) > 0 {
 			m.historyActions(c, t)
@@ -325,15 +313,25 @@ func (m *Model) historyActions(c *ui.Context, t *ui.Theme) {
 	blocked := m.cleanupBlockedReason()
 	selected := m.selectedHistoryIDs()
 	ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
-		ui.Textf(c, "已选 %d 条", len(selected)).TextColor(t.TextMuted)
-		if ui.Button(c, "删除选中截图").Disabled(blocked != "" || len(selected) == 0).Clicked() {
-			m.RequestSelectedScreenshotCleanup()
+		ui.Text(c, "日期筛选").TextColor(t.TextMuted)
+		ui.TextInput(c, &m.historyFilter).Width(110).Placeholder("YYYY-MM-DD")
+		if ui.Button(c, "清除筛选").Clicked() {
+			m.historyFilter = ""
 		}
-		if ui.Button(c, "删除选中记录").Disabled(blocked != "" || len(selected) == 0).Clicked() {
-			m.RequestSelectedRecordCleanup()
+		if m.historyFilterInvalid() {
+			ui.Text(c, "格式应为 YYYY-MM-DD。").TextColor(t.Danger).FontSize(t.FontSize * 0.9)
 		}
-		if ui.Button(c, "清除选择").Disabled(len(selected) == 0).Clicked() {
-			m.ClearHistorySelection()
+		if len(selected) > 0 {
+			ui.Textf(c, "已选 %d 条", len(selected)).TextColor(t.TextMuted)
+			if ui.Button(c, "删除选中截图").Disabled(blocked != "").Clicked() {
+				m.RequestSelectedScreenshotCleanup()
+			}
+			if ui.Button(c, "删除选中记录").Disabled(blocked != "").Clicked() {
+				m.RequestSelectedRecordCleanup()
+			}
+			if ui.Button(c, "清除选择").Clicked() {
+				m.ClearHistorySelection()
+			}
 		}
 	})
 	ui.ScrollBoth(c).MaxHeight(180).Children(func() {
@@ -356,43 +354,35 @@ func (m *Model) historyActions(c *ui.Context, t *ui.Theme) {
 }
 
 func (m *Model) historyRow(c *ui.Context, t *ui.Theme, entry HistoryEntry, blocked string) {
-	ui.Column(c).Gap(t.Space(1)).Children(func() {
-		ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
-			selected := m.historySelected[entry.ID]
-			if ui.Checkbox(c, &selected, "").Changed() {
-				m.setHistorySelected(entry.ID, selected)
+	ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
+		selected := m.historySelected[entry.ID]
+		if ui.Checkbox(c, &selected, "").Changed() {
+			m.setHistorySelected(entry.ID, selected)
+		}
+		text := m.historyRowText(entry)
+		if m.rec != nil && m.rec.ID == entry.ID {
+			text += "（当前）"
+		}
+		ui.Text(c, text).TextColor(t.TextMuted).SingleLine().Grow(1)
+		if ui.Button(c, "打开").Clicked() {
+			m.histChoice = entry.Label
+			m.OpenHistory()
+		}
+		if m.cfg.ExportSaver != nil {
+			if ui.Button(c, "导出 JSON").Disabled(m.historyExportsBlocked()).Clicked() {
+				m.ExportHistory(entry.ID, app.ExportJSON)
 			}
-			m.historySummaryText(c, t, entry)
-		})
-		ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
-			if ui.Button(c, "打开").Clicked() {
-				m.histChoice = entry.Label
-				m.OpenHistory()
+			if ui.Button(c, "导出 CSV").Disabled(m.historyExportsBlocked()).Clicked() {
+				m.ExportHistory(entry.ID, app.ExportCSV)
 			}
-			if m.cfg.ExportSaver != nil {
-				if ui.Button(c, "导出 JSON").Disabled(m.historyExportsBlocked()).Clicked() {
-					m.ExportHistory(entry.ID, app.ExportJSON)
-				}
-				if ui.Button(c, "导出 CSV").Disabled(m.historyExportsBlocked()).Clicked() {
-					m.ExportHistory(entry.ID, app.ExportCSV)
-				}
-			}
-			if ui.Button(c, "删除截图").Disabled(blocked != "").Clicked() {
-				m.RequestScreenshotCleanup(entry.ID)
-			}
-			if ui.Button(c, "删除当前记录").Disabled(blocked != "").Clicked() {
-				m.RequestRecordCleanup(entry.ID)
-			}
-		})
+		}
+		if ui.Button(c, "删除截图").Disabled(blocked != "").Clicked() {
+			m.RequestScreenshotCleanup(entry.ID)
+		}
+		if ui.Button(c, "删除当前记录").Disabled(blocked != "").Clicked() {
+			m.RequestRecordCleanup(entry.ID)
+		}
 	})
-}
-
-func (m *Model) historySummaryText(c *ui.Context, t *ui.Theme, entry HistoryEntry) {
-	text := m.historyRowText(entry)
-	if m.rec != nil && m.rec.ID == entry.ID {
-		text += "（当前）"
-	}
-	ui.Text(c, text).TextColor(t.TextMuted).SingleLine()
 }
 
 func (m *Model) historyEmptyText() string {
