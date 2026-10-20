@@ -312,7 +312,17 @@ Windows 实测轮 ② 完成前，不宣称 Windows M3 通过。
 - 已实施低成本优化：上一件接纳后的稳定帧作为下一次点击前等待的首个稳定样本，仍保留新鲜/复用帧确认；单件少等约两帧。实际收益待下一次现场轮测量。
 - 筛选准备：日常路径本来就是一次面板访问（打开→重置→选 S→关闭→Active）。`YOUKAI_INDEPENDENT_CLEAR=1` 的额外关闭/重开只用于验收时独立证明 reset 已清除旧筛选；现有面板夹具在 reset 前后面板区域像素一致，无法在面板内替代该证据，因此不合并验收路径。
 
-### 4.5 空白记录模板
+### 4.5 2026-10-21 预点击稳定帧复跑（未完成）
+
+- 构建：`main` `275833d`（上一件稳定帧作为预点击等待首个样本）；启动参数 `YOUKAI_GAME_SOURCE=traverse`、`YOUKAI_INDEPENDENT_CLEAR=1`。
+- 会话：`09f61eb6-ce62-48cc-9638-18705dda9ff2`；起始位置 1，起始筛选 `active`；本地约 00:19–00:28。
+- 结果：532 captured / 532 produced / 0 unprocessed / 0 failed；终止 `failed` / `positionLost`；位置 1–3 `complete`，位置 4 在滚动后停止，`coverage:"partial"`。
+- 失败证据：列表位移 4 行（dy 587，error 7.99），但 3 秒 `ScrollBudget` 内未停稳；最终候选 frame 29866。没有 `detailUnattributed`、`navigationMismatch` 或 `evidenceFailed`。
+- 耗时：首末采集间隔 510.1 秒；逐件中位数 0.808 秒、均值 0.961 秒、p95 2.203 秒。对比 `07682b85` 的 0.824 / 0.991 / 2.215，约 2–3% 改善；因本轮提前停止，不能作为完整轮性能结论。
+- 关联：532 件中 `referenceVerified=2`；预点击稳定帧优化未引入详情归属失败。
+- 后续：把 `ScrollBudget` 默认值从 3 秒调整为 5 秒，待下一次现场轮确认滚动停稳；排序方向本轮未采。
+
+### 4.6 空白记录模板
 
 每次现场执行复制下表填写；没有证据的行保持“待执行”。
 

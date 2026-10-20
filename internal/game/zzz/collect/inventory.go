@@ -44,8 +44,9 @@ type Inventory struct {
 	ActionBudget time.Duration
 	// ScrollBudget bounds a scroll's settle wait after the drag. It is
 	// longer than ActionBudget because a 1000ms drag plus inertial
-	// settling outlasts a click. Zero takes the default. The default is
-	// provisional (T5 §5: 拖拽停稳未单独标定).
+	// settling outlasts a click. Zero takes the default. The default was
+	// raised to 5s after a field scroll displaced four rows but did not
+	// settle within the former 3s budget (T5 §5).
 	ScrollBudget time.Duration
 	// StableFrames is the consecutive same-verdict observation count that
 	// counts as settled. Zero takes the default.
@@ -94,7 +95,7 @@ type Inventory struct {
 // starts at 167–212ms, settles at 374–415ms; T5 §4).
 const (
 	DefaultActionBudget     = 2 * time.Second
-	DefaultScrollBudget     = 3 * time.Second
+	DefaultScrollBudget     = 5 * time.Second
 	DefaultStableFrames     = 3
 	DefaultDetailStableSpan = 200 * time.Millisecond
 	DefaultMaxRetries       = 2
