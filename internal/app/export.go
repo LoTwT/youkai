@@ -28,10 +28,10 @@ const (
 // Extension is the file extension of a format, without the leading dot.
 func (f ExportFormat) Extension() string { return string(f) }
 
-// Public identity of the usable-data document (scan JSON v1).
+// Public identity of the usable-data document (scan JSON v2).
 const (
 	exportFormatName        = "youkai.scan"
-	exportFormatVersion     = 1
+	exportFormatVersion     = 2
 	exportProducerName      = "youkai"
 	exportCatalogNamespace  = "youkai.zzz"
 	exportValidationRuleID  = "zzzDriveDisc"
@@ -150,12 +150,12 @@ type exportValidationRules struct {
 	Version string `json:"version"`
 }
 
-// v1Scope is the declared scan range of the first version: all S drive
+// allSScope is the declared scan range of v2: all S drive
 // discs, every set, slot and level, with no exclusion by lock, discard or
 // equipment state. A session that narrows this range needs a contract
 // change; the opaque scope stored in the checkpoint describes the
 // collector mode, not these field-policy semantics.
-func v1Scope() exportScope {
+func allSScope() exportScope {
 	return exportScope{
 		Rarity:    zzz.RarityS,
 		Slots:     []int{1, 2, 3, 4, 5, 6},
@@ -170,11 +170,15 @@ func v1Scope() exportScope {
 
 // BuildUsableExport analyses one saved record and freezes the data the
 // two formats share. Only records the contract calls usable enter Items:
-// produced structured data, quality autoAccepted or humanConfirmed, a
-// passed current validation, no error in either issue array, and every
-// required field present. Everything else is counted as excluded. The
-// function revalidates with the shipped catalog rather than trusting a
-// stale persisted conclusion, and never changes the checkpoint.
+// produced structured data, a settled quality, a passed current
+// validation, no error in either issue array, and every required field
+// present. Equipped is optional in v2: an unresolved equipped state or
+// agent identity stays as a warning and does not exclude the record.
+// Revision-0 v1 records whose only persisted gap was the old required
+// equipped field are reclassified as auto-accepted for the v2 snapshot.
+// Everything else is counted as excluded. The function revalidates with
+// the shipped catalog rather than trusting a stale persisted conclusion,
+// and never changes the checkpoint.
 func BuildUsableExport(rec *record.Recovery) (*UsableExport, error) {
 	if rec == nil {
 		return nil, errors.New("app: export: record is nil")
@@ -208,7 +212,7 @@ func BuildUsableExport(rec *record.Recovery) (*UsableExport, error) {
 			Locale:        shell.Locale,
 			StartedAt:     formatExportTime(shell.StartedAt),
 			Termination:   exportTermination(rec),
-			Scope:         v1Scope(),
+			Scope:         allSScope(),
 			Coverage:      exportCoverageOf(shell),
 			CapturedCount: shell.CapturedCount,
 		},
@@ -258,11 +262,6 @@ func usableItem(item *record.ItemRecord) (ExportItem, bool) {
 	if item.Status != record.StatusProduced {
 		return ExportItem{}, false
 	}
-	switch item.Quality {
-	case record.QualityAutoAccepted, record.QualityHumanConfirmed:
-	default:
-		return ExportItem{}, false
-	}
 	structured, ok := structuredDiscPayload(item.Data)
 	if !ok {
 		return ExportItem{}, false
@@ -270,33 +269,26 @@ func usableItem(item *record.ItemRecord) (ExportItem, bool) {
 	if hasIssueError(structured.Issues) {
 		return ExportItem{}, false
 	}
-	if structured.Validation.Status != zzz.ValidationPassed {
-		return ExportItem{}, false
-	}
 	check := CheckDiscData(structured.Data)
 	if check.Validation.Status != zzz.ValidationPassed || hasIssueError(check.Validation.Issues) {
 		return ExportItem{}, false
 	}
+	quality, ok := exportQuality(item, structured, check)
+	if !ok {
+		return ExportItem{}, false
+	}
 	// Passing validation implies every required field is known; the tests
 	// keep this check explicit because the export must never rely on a
-	// merely plausible payload.
+	// merely plausible payload. Equipped is optional in v2 and may stay
+	// null or carry a null agent identity.
 	if structured.Data.SetID == nil || structured.Data.Rarity == nil ||
 		*structured.Data.Rarity != zzz.RarityS || structured.Data.Slot == nil ||
 		structured.Data.Level == nil || structured.Data.MainStat == nil ||
-		structured.Data.Substats == nil || structured.Data.ManagementState == nil ||
-		structured.Data.Equipped == nil {
+		structured.Data.Substats == nil || structured.Data.ManagementState == nil {
 		return ExportItem{}, false
 	}
 	if _, ok := zzz.LookupSetByID(*structured.Data.SetID); !ok {
 		return ExportItem{}, false
-	}
-	if structured.Data.Equipped.State == zzz.EquippedStateEquipped {
-		if structured.Data.Equipped.AgentID == nil {
-			return ExportItem{}, false
-		}
-		if _, ok := zzz.LookupAgentByID(*structured.Data.Equipped.AgentID); !ok {
-			return ExportItem{}, false
-		}
 	}
 	issues := append([]zzz.Issue(nil), structured.Issues...)
 	if issues == nil {
@@ -305,11 +297,31 @@ func usableItem(item *record.ItemRecord) (ExportItem, bool) {
 	return ExportItem{
 		Sequence:   item.Sequence,
 		Revision:   item.Revision,
-		Quality:    item.Quality,
+		Quality:    quality,
 		Issues:     issues,
 		Validation: check.Validation,
 		Data:       structured.Data,
 	}, true
+}
+
+// exportQuality keeps the persisted quality for settled records and
+// reclassifies the exact v1 legacy shape whose only gap was the now
+// optional equipped field. Manual revisions and records with any other
+// gap remain excluded.
+func exportQuality(item *record.ItemRecord, structured zzz.StructuredDisc, check DataCheck) (record.Quality, bool) {
+	switch item.Quality {
+	case record.QualityAutoAccepted, record.QualityHumanConfirmed:
+		if structured.Validation.Status != zzz.ValidationPassed {
+			return "", false
+		}
+		return item.Quality, true
+	case record.QualityNeedsReview:
+		if item.Revision == 0 && check.Validation.Status == zzz.ValidationPassed &&
+			zzz.OnlyEquippedStateUnavailable(structured.Validation, structured.Issues) {
+			return record.QualityAutoAccepted, true
+		}
+	}
+	return "", false
 }
 
 // structuredDisc reads the persisted structured payload of a produced
@@ -402,7 +414,7 @@ func (e *UsableExport) JSON(exportedAt time.Time, producerVersion string) ([]byt
 		Producer:        exportProducer{Name: exportProducerName, Version: producerVersion},
 		Session:         e.session,
 		Catalog:         e.catalog,
-		FieldPolicy:     exportFieldPolicy{Management: "required", Equipped: "required"},
+		FieldPolicy:     exportFieldPolicy{Management: "required", Equipped: "optional"},
 		ValidationRules: e.validationRules,
 		ExcludedCount:   e.Summary.Excluded,
 		Items:           e.items,

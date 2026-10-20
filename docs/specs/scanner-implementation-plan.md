@@ -14,7 +14,7 @@
 | --- | --- |
 | [公共架构](scanner-architecture.md#3-最小合理边界) | 模块关系、会话控制、结果记账、保存恢复和目录边界。 |
 | [T1](t1-mygo-ui-distribution.md)、[T2](t2-platform-capture-input.md)、[T3](t3-ocr-runtime-model-samples.md) | 原生 UI 与构建、平台能力、OCR 和样本；固定版本与摘要从专项文档读取。 |
-| [T5](t5-zzz-inventory-traversal.md)、[T6](t6-review-export-workflow.md)、[JSON/CSV v1](scan-json-format.md) | 页面与遍历证据、用户操作、校对及文件契约。 |
+| [T5](t5-zzz-inventory-traversal.md)、[T6](t6-review-export-workflow.md)、[JSON/CSV v2](scan-json-format.md) | 页面与遍历证据、用户操作、校对及文件契约。 |
 | [T7](t7-public-release-acceptance.md) | 最低系统候选、离线安装、打包路线及完整验收。 |
 
 当前仓库已建立 Go 工程：`go.mod` 固定模块路径与 MyGo v0.5.5 工具依赖，`mygo.json` 与 `cmd/youkai/` 入口就位，其余包按里程碑逐步增加。开发机为 macOS arm64、Go 1.27.2，Xcode 开发目录已选中，`hdiutil`、`codesign`、`makensis` 可定位；PATH 中的 `clang` 指向 Homebrew LLVM，正式构建需明确所用编译器与 SDK。MyGo 使用项目固定的 Go 工具依赖（v0.5.5），不依赖全局 `mygo` 命令；环境与常用命令见[开发指南](../development.md)。

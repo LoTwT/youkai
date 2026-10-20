@@ -266,6 +266,9 @@ func (r Row) QualityText() string {
 	case record.QualityAutoAccepted:
 		return "自动接受"
 	case record.QualityNeedsReview:
+		if r.OptionalEquippedOnly() {
+			return "自动接受（装备字段警告）"
+		}
 		return "待校对"
 	case record.QualityHumanConfirmed:
 		return "人工确认"
@@ -274,6 +277,14 @@ func (r Row) QualityText() string {
 	default:
 		return string(r.Quality)
 	}
+}
+
+// OptionalEquippedOnly reports the v1 revision-0 shape whose only gap was
+// the now optional equipped field. It is presented as a settled record
+// with a warning, without rewriting the checkpoint.
+func (r Row) OptionalEquippedOnly() bool {
+	return r.Revision == 0 && r.Structured != nil &&
+		zzz.OnlyEquippedStateUnavailable(r.Structured.Validation, r.Structured.Issues)
 }
 
 // Summary is the one-line content of the results table: the first
@@ -472,6 +483,9 @@ func (r Row) ValidationText() string {
 	case zzz.ValidationFailed:
 		return "失败"
 	case zzz.ValidationUnavailable:
+		if r.OptionalEquippedOnly() {
+			return "通过（装备字段警告）"
+		}
 		return "不可用"
 	case "":
 		return "未读取"
@@ -488,7 +502,11 @@ func (r Row) Issues() []zzz.Issue {
 		return nil
 	}
 	out := append([]zzz.Issue(nil), r.Structured.Issues...)
+	optionalEquipped := r.OptionalEquippedOnly()
 	for _, issue := range r.Structured.Validation.Issues {
+		if optionalEquipped && issue.Code == zzz.CodeEquippedStateUnavailable {
+			issue.Severity = zzz.SeverityWarning
+		}
 		duplicate := false
 		for _, have := range out {
 			if have == issue {
@@ -652,7 +670,7 @@ func (r Row) PendingReview() bool {
 	case record.QualityHumanConfirmed, record.QualityAutoAccepted:
 		return false
 	default:
-		return true
+		return !r.OptionalEquippedOnly()
 	}
 }
 

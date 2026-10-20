@@ -581,16 +581,22 @@ func issueSummaryText(issues []zzz.Issue) string {
 	if len(issues) == 0 {
 		return "无问题"
 	}
-	errors := 0
+	errors, warnings := 0, 0
 	for _, issue := range issues {
 		if issue.Severity == zzz.SeverityError {
 			errors++
+		} else {
+			warnings++
 		}
 	}
-	if errors == 0 {
-		return fmt.Sprintf("%d 个问题", len(issues))
+	switch {
+	case errors == 0:
+		return fmt.Sprintf("%d 个警告", warnings)
+	case warnings == 0:
+		return fmt.Sprintf("%d 个问题（%d 个错误）", len(issues), errors)
+	default:
+		return fmt.Sprintf("%d 个问题（%d 个错误，%d 个警告）", len(issues), errors, warnings)
 	}
-	return fmt.Sprintf("%d 个问题（%d 个错误）", len(issues), errors)
 }
 
 // reviewActions offers the per-item review controls in the read-only

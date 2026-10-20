@@ -94,8 +94,8 @@ func TestStructuredDiscRarityFromCapture(t *testing.T) {
 
 // TestStructuredDiscCarriesCaptureState checks the adapter's non-text
 // fields: management state and equipment presence come from the capture,
-// an equipped object without an accepted identity keeps agentId null and
-// validation unavailable, and explicitly unequipped records can validate
+// an equipped object without an accepted identity keeps agentId null and a
+// non-blocking warning, and explicitly unequipped records can validate
 // once their management state is known (still needing human confirmation).
 func TestStructuredDiscCarriesCaptureState(t *testing.T) {
 	lines := detailLines()
@@ -118,8 +118,11 @@ func TestStructuredDiscCarriesCaptureState(t *testing.T) {
 	if structured.Data.Equipped.AgentID != nil {
 		t.Fatalf("equipped.agentId = %v, want null without an accepted identity", structured.Data.Equipped.AgentID)
 	}
-	if structured.Validation.Status != zzz.ValidationUnavailable {
-		t.Fatalf("validation = %+v, want unavailable while agentId is unresolved", structured.Validation)
+	if structured.Validation.Status != zzz.ValidationPassed {
+		t.Fatalf("validation = %+v, want passed with an equipped warning", structured.Validation)
+	}
+	if len(structured.Validation.Issues) != 1 || structured.Validation.Issues[0].Severity != zzz.SeverityWarning {
+		t.Fatalf("validation issues = %+v, want one equipped warning", structured.Validation.Issues)
 	}
 
 	unequipped := structuredDisc(Observation{
@@ -174,8 +177,8 @@ func TestStructuredDiscCarriesAgentIdentity(t *testing.T) {
 	unmatched := base
 	unmatched.AgentID = 0
 	if got := structuredDisc(unmatched, lines); got.Data.Equipped.AgentID != nil ||
-		got.Validation.Status != zzz.ValidationUnavailable {
-		t.Fatalf("unmatched = %+v/%s, want agentId null and unavailable", got.Data.Equipped, got.Validation.Status)
+		got.Validation.Status != zzz.ValidationPassed {
+		t.Fatalf("unmatched = %+v/%s, want agentId null and passed with a warning", got.Data.Equipped, got.Validation.Status)
 	}
 
 	stale := base
@@ -268,19 +271,21 @@ func TestDelivererPersistsRawAndStructured(t *testing.T) {
 	}
 }
 
-// TestDelivererLeavesIncompleteDiscsForReview checks the other side of
-// auto-accept: missing required evidence, an equipped disc without an
-// accepted agent id, and a result without structured data all stay
-// needsReview. A complete unequipped disc is the control that passes.
-func TestDelivererLeavesIncompleteDiscsForReview(t *testing.T) {
+// TestDelivererAppliesCurrentOptionalFieldPolicy checks auto-accept under
+// the v2 policy: a missing management state stays needsReview, while an
+// equipped disc without an accepted agent id is accepted with a warning.
+// A result without structured data still stays needsReview.
+func TestDelivererAppliesCurrentOptionalFieldPolicy(t *testing.T) {
 	lines := detailLines()
 	cases := []struct {
 		name string
 		obs  Observation
+		want record.Quality
 	}{
 		{
 			name: "missing management state",
 			obs:  Observation{Rarity: zzz.RarityS, EquippedState: zzz.EquippedStateUnequipped},
+			want: record.QualityNeedsReview,
 		},
 		{
 			name: "equipped without agent identity",
@@ -289,6 +294,7 @@ func TestDelivererLeavesIncompleteDiscsForReview(t *testing.T) {
 				ManagementState: zzz.ManagementLocked,
 				EquippedState:   zzz.EquippedStateEquipped,
 			},
+			want: record.QualityAutoAccepted,
 		},
 	}
 	for _, tc := range cases {
@@ -298,8 +304,8 @@ func TestDelivererLeavesIncompleteDiscsForReview(t *testing.T) {
 			if err := applyTerminalLocked(&item, scan.Record{State: scan.StateProduced, Result: result}); err != nil {
 				t.Fatalf("apply terminal: %v", err)
 			}
-			if item.Quality != record.QualityNeedsReview {
-				t.Fatalf("quality = %s, want needsReview", item.Quality)
+			if item.Quality != tc.want {
+				t.Fatalf("quality = %s, want %s", item.Quality, tc.want)
 			}
 		})
 	}

@@ -162,10 +162,10 @@ func TestBuildRecordViewParsesStructured(t *testing.T) {
 	if issues := row.Issues(); len(issues) != 2 {
 		t.Errorf("issues = %d, want the parser issue and the validation issue", len(issues))
 	}
-	if got := row.IssueSummaryText(); got != "2 个问题（1 个错误）" {
+	if got := row.IssueSummaryText(); got != "2 个问题（1 个错误，1 个警告）" {
 		t.Errorf("issue summary = %q", got)
 	}
-	if got := row.ResultColumnText(); got != "未评价 · 校验不可用 · 2 个问题（1 个错误）" {
+	if got := row.ResultColumnText(); got != "未评价 · 校验不可用 · 2 个问题（1 个错误，1 个警告）" {
 		t.Errorf("table result = %q", got)
 	}
 }

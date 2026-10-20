@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/LoTwT/youkai/internal/game/zzz"
 	"github.com/LoTwT/youkai/internal/record"
 	"github.com/LoTwT/youkai/internal/scan"
 )
@@ -237,6 +238,12 @@ func pendingReviewCount(items []record.ItemRecord) int {
 		switch item.Quality {
 		case record.QualityAutoAccepted, record.QualityHumanConfirmed:
 		default:
+			if item.Revision == 0 {
+				if structured, ok := structuredDiscPayload(item.Data); ok &&
+					zzz.OnlyEquippedStateUnavailable(structured.Validation, structured.Issues) {
+					continue
+				}
+			}
 			count++
 		}
 	}
