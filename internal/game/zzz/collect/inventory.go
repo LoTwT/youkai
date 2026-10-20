@@ -418,6 +418,12 @@ type inventoryRun struct {
 	listMatch PageMatch
 	// lastFrame is the newest stable warehouse frame observed.
 	lastFrame platform.Frame
+	// lastDetailFrame is the stable frame of the last admitted detail
+	// (including a calibrated NotS disc). It is the baseline for the next
+	// same-viewport detail comparison; a newly taken pre-click list frame
+	// can still show the previous item's stale detail under cloud video
+	// lag, which would otherwise make an identical neighbour look changed.
+	lastDetailFrame platform.Frame
 	// lastScrollEvidence describes the latest verified scroll of this
 	// position; the next admitted observation carries it, then it is
 	// cleared so one viewport transition is not repeated on every item.
@@ -456,6 +462,7 @@ func (run *inventoryRun) preparePosition(ctx context.Context, pos int) error {
 	run.allowInitial = true
 	run.lastScrollRows = 0
 	run.lastScrollEvidence = ""
+	run.lastDetailFrame = platform.Frame{}
 
 	if err := run.establishList(ctx); err != nil {
 		return err
@@ -1218,7 +1225,8 @@ func (run *inventoryRun) visitSlot(ctx context.Context, i int) error {
 		}
 		run.allowInitial = false
 
-		out, err := run.awaitDetail(ctx, pre.frame, i, false)
+		baseline := run.detailBaseline(pre.frame)
+		out, err := run.awaitDetail(ctx, baseline, i, false)
 		if err != nil {
 			slot.Discard()
 			return err
@@ -1233,7 +1241,7 @@ func (run *inventoryRun) visitSlot(ctx context.Context, i int) error {
 			slot.Discard()
 			return run.geometryChanged(out.frame)
 		default: // awaitDeadline
-			if run.ineffectiveClick(out, pre.frame, preSelected) {
+			if run.ineffectiveClick(out, baseline, preSelected) {
 				if attempt < run.inv.maxRetries() {
 					// The click verifiably did nothing: re-establish every
 					// precondition and re-dispatch within the bound.
@@ -1253,9 +1261,20 @@ func (run *inventoryRun) visitSlot(ctx context.Context, i int) error {
 				return run.referenceRoundTrip(ctx, slot, out, pre.frame, pre.match, i, preSelected, row, col, attempt, target)
 			}
 			slot.Discard()
-			return run.detailFault(out, pre.frame, preSelected, i, false, target)
+			return run.detailFault(out, baseline, preSelected, i, false, target)
 		}
 	}
+}
+
+// detailBaseline chooses the detail comparison frame for the next click.
+// The last admitted detail is a known item and is not subject to the
+// pre-click list frame's cloud-video lag; fall back to the fresh
+// pre-click frame only before the first admission of a wheel position.
+func (run *inventoryRun) detailBaseline(pre platform.Frame) platform.Frame {
+	if run.lastDetailFrame.ID != 0 {
+		return run.lastDetailFrame
+	}
+	return pre
 }
 
 // ineffectiveClick reports the deadline case the table calls "选中框没动，
@@ -1674,6 +1693,7 @@ func (run *inventoryRun) admit(slot *scan.Slot, out detailOutcome, pre platform.
 		run.visited[i] = true
 		run.listMatch = out.match
 		run.lastFrame = out.frame
+		run.lastDetailFrame = out.frame
 		slot.Discard()
 		return nil
 	case QualityS:
@@ -1740,6 +1760,7 @@ func (run *inventoryRun) admit(slot *scan.Slot, out detailOutcome, pre platform.
 	}
 	run.listMatch = out.match
 	run.lastFrame = out.frame
+	run.lastDetailFrame = out.frame
 	run.lastScrollEvidence = ""
 	return nil
 }
