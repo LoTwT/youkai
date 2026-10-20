@@ -41,7 +41,7 @@ func TestViewHistoryShowsMetadataAndDateFilter(t *testing.T) {
 	if !tt.HasText("macOS 云客户端 · 995 件 · 覆盖：部分 · 待校对 12 · 1.0 KB · r1") {
 		t.Fatalf("history metadata does not show: %q", tt.Texts())
 	}
-	if !tt.HasText("记录不可读 · 覆盖：无法确认 · 记录不可读") {
+	if !tt.HasText("件数未知 · 覆盖：无法确认 · 记录不可读") {
 		t.Fatalf("unreadable history state does not show: %q", tt.Texts())
 	}
 

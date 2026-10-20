@@ -656,7 +656,7 @@ func (m *Model) historyRowText(entry HistoryEntry) string {
 	switch {
 	case entry.Unreadable:
 		review = "记录不可读"
-		count = "记录不可读"
+		count = "件数未知"
 		coverage = "无法确认"
 	case entry.PendingReview > 0:
 		review = fmt.Sprintf("待校对 %d", entry.PendingReview)
