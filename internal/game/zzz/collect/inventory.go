@@ -1403,10 +1403,10 @@ func (run *inventoryRun) visitSlot(ctx context.Context, i int) error {
 					target, attempt+1, out.match.Evidence))
 			}
 			if run.sameDetailSelection(out, i) {
-				// The selection reached the target but the detail stayed
-				// the same as the pre-click frame. One reference round trip
-				// may still prove the target's detail; it is not a retry of
-				// the ineffective click above (T5 §4).
+				// The selection reached the target but the settled detail
+				// stayed the same as the comparison baseline. One reference
+				// round trip may still prove the target's detail; it is not
+				// a retry of the ineffective click above (T5 §4).
 				return run.referenceRoundTrip(ctx, slot, out, pre.frame, pre.match, i, preSelected, row, col, attempt, target)
 			}
 			slot.Discard()
@@ -1442,15 +1442,18 @@ func (run *inventoryRun) ineffectiveClick(out detailOutcome, pre platform.Frame,
 
 // sameDetailSelection reports the deadline case the attribution rule
 // sends to one reference round trip: the selection reached the target and
-// every detail comparison against the pre-click frame decided Same. An
-// undecidable pane, an undecided comparison, or a pane that never decided
-// Same is unclear rather than "same", and a click that never moved the
-// selection is an ineffective click with its own retry path. Sending a
-// verification click while the first click's effect is still unclear would
-// violate T5 §4's rule against a next action from an unclear result.
+// the pane settled on content that was not proven different from the
+// baseline. That covers a stable equal pane and a stable comparison that
+// falls between the calibrated same/different bands; the reference round
+// trip is the only honest way to decide the latter. A transient crossfade
+// or a never-settled pane is unclear rather than "same", and a click that
+// never moved the selection is an ineffective click with its own retry
+// path. Sending a verification click while the first click's effect is
+// still unclear would violate T5 §4's rule against a next action from an
+// unclear result.
 func (run *inventoryRun) sameDetailSelection(out detailOutcome, target int) bool {
 	return run.listVerdict(out.match) && out.match.List.Selected == target &&
-		out.sawPopulated && out.sawSame && !out.sawDifferent && !out.sawUndecided
+		out.sawPopulated && out.settledNotDifferent
 }
 
 // referenceSlot picks the one visible occupied slot used as the
@@ -1496,11 +1499,11 @@ func (run *inventoryRun) referenceRoundTrip(ctx context.Context, slot *scan.Slot
 	if !ok {
 		slot.Discard()
 		return scan.NewFault(CodeDetailUnattributed, fmt.Errorf(
-			"collect: the selection reached %s but its detail never changed from pre-click frame %d, and no other visible occupied slot is available as a distinguishable reference (T5 §4): %s",
-			targetName, pre.ID, targetOut.match.Evidence))
+			"collect: the selection reached %s but its settled detail was not proven different from the comparison baseline, and no other visible occupied slot is available as a distinguishable reference (T5 §4): %s",
+			targetName, targetOut.match.Evidence))
 	}
 	refRow, refColumn := run.inv.Layout.slotPosition(ref)
-	log.Printf("youkai: collect: %s: same detail after the click; trying one reference round trip via slot %d (row %d, column %d)",
+	log.Printf("youkai: collect: %s: the settled detail was not proven different after the click; trying one reference round trip via slot %d (row %d, column %d)",
 		targetName, ref, refRow, refColumn)
 
 	// The reference click needs its own stable pre-click frame with the
@@ -1651,7 +1654,7 @@ func (run *inventoryRun) detailFault(out detailOutcome, pre platform.Frame, preS
 			targetName, out.match.Evidence))
 	case selected == target && !out.sawDifferent:
 		return scan.NewFault(CodeDetailUnattributed, fmt.Errorf(
-			"collect: the selection reached %s but the detail never changed from the pre-click frame and no reference round trip resolved it (T5 §4): %s",
+			"collect: the selection reached %s but the detail never changed from its comparison baseline and no reference round trip resolved it (T5 §4): %s",
 			targetName, out.match.Evidence))
 	case selected == target:
 		return scan.NewFault(CodeDetailUnattributed, fmt.Errorf(
@@ -1934,7 +1937,7 @@ func (run *inventoryRun) admissionEvidence(target string, pre platform.Frame, ou
 				target, attempts, out.frame.ID, out.frame.Geometry)
 			break
 		}
-		lead = fmt.Sprintf("%s admitted after %d attempt(s): pre-click frame %d showed the target occupied but the detail stayed the same; one reference round trip selected reference slot %d (row %d, column %d), whose detail differed and held stable on frame %d, then the return click on the target showed a detail different from that reference and stable on frame %d (geometry %d)",
+		lead = fmt.Sprintf("%s admitted after %d attempt(s): pre-click frame %d showed the target occupied but the settled detail was not proven different from the comparison baseline; one reference round trip selected reference slot %d (row %d, column %d), whose detail differed and held stable on frame %d, then the return click on the target showed a detail different from that reference and stable on frame %d (geometry %d)",
 			target, attempts, pre.ID, ref.slot, ref.row, ref.column, ref.frame.ID, out.frame.ID, out.frame.Geometry)
 	}
 	stability := ""
@@ -1948,9 +1951,13 @@ func (run *inventoryRun) admissionEvidence(target string, pre platform.Frame, ou
 // target.
 //
 // Transition: the frame must show the target selected and a decidable
-// detail; at least one observation must differ from the pre-click frame;
-// after that, adjacent observations must stay the same for StableFrames
-// samples and a wall-clock span of DetailStableSpan. Wall-clock, not
+// detail; adjacent observations must settle on the same content for
+// StableFrames samples and a wall-clock span of DetailStableSpan, and that
+// settled pane is then compared with the baseline. A settled pane that
+// differs is a transition; one that is equal or falls between the
+// calibrated same/different bands at the deadline is the same-detail case
+// the reference round trip resolves. A transient animation frame never
+// decides the comparison. Wall-clock, not
 // Frame.ArrivedAt: Reused confirmations carry the last fresh frame's
 // arrival time but still prove the content is unchanged now.
 //
@@ -2012,45 +2019,52 @@ func (run *inventoryRun) awaitDetail(ctx context.Context, baseline platform.Fram
 		}
 		if !usable {
 			runLen, lastSet = 0, false
-		} else if initial {
+			out.settledNotDifferent = false
+		} else {
+			// Settle on the frame sequence itself first. A click can pass
+			// through a transient crossfade or dim frame that differs from
+			// the baseline; treating that frame as the transition would
+			// hide an identical neighbour and skip the reference round
+			// trip. Only the stable pane is compared with the baseline.
+			cmp := DetailSame
+			if !initial {
+				cmp = run.inv.matcher().CompareDetail(baseline, f)
+				if cmp == DetailDifferent {
+					// Keep the any-frame evidence for the ineffective-click
+					// gate, which must not retry after a visible change.
+					out.sawDifferent = true
+				}
+			}
 			if !lastSet {
 				runLen, runStart, last, lastSet = 1, time.Now(), f, true
+				out.settledNotDifferent = false
 			} else if run.inv.matcher().CompareDetail(last, f) == DetailSame {
 				runLen++
 				last = f
 			} else {
+				// Another change or an undecidable comparison: restart the
+				// stable run at this frame.
 				runLen, runStart, last = 1, time.Now(), f
+				out.settledNotDifferent = false
 			}
-		} else if !out.sawDifferent {
-			switch run.inv.matcher().CompareDetail(baseline, f) {
-			case DetailDifferent:
-				out.sawDifferent = true
-				runLen, runStart, last, lastSet = 1, time.Now(), f, true
-			case DetailSame:
-				out.sawSame = true
-				// The click may not have taken effect yet. Nothing can be
-				// called stable before a change.
-				runLen, lastSet = 0, false
-			default:
-				out.sawUndecided = true
-				// Undecided: the pane or the comparison is unclear, so this
-				// is neither evidence of a change nor of sameness.
-				runLen, lastSet = 0, false
+			if runLen >= run.inv.stableFrames() && (span <= 0 || time.Since(runStart) >= span) {
+				switch {
+				case initial || cmp == DetailDifferent:
+					out.class = awaitStable
+					out.stable = true
+					return out, nil
+				case cmp == DetailSame || cmp == DetailUndecided:
+					// The settled pane is not proven different from the
+					// baseline. Keep waiting for the budget: a delayed
+					// detail update can still replace this pane. Content
+					// that remains unchanged or ambiguous at the deadline
+					// goes to the reference round trip instead of being
+					// admitted as a transition.
+					out.settledNotDifferent = true
+				default:
+					out.settledNotDifferent = false
+				}
 			}
-		} else if !lastSet {
-			runLen, runStart, last, lastSet = 1, time.Now(), f, true
-		} else if run.inv.matcher().CompareDetail(last, f) == DetailSame {
-			runLen++
-			last = f
-		} else {
-			// Another change or an undecidable comparison: restart the
-			// stable run at this frame.
-			runLen, runStart, last = 1, time.Now(), f
-		}
-		if runLen >= run.inv.stableFrames() && (span <= 0 || time.Since(runStart) >= span) {
-			out.class = awaitStable
-			out.stable = true
-			return out, nil
 		}
 		if f.Reused {
 			if err := sleepCtx(ctx, run.inv.recheckEvery()); err != nil {
@@ -2456,21 +2470,25 @@ type awaitOutcome struct {
 }
 
 // detailOutcome is one detail wait's result. lastSelected is -2 until a
-// warehouse list verdict with the layout's slot count is seen. sawSame and
-// sawUndecided record the pre-change comparisons against the baseline, so
-// the same-detail round trip starts only from an unambiguous Same pane.
+// warehouse list verdict with the layout's slot count is seen. sawDifferent
+// records any usable frame that differed from the baseline, so an
+// ineffective click is never retried after a visible change.
+// settledNotDifferent records that the pane held stable on content that
+// was not proven different from the baseline: an equal pane, or one whose
+// comparison fell between the calibrated same/different bands. The
+// reference round trip then decides the target's detail instead of the
+// traversal guessing a transition.
 type detailOutcome struct {
-	class        awaitClass
-	frame        platform.Frame
-	match        PageMatch
-	err          error
-	sawTarget    bool
-	sawPopulated bool
-	sawDifferent bool
-	sawSame      bool
-	sawUndecided bool
-	lastSelected int
-	stable       bool
+	class               awaitClass
+	frame               platform.Frame
+	match               PageMatch
+	err                 error
+	sawTarget           bool
+	sawPopulated        bool
+	sawDifferent        bool
+	settledNotDifferent bool
+	lastSelected        int
+	stable              bool
 }
 
 // awaitSettled waits for the expected page verdict to hold stably:
