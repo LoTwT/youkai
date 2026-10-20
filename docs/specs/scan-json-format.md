@@ -1,6 +1,6 @@
 # Youkai 扫描结果 JSON 与 CSV v1
 
-更新日期：2026-10-20。状态：文件契约设计，尚未实现或发布。2026-10-20 冻结首版数据模型与导出：管理状态合并为 `managementState`，套装与代理人使用 fairy 数值 ID；首版只导出可用数据 JSON 与 CSV，不提供 archive 视图、ZIP 或档案导入导出。契约尚未实现，无既有文件需要兼容迁移。用户已确认先做 youkai 自有文件，外部工具接入等具体需求出现后再评估。会话、保存与物品身份以[公共架构第 5 节](scanner-architecture.md#5-扫描会话与结果语义)为准；操作流程见 [T6](t6-review-export-workflow.md)。
+更新日期：2026-10-20。状态：v1 契约已冻结；结构化解析、结果浏览与 JSON/CSV 导出已实现并合并到 `main`，自动接受、真实六位置与 Windows 验收仍未完成。2026-10-20 冻结首版数据模型与导出：管理状态合并为 `managementState`，套装与代理人使用 fairy 数值 ID；首版只导出可用数据 JSON 与 CSV，不提供 archive 视图、ZIP 或档案导入导出。首版文件契约按 v1 发布，无既有导出文件需要兼容迁移。用户已确认先做 youkai 自有文件，外部工具接入等具体需求出现后再评估。会话、保存与物品身份以[公共架构第 5 节](scanner-architecture.md#5-扫描会话与结果语义)为准；操作流程见 [T6](t6-review-export-workflow.md)。
 
 ## 1. 两种导出格式，同一数据源
 
@@ -81,7 +81,7 @@
 | `managementState` | `"locked"`、`"discarded"`、`"none"` 或 `null`。真实游戏状态只有前三态；`null` 表示未读到、不可读或证据冲突。没有 `unknown` 枚举值。 |
 | `equipped` | 整体可为 `null`（未读到）；读到后为 `{ "state": "equipped" 或 "unequipped", "agentId": number 或 null }`。结构上允许 `{ "state": "equipped", "agentId": null }` 作为未完成观测，但 `required` 校验下不能进入可用数据。 |
 
-`managementState` 的三态互斥由图标决定：盘格右下角红色垃圾桶为 `discarded`，灰色锁为 `locked`，无图标为 `none`。列表盘格右下角角标是主要依据，顶部“拆解”左侧指示用于确认锁定/弃置状态；两者冲突或任一不可读时记 `null`。锁定角标带有闪光动画，单帧可能漏检；多帧采样与颜色加形状分类仍是 PR 6a 的待验证项，不得把未验证结果写成 `none`。
+`managementState` 的三态互斥由图标决定：盘格右下角红色垃圾桶为 `discarded`，灰色锁为 `locked`，无图标为 `none`。列表盘格右下角角标是主要依据；顶部“拆解”左侧指示只确认锁定/未锁定维度，不能区分弃置与无标记，弃置/无标记仍由列表角标区分。列表与顶部在锁定维度冲突或任一不可读时记 `null`。锁定角标带有闪光动画，单帧可能漏检；多帧采样与颜色加形状分类仍是 PR 6a 的待验证项，不得把未验证结果写成 `none`。
 
 装备状态从详情页等级右侧头像判断并匹配代理人身份，列表格右上角头像确认；冲突或不可读时整个 `equipped` 记 `null`。当前代理人装备和他人装备都属于 `equipped`，当前装备置顶只影响遍历顺序，不构成额外的数据状态。`unequipped` 时 `agentId` 必须为 `null`；`equipped` 且用于可用数据时，`agentId` 必须是 fairy 代理人数值 ID（例如耀嘉音 `1311`），并能在 `catalog.agents` 中解析。
 

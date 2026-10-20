@@ -52,7 +52,7 @@ MyGo 的 [Menus and the tray](https://mygo.egoist.dev/docs/menus#tray-icons) 提
 
 ### 浏览器唤起的新增需求与构建依据
 
-用户于 2026-10-16 确认“唤起桌面 app”：网页链接唤起已安装的原生应用，拟定链接 `youkai://open`，尚未注册。启动、恢复和扫描中收到链接的行为由[架构第 2 节](scanner-architecture.md#浏览器唤起桌面应用)维护。
+用户于 2026-10-16 确认“唤起桌面 app”：网页链接唤起已安装的原生应用，链接为 `youkai://open`，已在项目清单注册。启动、恢复和扫描中收到链接的行为由[架构第 2 节](scanner-architecture.md#浏览器唤起桌面应用)维护。
 
 用户另问过浏览器内界面的可行性：v0.5.5 有 `web` / `js/wasm` 构建路径，可把原生 UI 编译为 WebAssembly（[web.go](https://github.com/egoist/mygo/blob/4d8673cd2658a2c6e86b26c44751e57bf8174f91/cmd/mygo/web.go)），但桌面采集、输入和 cgo OCR 不会因此进入浏览器，需另做本机通信、鉴权与断线处理。这只是可行性答复，不在首版范围。
 
