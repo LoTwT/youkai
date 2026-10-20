@@ -58,12 +58,12 @@ type Controller struct {
 	// Release is ignored so it cannot cut the next session.
 	Stop func()
 	// OnScopeObserved, when set, receives the observed-scope payload of
-	// the session's traversal (the ScopeReporter capability) once its
-	// precheck succeeded — the application's record wiring persists it
-	// as the session's observed range (T5 §3). It runs once, on the
-	// producer goroutine, right after the precheck; a traversal without
-	// the capability or with an empty report never triggers it. Wire it
-	// via SetScopeSink before the session starts.
+	// the session's traversal (the ScopeReporter capability) after its
+	// precheck succeeded and again after Collect — the application's
+	// record wiring persists it as the session's observed range (T5 §3).
+	// It runs on the producer goroutine; a traversal without the
+	// capability or with an empty report never triggers it. Wire it via
+	// SetScopeSink before the session starts.
 	OnScopeObserved func(scope json.RawMessage)
 
 	// PrepareBudget bounds the whole preparation wait; zero takes the
@@ -239,8 +239,9 @@ func (c *Controller) newTraversal() Traversal {
 }
 
 // relayScope hands the traversal's observed-scope report (T5 §3) to the
-// application's sink. It runs once, after a successful precheck, on the
-// producer goroutine.
+// application's sink. It runs after a successful precheck and again after
+// Collect, on the producer goroutine; the later report carries the sort
+// and coverage facts the traversal established while running.
 func (c *Controller) relayScope(trav Traversal) {
 	if c.OnScopeObserved == nil {
 		return
@@ -255,7 +256,11 @@ func (c *Controller) relayScope(trav Traversal) {
 }
 
 // Collect implements scan.Controller: the traversal runs the collection
-// loop on the open session.
+// loop on the open session. The observed scope is relayed again after the
+// traversal returns — including a stopped traversal — because the sort
+// and coverage facts are only known once panels and positions have been
+// observed; the deliverer overwrites the precheck report with this final
+// one.
 func (c *Controller) Collect(ctx context.Context, h *scan.ControllerHandle) error {
 	c.mu.Lock()
 	sess, trav := c.sess, c.trav
@@ -263,7 +268,9 @@ func (c *Controller) Collect(ctx context.Context, h *scan.ControllerHandle) erro
 	if sess == nil || trav == nil {
 		return errors.New("collect: collect called without a prepared session")
 	}
-	return trav.Collect(ctx, sess, h)
+	err := trav.Collect(ctx, sess, h)
+	c.relayScope(trav)
+	return err
 }
 
 // Release implements scan.Releaser: close the platform session exactly

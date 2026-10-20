@@ -64,8 +64,19 @@ func (m *PixelMatcher) Match(f platform.Frame) PageMatch {
 		}
 	}
 	if open == len(m.L.PanelOpen) {
-		return PageMatch{Page: PageFilterPanel, Panel: &PanelEvidence{},
-			Evidence: fmt.Sprintf("pixel matcher: frame %d is the filter panel (both probes report open)", f.ID)}
+		panel := &PanelEvidence{}
+		if m.sortLabelMatches(f.Image) {
+			panel.SortLabel = sortLabelRarity
+			panel.SortVerified = true
+		}
+		evidence := fmt.Sprintf("pixel matcher: frame %d is the filter panel (both probes report open", f.ID)
+		if panel.SortVerified {
+			evidence += fmt.Sprintf(", sort %q verified", panel.SortLabel)
+		} else {
+			evidence += ", sort label unverified"
+		}
+		evidence += ")"
+		return PageMatch{Page: PageFilterPanel, Panel: panel, Evidence: evidence}
 	}
 	if closed != len(m.L.PanelOpen) {
 		return m.unknown("frame %d: the filter-panel probes disagree or fall between tiers", f.ID)
@@ -175,6 +186,36 @@ func (m *PixelMatcher) detailEvidence(img *image.RGBA) *DetailEvidence {
 		ev.Substats = 3
 	}
 	return ev
+}
+
+// sortLabelMatches compares the panel's sort region against the
+// layout's reference template. It requires the exact calibrated size and
+// position; it never searches a neighbourhood, because a moved label is a
+// different display configuration, not the same fact.
+func (m *PixelMatcher) sortLabelMatches(img *image.RGBA) bool {
+	t := m.L.SortTemplate
+	r := m.L.SortLabel
+	if t == nil || r.Empty() || img == nil {
+		return false
+	}
+	if !r.In(img.Bounds()) || t.Bounds().Size() != r.Size() {
+		return false
+	}
+	limit := m.C.SortLabelMADMax
+	if limit <= 0 {
+		limit = 2.0
+	}
+	var sum float64
+	for y := 0; y < r.Dy(); y++ {
+		for x := 0; x < r.Dx(); x++ {
+			d := grayAt(img, r.Min.X+x, r.Min.Y+y) - grayAt(t, t.Bounds().Min.X+x, t.Bounds().Min.Y+y)
+			if d < 0 {
+				d = -d
+			}
+			sum += float64(d)
+		}
+	}
+	return sum/float64(r.Dx()*r.Dy()) <= limit
 }
 
 // detailLine returns the calibrated region for a role, or the zero

@@ -349,12 +349,34 @@ func (d *recordDeliverer) observeScope(raw json.RawMessage) {
 		return
 	}
 	d.shell.ObservedScope = append(json.RawMessage(nil), raw...)
+	if status, ok := observedCoverage(raw); ok {
+		d.shell.Coverage.Status = status
+	}
 	d.sinceSave++
 	if d.saveErr == nil {
 		d.saveErr = d.saveLocked()
 	}
 	if d.saveErr == nil {
 		d.sinceSave = 0
+	}
+}
+
+// observedCoverage reads the coverage conclusion the traversal wrote into
+// its observed-scope report. An absent or unknown field leaves the shell's
+// existing conclusion alone; only the three valid record statuses are
+// accepted, so a malformed scope cannot invent a conclusion.
+func observedCoverage(raw json.RawMessage) (record.CoverageStatus, bool) {
+	var scope struct {
+		Coverage string `json:"coverage"`
+	}
+	if err := json.Unmarshal(raw, &scope); err != nil {
+		return "", false
+	}
+	switch status := record.CoverageStatus(scope.Coverage); status {
+	case record.CoverageUnknown, record.CoveragePartial, record.CoverageComplete:
+		return status, true
+	default:
+		return "", false
 	}
 }
 

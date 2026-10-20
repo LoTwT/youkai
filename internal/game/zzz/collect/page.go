@@ -208,7 +208,18 @@ type FilterEvidence struct{ State FilterState }
 // PanelEvidence marks the filter panel as open. The first version only
 // recognizes that the panel is open; its controls are the preparation
 // step's business (4b-2).
-type PanelEvidence struct{}
+// PanelEvidence is what a filter-panel match reports about the panel.
+// The sort fields are empty/false when the layout has no calibrated
+// reference or the region does not match it; the page verdict stays
+// usable either way, but the traversal records the order as unverified.
+type PanelEvidence struct {
+	// SortLabel is the recognized sort label when SortVerified is true.
+	SortLabel string `json:"sortLabel,omitempty"`
+	// SortVerified reports that the panel's sort region matches the
+	// calibrated reference. It proves the recorded order, not a guess
+	// about an unrecognized label.
+	SortVerified bool `json:"sortVerified,omitempty"`
+}
 
 // DetailComparison is the verdict over the detail-pane line regions of
 // two frames.

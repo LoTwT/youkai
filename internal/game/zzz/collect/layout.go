@@ -170,6 +170,14 @@ type Layout struct {
 	// active funnel after closing; the acceptance-only IndependentClear path
 	// additionally proves the reset base is clear before selecting S (T5 §3).
 	PanelReset, PanelClose, PanelS image.Point
+	// SortLabel is the filter panel's sort dropdown region and the
+	// reference image it must match. The label names the active order
+	// ("稀有度" in every recorded sample); a mismatch means the matcher
+	// cannot state the order, so the traversal records it as unverified.
+	// Both fields are optional together: an uncalibrated layout leaves
+	// them empty and every panel verdict carries no sort fact.
+	SortLabel    image.Rectangle
+	SortTemplate *image.RGBA
 
 	// Wheel are the six wheel position centers, numbered from the
 	// top-left counter-clockwise 1..6.
@@ -274,6 +282,19 @@ func (l Layout) Validate() error {
 	if l.PanelS == (image.Point{}) || !ptIn(l.Content, l.PanelS) {
 		return fmt.Errorf("collect: layout: the S rarity control point %v is empty or outside the content region %v",
 			l.PanelS, l.Content)
+	}
+	switch {
+	case l.SortLabel.Empty() && l.SortTemplate == nil:
+		// The layout does not claim a sort read; panel verdicts simply
+		// carry no sort fact.
+	case l.SortLabel.Empty() || l.SortTemplate == nil:
+		return fmt.Errorf("collect: layout: the sort label region and its reference template must be calibrated together")
+	case !l.SortLabel.In(l.Content):
+		return fmt.Errorf("collect: layout: the sort label region %v is outside the content region %v",
+			l.SortLabel, l.Content)
+	case l.SortTemplate.Bounds().Size() != l.SortLabel.Size():
+		return fmt.Errorf("collect: layout: the sort template is %v but the sort label region is %v",
+			l.SortTemplate.Bounds().Size(), l.SortLabel.Size())
 	}
 	if l.Wheel == [6]image.Point{} {
 		return fmt.Errorf("collect: layout: the wheel positions are not calibrated")
@@ -387,13 +408,16 @@ func (l Layout) FitsContent(content image.Rectangle) bool {
 // and expects the same verdict. MatchScroll additionally reads
 // ListViewport, which is a declared layout field and is included here.
 func (l Layout) ReadRegions() []image.Rectangle {
-	regions := make([]image.Rectangle, 0, len(l.Slots)*4+len(l.DetailLines)+len(l.PanelOpen)+len(l.Wheel)*len(l.WheelArcs)+8)
+	regions := make([]image.Rectangle, 0, len(l.Slots)*4+len(l.DetailLines)+len(l.PanelOpen)+len(l.Wheel)*len(l.WheelArcs)+9)
 	for i := range l.Slots {
 		regions = append(regions, l.BorderRect(i), l.BarRect(i), l.ManagementRect(i), l.AvatarRect(i))
 	}
 	regions = append(regions, l.ListViewport, l.ScrollTrack, l.Funnel.At)
 	for _, p := range l.PanelOpen {
 		regions = append(regions, p.At)
+	}
+	if !l.SortLabel.Empty() {
+		regions = append(regions, l.SortLabel)
 	}
 	for _, c := range l.Wheel {
 		for _, rel := range l.WheelArcs {
