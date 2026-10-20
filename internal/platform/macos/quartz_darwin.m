@@ -63,6 +63,18 @@ static int32_t yk_activate_pid_on_main(int32_t pid) {
 	// activateWithOptions:.
 	BOOL ok = [app activateFromApplication:[NSRunningApplication currentApplication]
 	                               options:NSApplicationActivateAllWindows];
+	if (!ok) {
+		// AppKit can refuse the attributed activation (observed with the
+		// cloud client on macOS 14). The older activation path still
+		// works on some systems, so try it before falling back to
+		// LaunchServices.
+		ok = [app activateWithOptions:NSApplicationActivateAllWindows];
+	}
+	if (!ok && app.bundleURL != nil) {
+		// LaunchServices can bring an already-running application
+		// forward without creating a second instance.
+		ok = [[NSWorkspace sharedWorkspace] openURL:app.bundleURL];
+	}
 	return ok ? 0 : 2;
 }
 
