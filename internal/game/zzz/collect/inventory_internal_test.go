@@ -112,6 +112,37 @@ func (v *scrollScriptView) Frame(ctx context.Context, req platform.FrameRequest)
 	return platform.Frame{}, context.DeadlineExceeded
 }
 
+// A prior stable observation counts toward the settle window without
+// replacing the fresh confirmations: with StableFrames=3, a seed plus two
+// fresh frames must settle even though two alone would not.
+func TestAwaitSettledSeededCountsPriorObservation(t *testing.T) {
+	inv := &Inventory{
+		Layout:       MacCloudLayout(),
+		Matcher:      &scrollScriptMatcher{rows: 5, columns: 4},
+		StableFrames: 3,
+		ActionBudget: time.Second,
+		RecheckEvery: time.Millisecond,
+	}
+	view := &scrollScriptView{frames: []platform.Frame{scrollFrame(2), scrollFrame(3)}}
+	run := &inventoryRun{inv: inv, view: view, geo: 1}
+	expected := func(m PageMatch) bool { return m.Page == PageWarehouse && m.List != nil }
+	seed := &awaitOutcome{
+		frame:    scrollFrame(1),
+		match:    inv.matcher().Match(scrollFrame(0)),
+		expected: true,
+	}
+	out := run.awaitSettledSeeded(context.Background(), expected, seed)
+	if out.class != awaitStable {
+		t.Fatalf("seeded settle = %v, want stable", out.class)
+	}
+	if view.calls != 2 {
+		t.Fatalf("seeded settle observed %d fresh frames, want 2", view.calls)
+	}
+	if out.frame.ID != 3 {
+		t.Fatalf("seeded settle ended on frame %d, want 3", out.frame.ID)
+	}
+}
+
 // sixRowScrollLayout is the calibrated layout widened to six abstract rows
 // so a five-row total displacement still retains one row of overlap. Only
 // the grid dimensions matter to awaitScroll and applyTransition; no pixels
