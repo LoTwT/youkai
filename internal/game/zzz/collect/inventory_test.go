@@ -123,6 +123,11 @@ type scriptedGame struct {
 	// detail pixels are identical. An absent key renders the global index
 	// itself, the original behavior.
 	detailKeys map[int]int
+	// detailTint adds a small grayscale offset to one band of every detail
+	// line for the given item, modelling a pane whose comparison with a
+	// same-key neighbour falls between the calibrated same and different
+	// thresholds instead of deciding either way.
+	detailTint map[int]int
 	// flickerGlobals makes the detail of the given items alternate every
 	// frame, so its comparison never holds a stable run.
 	flickerGlobals map[int]bool
@@ -305,6 +310,10 @@ func (g *scriptedGame) signature(geo platform.GeometryVersion) string {
 		flicker = 1
 	}
 	detail := g.detailKey(g.detailGlobal)
+	tint := 0
+	if g.detailGlobal >= 0 {
+		tint = g.detailTint[g.detailGlobal]
+	}
 	// Hash the current position's occupancy so lists with the same length
 	// but different contents produce different frames.
 	var listHash uint64 = 1469598103934665603
@@ -314,8 +323,8 @@ func (g *scriptedGame) signature(geo platform.GeometryVersion) string {
 		}
 		listHash *= 1099511628211
 	}
-	return fmt.Sprintf("%d|%d|%s|%d|%d|%d|%d|%d|%v|%v|%v|%v|%v|%v|%x",
-		g.page, g.wheel, g.filter, g.viewport, g.selected, detail, flicker, geo,
+	return fmt.Sprintf("%d|%d|%s|%d|%d|%d|%d|%d|%d|%v|%v|%v|%v|%v|%v|%x",
+		g.page, g.wheel, g.filter, g.viewport, g.selected, detail, tint, flicker, geo,
 		g.qualityUnknown, g.substatsUnknown, g.substats4, g.forceBottom, g.content, g.globalRows(), listHash)
 }
 
@@ -420,6 +429,7 @@ func (g *scriptedGame) renderDetail(img *image.RGBA) {
 		}
 	}
 	id := g.detailKey(g.detailGlobal)
+	tint := g.detailTint[g.detailGlobal]
 	if (g.detailFlicker || g.flickerGlobals[g.detailGlobal]) && g.frameCalls%2 == 1 {
 		id ^= 0x7F
 	}
@@ -435,6 +445,16 @@ func (g *scriptedGame) renderDetail(img *image.RGBA) {
 			v := uint8(80)
 			if id&(1<<b) != 0 {
 				v = 200
+			}
+			if b == 0 && tint != 0 {
+				n := int(v) + tint
+				if n < 0 {
+					n = 0
+				}
+				if n > 255 {
+					n = 255
+				}
+				v = uint8(n)
 			}
 			fill(image.Rect(line.Rect.Min.X, y0, line.Rect.Max.X, y1), color.RGBA{R: v, G: v, B: v, A: 255})
 		}
@@ -1440,7 +1460,37 @@ func TestSinglePageSameDetailTransientFrameStillRoundTrips(t *testing.T) {
 	}
 }
 
-// T14b3: a detail update that arrives after the stability window must not
+// T14b3: a stable pane whose comparison with the previous detail falls
+// between the calibrated same/different bands must still reach the
+// reference round trip. It is not a verified transition, but the traversal
+// must not stop as if the pane had never settled.
+func TestSinglePageUndecidedBaselineStillRoundTrips(t *testing.T) {
+	game := newScriptedGame(true, true, true)
+	game.detailKeys = map[int]int{0: 41, 1: 41, 2: 7}
+	game.detailTint = map[int]int{1: 20}
+	h := newTraversalHarness(t, game)
+	h.start()
+	h.endCompleted()
+
+	obs := h.observations()
+	if len(obs) != 3 {
+		t.Fatalf("admitted %d, want 3: %v", len(obs), positions(obs))
+	}
+	if obs[1].Association != collect.AssociationReference {
+		t.Fatalf("the undecided-baseline duplicate = %q, want %q; evidence: %s",
+			obs[1].Association, collect.AssociationReference, obs[1].Evidence)
+	}
+	if obs[1].Reference == nil {
+		t.Fatal("the undecided-baseline admission carries no reference evidence")
+	}
+	for _, i := range []int{0, 2} {
+		if obs[i].Association != collect.AssociationTransition || obs[i].Reference != nil {
+			t.Fatalf("observation %d took the reference path: %+v", i+1, obs[i])
+		}
+	}
+}
+
+// T14b4: a detail update that arrives after the stability window must not
 // be mistaken for identical content. The settled pre-update pane is not
 // enough to start a reference round trip while the action budget remains.
 func TestSinglePageDelayedDetailDoesNotRoundTrip(t *testing.T) {
