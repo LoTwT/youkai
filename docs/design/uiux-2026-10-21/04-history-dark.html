@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="style.css">
+<style>
+  .history-filter { display:flex; align-items:center; gap:9px; margin-top:12px; }
+  .date-range { height:31px; display:flex; align-items:center; gap:8px; padding:0 10px; border:1px solid var(--border); border-radius:7px; background:#fff; font-size:11.5px; color:var(--text-2); font-variant-numeric:tabular-nums; }
+  .presets { display:flex; align-items:center; gap:4px; }
+  .preset { height:26px; padding:0 8px; border-radius:6px; display:inline-flex; align-items:center; font-size:10.5px; color:var(--muted); }
+  .preset.active { background:var(--accent-soft); color:var(--accent); font-weight:600; }
+  .history-filter .search { min-width:170px; }
+  .history-filter .select { height:31px; display:flex; align-items:center; gap:8px; padding:0 10px; border:1px solid var(--border); border-radius:7px; background:#fff; font-size:11.5px; color:var(--text-2); }
+  .history-filter .select .icon { color:var(--muted-2); }
+
+  .history-table { flex:1; min-height:0; margin-top:10px; overflow:hidden; display:flex; flex-direction:column; }
+  .history-table .table-wrap { flex:1; min-height:0; overflow:hidden; }
+  .history-table .table td { height:40px; }
+  .history-table .table th { height:32px; }
+  .row-actions { display:flex; align-items:center; gap:6px; justify-content:flex-end; }
+  .icon-btn { width:24px; height:24px; border-radius:6px; border:1px solid transparent; display:inline-flex; align-items:center; justify-content:center; color:var(--muted); background:transparent; }
+  .icon-btn:hover { background:var(--surface); }
+
+  .bottom-grid { display:flex; gap:12px; height:148px; flex:0 0 148px; margin-top:10px; }
+  .storage-card { flex:1; min-width:0; padding:13px 15px; }
+  .storage-head { display:flex; align-items:flex-start; justify-content:space-between; gap:10px; }
+  .storage-metrics { display:flex; align-items:center; gap:18px; margin-top:9px; }
+  .metric .k { font-size:9.5px; color:var(--muted); }
+  .metric .v { margin-top:3px; font-size:13px; font-weight:650; letter-spacing:-.01em; font-variant-numeric:tabular-nums; }
+  .metric .v small { font-size:9.5px; font-weight:500; color:var(--muted); margin-left:2px; }
+  .storage-actions { display:flex; align-items:center; gap:6px; margin-top:10px; }
+  .storage-actions .btn { height:25px; font-size:10.5px; padding:0 8px; }
+  .disk { margin-top:8px; }
+  .disk .line { display:flex; align-items:center; justify-content:space-between; font-size:9.5px; color:var(--muted); margin-bottom:4px; }
+
+  .danger-card { width:360px; flex:0 0 360px; padding:13px 15px; border-color:var(--danger-border); background:linear-gradient(#fffafa,#fff); box-shadow:inset 3px 0 0 var(--danger); }
+  .danger-head { display:flex; align-items:center; gap:7px; color:var(--danger); }
+  .danger-head .icon { color:var(--danger); }
+  .danger-head .section-title { color:var(--danger); }
+  .danger-copy { margin-top:5px; font-size:10px; line-height:1.45; color:var(--muted); }
+  .danger-actions { display:flex; gap:7px; margin-top:10px; }
+  .danger-actions .btn { height:26px; font-size:10.5px; padding:0 9px; }
+  .danger-note { margin-top:7px; font-size:9.5px; line-height:1.4; color:var(--muted-2); }
+</style>
+  <link rel="stylesheet" href="dark.css">
+</head>
+<body>
+<div class="board">
+  <div class="board-meta">
+    <div>
+      <div class="board-eyebrow">04 · 历史</div>
+      <h2 class="board-title">历史是“修订列表”，不是第二个结果页</h2>
+    </div>
+    <div class="board-note">二级页面 · 全宽表格<br>打开记录后回到“结果与校对”</div>
+  </div>
+
+  <div class="window">
+    <div class="titlebar">
+      <div class="lights"><span class="light red"></span><span class="light yellow"></span><span class="light green"></span></div>
+      <div class="window-title">Youkai</div>
+      <div class="window-meta"><span class="status-dot"></span>存储读取正常</div>
+    </div>
+    <div class="tabbar">
+      <div class="tab">扫描</div>
+      <div class="tab">结果与校对 <span class="badge warn">130</span></div>
+      <div class="tab active">历史 <span class="badge">8</span></div>
+      <div class="tab">设置</div>
+      <div class="tab-spacer"></div>
+      <div class="tab" style="color:var(--muted); font-size:11px;">共 8 条修订</div>
+    </div>
+
+    <div class="content">
+      <div class="page-head">
+        <div>
+          <h1 class="page-title">历史记录</h1>
+          <div class="page-sub">所有已保存的扫描修订 · 最近一次 <strong>10 月 20 日 13:42</strong> · 共 <strong>8</strong> 条</div>
+        </div>
+        <div class="head-actions">
+          <button class="btn">打开数据目录</button>
+          <button class="btn">导出历史…</button>
+        </div>
+      </div>
+
+      <div class="history-filter">
+        <div class="date-range">
+          <svg class="icon sm" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M8 3v4M16 3v4M3 10h18"/></svg>
+          2026-10-01 &nbsp;→&nbsp; 2026-10-21
+        </div>
+        <div class="presets">
+          <span class="preset">今天</span>
+          <span class="preset active">近 7 天</span>
+          <span class="preset">近 30 天</span>
+          <span class="preset">全部</span>
+        </div>
+        <div class="search">
+          <svg class="icon sm" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.6-3.6"/></svg>
+          搜索记录 ID / 日期
+        </div>
+        <div class="select">全部来源 <svg class="icon sm" viewBox="0 0 24 24" style="margin-left:auto;"><path d="m6 9 6 6 6-6"/></svg></div>
+        <div class="grow"></div>
+        <span class="muted" style="font-size:10.5px;">按时间倒序</span>
+      </div>
+
+      <div class="card history-table">
+        <div class="table-wrap">
+          <table class="table">
+            <colgroup>
+              <col style="width:40px"><col style="width:138px"><col style="width:150px"><col style="width:82px"><col style="width:126px"><col style="width:84px"><col style="width:82px"><col style="width:96px"><col style="width:82px"><col>
+            </colgroup>
+            <thead>
+              <tr><th></th><th>日期</th><th>扫描源</th><th class="num">采集</th><th class="num">可用 / 排除</th><th class="num">待校对</th><th>覆盖</th><th>截图</th><th class="num">大小</th><th style="text-align:right;">操作</th></tr>
+            </thead>
+            <tbody>
+              <tr class="selected">
+                <td><span class="checkbox"><svg viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></svg></span></td>
+                <td class="strong">10-20 13:42</td>
+                <td>云·绝区零</td>
+                <td class="num">1,005</td>
+                <td class="num">875 <span class="muted">/ 130</span></td>
+                <td class="num"><span class="status pending"><span class="dot"></span>130</span></td>
+                <td><span class="pill warn" style="height:18px; padding:0 6px; font-size:9.5px;">部分</span></td>
+                <td>532 张</td>
+                <td class="num">1.2 GB</td>
+                <td><div class="row-actions"><button class="btn small">打开</button><button class="icon-btn">⋯</button></div></td>
+              </tr>
+              <tr>
+                <td><span class="checkbox"></span></td>
+                <td class="strong">10-20 09:18</td>
+                <td>云·绝区零</td>
+                <td class="num">1,002</td>
+                <td class="num">1,002 <span class="muted">/ 0</span></td>
+                <td class="num"><span class="status confirmed"><span class="dot"></span>0</span></td>
+                <td><span class="pill success" style="height:18px; padding:0 6px; font-size:9.5px;">完整</span></td>
+                <td>501 张</td>
+                <td class="num">1.1 GB</td>
+                <td><div class="row-actions"><button class="btn small">打开</button><button class="icon-btn">⋯</button></div></td>
+              </tr>
+              <tr>
+                <td><span class="checkbox"></span></td>
+                <td class="strong">10-19 22:04</td>
+                <td>云·绝区零</td>
+                <td class="num">998</td>
+                <td class="num">860 <span class="muted">/ 138</span></td>
+                <td class="num"><span class="status confirmed"><span class="dot"></span>0</span></td>
+                <td><span class="pill warn" style="height:18px; padding:0 6px; font-size:9.5px;">部分</span></td>
+                <td class="muted">已删除</td>
+                <td class="num">620 MB</td>
+                <td><div class="row-actions"><button class="btn small">打开</button><button class="icon-btn">⋯</button></div></td>
+              </tr>
+              <tr>
+                <td><span class="checkbox"></span></td>
+                <td class="strong">10-19 18:30</td>
+                <td>云·绝区零</td>
+                <td class="num">1,000</td>
+                <td class="num">1,000 <span class="muted">/ 0</span></td>
+                <td class="num"><span class="status confirmed"><span class="dot"></span>0</span></td>
+                <td><span class="pill success" style="height:18px; padding:0 6px; font-size:9.5px;">完整</span></td>
+                <td>498 张</td>
+                <td class="num">1.0 GB</td>
+                <td><div class="row-actions"><button class="btn small">打开</button><button class="icon-btn">⋯</button></div></td>
+              </tr>
+              <tr>
+                <td><span class="checkbox"></span></td>
+                <td class="strong">10-18 21:12</td>
+                <td>云·绝区零</td>
+                <td class="num">987</td>
+                <td class="num">840 <span class="muted">/ 147</span></td>
+                <td class="num"><span class="status confirmed"><span class="dot"></span>0</span></td>
+                <td><span class="pill warn" style="height:18px; padding:0 6px; font-size:9.5px;">部分</span></td>
+                <td class="muted">已删除</td>
+                <td class="num">580 MB</td>
+                <td><div class="row-actions"><button class="btn small">打开</button><button class="icon-btn">⋯</button></div></td>
+              </tr>
+              <tr>
+                <td><span class="checkbox"></span></td>
+                <td class="strong">10-18 12:05</td>
+                <td>云·绝区零</td>
+                <td class="num">1,001</td>
+                <td class="num">1,001 <span class="muted">/ 0</span></td>
+                <td class="num"><span class="status confirmed"><span class="dot"></span>0</span></td>
+                <td><span class="pill success" style="height:18px; padding:0 6px; font-size:9.5px;">完整</span></td>
+                <td>512 张</td>
+                <td class="num">1.1 GB</td>
+                <td><div class="row-actions"><button class="btn small">打开</button><button class="icon-btn">⋯</button></div></td>
+              </tr>
+              <tr>
+                <td><span class="checkbox"></span></td>
+                <td class="strong">10-17 20:48</td>
+                <td>云·绝区零</td>
+                <td class="num">996</td>
+                <td class="num">850 <span class="muted">/ 146</span></td>
+                <td class="num"><span class="status confirmed"><span class="dot"></span>0</span></td>
+                <td><span class="pill warn" style="height:18px; padding:0 6px; font-size:9.5px;">部分</span></td>
+                <td class="muted">已删除</td>
+                <td class="num">590 MB</td>
+                <td><div class="row-actions"><button class="btn small">打开</button><button class="icon-btn">⋯</button></div></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="table-foot" style="height:34px; flex:0 0 34px; display:flex; align-items:center; justify-content:space-between; padding:0 12px; border-top:1px solid var(--border-soft); background:var(--surface-2); font-size:10.5px; color:var(--muted);">
+          <span>显示 7 / 8 条 · 已选 1 条</span>
+          <span class="pager" style="display:flex; align-items:center; gap:9px;"><span>‹</span><b style="font-weight:600; color:var(--text-2);">1</b><span>2</span><span>›</span></span>
+        </div>
+      </div>
+
+      <div class="bottom-grid">
+        <div class="card storage-card">
+          <div class="storage-head">
+            <div>
+              <div class="section-title">存储概览</div>
+              <div class="section-sub">历史 8 条 · 截图 2,545 张</div>
+            </div>
+            <div class="row gap-6">
+              <button class="btn small">清缓存</button>
+              <button class="btn small">清旧日志</button>
+              <button class="btn small">刷新</button>
+            </div>
+          </div>
+          <div class="storage-metrics">
+            <div class="metric"><div class="k">记录数据</div><div class="v">3.2 <small>GB</small></div></div>
+            <div class="metric"><div class="k">截图</div><div class="v">1.8 <small>GB</small></div></div>
+            <div class="metric"><div class="k">缓存</div><div class="v">320 <small>MB</small></div></div>
+            <div class="metric"><div class="k">日志</div><div class="v">48 <small>MB</small></div></div>
+            <div class="metric"><div class="k">磁盘可用</div><div class="v">42.1 <small>GB</small></div></div>
+          </div>
+          <div class="disk">
+            <div class="line"><span>数据卷占用</span><span>5.3 GB / 128 GB</span></div>
+            <div class="progress-line"><span style="width:12%;"></span></div>
+          </div>
+        </div>
+
+        <div class="card danger-card">
+          <div class="danger-head">
+            <svg class="icon" viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v6M14 11v6"/></svg>
+            <div class="section-title">清理与删除</div>
+          </div>
+          <div class="danger-copy">删除前会预览影响范围。待校对 &gt; 0 时，删除入口会弱化并说明后果。</div>
+          <div class="danger-actions">
+            <button class="btn danger">删除全部截图</button>
+            <button class="btn danger">删除全部记录</button>
+          </div>
+          <div class="danger-note">截图删除后，记录仍保留字段与 OCR 文本，但无法再看图校对。</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="statusbar">
+      <div class="status-left"><span class="status-dot"></span>存储读取完成 · 8 条修订 <span class="status-sep"></span> 已选 1 条</div>
+      <div class="status-right">打开记录后自动切到“结果与校对”</div>
+    </div>
+  </div>
+</div>
+</body>
+</html>

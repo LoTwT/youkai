@@ -766,3 +766,37 @@ func TestFileEvidence(t *testing.T) {
 		t.Fatal("loading a missing evidence image succeeded")
 	}
 }
+
+// TestResultsSideBySideKeepsQualityColumnReadable checks that the
+// side-by-side results split does not start before the quality column can
+// keep a readable width. The page is the window less the rail and the
+// page padding, the table takes 57% of it, and the fixed columns take 396
+// DIPs.
+func TestResultsSideBySideKeepsQualityColumnReadable(t *testing.T) {
+	const (
+		rail     = 64
+		padding  = 24
+		split    = 0.57
+		fixed    = 40 + 90 + 84 + 72 + 110
+		readable = 300
+	)
+	qualityAt := func(width int) float32 {
+		return float32(width-rail-padding)*split - fixed
+	}
+	if got := qualityAt(resultsSideBySideMinWidth); got < readable {
+		t.Fatalf("quality column at the split = %.1f, want at least %d", got, readable)
+	}
+	if got := qualityAt(1440); got < readable {
+		t.Fatalf("quality column at 1440 = %.1f, want at least %d", got, readable)
+	}
+	for _, width := range []int{860, 1020, 1180} {
+		if resultsSideBySide(width) {
+			t.Fatalf("results split side by side at %d", width)
+		}
+	}
+	for _, width := range []int{resultsSideBySideMinWidth, 1440} {
+		if !resultsSideBySide(width) {
+			t.Fatalf("results did not split side by side at %d", width)
+		}
+	}
+}

@@ -345,13 +345,13 @@ func TestConfirmAndNextThroughToEmpty(t *testing.T) {
 		t.Fatal(err)
 	}
 	settle(t, m, q, tt)
-	if m.pendingCount() != 0 || m.reviewNotice != "待校对为空" {
+	if m.pendingCount() != 0 || m.reviewNotice != "待校对 0 · 另有 2 件无法导出" {
 		t.Fatalf("after the last item: pending %d notice %q", m.pendingCount(), m.reviewNotice)
 	}
 	if m.selected != 1 {
 		t.Fatalf("the last confirmation moved away from the last item: %d", m.selected)
 	}
-	if !tt.HasText("待校对为空") {
+	if !tt.HasText("待校对 0 · 另有 2 件无法导出") {
 		t.Fatalf("the empty pending state does not show: %q", tt.Texts())
 	}
 }

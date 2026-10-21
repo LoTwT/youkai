@@ -106,7 +106,7 @@ func TestExportControlsShowCountsAndSaveBothFormats(t *testing.T) {
 	tt := ui.NewTester(m.View, 1020, 700)
 	settle(t, m, q, tt)
 
-	want := "已采集 2 件 · 可用 1 件 · 排除 1 件 · 覆盖：无法确认 · 不含截图"
+	want := "已采集 2 件 · 可导出 1 件 · 待校对 1 件 · 失败 0 件 · 未处理 0 件 · 覆盖：无法确认 · 不含截图"
 	if !tt.HasText(want) {
 		t.Fatalf("export summary missing %q: %v", want, tt.Texts())
 	}

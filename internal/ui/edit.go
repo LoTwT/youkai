@@ -620,7 +620,7 @@ func (m *Model) submitReview(recordID string, seq, expectedRevision int64, data 
 				}
 				switch {
 				case m.pendingCount() == 0:
-					m.reviewNotice = "待校对为空"
+					m.reviewNotice = m.pendingText()
 				case next < 0:
 					m.reviewNotice = "后面没有待校对项。"
 				default:
@@ -692,14 +692,6 @@ func (m *Model) pendingCount() int {
 		}
 	}
 	return count
-}
-
-// pendingText is the results area's review summary.
-func (m *Model) pendingText() string {
-	if count := m.pendingCount(); count > 0 {
-		return fmt.Sprintf("待校对 %d 件", count)
-	}
-	return "待校对为空"
 }
 
 // nextPendingAfter finds the next pending row after the given capture

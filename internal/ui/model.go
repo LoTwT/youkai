@@ -100,6 +100,9 @@ type ScanSourceInfo struct {
 type Config struct {
 	// Service is the application service the window drives. Required.
 	Service Service
+	// PageLayout selects the four-page shell. The legacy single-column
+	// layout remains for the interaction-test migration.
+	PageLayout bool
 	// ScanSource describes the start availability shown in the prepare
 	// area.
 	ScanSource ScanSourceInfo
@@ -248,12 +251,23 @@ type Model struct {
 	exportNotice   string
 	exportError    string
 
+	// page is the four-page shell's explicit choice; pageAuto follows
+	// the loaded record/history/update state.
+	page Page
+
+	// contentWidth/contentHeight track the page area so the shell can
+	// switch the results split orientation at narrow widths.
+	contentWidth  int
+	contentHeight int
+
 	// The results table's place and its chosen row (an index into
 	// rec.rows, -1 for none; the list's Key keeps it on the item's
 	// sequence across reloads).
-	list     ui.ListState
-	selected int
-	split    float32
+	list          ui.ListState
+	selected      int
+	split         float32
+	splitPercent  float32
+	splitVertical float32
 	// showEvidence reveals the detail pane's evidence area — screenshots,
 	// raw OCR lines, their provenance and model scores. It is off by
 	// default so the structured form stays the main view.
@@ -319,6 +333,10 @@ func New(cfg Config) *Model {
 		cfg:              cfg,
 		source:           cfg.ScanSource,
 		split:            520,
+		splitPercent:     57,
+		splitVertical:    48,
+		contentWidth:     1020,
+		contentHeight:    700,
 		cache:            newEvidenceCache(cfg.Evidence, limit),
 		promptedSessions: make(map[string]bool),
 		historySelected:  make(map[string]bool),
@@ -332,6 +350,21 @@ func New(cfg Config) *Model {
 	m.devAutoInstall = cfg.DevAutoInstall
 	m.list.Selected = &m.selected
 	return m
+}
+
+// SetContentSize records the page area for responsive layout. The entry
+// point calls it once at ready and again from Window.OnResize.
+func (m *Model) SetContentSize(width, height int) {
+	if width <= 0 || height <= 0 {
+		return
+	}
+	if m.contentWidth == width && m.contentHeight == height {
+		return
+	}
+	m.contentWidth, m.contentHeight = width, height
+	if m.upd != nil {
+		m.upd.Update(func() {})
+	}
 }
 
 // Attach connects the updater every background result flows through and
@@ -426,6 +459,9 @@ func (m *Model) Apply(snap app.Snapshot) {
 	if prevBusy && !snap.Busy && snap.SessionID != "" {
 		if snap.SaveError == "" && snap.Scan.Phase == scan.PhaseEnded {
 			m.requestSavePrompt(string(snap.SessionID))
+			if m.cfg.PageLayout && !m.editingDirty() && !m.reviewSaving {
+				m.page = pageResults
+			}
 		}
 		m.loadHistory()
 		m.refreshStorage()
@@ -465,6 +501,7 @@ func (m *Model) ShowLive() {
 	if m.rec != nil && m.rec.Live && m.rec.ID == string(m.appliedSession) {
 		return
 	}
+	m.page = pageResults
 	m.requestNavigation(navigationRequest{kind: navShowLive})
 }
 
@@ -674,6 +711,7 @@ func (m *Model) OpenHistory() {
 	if id == "" || m.exitState == exitRunning || m.exitState == exitDone {
 		return
 	}
+	m.page = pageResults
 	m.requestNavigation(navigationRequest{kind: navOpenHistory, recordID: id})
 }
 
@@ -751,6 +789,7 @@ func (m *Model) Start() {
 	if !m.canStart() {
 		return
 	}
+	m.page = pageScan
 	if m.startReqID == "" {
 		m.startSerial++
 		m.startReqID = "ui-" + strconv.Itoa(m.startSerial)

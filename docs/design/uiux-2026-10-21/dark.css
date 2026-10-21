@@ -1,0 +1,283 @@
+/* Dark-mode semantic tokens and component overrides for the static mockups.
+   The production implementation should keep the same names in
+   internal/ui/tokens.go; this file exists so the mockups can show both modes
+   from one set of semantic roles. */
+
+html[data-theme="dark"] {
+  color-scheme: dark;
+
+  --bg: #090c11;
+  --board-glow: #151b24;
+  --window: #101318;
+  --window-bg: #101318;
+  --content-bg: #151920;
+  --card-bg: #1b2029;
+  --control-bg: #222833;
+  --surface: #222833;
+  --surface-2: #0f1217;
+  --surface-3: #242a34;
+  --surface-disabled: #1c1c20;
+  --border: #303845;
+  --border-strong: #46505f;
+  --border-soft: #242a34;
+  --text: #f2f4f8;
+  --text-2: #c3c9d3;
+  --muted: #98a1ae;
+  --muted-2: #7c8494;
+  --unread: #858fa0;
+
+  --accent: #60a5fa;
+  --accent-hover: #93c5fd;
+  --accent-soft: rgba(96, 165, 250, 0.14);
+  --accent-border: rgba(96, 165, 250, 0.38);
+  --accent-fill: #2563eb;
+  --accent-fill-hover: #1d4ed8;
+  --accent-on-fill: #ffffff;
+  --accent-strong: #93c5fd;
+
+  --danger: #f87171;
+  --danger-soft: rgba(248, 113, 113, 0.12);
+  --danger-border: rgba(248, 113, 113, 0.32);
+  --danger-strong: #fca5a5;
+  --danger-surface: #1f1618;
+
+  --warning: #fbbf24;
+  --warning-soft: rgba(251, 191, 36, 0.12);
+  --warning-border: rgba(251, 191, 36, 0.30);
+  --warning-strong: #fcd34d;
+
+  --success: #4ade80;
+  --success-soft: rgba(74, 222, 128, 0.10);
+  --success-border: rgba(74, 222, 128, 0.28);
+  --success-strong: #86efac;
+
+  --table-header-bg: #222833;
+  --table-header-text: #98a1ae;
+  --evidence-bg: #090c11;
+  --evidence-border: #303845;
+  --row-hover: rgba(255, 255, 255, 0.045);
+  --row-selected: rgba(96, 165, 250, 0.14);
+  --row-selected-border: #60a5fa;
+  --focus-color: rgba(147, 197, 253, 0.85);
+  --code-text: #c9d1d9;
+  --shadow-window: 0 30px 90px rgba(0, 0, 0, 0.55), 0 4px 18px rgba(0, 0, 0, 0.35);
+}
+
+html[data-theme="dark"] body {
+  background:
+    radial-gradient(1100px 620px at 50% -10%, var(--board-glow) 0%, transparent 62%),
+    var(--bg);
+  color: var(--text);
+}
+
+html[data-theme="dark"] .window {
+  background: var(--window-bg);
+  border-color: var(--border);
+  box-shadow: var(--shadow-window);
+}
+
+html[data-theme="dark"] .titlebar {
+  background: linear-gradient(#141920, #101318);
+  border-bottom-color: var(--border);
+}
+
+html[data-theme="dark"] .window-title { color: var(--text-2); }
+html[data-theme="dark"] .window-meta { color: var(--muted); }
+html[data-theme="dark"] .tabbar { background: var(--window-bg); border-bottom-color: var(--border); }
+html[data-theme="dark"] .content { background: var(--content-bg); }
+html[data-theme="dark"] .statusbar { background: var(--surface-2); border-top-color: var(--border); }
+
+html[data-theme="dark"] .btn {
+  background: var(--control-bg);
+  border-color: var(--border);
+  color: var(--text-2);
+  box-shadow: none;
+}
+html[data-theme="dark"] .btn.primary {
+  background: var(--accent-fill);
+  border-color: var(--accent-fill);
+  color: var(--accent-on-fill);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.28);
+}
+html[data-theme="dark"] .btn.primary:hover { background: var(--accent-fill-hover); }
+html[data-theme="dark"] .btn.secondary { background: var(--surface); }
+html[data-theme="dark"] .btn.ghost { background: transparent; }
+html[data-theme="dark"] .btn.danger { background: var(--control-bg); color: var(--danger); border-color: var(--danger-border); }
+
+html[data-theme="dark"] .kbd {
+  background: var(--control-bg);
+  border-color: var(--border);
+  color: var(--muted);
+  border-bottom-color: var(--border-strong);
+}
+
+html[data-theme="dark"] .card {
+  background: var(--card-bg);
+  border-color: var(--border);
+  box-shadow: none;
+}
+html[data-theme="dark"] .card.soft { background: var(--surface-2); }
+
+html[data-theme="dark"] .table th {
+  background: var(--table-header-bg);
+  color: var(--table-header-text);
+  border-bottom-color: var(--border);
+}
+html[data-theme="dark"] .table td {
+  color: var(--text-2);
+  border-bottom-color: var(--border-soft);
+}
+html[data-theme="dark"] .table tr.selected td { background: var(--row-selected); }
+html[data-theme="dark"] .table tr.selected td:first-child { box-shadow: inset 3px 0 0 var(--row-selected-border); }
+
+html[data-theme="dark"] .segmented { background: var(--surface); }
+html[data-theme="dark"] .seg.active {
+  background: var(--surface-overlay);
+  color: var(--text);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.28);
+}
+html[data-theme="dark"] .search,
+html[data-theme="dark"] .select,
+html[data-theme="dark"] .date-range {
+  background: var(--control-bg);
+  border-color: var(--border);
+  color: var(--text-2);
+}
+html[data-theme="dark"] .search .icon,
+html[data-theme="dark"] .select .icon { color: var(--muted); }
+html[data-theme="dark"] .stat {
+  background: var(--card-bg);
+  border-color: var(--border);
+  box-shadow: none;
+}
+html[data-theme="dark"] .seg.active .count { color: var(--accent); }
+html[data-theme="dark"] .badge { background: var(--surface); color: var(--muted); }
+html[data-theme="dark"] .tab.active .badge { background: var(--accent-soft); color: var(--accent); }
+html[data-theme="dark"] .badge.warn,
+html[data-theme="dark"] .pill.warn,
+html[data-theme="dark"] .stat.warn .v { color: var(--warning); }
+html[data-theme="dark"] .badge.danger { color: var(--danger); }
+html[data-theme="dark"] .pill.success,
+html[data-theme="dark"] .status.confirmed { color: var(--success); }
+html[data-theme="dark"] .status.pending { color: var(--warning); }
+html[data-theme="dark"] .status.failed { color: var(--danger); }
+html[data-theme="dark"] .status.muted { color: var(--muted); }
+
+html[data-theme="dark"] .callout {
+  background: var(--accent-soft);
+  border-color: var(--accent-border);
+  color: var(--accent-strong);
+}
+html[data-theme="dark"] .callout.warn {
+  background: var(--warning-soft);
+  border-color: var(--warning-border);
+  color: var(--warning);
+}
+html[data-theme="dark"] .callout.danger {
+  background: var(--danger-soft);
+  border-color: var(--danger-border);
+  color: var(--danger);
+}
+html[data-theme="dark"] .validation {
+  background: var(--warning-soft);
+  border-color: var(--warning-border);
+  color: var(--warning);
+}
+html[data-theme="dark"] .validation .link { color: var(--warning); }
+
+html[data-theme="dark"] .checkbox,
+html[data-theme="dark"] .radio { background: var(--control-bg); border-color: var(--border); }
+html[data-theme="dark"] .checkbox.on {
+  background: var(--accent-fill);
+  border-color: var(--accent-fill);
+  color: var(--accent-on-fill);
+}
+html[data-theme="dark"] .radio.on {
+  background: var(--accent-fill);
+  border-color: var(--accent-fill);
+  box-shadow: inset 0 0 0 3px var(--control-bg);
+}
+
+html[data-theme="dark"] .switch { background: var(--border-strong); }
+html[data-theme="dark"] .switch.on { background: var(--accent-fill); }
+
+html[data-theme="dark"] .progress-line { background: var(--surface-3); }
+html[data-theme="dark"] .progress-line > span { background: var(--accent-fill); }
+
+html[data-theme="dark"] .danger-card {
+  background: linear-gradient(var(--danger-surface), var(--card-bg));
+  border-color: var(--danger-border);
+  box-shadow: inset 3px 0 0 var(--danger);
+}
+html[data-theme="dark"] .storage-danger {
+  background: var(--danger-soft);
+  border-color: var(--danger-border);
+}
+html[data-theme="dark"] .storage-danger .copy,
+html[data-theme="dark"] .danger-copy,
+html[data-theme="dark"] .danger-demo .s { color: var(--danger-strong); }
+html[data-theme="dark"] .danger-demo .t { color: var(--danger); }
+
+html[data-theme="dark"] .tag {
+  background: var(--surface-2);
+  border-color: var(--border);
+  color: var(--muted);
+}
+html[data-theme="dark"] .spec {
+  background: var(--card-bg);
+  border-color: var(--border);
+  box-shadow: none;
+}
+html[data-theme="dark"] .action-demo { background: var(--surface-2); border-color: var(--border-soft); }
+html[data-theme="dark"] .edit-wire { background: var(--surface-2); border-color: var(--border); }
+html[data-theme="dark"] .fake-input,
+html[data-theme="dark"] .fake-select { background: var(--control-bg); border-color: var(--border); color: var(--muted); }
+html[data-theme="dark"] .empty-icon { background: var(--control-bg); border-color: var(--border); }
+html[data-theme="dark"] .empty-demo,
+html[data-theme="dark"] .loading-box { background: var(--surface-2); border-color: var(--border); }
+html[data-theme="dark"] .swatch { background: var(--surface-2); border-color: var(--border-soft); }
+html[data-theme="dark"] .swatch .name { color: var(--text-2); }
+html[data-theme="dark"] .swatch .hex { color: var(--muted); }
+html[data-theme="dark"] .version-box,
+html[data-theme="dark"] .usage { background: var(--surface-2); border-color: var(--border-soft); }
+html[data-theme="dark"] .icon-btn { color: var(--muted); }
+html[data-theme="dark"] .icon-btn:hover { background: var(--surface); }
+
+/* Page-specific overrides */
+html[data-theme="dark"] .shell,
+html[data-theme="dark"] .shell-bar,
+html[data-theme="dark"] .journey,
+html[data-theme="dark"] .page-card,
+html[data-theme="dark"] .principle {
+  background: var(--card-bg);
+  border-color: var(--border);
+  box-shadow: none;
+}
+html[data-theme="dark"] .shell-bar { background: var(--window-bg); }
+html[data-theme="dark"] .shell-status { background: var(--surface-2); border-top-color: var(--border); }
+html[data-theme="dark"] .page-card.primary {
+  background: linear-gradient(var(--surface), var(--card-bg));
+  border-color: var(--accent-border);
+}
+html[data-theme="dark"] .step { background: var(--surface-2); border-color: var(--border-soft); }
+html[data-theme="dark"] .step.done { background: var(--success-soft); border-color: var(--success-border); }
+html[data-theme="dark"] .step.done .v { color: var(--success); }
+html[data-theme="dark"] .step.hot { background: var(--accent-soft); border-color: var(--accent-border); }
+html[data-theme="dark"] .step.hot .v { color: var(--accent); }
+html[data-theme="dark"] .step.warn { background: var(--warning-soft); border-color: var(--warning-border); }
+html[data-theme="dark"] .step.warn .v { color: var(--warning); }
+html[data-theme="dark"] .ia-tag .chip { background: var(--card-bg); border-color: var(--border); }
+html[data-theme="dark"] .page-card .icon-box { background: var(--surface); border-color: var(--border-soft); }
+html[data-theme="dark"] .page-card.primary .icon-box { background: var(--accent-soft); border-color: var(--accent-border); }
+html[data-theme="dark"] .mini-stat.warn .v { color: var(--warning); }
+html[data-theme="dark"] .mini-stat.danger .v { color: var(--danger); }
+html[data-theme="dark"] .detail-actions { background: var(--surface-2); border-top-color: var(--border); }
+html[data-theme="dark"] .history-table .table-foot { background: var(--surface-2); border-top-color: var(--border); }
+html[data-theme="dark"] .danger-head,
+html[data-theme="dark"] .danger-head .section-title { color: var(--danger); }
+html[data-theme="dark"] .storage-danger .btn { background: var(--control-bg); }
+html[data-theme="dark"] .shot { border-color: var(--evidence-border); }
+html[data-theme="dark"] .stat .v { color: var(--text); }
+html[data-theme="dark"] .stat.warn .v { color: var(--warning); }
+html[data-theme="dark"] .stat.danger .v { color: var(--danger); }
+html[data-theme="dark"] .stat.accent .v { color: var(--accent); }

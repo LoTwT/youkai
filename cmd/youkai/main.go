@@ -187,7 +187,8 @@ func main() {
 	updateInstalled := false
 
 	model := ui.New(ui.Config{
-		Service: svc,
+		Service:    svc,
+		PageLayout: true,
 		ScanSource: ui.ScanSourceInfo{
 			Available: source != nil,
 			Label:     sourceLabel,
@@ -292,6 +293,14 @@ func main() {
 			life.OnWindowClose(e)
 		})
 		model.Attach(win)
+		if width, height := win.ContentSize(); width > 0 && height > 0 {
+			model.SetContentSize(width, height)
+		}
+		win.OnResize(func() {
+			if width, height := win.ContentSize(); width > 0 && height > 0 {
+				model.SetContentSize(width, height)
+			}
+		})
 		// The window exists now: replay any restore that a second instance
 		// or a launch-time deep link requested before ready, then add the
 		// tray/menu bar entry (the fallback to close-to-exit is handled by

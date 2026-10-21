@@ -153,15 +153,21 @@ func (m *Model) exportArea(c *ui.Context, t *ui.Theme) {
 }
 
 // exportSummaryText renders what the two files will contain: captured,
-// usable and excluded counts, the coverage conclusion and the fact that
-// no evidence is included.
+// exportable, pending, failed and unprocessed counts, the coverage
+// conclusion and the fact that no evidence is included. The categories are
+// mutually exclusive so the reader can see why an item is not exported.
 func (m *Model) exportSummaryText() string {
 	if m.exportData == nil {
 		return "导出：数据尚未就绪 · 不含截图"
 	}
 	s := m.exportData.Summary
-	text := fmt.Sprintf("已采集 %d 件 · 可用 %d 件 · 排除 %d 件 · 覆盖：%s · 不含截图",
-		s.Captured, s.Included, s.Excluded, coverageText(s.Coverage))
+	c := m.recordCounts()
+	text := fmt.Sprintf("已采集 %d 件 · 可导出 %d 件 · 待校对 %d 件 · 失败 %d 件 · 未处理 %d 件",
+		s.Captured, s.Included, c.Pending, c.Failed, c.Unprocessed)
+	if c.OtherExcluded > 0 {
+		text += fmt.Sprintf(" · 其他排除 %d 件", c.OtherExcluded)
+	}
+	text += fmt.Sprintf(" · 覆盖：%s · 不含截图", coverageText(s.Coverage))
 	if s.ExpectedCount != nil {
 		text += fmt.Sprintf("（预期 %d 件）", *s.ExpectedCount)
 	}

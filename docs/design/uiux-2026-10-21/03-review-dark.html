@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="style.css">
+<style>
+  .review-stats { display:flex; gap:10px; margin-top:12px; }
+  .review-stats .stat { padding:9px 12px; }
+  .review-stats .stat .v { font-size:18px; }
+  .review-toolbar { display:flex; align-items:center; gap:10px; margin-top:10px; }
+  .review-toolbar .grow { flex:1; }
+  .review-toolbar .select { height:31px; display:flex; align-items:center; gap:8px; padding:0 10px; border:1px solid var(--border); border-radius:7px; background:#fff; font-size:11.5px; color:var(--text-2); min-width:112px; }
+  .review-toolbar .select .icon { color:var(--muted-2); }
+
+  .split { display:flex; gap:12px; flex:1; min-height:0; margin-top:10px; }
+  .table-pane { flex:1; min-width:0; display:flex; flex-direction:column; overflow:hidden; }
+  .table-pane .table-wrap { flex:1; min-height:0; overflow:hidden; }
+  .table-foot { height:34px; flex:0 0 34px; display:flex; align-items:center; justify-content:space-between; padding:0 12px; border-top:1px solid var(--border-soft); font-size:10.5px; color:var(--muted); background:var(--surface-2); }
+  .pager { display:flex; align-items:center; gap:9px; }
+  .pager b { font-weight:600; color:var(--text-2); }
+
+  .status { display:inline-flex; align-items:center; gap:5px; font-size:10px; font-weight:650; white-space:nowrap; }
+  .status .dot { width:5px; height:5px; border-radius:50%; background:currentColor; }
+  .status.pending { color:#b45309; }
+  .status.confirmed { color:#15803d; }
+  .status.failed { color:var(--danger); }
+  .status.muted { color:var(--muted); }
+
+  .detail { width:508px; flex:0 0 508px; display:flex; flex-direction:column; overflow:hidden; }
+  .detail-head { padding:11px 14px 0; }
+  .detail-title-row { display:flex; align-items:flex-start; justify-content:space-between; gap:10px; }
+  .detail-title { font-size:16px; line-height:1.2; font-weight:700; letter-spacing:-.02em; }
+  .detail-sub { margin-top:4px; font-size:10.5px; color:var(--muted); }
+  .detail-tabs { display:flex; align-items:center; gap:16px; margin-top:8px; border-bottom:1px solid var(--border-soft); }
+  .detail-tab { position:relative; padding-bottom:8px; font-size:11px; font-weight:600; color:var(--muted); }
+  .detail-tab.active { color:var(--accent); }
+  .detail-tab.active::after { content:""; position:absolute; left:0; right:0; bottom:-1px; height:2px; background:var(--accent); border-radius:2px; }
+  .detail-tab .count { color:var(--muted-2); font-weight:500; margin-left:3px; }
+
+  .detail-body { padding:9px 14px 0; display:flex; flex-direction:column; gap:5px; min-height:0; }
+  .detail-body .shot { height:112px; }
+  .detail .substat { height:27px; }
+  .detail .substats { border-radius:7px; }
+  .fieldline { display:flex; align-items:center; gap:10px; min-height:27px; }
+  .fieldline .k { width:53px; flex:0 0 53px; font-size:10.5px; color:var(--muted); }
+  .fieldline .v { font-size:11.5px; color:var(--text-2); font-weight:550; }
+  .fieldline .v strong { font-weight:650; color:var(--text); }
+  .fieldline .right { margin-left:auto; font-size:11.5px; color:var(--text); font-weight:650; font-variant-numeric:tabular-nums; }
+  .fieldline .right .u { color:var(--muted); font-weight:500; font-size:10px; }
+  .fieldline .right .unread { color:var(--unread); font-weight:500; }
+
+  .substat-head { display:flex; align-items:center; gap:10px; margin-top:1px; }
+  .substat-head .k { width:53px; flex:0 0 53px; font-size:10.5px; color:var(--muted); }
+  .substat-head .legend { margin-left:auto; font-size:9.5px; color:var(--muted-2); }
+
+  .validation { display:flex; align-items:center; gap:7px; padding:7px 9px; border-radius:7px; background:var(--warning-soft); border:1px solid var(--warning-border); font-size:10.5px; color:#92400e; }
+  .validation .icon { width:13px; height:13px; flex-basis:13px; }
+  .validation b { font-weight:650; }
+  .validation .link { margin-left:auto; color:#b45309; font-weight:600; }
+
+  .detail-actions { margin-top:auto; padding:10px 14px; border-top:1px solid var(--border); background:var(--surface-2); display:flex; align-items:center; gap:7px; }
+  .detail-actions .note { margin-left:auto; font-size:9.5px; color:var(--muted); }
+  .detail-actions .btn { height:30px; font-size:11.5px; }
+</style>
+  <link rel="stylesheet" href="dark.css">
+</head>
+<body>
+<div class="board">
+  <div class="board-meta">
+    <div>
+      <div class="board-eyebrow">03 · 结果与校对</div>
+      <h2 class="board-title">先让人找到“待校对”，再让人看清“这一件”</h2>
+    </div>
+    <div class="board-note">主工作区 · 校对模式<br>表格 57% / 详情 43% · 证据默认展开</div>
+  </div>
+
+  <div class="window">
+    <div class="titlebar">
+      <div class="lights"><span class="light red"></span><span class="light yellow"></span><span class="light green"></span></div>
+      <div class="window-title">Youkai</div>
+      <div class="window-meta"><span class="status-dot"></span>自动保存已开启</div>
+    </div>
+    <div class="tabbar">
+      <div class="tab">扫描</div>
+      <div class="tab active">结果与校对 <span class="badge warn">130</span></div>
+      <div class="tab">历史 <span class="badge">8</span></div>
+      <div class="tab">设置</div>
+      <div class="tab-spacer"></div>
+      <div class="tab" style="color:var(--muted); font-size:11px;">本次扫描 · 13:42</div>
+    </div>
+
+    <div class="content">
+      <div class="page-head">
+        <div>
+          <h1 class="page-title">结果与校对</h1>
+          <div class="page-sub">本次扫描 · 已保存 <strong>1,005</strong> 条 · 覆盖 <strong>部分</strong> · 不含截图导出</div>
+        </div>
+        <div class="head-actions">
+          <button class="btn">导出 JSON</button>
+          <button class="btn">导出 CSV</button>
+          <button class="btn ghost" style="width:31px; padding:0;">⋯</button>
+        </div>
+      </div>
+
+      <div class="review-stats">
+        <div class="stat accent"><div class="k">可用记录</div><div class="v">875 <small>/ 1,005</small></div></div>
+        <div class="stat warn"><div class="k">待校对</div><div class="v">130 <small>件</small></div></div>
+        <div class="stat danger"><div class="k">失败 / 未处理</div><div class="v">3 <small>件</small></div></div>
+        <div class="stat"><div class="k">覆盖结论</div><div class="v" style="font-size:16px; color:var(--text);">部分</div></div>
+      </div>
+
+      <div class="review-toolbar">
+        <div class="segmented">
+          <div class="seg">全部 <span class="count">1,005</span></div>
+          <div class="seg active">待校对 <span class="count">130</span></div>
+          <div class="seg">失败 <span class="count">3</span></div>
+          <div class="seg">未处理 <span class="count">0</span></div>
+        </div>
+        <div class="search">
+          <svg class="icon sm" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.6-3.6"/></svg>
+          搜索套装 / 属性 / 序号
+        </div>
+        <div class="select">全部套装 <svg class="icon sm" viewBox="0 0 24 24" style="margin-left:auto;"><path d="m6 9 6 6 6-6"/></svg></div>
+        <div class="select">全部槽位 <svg class="icon sm" viewBox="0 0 24 24" style="margin-left:auto;"><path d="m6 9 6 6 6-6"/></svg></div>
+        <div class="grow"></div>
+        <button class="btn secondary">下一个待校对 <span class="kbd">⌘J</span></button>
+      </div>
+
+      <div class="split">
+        <div class="card table-pane">
+          <div class="table-wrap">
+            <table class="table">
+              <colgroup>
+                <col style="width:48px"><col style="width:124px"><col style="width:62px"><col style="width:52px"><col style="width:120px"><col style="width:92px"><col>
+              </colgroup>
+              <thead>
+                <tr><th>序号</th><th>套装</th><th>槽位</th><th>等级</th><th>主词条</th><th>状态</th><th>问题</th></tr>
+              </thead>
+              <tbody>
+                <tr class="selected"><td class="num muted">812</td><td class="strong">极地重金属</td><td>4 号位</td><td class="num">+12</td><td>暴击伤害 <span class="muted">48.0%</span></td><td><span class="status pending"><span class="dot"></span>待校对</span></td><td class="muted">2 个警告</td></tr>
+                <tr><td class="num muted">813</td><td class="strong">极地重金属</td><td>4 号位</td><td class="num">+12</td><td>生命值 <span class="muted">4,480</span></td><td><span class="status pending"><span class="dot"></span>待校对</span></td><td class="muted">—</td></tr>
+                <tr><td class="num muted">814</td><td class="strong">啄木鸟电音</td><td>5 号位</td><td class="num">+15</td><td>攻击力 <span class="muted">19.2%</span></td><td><span class="status confirmed"><span class="dot"></span>已确认</span></td><td class="muted">—</td></tr>
+                <tr><td class="num muted">815</td><td class="strong">摇摆爵士</td><td>6 号位</td><td class="num">+15</td><td>防御力 <span class="muted">4.8%</span></td><td><span class="status pending"><span class="dot"></span>待校对</span></td><td class="muted">装备字段</td></tr>
+                <tr><td class="num muted">816</td><td class="strong">极地重金属</td><td>4 号位</td><td class="num">+12</td><td class="muted">—</td><td><span class="status failed"><span class="dot"></span>失败</span></td><td style="color:var(--danger);">识别失败</td></tr>
+                <tr><td class="num muted">817</td><td class="strong">极地重金属</td><td>4 号位</td><td class="num">+12</td><td>暴击率 <span class="muted">12.0%</span></td><td><span class="status confirmed"><span class="dot"></span>已确认</span></td><td class="muted">—</td></tr>
+                <tr><td class="num muted">818</td><td class="strong">啄木鸟电音</td><td>5 号位</td><td class="num">+15</td><td>攻击力 <span class="muted">19.2%</span></td><td><span class="status pending"><span class="dot"></span>待校对</span></td><td class="muted">—</td></tr>
+                <tr><td class="num muted">819</td><td class="strong">摇摆爵士</td><td>6 号位</td><td class="num">+15</td><td>生命值 <span class="muted">4,480</span></td><td><span class="status pending"><span class="dot"></span>待校对</span></td><td class="muted">—</td></tr>
+                <tr><td class="num muted">820</td><td class="strong">极地重金属</td><td>4 号位</td><td class="num">+12</td><td>暴击伤害 <span class="muted">48.0%</span></td><td><span class="status pending"><span class="dot"></span>待校对</span></td><td class="muted">—</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="table-foot">
+            <span>显示 9 / 130 条待校对 · 按采集顺序</span>
+            <span class="pager"><span>‹</span><b>1</b><span>2</span><span>3</span><span>…</span><span>15</span><span>›</span></span>
+          </div>
+        </div>
+
+        <div class="card detail">
+          <div class="detail-head">
+            <div class="detail-title-row">
+              <div>
+                <div class="detail-title">序号 812</div>
+                <div class="detail-sub">4 号位 · +12 · 极地重金属 · 已采集 13:44:08</div>
+              </div>
+              <span class="pill warn"><span class="dot"></span>待校对</span>
+            </div>
+            <div class="detail-tabs">
+              <div class="detail-tab active">字段</div>
+              <div class="detail-tab">原始 OCR <span class="count">4 行</span></div>
+              <div class="detail-tab" style="margin-left:auto; color:var(--muted-2); font-weight:500;">第 812 / 1,005</div>
+            </div>
+          </div>
+
+          <div class="detail-body">
+            <div class="shot">
+              <div class="shot-card">
+                <div class="shot-title">极地重金属 · 4 号位</div>
+                <div class="shot-line"><span>暴击伤害</span><b>48.0%</b></div>
+                <div class="shot-line"><span class="dim">暴击率</span><b>12.0%</b></div>
+                <div class="shot-line"><span class="dim">生命值</span><b>4,480</b></div>
+                <div class="shot-line"><span class="dim">攻击力加成</span><b>19.2%</b></div>
+                <div class="shot-line"><span class="dim">防御力</span><b>未读取</b></div>
+              </div>
+              <div class="shot-zoom"><svg class="icon sm" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.6-3.6M11 8v6M8 11h6"/></svg></div>
+              <div class="shot-footer"><span class="status-dot" style="background:#4ade80;"></span>证据 1 / 2 · 点击放大</div>
+            </div>
+
+            <div class="fieldline"><span class="k">主词条</span><span class="v"><strong>暴击伤害</strong></span><span class="right">48.0 <span class="u">%</span></span></div>
+
+            <div class="substat-head"><span class="k">副词条</span><span class="legend">数值右对齐 · 单位弱化</span></div>
+            <div class="substats">
+              <div class="substat"><span class="idx">1</span><span class="name">暴击率</span><span class="val">12.0 <span class="u">%</span></span><span class="roll">强化 +4</span></div>
+              <div class="substat"><span class="idx">2</span><span class="name">生命值</span><span class="val">4,480</span><span class="roll">强化 +3</span></div>
+              <div class="substat"><span class="idx">3</span><span class="name">攻击力加成</span><span class="val">19.2 <span class="u">%</span></span><span class="roll">强化 +2</span></div>
+              <div class="substat"><span class="idx">4</span><span class="name" style="color:var(--muted);">防御力</span><span class="val unread">未读取</span><span class="roll">—</span></div>
+            </div>
+
+            <div class="validation">
+              <svg class="icon" viewBox="0 0 24 24"><path d="M12 3 2.6 20a1 1 0 0 0 .9 1.5h17a1 1 0 0 0 .9-1.5L12 3Z"/><path d="M12 9v5M12 17.5h.01"/></svg>
+              <span><b>校验通过</b> · 2 个警告：装备字段待补全</span>
+              <span class="link">查看</span>
+            </div>
+          </div>
+
+          <div class="detail-actions">
+            <button class="btn">编辑</button>
+            <button class="btn primary">确认并下一项 <span class="kbd" style="border-color:rgba(255,255,255,.35); background:rgba(255,255,255,.16); color:#fff;">⌘↵</span></button>
+            <button class="btn ghost">跳过</button>
+            <span class="note">⌘S 保存</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="statusbar">
+      <div class="status-left"><span class="status-dot"></span>已保存 · 130 件待校对 <span class="status-sep"></span> 筛选：待校对</div>
+      <div class="status-right">⌘J 下一个待校对 <span class="status-sep"></span> ⌘↵ 确认并下一项</div>
+    </div>
+  </div>
+</div>
+</body>
+</html>

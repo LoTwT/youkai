@@ -31,7 +31,19 @@ var resultColumns = []ui.TableColumn{
 	{Title: "槽位/等级", Width: 84, Fixed: true},
 	{Title: "管理状态", Width: 72, Fixed: true},
 	{Title: "装备", Width: 110, Fixed: true},
-	{Title: "质量/问题"},
+	{Title: "质量/问题", MinWidth: 280},
+}
+
+// resultsSideBySideMinWidth starts the results page's side-by-side split.
+// The page takes the window less the 64-DIP rail and 24 DIP of page
+// padding; the table gets 57% of that, and its fixed columns take 396
+// DIPs. At this width the quality column keeps about 306 DIPs. Below it,
+// stacking the table above the details keeps the table wider than a
+// side-by-side split would.
+const resultsSideBySideMinWidth = 1320
+
+func resultsSideBySide(contentWidth int) bool {
+	return contentWidth >= resultsSideBySideMinWidth
 }
 
 // View builds the main window's three areas — prepare, progress and
@@ -39,6 +51,11 @@ var resultColumns = []ui.TableColumn{
 // only reads the model; every interaction schedules its work through the
 // model's actions.
 func (m *Model) View(c *ui.Context) {
+	if m.cfg.PageLayout {
+		m.viewPages(c)
+		return
+	}
+	ApplyTheme(c)
 	t := c.Theme()
 	m.list.Key = func(row int) any {
 		if m.rec == nil || row < 0 || row >= len(m.rec.Rows) {
@@ -255,29 +272,33 @@ func (m *Model) resultsArea(c *ui.Context, t *ui.Theme) {
 					m.ShowLive()
 				}
 			}
-			if m.rec != nil && m.rec.ID != m.historyID(m.histChoice) {
+			if !m.cfg.PageLayout && m.rec != nil && m.rec.ID != m.historyID(m.histChoice) {
 				blocked := m.cleanupBlockedReason()
 				if ui.Button(c, "删除当前记录").Disabled(blocked != "").Clicked() {
 					m.RequestRecordCleanup(m.rec.ID)
 				}
 			}
 			ui.Box(c).Grow(1)
-			if m.histChoice != "" && !m.hasHistoryLabel(m.histChoice) {
-				m.histChoice = ""
-			}
-			if labels := m.HistoryLabels(); len(labels) > 0 {
-				ui.Text(c, "历史记录").TextColor(t.TextMuted)
-				ui.Select(c, &m.histChoice, labels).Width(220)
-				if ui.Button(c, "打开记录").Disabled(m.historyID(m.histChoice) == "").Clicked() {
-					m.OpenHistory()
+			if !m.cfg.PageLayout {
+				if m.histChoice != "" && !m.hasHistoryLabel(m.histChoice) {
+					m.histChoice = ""
 				}
-			} else {
-				ui.Text(c, "历史记录："+m.historyEmptyText()).TextColor(t.TextMuted)
+				if labels := m.HistoryLabels(); len(labels) > 0 {
+					ui.Text(c, "历史记录").TextColor(t.TextMuted)
+					ui.Select(c, &m.histChoice, labels).Width(220)
+					if ui.Button(c, "打开记录").Disabled(m.historyID(m.histChoice) == "").Clicked() {
+						m.OpenHistory()
+					}
+				} else {
+					ui.Text(c, "历史记录："+m.historyEmptyText()).TextColor(t.TextMuted)
+				}
 			}
 		})
-		m.savePromptArea(c, t)
-		if len(m.history) > 0 {
-			m.historyActions(c, t)
+		if !m.cfg.PageLayout {
+			m.savePromptArea(c, t)
+			if len(m.history) > 0 {
+				m.historyActions(c, t)
+			}
 		}
 		if m.histErr != "" {
 			ui.Text(c, "历史记录读取失败："+m.histErr).TextColor(t.Danger)
@@ -297,10 +318,22 @@ func (m *Model) resultsArea(c *ui.Context, t *ui.Theme) {
 			ui.Text(c, m.emptyResultsText()).TextColor(t.TextMuted)
 		} else {
 			m.exportArea(c, t)
-			ui.Split(c, &m.split,
-				func() { m.tablePane(c) },
-				func() { m.detailPane(c) },
-			).Fill()
+			if m.cfg.PageLayout && !resultsSideBySide(m.contentWidth) {
+				ui.SplitVerticalPercent(c, &m.splitVertical,
+					func() { m.tablePane(c) },
+					func() { m.detailPane(c) },
+				).Fill()
+			} else if m.cfg.PageLayout {
+				ui.SplitPercent(c, &m.splitPercent,
+					func() { m.tablePane(c) },
+					func() { m.detailPane(c) },
+				).Fill()
+			} else {
+				ui.Split(c, &m.split,
+					func() { m.tablePane(c) },
+					func() { m.detailPane(c) },
+				).Fill()
+			}
 		}
 	})
 }
@@ -368,19 +401,21 @@ func (m *Model) historyRow(c *ui.Context, t *ui.Theme, entry HistoryEntry, block
 			m.histChoice = entry.Label
 			m.OpenHistory()
 		}
-		if m.cfg.ExportSaver != nil {
-			if ui.Button(c, "导出 JSON").Disabled(m.historyExportsBlocked()).Clicked() {
-				m.ExportHistory(entry.ID, app.ExportJSON)
+		if !m.cfg.PageLayout {
+			if m.cfg.ExportSaver != nil {
+				if ui.Button(c, "导出 JSON").Disabled(m.historyExportsBlocked()).Clicked() {
+					m.ExportHistory(entry.ID, app.ExportJSON)
+				}
+				if ui.Button(c, "导出 CSV").Disabled(m.historyExportsBlocked()).Clicked() {
+					m.ExportHistory(entry.ID, app.ExportCSV)
+				}
 			}
-			if ui.Button(c, "导出 CSV").Disabled(m.historyExportsBlocked()).Clicked() {
-				m.ExportHistory(entry.ID, app.ExportCSV)
+			if ui.Button(c, "删除截图").Disabled(blocked != "").Clicked() {
+				m.RequestScreenshotCleanup(entry.ID)
 			}
-		}
-		if ui.Button(c, "删除截图").Disabled(blocked != "").Clicked() {
-			m.RequestScreenshotCleanup(entry.ID)
-		}
-		if ui.Button(c, "删除当前记录").Disabled(blocked != "").Clicked() {
-			m.RequestRecordCleanup(entry.ID)
+			if ui.Button(c, "删除当前记录").Disabled(blocked != "").Clicked() {
+				m.RequestRecordCleanup(entry.ID)
+			}
 		}
 	})
 }
