@@ -1,6 +1,6 @@
 # 扫描器首版实施清单
 
-更新日期：2026-10-20。状态：执行中，M1 已完成收尾（六项落地与通过条件判定见[第 3 节 M1](#m1正式工程资源与会话底座)，剩余验证项去向在 M1 各项说明内）；M2 两平台底座与 macOS 云客户端遍历已实现并完成样本采集轮，Windows 实测轮 ② 推迟。M3 代码实施已合并到 `main`（`b4fa6b2`）；正式六位置、macOS 原生体验与 Windows 实测轮 ② 尚未执行。2026-10-20 冻结的 M3 数据、导出、清理与窗口生命周期决策见第 3 节。
+更新日期：2026-10-21。状态：执行中，M1 已完成收尾（六项落地与通过条件判定见[第 3 节 M1](#m1正式工程资源与会话底座)，剩余验证项去向在 M1 各项说明内）；M2 两平台底座与 macOS 云客户端遍历已实现并完成样本采集轮，Windows 实测轮 ② 推迟。M3 代码实施已合并到 `main`（`b4fa6b2`）；正式六位置、macOS 原生体验与 Windows 实测轮 ② 尚未执行。2026-10-20 冻结的 M3 数据、导出、清理与窗口生命周期决策见第 3 节。
 
 首版作为一次完整交付，内部按四个里程碑检查进展。期间的构建供开发和用户测试，不作为删减范围的正式版本，也不另做独立 UI 验证版。
 
@@ -17,7 +17,7 @@
 | [T5](t5-zzz-inventory-traversal.md)、[T6](t6-review-export-workflow.md)、[JSON/CSV v2](scan-json-format.md) | 页面与遍历证据、用户操作、校对及文件契约。 |
 | [T7](t7-public-release-acceptance.md) | 最低系统候选、离线安装、打包路线及完整验收。 |
 
-当前仓库已建立 Go 工程：`go.mod` 固定模块路径与 MyGo v0.5.5 工具依赖，`mygo.json` 与 `cmd/youkai/` 入口就位，其余包按里程碑逐步增加。开发机为 macOS arm64、Go 1.27.2，Xcode 开发目录已选中，`hdiutil`、`codesign`、`makensis` 可定位；PATH 中的 `clang` 指向 Homebrew LLVM，正式构建需明确所用编译器与 SDK。MyGo 使用项目固定的 Go 工具依赖（v0.5.5），不依赖全局 `mygo` 命令；环境与常用命令见[开发指南](../development.md)。
+当前仓库已建立 Go 工程：`go.mod` 固定模块路径与 MyGo v0.6.2 工具依赖，`mygo.json` 与 `cmd/youkai/` 入口就位，其余包按里程碑逐步增加。开发机为 macOS arm64、Go 1.27.2，Xcode 开发目录已选中，`hdiutil`、`codesign`、`makensis` 可定位；PATH 中的 `clang` 指向 Homebrew LLVM，正式构建需明确所用编译器与 SDK。MyGo 使用项目固定的 Go 工具依赖（v0.6.2），不依赖全局 `mygo` 命令；环境与常用命令见[开发指南](../development.md)。
 
 采用一个 Go 模块、一个应用进程、一个活动扫描会话，按公共边界组织普通包，平台桥接只覆盖必要的原生 API。最小路线是单输入控制者、一个 OCR 工作者和有界队列。
 
@@ -39,7 +39,7 @@
 - **许可证：** MIT，仓库根目录 `LICENSE` 复制自 `LoTwT/ts-starter`。随包的 ORT（MIT）、模型（Apache 2.0）等第三方声明另行附带，见 [T7](t7-public-release-acceptance.md#2-首版交付门槛)。
 - **版本号：** 首个发布版为 `0.0.1`，按语义化版本递增。MyGo 在 `mygo.json` 未填 `version` 时默认使用 `0.1.0`，因此必须显式填写；同一版本号写入安装包、DMG 和 JSON 的 `producer.version`。
 - **构建与发布：** 正式发布由 GitHub Actions 构建两个平台的制品，随版本发布在 GitHub Releases（`LoTwT/youkai`）上；Windows 上的测试同样使用 GitHub Actions 产出的安装包（用户不在 Windows 上安装开发工具），快速排查非 VC++ 问题时可由 Mac 交叉编译免安装包补充，见[开发与 Windows 测试方式](#开发与-windows-测试方式)。
-- **自动更新：** 首版包含，使用 MyGo v0.5.5 内置更新，从 GitHub Releases（`LoTwT/youkai`）获取经 MyGo 更新密钥签名的版本；范围与规则见[架构第 6 节](scanner-architecture.md#6-首版功能范围)，交付证据见 [T7](t7-public-release-acceptance.md#2-首版交付门槛)。发布时以标签版本为准（`test-v*` 测试渠道、`v*` 正式渠道，靠 `updates.tagPrefix` 隔离），仓库内 `mygo.json` 不随发布改版本号；发布 workflow、密钥管理与升级实测清单见[发布与自动更新](../release.md)。
+- **自动更新：** 首版包含，使用 MyGo v0.6.2 内置更新，从 GitHub Releases（`LoTwT/youkai`）获取经 MyGo 更新密钥签名的版本；范围与规则见[架构第 6 节](scanner-architecture.md#6-首版功能范围)，交付证据见 [T7](t7-public-release-acceptance.md#2-首版交付门槛)。发布时以标签版本为准（`test-v*` 测试渠道、`v*` 正式渠道，靠 `updates.tagPrefix` 隔离），仓库内 `mygo.json` 不随发布改版本号；发布 workflow、密钥管理与升级实测清单见[发布与自动更新](../release.md)。
 - **第三方大文件：** ORT 运行库和 OCR 模型不进 Git，由仓库内脚本按固定 URL 与 SHA-256 下载到被忽略的目录；VC++ 运行库文件取自 GitHub Actions 的 Windows runner（见 VC++ 条目），同样不进 Git。本地构建、测试和 CI 都调用同一脚本，摘要不符即失败。
 - **PR 检查：** Mac 本地测试与 Windows 交叉编译通过即可合并；只能在 Windows 实机验证的内容记入待测清单，在用户的 Windows 上集中测试后再修。GitHub Actions 在 PR 上运行轻量检查：格式、`go vet`、`go test`，覆盖 macOS 与 Windows 两个 runner；不在 PR 上打安装包、跑长时间测试或游戏相关检查。供 Windows 测试的安装包由 GitHub Actions 按需构建（见[开发与 Windows 测试方式](#开发与-windows-测试方式)），正式发布制品构建放在发布流程中。
 - **本机工具：** 需要新增 mingw-w64 等工具时，先告知用户，由用户优先手动安装。
@@ -70,7 +70,7 @@
 
 关联 T1、T3、T4、T7。
 
-- [x] 建立 Go 原生应用、固定依赖和两个目标平台的构建配置；资源根与用户数据根分开，开发与正式记录分开；设置部署目标（macOS 显式设为 14.0）。（已落地：`go.mod` 固定模块路径与 MyGo v0.5.5 工具依赖、`cmd/youkai` 入口只组装应用（PR #3）；PR 检查在 macOS 与 Windows 两个 runner 运行格式、`go vet` 与 `go test`（PR #4）；目录解析把资源根与用户数据根、缓存、日志目录分开，开发版 `Youkai Dev` 与正式版数据根隔离（PR #5）；macOS 部署目标显式 14.0——`mygo.json` 的 `macos.minimumSystemVersion` 与本地打包命令、Package/Release workflow 的 `MACOSX_DEPLOYMENT_TARGET` 一致，安装版 `Info.plist` 的 `LSMinimumSystemVersion=14.0` 已实机核对（见[M1 macOS 实机测试报告](../reports/2026-10-17-m1-macos-test.md)）。环境与命令见[开发指南](../development.md)，双平台制品构建与实机安装见第 5、6 项。）
+- [x] 建立 Go 原生应用、固定依赖和两个目标平台的构建配置；资源根与用户数据根分开，开发与正式记录分开；设置部署目标（macOS 显式设为 14.0）。（已落地：`go.mod` 固定模块路径与 MyGo 工具依赖（初始 v0.5.5，2026-10-21 升级至 v0.6.2）、`cmd/youkai` 入口只组装应用（PR #3）；PR 检查在 macOS 与 Windows 两个 runner 运行格式、`go vet` 与 `go test`（PR #4）；目录解析把资源根与用户数据根、缓存、日志目录分开，开发版 `Youkai Dev` 与正式版数据根隔离（PR #5）；macOS 部署目标显式 14.0——`mygo.json` 的 `macos.minimumSystemVersion` 与本地打包命令、Package/Release workflow 的 `MACOSX_DEPLOYMENT_TARGET` 一致，安装版 `Info.plist` 的 `LSMinimumSystemVersion=14.0` 已实机核对（见[M1 macOS 实机测试报告](../reports/2026-10-17-m1-macos-test.md)）。环境与命令见[开发指南](../development.md)，双平台制品构建与实机安装见第 5、6 项。）
 - [x] 接入一套 OCR 绑定和 CPU 运行库，以绝对路径加载固定模型与字符表；完成预处理、解码、取消、再次运行和资源释放。用可控图片做集成检查，不增加“任意图片导入识别”功能。（已落地：yalue v1.36.0 + ORT 1.29.0 CPU + PP-OCRv6 small（PR #6、#7），资源由 fetchdeps 按固定 SHA-256 下载、摘要不符即失败；识别器从资源根以绝对路径加载模型与字符表（字符表取自模型元数据），缺库、缺模型与损坏模型返回带路径的专用错误。预处理与 CTC 解码有单元测试；取消（运行前与运行中）、重复运行、关闭后重开与 ORT 环境的显式释放由真实库与模型的集成测试覆盖，识别包另有 `-race` 竞态检查（见[开发指南](../development.md)）。可控图片为 `internal/recognition/testdata` 的固定裁剪，未增加任意图片导入功能；安装布局的实际加载经 `YOUKAI_SELFTEST` 在两平台实机验证通过（见[M1 Windows 实机测试报告](../reports/2026-10-17-m1-windows-test.md)与[M1 macOS 实机测试报告](../reports/2026-10-17-m1-macos-test.md)）。）
 - [x] 实现应用持有会话、数据根占用、扫描占用和 MyGo 窗口复用；用两个独立进程验证同根编辑竞争、导出与删除竞争、路径别名、持有者崩溃后恢复，以及不同数据根只有一个能扫描。实现输入许可、有界队列、接纳序号和终结记账，用可控平台事件验证队列满、迟到结果、重复通知和并发停止。（已落地：应用服务持有会话、保存与退出收尾（PR #11），扫描内核实现输入许可、有界队列、接纳序号与终结记账（PR #8），数据根与扫描两个占用域以 OS 排他原语实现并接入入口（PR #10）——数据根独占使同根的编辑、导出与删除竞争在进程间不可能发生。占用语义由真实独立进程的跨进程测试证明：同根互斥、路径别名（`..`、符号链接、大小写变体）、持有者被杀后由 OS 释放、不同数据根共享同一把扫描锁（见[开发指南的跨进程占用与锁文件](../development.md#跨进程占用与锁文件)）；两平台安装版实测第二实例退出码 1、原实例不受影响、无第二窗口（见两份 M1 实机报告）。内核与服务层测试覆盖队列满、迟到结果、重复通知、并发停止与保存失败保留上一检查点，随双平台 CI 的 `go test ./...` 运行；开发数据源可在开发机构建驱动含真实识别的完整扫描（见[开发指南](../development.md)）。同根第二实例在框架窗口创建前即被数据根占用拒绝退出；第二实例唤起已有实例恢复主窗与 `youkai://open` 的完整接线按 M3 的第二实例条目实施。）
 - [x] 实现证据先写入、检查点更新、上一有效版本恢复及修订保存；接入正式界面的准备、进度和结果视图，能展示失败与未处理项。（证据与检查点随 `internal/record`、`internal/app` 落地；界面随 `internal/ui` 落地并由 `cmd/youkai` 组装，重开历史记录可用，修订保存的服务与存储入口已就绪、校对界面随 M2 字段校对接入，见[开发指南](../development.md)。）
@@ -159,7 +159,7 @@ go tool mygo vet .
 go test -race ./internal/app ./internal/scan ./internal/record
 ```
 
-竞态检查覆盖有并发生命周期和持久化测试的包，不能证明原生调用安全。`mygo vet` 接收应用目录，会先运行 `go vet ./...` 再检查原生 UI，不能写成 `mygo vet ./...`。[vet_ui.go](https://github.com/egoist/mygo/blob/4d8673cd2658a2c6e86b26c44751e57bf8174f91/cmd/mygo/vet_ui.go)
+竞态检查覆盖有并发生命周期和持久化测试的包，不能证明原生调用安全。`mygo vet` 接收应用目录，会先运行 `go vet ./...` 再检查原生 UI，不能写成 `mygo vet ./...`。[vet_ui.go](https://github.com/egoist/mygo/blob/cf26587264f26ea68bd1b8abbf5c9723f35e0a70/cmd/mygo/vet_ui.go)
 
 以下两条生成两平台制品，完整命令（先 fetchdeps 下载资源、显式 `CGO_ENABLED=1`、macOS 另设部署目标）见[开发指南的打包与安装包](../development.md#打包与安装包)；本地与 Package/Release workflow 均已实际执行，须确认确实生成了安装包或 DMG，跳过打包的退出成功不算通过：
 
@@ -168,7 +168,7 @@ go tool mygo build -platform windows/amd64
 go tool mygo build -platform darwin/arm64
 ```
 
-入口与构建方式依据 [config.go](https://github.com/egoist/mygo/blob/4d8673cd2658a2c6e86b26c44751e57bf8174f91/cmd/mygo/config.go)、[build.go](https://github.com/egoist/mygo/blob/4d8673cd2658a2c6e86b26c44751e57bf8174f91/cmd/mygo/build.go) 和[分发说明](https://github.com/egoist/mygo/blob/4d8673cd2658a2c6e86b26c44751e57bf8174f91/docs/distribution.md)。
+入口与构建方式依据 [config.go](https://github.com/egoist/mygo/blob/cf26587264f26ea68bd1b8abbf5c9723f35e0a70/cmd/mygo/config.go)、[build.go](https://github.com/egoist/mygo/blob/cf26587264f26ea68bd1b8abbf5c9723f35e0a70/cmd/mygo/build.go) 和[分发说明](https://github.com/egoist/mygo/blob/cf26587264f26ea68bd1b8abbf5c9723f35e0a70/docs/distribution.md)。
 
 自动测试优先覆盖数据损失和错误归属风险：迟到结果不跨会话写入、相同盘不合并、取消后不接纳新输入、写入失败可恢复上一检查点、修订确认与 JSON/CSV 导出一致、截图与记录清理不越出目标目录。原生权限、失焦与坐标、首次打开、中文输入法和游戏响应必须在对应系统核验。
 

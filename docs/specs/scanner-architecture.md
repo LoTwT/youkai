@@ -1,6 +1,6 @@
 # MyGo + Go 扫描器架构
 
-更新日期：2026-10-20。状态：产品范围已由用户确认；模块边界与会话契约的 M1 底座（工程与构建、OCR、会话与占用锁、持久化、主窗口、打包与自动更新）已实施并经两平台实机验证（结论见[实施清单 M1](scanner-implementation-plan.md#m1正式工程资源与会话底座)），M2 起的采集、输入、遍历与游戏适配仍为设计方案。2026-10-20 冻结 M3 的数据模型、JSON/CSV 导出、截图与历史清理、默认目录和窗口关闭行为；相关实现按[实施清单 M3](scanner-implementation-plan.md#m3整仓扫描与完整日常使用)的顺序推进。
+更新日期：2026-10-21。状态：产品范围已由用户确认；模块边界与会话契约的 M1 底座（工程与构建、OCR、会话与占用锁、持久化、主窗口、打包与自动更新）已实施并经两平台实机验证（结论见[实施清单 M1](scanner-implementation-plan.md#m1正式工程资源与会话底座)），M2 起的采集、输入、遍历与游戏适配仍为设计方案。2026-10-20 冻结 M3 的数据模型、JSON/CSV 导出、截图与历史清理、默认目录和窗口关闭行为；相关实现按[实施清单 M3](scanner-implementation-plan.md#m3整仓扫描与完整日常使用)的顺序推进。
 
 本文维护公共架构：模块边界、应用层与会话契约、OCR 集成要求、结果与存储语义、首版范围、验收与成本。专项细节由 T1–T7 和 [JSON/CSV v2](scan-json-format.md) 维护，实施顺序见[首版实施清单](scanner-implementation-plan.md)，背景见 [Handoff](../scanner-handoff.md)。
 
@@ -14,14 +14,14 @@ MyGo + Go 值得继续。MyGo 承担窗口、交互与分发，Go 管理串行�
 
 ## 1. 依据事实
 
-以下为固定版本源码或官方文档的阅读结果，未编译或运行。MyGo 统一固定为最新发布版 **v0.5.5**（`4d8673cd2658a2c6e86b26c44751e57bf8174f91`），其 `go.mod` 要求 Go 1.27.1；选型记录见 [T1](t1-mygo-ui-distribution.md#首轮框架与工具链候选)。
+以下为固定版本源码或官方文档的阅读结果；升级到 v0.6.2 后已另行编译、运行测试并完成 macOS 打包自检。MyGo 统一固定为最新发布版 **v0.6.2**（`cf26587264f26ea68bd1b8abbf5c9723f35e0a70`），其 `go.mod` 要求 Go 1.27.1；选型记录见 [T1](t1-mygo-ui-distribution.md#首轮框架与工具链候选)。
 
 | 事实 | 依据与影响 |
 | --- | --- |
 | MyGo 原生 UI 由框架 GPU 绘制，提供 Table、Image、文本输入与视图测试工具。 | [原生 UI](https://mygo.egoist.dev/docs/ui)、[Table](https://mygo.egoist.dev/docs/ui/table)、[视图测试](https://mygo.egoist.dev/docs/ui/testing)。本项目的数据量、中文输入和图片浏览未实测。 |
-| MyGo CLI 未指定时设置 `CGO_ENABLED=0`，但尊重显式 `CGO_ENABLED=1`。 | [proc.go](https://github.com/egoist/mygo/blob/4d8673cd2658a2c6e86b26c44751e57bf8174f91/cmd/mygo/proc.go)、[分发文档](https://mygo.egoist.dev/docs/distribution)。OCR 与 Mac 桥接需显式启用 cgo。 |
-| 按平台组织的资源在打包时合并；`go run` / `go test` 看不到同样的合并。 | [resources.go](https://github.com/egoist/mygo/blob/4d8673cd2658a2c6e86b26c44751e57bf8174f91/cmd/mygo/resources.go)。开发测试与安装后加载需分别验收。 |
-| Windows 安装脚本为每用户安装（`RequestExecutionLevel user`），没有 VC++ Runtime 安装步骤；非 Windows 主机缺 `makensis` 时仅警告并跳过安装包。 | [nsis.go](https://github.com/egoist/mygo/blob/4d8673cd2658a2c6e86b26c44751e57bf8174f91/cmd/mygo/nsis.go)。能打包不等于已处理全部运行前提，退出成功也不等于已生成安装包。 |
+| MyGo CLI 未指定时设置 `CGO_ENABLED=0`，但尊重显式 `CGO_ENABLED=1`。 | [proc.go](https://github.com/egoist/mygo/blob/cf26587264f26ea68bd1b8abbf5c9723f35e0a70/cmd/mygo/proc.go)、[分发文档](https://mygo.egoist.dev/docs/distribution)。OCR 与 Mac 桥接需显式启用 cgo。 |
+| 按平台组织的资源在打包时合并；`go run` / `go test` 看不到同样的合并。 | [resources.go](https://github.com/egoist/mygo/blob/cf26587264f26ea68bd1b8abbf5c9723f35e0a70/cmd/mygo/resources.go)。开发测试与安装后加载需分别验收。 |
+| Windows 安装脚本为每用户安装（`RequestExecutionLevel user`），没有 VC++ Runtime 安装步骤；非 Windows 主机缺 `makensis` 时仅警告并跳过安装包。 | [nsis.go](https://github.com/egoist/mygo/blob/cf26587264f26ea68bd1b8abbf5c9723f35e0a70/cmd/mygo/nsis.go)。能打包不等于已处理全部运行前提，退出成功也不等于已生成安装包。 |
 | yalue/onnxruntime_go v1.36.0 使用 cgo、动态加载 ORT，提供 `RunOptions.Terminate`，采用 ORT 1.29 C API 头文件。 | [固定源码](https://github.com/yalue/onnxruntime_go/blob/1f0fb0647fc7091b57ec72dcf0f666d2234e4d04/onnxruntime_go.go)。取消 goroutine 不等于取消原生调用。 |
 | Microsoft ORT 官方 Go 包把 `Session.Run(ctx, …)` 的取消转为 terminate；`Shutdown` 后不能重新 `Init`。 | [session.go](https://github.com/microsoft/onnxruntime/blob/402979ac1bef89dcd55add41eaa7277c407599eb/go/onnxruntime/session.go)、[ort.go](https://github.com/microsoft/onnxruntime/blob/402979ac1bef89dcd55add41eaa7277c407599eb/go/onnxruntime/ort.go)。ORT 环境属于应用生命周期。官方子模块暂无 `go/` 前缀标签，可用固定提交伪版本。 |
 
@@ -38,7 +38,7 @@ MyGo + Go 值得继续。MyGo 承担窗口、交互与分发，Go 管理串行�
 
 UI、菜单与关闭回调只安排异步工作，不等待采集或 OCR；后台不持有服务锁等待 UI 线程（[线程模型](https://mygo.egoist.dev/docs/architecture)）。窗口可见性、输入许可与退出意图互不代替，顺序见第 5 节。`Hide`、`ShowInactive`、`OnClose`、`OnBeforeQuit` 与托盘是可用基础，但不激活窗口不保证不遮挡游戏。[窗口](https://mygo.egoist.dev/docs/windows) · [应用生命周期](https://mygo.egoist.dev/docs/app) · [托盘](https://mygo.egoist.dev/docs/menus#tray-icons)
 
-重复启动使用 `RequestSingleInstanceLock` 与 `OnSecondInstance` 复用窗口，第二实例通知仍经过第 5 节的“先停止再恢复”入口。v0.5.5 在监听出现非地址占用错误或五次重试耗尽时仍返回 true，开发版锁标识另加 `.dev`，因此框架返回值不能证明本进程独占游戏输入；跨进程占用由第 5 节单独约束。[单实例实现](https://github.com/egoist/mygo/blob/4d8673cd2658a2c6e86b26c44751e57bf8174f91/single_instance.go)
+重复启动使用 `RequestSingleInstanceLock` 与 `OnSecondInstance` 复用窗口，第二实例通知仍经过第 5 节的“先停止再恢复”入口。v0.6.2 在监听出现非地址占用错误或五次重试耗尽时仍返回 true，开发版锁标识另加 `.dev`，因此框架返回值不能证明本进程独占游戏输入；跨进程占用由第 5 节单独约束。[单实例实现](https://github.com/egoist/mygo/blob/cf26587264f26ea68bd1b8abbf5c9723f35e0a70/single_instance.go)
 
 ### 浏览器唤起桌面应用
 
@@ -257,7 +257,7 @@ Youkai/
 - **完整操作链：** 检查仓库 → 确认范围与前台说明 → 注册停止方式 → 隐藏并让游戏获得焦点 → 扫描至范围结束 → 收尾保存 → 浏览全部结果、对照截图校对 → 导出 JSON/CSV 并能在本机重新打开历史。总数未知时不显示百分比。
 - **异常闭环：** 不支持的布局在输入前拒绝；失焦、切页、滚动失配、取消和识别故障都能停止，保留已完成条目和原因并可导出部分结果；没有自动续扫。
 - **交付形式：** Windows 安装包与 Mac DMG，随附模型、字典和运行库；无需开发环境即可安装；资源就绪后断网可对固定图片识别和导出。不走官方渠道、不以付费签名或公证为前提，见 [T7](t7-public-release-acceptance.md)。
-- **自动更新：** 首版包含（2026-10-16 确认）。使用 MyGo v0.5.5 内置更新（[官方更新文档](https://github.com/egoist/mygo/blob/4d8673cd2658a2c6e86b26c44751e57bf8174f91/docs/updates.md)），从 GitHub Releases（`LoTwT/youkai`）获取用 MyGo 更新密钥签名的版本；更新公钥自 0.0.1 起随包内置（晚加需用户手动重装一次），更新私钥由用户本人生成并保管在密码管理器与 GitHub Actions secrets，不进仓库。扫描进行中不安装更新，须收尾保存后再安装；测试版与正式版的更新渠道用 `updates.tagPrefix`（`test-v` / `v` 标签）分开，版本规则、发布 workflow 与发布后验证见[发布与自动更新](../release.md)。macOS ad-hoc 签名下更新后录屏/辅助功能权限可能需重新授予，须实测并写进说明。
+- **自动更新：** 首版包含（2026-10-16 确认）。使用 MyGo v0.6.2 内置更新（[官方更新文档](https://github.com/egoist/mygo/blob/cf26587264f26ea68bd1b8abbf5c9723f35e0a70/docs/updates.md)），从 GitHub Releases（`LoTwT/youkai`）获取用 MyGo 更新密钥签名的版本；更新公钥自 0.0.1 起随包内置（晚加需用户手动重装一次），更新私钥由用户本人生成并保管在密码管理器与 GitHub Actions secrets，不进仓库。扫描进行中不安装更新，须收尾保存后再安装；测试版与正式版的更新渠道用 `updates.tagPrefix`（`test-v` / `v` 标签）分开，版本规则、发布 workflow 与发布后验证见[发布与自动更新](../release.md)。macOS ad-hoc 签名下更新后录屏/辅助功能权限可能需重新授予，须实测并写进说明。
 - **浏览器入口：** 网页唤起桌面应用，按第 2 节验收；浏览器内界面只答复了可行性，不在首版范围。
 
 首版不纳入：第二款游戏、后台遮挡扫描、多客户端并发、动态插件、GPU、云 OCR、自动库存删除同步和跨重启续扫。

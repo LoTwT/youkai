@@ -1,6 +1,6 @@
 # T1：MyGo 界面与构建分发
 
-更新日期：2026-10-20。状态：界面、平台、结果处理、关窗、分发和浏览器入口均已由用户确认（见第 4 节）；2026-10-20 冻结默认关窗行为；构建与安装已双平台实机验证（见[实施清单 M1](scanner-implementation-plan.md#m1正式工程资源与会话底座)），最低系统与显示配置尚未实测。
+更新日期：2026-10-21。状态：界面、平台、结果处理、关窗、分发和浏览器入口均已由用户确认（见第 4 节）；2026-10-20 冻结默认关窗行为；2026-10-21 将 MyGo 从 v0.5.5 升级至 v0.6.2，macOS arm64 打包与识别自检通过；构建与安装已双平台实机验证（见[实施清单 M1](scanner-implementation-plan.md#m1正式工程资源与会话底座)），最低系统与显示配置尚未实测。
 
 本文维护界面框架选择、构建与分发影响、浏览器唤起依据和界面验收。会话所有权、隐藏恢复与退出顺序由[架构第 2、5 节](scanner-architecture.md#2-界面选择与应用层)维护，校对流程由 [T6](t6-review-export-workflow.md) 维护。
 
@@ -32,21 +32,21 @@ MyGo 的 [Menus and the tray](https://mygo.egoist.dev/docs/menus#tray-icons) 提
 
 ### 首轮框架与工具链候选
 
-正式功能使用 **MyGo v0.5.5 + Go 1.27.2**。v0.5.5 是当前最新发布版（2026-10-16 核对），固定提交 `4d8673cd2658a2c6e86b26c44751e57bf8174f91`，[go.mod](https://github.com/egoist/mygo/blob/4d8673cd2658a2c6e86b26c44751e57bf8174f91/go.mod) 要求 Go 1.27.1。main 分支在此之后的提交未发布，不跟随；升级时重新核对本文和架构中引用的源码行为。
+正式功能使用 **MyGo v0.6.2 + Go 1.27.2**。v0.6.2 是当前最新发布版（2026-10-21 核对），固定提交 `cf26587264f26ea68bd1b8abbf5c9723f35e0a70`，[go.mod](https://github.com/egoist/mygo/blob/cf26587264f26ea68bd1b8abbf5c9723f35e0a70/go.mod) 要求 Go 1.27.1。main 分支在此之后的提交未发布，不跟随；升级时重新核对本文和架构中引用的源码行为。
 
-选择依据：[v0.5.5 发布记录](https://github.com/egoist/mygo/releases/tag/v0.5.5)包含分栏布局和列表点击修复，并补齐了 cgo 文件的原生 UI 检查（[vet_ui.go](https://github.com/egoist/mygo/blob/4d8673cd2658a2c6e86b26c44751e57bf8174f91/cmd/mygo/vet_ui.go)）。2026-10-16 已在 v0.5.5 源码上复核本项目引用的单实例、cgo 默认值、资源合并、NSIS、深链接注册、文件对话框和 `App.Exit` 行为，与早先 v0.5.1 的阅读结论一致。
+当前版本由 2026-10-16 选定的 v0.5.5 升级而来。v0.5.5 的原选择依据是分栏布局、列表点击修复和 cgo 文件的原生 UI 检查（[vet_ui.go](https://github.com/egoist/mygo/blob/cf26587264f26ea68bd1b8abbf5c9723f35e0a70/cmd/mygo/vet_ui.go)）。2026-10-21 升级到 [v0.6.2 发布记录](https://github.com/egoist/mygo/releases/tag/v0.6.2)：v0.6.0 系列带来原生 UI 局部重绘与增量布局、loading 插件、安装器非 ASCII 路径修复等变化。升级后已在 v0.6.2 源码上复核本项目引用的单实例、cgo 默认值、资源合并、NSIS、深链接注册、文件对话框和 `App.Exit` 行为，未发现与 v0.5.5 阅读结论冲突；macOS arm64 打包与 `YOUKAI_SELFTEST` 识别自检通过。Windows 实机、安装器与自动更新链路未随本次升级重测，仍需按 [T7](t7-public-release-acceptance.md) 验收。
 
-本机 Go 已于 2026-10-15 经用户授权升级至 1.27.2（macOS arm64，SHA-256 与官网一致，签名与公证验证通过）。MyGo v0.5.5 已于 2026-10-16 固定为项目工具依赖（随工程初始化落地）；OCR 运行库与模型已由 fetchdeps 按固定摘要下载并随包分发（见 [T3](t3-ocr-runtime-model-samples.md#固定组合与制品静态核查)与[开发指南](../development.md)）；mingw-w64（`x86_64-w64-mingw32-gcc`）已安装。
+本机 Go 已于 2026-10-15 经用户授权升级至 1.27.2（macOS arm64，SHA-256 与官网一致，签名与公证验证通过）。MyGo 已于 2026-10-16 固定为项目工具依赖（随工程初始化落地，当时 v0.5.5；2026-10-21 升级至 v0.6.2）；OCR 运行库与模型已由 fetchdeps 按固定摘要下载并随包分发（见 [T3](t3-ocr-runtime-model-samples.md#固定组合与制品静态核查)与[开发指南](../development.md)）；mingw-w64（`x86_64-w64-mingw32-gcc`）已安装。
 
-[proc.go](https://github.com/egoist/mygo/blob/4d8673cd2658a2c6e86b26c44751e57bf8174f91/cmd/mygo/proc.go) 在未指定时设置 `CGO_ENABLED=0`。OCR 与 Mac 平台桥接要求显式启用 cgo 并使用目标平台 C 工具链。[Go 1.27](https://go.dev/doc/go1.27#ports) 已将 macOS 下限提高到 13，不能沿用 MyGo 官网的 macOS 12+；系统候选由 [T7](t7-public-release-acceptance.md#最低系统候选与证据)维护，OCR 制品与体积见 [T3](t3-ocr-runtime-model-samples.md#固定组合与制品静态核查)。
+[proc.go](https://github.com/egoist/mygo/blob/cf26587264f26ea68bd1b8abbf5c9723f35e0a70/cmd/mygo/proc.go) 在未指定时设置 `CGO_ENABLED=0`。OCR 与 Mac 平台桥接要求显式启用 cgo 并使用目标平台 C 工具链。[Go 1.27](https://go.dev/doc/go1.27#ports) 已将 macOS 下限提高到 13，不能沿用 MyGo 官网的 macOS 12+；系统候选由 [T7](t7-public-release-acceptance.md#最低系统候选与证据)维护，OCR 制品与体积见 [T3](t3-ocr-runtime-model-samples.md#固定组合与制品静态核查)。
 
 启动配置和服务注册不能有 OCR、模型或游戏探测的副作用；应用就绪时只安排后台预检，不在 `WhenReady` 主线程回调中加载模型。
 
 ### 资源和安装
 
-- `mygo dev` 与正式打包会合并目标平台资源，直接 `go run` / `go test` 使用未合并的目录（[resources.go](https://github.com/egoist/mygo/blob/4d8673cd2658a2c6e86b26c44751e57bf8174f91/cmd/mygo/resources.go)、[分发文档](https://mygo.egoist.dev/docs/distribution)）。应用组装时确定资源根，向 OCR 传入明确路径；测试显式提供资源根。开发时能加载不代表从开始菜单启动也能加载。
+- `mygo dev` 与正式打包会合并目标平台资源，直接 `go run` / `go test` 使用未合并的目录（[resources.go](https://github.com/egoist/mygo/blob/cf26587264f26ea68bd1b8abbf5c9723f35e0a70/cmd/mygo/resources.go)、[分发文档](https://mygo.egoist.dev/docs/distribution)）。应用组装时确定资源根，向 OCR 传入明确路径；测试显式提供资源根。开发时能加载不代表从开始菜单启动也能加载。
 - 模型、字典和原生运行库随版本分发，结果和截图写用户数据目录；安装后的用户不需要 Go、C 编译器或前端运行时。
-- NSIS 安装为每用户安装；在 Windows 上构建时可自动下载 NSIS，其他主机缺少 `makensis` 时只警告并跳过安装包，所以编译成功不代表已生成安装包。脚本没有 VC++ Runtime 安装步骤。[nsis.go](https://github.com/egoist/mygo/blob/4d8673cd2658a2c6e86b26c44751e57bf8174f91/cmd/mygo/nsis.go)
+- NSIS 安装为每用户安装；在 Windows 上构建时可自动下载 NSIS，其他主机缺少 `makensis` 时只警告并跳过安装包，所以编译成功不代表已生成安装包。脚本没有 VC++ Runtime 安装步骤。[nsis.go](https://github.com/egoist/mygo/blob/cf26587264f26ea68bd1b8abbf5c9723f35e0a70/cmd/mygo/nsis.go)
 - MyGo 可生成 macOS `.app` 与 DMG，本地签名和 DMG 制作在 macOS 上执行。按用户选择采用 ad-hoc 签名，Developer ID 与公证不作为首版前提；路线见 [T7 第 3 节](t7-public-release-acceptance.md#3-不依赖付费证书的打包路线)。
 - 双平台正式制品分别在对应系统构建和验收；日常开发与 Windows 测试安排见[实施清单](scanner-implementation-plan.md#开发与-windows-测试方式)。
 
@@ -54,13 +54,13 @@ MyGo 的 [Menus and the tray](https://mygo.egoist.dev/docs/menus#tray-icons) 提
 
 用户于 2026-10-16 确认“唤起桌面 app”：网页链接唤起已安装的原生应用，链接为 `youkai://open`，已在项目清单注册。启动、恢复和扫描中收到链接的行为由[架构第 2 节](scanner-architecture.md#浏览器唤起桌面应用)维护。
 
-用户另问过浏览器内界面的可行性：v0.5.5 有 `web` / `js/wasm` 构建路径，可把原生 UI 编译为 WebAssembly（[web.go](https://github.com/egoist/mygo/blob/4d8673cd2658a2c6e86b26c44751e57bf8174f91/cmd/mygo/web.go)），但桌面采集、输入和 cgo OCR 不会因此进入浏览器，需另做本机通信、鉴权与断线处理。这只是可行性答复，不在首版范围。
+用户另问过浏览器内界面的可行性：v0.6.2 有 `web` / `js/wasm` 构建路径，可把原生 UI 编译为 WebAssembly（[web.go](https://github.com/egoist/mygo/blob/cf26587264f26ea68bd1b8abbf5c9723f35e0a70/cmd/mygo/web.go)），但桌面采集、输入和 cgo OCR 不会因此进入浏览器，需另做本机通信、鉴权与断线处理。这只是可行性答复，不在首版范围。
 
 | 依据 | 框架能力与集成要求 |
 | --- | --- |
-| [深链接文档](https://mygo.egoist.dev/docs/app#deep-links)、[deeplink.go](https://github.com/egoist/mygo/blob/4d8673cd2658a2c6e86b26c44751e57bf8174f91/deeplink.go) | 构建配置支持 `urlSchemes`，应用通过 `OnOpenURL` 接收 URL；监听须在 `Run` 前注册才能收到启动时的链接。Windows 的后续启动经单实例转交现有实例，处理器仍须校验路由。 |
-| [nsis.go](https://github.com/egoist/mygo/blob/4d8673cd2658a2c6e86b26c44751e57bf8174f91/cmd/mygo/nsis.go) | 按 URLSchemes 在 HKCU 写入协议注册，卸载时删除。安装、升级与卸载后的处理器归属须验证。 |
-| [bundle.go](https://github.com/egoist/mygo/blob/4d8673cd2658a2c6e86b26c44751e57bf8174f91/cmd/mygo/bundle.go)、[Darwin 注册](https://github.com/egoist/mygo/blob/4d8673cd2658a2c6e86b26c44751e57bf8174f91/internal/darwin/deeplink.go) | 应用包写入 `CFBundleURLTypes`（只填名称与 scheme）；运行时注册不能代替构建声明。需验证 DMG 拖拽安装后的识别、首次唤起和多副本归属。 |
+| [深链接文档](https://mygo.egoist.dev/docs/app#deep-links)、[deeplink.go](https://github.com/egoist/mygo/blob/cf26587264f26ea68bd1b8abbf5c9723f35e0a70/deeplink.go) | 构建配置支持 `urlSchemes`，应用通过 `OnOpenURL` 接收 URL；监听须在 `Run` 前注册才能收到启动时的链接。Windows 的后续启动经单实例转交现有实例，处理器仍须校验路由。 |
+| [nsis.go](https://github.com/egoist/mygo/blob/cf26587264f26ea68bd1b8abbf5c9723f35e0a70/cmd/mygo/nsis.go) | 按 URLSchemes 在 HKCU 写入协议注册，卸载时删除。安装、升级与卸载后的处理器归属须验证。 |
+| [bundle.go](https://github.com/egoist/mygo/blob/cf26587264f26ea68bd1b8abbf5c9723f35e0a70/cmd/mygo/bundle.go)、[Darwin 注册](https://github.com/egoist/mygo/blob/cf26587264f26ea68bd1b8abbf5c9723f35e0a70/internal/darwin/deeplink.go) | 应用包写入 `CFBundleURLTypes`（只填名称与 scheme）；运行时注册不能代替构建声明。需验证 DMG 拖拽安装后的识别、首次唤起和多副本归属。 |
 
 浏览器可能要求用户确认打开外部应用，不承诺静默打开；本项目不替用户修改浏览器策略（如 [Edge AutoLaunchProtocolsFromOrigins](https://learn.microsoft.com/en-us/deployedge/microsoft-edge-policies/AutoLaunchProtocolsFromOrigins)）。新增成本在安装注册、URL 分发与扫描状态衔接及双平台浏览器验收，不需要 Web UI、本地 Web 服务或浏览器扩展。
 
@@ -79,7 +79,7 @@ MyGo 的 [Menus and the tray](https://mygo.egoist.dev/docs/menus#tray-icons) 提
 | 扫描与校对节奏 | 扫描时游戏保持前台，完成或停止后校对，须明确告知。 | 开始前展示前台要求，扫描器可隐藏。 |
 | 扫描中关闭主窗口 | 默认隐藏到托盘或菜单栏并继续运行；设置可改为“关闭即停止并退出”，明确退出才停止、保存并退出。 | 托盘或菜单栏提供返回入口。 |
 | 分发形式 | Windows 安装包，macOS DMG 拖拽安装，不走官方渠道。 | 两种制品分别验收安装、数据路径和首次打开。 |
-| 自动更新 | 首版包含（2026-10-16）：MyGo v0.5.5 内置更新，从 GitHub Releases（`LoTwT/youkai`）获取经 MyGo 更新密钥签名的版本。 | 更新公钥自 0.0.1 内置；私钥不进仓库，扫描中不安装更新，测试版与正式版渠道分开；规则见[架构第 6 节](scanner-architecture.md#6-首版功能范围)。 |
+| 自动更新 | 首版包含（2026-10-16 确认）：MyGo v0.6.2 内置更新，从 GitHub Releases（`LoTwT/youkai`）获取经 MyGo 更新密钥签名的版本。 | 更新公钥自 0.0.1 内置；私钥不进仓库，扫描中不安装更新，测试版与正式版渠道分开；规则见[架构第 6 节](scanner-architecture.md#6-首版功能范围)。 |
 | 识别资源 | 完整包随附模型、字典与运行库，首次启动无需下载。 | 安装包更大，但省去首次下载与版本匹配；云游戏仍需联网。 |
 | 浏览器入口 | 网页唤起桌面 App（2026-10-16）。 | 按第 3 节实现与验收深链接。 |
 | 交付标准 | 正常构建打包，不准备 Apple Developer 会员或 Windows 证书；用户在测试前准备环境。 | 付费签名、公证和上架不作为首版前提，见 [T7](t7-public-release-acceptance.md)。 |
@@ -120,7 +120,7 @@ MyGo 按平台和架构构建并合并资源，目标为 `windows/amd64` 与 `da
 
 据此，“结果列表 + 图片证据 + 字段表单”不需要先自建控件库。
 
-**上游性能数据（v0.5.1，本项目未复跑，v0.5.5 未重新测量）：** 官方 2026-10-15 的 Windows amd64 基准（Go 1.27.1，六次中位数）中，`counter-native` 示例体积 9.37 MB、启动 6 秒后空闲私有工作集 12.15 MB；`BenchmarkListScroll`（百万变高行、无窗口 CPU 渲染）0.6873 ms/次。[原始数据](https://raw.githubusercontent.com/egoist/mygo/benchmarks/history/2026-10-14.json) · [基准源码](https://github.com/egoist/mygo/blob/408b4def1f3e6a8d3fac852396b4a46d82ba22a3/ui/list_test.go#L1118)。这些示例没有 OCR、模型、截图或游戏并行负载，只说明原生 UI 有较低占用的潜力，不能当作 youkai 的预算。
+**上游性能数据（v0.5.1，本项目未复跑，v0.6.2 未重新测量）：** 官方 2026-10-15 的 Windows amd64 基准（Go 1.27.1，六次中位数）中，`counter-native` 示例体积 9.37 MB、启动 6 秒后空闲私有工作集 12.15 MB；`BenchmarkListScroll`（百万变高行、无窗口 CPU 渲染）0.6873 ms/次。[原始数据](https://raw.githubusercontent.com/egoist/mygo/benchmarks/history/2026-10-14.json) · [基准源码](https://github.com/egoist/mygo/blob/408b4def1f3e6a8d3fac852396b4a46d82ba22a3/ui/list_test.go#L1118)。这些示例没有 OCR、模型、截图或游戏并行负载，只说明原生 UI 有较低占用的潜力，不能当作 youkai 的预算。
 
 渲染只在输入、显式失效或动画时发生，空闲窗口不持续重绘；但持续刷新进度、重复解码图片仍会产生开销，缩略图与证据缓存必须有界。`MYGO_FRAME_STATS` 可分解构建、布局、绘制与呈现耗时，用于后续定位。
 

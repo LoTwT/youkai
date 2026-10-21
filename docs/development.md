@@ -1,20 +1,20 @@
 # 开发指南
 
-更新日期：2026-10-18。本文维护环境要求与本仓库当前实际可用的开发命令；范围与里程碑安排见[实施清单](specs/scanner-implementation-plan.md)，构建与分发决策见 [T7](specs/t7-public-release-acceptance.md)。
+更新日期：2026-10-21。本文维护环境要求与本仓库当前实际可用的开发命令；范围与里程碑安排见[实施清单](specs/scanner-implementation-plan.md)，构建与分发决策见 [T7](specs/t7-public-release-acceptance.md)。
 
 ## 环境要求
 
 | 工具 | 要求与用途 |
 | --- | --- |
-| Go | 1.27.2（`go.mod` 固定 `go 1.27.2`；MyGo v0.5.5 要求 1.27.1+）。 |
-| MyGo | v0.5.5，作为 Go tool 依赖固定在 `go.mod`（`tool github.com/egoist/mygo/cmd/mygo`），经 `go tool mygo` 使用，不依赖全局安装的 `mygo` 命令。 |
+| Go | 1.27.2（`go.mod` 固定 `go 1.27.2`；MyGo v0.6.2 要求 1.27.1+）。 |
+| MyGo | v0.6.2，作为 Go tool 依赖固定在 `go.mod`（`tool github.com/egoist/mygo/cmd/mygo`），经 `go tool mygo` 使用，不依赖全局安装的 `mygo` 命令。 |
 | Xcode 命令行工具 | macOS 打包所需（`codesign`、`hdiutil`、SDK）；开发机 `xcode-select` 指向 `/Applications/Xcode.app`。 |
 | mingw-w64 | 本机已安装（`/opt/homebrew/bin/x86_64-w64-mingw32-gcc`，Homebrew mingw-w64 14.0.0_3）。`internal/recognition` 的 OCR 绑定（onnxruntime_go）需要 cgo，Mac 上交叉编译 Windows 目标时用作 `CC`。 |
 | makensis | 本机已安装（v3.13）。macOS 上交叉构建 Windows 平台时也会产出 NSIS 安装包；未安装时 MyGo 仅警告并跳过安装包。 |
 
 不使用 Web 前端：`mygo.json` 为纯原生 UI 配置，无需 Bun、Node.js 或 WebView2。
 
-cgo 说明：`internal/recognition` 依赖 cgo 编译 onnxruntime_go 的 C 桥接。直接调用的 `go build`/`go vet`/`go test` 与 `go tool mygo vet .` 在原生构建下默认 `CGO_ENABLED=1`，无需处理。`go tool mygo dev` 与 `go tool mygo build` 则遵循 MyGo v0.5.5 的行为：环境未显式设置 `CGO_ENABLED` 时，MyGo 给子进程设置 `CGO_ENABLED=0`（[T1](specs/t1-mygo-ui-distribution.md) 已记录，显式设置时尊重用户值）。`cmd/youkai` 经应用服务引用识别包，因此必须以 `CGO_ENABLED=1 go tool mygo dev`、`CGO_ENABLED=1 go tool mygo build` 的方式调用，否则 cgo 包编译失败。识别器由应用服务在第一次接受的开始请求时才创建（`internal/app` 的懒加载），包初始化与就绪回调不加载任何原生库与模型（见[架构第 4 节](specs/scanner-architecture.md#4-ocr原生资源与构建)）。
+cgo 说明：`internal/recognition` 依赖 cgo 编译 onnxruntime_go 的 C 桥接。直接调用的 `go build`/`go vet`/`go test` 与 `go tool mygo vet .` 在原生构建下默认 `CGO_ENABLED=1`，无需处理。`go tool mygo dev` 与 `go tool mygo build` 则遵循 MyGo v0.6.2 的行为：环境未显式设置 `CGO_ENABLED` 时，MyGo 给子进程设置 `CGO_ENABLED=0`（[T1](specs/t1-mygo-ui-distribution.md) 已记录，显式设置时尊重用户值）。`cmd/youkai` 经应用服务引用识别包，因此必须以 `CGO_ENABLED=1 go tool mygo dev`、`CGO_ENABLED=1 go tool mygo build` 的方式调用，否则 cgo 包编译失败。识别器由应用服务在第一次接受的开始请求时才创建（`internal/app` 的懒加载），包初始化与就绪回调不加载任何原生库与模型（见[架构第 4 节](specs/scanner-architecture.md#4-ocr原生资源与构建)）。
 
 ## 用开发数据源跑一次完整扫描
 

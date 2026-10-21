@@ -6,6 +6,22 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
+// TestPageLayoutRailStaysCompact guards the 64-DIP navigation rail against
+// Fill() expanding it: the settings label must stay inside the rail's bounds.
+func TestPageLayoutRailStaysCompact(t *testing.T) {
+	m, q := newTestModel(t, Config{Service: &fakeService{}, PageLayout: true})
+	tt := ui.NewTester(m.View, 1020, 700)
+	settle(t, m, q, tt)
+
+	rect, ok := tt.Find("设置")
+	if !ok {
+		t.Fatal("the settings label is missing")
+	}
+	if rect.X+rect.W > 64 {
+		t.Fatalf("settings label at %+v, want inside the 64-DIP rail", rect)
+	}
+}
+
 func TestPageLayoutTabsRouteToEachPage(t *testing.T) {
 	m, q := newTestModel(t, Config{Service: &fakeService{}, PageLayout: true})
 	tt := ui.NewTester(m.View, 1020, 700)
