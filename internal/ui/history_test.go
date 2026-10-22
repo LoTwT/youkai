@@ -3,6 +3,7 @@ package ui
 import (
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -785,6 +786,10 @@ func TestHistoryCompositeSnapsPreciseScrollToRowsAt860(t *testing.T) {
 		t.Fatalf("the table footer is missing: %q", tt.Texts())
 		return 0
 	}
+	rest := func() {
+		tt.Advance(historySnapDelay + 40*time.Millisecond)
+		tt.Frame()
+	}
 	check := func(stage string, wantOffset, wantFirst int) {
 		t.Helper()
 		if got := m.historyScroll.Y; got != float32(wantOffset) {
@@ -820,16 +825,20 @@ func TestHistoryCompositeSnapsPreciseScrollToRowsAt860(t *testing.T) {
 		}
 	}
 
-	// A precise 26-DIP move leaves the tracked offset at 26 before the
-	// frame builds; the view snaps it to the nearest row boundary.
+	// A precise 26-DIP move leaves the tracked offset at 26 until the
+	// motion stops; the rest snap then aligns it with the next row.
 	tt.Scroll(400, 300, 0, 26)
 	tt.Frame()
+	if got := m.historyScroll.Y; got != 26 {
+		t.Fatalf("the move was snapped mid-input: offset %v", got)
+	}
+	rest()
 	check("after 26 DIP", historyRowHeight860, 1)
 
 	// Repeated moves keep snapping forward one whole row instead of
 	// accumulating half rows.
 	tt.Scroll(400, 300, 0, 26)
-	tt.Frame()
+	rest()
 	check("after another 26 DIP", 2*historyRowHeight860, 2)
 
 	// A single small move below half a row stays where it is, so the next
@@ -841,6 +850,7 @@ func TestHistoryCompositeSnapsPreciseScrollToRowsAt860(t *testing.T) {
 	}
 	tt.Scroll(400, 300, 0, 20)
 	tt.Frame()
+	rest()
 	check("after two small moves", 3*historyRowHeight860, 3)
 
 	// Stopping between rows snaps to the nearest one once the debounce
@@ -850,7 +860,50 @@ func TestHistoryCompositeSnapsPreciseScrollToRowsAt860(t *testing.T) {
 	if got := m.historyScroll.Y; got != 3*historyRowHeight860+10 {
 		t.Fatalf("the short move did not stay for the rest snap: offset %v", got)
 	}
-	tt.Advance(historySnapDelay + 40*time.Millisecond)
-	tt.Frame()
+	rest()
 	check("after the rest snap", 3*historyRowHeight860, 3)
+}
+
+// TestHistoryCompositeWheelKeepsFullTravelAt860 checks a mouse wheel's
+// animating scroll: the composite may only snap after the glide stops, so
+// a 120-DIP wheel moves at least two whole rows instead of being cut to
+// the first row by a mid-animation offset write. The header and the fixed
+// action column stay in place.
+func TestHistoryCompositeWheelKeepsFullTravelAt860(t *testing.T) {
+	for _, delta := range []float32{120, 600} {
+		t.Run(fmt.Sprintf("delta%d", int(delta)), func(t *testing.T) {
+			svc := &fakeService{history: historyTableRecords(40)}
+			m, q := newTestModel(t, Config{Service: svc, PageLayout: true})
+			m.SetContentSize(860, 560)
+			tt := ui.NewTester(m.View, 860, 560)
+			settle(t, m, q, tt)
+			header, _ := tt.Find("时间")
+			action, _ := tt.Find("操作")
+			if m.historyScroll.Y != 0 {
+				t.Fatalf("the table does not start at the top: Y=%v", m.historyScroll.Y)
+			}
+
+			tt.Wheel(450, 300, 0, delta)
+			tt.Advance(time.Second)
+			settle(t, m, q, tt)
+
+			got := m.historyScroll.Y
+			if math.Abs(float64(got-delta)) > historyRowHeight860/2 {
+				t.Fatalf("wheel travel truncated beyond nearest-row quantization: requested=%v actual=%v",
+					delta, got)
+			}
+			if math.Mod(float64(got), historyRowHeight860) != 0 {
+				t.Fatalf("the wheel stopped between rows: Y=%v", got)
+			}
+			if first, _ := m.historyList.Visible(); first != int(math.Round(float64(got/historyRowHeight860))) {
+				t.Fatalf("the list is not at the snapped row: Y=%v first=%d", got, first)
+			}
+			headerAfter, _ := tt.Find("时间")
+			actionAfter, _ := tt.Find("操作")
+			if headerAfter.Y != header.Y || actionAfter.X != action.X {
+				t.Fatalf("the header/action column moved: %+v -> %+v, %+v -> %+v",
+					header, headerAfter, action, actionAfter)
+			}
+		})
+	}
 }

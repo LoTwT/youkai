@@ -569,6 +569,10 @@ func (m *Model) saveEdit(action reviewAction, after func()) {
 	if m.edit == nil || m.reviewSaving {
 		return
 	}
+	if m.recErr != "" {
+		m.reviewErr = "记录读取失败，不能保存或确认旧快照。"
+		return
+	}
 	if m.loading {
 		m.reviewErr = "正在加载最新检查点，加载完成前不能保存或确认。"
 		return
@@ -611,6 +615,13 @@ func (m *Model) confirmCurrentStay() {
 // opening the editor.
 func (m *Model) confirmCurrentAction(action reviewAction) {
 	if m.reviewSaving {
+		return
+	}
+	if m.recErr != "" {
+		// The displayed record is only the last good snapshot; a failed
+		// load must not let a confirmation write it over the record on
+		// disk.
+		m.reviewErr = "记录读取失败，不能确认旧快照。"
 		return
 	}
 	if m.loading {
