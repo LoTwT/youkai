@@ -60,6 +60,23 @@ type editState struct {
 	check       app.DataCheck
 }
 
+// reviewAction is one save/confirmation the results page can request. A
+// confirmation may stay on the current item (the secondary action) or move
+// to the next pending one (the primary action); a plain save never changes
+// the item's review quality.
+type reviewAction int
+
+const (
+	reviewSave reviewAction = iota
+	reviewConfirmStay
+	reviewConfirmNext
+)
+
+// confirmed reports whether the action settles the item's review.
+func (a reviewAction) confirmed() bool {
+	return a == reviewConfirmStay || a == reviewConfirmNext
+}
+
 // navKind is a pending navigation the editor must resolve first.
 type navKind int
 
@@ -431,6 +448,7 @@ func (m *Model) startEdit() {
 	m.navPrompt = nil
 	m.reviewErr = ""
 	m.reviewNotice = ""
+	m.lastAction = reviewSave
 }
 
 // clearEdit closes the editor without saving.
@@ -444,6 +462,7 @@ func (m *Model) discardEdit() {
 	m.navPrompt = nil
 	m.reviewErr = ""
 	m.reviewNotice = ""
+	m.lastAction = reviewSave
 	m.catchUpLive()
 }
 
@@ -511,7 +530,7 @@ func (m *Model) promptSaveAndContinue() {
 		m.runNavigation(req)
 		return
 	}
-	m.saveEdit(false, func() { m.runNavigation(req) })
+	m.saveEdit(reviewSave, func() { m.runNavigation(req) })
 }
 
 // promptDiscardAndContinue drops the editor, then runs the held
@@ -537,34 +556,49 @@ func (m *Model) promptStay() {
 
 // saveEdit validates and submits the open editor. after runs only after a
 // successful save (and after the editor settled), never on failure.
-func (m *Model) saveEdit(confirm bool, after func()) {
+func (m *Model) saveEdit(action reviewAction, after func()) {
 	if m.edit == nil || m.reviewSaving {
 		return
 	}
+	m.lastAction = action
 	m.edit.refresh()
 	if len(m.edit.fieldErrors) > 0 || len(m.edit.check.Blocking) > 0 {
 		m.reviewErr = "请先修正标出的字段错误，未保存。"
 		return
 	}
-	if confirm && !m.edit.check.Confirmable() {
+	if action.confirmed() && !m.edit.check.Confirmable() {
 		m.reviewErr = "必需字段仍未读取或校验未通过，不能确认。"
 		return
 	}
-	if !confirm && !m.edit.dirty() {
+	if action == reviewSave && !m.edit.dirty() {
 		m.reviewNotice = "没有修改需要保存。"
 		return
 	}
-	m.submitReview(m.edit.recordID, m.edit.seq, m.edit.baseRevision, m.edit.data, confirm, after)
+	m.submitReview(m.edit.recordID, m.edit.seq, m.edit.baseRevision, m.edit.data, action, after)
 }
 
-// confirmCurrent confirms the selected row as it stands, without opening
-// the editor.
+// confirmCurrent confirms the selected row as it stands and moves to the
+// next pending item when one follows.
 func (m *Model) confirmCurrent() {
+	m.confirmCurrentAction(reviewConfirmNext)
+}
+
+// confirmCurrentStay confirms the selected row without moving away from
+// it. A non-final row stays in the pending segment, marked as confirmed,
+// until the page is left or the record is reloaded.
+func (m *Model) confirmCurrentStay() {
+	m.confirmCurrentAction(reviewConfirmStay)
+}
+
+// confirmCurrentAction confirms the selected row as it stands, without
+// opening the editor.
+func (m *Model) confirmCurrentAction(action reviewAction) {
 	if m.reviewSaving || m.rec == nil || m.selected < 0 || m.selected >= len(m.rec.Rows) {
 		return
 	}
+	m.lastAction = action
 	row := &m.rec.Rows[m.selected]
-	if row.Status != record.StatusProduced || row.Structured == nil {
+	if row.Status != record.StatusProduced || row.Structured == nil || !row.PendingReview() {
 		return
 	}
 	check := app.CheckDiscData(row.Structured.Data)
@@ -572,22 +606,22 @@ func (m *Model) confirmCurrent() {
 		m.reviewErr = "当前修订还有未读取或未通过的字段，不能确认。"
 		return
 	}
-	m.submitReview(m.rec.ID, row.Seq, row.Revision, row.Structured.Data, true, nil)
+	m.submitReview(m.rec.ID, row.Seq, row.Revision, row.Structured.Data, action, nil)
 }
 
 // submitReview schedules one save/confirmation. The captured identity and
 // serial mean a late response can only update the item it was sent for.
-func (m *Model) submitReview(recordID string, seq, expectedRevision int64, data zzz.DiscData, confirm bool, after func()) {
+func (m *Model) submitReview(recordID string, seq, expectedRevision int64, data zzz.DiscData, action reviewAction, after func()) {
 	m.reviewSerial++
 	serial := m.reviewSerial
 	m.reviewSaving = true
 	m.reviewErr = ""
 	m.reviewNotice = ""
-	m.lastConfirm = confirm
+	m.lastAction = action
 	m.goAsync(func() {
 		result, err := m.cfg.Service.SaveItemRevision(recordID, seq, expectedRevision, app.ItemRevisionEdit{
 			Data:      data,
-			Confirmed: confirm,
+			Confirmed: action.confirmed(),
 		})
 		m.update(func() {
 			if serial != m.reviewSerial {
@@ -616,7 +650,9 @@ func (m *Model) submitReview(recordID string, seq, expectedRevision int64, data 
 			}
 			m.navPrompt = nil
 			m.reviewErr = ""
-			if confirm {
+			switch action {
+			case reviewConfirmNext:
+				m.forgetRecentlyConfirmed(seq)
 				next := m.nextPendingAfter(seq)
 				if next >= 0 {
 					m.selected = next
@@ -629,7 +665,18 @@ func (m *Model) submitReview(recordID string, seq, expectedRevision int64, data 
 				default:
 					m.reviewNotice = fmt.Sprintf("已确认并定位下一项（序号 %d）。", m.rec.Rows[next].Seq)
 				}
-			} else {
+			case reviewConfirmStay:
+				m.forgetRecentlyConfirmed(seq)
+				if m.pendingCount() == 0 {
+					// The last pending item completes the review even
+					// though the action asked to stay.
+					m.reviewNotice = m.pendingText()
+					break
+				}
+				m.markRecentlyConfirmed(seq)
+				m.reviewNotice = fmt.Sprintf("已确认（序号 %d），仍停留在当前项。", seq)
+			default:
+				m.forgetRecentlyConfirmed(seq)
 				m.reviewNotice = fmt.Sprintf("已保存修订 %d。", result.Item.Revision)
 			}
 			m.catchUpLive()

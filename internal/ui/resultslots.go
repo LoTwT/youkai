@@ -54,6 +54,11 @@ type resultSlotState struct {
 	selectedSequence int64
 	scroll           int
 
+	// recentlyConfirmed holds items confirmed with the "confirm and stay"
+	// action. They remain visible in the pending segment, marked as
+	// confirmed, until the page is left or the record is reloaded.
+	recentlyConfirmed map[int64]bool
+
 	// The slot's frozen export snapshot and its outcome.
 	exportData     *app.UsableExport
 	exportBuildErr string
@@ -92,6 +97,46 @@ func (m *Model) activeResultSlot() *resultSlot {
 	return m.resultSlotFor(m.activeSlot)
 }
 
+// markRecentlyConfirmed keeps one confirmed item visible in the active
+// slot's pending segment for the rest of this visit.
+func (m *Model) markRecentlyConfirmed(seq int64) {
+	if m.recentlyConfirmed == nil {
+		m.recentlyConfirmed = make(map[int64]bool)
+		m.activeResultSlot().state.recentlyConfirmed = m.recentlyConfirmed
+	}
+	m.recentlyConfirmed[seq] = true
+}
+
+// forgetRecentlyConfirmed drops one item's temporary pending marker.
+func (m *Model) forgetRecentlyConfirmed(seq int64) {
+	delete(m.recentlyConfirmed, seq)
+	delete(m.activeResultSlot().state.recentlyConfirmed, seq)
+}
+
+// clearRecentlyConfirmed drops every temporary marker of the active slot
+// on leaving the results page or reloading its record.
+func (m *Model) clearRecentlyConfirmed() {
+	m.recentlyConfirmed = nil
+	m.activeResultSlot().state.recentlyConfirmed = nil
+}
+
+// clearRecentlyConfirmedFor drops a destination's temporary markers when
+// it becomes active again, so a confirmed row does not survive a visit.
+func (m *Model) clearRecentlyConfirmedFor(kind resultSlotKind) {
+	slot := m.resultSlotFor(kind)
+	slot.state.recentlyConfirmed = nil
+	if m.activeSlot == kind {
+		m.recentlyConfirmed = nil
+	}
+}
+
+// recentlyConfirmedNow reports whether row is the current visit's
+// just-confirmed item, visible in the pending segment only.
+func (m *Model) recentlyConfirmedNow(row *Row) bool {
+	return m.filter == resultFilterPending && m.recentlyConfirmed != nil &&
+		m.recentlyConfirmed[row.Seq]
+}
+
 // captureActiveResult stores the rendered state back into its slot. It runs
 // before a switch so the destination keeps filters, selection, scroll and
 // the export snapshot for its next visit.
@@ -111,6 +156,9 @@ func (m *Model) activateResultSlot(kind resultSlotKind) {
 	if m.activeSlot != kind {
 		m.captureActiveResult()
 		m.activeSlot = kind
+		// A new visit never keeps the previous visit's just-confirmed
+		// rows in the pending segment.
+		m.clearRecentlyConfirmedFor(kind)
 	}
 	m.resultSlotState = m.resultSlotFor(kind).state
 	m.resetResultList()
@@ -120,7 +168,7 @@ func (m *Model) activateResultSlot(kind resultSlotKind) {
 	m.navPrompt = nil
 	m.reviewErr = ""
 	m.reviewNotice = ""
-	m.lastConfirm = false
+	m.lastAction = reviewSave
 }
 
 // resetResultList clears the table's per-destination scroll and selection
@@ -180,7 +228,7 @@ func (m *Model) showLiveSession(id string) {
 	m.navPrompt = nil
 	m.reviewErr = ""
 	m.reviewNotice = ""
-	m.lastConfirm = false
+	m.lastAction = reviewSave
 }
 
 // reloadSessionRecord reloads the session slot even while history is the
@@ -245,6 +293,9 @@ func (m *Model) applyLoadedRecord(slot *resultSlot, id string, rec *record.Recov
 	slot.state.recErr = ""
 	slot.state.exportData = export
 	slot.state.exportBuildErr = buildErr
+	// A reload is a refresh: confirmed rows no longer linger in the
+	// pending segment.
+	slot.state.recentlyConfirmed = nil
 	slot.state.selected = selected
 	slot.state.selectedSequence = 0
 	if selected >= 0 && selected < len(view.Rows) {
@@ -265,6 +316,7 @@ func (m *Model) applyLoadedRecord(slot *resultSlot, id string, rec *record.Recov
 	m.recErr = ""
 	m.exportData = export
 	m.exportBuildErr = buildErr
+	m.recentlyConfirmed = nil
 	m.selected = selected
 	m.selectedSequence = slot.state.selectedSequence
 	m.scroll = slot.state.scroll

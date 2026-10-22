@@ -59,6 +59,10 @@ func (m *Model) exportBlockedReason() string {
 		return "扫描尚未收尾，结束后可导出已保存的固定修订。"
 	case m.exportBuildErr != "":
 		return "无法生成导出：" + m.exportBuildErr
+	case m.exportData == nil:
+		return "导出清单尚未就绪，不能导出。"
+	case m.exportData.Summary.Included == 0:
+		return "没有可导出的条目，不能导出。"
 	default:
 		return ""
 	}

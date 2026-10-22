@@ -56,6 +56,16 @@ func resultStatusColumnText(row *Row) string {
 	}
 }
 
+// resultStatusText renders a table row's status, naming the current
+// visit's just-confirmed item as such while it lingers in the pending
+// segment.
+func (m *Model) resultStatusText(row *Row) string {
+	if m.recentlyConfirmedNow(row) {
+		return "已确认"
+	}
+	return resultStatusColumnText(row)
+}
+
 // visibleResultRows maps the rendered table to the record's rows. The
 // four-page shell filters by the slot's segment, search text and set/slot
 // choices; the legacy single-column view keeps showing every row.
@@ -77,7 +87,7 @@ func (m *Model) visibleResultRows() []int {
 func (m *Model) resultRowMatches(row *Row) bool {
 	switch m.filter {
 	case resultFilterPending:
-		if !row.PendingReview() {
+		if !row.PendingReview() && !m.recentlyConfirmedNow(row) {
 			return false
 		}
 	case resultFilterUnexportable:
@@ -562,7 +572,7 @@ func (m *Model) evidenceStacked() bool {
 // pages open a row with Return; both detail layouts confirm the chosen row
 // with ⌘↵ and move with ⌘J.
 func (m *Model) resultShortcutText() string {
-	if m.rec == nil || len(m.rec.Rows) == 0 {
+	if m.rec == nil || len(m.rec.Rows) == 0 || m.completionVisible() {
 		return ""
 	}
 	if m.narrowResults() && !m.resultsDetail {

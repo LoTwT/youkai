@@ -55,6 +55,10 @@ func (m *Model) viewPages(c *ui.Context) {
 	t := c.Theme()
 	if m.displayPage() == pageResults {
 		m.registerResultsShortcuts(c)
+	} else {
+		// Confirmed rows linger in the pending segment only for the
+		// current results visit; leaving the destination refreshes it.
+		m.clearRecentlyConfirmed()
 	}
 
 	ui.Row(c).Fill().Children(func() {
@@ -221,6 +225,9 @@ func (m *Model) statusShortcutText() string {
 func (m *Model) pageStatusText() string {
 	switch m.displayPage() {
 	case pageResults:
+		if m.completionVisible() {
+			return m.completionStatusText()
+		}
 		return m.pendingText()
 	case pageHistory:
 		return fmt.Sprintf("已加载 %d 条历史记录", len(m.history))
