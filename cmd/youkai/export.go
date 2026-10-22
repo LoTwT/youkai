@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/LoTwT/youkai/internal/app"
+	"github.com/LoTwT/youkai/internal/ui"
 	"github.com/egoist/mygo"
 )
 
@@ -56,6 +57,91 @@ func (s fileExportSaver) Save(format app.ExportFormat, defaultName string, data 
 		return "", fmt.Errorf("写入 %q：%w", path, err)
 	}
 	return path, nil
+}
+
+// SaveDirect implements ui.DirectExportSaver: the page shell writes into
+// the system downloads directory without a save dialog. An existing name is
+// never replaced; the writer picks the next numbered name instead.
+func (s fileExportSaver) SaveDirect(format app.ExportFormat, defaultName string, data []byte) (string, error) {
+	dir, err := mygo.App.Path(mygo.PathDownloads)
+	if err != nil {
+		return "", &ui.ExportDirectoryError{Err: err}
+	}
+	if dir == "" {
+		return "", &ui.ExportDirectoryError{Err: errors.New("系统未提供下载目录")}
+	}
+	path, err := writeDirectExport(dir, defaultName, data)
+	if err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+// directExportNameAttempts bounds the numbered-name search. Reaching it
+// means the directory holds an implausible number of same-named files.
+const directExportNameAttempts = 1000
+
+// writeDirectExport writes data under dir without overwriting an existing
+// file. It reserves the first free name with an exclusive create, then
+// atomically replaces that reservation with the synced file. A failed write
+// removes the reservation and leaves every existing export untouched.
+func writeDirectExport(dir, defaultName string, data []byte) (string, error) {
+	path, err := reserveDirectExportPath(dir, defaultName)
+	if err != nil {
+		return "", err
+	}
+	if err := writeExportFile(path, data); err != nil {
+		_ = os.Remove(path)
+		if errors.Is(err, os.ErrPermission) || errors.Is(err, os.ErrNotExist) {
+			return "", &ui.ExportDirectoryError{Directory: dir, Err: err}
+		}
+		return "", fmt.Errorf("写入 %q：%w", path, err)
+	}
+	return path, nil
+}
+
+// reserveDirectExportPath claims the first free numbered name. The
+// exclusive create closes the check-then-write race, so two exports never
+// choose the same file.
+func reserveDirectExportPath(dir, defaultName string) (string, error) {
+	name := filepath.Base(defaultName)
+	if name == "" || name == "." || name == string(filepath.Separator) {
+		return "", &ui.ExportDirectoryError{Directory: dir, Err: errors.New("导出文件名无效")}
+	}
+	for attempt := 0; attempt < directExportNameAttempts; attempt++ {
+		candidate := filepath.Join(dir, numberedExportName(name, attempt))
+		file, err := os.OpenFile(candidate, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+		if errors.Is(err, os.ErrExist) {
+			continue
+		}
+		if err != nil {
+			return "", &ui.ExportDirectoryError{Directory: dir, Err: err}
+		}
+		if err := file.Close(); err != nil {
+			_ = os.Remove(candidate)
+			return "", &ui.ExportDirectoryError{Directory: dir, Err: err}
+		}
+		return candidate, nil
+	}
+	return "", &ui.ExportDirectoryError{
+		Directory: dir,
+		Err:       errors.New("同名导出文件过多，无法选择新文件名"),
+	}
+}
+
+// numberedExportName inserts the conflict counter before the extension:
+// name.youkai.json, name.youkai-1.json, name.youkai-2.json.
+func numberedExportName(name string, attempt int) string {
+	if attempt == 0 {
+		return name
+	}
+	ext := filepath.Ext(name)
+	stem := strings.TrimSuffix(name, ext)
+	if stem == "" {
+		// A leading-dot name is a file name, not an extension.
+		stem, ext = name, ""
+	}
+	return fmt.Sprintf("%s-%d%s", stem, attempt, ext)
 }
 
 // refuseManagedTarget rejects a destination inside the application's own
