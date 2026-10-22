@@ -85,8 +85,14 @@ func resultsSideBySide(contentWidth int) bool {
 func (m *Model) resultsArea(c *ui.Context, t *ui.Theme) {
 	ui.Column(c).Grow(1).Gap(t.Space(1)).Children(func() {
 		if m.narrowResults() && m.resultsDetail {
-			m.resultsDetailArea(c, t)
-			return
+			if m.completionVisible() {
+				// The last confirmation finishes the review; the narrow
+				// detail page gives way to the completion card.
+				m.resultsDetail = false
+			} else {
+				m.resultsDetailArea(c, t)
+				return
+			}
 		}
 		m.resultsHeader(c, t)
 		if !m.cfg.PageLayout {
@@ -109,6 +115,10 @@ func (m *Model) resultsArea(c *ui.Context, t *ui.Theme) {
 			return
 		}
 		if m.rec == nil || len(m.rec.Rows) == 0 {
+			if m.rec != nil && m.completionVisible() {
+				m.completionArea(c, t)
+				return
+			}
 			if m.rec != nil {
 				m.exportArea(c, t)
 			}
@@ -117,6 +127,10 @@ func (m *Model) resultsArea(c *ui.Context, t *ui.Theme) {
 		}
 		if m.cfg.PageLayout {
 			m.resultsFilterBar(c, t)
+		}
+		if m.completionVisible() {
+			m.completionArea(c, t)
+			return
 		}
 		m.exportArea(c, t)
 		visible := m.visibleResultRows()
@@ -289,7 +303,7 @@ func (m *Model) tablePane(c *ui.Context) {
 			cellText(row, r.ManagementColumnText())
 		case 4:
 			if m.cfg.PageLayout {
-				cellText(row, resultStatusColumnText(r))
+				cellText(row, m.resultStatusText(r))
 				return
 			}
 			cellText(row, r.EquippedColumnText())
@@ -398,7 +412,7 @@ func (m *Model) detailHeader(c *ui.Context, t *ui.Theme, row *Row) {
 		m.evidenceToggle(c, row)
 	})
 	ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, resultStatusColumnText(row)).TextColor(resultStatusColor(t, row)).SingleLine()
+		ui.Text(c, m.resultStatusText(row)).TextColor(m.resultStatusColor(t, row)).SingleLine()
 		ui.Text(c, resultIssueText(row)).TextColor(resultIssueColor(t, row)).SingleLine()
 	})
 }
@@ -414,6 +428,13 @@ func (m *Model) evidenceToggle(c *ui.Context, row *Row) {
 	if ui.Button(c, label).Clicked() {
 		m.showEvidence = !m.showEvidence
 	}
+}
+
+func (m *Model) resultStatusColor(t *ui.Theme, row *Row) ui.Color {
+	if m.recentlyConfirmedNow(row) {
+		return t.Success
+	}
+	return resultStatusColor(t, row)
 }
 
 func resultStatusColor(t *ui.Theme, row *Row) ui.Color {
@@ -537,6 +558,8 @@ func (m *Model) structuredForm(c *ui.Context, t *ui.Theme, row *Row) {
 			ui.Textf(c, "· %s · %s（%s）：%s", field, issue.Code, issue.Severity, issue.Message).
 				MaxWidth(360).FontSize(t.FontSize * 0.9).TextColor(t.TextMuted)
 		}
+		// An item that cannot be exported offers no edit or confirmation
+		// actions; the read-only fields still explain why it is excluded.
 		m.reviewActions(c, t, row, check)
 	})
 }
@@ -585,53 +608,84 @@ func issueSummaryText(issues []zzz.Issue) string {
 }
 
 // reviewActions offers the per-item review controls in the read-only
-// view: entering the editor or confirming the item as it stands.
+// view: entering the editor, confirming the item where it stands, or
+// confirming it and moving on. An already-settled item has no confirmation
+// action; only a pending row offers the two confirmation buttons.
 func (m *Model) reviewActions(c *ui.Context, t *ui.Theme, row *Row, check app.DataCheck) {
 	if row.Structured == nil {
 		return
 	}
 	ui.Divider(c)
+	unexportable := resultRowUnexportable(row)
+	pending := row.PendingReview()
 	editButton := func() {
 		if ui.Button(c, "编辑").Disabled(m.reviewSaving).Clicked() {
 			m.startEdit()
 		}
 	}
-	confirmLabel := "确认并下一项"
-	if m.reviewErr != "" && m.lastConfirm {
-		confirmLabel = "重试确认并下一项"
+	stayLabel := "确认"
+	if m.reviewErr != "" && m.lastAction == reviewConfirmStay {
+		stayLabel = "重试确认"
 	}
-	confirmButton := func() {
-		confirm := ui.Button(c, confirmLabel).Disabled(!check.Confirmable() || m.reviewSaving)
+	stayButton := func() {
+		confirm := ui.Button(c, stayLabel).Disabled(!check.Confirmable() || m.reviewSaving)
 		if confirm.Clicked() {
+			m.confirmCurrentStay()
+		}
+	}
+	nextLabel := "确认并下一项"
+	if m.reviewErr != "" && m.lastAction == reviewConfirmNext {
+		nextLabel = "重试确认并下一项"
+	}
+	nextButton := func() {
+		if ui.PrimaryButton(c, nextLabel).Disabled(!check.Confirmable() || m.reviewSaving).Clicked() {
 			m.confirmCurrent()
 		}
 	}
-	nextButton := func() {
-		if ui.Button(c, "下一个待校对").Clicked() {
+	selectNext := func() {
+		if ui.Button(c, "下一个待校对").Disabled(m.reviewSaving).Clicked() {
 			m.selectNextPendingResult()
 		}
 	}
 	if m.cfg.PageLayout && !m.narrowResults() {
 		ui.Column(c).Gap(t.Space(1)).Children(func() {
+			if !unexportable || pending {
+				ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
+					if !unexportable {
+						editButton()
+					}
+					if pending {
+						stayButton()
+					}
+				})
+			}
 			ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
-				editButton()
-			})
-			ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
-				nextButton()
-				confirmButton()
+				selectNext()
+				if pending {
+					nextButton()
+				}
 			})
 		})
 	} else {
 		ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
-			editButton()
+			if !unexportable {
+				editButton()
+			}
+			if pending {
+				stayButton()
+			}
 			if m.cfg.PageLayout {
+				selectNext()
+			}
+			if pending {
 				nextButton()
 			}
-			confirmButton()
 		})
 	}
-	if problem := firstCheckProblem(check); problem != "" {
-		ui.Text(c, "确认前还需："+problem).TextColor(t.TextMuted)
+	if pending {
+		if problem := firstCheckProblem(check); problem != "" {
+			ui.Text(c, "确认前还需："+problem).TextColor(t.TextMuted)
+		}
 	}
 	if m.reviewNotice != "" {
 		ui.Text(c, m.reviewNotice)
@@ -711,25 +765,57 @@ func (m *Model) editForm(c *ui.Context, t *ui.Theme, row *Row) {
 				MaxWidth(380).FontSize(t.FontSize * 0.9).TextColor(t.TextMuted)
 		}
 
-		ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
-			saveLabel := "保存修改"
-			if m.reviewErr != "" && !m.lastConfirm {
-				saveLabel = "重试保存"
-			}
-			if ui.Button(c, saveLabel).Disabled(!edit.canSave() || m.reviewSaving).Clicked() {
-				m.saveEdit(false, nil)
-			}
-			confirmLabel := "确认并下一项"
-			if m.reviewErr != "" && m.lastConfirm {
-				confirmLabel = "重试确认并下一项"
-			}
-			if ui.Button(c, confirmLabel).Disabled(!edit.canConfirm() || m.reviewSaving).Clicked() {
-				m.saveEdit(true, nil)
-			}
+		saveLabel := "保存"
+		if m.reviewErr != "" && m.lastAction == reviewSave {
+			saveLabel = "重试保存"
+		}
+		confirmStayLabel := "保存并确认"
+		if m.reviewErr != "" && m.lastAction == reviewConfirmStay {
+			confirmStayLabel = "重试保存并确认"
+		}
+		confirmNextLabel := "保存并确认并下一项"
+		if m.reviewErr != "" && m.lastAction == reviewConfirmNext {
+			confirmNextLabel = "重试保存并确认并下一项"
+		}
+		discardButton := func() {
 			if ui.Button(c, "放弃修改").Disabled(m.reviewSaving).Clicked() {
 				m.discardEdit()
 			}
-		})
+		}
+		saveButton := func() {
+			if ui.Button(c, saveLabel).Disabled(!edit.canSave() || m.reviewSaving).Clicked() {
+				m.saveEdit(reviewSave, nil)
+			}
+		}
+		confirmStayButton := func() {
+			if ui.Button(c, confirmStayLabel).Disabled(!edit.canConfirm() || m.reviewSaving).Clicked() {
+				m.saveEdit(reviewConfirmStay, nil)
+			}
+		}
+		confirmNextButton := func() {
+			if ui.PrimaryButton(c, confirmNextLabel).Disabled(!edit.canConfirm() || m.reviewSaving).Clicked() {
+				m.saveEdit(reviewConfirmNext, nil)
+			}
+		}
+		if m.cfg.PageLayout && !m.narrowResults() {
+			ui.Column(c).Gap(t.Space(1)).Children(func() {
+				ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
+					discardButton()
+					saveButton()
+					confirmStayButton()
+				})
+				ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
+					confirmNextButton()
+				})
+			})
+		} else {
+			ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
+				discardButton()
+				saveButton()
+				confirmStayButton()
+				confirmNextButton()
+			})
+		}
 		if m.reviewSaving {
 			ui.Text(c, "正在保存……").TextColor(t.TextMuted)
 		}

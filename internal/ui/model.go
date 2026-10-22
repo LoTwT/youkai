@@ -275,7 +275,7 @@ type Model struct {
 	reviewSaving bool
 	reviewErr    string
 	reviewNotice string
-	lastConfirm  bool
+	lastAction   reviewAction
 	navPrompt    *navigationRequest
 
 	exitState exitState
@@ -532,7 +532,7 @@ func (m *Model) performShowLive() {
 	m.navPrompt = nil
 	m.reviewErr = ""
 	m.reviewNotice = ""
-	m.lastConfirm = false
+	m.lastAction = reviewSave
 }
 
 // HistoryEntry is one saved record of the history list, as the reopen flow
@@ -785,7 +785,7 @@ func (m *Model) performOpenHistory(id string, reload bool) {
 	m.navPrompt = nil
 	m.reviewErr = ""
 	m.reviewNotice = ""
-	m.lastConfirm = false
+	m.lastAction = reviewSave
 	m.reloadResultRecord(history, id, false)
 }
 
