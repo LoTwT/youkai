@@ -107,10 +107,14 @@ func (m *Model) sidebar(c *ui.Context, t *ui.Theme, tok *Tokens) {
 	ui.Column(c).Width(width).FillHeight().Background(tok.SurfaceWindow).
 		Padding(vertical, horizontal).Gap(t.Space(0.5)).Children(func() {
 		page := m.displayPage()
+		results := page == pageResults
+		// An opened history snapshot is shown by the results area but
+		// belongs to the history destination; only the live session's
+		// results belong to scan.
 		m.sidebarButton(c, t, tok, "扫描", scanIcon,
-			page == pageScan || page == pageResults, m.sidebarScan)
+			page == pageScan || (results && m.activeSlot == resultSlotSession), m.sidebarScan)
 		m.sidebarButton(c, t, tok, "历史", historyIcon,
-			page == pageHistory, m.sidebarHistory)
+			page == pageHistory || (results && m.activeSlot == resultSlotHistory), m.sidebarHistory)
 		ui.Box(c).Grow(1)
 		ui.Divider(c)
 		m.sidebarButton(c, t, tok, "设置", settingsIcon,
@@ -152,10 +156,16 @@ func (m *Model) sidebarScan() {
 // sidebarHistory routes the history destination. An opened snapshot is
 // restored on the results page (its filters, selection and scroll stay
 // live), while only the history snapshot's own "← 返回历史" goes to the
-// list. Without an opened record the rail opens the list.
+// list. Without an opened record the rail opens the list. The destination
+// already on screen ignores the click: a reopen would settle the editor
+// and could hold a dirty draft behind a prompt for a move that is not one.
 func (m *Model) sidebarHistory() {
-	if m.displayPage() == pageHistory {
+	page := m.displayPage()
+	if page == pageHistory {
 		return // already on the list
+	}
+	if page == pageResults && m.activeSlot == resultSlotHistory {
+		return // the opened snapshot already is this destination
 	}
 	if m.historySlot.recordID != "" {
 		m.requestNavigation(navigationRequest{

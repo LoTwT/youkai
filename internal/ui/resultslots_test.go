@@ -755,3 +755,58 @@ func TestFinalCheckpointLoadingBlocksEditorSave(t *testing.T) {
 			len(m.rec.Rows), m.pendingCount())
 	}
 }
+
+// TestFailedRecordLoadBlocksReviewActions checks that a failed final
+// checkpoint load disables every way of writing the stale rows it leaves
+// on screen: the button guard, ⌘Enter and a direct confirmation must not
+// reach SaveItemRevision, and the failure stays visible.
+func TestFailedRecordLoadBlocksReviewActions(t *testing.T) {
+	svc := &fakeService{loads: map[string]*record.Recovery{
+		"s1": recovery(reviewRowItem(t, 1, 12)),
+	}}
+	installReviewSave(svc)
+	m, q := newTestModel(t, Config{Service: svc, PageLayout: true})
+	tt := ui.NewTester(m.View, 1024, 700)
+	settle(t, m, q, tt)
+	m.Apply(snap("s1", 1, true, scan.PhaseCapturing,
+		scan.Counts{Captured: 1, Produced: 1}, 1, true, ""))
+	drainAll(t, m, q)
+	settle(t, m, q, tt)
+	if m.rec == nil || len(m.rec.Rows) != 1 || m.recErr != "" {
+		t.Fatalf("the record did not load: %+v err %q", m.rec, m.recErr)
+	}
+
+	// The next load fails and leaves the last good row on screen.
+	svc.mu.Lock()
+	svc.loadErr = map[string]error{"s1": errors.New("磁盘读取失败")}
+	svc.mu.Unlock()
+	m.reloadSessionRecord("s1")
+	drainAll(t, m, q)
+	if m.recErr == "" || m.rec == nil || len(m.rec.Rows) != 1 {
+		t.Fatalf("the failed load did not leave its error and stale row: rec %+v err %q",
+			m.rec, m.recErr)
+	}
+	if !m.reviewActionsBlocked() {
+		t.Fatal("a failed load does not block review actions")
+	}
+	m.startEdit()
+	if m.edit != nil {
+		t.Fatal("a failed load still opens the editor")
+	}
+
+	tt.Frame()
+	if !tt.HasText("记录读取失败：磁盘读取失败") {
+		t.Fatalf("the load failure is not visible: %q", tt.Texts())
+	}
+	tt.Key(ui.Cmd, ui.KeyEnter)
+	m.confirmCurrent()
+	m.confirmCurrentStay()
+	m.confirmCurrentAction(reviewConfirmNext)
+	drainAll(t, m, q)
+	if calls := svc.saveCount(); calls != 0 {
+		t.Fatalf("a failed load still confirmed the stale row: %+v", svc.saves)
+	}
+	if !strings.Contains(m.reviewErr, "读取失败") {
+		t.Fatalf("a blocked confirmation gave no record-error reason: %q", m.reviewErr)
+	}
+}

@@ -544,6 +544,138 @@ func TestSidebarHistoryRoundTripRestoresViewState(t *testing.T) {
 	checkRestored("history from the list")
 }
 
+// TestPageLayoutSidebarSnapshotHighlightsHistory checks that a reopened
+// record, rendered by the results area, still belongs to the history
+// destination in the rail: history is active and scan is not.
+func TestPageLayoutSidebarSnapshotHighlightsHistory(t *testing.T) {
+	m, _, tt, _ := openReviewRecordPage(t, reviewRowItem(t, 1, 12))
+	if m.displayPage() != pageResults || m.activeSlot != resultSlotHistory {
+		t.Fatalf("the record is not shown by the history slot: page %v slot %v",
+			m.displayPage(), m.activeSlot)
+	}
+	soft := tokensFor(false).AccentSoft
+	active := color.RGBA{R: soft.R, G: soft.G, B: soft.B, A: 255}
+	rectImage := func(r ui.Rect) image.Rectangle {
+		return image.Rect(int(r.X), int(r.Y), int(r.X+r.W), int(r.Y+r.H))
+	}
+	faceIsActive := func(label string) bool {
+		rect, ok := tt.Find(label)
+		if !ok {
+			t.Fatalf("the %q item is missing", label)
+		}
+		want := int(rect.W * rect.H / 2)
+		return countColorInRect(tt.Image(), active, rectImage(rect)) >= want
+	}
+	if faceIsActive("扫描") {
+		t.Fatal("the scan destination is active for a history snapshot")
+	}
+	if !faceIsActive("历史") {
+		t.Fatal("the history destination is not active for its opened snapshot")
+	}
+	if faceIsActive("设置") {
+		t.Fatal("the settings destination is active for a history snapshot")
+	}
+}
+
+// TestSidebarHistoryRevalidatesConfirmedStaySelection checks the same-slot
+// revisit after "confirm and stay": leaving the results page drops the
+// temporary marker of the confirmed row, so returning through settings
+// must move the selection to the first row the pending segment still
+// shows instead of keeping the hidden row in the detail.
+func TestSidebarHistoryRevalidatesConfirmedStaySelection(t *testing.T) {
+	m, q, tt, _ := openReviewRecordPage(t,
+		reviewRowItem(t, 1, 12),
+		reviewRowItem(t, 2, 10),
+	)
+
+	if err := tt.Click("确认"); err != nil {
+		t.Fatalf("click 确认: %v", err)
+	}
+	settle(t, m, q, tt)
+	if visible := m.visibleResultRows(); m.pendingCount() != 1 || len(visible) != 2 ||
+		m.selected != 0 || m.selectedSeq() != 1 {
+		t.Fatalf("confirm-stay setup: pending %d selected %d (seq %d) visible %v",
+			m.pendingCount(), m.selected, m.selectedSeq(), visible)
+	}
+
+	if err := tt.Click("设置"); err != nil {
+		t.Fatalf("click 设置: %v", err)
+	}
+	settle(t, m, q, tt)
+	if err := tt.Click("历史"); err != nil {
+		t.Fatalf("click 历史: %v", err)
+	}
+	settle(t, m, q, tt)
+
+	visible := m.visibleResultRows()
+	if len(visible) != 1 || visible[0] != 1 {
+		t.Fatalf("the pending segment shows %v, want only row 1", visible)
+	}
+	if m.selected != visible[0] || m.selectedSeq() != 2 {
+		t.Fatalf("the detail keeps the hidden row: selected %d (seq %d), visible %v",
+			m.selected, m.selectedSeq(), visible)
+	}
+	if m.scroll != 0 {
+		t.Fatalf("the restored scroll is %d, want the first visible row", m.scroll)
+	}
+	// The rendered detail follows the settled selection.
+	if !tt.HasText("2 · ") {
+		t.Fatalf("the detail does not show row 2: %q", tt.Texts())
+	}
+
+	// A selection that the filter hides also falls back on a plain
+	// same-slot activation, not only on the navigation path above.
+	m.selected = 0
+	m.selectedSequence = 1
+	m.activateResultSlot(resultSlotHistory)
+	if m.selected != 1 || m.selectedSeq() != 2 {
+		t.Fatalf("an out-of-filter selection was kept: selected %d (seq %d)",
+			m.selected, m.selectedSeq())
+	}
+}
+
+// TestSidebarHistoryActiveDestinationIsNoOp checks that the rail's active
+// history destination ignores its own click: an unchanged editor stays
+// open, a dirty draft gets no save/discard prompt, and the record is not
+// reopened.
+func TestSidebarHistoryActiveDestinationIsNoOp(t *testing.T) {
+	m, _, tt, svc := openReviewRecordPage(t, reviewRowItem(t, 1, 12), reviewRowItem(t, 2, 10))
+	loads := slotLoadCount(svc, "r1")
+
+	m.startEdit()
+	if m.edit == nil || m.navPrompt != nil {
+		t.Fatalf("the clean editor did not open: edit %+v prompt %+v", m.edit, m.navPrompt)
+	}
+	if err := tt.Click("历史"); err != nil {
+		t.Fatalf("click 历史: %v", err)
+	}
+	tt.Frame()
+	if m.edit == nil || m.navPrompt != nil {
+		t.Fatalf("clicking the active history destination closed the editor: edit %+v prompt %+v",
+			m.edit, m.navPrompt)
+	}
+	if m.displayPage() != pageResults || m.activeSlot != resultSlotHistory {
+		t.Fatalf("the active destination moved: page %v slot %v", m.displayPage(), m.activeSlot)
+	}
+
+	m.edit.draft.Level = "13"
+	if err := tt.Click("历史"); err != nil {
+		t.Fatalf("click 历史 with a dirty draft: %v", err)
+	}
+	tt.Frame()
+	if m.navPrompt != nil {
+		t.Fatalf("clicking the active history destination prompted for the same record: %+v",
+			m.navPrompt)
+	}
+	if m.edit == nil || m.edit.draft.Level != "13" {
+		t.Fatal("clicking the active history destination lost the dirty draft")
+	}
+	if got := slotLoadCount(svc, "r1"); got != loads {
+		t.Fatalf("clicking the active history destination reloaded the record: %d loads, want %d",
+			got, loads)
+	}
+}
+
 // TestSidebarDestinationsGuardDirtyDrafts checks that switching to the
 // scan, history or settings destination never drops an unsaved item: the
 // move waits behind the save/discard/stay prompt, and staying keeps the

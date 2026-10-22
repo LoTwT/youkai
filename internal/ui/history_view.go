@@ -287,11 +287,12 @@ const historySnapDelay = 120 * time.Millisecond
 
 // snapHistoryScroll aligns the composite's vertical offset with the
 // 52-DIP row boundary a precise scroll can leave between rows. A trackpad
-// delivers small moves, so the first half-row of travel accumulates rather
-// than being rounded away; crossing the midpoint snaps one row in the
-// direction of the move, and a debounced frame snaps the nearest row once
-// the moves stop. The header and the fixed action column follow only the
-// horizontal offset and stay put.
+// delivers small moves, and a wheel glides through the offset over a few
+// frames; in both cases the offset belongs to the input until the motion
+// stops. Writing it mid-glide makes MyGo treat the app as taking over and
+// cancels the rest of the wheel's travel, so snapping waits for the
+// debounce and then moves to the nearest row. The header and the fixed
+// action column follow only the horizontal offset and stay put.
 func (m *Model) snapHistoryScroll(c *ui.Context, rows int) {
 	if rows == 0 {
 		return
@@ -302,48 +303,27 @@ func (m *Model) snapHistoryScroll(c *ui.Context, rows int) {
 		y = 0
 	}
 	now := c.Now()
-	if y == m.historyScrollSeen {
-		if m.historyScrollSnapAt.IsZero() || now.Before(m.historyScrollSnapAt) {
-			return
+	if y != m.historyScrollSeen {
+		// The offset is still moving: keep the full travel and snap only
+		// after it has been still for the whole debounce.
+		m.historyScrollSeen = y
+		m.historyScrollMovedAt = now
+		if m.historyScrollSnapAt.IsZero() || !now.Before(m.historyScrollSnapAt) {
+			m.historyScrollSnapAt = now.Add(historySnapDelay)
 		}
-		if wait := m.historyScrollMovedAt.Add(historySnapDelay).Sub(now); wait > 0 {
-			m.historyScrollSnapAt = now.Add(wait)
-			c.After(wait)
-			return
-		}
-		m.historyScrollSnapAt = time.Time{}
-		m.applyHistoryScrollSnap(historyRowOffset(y))
+		c.After(historySnapDelay)
 		return
 	}
-
-	previous := m.historyScrollSeen
-	m.historyScrollSeen = y
-	m.historyScrollMovedAt = now
-	if m.historyScrollSnapAt.IsZero() || !now.Before(m.historyScrollSnapAt) {
-		m.historyScrollSnapAt = now.Add(historySnapDelay)
-		c.After(historySnapDelay)
+	if m.historyScrollSnapAt.IsZero() || now.Before(m.historyScrollSnapAt) {
+		return
 	}
-	if target, ok := historyMidpointSnap(y, previous); ok {
-		m.applyHistoryScrollSnap(target)
+	if wait := m.historyScrollMovedAt.Add(historySnapDelay).Sub(now); wait > 0 {
+		m.historyScrollSnapAt = now.Add(wait)
+		c.After(wait)
+		return
 	}
-}
-
-// historyMidpointSnap returns the row boundary a move crosses. A downward
-// move snaps up after half a row, an upward move snaps down after half;
-// smaller moves stay where they are so the next one accumulates.
-func historyMidpointSnap(y, previous float32) (float32, bool) {
-	lower := float32(math.Floor(float64(y)/historyRowHeight860)) * historyRowHeight860
-	offset := y - lower
-	if y > previous {
-		if offset >= historyRowHeight860/2 {
-			return lower + historyRowHeight860, true
-		}
-		return 0, false
-	}
-	if offset > 0 && offset <= historyRowHeight860/2 {
-		return lower, true
-	}
-	return 0, false
+	m.historyScrollSnapAt = time.Time{}
+	m.applyHistoryScrollSnap(historyRowOffset(y))
 }
 
 // historyRowOffset is the nearest 52-DIP boundary to y.

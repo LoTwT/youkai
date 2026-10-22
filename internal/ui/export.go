@@ -70,10 +70,10 @@ func (m *Model) exportBusy() bool {
 
 // reviewActionsBlocked reports whether review edits and confirmations must
 // stay disabled: while a save is in flight, the latest checkpoint is still
-// loading (the visible record is an older snapshot then), or an export
-// holds its snapshot.
+// loading (the visible record is an older snapshot then), the last load
+// failed (the record on screen is stale), or an export holds its snapshot.
 func (m *Model) reviewActionsBlocked() bool {
-	return m.reviewSaving || m.loading || m.exportBusy()
+	return m.reviewSaving || m.loading || m.recErr != "" || m.exportBusy()
 }
 
 // exportAvailable reports whether this build offers an export entry. The

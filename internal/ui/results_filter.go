@@ -441,7 +441,7 @@ func (m *Model) registerResultsShortcuts(c *ui.Context) {
 	if !m.cfg.PageLayout {
 		return
 	}
-	if m.reviewSaving || m.loading || m.exportBusy() {
+	if m.reviewSaving || m.loading || m.recErr != "" || m.exportBusy() {
 		return
 	}
 	if m.edit != nil {
@@ -604,7 +604,7 @@ func (m *Model) evidenceStacked() bool {
 // otherwise name the keys their layout registers. Narrow list pages open a
 // row with Return.
 func (m *Model) resultShortcutText() string {
-	if m.reviewSaving || m.loading || m.exportBusy() {
+	if m.reviewSaving || m.loading || m.recErr != "" || m.exportBusy() {
 		return ""
 	}
 	if m.edit != nil {

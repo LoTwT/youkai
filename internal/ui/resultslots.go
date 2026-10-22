@@ -156,11 +156,15 @@ func (m *Model) captureActiveResult() {
 // activateResultSlot makes kind the rendered destination. Navigation calls
 // it only after the editor settled, so the previous slot never holds a
 // draft while inactive. Activating the destination that is already active
-// is a no-op: the live projection is newer than the slot's last capture,
-// and copying the stored state back would reset filters, selection and
-// scroll after a trip through settings or the history list.
+// keeps the live projection, which is newer than the slot's last capture:
+// copying the stored state back would reset filters and scroll after a
+// trip through settings or the history list. The destination still starts
+// a new visit, so temporary confirmed rows drop out, and the selection is
+// checked against the rows the filter still shows.
 func (m *Model) activateResultSlot(kind resultSlotKind) {
 	if m.activeSlot == kind {
+		m.clearRecentlyConfirmedFor(kind)
+		m.settleResultSelection()
 		return
 	}
 	m.captureActiveResult()
