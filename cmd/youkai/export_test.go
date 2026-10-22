@@ -8,6 +8,8 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+
+	"github.com/LoTwT/youkai/internal/ui"
 )
 
 func TestRefuseManagedTarget(t *testing.T) {
@@ -188,6 +190,76 @@ func TestWriteExportFileCreateFailureLeavesTarget(t *testing.T) {
 	}
 	if string(got) != "old" {
 		t.Fatalf("a failed create changed the existing export: %q", got)
+	}
+}
+
+func TestWriteDirectExportNumbersExistingNames(t *testing.T) {
+	dir := t.TempDir()
+	const name = "youkai-2026-10-22-abc.youkai.csv"
+	first, err := writeDirectExport(dir, name, []byte("first"))
+	if err != nil {
+		t.Fatalf("first direct export: %v", err)
+	}
+	if first != filepath.Join(dir, name) {
+		t.Fatalf("first path = %q", first)
+	}
+	second, err := writeDirectExport(dir, name, []byte("second"))
+	if err != nil {
+		t.Fatalf("second direct export: %v", err)
+	}
+	if want := filepath.Join(dir, "youkai-2026-10-22-abc.youkai-1.csv"); second != want {
+		t.Fatalf("second path = %q, want %q", second, want)
+	}
+	third, err := writeDirectExport(dir, name, []byte("third"))
+	if err != nil {
+		t.Fatalf("third direct export: %v", err)
+	}
+	if want := filepath.Join(dir, "youkai-2026-10-22-abc.youkai-2.csv"); third != want {
+		t.Fatalf("third path = %q, want %q", third, want)
+	}
+	for path, want := range map[string]string{first: "first", second: "second", third: "third"} {
+		got, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(got) != want {
+			t.Fatalf("%s = %q, want %q", filepath.Base(path), got, want)
+		}
+	}
+}
+
+func TestWriteDirectExportReportsUnusableDirectory(t *testing.T) {
+	// A regular file cannot act as the export directory, which makes the
+	// failure deterministic on every platform.
+	file := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(file, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	path, err := writeDirectExport(file, "out.youkai.csv", []byte("data"))
+	if err == nil || path != "" {
+		t.Fatalf("unusable directory returned path %q err %v", path, err)
+	}
+	var dirErr *ui.ExportDirectoryError
+	if !errors.As(err, &dirErr) {
+		t.Fatalf("error %T is not an ExportDirectoryError: %v", err, err)
+	}
+	if dirErr.Directory != file {
+		t.Fatalf("directory = %q, want %q", dirErr.Directory, file)
+	}
+}
+
+func TestNumberedExportNameKeepsTheExtension(t *testing.T) {
+	cases := map[string]string{
+		"out.youkai.json":   "out.youkai-1.json",
+		"out.csv":           "out-1.csv",
+		"noextension":       "noextension-1",
+		".hidden":           ".hidden-1",
+		"two.dots.youkai.x": "two.dots.youkai-1.x",
+	}
+	for name, want := range cases {
+		if got := numberedExportName(name, 1); got != want {
+			t.Fatalf("numberedExportName(%q) = %q, want %q", name, got, want)
+		}
 	}
 }
 

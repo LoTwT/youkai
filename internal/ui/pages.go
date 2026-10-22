@@ -72,6 +72,10 @@ func (m *Model) viewPages(c *ui.Context) {
 		ui.Column(c).Grow(1).FillHeight().Children(func() {
 			m.pageBody(c, t)
 			m.pageActions(c, t, tok)
+			if m.exportStatusVisible() {
+				ui.Divider(c)
+				m.exportStatusArea(c, t)
+			}
 			ui.Divider(c)
 			m.pageStatusBar(c, t)
 		})
