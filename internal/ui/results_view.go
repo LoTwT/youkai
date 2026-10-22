@@ -729,13 +729,13 @@ func (m *Model) editForm(c *ui.Context, t *ui.Theme, row *Row) {
 			ui.Select(c, &draft.Slot, slotChoices(currentID(draft.Slot))).Width(120).Disabled(m.reviewActionsBlocked())
 		})
 		labeledRow(c, t, "等级", func() {
-			ui.TextInput(c, &draft.Level).Width(80).Disabled(m.reviewActionsBlocked())
+			m.noteTextInputFocus(ui.TextInput(c, &draft.Level).Width(80).Disabled(m.reviewActionsBlocked()))
 		})
 
 		labeledRow(c, t, "主词条", func() {
 			ui.Row(c).Gap(t.Space(1)).AlignItems(ui.Center).Children(func() {
 				ui.Select(c, &draft.MainAttribute, attributeChoices(attributeTextValue(draft.MainAttribute))).Width(170).Disabled(m.reviewActionsBlocked())
-				ui.TextInput(c, &draft.MainValue).Width(100).Disabled(m.reviewActionsBlocked())
+				m.noteTextInputFocus(ui.TextInput(c, &draft.MainValue).Width(100).Disabled(m.reviewActionsBlocked()))
 				ui.Select(c, &draft.MainUnit, unitChoices(attributeTextValue(draft.MainAttribute), attributeTextValue(draft.MainUnit))).Width(150).Disabled(m.reviewActionsBlocked())
 			})
 		})
@@ -877,10 +877,10 @@ func (m *Model) editSubstatRow(c *ui.Context, t *ui.Theme, index int) bool {
 	ui.Row(c).Gap(t.Space(1)).AlignItems(ui.Center).Children(func() {
 		ui.Textf(c, "%d", index+1).Width(16).TextColor(t.TextMuted)
 		ui.Select(c, &sub.Attribute, attributeChoices(attributeTextValue(sub.Attribute))).Width(160).Disabled(m.reviewActionsBlocked())
-		ui.TextInput(c, &sub.Value).Width(90).Disabled(m.reviewActionsBlocked())
+		m.noteTextInputFocus(ui.TextInput(c, &sub.Value).Width(90).Disabled(m.reviewActionsBlocked()))
 		ui.Select(c, &sub.Unit, unitChoices(attributeTextValue(sub.Attribute), attributeTextValue(sub.Unit))).Width(140).Disabled(m.reviewActionsBlocked())
 		ui.Text(c, "强化").TextColor(t.TextMuted)
-		ui.TextInput(c, &sub.Rolls).Width(50).Disabled(m.reviewActionsBlocked())
+		m.noteTextInputFocus(ui.TextInput(c, &sub.Rolls).Width(50).Disabled(m.reviewActionsBlocked()))
 		if ui.Button(c, "删除").Disabled(m.reviewActionsBlocked()).Clicked() {
 			remove = true
 		}

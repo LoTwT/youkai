@@ -273,10 +273,13 @@ type Model struct {
 	// The results table's place and its chosen row live in the active
 	// result slot's state; list keeps the toolkit's per-pass list state.
 	// tableSelected is the chosen display row of the filtered table, which
-	// maps back to the slot's full-row selected index.
-	list          ui.ListState
-	tableSelected int
-	split         float32
+	// maps back to the slot's full-row selected index. textInputFocused is
+	// rebuilt every frame: MyGo's text inputs leave Escape to shortcuts, so
+	// the shell keeps the key with a focused field instead of taking it.
+	list             ui.ListState
+	tableSelected    int
+	textInputFocused bool
+	split            float32
 	// resultsDetail opens a narrow results page from its list to the
 	// chosen item's detail; it has no effect in the side-by-side split.
 	resultsDetail bool

@@ -92,8 +92,7 @@ func (m *Model) settingsStorageCard(c *ui.Context, t *ui.Theme, tok *Tokens) {
 }
 
 // settingsShortcut is one row of the settings key list. Only keys this
-// build actually registers appear: the design's ⌘R and ⌘S rows stay out
-// until something handles them.
+// build actually registers appear.
 type settingsShortcut struct {
 	action  string
 	context string
@@ -119,14 +118,17 @@ func (m *Model) settingsShortcutsCard(c *ui.Context, t *ui.Theme, tok *Tokens) {
 
 // settingsShortcutRows lists the registered keys in the design's order.
 // The global stop key follows the platform binding the entry point
-// registers for a scan session.
+// registers for a scan session; every other row is a key the page shell
+// itself handles.
 func settingsShortcutRows() []settingsShortcut {
 	return []settingsShortcut{
+		{action: "开始扫描", context: "扫描准备", keys: "⌘R"},
 		{action: "停止扫描", context: "扫描中 · 全局", keys: stopHotkeyLabel()},
 		{action: "确认并下一项", context: "结果与校对", keys: "⌘↵"},
 		{action: "下一个待校对", context: "结果与校对", keys: "⌘J"},
+		{action: "保存修改", context: "编辑中", keys: "⌘S"},
 		{action: "打开记录", context: "历史", keys: "↵"},
-		{action: "关闭浮层", context: "任意", keys: "Esc"},
+		{action: "关闭浮层/返回表格", context: "任意", keys: "Esc"},
 	}
 }
 

@@ -115,20 +115,25 @@ func TestSettingsPageGroupsVersionAndShortcuts(t *testing.T) {
 		t.Fatalf("the settings page shows the version %d times, want 1: %q", versions, tt.Texts())
 	}
 
-	// Only registered keys: the design's ⌘R and ⌘S rows stay out until
-	// something handles them.
+	// Every row names a key this build registers, in the design's order.
+	rows := settingsShortcutRows()
+	if len(rows) != 7 {
+		t.Fatalf("the shortcut list has %d rows, want 7: %+v", len(rows), rows)
+	}
 	for _, registered := range []string{
+		"开始扫描", "⌘R", "扫描准备",
 		"停止扫描", "扫描中 · 全局", "确认并下一项", "下一个待校对", "⌘↵", "⌘J",
-		"打开记录", "关闭浮层", "Esc",
+		"保存修改", "⌘S", "打开记录", "关闭浮层/返回表格", "Esc",
 	} {
 		if !tt.HasText(registered) {
 			t.Errorf("the shortcut list does not show %q: %q", registered, tt.Texts())
 		}
 	}
-	for _, unregistered := range []string{"开始扫描", "保存修改"} {
-		if tt.HasText(unregistered) {
-			t.Errorf("the shortcut list claims the unregistered %q", unregistered)
-		}
+	if got, want := rows[0], (settingsShortcut{action: "开始扫描", context: "扫描准备", keys: "⌘R"}); got != want {
+		t.Errorf("the first shortcut row = %+v, want %+v", got, want)
+	}
+	if got, want := rows[6], (settingsShortcut{action: "关闭浮层/返回表格", context: "任意", keys: "Esc"}); got != want {
+		t.Errorf("the last shortcut row = %+v, want %+v", got, want)
 	}
 }
 

@@ -375,8 +375,8 @@ func (m *Model) resultsFilterBar(c *ui.Context, t *ui.Theme) {
 				m.setResultFilter(filter)
 			}
 		}
-		search := ui.SearchField(c, &m.search).Width(t.Space(48)).
-			Placeholder("搜索序号、套装、主词条")
+		search := m.noteTextInputFocus(ui.SearchField(c, &m.search).Width(t.Space(48)).
+			Placeholder("搜索序号、套装、主词条"))
 		if search.Changed() {
 			changed = true
 		}
@@ -432,8 +432,9 @@ func resultFilterLabel(value, allLabel string, options []resultFilterOption) str
 }
 
 // registerResultsShortcuts wires the results page's keys: ⌘J moves to
-// the next pending item in the current filter and ⌘↵ confirms the chosen
-// one. The status bar names only these keys.
+// the next pending item in the current filter, ⌘↵ confirms the chosen
+// one, and ⌘S saves the open editor. The status bar names only the keys
+// that are registered and usable in the current layout.
 func (m *Model) registerResultsShortcuts(c *ui.Context) {
 	if !m.cfg.PageLayout {
 		return
@@ -444,6 +445,11 @@ func (m *Model) registerResultsShortcuts(c *ui.Context) {
 	c.OnShortcut(ui.Cmd, ui.KeyEnter, func() {
 		m.confirmCurrent()
 	})
+	if m.edit != nil && !m.reviewSaving && !m.exportBusy() {
+		c.OnShortcut(ui.Cmd, ui.KeyS, func() {
+			m.saveEdit(reviewSave, nil)
+		})
+	}
 }
 
 // selectNextPendingResult moves the selection to the next pending row in
@@ -568,10 +574,16 @@ func (m *Model) evidenceStacked() bool {
 	return m.cfg.PageLayout && m.resultsDetailWidth() < 600
 }
 
-// resultShortcutText is the results page's status-bar keys. Narrow list
-// pages open a row with Return; both detail layouts confirm the chosen row
-// with ⌘↵ and move with ⌘J.
+// resultShortcutText is the results page's status-bar keys. An open
+// editor names its save key; the list and detail otherwise name the keys
+// their layout registers. Narrow list pages open a row with Return.
 func (m *Model) resultShortcutText() string {
+	if m.edit != nil {
+		if m.reviewSaving || m.exportBusy() {
+			return ""
+		}
+		return "⌘S 保存修改"
+	}
 	if m.rec == nil || len(m.rec.Rows) == 0 || m.completionVisible() {
 		return ""
 	}

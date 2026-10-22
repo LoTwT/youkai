@@ -53,6 +53,7 @@ func (m *Model) displayPage() Page {
 func (m *Model) viewPages(c *ui.Context) {
 	tok := ApplyTheme(c)
 	t := c.Theme()
+	m.registerPageShortcuts(c)
 	if m.displayPage() == pageResults {
 		m.registerResultsShortcuts(c)
 	} else {
@@ -155,6 +156,7 @@ func (m *Model) pageBody(c *ui.Context, t *ui.Theme) {
 			}
 			ui.Scroll(c).Grow(1).Children(func() {
 				ui.Column(c).Gap(t.Space(2)).Children(func() {
+					m.navigationPrompt(c, t)
 					m.prepareArea(c, t)
 					if m.snap.SessionID != "" {
 						ui.Divider(c)
@@ -223,9 +225,9 @@ func (m *Model) pageStatusBar(c *ui.Context, t *ui.Theme) {
 }
 
 // statusShortcutText names only the keys this build registers for the
-// current page. The results page's keys follow its list/detail layout; the
-// scan page's stop key is the platform hotkey registered by the entry
-// point.
+// current page. The results page's keys follow its list/detail/edit
+// layout; the scan page's stop key is the platform hotkey registered by
+// the entry point, and its start key exists only when ⌘R is registered.
 func (m *Model) statusShortcutText() string {
 	switch m.displayPage() {
 	case pageResults:
@@ -233,6 +235,9 @@ func (m *Model) statusShortcutText() string {
 	case pageScan:
 		if m.snap.Busy || m.startReqID != "" {
 			return "⌃⌥⌘S 停止扫描"
+		}
+		if m.scanStartShortcutAvailable() {
+			return "⌘R 开始扫描"
 		}
 	case pageHistory:
 		if len(m.visibleHistory()) > 0 {
