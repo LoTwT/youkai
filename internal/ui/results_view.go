@@ -85,11 +85,17 @@ func resultsSideBySide(contentWidth int) bool {
 func (m *Model) resultsArea(c *ui.Context, t *ui.Theme) {
 	ui.Column(c).Grow(1).Gap(t.Space(1)).Children(func() {
 		if m.narrowResults() && m.resultsDetail {
-			if m.completionVisible() {
+			switch {
+			case m.completionVisible():
 				// The last confirmation finishes the review; the narrow
 				// detail page gives way to the completion card.
 				m.resultsDetail = false
-			} else {
+			case !m.resultDetailHasRow():
+				// The confirmed item left the current filtered view and
+				// no other row replaced it: return to the list, whose
+				// filter bar and empty state are the only useful surface.
+				m.closeResultDetail()
+			default:
 				m.resultsDetailArea(c, t)
 				return
 			}
@@ -170,6 +176,14 @@ func (m *Model) resultsHeader(c *ui.Context, t *ui.Theme) {
 		}
 		ui.Box(c).Grow(1)
 		if m.cfg.PageLayout {
+			if m.activeSlot == resultSlotHistory {
+				// A history snapshot returns to the list; the new-scan
+				// action belongs to the scan destination.
+				if ui.Button(c, "← 返回历史").Clicked() {
+					m.navigatePage(pageHistory)
+				}
+				return
+			}
 			action := "+ 准备新扫描"
 			if m.snap.Busy || m.startReqID != "" {
 				action = "返回扫描中"
@@ -633,7 +647,7 @@ func (m *Model) reviewActions(c *ui.Context, t *ui.Theme, row *Row, check app.Da
 		stayLabel = "重试确认"
 	}
 	stayButton := func() {
-		confirm := ui.Button(c, stayLabel).Disabled(!check.Confirmable() || m.reviewSaving)
+		confirm := ui.Button(c, stayLabel).Disabled(!check.Confirmable() || m.reviewActionsBlocked())
 		if confirm.Clicked() {
 			m.confirmCurrentStay()
 		}
@@ -643,7 +657,7 @@ func (m *Model) reviewActions(c *ui.Context, t *ui.Theme, row *Row, check app.Da
 		nextLabel = "重试确认并下一项"
 	}
 	nextButton := func() {
-		if ui.PrimaryButton(c, nextLabel).Disabled(!check.Confirmable() || m.reviewSaving).Clicked() {
+		if ui.PrimaryButton(c, nextLabel).Disabled(!check.Confirmable() || m.reviewActionsBlocked()).Clicked() {
 			m.confirmCurrent()
 		}
 	}
@@ -691,6 +705,9 @@ func (m *Model) reviewActions(c *ui.Context, t *ui.Theme, row *Row, check app.Da
 		if problem := firstCheckProblem(check); problem != "" {
 			ui.Text(c, "确认前还需："+problem).TextColor(t.TextMuted)
 		}
+	}
+	if m.loading {
+		ui.Text(c, "正在加载最新检查点，加载完成前不能编辑、保存或确认。").TextColor(t.TextMuted)
 	}
 	if m.exportBusy() {
 		ui.Text(c, "正在导出，完成前不能编辑或确认。").TextColor(t.TextMuted)
@@ -791,17 +808,17 @@ func (m *Model) editForm(c *ui.Context, t *ui.Theme, row *Row) {
 			}
 		}
 		saveButton := func() {
-			if ui.Button(c, saveLabel).Disabled(!edit.canSave() || m.reviewSaving).Clicked() {
+			if ui.Button(c, saveLabel).Disabled(!edit.canSave() || m.reviewActionsBlocked()).Clicked() {
 				m.saveEdit(reviewSave, nil)
 			}
 		}
 		confirmStayButton := func() {
-			if ui.Button(c, confirmStayLabel).Disabled(!edit.canConfirm() || m.reviewSaving).Clicked() {
+			if ui.Button(c, confirmStayLabel).Disabled(!edit.canConfirm() || m.reviewActionsBlocked()).Clicked() {
 				m.saveEdit(reviewConfirmStay, nil)
 			}
 		}
 		confirmNextButton := func() {
-			if ui.PrimaryButton(c, confirmNextLabel).Disabled(!edit.canConfirm() || m.reviewSaving).Clicked() {
+			if ui.PrimaryButton(c, confirmNextLabel).Disabled(!edit.canConfirm() || m.reviewActionsBlocked()).Clicked() {
 				m.saveEdit(reviewConfirmNext, nil)
 			}
 		}
@@ -826,6 +843,9 @@ func (m *Model) editForm(c *ui.Context, t *ui.Theme, row *Row) {
 		}
 		if m.reviewSaving {
 			ui.Text(c, "正在保存……").TextColor(t.TextMuted)
+		}
+		if m.loading {
+			ui.Text(c, "正在加载最新检查点，加载完成前不能保存或确认。").TextColor(t.TextMuted)
 		}
 		if m.reviewErr != "" {
 			ui.Text(c, m.reviewErr).TextColor(t.Danger)

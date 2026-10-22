@@ -569,6 +569,10 @@ func (m *Model) saveEdit(action reviewAction, after func()) {
 	if m.edit == nil || m.reviewSaving {
 		return
 	}
+	if m.loading {
+		m.reviewErr = "正在加载最新检查点，加载完成前不能保存或确认。"
+		return
+	}
 	if m.exportBusy() {
 		m.reviewErr = "正在导出，完成前不能保存或确认。"
 		return
@@ -606,7 +610,17 @@ func (m *Model) confirmCurrentStay() {
 // confirmCurrentAction confirms the selected row as it stands, without
 // opening the editor.
 func (m *Model) confirmCurrentAction(action reviewAction) {
-	if m.reviewSaving || m.rec == nil || m.selected < 0 || m.selected >= len(m.rec.Rows) {
+	if m.reviewSaving {
+		return
+	}
+	if m.loading {
+		// The visible record is a stale snapshot until the latest
+		// checkpoint lands. Confirming it would also clear the loading
+		// guard and drop that checkpoint, so the action waits.
+		m.reviewErr = "正在加载最新检查点，加载完成前不能确认。"
+		return
+	}
+	if m.rec == nil || m.selected < 0 || m.selected >= len(m.rec.Rows) {
 		return
 	}
 	if m.exportBusy() {

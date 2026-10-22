@@ -437,8 +437,8 @@ func TestHistoryMinFixedActionColumn(t *testing.T) {
 		t.Fatalf("opening from the fixed column = page %v, slot %v, record %q",
 			m.displayPage(), m.activeSlot, m.historySlot.recordID)
 	}
-	if err := tt.Click("历史"); err != nil {
-		t.Fatal(err)
+	if err := tt.Click("← 返回历史"); err != nil {
+		t.Fatalf("click 返回历史: %v", err)
 	}
 	settle(t, m, q, tt)
 
@@ -504,8 +504,8 @@ func TestHistoryOpenAndReturn(t *testing.T) {
 		t.Fatalf("Enter opened page %v, slot %v, record %q", m.displayPage(), m.activeSlot, m.historySlot.recordID)
 	}
 
-	if err := tt.Click("历史"); err != nil {
-		t.Fatal(err)
+	if err := tt.Click("← 返回历史"); err != nil {
+		t.Fatalf("click 返回历史: %v", err)
 	}
 	settle(t, m, q, tt)
 	if m.displayPage() != pageHistory || m.historyRow != 1 {
@@ -759,4 +759,98 @@ func TestHistoryCompositeShowsWholeRowsAt860(t *testing.T) {
 	tt.Scroll(400, 300, 0, 1000)
 	settle(t, m, q, tt)
 	checkWholeRows("bottom")
+}
+
+// TestHistoryCompositeSnapsPreciseScrollToRowsAt860 checks a touchpad's
+// 26-DIP vertical move: the offset may not stop between two 52-DIP rows,
+// so the table shows whole rows instead of half of the first and last one.
+func TestHistoryCompositeSnapsPreciseScrollToRowsAt860(t *testing.T) {
+	svc := &fakeService{history: historyTableRecords(12)}
+	m, q := newTestModel(t, Config{Service: svc, PageLayout: true, ExportSaver: &fakeExportSaver{}})
+	m.SetContentSize(860, 560)
+	tt := ui.NewTester(m.View, 860, 560)
+	settle(t, m, q, tt)
+	entries := m.visibleHistory()
+	header, _ := tt.Find("时间")
+	action, _ := tt.Find("操作")
+
+	footerTop := func() float32 {
+		for _, text := range tt.Texts() {
+			if strings.HasPrefix(text, "共 ") {
+				if rect, ok := tt.Find(text); ok {
+					return rect.Y
+				}
+			}
+		}
+		t.Fatalf("the table footer is missing: %q", tt.Texts())
+		return 0
+	}
+	check := func(stage string, wantOffset, wantFirst int) {
+		t.Helper()
+		if got := m.historyScroll.Y; got != float32(wantOffset) {
+			t.Fatalf("%s: scroll offset = %v, want the %d-DIP row boundary",
+				stage, got, wantOffset)
+		}
+		first, last := m.historyList.Visible()
+		if first != wantFirst || last-first+1 != 7 {
+			t.Fatalf("%s: visible rows = %d..%d, want %d..%d",
+				stage, first, last, wantFirst, wantFirst+6)
+		}
+		footer := footerTop()
+		headerAfter, _ := tt.Find("时间")
+		actionAfter, _ := tt.Find("操作")
+		if headerAfter.Y != header.Y || actionAfter.X != action.X {
+			t.Fatalf("%s: header/action moved: %+v -> %+v, %+v -> %+v",
+				stage, header, headerAfter, action, actionAfter)
+		}
+		if actionAfter.W < 1 {
+			t.Fatalf("%s: the fixed action column is clipped: %+v", stage, actionAfter)
+		}
+		for row := first; row <= last; row++ {
+			rect, ok := tt.Find(historyRowLabel(entries[row]))
+			if !ok {
+				t.Fatalf("%s: row %d is not rendered", stage, row)
+			}
+			if rect.H < historyRowHeight860-0.01 || rect.H > historyRowHeight860+0.01 {
+				t.Fatalf("%s: row %d height = %.3f, want %d", stage, row, rect.H, historyRowHeight860)
+			}
+			if rect.Y+rect.H > footer+0.01 {
+				t.Fatalf("%s: row %d overlaps the footer", stage, row)
+			}
+		}
+	}
+
+	// A precise 26-DIP move leaves the tracked offset at 26 before the
+	// frame builds; the view snaps it to the nearest row boundary.
+	tt.Scroll(400, 300, 0, 26)
+	tt.Frame()
+	check("after 26 DIP", historyRowHeight860, 1)
+
+	// Repeated moves keep snapping forward one whole row instead of
+	// accumulating half rows.
+	tt.Scroll(400, 300, 0, 26)
+	tt.Frame()
+	check("after another 26 DIP", 2*historyRowHeight860, 2)
+
+	// A single small move below half a row stays where it is, so the next
+	// one accumulates instead of being rounded away.
+	tt.Scroll(400, 300, 0, 20)
+	tt.Frame()
+	if got := m.historyScroll.Y; got != 2*historyRowHeight860+20 {
+		t.Fatalf("a small move did not accumulate: offset %v", got)
+	}
+	tt.Scroll(400, 300, 0, 20)
+	tt.Frame()
+	check("after two small moves", 3*historyRowHeight860, 3)
+
+	// Stopping between rows snaps to the nearest one once the debounce
+	// elapses, so a short final move cannot leave half a row showing.
+	tt.Scroll(400, 300, 0, 10)
+	tt.Frame()
+	if got := m.historyScroll.Y; got != 3*historyRowHeight860+10 {
+		t.Fatalf("the short move did not stay for the rest snap: offset %v", got)
+	}
+	tt.Advance(historySnapDelay + 40*time.Millisecond)
+	tt.Frame()
+	check("after the rest snap", 3*historyRowHeight860, 3)
 }

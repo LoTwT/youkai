@@ -118,53 +118,46 @@ func (m *Model) sidebar(c *ui.Context, t *ui.Theme, tok *Tokens) {
 	})
 }
 
-// sidebarScan routes the scan destination. The results page is that
-// destination whenever it is showing; prepare shows only when there is no
-// loaded record to return to. A live session is restored through
-// ShowLive, so a history snapshot never stands in for it.
+// sidebarScan routes the scan destination: its prepare page while no
+// session is live, and the live session's results once there is one. A
+// reopened history record belongs to the history destination, so it is
+// never presented as the scan destination's content.
 func (m *Model) sidebarScan() {
 	switch m.displayPage() {
 	case pageResults:
-		if m.activeSlot == resultSlotSession || m.appliedSession == "" {
-			return // the live session (or the only loaded record) stays
+		if m.activeSlot == resultSlotSession {
+			return // the live session stays
+		}
+		if m.appliedSession == "" {
+			// A history snapshot is showing and no live session exists:
+			// the scan destination is its prepare page.
+			m.navigatePage(pageScan)
+			return
 		}
 		// A history snapshot is showing. The scan destination is the
-		// live session whenever one exists; the draft guard turns this
-		// into the unsaved prompt.
+		// live session; the draft guard turns this into the unsaved
+		// prompt.
 		m.ShowLive()
 		return
 	case pageScan:
-		if m.appliedSession != "" {
-			return // the running session's prepare page stays put
-		}
-		if m.rec != nil && m.historySlot.recordID != "" {
-			m.page = pageResults
-		}
-		return
+		return // already preparing
 	}
 	if m.appliedSession != "" {
 		m.ShowLive()
 		return
 	}
-	if m.historySlot.recordID != "" {
-		m.requestNavigation(navigationRequest{
-			kind:     navOpenHistory,
-			recordID: m.historySlot.recordID,
-		})
-		return
-	}
 	m.navigatePage(pageScan)
 }
 
-// sidebarHistory routes the history destination. From the results page it
-// opens the saved-record list (the results page itself belongs to the scan
-// destination); from prepare or settings it restores the opened snapshot
-// when one exists. Both moves go through the draft guard.
+// sidebarHistory routes the history destination. An opened snapshot is
+// restored on the results page (its filters, selection and scroll stay
+// live), while only the history snapshot's own "← 返回历史" goes to the
+// list. Without an opened record the rail opens the list.
 func (m *Model) sidebarHistory() {
 	if m.displayPage() == pageHistory {
 		return // already on the list
 	}
-	if m.displayPage() != pageResults && m.historySlot.recordID != "" {
+	if m.historySlot.recordID != "" {
 		m.requestNavigation(navigationRequest{
 			kind:     navOpenHistory,
 			recordID: m.historySlot.recordID,

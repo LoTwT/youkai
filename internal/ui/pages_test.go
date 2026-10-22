@@ -152,9 +152,9 @@ func TestPageLayoutSidebarActiveState(t *testing.T) {
 }
 
 // TestPageLayoutPagesRouteWithoutStageSwitch checks the shell's page
-// model: the scan item opens prepare or the current results, there is no
-// in-page stage switch, and the results header returns to prepare without
-// discarding the loaded record.
+// model: there is no in-page stage switch, a history snapshot returns to
+// the list, and the scan destination is prepare without a live session
+// while the history destination keeps the loaded record.
 func TestPageLayoutPagesRouteWithoutStageSwitch(t *testing.T) {
 	svc := &fakeService{
 		list: []record.RecordInfo{{
@@ -197,28 +197,36 @@ func TestPageLayoutPagesRouteWithoutStageSwitch(t *testing.T) {
 	if m.displayPage() != pageResults {
 		t.Fatalf("opening a record shows page %v, want results", m.displayPage())
 	}
-	if !tt.HasText("+ 准备新扫描") {
-		t.Fatalf("the results header does not offer a new scan: %q", tt.Texts())
+	if !tt.HasText("← 返回历史") {
+		t.Fatalf("the history snapshot header does not offer its way back: %q", tt.Texts())
 	}
-	if err := tt.Click("+ 准备新扫描"); err != nil {
+	if tt.HasText("+ 准备新扫描") {
+		t.Fatal("the history snapshot header offers the scan destination's action")
+	}
+	if err := tt.Click("← 返回历史"); err != nil {
 		t.Fatal(err)
 	}
 	tt.Frame()
-	if m.displayPage() != pageScan || !tt.HasText(scanHint) {
-		t.Fatalf("preparing a new scan shows page %v, want the scan page", m.displayPage())
-	}
-	if m.rec == nil {
-		t.Fatal("preparing a new scan discarded the loaded record")
+	if m.displayPage() != pageHistory {
+		t.Fatalf("the history snapshot's back action shows page %v, want the list", m.displayPage())
 	}
 	if err := tt.Click("扫描"); err != nil {
 		t.Fatal(err)
 	}
 	tt.Frame()
-	if m.displayPage() != pageResults {
-		t.Fatalf("the scan item shows page %v, want the loaded results", m.displayPage())
+	if m.displayPage() != pageScan || !tt.HasText(scanHint) {
+		t.Fatalf("scan without a live session shows page %v, want prepare", m.displayPage())
 	}
-	if !tt.HasText("+ 准备新扫描") {
-		t.Fatal("the scan item did not return to the results page")
+	if m.rec == nil {
+		t.Fatal("preparing a new scan discarded the loaded record")
+	}
+	if err := tt.Click("历史"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
+	if m.displayPage() != pageResults || m.rec == nil || m.rec.ID != "r1" {
+		t.Fatalf("history after prepare = page %v record %+v, want the opened record",
+			m.displayPage(), m.rec)
 	}
 }
 
@@ -345,14 +353,23 @@ func TestSidebarRestoresSessionAndOpenedHistory(t *testing.T) {
 		t.Fatal("restoring the opened history reloaded it")
 	}
 
-	// From results, history opens its list (the results page belongs to
-	// the scan destination).
+	// The history destination restores the opened snapshot; only its own
+	// back action opens the list. Clicking the active destination is a
+	// no-op.
 	if err := tt.Click("历史"); err != nil {
 		t.Fatal(err)
 	}
 	tt.Frame()
+	if m.displayPage() != pageResults || m.activeSlot != resultSlotHistory {
+		t.Fatalf("history from results = page %v slot %v, want the opened record",
+			m.displayPage(), m.activeSlot)
+	}
+	if err := tt.Click("← 返回历史"); err != nil {
+		t.Fatalf("click 返回历史: %v", err)
+	}
+	tt.Frame()
 	if m.displayPage() != pageHistory {
-		t.Fatalf("history from results shows page %v, want the list", m.displayPage())
+		t.Fatalf("returning to history shows page %v, want the list", m.displayPage())
 	}
 	if err := tt.Click("历史"); err != nil { // active destination: no-op
 		t.Fatal(err)
@@ -399,6 +416,132 @@ func TestSidebarRestoresSessionAndOpenedHistory(t *testing.T) {
 	if m.displayPage() != pageSettings {
 		t.Fatalf("clicking the active settings destination moved to page %v", m.displayPage())
 	}
+}
+
+// TestSidebarHistoryRoundTripRestoresViewState checks the history
+// destination's two levels: the rail restores the opened snapshot with its
+// filter, search, selection and scroll after a scan or settings visit, and
+// only the snapshot's back action opens the list. Neither round trip
+// reloads the record.
+func TestSidebarHistoryRoundTripRestoresViewState(t *testing.T) {
+	old := manyPendingRecord(t, 60)
+	old.Checkpoint.Session.SessionID = "old"
+	svc := &fakeService{
+		list: []record.RecordInfo{{
+			ID:      "old",
+			SavedAt: time.Date(2026, 10, 20, 10, 0, 0, 0, time.UTC),
+		}},
+		loads: map[string]*record.Recovery{
+			"s1": recovery(
+				item(1, record.StatusProduced, "", "", "本次一"),
+				item(2, record.StatusProduced, "", "", "本次二"),
+			),
+			"old": old,
+		},
+	}
+	m, q := newTestModel(t, Config{Service: svc, PageLayout: true})
+	tt := ui.NewTester(m.View, 1020, 700)
+	settle(t, m, q, tt)
+	m.Apply(snap("s1", 1, true, scan.PhaseCapturing,
+		scan.Counts{Captured: 2, Produced: 2}, 1, true, ""))
+	drainAll(t, m, q)
+
+	m.histChoice = slotHistoryLabel(t, m, "old")
+	m.OpenHistory()
+	settle(t, m, q, tt)
+	if m.activeSlot != resultSlotHistory || m.rec == nil || m.rec.ID != "old" {
+		t.Fatalf("history did not open: slot %v record %+v", m.activeSlot, m.rec)
+	}
+	loads := slotLoadCount(svc, "old")
+
+	// A segment, a search that keeps every row, a set filter, a chosen row
+	// and a first visible row well down the list.
+	m.filter = resultFilterAll
+	m.search = "待校对"
+	m.setFilter = "31100"
+	m.selected = 32
+	m.selectedSequence = m.rec.Rows[32].Seq
+	m.scroll = 30
+	m.list.ScrollTo(30, ui.Start)
+	tt.Frame()
+	if first, _ := m.list.Visible(); first != 30 {
+		t.Fatalf("the history list starts at row %d, want 30", first)
+	}
+	wantSeq := m.rec.Rows[32].Seq
+
+	checkRestored := func(stage string) {
+		t.Helper()
+		if m.displayPage() != pageResults || m.activeSlot != resultSlotHistory ||
+			m.rec == nil || m.rec.ID != "old" {
+			t.Fatalf("%s: page %v slot %v record %+v", stage,
+				m.displayPage(), m.activeSlot, m.rec)
+		}
+		if m.filter != resultFilterAll || m.search != "待校对" || m.setFilter != "31100" {
+			t.Fatalf("%s: view state = filter %v search %q set %q",
+				stage, m.filter, m.search, m.setFilter)
+		}
+		if m.selected != 32 || m.selectedSeq() != wantSeq {
+			t.Fatalf("%s: selection = %d (seq %d), want 32 (seq %d)",
+				stage, m.selected, m.selectedSeq(), wantSeq)
+		}
+		tt.Frame()
+		if first, _ := m.list.Visible(); first != 30 {
+			t.Fatalf("%s: the list starts at row %d, want 30", stage, first)
+		}
+		if got := slotLoadCount(svc, "old"); got != loads {
+			t.Fatalf("%s: restoring reloaded the record (%d loads, want %d)", stage, got, loads)
+		}
+	}
+
+	// History → scan (the live session) → history.
+	if err := tt.Click("扫描"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
+	if m.displayPage() != pageResults || m.activeSlot != resultSlotSession {
+		t.Fatalf("scan from history = page %v slot %v", m.displayPage(), m.activeSlot)
+	}
+	if err := tt.Click("历史"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
+	checkRestored("history after scan")
+
+	// History → settings → history.
+	if err := tt.Click("设置"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if m.displayPage() != pageSettings {
+		t.Fatalf("settings shows page %v", m.displayPage())
+	}
+	if err := tt.Click("历史"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
+	checkRestored("history after settings")
+
+	// The snapshot's own back action opens the list; the rail then
+	// returns to the opened record rather than the list.
+	if err := tt.Click("← 返回历史"); err != nil {
+		t.Fatalf("click 返回历史: %v", err)
+	}
+	tt.Frame()
+	if m.displayPage() != pageHistory {
+		t.Fatalf("returning to history shows page %v, want the list", m.displayPage())
+	}
+	if err := tt.Click("扫描"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
+	if m.activeSlot != resultSlotSession {
+		t.Fatalf("scan from the history list did not open the live session: slot %v", m.activeSlot)
+	}
+	if err := tt.Click("历史"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
+	checkRestored("history from the list")
 }
 
 // TestSidebarDestinationsGuardDirtyDrafts checks that switching to the
@@ -471,8 +614,8 @@ func TestSidebarDestinationsGuardDirtyDrafts(t *testing.T) {
 	if err := tt.Click("历史"); err != nil {
 		t.Fatal(err)
 	}
-	if m.navPrompt == nil || m.navPrompt.kind != navPage || m.navPrompt.page != pageHistory {
-		t.Fatalf("dirty session did not prompt before history: %+v", m.navPrompt)
+	if m.navPrompt == nil || m.navPrompt.kind != navOpenHistory || m.navPrompt.recordID != "old" {
+		t.Fatalf("dirty session did not prompt before the opened history: %+v", m.navPrompt)
 	}
 	if m.displayPage() != pageResults || m.activeSlot != resultSlotSession {
 		t.Fatal("the dirty session switched before the prompt settled")

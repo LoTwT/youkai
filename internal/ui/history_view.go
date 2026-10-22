@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -261,6 +262,7 @@ func (m *Model) historyCompositeTable(c *ui.Context, t *ui.Theme, tok *Tokens, e
 			m.historyCompositeActionCell(c, t, tok, entry, row, actionLeft, false)
 		})
 	}).MinWidth(0).RowWidth(historyMinTableWidth860).TrackScroll(&m.historyScroll)
+	m.snapHistoryScroll(c, len(entries))
 	if height, measured := m.historyCompositeListHeight(c); measured {
 		// Rows are fixed 52-DIP boxes. An exact whole-row height keeps
 		// the viewport from clipping the last row; the spacer holds the
@@ -277,6 +279,93 @@ func (m *Model) historyCompositeTable(c *ui.Context, t *ui.Theme, tok *Tokens, e
 	if list.Submitted() {
 		m.openHistoryRow(m.historyRow)
 	}
+}
+
+// historySnapDelay is how long the composite waits after the last precise
+// scroll move before snapping a small offset to the nearest row.
+const historySnapDelay = 120 * time.Millisecond
+
+// snapHistoryScroll aligns the composite's vertical offset with the
+// 52-DIP row boundary a precise scroll can leave between rows. A trackpad
+// delivers small moves, so the first half-row of travel accumulates rather
+// than being rounded away; crossing the midpoint snaps one row in the
+// direction of the move, and a debounced frame snaps the nearest row once
+// the moves stop. The header and the fixed action column follow only the
+// horizontal offset and stay put.
+func (m *Model) snapHistoryScroll(c *ui.Context, rows int) {
+	if rows == 0 {
+		return
+	}
+	y := m.historyScroll.Y
+	if y < 0 {
+		m.historyScroll.Y = 0
+		y = 0
+	}
+	now := c.Now()
+	if y == m.historyScrollSeen {
+		if m.historyScrollSnapAt.IsZero() || now.Before(m.historyScrollSnapAt) {
+			return
+		}
+		if wait := m.historyScrollMovedAt.Add(historySnapDelay).Sub(now); wait > 0 {
+			m.historyScrollSnapAt = now.Add(wait)
+			c.After(wait)
+			return
+		}
+		m.historyScrollSnapAt = time.Time{}
+		m.applyHistoryScrollSnap(historyRowOffset(y))
+		return
+	}
+
+	previous := m.historyScrollSeen
+	m.historyScrollSeen = y
+	m.historyScrollMovedAt = now
+	if m.historyScrollSnapAt.IsZero() || !now.Before(m.historyScrollSnapAt) {
+		m.historyScrollSnapAt = now.Add(historySnapDelay)
+		c.After(historySnapDelay)
+	}
+	if target, ok := historyMidpointSnap(y, previous); ok {
+		m.applyHistoryScrollSnap(target)
+	}
+}
+
+// historyMidpointSnap returns the row boundary a move crosses. A downward
+// move snaps up after half a row, an upward move snaps down after half;
+// smaller moves stay where they are so the next one accumulates.
+func historyMidpointSnap(y, previous float32) (float32, bool) {
+	lower := float32(math.Floor(float64(y)/historyRowHeight860)) * historyRowHeight860
+	offset := y - lower
+	if y > previous {
+		if offset >= historyRowHeight860/2 {
+			return lower + historyRowHeight860, true
+		}
+		return 0, false
+	}
+	if offset > 0 && offset <= historyRowHeight860/2 {
+		return lower, true
+	}
+	return 0, false
+}
+
+// historyRowOffset is the nearest 52-DIP boundary to y.
+func historyRowOffset(y float32) float32 {
+	return float32(math.Round(float64(y)/historyRowHeight860)) * historyRowHeight860
+}
+
+// applyHistoryScrollSnap moves the tracked offset and the list to one row
+// boundary. MaxY keeps the end of the content in reach.
+func (m *Model) applyHistoryScrollSnap(target float32) {
+	if maxY := m.historyScroll.MaxY; maxY > 0 && target > maxY {
+		target = maxY
+	}
+	if target < 0 {
+		target = 0
+	}
+	m.historyScrollSeen = target
+	if target == m.historyScroll.Y {
+		return
+	}
+	m.historyScroll.Y = target
+	m.historyList.ScrollTo(int(math.Round(float64(target)/historyRowHeight860)), ui.Start)
 }
 
 // historyCompositeListHeight returns the largest whole number of 52-DIP

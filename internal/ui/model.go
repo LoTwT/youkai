@@ -238,6 +238,12 @@ type Model struct {
 	historyScroll   ui.ScrollState
 	historyMenuID   string
 	historyMenuOpen bool
+	// The composite table snaps precise scrolls to whole 52-DIP rows.
+	// historyScrollSeen is the offset the last frame observed, and the two
+	// times debounce the rest snap after the user stops moving.
+	historyScrollSeen    float32
+	historyScrollMovedAt time.Time
+	historyScrollSnapAt  time.Time
 	// The 860 composite's measured frame: the panel, its header and its
 	// footer give the whole-row list viewport once laid out.
 	historyPanel  ui.Ref

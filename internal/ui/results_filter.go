@@ -441,7 +441,7 @@ func (m *Model) registerResultsShortcuts(c *ui.Context) {
 	if !m.cfg.PageLayout {
 		return
 	}
-	if m.reviewSaving || m.exportBusy() {
+	if m.reviewSaving || m.loading || m.exportBusy() {
 		return
 	}
 	if m.edit != nil {
@@ -503,6 +503,18 @@ func resultDisplayIndex(visible []int, full int) int {
 // narrowResults reports the list ↔ detail layout below the 1024 split.
 func (m *Model) narrowResults() bool {
 	return m.cfg.PageLayout && !resultsSideBySide(m.contentWidth)
+}
+
+// resultDetailHasRow reports whether a narrow detail page still has a row
+// in the current filtered view. A confirmation can remove the chosen row
+// from the filter while other pending rows remain outside it; the detail
+// then must fall back to the list instead of an empty page with no way
+// back.
+func (m *Model) resultDetailHasRow() bool {
+	if m.rec == nil || m.selected < 0 || m.selected >= len(m.rec.Rows) {
+		return false
+	}
+	return resultDisplayIndex(m.visibleResultRows(), m.selected) >= 0
 }
 
 // openResultDetail moves a narrow results page from its list to the
@@ -592,7 +604,7 @@ func (m *Model) evidenceStacked() bool {
 // otherwise name the keys their layout registers. Narrow list pages open a
 // row with Return.
 func (m *Model) resultShortcutText() string {
-	if m.reviewSaving || m.exportBusy() {
+	if m.reviewSaving || m.loading || m.exportBusy() {
 		return ""
 	}
 	if m.edit != nil {

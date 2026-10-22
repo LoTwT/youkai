@@ -73,6 +73,28 @@ func openResponsiveResults(t *testing.T, rec *record.Recovery, width, height int
 	return m, q, tt
 }
 
+// openReviewableResults is openResponsiveResults with the revision save the
+// review actions need.
+func openReviewableResults(t *testing.T, rec *record.Recovery, width, height int) (*Model, *queueUpdater, *ui.Tester, *fakeService) {
+	t.Helper()
+	svc := &fakeService{
+		list: []record.RecordInfo{{
+			ID: "rec", LatestRevision: 1,
+			SavedAt: time.Date(2026, 10, 21, 14, 2, 0, 0, time.UTC),
+		}},
+		loads: map[string]*record.Recovery{"rec": rec},
+	}
+	installReviewSave(svc)
+	m, q := newTestModel(t, Config{Service: svc, PageLayout: true})
+	m.SetContentSize(width, height)
+	tt := ui.NewTester(m.View, width, height)
+	settle(t, m, q, tt)
+	m.histChoice = slotHistoryLabel(t, m, "rec")
+	m.OpenHistory()
+	settle(t, m, q, tt)
+	return m, q, tt, svc
+}
+
 // TestResultsResponsiveListDetail checks the confirmed breakpoint: 1024
 // and wider show the table beside the detail, while 1020 and 860 are whole
 // list and detail pages. Returning from the detail restores the filter,
@@ -396,6 +418,70 @@ func TestResultsNarrowScrollRestore(t *testing.T) {
 	}
 	if m.selectedSeq() != 121 || m.filter != resultFilterPending {
 		t.Fatalf("the return lost the selection/filter: seq %d filter %v", m.selectedSeq(), m.filter)
+	}
+}
+
+// TestResultsNarrowFilteredExhaustionLeavesDetail checks the narrow detail
+// after confirming the last row of the current filter while other pending
+// rows remain outside it: the page must return to the list and its empty
+// filtered state, not stay on an empty detail with no way back.
+func TestResultsNarrowFilteredExhaustionLeavesDetail(t *testing.T) {
+	for _, tc := range []struct {
+		width  int
+		height int
+	}{
+		{width: 860, height: 560},
+		{width: 1020, height: 700},
+	} {
+		t.Run(fmt.Sprintf("width-%d", tc.width), func(t *testing.T) {
+			m, q, tt, svc := openReviewableResults(t,
+				recovery(reviewRowItem(t, 1, 12), reviewRowItem(t, 2, 10)), tc.width, tc.height)
+			if !m.narrowResults() {
+				t.Fatalf("%d is not the narrow results layout", tc.width)
+			}
+			if m.pendingCount() != 2 {
+				t.Fatalf("the record starts with %d pending rows, want 2", m.pendingCount())
+			}
+
+			// Only the first row (level 12) is in the filtered view; the
+			// second pending row sits outside it.
+			m.search = "12"
+			m.settleResultSelection()
+			tt.Frame()
+			if visible := m.visibleResultRows(); len(visible) != 1 || visible[0] != 0 {
+				t.Fatalf("the filtered view = %v, want row 0 only", visible)
+			}
+			m.openResultDetail()
+			tt.Frame()
+			if !m.resultsDetail {
+				t.Fatal("the narrow results page did not open the detail")
+			}
+
+			tt.Key(ui.Cmd, ui.KeyEnter)
+			settle(t, m, q, tt)
+			if got := svc.saveCount(); got != 1 {
+				t.Fatalf("the confirmation saved %d times, want 1", got)
+			}
+			if m.pendingCount() != 1 {
+				t.Fatalf("pending after the confirmation = %d, want the row outside the filter",
+					m.pendingCount())
+			}
+			if m.resultsDetail {
+				t.Fatal("the detail stayed open with no visible row")
+			}
+			if tt.HasText("选择一条记录查看详情。") {
+				t.Fatal("the empty detail remained on screen")
+			}
+			if tt.HasText("← 结果列表") {
+				t.Fatal("the list page still shows the detail's back action")
+			}
+			if !tt.HasText("没有符合搜索或筛选条件的条目。") {
+				t.Fatalf("the list does not show its filtered empty state: %q", tt.Texts())
+			}
+			if !tt.HasText("待校对 1") {
+				t.Fatalf("the filter bar lost the outside pending count: %q", tt.Texts())
+			}
+		})
 	}
 }
 
