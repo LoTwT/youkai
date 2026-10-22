@@ -85,6 +85,7 @@ const (
 	navOpenHistory
 	navShowLive
 	navExit
+	navStartScan
 )
 
 // navigationRequest is a navigation deferred until unsaved input is saved
@@ -503,6 +504,8 @@ func (m *Model) runNavigation(req navigationRequest) {
 		m.performShowLive()
 	case navExit:
 		m.beginExit()
+	case navStartScan:
+		m.Start()
 	}
 }
 

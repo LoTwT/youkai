@@ -375,8 +375,8 @@ func (m *Model) resultsFilterBar(c *ui.Context, t *ui.Theme) {
 				m.setResultFilter(filter)
 			}
 		}
-		search := ui.SearchField(c, &m.search).Width(t.Space(48)).
-			Placeholder("搜索序号、套装、主词条")
+		search := m.noteTextInputFocus(ui.SearchField(c, &m.search).Width(t.Space(48)).
+			Placeholder("搜索序号、套装、主词条"))
 		if search.Changed() {
 			changed = true
 		}
@@ -431,24 +431,43 @@ func resultFilterLabel(value, allLabel string, options []resultFilterOption) str
 	return value
 }
 
-// registerResultsShortcuts wires the results page's keys: ⌘J moves to
-// the next pending item in the current filter and ⌘↵ confirms the chosen
-// one. The status bar names only these keys.
+// registerResultsShortcuts wires the results page's keys. In the editor
+// ⌘↵ saves the draft and confirms it, and ⌘S saves it without confirming;
+// both keep the editor open on failure. ⌘J moves to the next pending item
+// through requestNavigation, so a dirty draft holds the move behind the
+// unsaved prompt. The status bar names only the keys that are registered
+// and usable in the current layout.
 func (m *Model) registerResultsShortcuts(c *ui.Context) {
 	if !m.cfg.PageLayout {
 		return
 	}
+	if m.reviewSaving || m.exportBusy() {
+		return
+	}
+	if m.edit != nil {
+		c.OnShortcut(ui.Cmd, ui.KeyEnter, func() {
+			// The editor's draft is what ⌘↵ confirms; confirming the
+			// persisted row here would silently drop the input.
+			m.saveEdit(reviewConfirmNext, nil)
+		})
+		c.OnShortcut(ui.Cmd, ui.KeyS, func() {
+			m.saveEdit(reviewSave, nil)
+		})
+	} else {
+		c.OnShortcut(ui.Cmd, ui.KeyEnter, func() {
+			m.confirmCurrent()
+		})
+	}
 	c.OnShortcut(ui.Cmd, ui.KeyJ, func() {
 		m.selectNextPendingResult()
-	})
-	c.OnShortcut(ui.Cmd, ui.KeyEnter, func() {
-		m.confirmCurrent()
 	})
 }
 
 // selectNextPendingResult moves the selection to the next pending row in
 // the current filtered view, wrapping around. It never leaves the view for
-// another slot.
+// another slot. The move goes through requestNavigation, so an open editor
+// with unsaved input holds it behind the save/discard/stay prompt instead
+// of dropping the draft.
 func (m *Model) selectNextPendingResult() {
 	visible := m.visibleResultRows()
 	if len(visible) == 0 {
@@ -568,10 +587,17 @@ func (m *Model) evidenceStacked() bool {
 	return m.cfg.PageLayout && m.resultsDetailWidth() < 600
 }
 
-// resultShortcutText is the results page's status-bar keys. Narrow list
-// pages open a row with Return; both detail layouts confirm the chosen row
-// with ⌘↵ and move with ⌘J.
+// resultShortcutText is the results page's status-bar keys. An open
+// editor names its save-and-confirm and save keys; the list and detail
+// otherwise name the keys their layout registers. Narrow list pages open a
+// row with Return.
 func (m *Model) resultShortcutText() string {
+	if m.reviewSaving || m.exportBusy() {
+		return ""
+	}
+	if m.edit != nil {
+		return "⌘↵ 保存并确认并下一项  ·  ⌘S 保存修改"
+	}
 	if m.rec == nil || len(m.rec.Rows) == 0 || m.completionVisible() {
 		return ""
 	}

@@ -127,7 +127,7 @@ func (m *Model) historyPage(c *ui.Context, t *ui.Theme) {
 
 	ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
 		ui.Text(c, "搜索日期").TextColor(tok.TextMuted)
-		ui.TextInput(c, &m.historyFilter).Width(160).Placeholder("YYYY-MM-DD")
+		m.noteTextInputFocus(ui.TextInput(c, &m.historyFilter).Width(160).Placeholder("YYYY-MM-DD"))
 		if m.historyFilterInvalid() {
 			ui.Text(c, "格式应为 YYYY-MM-DD。").TextColor(t.Danger).FontSize(t.FontSize * 0.9)
 		}
@@ -711,7 +711,7 @@ func (m *Model) legacyHistoryActions(c *ui.Context, t *ui.Theme) {
 	selected := m.selectedHistoryIDs()
 	ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
 		ui.Text(c, "日期筛选").TextColor(t.TextMuted)
-		ui.TextInput(c, &m.historyFilter).Width(110).Placeholder("YYYY-MM-DD")
+		m.noteTextInputFocus(ui.TextInput(c, &m.historyFilter).Width(110).Placeholder("YYYY-MM-DD"))
 		if ui.Button(c, "清除筛选").Clicked() {
 			m.historyFilter = ""
 		}
