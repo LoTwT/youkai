@@ -769,7 +769,8 @@ func TestFileEvidence(t *testing.T) {
 
 // TestResultsSideBySideBreakpoint guards the confirmed 1024 breakpoint:
 // 1024 and wider split the table and detail, while 1020 and 860 are whole
-// list/detail pages. The split table's columns must fit its 420-DIP pane.
+// list/detail pages. The table is 420 DIPs at 1024 and 560 DIPs at 1440,
+// and each column set must fit and fill its pane.
 func TestResultsSideBySideBreakpoint(t *testing.T) {
 	if resultsSideBySideMinWidth != 1024 {
 		t.Fatalf("results breakpoint = %d, want 1024", resultsSideBySideMinWidth)
@@ -779,21 +780,46 @@ func TestResultsSideBySideBreakpoint(t *testing.T) {
 			t.Fatalf("results split side by side at %d", width)
 		}
 	}
-	for _, width := range []int{1024, 1440} {
+	for _, width := range []int{1024, 1439, 1440} {
 		if !resultsSideBySide(width) {
 			t.Fatalf("results did not split side by side at %d", width)
 		}
 	}
-	fixed := float32(0)
-	for _, column := range splitResultColumns {
-		if column.Width > 0 {
-			fixed += column.Width
-		}
-		if column.MinWidth > 0 {
-			fixed += column.MinWidth
+	for _, tc := range []struct {
+		width int
+		want  float32
+	}{
+		{width: 1024, want: 420},
+		{width: 1439, want: 420},
+		{width: 1440, want: 560},
+	} {
+		if got := resultsSplitTableWidth(tc.width); got != tc.want {
+			t.Errorf("results table at %d = %v, want %v", tc.width, got, tc.want)
 		}
 	}
-	if fixed > 420 {
-		t.Fatalf("the split table's columns take %v DIPs, want at most the 420-DIP pane", fixed)
+	for _, tc := range []struct {
+		width int
+		table float32
+	}{
+		{width: 1024, table: 420},
+		{width: 1440, table: 560},
+	} {
+		columns := resultsColumnsFor(tc.width)
+		explicit := float32(0)
+		for _, column := range columns {
+			explicit += column.Width
+		}
+		if explicit > tc.table {
+			t.Errorf("the columns at %d take %v DIPs, want at most the %v-DIP pane", tc.width, explicit, tc.table)
+		}
+		if remaining := tc.table - explicit; remaining < columns[len(columns)-1].MinWidth {
+			t.Errorf("the state column at %d gets %v DIPs, want at least %v",
+				tc.width, remaining, columns[len(columns)-1].MinWidth)
+		}
+		if tc.width >= 1440 {
+			if columns[1].Width != 120 || columns[3].Width != 140 {
+				t.Errorf("the 1440 set/main columns are %v/%v, want 120/140", columns[1].Width, columns[3].Width)
+			}
+		}
 	}
 }

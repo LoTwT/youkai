@@ -356,6 +356,7 @@ func (m *Model) SetContentSize(width, height int) {
 		return
 	}
 	m.contentWidth, m.contentHeight = width, height
+	m.split = resultsSplitTableWidth(width)
 	if m.upd != nil {
 		m.upd.Update(func() {})
 	}

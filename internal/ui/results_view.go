@@ -35,11 +35,44 @@ var splitResultColumns = []ui.TableColumn{
 	{Title: "状态", MinWidth: 110},
 }
 
+// wideSplitResultColumns fills the 1440 layout's 560-DIP table: the set
+// and main-stat columns take the extra room and the state column absorbs
+// what is left, so the table never leaves an empty right edge.
+var wideSplitResultColumns = []ui.TableColumn{
+	{Title: "序号", Width: 40, Align: ui.End, Fixed: true},
+	{Title: "套装", Width: 120, Fixed: true},
+	{Title: "槽位·等级", Width: 84, Fixed: true},
+	{Title: "主词条", Width: 140},
+	{Title: "状态", MinWidth: 110},
+}
+
 // resultsSideBySideMinWidth starts the results page's side-by-side split.
 // At 1024 the page keeps the 144-DIP rail and 24 DIP of padding; the table
 // takes 420 DIPs, leaving the detail pane about 408 DIPs after its own
 // padding. Below it the list and the detail are separate full-width pages.
 const resultsSideBySideMinWidth = 1024
+
+// resultsWideSplitMinWidth starts the 1440 layout's wider table.
+const resultsWideSplitMinWidth = 1440
+
+// resultsSplitTableWidth is the table pane's design width: 560 DIPs on
+// 1440 screens and 420 DIPs from 1024 through 1439. The split divider and
+// the detail take the rest.
+func resultsSplitTableWidth(contentWidth int) float32 {
+	if contentWidth >= resultsWideSplitMinWidth {
+		return 560
+	}
+	return 420
+}
+
+// resultsColumnsFor picks the column widths that fill the current split
+// table.
+func resultsColumnsFor(contentWidth int) []ui.TableColumn {
+	if contentWidth >= resultsWideSplitMinWidth {
+		return wideSplitResultColumns
+	}
+	return splitResultColumns
+}
 
 func resultsSideBySide(contentWidth int) bool {
 	return contentWidth >= resultsSideBySideMinWidth
@@ -214,7 +247,7 @@ func (m *Model) tablePane(c *ui.Context) {
 
 	columns := resultColumns
 	if m.cfg.PageLayout {
-		columns = splitResultColumns
+		columns = resultsColumnsFor(m.contentWidth)
 	}
 	m.list.Key = func(row int) any {
 		if row < 0 || row >= len(visible) {

@@ -140,7 +140,8 @@ func TestResultsResponsiveListDetail(t *testing.T) {
 }
 
 // TestResultsSplitAt1024 checks that 1024 is the side-by-side layout: the
-// table takes its 420-DIP pane and the detail stays visible beside it.
+// table takes its 420-DIP pane, the detail stays visible beside it and the
+// evidence uses the 224×112 size.
 func TestResultsSplitAt1024(t *testing.T) {
 	m, _, tt := openResponsiveResults(t, responsiveResultRecord(t), 1024, 700)
 	if !resultsSideBySide(m.contentWidth) {
@@ -149,12 +150,54 @@ func TestResultsSplitAt1024(t *testing.T) {
 	if m.split != 420 {
 		t.Fatalf("the results table is %v DIPs wide, want 420", m.split)
 	}
+	if width, height := m.evidenceDisplaySize(); width != 224 || height != 112 {
+		t.Fatalf("the 1024 evidence is %v×%v, want 224×112", width, height)
+	}
 	if tt.HasText("← 结果列表") {
 		t.Fatal("the side-by-side layout shows the narrow detail's back action")
 	}
 	table, ok := tt.Find("主词条")
 	if !ok {
 		t.Fatalf("the split table header is missing: %q", tt.Texts())
+	}
+	detail, ok := tt.Find("字段（只读）")
+	if !ok {
+		t.Fatalf("the detail form is missing: %q", tt.Texts())
+	}
+	if detail.X <= table.X {
+		t.Fatalf("the detail at %v is not right of the table at %v", detail, table)
+	}
+}
+
+// TestResultsWideSplitAt1440 checks the 1440 layout: a 560-DIP table with
+// the widened set/main columns, a detail pane that keeps the design's
+// ~612-DIP room, and 340×170 evidence.
+func TestResultsWideSplitAt1440(t *testing.T) {
+	const detailTarget = 612
+	m, _, tt := openResponsiveResults(t, responsiveResultRecord(t), 1440, 900)
+	if !resultsSideBySide(m.contentWidth) {
+		t.Fatal("1440 did not use the side-by-side results split")
+	}
+	if m.split != 560 {
+		t.Fatalf("the results table is %v DIPs wide, want 560", m.split)
+	}
+	if got := m.resultsDetailWidth(); got < detailTarget || got > 700 {
+		t.Fatalf("the detail pane is %v DIPs wide, want about %v", got, detailTarget)
+	}
+	if width, height := m.evidenceDisplaySize(); width != 340 || height != 170 {
+		t.Fatalf("the 1440 evidence is %v×%v, want 340×170", width, height)
+	}
+	if tt.HasText("← 结果列表") {
+		t.Fatal("the 1440 split shows the narrow detail's back action")
+	}
+	columns := resultsColumnsFor(1440)
+	if columns[1].Title != "套装" || columns[1].Width != 120 ||
+		columns[3].Title != "主词条" || columns[3].Width != 140 {
+		t.Fatalf("the 1440 columns are %+v", columns)
+	}
+	table, ok := tt.Find("主词条")
+	if !ok {
+		t.Fatalf("the wide table header is missing: %q", tt.Texts())
 	}
 	detail, ok := tt.Find("字段（只读）")
 	if !ok {
