@@ -98,7 +98,7 @@ func (m *Model) resultsArea(c *ui.Context, t *ui.Theme) {
 		if !m.cfg.PageLayout {
 			m.savePromptArea(c, t)
 			if len(m.history) > 0 {
-				m.historyActions(c, t)
+				m.legacyHistoryActions(c, t)
 			}
 		}
 		if m.histErr != "" {
