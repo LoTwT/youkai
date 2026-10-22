@@ -465,12 +465,16 @@ func (m *Model) storagePromptArea(c *ui.Context, t *ui.Theme) {
 			ui.Text(c, storagePromptText(p))
 		}
 		ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
+			// The prompt opens on its safe choice: Enter never clears
+			// anything until the user deliberately moves to confirm.
+			cancel := ui.Button(c, "取消").Disabled(p.running)
+			cancel.AutoFocus()
+			if cancel.Clicked() {
+				m.CancelStorageClear()
+			}
 			confirm := ui.Button(c, "确认清理").Disabled(p.running || p.previewing || !p.ready)
 			if confirm.Clicked() {
 				m.ConfirmStorageClear()
-			}
-			if ui.Button(c, "取消").Disabled(p.running).Clicked() {
-				m.CancelStorageClear()
 			}
 			if p.running {
 				ui.Text(c, "正在清理……").TextColor(t.TextMuted)
@@ -745,12 +749,16 @@ func (m *Model) cleanupPromptArea(c *ui.Context, t *ui.Theme) {
 				TextColor(t.TextMuted).FontSize(t.FontSize * 0.9)
 		}
 		ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
+			// The destructive confirmation opens on 取消, so a stray Enter
+			// closes it instead of deleting anything.
+			cancel := ui.Button(c, "取消").Disabled(p.running)
+			cancel.AutoFocus()
+			if cancel.Clicked() {
+				m.CancelCleanup()
+			}
 			confirm := ui.Button(c, "确认删除").Disabled(p.running || p.previewing || !p.ready)
 			if confirm.Clicked() {
 				m.ConfirmCleanup()
-			}
-			if ui.Button(c, "取消").Disabled(p.running).Clicked() {
-				m.CancelCleanup()
 			}
 			if p.running {
 				ui.Text(c, "正在删除……").TextColor(t.TextMuted)
@@ -782,57 +790,87 @@ func cleanupPreviewText(p *cleanupPrompt) string {
 	}
 }
 
-// storageArea is the storeroom view: measured history, screenshot, cache
-// and log footprints plus the data volume's free space, with the two bulk
-// deletion entries kept separate from cache/log housekeeping.
+// storageArea is the legacy single-column storeroom view. The settings
+// page composes the same pieces as its own cards.
 func (m *Model) storageArea(c *ui.Context, t *ui.Theme) {
 	ui.Column(c).Gap(t.Space(1)).Children(func() {
 		ui.Text(c, "存储管理").FontWeight(600)
-		switch {
-		case m.storageLoading:
-			ui.Text(c, "正在计算占用……").TextColor(t.TextMuted)
-		case m.storageErr != "":
-			ui.Text(c, "占用读取失败："+m.storageErr).TextColor(t.Danger)
-		case m.storage != nil:
-			ui.Text(c, m.storageSummary()).TextColor(t.TextMuted)
-		}
-		ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
-			if m.cfg.OpenDataDirectory != nil {
-				if ui.Button(c, "打开数据目录").Clicked() {
-					m.OpenDataDirectory()
-				}
-			}
-			if ui.Button(c, "清缓存").Disabled(m.storageLoading).Clicked() {
-				m.RequestCacheClear()
-			}
-			if ui.Button(c, "清旧日志").Disabled(m.storageLoading).Clicked() {
-				m.RequestOldLogClear()
-			}
-			if ui.Button(c, "刷新占用").Disabled(m.storageLoading).Clicked() {
-				m.refreshStorage()
-			}
-		})
-		blocked := m.cleanupBlockedReason()
-		ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
-			if ui.Button(c, "删除全部截图").Disabled(blocked != "").Clicked() {
-				m.RequestAllScreenshotCleanup()
-			}
-			if ui.Button(c, "删除全部记录").Disabled(blocked != "").Clicked() {
-				m.RequestAllRecordCleanup()
-			}
-			if blocked != "" {
-				ui.Text(c, blocked).TextColor(t.TextMuted).FontSize(t.FontSize * 0.9)
-			}
-		})
-		if m.cleanupNotice != "" {
-			ui.Text(c, m.cleanupNotice)
-		}
-		m.storagePromptArea(c, t)
-		if m.cleanup != nil && m.cleanup.target.all() {
-			m.cleanupPromptArea(c, t)
-		}
+		m.storageSummaryLine(c, t)
+		m.storageHousekeepingRow(c, t, true)
+		m.bulkCleanupRow(c, t)
+		m.cleanupFeedbackArea(c, t)
 		m.closeBehaviorArea(c, t)
 	})
+}
+
+// storageSummaryLine shows the measured footprint, or the state that
+// replaces it; a failed measurement is never presented as stale numbers.
+func (m *Model) storageSummaryLine(c *ui.Context, t *ui.Theme) {
+	switch {
+	case m.storageLoading:
+		ui.Text(c, "正在计算占用……").TextColor(t.TextMuted)
+	case m.storageErr != "":
+		ui.Text(c, "占用读取失败："+m.storageErr).TextColor(t.Danger)
+	case m.storage != nil:
+		ui.Text(c, m.storageSummary()).TextColor(t.TextMuted)
+	}
+}
+
+// storageHousekeepingRow exposes the data root and the two rebuildable
+// clears. includeOpenDir is false where another settings group owns the
+// directory action.
+func (m *Model) storageHousekeepingRow(c *ui.Context, t *ui.Theme, includeOpenDir bool) {
+	ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
+		if includeOpenDir && m.cfg.OpenDataDirectory != nil {
+			if ui.Button(c, "打开数据目录").Clicked() {
+				m.OpenDataDirectory()
+			}
+		}
+		if ui.Button(c, "清缓存").Disabled(m.storageLoading).Clicked() {
+			m.RequestCacheClear()
+		}
+		if ui.Button(c, "清旧日志").Disabled(m.storageLoading).Clicked() {
+			m.RequestOldLogClear()
+		}
+		if ui.Button(c, "刷新占用").Disabled(m.storageLoading).Clicked() {
+			m.refreshStorage()
+		}
+	})
+}
+
+// bulkCleanupRow is the two all-record deletion entries. The settings
+// danger zone and the legacy storeroom share it, so wording, the disabled
+// reason and the measured confirmation stay identical.
+func (m *Model) bulkCleanupRow(c *ui.Context, t *ui.Theme) {
+	_, tok := themeWithTokens(t, c.Preferences())
+	blocked := m.cleanupBlockedReason()
+	ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
+		dangerButton := func(label string, action func()) {
+			button := ui.Button(c, label).TextColor(tok.DangerFG).
+				Background(tok.SurfaceControl).Border(1, tok.DangerBorder)
+			if button.Disabled(blocked != "").Clicked() {
+				action()
+			}
+		}
+		dangerButton("删除全部截图", m.RequestAllScreenshotCleanup)
+		dangerButton("删除全部记录", m.RequestAllRecordCleanup)
+		if blocked != "" {
+			ui.Text(c, blocked).TextColor(t.TextMuted).FontSize(t.FontSize * 0.9)
+		}
+	})
+}
+
+// cleanupFeedbackArea shows the last result and any open measured prompt.
+// The bulk entries only show their own prompt; a single record's prompt
+// lives where that record is shown.
+func (m *Model) cleanupFeedbackArea(c *ui.Context, t *ui.Theme) {
+	if m.cleanupNotice != "" {
+		ui.Text(c, m.cleanupNotice)
+	}
+	m.storagePromptArea(c, t)
+	if m.cleanup != nil && m.cleanup.target.all() {
+		m.cleanupPromptArea(c, t)
+	}
 }
 
 func (m *Model) storageSummary() string {
