@@ -767,36 +767,59 @@ func TestFileEvidence(t *testing.T) {
 	}
 }
 
-// TestResultsSideBySideKeepsQualityColumnReadable checks that the
-// side-by-side results split does not start before the quality column can
-// keep a readable width. The page is the window less the rail and the
-// page padding, the table takes 57% of it, and the fixed columns take 396
-// DIPs.
-func TestResultsSideBySideKeepsQualityColumnReadable(t *testing.T) {
-	const (
-		rail     = 64
-		padding  = 24
-		split    = 0.57
-		fixed    = 40 + 90 + 84 + 72 + 110
-		readable = 300
-	)
-	qualityAt := func(width int) float32 {
-		return float32(width-rail-padding)*split - fixed
+// TestResultsSideBySideBreakpoint guards the confirmed 1024 breakpoint:
+// 1024 and wider split the table and detail, while 1020 and 860 are whole
+// list/detail pages. The table is 420 DIPs at 1024 and 560 DIPs at 1440,
+// and each column set must fit and fill its pane.
+func TestResultsSideBySideBreakpoint(t *testing.T) {
+	if resultsSideBySideMinWidth != 1024 {
+		t.Fatalf("results breakpoint = %d, want 1024", resultsSideBySideMinWidth)
 	}
-	if got := qualityAt(resultsSideBySideMinWidth); got < readable {
-		t.Fatalf("quality column at the split = %.1f, want at least %d", got, readable)
-	}
-	if got := qualityAt(1440); got < readable {
-		t.Fatalf("quality column at 1440 = %.1f, want at least %d", got, readable)
-	}
-	for _, width := range []int{860, 1020, 1180} {
+	for _, width := range []int{860, 1020, 1023} {
 		if resultsSideBySide(width) {
 			t.Fatalf("results split side by side at %d", width)
 		}
 	}
-	for _, width := range []int{resultsSideBySideMinWidth, 1440} {
+	for _, width := range []int{1024, 1439, 1440} {
 		if !resultsSideBySide(width) {
 			t.Fatalf("results did not split side by side at %d", width)
+		}
+	}
+	for _, tc := range []struct {
+		width int
+		want  float32
+	}{
+		{width: 1024, want: 420},
+		{width: 1439, want: 420},
+		{width: 1440, want: 560},
+	} {
+		if got := resultsSplitTableWidth(tc.width); got != tc.want {
+			t.Errorf("results table at %d = %v, want %v", tc.width, got, tc.want)
+		}
+	}
+	for _, tc := range []struct {
+		width int
+		table float32
+	}{
+		{width: 1024, table: 420},
+		{width: 1440, table: 560},
+	} {
+		columns := resultsColumnsFor(tc.width)
+		explicit := float32(0)
+		for _, column := range columns {
+			explicit += column.Width
+		}
+		if explicit > tc.table {
+			t.Errorf("the columns at %d take %v DIPs, want at most the %v-DIP pane", tc.width, explicit, tc.table)
+		}
+		if remaining := tc.table - explicit; remaining < columns[len(columns)-1].MinWidth {
+			t.Errorf("the state column at %d gets %v DIPs, want at least %v",
+				tc.width, remaining, columns[len(columns)-1].MinWidth)
+		}
+		if tc.width >= 1440 {
+			if columns[1].Width != 120 || columns[3].Width != 140 {
+				t.Errorf("the 1440 set/main columns are %v/%v, want 120/140", columns[1].Width, columns[3].Width)
+			}
 		}
 	}
 }
