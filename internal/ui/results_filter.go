@@ -232,7 +232,8 @@ func (m *Model) settleResultSelection() {
 		return
 	}
 	if slices.Contains(visible, m.selected) {
-		m.clampResultScroll()
+		// The chosen row is still shown: keep the list where the user left
+		// it, including a scroll only the ListState knows about.
 		return
 	}
 	m.selected = visible[0]

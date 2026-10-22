@@ -542,9 +542,12 @@ func (m *Model) ShowLive() {
 	}
 	if m.activeSlot == resultSlotSession && m.sessionSlot.recordID == string(m.appliedSession) &&
 		m.rec != nil && m.rec.Live && m.rec.ID == string(m.appliedSession) {
-		// The session slot is already the live destination; opening "本次"
-		// from history only has to return to it.
+		// The session slot is already the live destination; returning from
+		// settings or the history list still starts a new visit. Revalidate
+		// the same slot so a confirmed-and-stayed row leaves the pending
+		// segment and the detail follows the rows the filter shows.
 		m.page = pageResults
+		m.activateResultSlot(resultSlotSession)
 		return
 	}
 	m.page = pageResults
