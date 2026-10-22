@@ -798,7 +798,15 @@ func (m *Model) OpenHistory() {
 			// An explicit reopen while the editor is unsettled still walks
 			// the save/discard/stay prompt; the settled action reloads.
 			m.requestNavigation(navigationRequest{kind: navOpenHistory, recordID: id, reload: true})
+			return
 		}
+		// Entering from the list is a new visit: the previous visit's
+		// confirmed-and-stayed rows leave the pending segment, so the
+		// selection is checked against the rows the filters still show.
+		// Everything else — filter, search, set/slot choices, a still
+		// visible selection and scroll — stays where the user left it.
+		m.clearRecentlyConfirmedFor(resultSlotHistory)
+		m.settleResultSelection()
 		return // the destination is already active: no reset, no reload
 	}
 	m.page = pageResults

@@ -635,6 +635,210 @@ func TestSidebarHistoryRevalidatesConfirmedStaySelection(t *testing.T) {
 	}
 }
 
+// TestHistoryConfirmedStayListReopenRevalidatesSelection checks the
+// "confirm and stay → back to the history list → open the same record"
+// path: the list drops the temporary marker, so the reopen must settle the
+// selection against the pending segment instead of leaving the confirmed
+// row's detail under a list that no longer shows it.
+func TestHistoryConfirmedStayListReopenRevalidatesSelection(t *testing.T) {
+	for _, width := range []int{1440, 1024} {
+		for _, rows := range []int{2, 1} {
+			t.Run(fmt.Sprintf("%d/%drows", width, rows), func(t *testing.T) {
+				items := []record.ItemRecord{
+					reviewRowItem(t, 1, 12),
+					reviewRowItem(t, 2, 10),
+				}[:rows]
+				rec := recovery(items...)
+				rec.Checkpoint.Session.SessionID = "r1"
+				svc := &fakeService{
+					list: []record.RecordInfo{{
+						ID:             "r1",
+						SavedAt:        time.Date(2026, 10, 20, 10, 0, 0, 0, time.UTC),
+						LatestRevision: 1,
+					}},
+					loads: map[string]*record.Recovery{"r1": rec},
+				}
+				installReviewSave(svc)
+				m, q := newTestModel(t, Config{Service: svc, PageLayout: true})
+				height := 700
+				if width == 1440 {
+					height = 900
+				}
+				m.SetContentSize(width, height)
+				tt := ui.NewTester(m.View, width, height)
+				settle(t, m, q, tt)
+				m.histChoice = slotHistoryLabel(t, m, "r1")
+				m.OpenHistory()
+				settle(t, m, q, tt)
+				if m.activeSlot != resultSlotHistory || m.rec == nil || m.rec.ID != "r1" {
+					t.Fatalf("the history record did not open: slot %v record %+v", m.activeSlot, m.rec)
+				}
+				loads := slotLoadCount(svc, "r1")
+				rowLabel := historyTimeText(m.history[0])
+
+				if err := tt.Click("确认"); err != nil {
+					t.Fatalf("click 确认: %v", err)
+				}
+				settle(t, m, q, tt)
+				wantVisible := 0
+				if rows == 2 {
+					// The confirmed row lingers in this visit's pending
+					// segment only while the results page stays open.
+					wantVisible = 2
+				}
+				if visible := m.visibleResultRows(); m.pendingCount() != rows-1 ||
+					len(visible) != wantVisible || m.selected != 0 || m.selectedSeq() != 1 {
+					t.Fatalf("confirm-stay setup: pending %d selected %d (seq %d) visible %v",
+						m.pendingCount(), m.selected, m.selectedSeq(), visible)
+				}
+
+				if err := tt.Click("← 返回历史"); err != nil {
+					t.Fatalf("click 返回历史: %v", err)
+				}
+				settle(t, m, q, tt)
+				if m.displayPage() != pageHistory {
+					t.Fatalf("returning to history shows page %v, want the list", m.displayPage())
+				}
+				if err := tt.Click(rowLabel); err != nil {
+					t.Fatalf("click the history row %q: %v", rowLabel, err)
+				}
+				tt.Key(0, ui.KeyEnter)
+				settle(t, m, q, tt)
+				if m.displayPage() != pageResults || m.activeSlot != resultSlotHistory ||
+					m.rec == nil || m.rec.ID != "r1" {
+					t.Fatalf("reopening = page %v slot %v record %+v",
+						m.displayPage(), m.activeSlot, m.rec)
+				}
+				visible := m.visibleResultRows()
+				want := -1
+				if len(visible) > 0 {
+					want = visible[0]
+				}
+				if m.selected != want {
+					t.Fatalf("the detail keeps a row outside the segment: selected %d, want %d (visible %v)",
+						m.selected, want, visible)
+				}
+				if m.selected >= 0 && m.selectedSeq() != m.rec.Rows[m.selected].Seq {
+					t.Fatalf("the selection sequence %d does not match row %d",
+						m.selectedSeq(), m.selected)
+				}
+				if m.scroll != 0 {
+					t.Fatalf("the fallback scroll is %d, want the first visible row", m.scroll)
+				}
+				switch rows {
+				case 2:
+					if len(visible) != 1 || visible[0] != 1 || m.selectedSeq() != 2 {
+						t.Fatalf("the reopened list shows %v selected %d, want only row 2",
+							visible, m.selected)
+					}
+					if !tt.HasText("2 · ") || tt.HasText("1 · ") {
+						t.Fatalf("the detail does not follow row 2: %q", tt.Texts())
+					}
+				case 1:
+					if len(visible) != 0 || m.selected != -1 {
+						t.Fatalf("the completed segment shows %v selected %d",
+							visible, m.selected)
+					}
+					if tt.HasText("1 · ") {
+						t.Fatalf("the empty list still shows the confirmed row's detail: %q", tt.Texts())
+					}
+					if !tt.HasText("结果已保存，没有待校对的条目。") {
+						t.Fatalf("the completed segment has no empty state: %q", tt.Texts())
+					}
+				}
+				if got := slotLoadCount(svc, "r1"); got != loads {
+					t.Fatalf("reopening from the list reloaded the record (%d loads, want %d)", got, loads)
+				}
+			})
+		}
+	}
+}
+
+// TestHistoryListReopenSettlesSelectionAgainstFilters checks that opening
+// the record already on screen from the list keeps its segment, set/slot
+// choices, selection and scroll, and falls back to the first visible row
+// when the chosen one no longer matches the filters.
+func TestHistoryListReopenSettlesSelectionAgainstFilters(t *testing.T) {
+	rec := manyPendingRecord(t, 30)
+	rec.Checkpoint.Session.SessionID = "r1"
+	svc := &fakeService{
+		list: []record.RecordInfo{{
+			ID:             "r1",
+			SavedAt:        time.Date(2026, 10, 20, 10, 0, 0, 0, time.UTC),
+			LatestRevision: 1,
+		}},
+		loads: map[string]*record.Recovery{"r1": rec},
+	}
+	m, q := newTestModel(t, Config{Service: svc, PageLayout: true})
+	m.SetContentSize(1024, 700)
+	tt := ui.NewTester(m.View, 1024, 700)
+	settle(t, m, q, tt)
+	m.histChoice = slotHistoryLabel(t, m, "r1")
+	m.OpenHistory()
+	settle(t, m, q, tt)
+	loads := slotLoadCount(svc, "r1")
+
+	m.filter = resultFilterAll
+	m.selected = 13
+	m.selectedSequence = m.rec.Rows[13].Seq
+	m.scroll = 5
+	m.list.ScrollTo(5, ui.Start)
+	tt.Frame()
+	rowLabel := historyTimeText(m.history[0])
+
+	backToRecord := func() {
+		t.Helper()
+		if err := tt.Click("← 返回历史"); err != nil {
+			t.Fatalf("click 返回历史: %v", err)
+		}
+		settle(t, m, q, tt)
+		if m.displayPage() != pageHistory {
+			t.Fatalf("returning to history shows page %v, want the list", m.displayPage())
+		}
+		if err := tt.Click(rowLabel); err != nil {
+			t.Fatalf("click the history row %q: %v", rowLabel, err)
+		}
+		tt.Key(0, ui.KeyEnter)
+		settle(t, m, q, tt)
+	}
+
+	backToRecord()
+	if m.displayPage() != pageResults || m.activeSlot != resultSlotHistory {
+		t.Fatalf("reopening = page %v slot %v", m.displayPage(), m.activeSlot)
+	}
+	if m.filter != resultFilterAll || m.search != "" {
+		t.Fatalf("the reopen reset the filters: filter %v search %q", m.filter, m.search)
+	}
+	if m.selected != 13 || m.selectedSeq() != 14 {
+		t.Fatalf("the reopen moved the visible selection: selected %d (seq %d)",
+			m.selected, m.selectedSeq())
+	}
+	tt.Frame()
+	if first, _ := m.list.Visible(); first != 5 {
+		t.Fatalf("the reopen reset the scroll: first %d, want 5", first)
+	}
+
+	// A selection the segment no longer shows falls back to its first row.
+	m.slotFilter = "2"
+	m.selected = 0
+	m.selectedSequence = 1
+	backToRecord()
+	visible := m.visibleResultRows()
+	if len(visible) == 0 || m.selected != visible[0] || m.selectedSeq() != 2 || m.scroll != 0 {
+		t.Fatalf("the hidden selection was kept: selected %d (seq %d) scroll %d visible %v",
+			m.selected, m.selectedSeq(), m.scroll, visible)
+	}
+	if m.slotFilter != "2" {
+		t.Fatalf("the fallback dropped the set/slot choice: %q", m.slotFilter)
+	}
+	if !tt.HasText("2 · ") {
+		t.Fatalf("the detail does not follow the fallback row: %q", tt.Texts())
+	}
+	if got := slotLoadCount(svc, "r1"); got != loads {
+		t.Fatalf("reopening from the list reloaded the record (%d loads, want %d)", got, loads)
+	}
+}
+
 // TestSidebarHistoryActiveDestinationIsNoOp checks that the rail's active
 // history destination ignores its own click: an unchanged editor stays
 // open, a dirty draft gets no save/discard prompt, and the record is not
