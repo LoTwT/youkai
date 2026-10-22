@@ -76,6 +76,9 @@ type navigationRequest struct {
 	kind     navKind
 	seq      int64
 	recordID string
+	// reload forces an explicit history reopen to reload its record instead
+	// of restoring the slot's stored view after a dirty prompt settled.
+	reload bool
 }
 
 // cloneDraft copies a draft including its substat slice.
@@ -476,7 +479,7 @@ func (m *Model) runNavigation(req navigationRequest) {
 			m.reviewNotice = ""
 		}
 	case navOpenHistory:
-		m.performOpenHistory(req.recordID)
+		m.performOpenHistory(req.recordID, req.reload)
 	case navShowLive:
 		m.performShowLive()
 	case navExit:

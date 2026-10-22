@@ -408,17 +408,26 @@ func TestOpenHistoryAndReturnToLive(t *testing.T) {
 		t.Fatalf("the history record did not open with its marks: %+v", m.rec)
 	}
 
-	// The live session's saved growth does not overwrite an open history
-	// record; returning to the live scan reloads it.
+	// The live session's saved growth updates the session slot without
+	// overwriting the open history record; returning restores that slot
+	// without another load.
+	svc.loads["s1"] = recovery(
+		item(1, record.StatusProduced, "", ""),
+		item(2, record.StatusProduced, "", ""),
+	)
 	m.Apply(snap("s1", 2, true, scan.PhaseCapturing, scan.Counts{Captured: 2}, 1, true, ""))
 	drainAll(t, m, q)
 	if m.rec.ID != "old" || m.rec.Live {
 		t.Fatalf("a live update overwrote the open history record: %+v", m.rec)
 	}
+	loadsBefore := len(svc.loadLog)
 	m.ShowLive()
 	drainAll(t, m, q)
-	if !m.rec.Live || m.rec.ID != "s1" || len(svc.loadLog) == 0 || svc.loadLog[len(svc.loadLog)-1] != "s1" {
-		t.Fatalf("returning to the live scan did not reload it: %+v", svc.loadLog)
+	if !m.rec.Live || m.rec.ID != "s1" || len(m.rec.Rows) != 2 {
+		t.Fatalf("returning to the live scan did not restore the session: %+v", m.rec)
+	}
+	if len(svc.loadLog) != loadsBefore {
+		t.Fatalf("returning to the live scan reloaded it: %v", svc.loadLog)
 	}
 
 	// A new session takes the results area back from a history record.
