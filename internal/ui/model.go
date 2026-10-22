@@ -253,10 +253,14 @@ type Model struct {
 
 	// The results table's place and its chosen row live in the active
 	// result slot's state; list keeps the toolkit's per-pass list state.
+	// tableSelected is the chosen display row of the filtered table, which
+	// maps back to the slot's full-row selected index.
 	list          ui.ListState
+	tableSelected int
 	split         float32
-	splitPercent  float32
-	splitVertical float32
+	// resultsDetail opens a narrow results page from its list to the
+	// chosen item's detail; it has no effect in the side-by-side split.
+	resultsDetail bool
 	// showEvidence reveals the detail pane's evidence area — screenshots,
 	// raw OCR lines, their provenance and model scores. It is off by
 	// default so the structured form stays the main view.
@@ -321,9 +325,7 @@ func New(cfg Config) *Model {
 	m := &Model{
 		cfg:              cfg,
 		source:           cfg.ScanSource,
-		split:            520,
-		splitPercent:     57,
-		splitVertical:    48,
+		split:            420,
 		contentWidth:     1020,
 		contentHeight:    700,
 		cache:            newEvidenceCache(cfg.Evidence, limit),
@@ -340,7 +342,7 @@ func New(cfg Config) *Model {
 	m.sessionSlot = resultSlot{kind: resultSlotSession, state: newResultSlotState()}
 	m.historySlot = resultSlot{kind: resultSlotHistory, state: newResultSlotState()}
 	m.resultSlotState = m.sessionSlot.state
-	m.list.Selected = &m.selected
+	m.list.Selected = &m.tableSelected
 	return m
 }
 
@@ -776,6 +778,8 @@ func (m *Model) performOpenHistory(id string, reload bool) {
 	m.resetResultSlot(history, id, false)
 	m.resultSlotState = history.state
 	m.resetResultList()
+	m.settleResultSelection()
+	m.resultsDetail = false
 	m.edit = nil
 	m.navPrompt = nil
 	m.reviewErr = ""

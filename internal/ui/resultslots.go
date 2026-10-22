@@ -16,8 +16,8 @@ const (
 	resultSlotHistory
 )
 
-// resultFilter is the results table's chosen segment. W2 stores it per
-// slot; the filtering interactivity arrives with W5.
+// resultFilter is the results table's chosen segment. Each slot keeps its
+// own segment, search text and set/slot choices.
 type resultFilter int
 
 const (
@@ -114,6 +114,8 @@ func (m *Model) activateResultSlot(kind resultSlotKind) {
 	}
 	m.resultSlotState = m.resultSlotFor(kind).state
 	m.resetResultList()
+	m.settleResultSelection()
+	m.resultsDetail = false
 	m.edit = nil
 	m.navPrompt = nil
 	m.reviewErr = ""
@@ -124,7 +126,7 @@ func (m *Model) activateResultSlot(kind resultSlotKind) {
 // resetResultList clears the table's per-destination scroll and selection
 // internals before the slot's own place is restored.
 func (m *Model) resetResultList() {
-	m.list = ui.ListState{Selected: &m.selected}
+	m.list = ui.ListState{Selected: &m.tableSelected}
 	if m.rec == nil {
 		m.selected = -1
 		m.scroll = 0
@@ -172,6 +174,8 @@ func (m *Model) showLiveSession(id string) {
 	m.resetResultSlot(&m.sessionSlot, id, true)
 	m.resultSlotState = m.sessionSlot.state
 	m.resetResultList()
+	m.settleResultSelection()
+	m.resultsDetail = false
 	m.edit = nil
 	m.navPrompt = nil
 	m.reviewErr = ""
@@ -264,6 +268,9 @@ func (m *Model) applyLoadedRecord(slot *resultSlot, id string, rec *record.Recov
 	m.selected = selected
 	m.selectedSequence = slot.state.selectedSequence
 	m.scroll = slot.state.scroll
+	m.settleResultSelection()
+	m.clampResultScroll()
+	m.selectedSequence = m.selectedSeq()
 	if m.scroll > 0 {
 		m.list.ScrollTo(m.scroll, ui.Start)
 	}

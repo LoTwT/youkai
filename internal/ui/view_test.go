@@ -767,36 +767,33 @@ func TestFileEvidence(t *testing.T) {
 	}
 }
 
-// TestResultsSideBySideKeepsQualityColumnReadable checks that the
-// side-by-side results split does not start before the quality column can
-// keep a readable width. The page is the window less the rail and the
-// page padding, the table takes 57% of it, and the fixed columns take 396
-// DIPs.
-func TestResultsSideBySideKeepsQualityColumnReadable(t *testing.T) {
-	const (
-		rail     = 64
-		padding  = 24
-		split    = 0.57
-		fixed    = 40 + 90 + 84 + 72 + 110
-		readable = 300
-	)
-	qualityAt := func(width int) float32 {
-		return float32(width-rail-padding)*split - fixed
+// TestResultsSideBySideBreakpoint guards the confirmed 1024 breakpoint:
+// 1024 and wider split the table and detail, while 1020 and 860 are whole
+// list/detail pages. The split table's columns must fit its 420-DIP pane.
+func TestResultsSideBySideBreakpoint(t *testing.T) {
+	if resultsSideBySideMinWidth != 1024 {
+		t.Fatalf("results breakpoint = %d, want 1024", resultsSideBySideMinWidth)
 	}
-	if got := qualityAt(resultsSideBySideMinWidth); got < readable {
-		t.Fatalf("quality column at the split = %.1f, want at least %d", got, readable)
-	}
-	if got := qualityAt(1440); got < readable {
-		t.Fatalf("quality column at 1440 = %.1f, want at least %d", got, readable)
-	}
-	for _, width := range []int{860, 1020, 1180} {
+	for _, width := range []int{860, 1020, 1023} {
 		if resultsSideBySide(width) {
 			t.Fatalf("results split side by side at %d", width)
 		}
 	}
-	for _, width := range []int{resultsSideBySideMinWidth, 1440} {
+	for _, width := range []int{1024, 1440} {
 		if !resultsSideBySide(width) {
 			t.Fatalf("results did not split side by side at %d", width)
 		}
+	}
+	fixed := float32(0)
+	for _, column := range splitResultColumns {
+		if column.Width > 0 {
+			fixed += column.Width
+		}
+		if column.MinWidth > 0 {
+			fixed += column.MinWidth
+		}
+	}
+	if fixed > 420 {
+		t.Fatalf("the split table's columns take %v DIPs, want at most the 420-DIP pane", fixed)
 	}
 }

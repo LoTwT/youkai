@@ -53,11 +53,14 @@ func (m *Model) displayPage() Page {
 func (m *Model) viewPages(c *ui.Context) {
 	tok := ApplyTheme(c)
 	t := c.Theme()
+	if m.displayPage() == pageResults {
+		m.registerResultsShortcuts(c)
+	}
 
 	ui.Row(c).Fill().Children(func() {
 		m.sidebar(c, t, tok)
 		ui.Divider(c)
-		ui.Column(c).Grow(1).Children(func() {
+		ui.Column(c).Grow(1).FillHeight().Children(func() {
 			m.pageBody(c, t)
 			m.pageActions(c, t, tok)
 			ui.Divider(c)
@@ -193,9 +196,26 @@ func (m *Model) pageStatusBar(c *ui.Context, t *ui.Theme) {
 	ui.Row(c).Background(t.Surface).Padding(t.Space(2), t.Space(3)).Children(func() {
 		ui.Text(c, m.pageStatusText()).TextColor(t.TextMuted).FontSize(t.FontSize * 0.85)
 		ui.Box(c).Grow(1)
-		ui.Text(c, "⌘↵ 确认并下一项  ·  ⌘S 保存修改  ·  ⌃⌥⌘S 停止扫描").
-			TextColor(t.TextMuted).FontSize(t.FontSize * 0.85)
+		if shortcuts := m.statusShortcutText(); shortcuts != "" {
+			ui.Text(c, shortcuts).TextColor(t.TextMuted).FontSize(t.FontSize * 0.85)
+		}
 	})
+}
+
+// statusShortcutText names only the keys this build registers for the
+// current page. The results page's keys follow its list/detail layout; the
+// scan page's stop key is the platform hotkey registered by the entry
+// point.
+func (m *Model) statusShortcutText() string {
+	switch m.displayPage() {
+	case pageResults:
+		return m.resultShortcutText()
+	case pageScan:
+		if m.snap.Busy || m.startReqID != "" {
+			return "⌃⌥⌘S 停止扫描"
+		}
+	}
+	return ""
 }
 
 func (m *Model) pageStatusText() string {
