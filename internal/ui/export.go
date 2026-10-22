@@ -128,6 +128,10 @@ func (m *Model) exportBlockedReason() string {
 		return "正在保存修改，完成前不能导出。"
 	case m.editingDirty():
 		return "有未保存的修改，保存或放弃后可导出。"
+	case m.loading:
+		return "正在加载最新检查点，加载完成前不能导出。"
+	case m.recErr != "":
+		return "记录读取失败，不能导出旧快照。"
 	case m.rec == nil || m.recData == nil:
 		return "结果尚未加载，不能导出。"
 	case m.rec.Live && m.snap.Busy:

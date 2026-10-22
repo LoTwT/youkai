@@ -692,3 +692,71 @@ func TestHistoryDateSearch(t *testing.T) {
 		t.Fatal("the history page added a source filter")
 	}
 }
+
+// TestHistoryCompositeShowsWholeRowsAt860 checks the 860 table's vertical
+// viewport: its list shows only complete 52-DIP rows, the footer never
+// overlaps the last row, and the same holds at the bottom of the scroll.
+func TestHistoryCompositeShowsWholeRowsAt860(t *testing.T) {
+	svc := &fakeService{history: historyTableRecords(12)}
+	m, q := newTestModel(t, Config{Service: svc, PageLayout: true, ExportSaver: &fakeExportSaver{}})
+	m.SetContentSize(860, 560)
+	tt := ui.NewTester(m.View, 860, 560)
+	settle(t, m, q, tt)
+	if !historyUsesComposite(860) {
+		t.Fatal("860 must use the composite table")
+	}
+	entries := m.visibleHistory()
+
+	footerRect := func() (ui.Rect, string) {
+		for _, text := range tt.Texts() {
+			if strings.HasPrefix(text, "共 ") {
+				if rect, ok := tt.Find(text); ok {
+					return rect, text
+				}
+			}
+		}
+		t.Fatalf("the table footer is missing: %q", tt.Texts())
+		return ui.Rect{}, ""
+	}
+	checkWholeRows := func(stage string) {
+		t.Helper()
+		first, last := m.historyList.Visible()
+		if first < 0 || last < first {
+			t.Fatalf("%s: the table shows no rows (%d..%d)", stage, first, last)
+		}
+		if count := last - first + 1; count != 7 {
+			t.Fatalf("%s: visible rows = %d, want 7 whole rows", stage, count)
+		}
+		footer, text := footerRect()
+		if !strings.Contains(text, fmt.Sprintf("显示 %d 条", last-first+1)) {
+			t.Fatalf("%s: footer %q disagrees with rows %d..%d", stage, text, first, last)
+		}
+		for row := first; row <= last; row++ {
+			if row >= len(entries) {
+				t.Fatalf("%s: visible row %d exceeds %d entries", stage, row, len(entries))
+			}
+			rect, ok := tt.Find(historyRowLabel(entries[row]))
+			if !ok {
+				t.Fatalf("%s: row %d is not rendered", stage, row)
+			}
+			if rect.H < historyRowHeight860-0.01 || rect.H > historyRowHeight860+0.01 {
+				t.Fatalf("%s: row %d height = %.3f, want %d", stage, row, rect.H, historyRowHeight860)
+			}
+			if rect.Y+rect.H > footer.Y+0.01 {
+				t.Fatalf("%s: row %d bottom %.1f overlaps footer top %.1f",
+					stage, row, rect.Y+rect.H, footer.Y)
+			}
+		}
+		if last+1 < len(entries) {
+			if rect, ok := tt.Find(historyRowLabel(entries[last+1])); ok && rect.H > 0 {
+				t.Fatalf("%s: row %d is partially visible (height %.1f)",
+					stage, last+1, rect.H)
+			}
+		}
+	}
+
+	checkWholeRows("top")
+	tt.Scroll(400, 300, 0, 1000)
+	settle(t, m, q, tt)
+	checkWholeRows("bottom")
+}

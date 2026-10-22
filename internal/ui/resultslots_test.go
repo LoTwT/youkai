@@ -380,3 +380,168 @@ func TestHistoryPendingZeroUsesItsOwnRecord(t *testing.T) {
 		t.Fatalf("opening history changed the session export snapshot: %+v", m.sessionSlot.state.exportData)
 	}
 }
+
+// TestFinalCheckpointLoadingGatesCompletionAndExport checks the window
+// between a saved-count growth and its final checkpoint landing: the old
+// snapshot must not satisfy the completion state or an export.
+func TestFinalCheckpointLoadingGatesCompletionAndExport(t *testing.T) {
+	initial := recovery(confirmedReviewItem(t, 1, 12))
+	final := recovery(confirmedReviewItem(t, 1, 12), confirmedReviewItem(t, 2, 10))
+	svc := &fakeService{loads: map[string]*record.Recovery{"s1": initial}}
+	saver := &fakeExportSaver{}
+	m, q := newTestModel(t, Config{Service: svc, PageLayout: true, ExportSaver: saver})
+
+	m.Apply(snap("s1", 1, true, scan.PhaseCapturing,
+		scan.Counts{Captured: 1, Produced: 1}, 1, true, ""))
+	drainAll(t, m, q)
+	if m.rec == nil || len(m.rec.Rows) != 1 || !m.rec.Live {
+		t.Fatalf("the initial checkpoint did not load: %+v", m.rec)
+	}
+	if m.exportData == nil || m.exportData.Summary.Included != 1 {
+		t.Fatalf("the initial export snapshot is wrong: %+v (%q)", m.exportData, m.exportBuildErr)
+	}
+
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+	svc.mu.Lock()
+	svc.loadFn = func(id string) (*record.Recovery, error) {
+		if id == "s1" {
+			select {
+			case started <- struct{}{}:
+			default:
+			}
+			<-release
+			return final, nil
+		}
+		return svc.loads[id], nil
+	}
+	svc.mu.Unlock()
+
+	// The final checkpoint grew to two items, but its load has not
+	// returned. The on-screen record is still the one-item snapshot.
+	m.Apply(snap("s1", 2, false, scan.PhaseEnded,
+		scan.Counts{Captured: 2, Produced: 2}, 2, false, ""))
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the final checkpoint load did not start")
+	}
+	if !m.loading || !m.sessionSlot.state.loading {
+		t.Fatal("the session slot does not mark its final load as pending")
+	}
+	if m.completionVisible() {
+		t.Fatal("the completion state shows during the final checkpoint load")
+	}
+	if reason := m.exportBlockedReason(); reason == "" {
+		t.Fatal("export is not blocked during the final checkpoint load")
+	}
+	if m.exportData == nil || m.exportData.Summary.Included != 1 {
+		t.Fatalf("the stale export snapshot changed before the load landed: %+v", m.exportData)
+	}
+	m.ExportJSON()
+	if calls := saver.snapshot(); len(calls) != 0 {
+		t.Fatalf("an export started from the stale snapshot: %+v", calls)
+	}
+
+	close(release)
+	drainAll(t, m, q)
+	if m.loading {
+		t.Fatal("the landed final checkpoint left the slot loading")
+	}
+	if m.pendingCount() != 0 || len(m.rec.Rows) != 2 {
+		t.Fatalf("the final checkpoint is not applied: pending %d rows %d",
+			m.pendingCount(), len(m.rec.Rows))
+	}
+	if !m.completionVisible() {
+		t.Fatal("the completion state does not show after the final checkpoint landed")
+	}
+	if reason := m.exportBlockedReason(); reason != "" {
+		t.Fatalf("export stays blocked after the final checkpoint landed: %q", reason)
+	}
+	if m.exportData == nil || m.exportData.Summary.Included != 2 {
+		t.Fatalf("the export snapshot did not advance: %+v", m.exportData)
+	}
+
+	// A failed reload clears loading through its own current version, but
+	// the latest checkpoint never became ready: completion stays hidden
+	// and the old snapshot stays unexportable.
+	svc.mu.Lock()
+	svc.loadFn = func(string) (*record.Recovery, error) {
+		return nil, errors.New("磁盘读取失败")
+	}
+	svc.mu.Unlock()
+	m.reloadSessionRecord("s1")
+	drainAll(t, m, q)
+	if m.loading || m.recErr == "" {
+		t.Fatalf("the failed reload state = loading %v err %q", m.loading, m.recErr)
+	}
+	if m.completionVisible() {
+		t.Fatal("a failed checkpoint load still shows completion")
+	}
+	if reason := m.exportBlockedReason(); reason == "" {
+		t.Fatal("a failed checkpoint load still allows exporting the old snapshot")
+	}
+}
+
+// TestSupersededResultLoadDoesNotClearLoading checks that only the current
+// load's response clears the slot's loading state; an older response that
+// lands while a newer load is in flight must leave the guard in place.
+func TestSupersededResultLoadDoesNotClearLoading(t *testing.T) {
+	svc := &fakeService{loads: map[string]*record.Recovery{
+		"s1": recovery(confirmedReviewItem(t, 1, 12)),
+	}}
+	m, q := newTestModel(t, Config{Service: svc, PageLayout: true})
+	releases := []chan struct{}{make(chan struct{}), make(chan struct{})}
+	started := []chan struct{}{make(chan struct{}, 1), make(chan struct{}, 1)}
+	responses := []*record.Recovery{
+		recovery(confirmedReviewItem(t, 1, 12), confirmedReviewItem(t, 2, 10)),
+		recovery(confirmedReviewItem(t, 1, 12), confirmedReviewItem(t, 2, 10), confirmedReviewItem(t, 3, 14)),
+	}
+	call := 0
+	svc.mu.Lock()
+	svc.loadFn = func(string) (*record.Recovery, error) {
+		index := call
+		call++
+		started[index] <- struct{}{}
+		<-releases[index]
+		return responses[index], nil
+	}
+	svc.mu.Unlock()
+
+	m.reloadResultRecord(&m.sessionSlot, "s1", true)
+	<-started[0]
+	m.reloadResultRecord(&m.sessionSlot, "s1", true)
+	<-started[1]
+	if !m.sessionSlot.state.loading {
+		t.Fatal("the newer load did not mark the slot loading")
+	}
+
+	// Let the superseded response land while the newer one is still
+	// blocked.
+	close(releases[0])
+	deadline := time.Now().Add(2 * time.Second)
+	for q.count() == 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if q.count() == 0 {
+		t.Fatal("the superseded load response did not arrive")
+	}
+	for _, fn := range q.take() {
+		fn()
+	}
+	if !m.loading || !m.sessionSlot.state.loading {
+		t.Fatal("a superseded response cleared the loading guard")
+	}
+	if m.sessionSlot.state.rec != nil {
+		t.Fatalf("a superseded response applied its record: %+v", m.sessionSlot.state.rec)
+	}
+
+	close(releases[1])
+	drainAll(t, m, q)
+	if m.loading || m.sessionSlot.state.loading {
+		t.Fatal("the current response did not clear the loading guard")
+	}
+	if m.rec == nil || len(m.rec.Rows) != 3 {
+		t.Fatalf("the current response did not apply: %+v", m.rec)
+	}
+}

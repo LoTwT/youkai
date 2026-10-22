@@ -1093,3 +1093,28 @@ func TestCompletionUsesHistoryRecordCounts(t *testing.T) {
 		t.Fatalf("opening history changed the session export snapshot: %+v", m.sessionSlot.state.exportData)
 	}
 }
+
+// TestUnprocessedResultColorsAreMuted checks the status semantics: an
+// unprocessed item means recognition did not run, so it uses the muted
+// role rather than the failure's danger color. Failures stay danger.
+func TestUnprocessedResultColorsAreMuted(t *testing.T) {
+	theme := &ui.Theme{
+		Danger:    ui.RGB(220, 0, 0),
+		Warning:   ui.RGB(200, 120, 0),
+		TextMuted: ui.RGB(120, 120, 120),
+	}
+	unprocessed := &Row{Status: record.StatusUnprocessed, Reason: record.ReasonInterrupted}
+	if got := resultStatusColor(theme, unprocessed); got != theme.TextMuted {
+		t.Fatalf("unprocessed status color = %+v, want muted %+v", got, theme.TextMuted)
+	}
+	if got := resultIssueColor(theme, unprocessed); got != theme.TextMuted {
+		t.Fatalf("unprocessed issue color = %+v, want muted %+v", got, theme.TextMuted)
+	}
+	failed := &Row{Status: record.StatusFailed, Failure: "识别超时"}
+	if got := resultStatusColor(theme, failed); got != theme.Danger {
+		t.Fatalf("failed status color = %+v, want danger %+v", got, theme.Danger)
+	}
+	if got := resultIssueColor(theme, failed); got != theme.Danger {
+		t.Fatalf("failed issue color = %+v, want danger %+v", got, theme.Danger)
+	}
+}

@@ -1036,3 +1036,115 @@ func TestExitRefusesWithUnsavedEdit(t *testing.T) {
 		t.Fatalf("save-and-exit did not finish: quits %d state %d", svc.quits, m.exitState)
 	}
 }
+
+// TestConfirmNextStaysWithinVisibleFilter checks that confirmation moves
+// only inside the current segment. Rows hidden by the pending or
+// unexportable filter are never selected behind the visible list.
+func TestConfirmNextStaysWithinVisibleFilter(t *testing.T) {
+	t.Run("pending skips hidden rows and completes", func(t *testing.T) {
+		m, q, tt, svc := openReviewRecordPage(t,
+			reviewRowItem(t, 1, 12),
+			confirmedReviewItem(t, 2, 10),
+			reviewRowItem(t, 3, 14),
+		)
+		m.filter = resultFilterPending
+		m.selected = 0
+		tt.Frame()
+		if visible := m.visibleResultRows(); len(visible) != 2 || visible[0] != 0 || visible[1] != 2 {
+			t.Fatalf("the pending segment shows rows %v, want [0 2]", visible)
+		}
+
+		m.confirmCurrent()
+		settle(t, m, q, tt)
+		if svc.saveCount() != 1 {
+			t.Fatalf("confirmation issued %d saves", svc.saveCount())
+		}
+		if m.selected != 2 {
+			t.Fatalf("confirmation selected row %d, want the visible seq 3 (index 2)", m.selected)
+		}
+		visible := m.visibleResultRows()
+		if len(visible) != 1 || visible[0] != 2 || resultDisplayIndex(visible, m.selected) < 0 {
+			t.Fatalf("the selection left the visible pending rows: selected %d visible %v",
+				m.selected, visible)
+		}
+
+		m.confirmCurrent()
+		settle(t, m, q, tt)
+		if m.pendingCount() != 0 || !m.completionVisible() {
+			t.Fatalf("the last confirmation did not complete: pending %d completion %v",
+				m.pendingCount(), m.completionVisible())
+		}
+	})
+
+	t.Run("all wraps to the first pending row", func(t *testing.T) {
+		m, q, tt, _ := openReviewRecordPage(t,
+			reviewRowItem(t, 1, 12),
+			reviewRowItem(t, 2, 10),
+			reviewRowItem(t, 3, 14),
+		)
+		m.filter = resultFilterAll
+		m.selected = 2
+		tt.Frame()
+		m.confirmCurrent()
+		settle(t, m, q, tt)
+		if m.selected != 0 {
+			t.Fatalf("the last pending row did not wrap: selected %d", m.selected)
+		}
+		if !tt.HasText("已确认并定位下一项（序号 1）。") {
+			t.Fatalf("the wrapped next-item notice is missing: %q", tt.Texts())
+		}
+		if visible := m.visibleResultRows(); resultDisplayIndex(visible, m.selected) < 0 {
+			t.Fatalf("the wrapped selection is outside the visible rows: selected %d visible %v",
+				m.selected, visible)
+		}
+	})
+
+	t.Run("unexportable never leaves its segment", func(t *testing.T) {
+		m, _, tt, _ := openReviewRecordPage(t,
+			excludedReviewItem(t, 1),
+			reviewRowItem(t, 2, 10),
+		)
+		m.filter = resultFilterUnexportable
+		m.selected = 0
+		tt.Frame()
+		visible := m.visibleResultRows()
+		if len(visible) != 1 || visible[0] != 0 {
+			t.Fatalf("the unexportable segment shows rows %v, want [0]", visible)
+		}
+		if next := m.nextPendingAfter(m.rec.Rows[0].Seq); next != -1 {
+			t.Fatalf("the unexportable segment selected hidden row %d", next)
+		}
+		if m.selected != 0 || resultDisplayIndex(visible, m.selected) < 0 {
+			t.Fatalf("the selection left the unexportable segment: selected %d visible %v",
+				m.selected, visible)
+		}
+	})
+
+	t.Run("pending with hidden work drops a filtered-out selection", func(t *testing.T) {
+		setItem := func(seq int64, set int) record.ItemRecord {
+			it := reviewRowItem(t, seq, 12)
+			return withStructured(t, it, func(structured *zzz.StructuredDisc) {
+				structured.Data.SetID = &set
+			})
+		}
+		m, q, tt, _ := openReviewRecordPage(t, setItem(1, 31100), setItem(2, 31200))
+		m.filter = resultFilterPending
+		m.setFilter = "31100"
+		m.selected = 0
+		tt.Frame()
+		if visible := m.visibleResultRows(); len(visible) != 1 || visible[0] != 0 {
+			t.Fatalf("the filtered pending segment shows rows %v, want [0]", visible)
+		}
+		m.confirmCurrent()
+		settle(t, m, q, tt)
+		if m.pendingCount() != 1 {
+			t.Fatalf("the hidden pending row disappeared: %d pending", m.pendingCount())
+		}
+		if m.selected != -1 {
+			t.Fatalf("the confirmed row left selection on hidden index %d", m.selected)
+		}
+		if m.completionVisible() {
+			t.Fatal("hidden pending work entered the completion state")
+		}
+	})
+}
