@@ -58,6 +58,15 @@ func (m *Model) resultsArea(c *ui.Context, t *ui.Theme) {
 				}
 			}
 			ui.Box(c).Grow(1)
+			if m.cfg.PageLayout {
+				action := "+ 准备新扫描"
+				if m.snap.Busy || m.startReqID != "" {
+					action = "返回扫描中"
+				}
+				if ui.Button(c, action).Clicked() {
+					m.page = pageScan
+				}
+			}
 			if !m.cfg.PageLayout {
 				if m.histChoice != "" && !m.hasHistoryLabel(m.histChoice) {
 					m.histChoice = ""

@@ -18,6 +18,15 @@ const (
 	pageSettings
 )
 
+// The page shell's navigation rail. The design fixes 168 DIP at 1440 and
+// 144 DIP at 1020/1024 and 860; folding below 1200 keeps that room for the
+// page as the window narrows while leaving the wide screenshots untouched.
+const (
+	sidebarWideWidth     = 168
+	sidebarNarrowWidth   = 144
+	sidebarNarrowMaxSize = 1200
+)
+
 var (
 	scanIcon     = ui.MustParseSVG([]byte(`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3"/><circle cx="12" cy="12" r="3"/></svg>`))
 	historyIcon  = ui.MustParseSVG([]byte(`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/><path d="M12 7v5l3 2"/></svg>`))
@@ -42,26 +51,45 @@ func (m *Model) displayPage() Page {
 // single-column view remains available for the existing interaction tests
 // while the pages are migrated incrementally.
 func (m *Model) viewPages(c *ui.Context) {
-	ApplyTheme(c)
+	tok := ApplyTheme(c)
 	t := c.Theme()
 
 	ui.Row(c).Fill().Children(func() {
-		m.sidebar(c, t)
+		m.sidebar(c, t, tok)
 		ui.Divider(c)
 		ui.Column(c).Grow(1).Children(func() {
 			m.pageBody(c, t)
+			m.pageActions(c, t, tok)
 			ui.Divider(c)
 			m.pageStatusBar(c, t)
 		})
 	})
 }
 
-// sidebar is a compact navigation rail: icon and short label, no counts.
-// Settings stays pinned to the bottom; the upper items are destinations.
-func (m *Model) sidebar(c *ui.Context, t *ui.Theme) {
-	ui.Column(c).Width(t.Space(16)).FillHeight().Background(t.Surface).
-		Padding(t.Space(2), t.Space(1)).Gap(t.Space(1)).Children(func() {
-		m.sidebarButton(c, t, "扫描与校对", "扫描", scanIcon,
+// sidebarWidth folds the rail to the design's narrow width when the window
+// is compact. The window reports its content size through SetContentSize,
+// so a resize redraws with the other width without any extra state.
+func (m *Model) sidebarWidth() float32 {
+	if m.contentWidth > 0 && m.contentWidth < sidebarNarrowMaxSize {
+		return sidebarNarrowWidth
+	}
+	return sidebarWideWidth
+}
+
+// sidebar is the navigation rail: rectangular items with an icon and a
+// label. Settings stays pinned to the bottom; the upper items are
+// destinations.
+func (m *Model) sidebar(c *ui.Context, t *ui.Theme, tok *Tokens) {
+	width := m.sidebarWidth()
+	horizontal := t.Space(2.5)
+	vertical := t.Space(3.5)
+	if width == sidebarNarrowWidth {
+		horizontal = t.Space(2)
+		vertical = t.Space(3)
+	}
+	ui.Column(c).Width(width).FillHeight().Background(tok.SurfaceWindow).
+		Padding(vertical, horizontal).Gap(t.Space(0.5)).Children(func() {
+		m.sidebarButton(c, t, tok, "扫描", scanIcon,
 			m.displayPage() == pageScan || m.displayPage() == pageResults, func() {
 				if m.rec != nil {
 					m.page = pageResults
@@ -69,53 +97,42 @@ func (m *Model) sidebar(c *ui.Context, t *ui.Theme) {
 					m.page = pageScan
 				}
 			})
-		m.sidebarButton(c, t, "历史记录", "历史", historyIcon,
+		m.sidebarButton(c, t, tok, "历史", historyIcon,
 			m.displayPage() == pageHistory, func() {
 				m.page = pageHistory
 			})
 		ui.Box(c).Grow(1)
 		ui.Divider(c)
-		m.sidebarButton(c, t, "设置", "设置", settingsIcon,
+		m.sidebarButton(c, t, tok, "设置", settingsIcon,
 			m.displayPage() == pageSettings, func() {
 				m.page = pageSettings
 			})
 	})
 }
 
-func (m *Model) sidebarButton(c *ui.Context, t *ui.Theme, label, short string, icon *ui.SVG, active bool, action func()) {
-	bg, fg := t.Surface, t.TextMuted
+// sidebarButton is one rectangular navigation item. The active item uses
+// the accent-soft face and accent foreground, as the design's wide sidebar.
+func (m *Model) sidebarButton(c *ui.Context, t *ui.Theme, tok *Tokens, label string, icon *ui.SVG, active bool, action func()) {
+	bg, fg := tok.SurfaceWindow, tok.TextSecondary
 	if active {
-		bg, fg = t.SurfaceHover, t.Text
+		bg, fg = tok.AccentSoft, tok.AccentFG
 	}
 	button := ui.Button(c, "").Label(label).Background(bg).TextColor(fg).
-		Height(t.Space(14)).Width(t.Space(14))
+		Border(0, ui.Color{}).Radius(t.Space(2)).
+		Height(t.Space(9.5)).Padding(0, t.Space(2.5)).Gap(t.Space(2.5))
 	if button.Clicked() {
 		action()
 	}
 	button.Children(func() {
-		ui.Column(c).AlignItems(ui.Center).Gap(t.Space(0.5)).Children(func() {
-			ui.Icon(c, icon).Size(t.Space(4), t.Space(4)).TextColor(fg)
-			ui.Text(c, short).FontSize(t.FontSize * 0.68).TextColor(fg).SingleLine()
-		})
+		ui.Icon(c, icon).Size(t.Space(4.5), t.Space(4.5)).TextColor(fg)
+		ui.Text(c, label).FontSize(t.FontSize).TextColor(fg).SingleLine()
 	})
-}
-
-func (m *Model) workflowLabel() string {
-	return "扫描与校对"
-}
-
-func (m *Model) pageResultsLabel() string {
-	if n := m.pendingCount(); n > 0 {
-		return fmt.Sprintf("结果与校对 %d", n)
-	}
-	return "结果与校对"
 }
 
 func (m *Model) pageBody(c *ui.Context, t *ui.Theme) {
 	page := m.displayPage()
 	if page == pageScan || page == pageResults {
 		ui.Column(c).Grow(1).Padding(t.Space(3), t.Space(3)).Gap(t.Space(2)).Children(func() {
-			m.workflowStage(c, t)
 			if page == pageResults {
 				m.resultsArea(c, t)
 				return
@@ -149,19 +166,27 @@ func (m *Model) pageBody(c *ui.Context, t *ui.Theme) {
 	})
 }
 
-func (m *Model) workflowStage(c *ui.Context, t *ui.Theme) {
-	stage := 0
-	if m.displayPage() == pageResults {
-		stage = 1
+// pageActions is the scan page's bottom action bar: start while idle, stop
+// while a session is running. The results page keeps its actions in the
+// page header instead, so this bar renders only on the scan destination.
+func (m *Model) pageActions(c *ui.Context, t *ui.Theme, tok *Tokens) {
+	if m.displayPage() != pageScan {
+		return
 	}
-	seg := ui.Segmented(c, &stage, "扫描", m.pageResultsLabel())
-	if seg.Changed() {
-		if stage == 0 {
-			m.page = pageScan
-		} else {
-			m.page = pageResults
+	ui.Divider(c)
+	ui.Row(c).Height(t.Space(13)).Background(tok.SurfaceHeader).
+		Padding(0, t.Space(3)).AlignItems(ui.Center).Children(func() {
+		ui.Box(c).Grow(1)
+		if m.snap.Busy || m.startReqID != "" {
+			if ui.Button(c, "停止扫描").TextColor(t.Danger).Clicked() {
+				m.Stop()
+			}
+			return
 		}
-	}
+		if ui.PrimaryButton(c, "开始扫描").Disabled(!m.canStart()).Clicked() {
+			m.Start()
+		}
+	})
 }
 
 func (m *Model) pageStatusBar(c *ui.Context, t *ui.Theme) {

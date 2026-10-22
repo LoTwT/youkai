@@ -14,7 +14,7 @@ const scanHint = "扫描期间会自动操作游戏。请保持游戏窗口在�
 // stopMeans is how a scan can be stopped in this build: the window's stop
 // button (a global shortcut arrives with M2's platform work, and nothing
 // unregistered is claimed).
-const stopMeans = "停止方式：点击本窗口的“停止”按钮。"
+const stopMeans = "停止方式：点击本窗口的“停止扫描”按钮。"
 
 // View builds the main window's three areas — prepare, progress and
 // results. It runs on the UI thread whenever the window needs a frame and
@@ -64,8 +64,10 @@ func (m *Model) prepareArea(c *ui.Context, t *ui.Theme) {
 	ui.Column(c).Gap(t.Space(1)).Children(func() {
 		ui.Text(c, scanHint)
 		ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
-			if ui.PrimaryButton(c, "开始扫描").Disabled(!m.canStart()).Clicked() {
-				m.Start()
+			if !m.cfg.PageLayout {
+				if ui.PrimaryButton(c, "开始扫描").Disabled(!m.canStart()).Clicked() {
+					m.Start()
+				}
 			}
 			if note := m.startNote(); note != "" {
 				ui.Text(c, note).TextColor(t.TextMuted)
@@ -110,8 +112,10 @@ func (m *Model) progressArea(c *ui.Context, t *ui.Theme) {
 				ui.Text(c, "结束："+end)
 			}
 			ui.Box(c).Grow(1)
-			if ui.Button(c, "停止").Disabled(!snap.Busy && m.startReqID == "").Clicked() {
-				m.Stop()
+			if !m.cfg.PageLayout {
+				if ui.Button(c, "停止扫描").Disabled(!snap.Busy && m.startReqID == "").Clicked() {
+					m.Stop()
+				}
 			}
 		})
 		ui.Text(c, countsText(snap.Scan.Counts))

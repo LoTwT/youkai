@@ -113,7 +113,7 @@ func TestViewStartAndStopByPhase(t *testing.T) {
 	if !tt.HasText(scanHint) {
 		t.Error("the confirmed scan hint does not show")
 	}
-	if !tt.HasText("停止方式：点击本窗口的“停止”按钮。") {
+	if !tt.HasText("停止方式：点击本窗口的“停止扫描”按钮。") {
 		t.Error("the stop means do not show")
 	}
 
@@ -140,7 +140,7 @@ func TestViewStartAndStopByPhase(t *testing.T) {
 	if err := tt.Click("开始扫描"); err != nil {
 		t.Fatal(err)
 	}
-	if err := tt.Click("停止"); err != nil {
+	if err := tt.Click("停止扫描"); err != nil {
 		t.Fatal(err)
 	}
 	drainAll(t, m, q)
@@ -154,7 +154,7 @@ func TestViewStartAndStopByPhase(t *testing.T) {
 	if !tt.HasText("阶段：采集中") || !tt.HasText("已采集 5 · 已产出 2 · 失败 1 · 未处理 1 · 排队 1 · 识别中 0") {
 		t.Errorf("the provable counts do not show: %q", tt.Texts())
 	}
-	if err := tt.Click("停止"); err != nil {
+	if err := tt.Click("停止扫描"); err != nil {
 		t.Fatal(err)
 	}
 	drainAll(t, m, q)
@@ -175,7 +175,7 @@ func TestViewStartAndStopByPhase(t *testing.T) {
 	if !tt.HasText("结束：用户取消（用户停止，阶段：采集中（userCancelled））") {
 		t.Errorf("the end reason does not show: %q", tt.Texts())
 	}
-	if err := tt.Click("停止"); err != nil {
+	if err := tt.Click("停止扫描"); err != nil {
 		t.Fatal(err)
 	}
 	if err := tt.Click("开始扫描"); err != nil {
