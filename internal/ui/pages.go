@@ -208,8 +208,8 @@ func (m *Model) pageActions(c *ui.Context, t *ui.Theme, tok *Tokens) {
 			}
 			return
 		}
-		if ui.PrimaryButton(c, "开始扫描").Disabled(!m.canStart()).Clicked() {
-			m.Start()
+		if ui.PrimaryButton(c, "开始扫描").Disabled(!m.scanStartReady()).Clicked() {
+			m.requestScanStart()
 		}
 	})
 }
@@ -236,7 +236,7 @@ func (m *Model) statusShortcutText() string {
 		if m.snap.Busy || m.startReqID != "" {
 			return "⌃⌥⌘S 停止扫描"
 		}
-		if m.scanStartShortcutAvailable() {
+		if m.scanStartReady() {
 			return "⌘R 开始扫描"
 		}
 	case pageHistory:

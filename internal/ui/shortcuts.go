@@ -9,24 +9,24 @@ import "github.com/egoist/mygo/ui"
 // prepare page can actually start a scan; it is not a global key.
 func (m *Model) registerPageShortcuts(c *ui.Context) {
 	c.OnShortcut(0, ui.KeyEscape, func() { m.handleEscapeShortcut(c) })
-	if m.scanStartShortcutAvailable() {
-		c.OnShortcut(ui.Cmd, ui.KeyR, func() { m.startScanFromShortcut() })
+	if m.scanStartReady() {
+		c.OnShortcut(ui.Cmd, ui.KeyR, func() { m.requestScanStart() })
 	}
 }
 
-// scanStartShortcutAvailable reports whether ⌘R may start a scan now: the
-// prepare destination is showing, the start button's own guards pass, and
-// no save or export is in flight. The status bar uses the same answer, so
-// it never names a key this build does not register.
-func (m *Model) scanStartShortcutAvailable() bool {
+// scanStartReady reports whether the prepare page may start a scan now:
+// the prepare destination is showing, the start guards pass, and no review
+// save or export is in flight. The start button, ⌘R and the status bar all
+// use this answer, so they cannot disagree.
+func (m *Model) scanStartReady() bool {
 	return m.displayPage() == pageScan && m.canStart() && !m.reviewSaving && !m.exportBusy()
 }
 
-// startScanFromShortcut runs ⌘R. Unsaved editor input holds the start
-// behind the ordinary save/discard/stay prompt; the scan only begins once
-// the draft is settled.
-func (m *Model) startScanFromShortcut() {
-	if !m.scanStartShortcutAvailable() {
+// requestScanStart starts a scan from the prepare page. Unsaved editor
+// input holds the start behind the ordinary save/discard/stay prompt; the
+// scan only begins once the draft is settled.
+func (m *Model) requestScanStart() {
+	if !m.scanStartReady() {
 		return
 	}
 	m.requestNavigation(navigationRequest{kind: navStartScan})

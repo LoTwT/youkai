@@ -104,6 +104,84 @@ func TestScanStartShortcutRequiresAPreparableScan(t *testing.T) {
 	})
 }
 
+// TestEditConfirmShortcutSavesTheDraft checks ⌘↵ in the editor: it saves
+// the draft as the confirmation and advances, and a failed save keeps the
+// editor and the input in place.
+func TestEditConfirmShortcutSavesTheDraft(t *testing.T) {
+	t.Run("saves and advances", func(t *testing.T) {
+		m, q, tt, svc := openReviewRecordPage(t,
+			reviewRowItem(t, 1, 12),
+			reviewRowItem(t, 2, 10),
+		)
+		if err := tt.Click("编辑"); err != nil {
+			t.Fatal(err)
+		}
+		settle(t, m, q, tt)
+		m.edit.draft.Level = "13"
+		tt.Frame()
+		if got := m.statusShortcutText(); got != "⌘↵ 保存并确认并下一项  ·  ⌘S 保存修改" {
+			t.Fatalf("the editing status bar names %q", got)
+		}
+		if !tt.HasText("⌘↵ 保存并确认并下一项") || !tt.HasText("⌘S 保存修改") {
+			t.Fatalf("the editing status bar does not show its keys: %q", tt.Texts())
+		}
+
+		tt.Key(ui.Cmd, ui.KeyEnter)
+		settle(t, m, q, tt)
+		if svc.saveCount() != 1 || !svc.saves[0].edit.Confirmed {
+			t.Fatalf("⌘↵ saves = %+v, want one confirmed save", svc.saves)
+		}
+		if level := svc.saves[0].edit.Data.Level; level == nil || *level != 13 {
+			t.Fatalf("⌘↵ saved level %v, want the draft's 13", level)
+		}
+		if m.edit != nil {
+			t.Fatal("⌘↵ left the editor open after a successful save")
+		}
+		if m.selected != 1 {
+			t.Fatalf("⌘↵ did not advance to the next pending item: selected %d", m.selected)
+		}
+		if m.rec.Rows[0].Quality != record.QualityHumanConfirmed || m.rec.Rows[0].Revision != 1 {
+			t.Fatalf("the confirmed row = quality %q revision %d",
+				m.rec.Rows[0].Quality, m.rec.Rows[0].Revision)
+		}
+	})
+
+	t.Run("save failure stays", func(t *testing.T) {
+		m, q, tt, svc := openReviewRecordPage(t,
+			reviewRowItem(t, 1, 12),
+			reviewRowItem(t, 2, 10),
+		)
+		svc.saveFn = func(string, int64, int64, app.ItemRevisionEdit) (app.ItemRevisionResult, error) {
+			return app.ItemRevisionResult{}, errors.New("disk full")
+		}
+		if err := tt.Click("编辑"); err != nil {
+			t.Fatal(err)
+		}
+		settle(t, m, q, tt)
+		m.edit.draft.Level = "13"
+		tt.Frame()
+
+		tt.Key(ui.Cmd, ui.KeyEnter)
+		settle(t, m, q, tt)
+		if m.edit == nil || m.edit.draft.Level != "13" {
+			t.Fatalf("a failed ⌘↵ lost the input: %+v", m.edit)
+		}
+		if m.selected != 0 {
+			t.Fatalf("a failed ⌘↵ moved to %d", m.selected)
+		}
+		if m.rec.Rows[0].Quality != record.QualityNeedsReview || m.rec.Rows[0].Revision != 0 {
+			t.Fatalf("a failed ⌘↵ changed the row: quality %q revision %d",
+				m.rec.Rows[0].Quality, m.rec.Rows[0].Revision)
+		}
+		if !strings.Contains(m.reviewErr, "disk full") {
+			t.Fatalf("the save failure = %q", m.reviewErr)
+		}
+		if !tt.HasText("保存失败：disk full") {
+			t.Fatalf("the save failure does not show: %q", tt.Texts())
+		}
+	})
+}
+
 // TestScanStartShortcutPromptsForUnsavedEdit checks that a dirty editor
 // holds the start behind the ordinary save/discard/stay prompt, and that
 // saving then continues into the scan.
@@ -162,6 +240,66 @@ func TestScanStartShortcutPromptsForUnsavedEdit(t *testing.T) {
 	}
 }
 
+// TestScanButtonAndShortcutPromptAlike checks the scan button and ⌘R use
+// the same navStartScan path: both prompt for a dirty draft and neither
+// starts before it is settled.
+func TestScanButtonAndShortcutPromptAlike(t *testing.T) {
+	m, q, tt, svc := openReviewRecordPage(t,
+		reviewRowItem(t, 1, 12),
+		reviewRowItem(t, 2, 10),
+	)
+	if err := tt.Click("编辑"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
+	m.edit.draft.Level = "13"
+	tt.Frame()
+	m.page = pageScan
+	tt.Frame()
+
+	tt.Key(ui.Cmd, ui.KeyR)
+	settle(t, m, q, tt)
+	if m.navPrompt == nil || m.navPrompt.kind != navStartScan {
+		t.Fatalf("⌘R did not prompt for the dirty draft: %+v", m.navPrompt)
+	}
+	if len(svc.starts) != 0 {
+		t.Fatalf("⌘R started %d scans before the draft settled", len(svc.starts))
+	}
+	if err := tt.Click("留在当前项"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
+	if m.navPrompt != nil || len(svc.starts) != 0 {
+		t.Fatalf("staying after ⌘R left prompt %+v and %d starts", m.navPrompt, len(svc.starts))
+	}
+
+	if err := tt.Click("开始扫描"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
+	if m.navPrompt == nil || m.navPrompt.kind != navStartScan {
+		t.Fatalf("the start button did not prompt for the dirty draft: %+v", m.navPrompt)
+	}
+	if len(svc.starts) != 0 {
+		t.Fatalf("the start button started %d scans before the draft settled", len(svc.starts))
+	}
+	if !tt.HasText("当前条目有未保存的修改。") {
+		t.Fatalf("the unsaved prompt does not show: %q", tt.Texts())
+	}
+
+	if err := tt.Click("保存修改并继续"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
+	if svc.saveCount() != 1 || len(svc.starts) != 1 {
+		t.Fatalf("save-and-start from the button issued %d saves and %d starts",
+			svc.saveCount(), len(svc.starts))
+	}
+	if m.edit != nil || m.navPrompt != nil {
+		t.Fatalf("save-and-start did not settle: edit %+v prompt %+v", m.edit, m.navPrompt)
+	}
+}
+
 // TestEditSaveShortcut checks ⌘S in the editor: it saves modifications,
 // reports an unchanged draft, and keeps the editor and its input when the
 // save fails.
@@ -174,11 +312,11 @@ func TestEditSaveShortcut(t *testing.T) {
 		settle(t, m, q, tt)
 		m.edit.draft.Level = "13"
 		tt.Frame()
-		if got := m.statusShortcutText(); got != "⌘S 保存修改" {
+		if got := m.statusShortcutText(); got != "⌘↵ 保存并确认并下一项  ·  ⌘S 保存修改" {
 			t.Fatalf("the editing status bar names %q", got)
 		}
-		if !tt.HasText("⌘S 保存修改") {
-			t.Fatalf("the editing status bar does not show ⌘S: %q", tt.Texts())
+		if !tt.HasText("⌘↵ 保存并确认并下一项") || !tt.HasText("⌘S 保存修改") {
+			t.Fatalf("the editing status bar does not show its keys: %q", tt.Texts())
 		}
 
 		tt.Key(ui.Cmd, ui.KeyS)
@@ -192,8 +330,8 @@ func TestEditSaveShortcut(t *testing.T) {
 		if m.rec.Rows[0].LevelText() != "13 级" {
 			t.Fatalf("the saved row shows %q", m.rec.Rows[0].LevelText())
 		}
-		if got := m.statusShortcutText(); got == "⌘S 保存修改" {
-			t.Fatal("the closed editor still names ⌘S")
+		if got := m.statusShortcutText(); got == "⌘↵ 保存并确认并下一项  ·  ⌘S 保存修改" {
+			t.Fatal("the closed editor still names its keys")
 		}
 	})
 
@@ -407,9 +545,126 @@ func TestEscapeStaysInATextField(t *testing.T) {
 	}
 }
 
+// TestEditNextShortcutPromptsForUnsavedEdit checks that ⌘J in the editor
+// runs through the shared unsaved prompt: it stays on 留在当前项 and moves
+// only after the draft is saved or discarded.
+func TestEditNextShortcutPromptsForUnsavedEdit(t *testing.T) {
+	setup := func(t *testing.T) (*Model, *queueUpdater, *ui.Tester, *fakeService) {
+		t.Helper()
+		m, q, tt, svc := openReviewRecordPage(t,
+			reviewRowItem(t, 1, 12),
+			reviewRowItem(t, 2, 10),
+		)
+		if err := tt.Click("编辑"); err != nil {
+			t.Fatal(err)
+		}
+		settle(t, m, q, tt)
+		m.edit.draft.Level = "13"
+		tt.Frame()
+		return m, q, tt, svc
+	}
+
+	t.Run("stays", func(t *testing.T) {
+		m, q, tt, svc := setup(t)
+		tt.Key(ui.Cmd, ui.KeyJ)
+		settle(t, m, q, tt)
+		if m.navPrompt == nil {
+			t.Fatal("⌘J bypassed the unsaved prompt")
+		}
+		if m.selected != 0 || svc.saveCount() != 0 {
+			t.Fatalf("⌘J moved before the draft settled: selected %d saves %d", m.selected, svc.saveCount())
+		}
+		if !tt.HasText("当前条目有未保存的修改。") || !tt.HasText("留在当前项") {
+			t.Fatalf("the unsaved prompt does not show: %q", tt.Texts())
+		}
+		if err := tt.Click("留在当前项"); err != nil {
+			t.Fatal(err)
+		}
+		settle(t, m, q, tt)
+		if m.navPrompt != nil || m.selected != 0 || m.edit == nil {
+			t.Fatalf("staying moved or lost the draft: prompt %v selected %d edit %+v",
+				m.navPrompt, m.selected, m.edit)
+		}
+	})
+
+	t.Run("saves and moves", func(t *testing.T) {
+		m, q, tt, svc := setup(t)
+		tt.Key(ui.Cmd, ui.KeyJ)
+		settle(t, m, q, tt)
+		if m.navPrompt == nil {
+			t.Fatal("⌘J bypassed the unsaved prompt")
+		}
+		if err := tt.Click("保存修改并继续"); err != nil {
+			t.Fatal(err)
+		}
+		settle(t, m, q, tt)
+		if svc.saveCount() != 1 || svc.saves[0].edit.Confirmed {
+			t.Fatalf("⌘J saves = %+v, want one unconfirmed save", svc.saves)
+		}
+		if m.selected != 1 || m.edit != nil {
+			t.Fatalf("save-and-continue did not move: selected %d edit %+v", m.selected, m.edit)
+		}
+	})
+
+	t.Run("discards and moves", func(t *testing.T) {
+		m, q, tt, svc := setup(t)
+		tt.Key(ui.Cmd, ui.KeyJ)
+		settle(t, m, q, tt)
+		if m.navPrompt == nil {
+			t.Fatal("⌘J bypassed the unsaved prompt")
+		}
+		if err := tt.Click("放弃修改"); err != nil {
+			t.Fatal(err)
+		}
+		settle(t, m, q, tt)
+		if svc.saveCount() != 0 {
+			t.Fatalf("discarding saved %d revisions", svc.saveCount())
+		}
+		if m.selected != 1 || m.edit != nil || m.navPrompt != nil {
+			t.Fatalf("discard-and-continue did not move: selected %d edit %+v prompt %+v",
+				m.selected, m.edit, m.navPrompt)
+		}
+	})
+
+	t.Run("form change", func(t *testing.T) {
+		m, q, tt, _ := openReviewRecordPage(t,
+			reviewRowItem(t, 1, 12),
+			reviewRowItem(t, 2, 10),
+		)
+		if err := tt.Click("编辑"); err != nil {
+			t.Fatal(err)
+		}
+		settle(t, m, q, tt)
+
+		// Make the draft dirty through the form, not a test-only field
+		// assignment: the picker writes the bound draft value.
+		if err := tt.Click("31100 河豚电音"); err != nil {
+			t.Fatal(err)
+		}
+		tt.Frame()
+		if err := tt.Click("31200 震星迪斯科"); err != nil {
+			t.Fatal(err)
+		}
+		tt.Frame()
+		if m.edit == nil || m.edit.draft.SetID == m.edit.original.SetID {
+			t.Fatalf("the form change did not dirty the draft: %+v", m.edit)
+		}
+
+		tt.Key(ui.Cmd, ui.KeyJ)
+		settle(t, m, q, tt)
+		if m.navPrompt == nil {
+			t.Fatal("⌘J dropped a draft changed through the form")
+		}
+		if m.selected != 0 {
+			t.Fatalf("⌘J moved before the form draft settled: selected %d", m.selected)
+		}
+	})
+}
+
 // TestStatusBarNamesOnlyUsableShortcuts checks the destination-specific
-// key line: prepare names ⌘R, an editor names ⌘S, results name their list
-// keys, history names Return, and settings names none.
+// key line: prepare names ⌘R, an editor names its save-and-confirm and save
+// keys, results name their list keys, history names Return, and settings
+// names none.
 func TestStatusBarNamesOnlyUsableShortcuts(t *testing.T) {
 	m, q := newTestModel(t, Config{Service: &fakeService{}, PageLayout: true})
 	tt := ui.NewTester(m.View, 1020, 700)
@@ -429,7 +684,7 @@ func TestStatusBarNamesOnlyUsableShortcuts(t *testing.T) {
 		t.Fatal(err)
 	}
 	settle(t, m2, q2, tt2)
-	if got := m2.statusShortcutText(); got != "⌘S 保存修改" {
+	if got := m2.statusShortcutText(); got != "⌘↵ 保存并确认并下一项  ·  ⌘S 保存修改" {
 		t.Fatalf("the editing status = %q", got)
 	}
 	if tt2.HasText("⌘J 下一个待校对") || tt2.HasText("⌘↵ 确认并下一项") {

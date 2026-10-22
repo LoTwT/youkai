@@ -431,30 +431,43 @@ func resultFilterLabel(value, allLabel string, options []resultFilterOption) str
 	return value
 }
 
-// registerResultsShortcuts wires the results page's keys: ⌘J moves to
-// the next pending item in the current filter, ⌘↵ confirms the chosen
-// one, and ⌘S saves the open editor. The status bar names only the keys
-// that are registered and usable in the current layout.
+// registerResultsShortcuts wires the results page's keys. In the editor
+// ⌘↵ saves the draft and confirms it, and ⌘S saves it without confirming;
+// both keep the editor open on failure. ⌘J moves to the next pending item
+// through requestNavigation, so a dirty draft holds the move behind the
+// unsaved prompt. The status bar names only the keys that are registered
+// and usable in the current layout.
 func (m *Model) registerResultsShortcuts(c *ui.Context) {
 	if !m.cfg.PageLayout {
 		return
 	}
-	c.OnShortcut(ui.Cmd, ui.KeyJ, func() {
-		m.selectNextPendingResult()
-	})
-	c.OnShortcut(ui.Cmd, ui.KeyEnter, func() {
-		m.confirmCurrent()
-	})
-	if m.edit != nil && !m.reviewSaving && !m.exportBusy() {
+	if m.reviewSaving || m.exportBusy() {
+		return
+	}
+	if m.edit != nil {
+		c.OnShortcut(ui.Cmd, ui.KeyEnter, func() {
+			// The editor's draft is what ⌘↵ confirms; confirming the
+			// persisted row here would silently drop the input.
+			m.saveEdit(reviewConfirmNext, nil)
+		})
 		c.OnShortcut(ui.Cmd, ui.KeyS, func() {
 			m.saveEdit(reviewSave, nil)
 		})
+	} else {
+		c.OnShortcut(ui.Cmd, ui.KeyEnter, func() {
+			m.confirmCurrent()
+		})
 	}
+	c.OnShortcut(ui.Cmd, ui.KeyJ, func() {
+		m.selectNextPendingResult()
+	})
 }
 
 // selectNextPendingResult moves the selection to the next pending row in
 // the current filtered view, wrapping around. It never leaves the view for
-// another slot.
+// another slot. The move goes through requestNavigation, so an open editor
+// with unsaved input holds it behind the save/discard/stay prompt instead
+// of dropping the draft.
 func (m *Model) selectNextPendingResult() {
 	visible := m.visibleResultRows()
 	if len(visible) == 0 {
@@ -575,14 +588,15 @@ func (m *Model) evidenceStacked() bool {
 }
 
 // resultShortcutText is the results page's status-bar keys. An open
-// editor names its save key; the list and detail otherwise name the keys
-// their layout registers. Narrow list pages open a row with Return.
+// editor names its save-and-confirm and save keys; the list and detail
+// otherwise name the keys their layout registers. Narrow list pages open a
+// row with Return.
 func (m *Model) resultShortcutText() string {
+	if m.reviewSaving || m.exportBusy() {
+		return ""
+	}
 	if m.edit != nil {
-		if m.reviewSaving || m.exportBusy() {
-			return ""
-		}
-		return "⌘S 保存修改"
+		return "⌘↵ 保存并确认并下一项  ·  ⌘S 保存修改"
 	}
 	if m.rec == nil || len(m.rec.Rows) == 0 || m.completionVisible() {
 		return ""
