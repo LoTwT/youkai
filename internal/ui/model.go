@@ -223,6 +223,15 @@ type Model struct {
 	historyExporting string
 	historyBulk      *historyBulkPrompt
 
+	// The history table's choice, place and row menu. historyRow indexes
+	// the visible (date-filtered) entries; the ListState keeps the scroll
+	// and the keyboard choice. Only one row's popover menu is open at once.
+	historyList     ui.ListState
+	historyRow      int
+	historyScroll   ui.ScrollState
+	historyMenuID   string
+	historyMenuOpen bool
+
 	// Screenshot/history cleanup. savePrompt is the post-save three-way
 	// choice; promptedSessions remembers the sessions it was settled for,
 	// so "稍后处理" never reopens it. cleanup is the preview awaiting
@@ -331,6 +340,7 @@ func New(cfg Config) *Model {
 		cache:            newEvidenceCache(cfg.Evidence, limit),
 		promptedSessions: make(map[string]bool),
 		historySelected:  make(map[string]bool),
+		historyRow:       -1,
 		closeBehavior:    closeBehavior,
 	}
 	if cfg.Updates != nil {
@@ -508,6 +518,9 @@ func (m *Model) ShowLive() {
 	}
 	if m.activeSlot == resultSlotSession && m.sessionSlot.recordID == string(m.appliedSession) &&
 		m.rec != nil && m.rec.Live && m.rec.ID == string(m.appliedSession) {
+		// The session slot is already the live destination; opening "本次"
+		// from history only has to return to it.
+		m.page = pageResults
 		return
 	}
 	m.page = pageResults
@@ -547,9 +560,17 @@ type HistoryEntry struct {
 	Client        record.Client
 	CapturedCount int64
 	Coverage      record.CoverageStatus
-	PendingReview int
-	TotalBytes    int64
-	Unreadable    bool
+	// CoverageExpected is 0 when the record does not know the scope's
+	// expected count; the table then shows the status word instead of a
+	// percentage.
+	CoverageExpected int64
+	PendingReview    int
+	ExportableCount  int64
+	FailedCount      int64
+	UnprocessedCount int64
+	OtherCount       int64
+	TotalBytes       int64
+	Unreadable       bool
 }
 
 // loadHistory refreshes the history list from the service.
@@ -569,15 +590,20 @@ func (m *Model) loadHistory() {
 					label = info.SavedAt.Format("2006-01-02 15:04") + " · " + info.ID
 				}
 				entries = append(entries, HistoryEntry{
-					ID:            info.ID,
-					Label:         label,
-					SavedAt:       info.SavedAt,
-					Client:        info.Client,
-					CapturedCount: info.CapturedCount,
-					Coverage:      info.Coverage,
-					PendingReview: info.PendingReview,
-					TotalBytes:    info.TotalBytes,
-					Unreadable:    info.Unreadable,
+					ID:               info.ID,
+					Label:            label,
+					SavedAt:          info.SavedAt,
+					Client:           info.Client,
+					CapturedCount:    info.CapturedCount,
+					Coverage:         info.Coverage,
+					CoverageExpected: info.CoverageExpected,
+					PendingReview:    info.PendingReview,
+					ExportableCount:  info.ExportableCount,
+					FailedCount:      info.FailedCount,
+					UnprocessedCount: info.UnprocessedCount,
+					OtherCount:       info.OtherCount,
+					TotalBytes:       info.TotalBytes,
+					Unreadable:       info.Unreadable,
 				})
 			}
 			m.history = entries

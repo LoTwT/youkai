@@ -60,6 +60,11 @@ func (m *Model) viewPages(c *ui.Context) {
 		// current results visit; leaving the destination refreshes it.
 		m.clearRecentlyConfirmed()
 	}
+	if m.displayPage() != pageHistory {
+		// The row menu only exists on the history page; leaving it must not
+		// leave an open menu to reappear on the next visit.
+		m.historyMenuOpen = false
+	}
 
 	ui.Row(c).Fill().Children(func() {
 		m.sidebar(c, t, tok)
@@ -161,11 +166,18 @@ func (m *Model) pageBody(c *ui.Context, t *ui.Theme) {
 		return
 	}
 
+	if page == pageHistory {
+		// The history table owns its vertical scrolling; an outer scroll
+		// would give the List an unbounded height and defeat row snapping.
+		ui.Column(c).Grow(1).FillHeight().Padding(t.Space(3), t.Space(3)).Children(func() {
+			m.historyPage(c, t)
+		})
+		return
+	}
+
 	ui.Scroll(c).Grow(1).Children(func() {
 		ui.Column(c).Gap(t.Space(2)).Padding(t.Space(3), t.Space(3)).Children(func() {
 			switch page {
-			case pageHistory:
-				m.historyPage(c, t)
 			case pageSettings:
 				m.settingsPage(c, t)
 			}
@@ -218,6 +230,10 @@ func (m *Model) statusShortcutText() string {
 		if m.snap.Busy || m.startReqID != "" {
 			return "⌃⌥⌘S 停止扫描"
 		}
+	case pageHistory:
+		if len(m.visibleHistory()) > 0 {
+			return "↵ 打开记录"
+		}
 	}
 	return ""
 }
@@ -230,7 +246,7 @@ func (m *Model) pageStatusText() string {
 		}
 		return m.pendingText()
 	case pageHistory:
-		return fmt.Sprintf("已加载 %d 条历史记录", len(m.history))
+		return m.historyStatusText()
 	case pageSettings:
 		return "设置更改会立即保存"
 	default:

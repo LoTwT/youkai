@@ -187,7 +187,7 @@ func TestPageLayoutPagesRouteWithoutStageSwitch(t *testing.T) {
 		t.Fatal(err)
 	}
 	tt.Frame()
-	if !tt.HasText("日期筛选") {
+	if !tt.HasText("搜索日期") {
 		t.Fatalf("the history page does not show its records: %q", tt.Texts())
 	}
 	if err := tt.Click("打开"); err != nil {

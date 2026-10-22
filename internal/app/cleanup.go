@@ -232,22 +232,34 @@ func (s *Service) cleanupBlockedLocked() error {
 func pendingReviewCount(items []record.ItemRecord) int {
 	count := 0
 	for _, item := range items {
-		if item.Status != record.StatusProduced || !hasStructured(item) {
-			continue
-		}
-		switch item.Quality {
-		case record.QualityAutoAccepted, record.QualityHumanConfirmed:
-		default:
-			if item.Revision == 0 {
-				if structured, ok := structuredDiscPayload(item.Data); ok &&
-					zzz.OnlyEquippedStateUnavailable(structured.Validation, structured.Issues) {
-					continue
-				}
-			}
+		if itemPendingReview(item) {
 			count++
 		}
 	}
 	return count
+}
+
+// itemPendingReview reports whether one produced item still needs a
+// person. Failed and unprocessed items are not reviewable in this
+// revision, and an item without the structured interpretation has nothing
+// to review. Revision-0 records whose only persisted gap was the old
+// required equipped field are settled by the export's reclassification.
+func itemPendingReview(item record.ItemRecord) bool {
+	if item.Status != record.StatusProduced || !hasStructured(item) {
+		return false
+	}
+	switch item.Quality {
+	case record.QualityAutoAccepted, record.QualityHumanConfirmed:
+		return false
+	default:
+		if item.Revision == 0 {
+			if structured, ok := structuredDiscPayload(item.Data); ok &&
+				zzz.OnlyEquippedStateUnavailable(structured.Validation, structured.Issues) {
+				return false
+			}
+		}
+		return true
+	}
 }
 
 // hasStructured reports whether a produced payload carries (or can derive
