@@ -354,7 +354,7 @@ func (m *Model) detailPane(c *ui.Context) {
 					ui.Text(c, "识别失败："+row.Failure).TextColor(t.Danger)
 					ui.Text(c, "该条目没有结构化字段（识别失败）。").TextColor(t.TextMuted)
 				case record.StatusUnprocessed:
-					ui.Text(c, "未处理原因："+unprocessedReasonText(row.Reason)).TextColor(t.Danger)
+					ui.Text(c, "未处理原因："+unprocessedReasonText(row.Reason)).TextColor(t.TextMuted)
 					ui.Text(c, "该条目没有结构化字段（识别未运行）。").TextColor(t.TextMuted)
 				case record.StatusProduced:
 					if row.Structured == nil {
@@ -439,8 +439,13 @@ func (m *Model) resultStatusColor(t *ui.Theme, row *Row) ui.Color {
 
 func resultStatusColor(t *ui.Theme, row *Row) ui.Color {
 	switch row.Status {
-	case record.StatusFailed, record.StatusUnprocessed:
+	case record.StatusFailed:
 		return t.Danger
+	case record.StatusUnprocessed:
+		// Unprocessed means recognition did not run; it is not a
+		// failure. Keep it muted so color never claims an error the
+		// text does not.
+		return t.TextMuted
 	}
 	if row.PendingReview() {
 		return t.Warning
@@ -449,7 +454,7 @@ func resultStatusColor(t *ui.Theme, row *Row) ui.Color {
 }
 
 func resultIssueColor(t *ui.Theme, row *Row) ui.Color {
-	if row.Status == record.StatusFailed || row.Status == record.StatusUnprocessed {
+	if row.Status == record.StatusFailed {
 		return t.Danger
 	}
 	return t.TextMuted

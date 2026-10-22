@@ -15,7 +15,7 @@ import (
 // persisted by definition. A failed export snapshot does not hide the
 // state: the card then explains that completion cannot be confirmed.
 func (m *Model) reviewSettled() bool {
-	if !m.cfg.PageLayout || m.rec == nil || m.recData == nil || m.recErr != "" {
+	if !m.cfg.PageLayout || m.rec == nil || m.recData == nil || m.recErr != "" || m.loading {
 		return false
 	}
 	if m.pendingCount() != 0 || m.reviewSaving || m.editingDirty() {

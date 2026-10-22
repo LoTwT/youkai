@@ -602,6 +602,8 @@ func (m *Model) dismissSavePromptFor(target cleanupTarget, recordID string) {
 // state. It is used when the displayed record was deleted.
 func (m *Model) clearResultsLocked() {
 	m.recLoad++
+	m.loading = false
+	m.activeResultSlot().state.loading = false
 	m.rec = nil
 	m.recData = nil
 	m.recErr = ""

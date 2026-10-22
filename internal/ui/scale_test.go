@@ -101,10 +101,10 @@ func TestScaleBuildRecordViewOneAndTenThousandRows(t *testing.T) {
 			if got := m.nextPendingAfter(10); got != 11 {
 				t.Fatalf("next pending after seq 10 = %d, want the settled seq 11 skipped", got)
 			}
-			// The last row is settled (index n-1 divisible by 10); there is
-			// no wrapping back to the first pending row.
-			if got := m.nextPendingAfter(int64(n)); got != -1 {
-				t.Fatalf("next pending after the last row = %d, want no wrap (-1)", got)
+			// The last row is settled (index n-1 divisible by 10); the
+			// walk wraps to the first pending row, index 1.
+			if got := m.nextPendingAfter(int64(n)); got != 1 {
+				t.Fatalf("next pending after the last row = %d, want wrap to 1", got)
 			}
 			t.Logf("%d rows: BuildRecordView %s, pending %d", n, build, wantPending)
 		})
@@ -325,7 +325,7 @@ func TestScaleLateEvidenceCompletionStaysKeyed(t *testing.T) {
 }
 
 // TestScalePendingNavigationHandlesTenThousandRows exercises the pending
-// count and forward walk at 10,000 rows without any persistence.
+// count and wrapping forward walk at 10,000 rows without any persistence.
 func TestScalePendingNavigationHandlesTenThousandRows(t *testing.T) {
 	const n = 10000
 	view := BuildRecordView("scale", &record.Recovery{
@@ -341,7 +341,7 @@ func TestScalePendingNavigationHandlesTenThousandRows(t *testing.T) {
 	if got := m.nextPendingAfter(10); got != 11 {
 		t.Fatalf("next pending after seq 10 = %d, want the settled row skipped", got)
 	}
-	if got := m.nextPendingAfter(n); got != -1 {
-		t.Fatalf("next pending after the last row = %d, want -1", got)
+	if got := m.nextPendingAfter(n); got != 1 {
+		t.Fatalf("next pending after the last row = %d, want wrap to 1", got)
 	}
 }

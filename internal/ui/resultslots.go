@@ -34,6 +34,10 @@ type resultSlotState struct {
 	// its version is current, so a late response cannot replace a newer
 	// record in the same slot.
 	recLoad int64
+	// loading is true from the moment a load starts until that load's
+	// current version lands. The old record stays visible meanwhile, but
+	// it is a stale snapshot: completion and export must wait.
+	loading bool
 	// rec is the slot's view, recData the checkpoint it was built from.
 	// Exports freeze their revision from recData.
 	rec     *RecordView
@@ -244,8 +248,10 @@ func (m *Model) reloadSessionRecord(id string) {
 func (m *Model) reloadResultRecord(slot *resultSlot, id string, live bool) {
 	slot.state.recLoad++
 	version := slot.state.recLoad
+	slot.state.loading = true
 	if m.activeSlot == slot.kind {
 		m.recLoad = version
+		m.loading = true
 	}
 	m.goAsync(func() {
 		rec, err := m.cfg.Service.LoadRecord(id)
@@ -257,8 +263,10 @@ func (m *Model) reloadResultRecord(slot *resultSlot, id string, live bool) {
 				return // an action invalidated the active view's load
 			}
 			if err != nil {
+				slot.state.loading = false
 				slot.state.recErr = err.Error()
 				if m.activeSlot == slot.kind {
+					m.loading = false
 					m.recErr = slot.state.recErr
 				}
 				return
@@ -291,6 +299,7 @@ func (m *Model) applyLoadedRecord(slot *resultSlot, id string, rec *record.Recov
 	slot.state.rec = view
 	slot.state.recData = rec
 	slot.state.recErr = ""
+	slot.state.loading = false
 	slot.state.exportData = export
 	slot.state.exportBuildErr = buildErr
 	// A reload is a refresh: confirmed rows no longer linger in the
@@ -314,6 +323,7 @@ func (m *Model) applyLoadedRecord(slot *resultSlot, id string, rec *record.Recov
 	m.rec = view
 	m.recData = rec
 	m.recErr = ""
+	m.loading = false
 	m.exportData = export
 	m.exportBuildErr = buildErr
 	m.recentlyConfirmed = nil

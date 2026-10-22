@@ -84,6 +84,7 @@ const (
 	navSelect navKind = iota
 	navOpenHistory
 	navShowLive
+	navPage
 	navExit
 	navStartScan
 )
@@ -94,6 +95,8 @@ type navigationRequest struct {
 	kind     navKind
 	seq      int64
 	recordID string
+	// page is the destination of a navPage request.
+	page Page
 	// reload forces an explicit history reopen to reload its record instead
 	// of restoring the slot's stored view after a dirty prompt settled.
 	reload bool
@@ -499,9 +502,12 @@ func (m *Model) runNavigation(req navigationRequest) {
 			m.reviewNotice = ""
 		}
 	case navOpenHistory:
+		m.page = pageResults
 		m.performOpenHistory(req.recordID, req.reload)
 	case navShowLive:
 		m.performShowLive()
+	case navPage:
+		m.page = req.page
 	case navExit:
 		m.beginExit()
 	case navStartScan:
@@ -655,7 +661,14 @@ func (m *Model) submitReview(recordID string, seq, expectedRevision int64, data 
 				return
 			}
 			m.applySavedItem(result.Item, result.Generation)
-			m.recLoad++ // invalidate an older load started before the save
+			// Invalidate an older load started before the save: this
+			// save's applied revision is the newest view. No current load
+			// remains, so the loading guard must not outlive it.
+			m.recLoad++
+			active := m.activeResultSlot()
+			active.state.recLoad = m.recLoad
+			m.loading = false
+			active.state.loading = false
 			if m.edit != nil && m.edit.recordID == recordID && m.edit.seq == seq {
 				m.edit = nil
 			}
@@ -667,6 +680,22 @@ func (m *Model) submitReview(recordID string, seq, expectedRevision int64, data 
 				next := m.nextPendingAfter(seq)
 				if next >= 0 {
 					m.selected = next
+					m.selectedSequence = m.rec.Rows[next].Seq
+					// Keep the table's chosen row and scroll position on
+					// the same visible row the guard chose.
+					if display := resultDisplayIndex(m.visibleResultRows(), next); display >= 0 {
+						m.tableSelected = display
+						m.list.ScrollIntoView(display)
+					}
+				} else if m.pendingCount() > 0 {
+					// Pending work remains but none of it is in the
+					// current segment. Drop a confirmed row that filtered
+					// itself out instead of leaving a hidden selection.
+					m.settleResultSelection()
+					if display := resultDisplayIndex(m.visibleResultRows(), m.selected); display >= 0 {
+						m.tableSelected = display
+						m.list.ScrollIntoView(display)
+					}
 				}
 				switch {
 				case m.pendingCount() == 0:
@@ -756,7 +785,9 @@ func (m *Model) pendingCount() int {
 }
 
 // nextPendingAfter finds the next pending row after the given capture
-// sequence, in the record's capture order. It never wraps around.
+// sequence in the current filtered view. It walks the visible rows only,
+// in record order, and wraps around at the end so a confirmed row can
+// never move the selection outside the segment the user is looking at.
 func (m *Model) nextPendingAfter(seq int64) int {
 	if m.rec == nil {
 		return -1
@@ -765,9 +796,31 @@ func (m *Model) nextPendingAfter(seq int64) int {
 	if start < 0 {
 		return -1
 	}
-	for i := start + 1; i < len(m.rec.Rows); i++ {
-		if m.rec.Rows[i].PendingReview() {
-			return i
+	visible := m.visibleResultRows()
+	if len(visible) == 0 {
+		return -1
+	}
+	next := func(index int) int {
+		if index == start {
+			return -1
+		}
+		if m.rec.Rows[index].PendingReview() {
+			return index
+		}
+		return -1
+	}
+	for _, index := range visible {
+		if index > start {
+			if found := next(index); found >= 0 {
+				return found
+			}
+		}
+	}
+	for _, index := range visible {
+		if index <= start {
+			if found := next(index); found >= 0 {
+				return found
+			}
 		}
 	}
 	return -1

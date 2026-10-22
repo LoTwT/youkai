@@ -238,6 +238,11 @@ type Model struct {
 	historyScroll   ui.ScrollState
 	historyMenuID   string
 	historyMenuOpen bool
+	// The 860 composite's measured frame: the panel, its header and its
+	// footer give the whole-row list viewport once laid out.
+	historyPanel  ui.Ref
+	historyHead   ui.Ref
+	historyFooter ui.Ref
 
 	// Screenshot/history cleanup. savePrompt is the post-save three-way
 	// choice; promptedSessions remembers the sessions it was settled for,

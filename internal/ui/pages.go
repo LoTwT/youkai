@@ -106,25 +106,87 @@ func (m *Model) sidebar(c *ui.Context, t *ui.Theme, tok *Tokens) {
 	}
 	ui.Column(c).Width(width).FillHeight().Background(tok.SurfaceWindow).
 		Padding(vertical, horizontal).Gap(t.Space(0.5)).Children(func() {
+		page := m.displayPage()
 		m.sidebarButton(c, t, tok, "扫描", scanIcon,
-			m.displayPage() == pageScan || m.displayPage() == pageResults, func() {
-				if m.rec != nil {
-					m.page = pageResults
-				} else {
-					m.page = pageScan
-				}
-			})
+			page == pageScan || page == pageResults, m.sidebarScan)
 		m.sidebarButton(c, t, tok, "历史", historyIcon,
-			m.displayPage() == pageHistory, func() {
-				m.page = pageHistory
-			})
+			page == pageHistory, m.sidebarHistory)
 		ui.Box(c).Grow(1)
 		ui.Divider(c)
 		m.sidebarButton(c, t, tok, "设置", settingsIcon,
-			m.displayPage() == pageSettings, func() {
-				m.page = pageSettings
-			})
+			page == pageSettings, m.sidebarSettings)
 	})
+}
+
+// sidebarScan routes the scan destination. The results page is that
+// destination whenever it is showing; prepare shows only when there is no
+// loaded record to return to. A live session is restored through
+// ShowLive, so a history snapshot never stands in for it.
+func (m *Model) sidebarScan() {
+	switch m.displayPage() {
+	case pageResults:
+		if m.activeSlot == resultSlotSession || m.appliedSession == "" {
+			return // the live session (or the only loaded record) stays
+		}
+		// A history snapshot is showing. The scan destination is the
+		// live session whenever one exists; the draft guard turns this
+		// into the unsaved prompt.
+		m.ShowLive()
+		return
+	case pageScan:
+		if m.appliedSession != "" {
+			return // the running session's prepare page stays put
+		}
+		if m.rec != nil && m.historySlot.recordID != "" {
+			m.page = pageResults
+		}
+		return
+	}
+	if m.appliedSession != "" {
+		m.ShowLive()
+		return
+	}
+	if m.historySlot.recordID != "" {
+		m.requestNavigation(navigationRequest{
+			kind:     navOpenHistory,
+			recordID: m.historySlot.recordID,
+		})
+		return
+	}
+	m.navigatePage(pageScan)
+}
+
+// sidebarHistory routes the history destination. From the results page it
+// opens the saved-record list (the results page itself belongs to the scan
+// destination); from prepare or settings it restores the opened snapshot
+// when one exists. Both moves go through the draft guard.
+func (m *Model) sidebarHistory() {
+	if m.displayPage() == pageHistory {
+		return // already on the list
+	}
+	if m.displayPage() != pageResults && m.historySlot.recordID != "" {
+		m.requestNavigation(navigationRequest{
+			kind:     navOpenHistory,
+			recordID: m.historySlot.recordID,
+		})
+		return
+	}
+	m.navigatePage(pageHistory)
+}
+
+// sidebarSettings routes the settings destination through the same draft
+// guard as the result destinations, so leaving a dirty item prompts
+// instead of dropping its input.
+func (m *Model) sidebarSettings() {
+	m.navigatePage(pageSettings)
+}
+
+// navigatePage switches destinations after the active editor settles.
+func (m *Model) navigatePage(page Page) {
+	if m.displayPage() == page {
+		return
+	}
+	m.requestNavigation(navigationRequest{kind: navPage, page: page})
 }
 
 // sidebarButton is one rectangular navigation item. The active item uses

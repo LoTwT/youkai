@@ -148,7 +148,7 @@ func (m *Model) historyPage(c *ui.Context, t *ui.Theme) {
 
 	ui.Column(c).Grow(1).Width(historyPanelWidth(m.contentWidth)).MinWidth(0).
 		Background(tok.SurfaceCard).Border(1, tok.TableBorder).
-		Radius(t.Space(1.5)).Clip().Children(func() {
+		Radius(t.Space(1.5)).Clip().Bind(&m.historyPanel).Children(func() {
 		if historyUsesComposite(m.contentWidth) {
 			m.historyCompositeTable(c, t, tok, entries)
 		} else {
@@ -240,7 +240,7 @@ func (m *Model) historyCompositeTable(c *ui.Context, t *ui.Theme, tok *Tokens, e
 
 	head := ui.Row(c).Height(historyCompositeHeader).Background(tok.TableHeader).BorderWidth(0, 0, 1, 0).
 		BorderColor(tok.TableBorder).Clip().Shrink(0).MinWidth(0).Padding(0, historyCompositePad).
-		Gap(historyCompositeGap).AlignItems(ui.Stretch).Children(func() {
+		Gap(historyCompositeGap).AlignItems(ui.Stretch).Bind(&m.historyHead).Children(func() {
 		for _, column := range historyColumns860[:len(historyColumns860)-1] {
 			m.historyCompositeCell(c, t, tok, HistoryEntry{}, column, true, false)
 		}
@@ -260,11 +260,42 @@ func (m *Model) historyCompositeTable(c *ui.Context, t *ui.Theme, tok *Tokens, e
 			}
 			m.historyCompositeActionCell(c, t, tok, entry, row, actionLeft, false)
 		})
-	}).Grow(1).MinWidth(0).RowWidth(historyMinTableWidth860).TrackScroll(&m.historyScroll)
+	}).MinWidth(0).RowWidth(historyMinTableWidth860).TrackScroll(&m.historyScroll)
+	if height, measured := m.historyCompositeListHeight(c); measured {
+		// Rows are fixed 52-DIP boxes. An exact whole-row height keeps
+		// the viewport from clipping the last row; the spacer holds the
+		// footer at the panel's bottom.
+		list.Height(height)
+		ui.Box(c).Grow(1)
+	} else {
+		// Measure the panel/header/footer once with the table filling the
+		// rest, then rebuild with the snapped viewport.
+		list.Grow(1)
+		c.Invalidate()
+	}
 	head.ScrollWith(list)
 	if list.Submitted() {
 		m.openHistoryRow(m.historyRow)
 	}
+}
+
+// historyCompositeListHeight returns the largest whole number of 52-DIP
+// rows the composite's panel can show, after its header and footer. The
+// measured flag is false until all three have a committed frame.
+func (m *Model) historyCompositeListHeight(c *ui.Context) (height float32, measured bool) {
+	panel := m.historyPanel.Bounds(c)
+	head := m.historyHead.Bounds(c)
+	footer := m.historyFooter.Bounds(c)
+	if panel.H <= 0 || head.H <= 0 || footer.H <= 0 {
+		return 0, false
+	}
+	// The panel's own 1-DIP border sits outside the children's frame.
+	available := panel.H - 2 - head.H - footer.H
+	if available < 0 {
+		available = 0
+	}
+	rows := int(available / historyRowHeight860)
+	return float32(rows) * historyRowHeight860, true
 }
 
 // historyCompositeCell is one fixed-width data cell of the 860 composite.
@@ -591,7 +622,8 @@ func (m *Model) historyTableFooter(c *ui.Context, t *ui.Theme, tok *Tokens, entr
 		text += "，左右滚动查看全部列"
 	}
 	text += " · 采集 = 可导出 + 待校对 + 失败 + 未处理 + 其他"
-	ui.Text(c, text).TextColor(tok.TextMuted).FontSize(t.FontSize * 0.8)
+	ui.Text(c, text).TextColor(tok.TextMuted).FontSize(t.FontSize * 0.8).
+		Bind(&m.historyFooter)
 }
 
 // historyNotices shows export/cleanup outcomes, the load error and a

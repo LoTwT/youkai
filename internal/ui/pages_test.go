@@ -289,3 +289,196 @@ func TestPageLayoutScanActions(t *testing.T) {
 		t.Fatalf("the new-scan action shows page %v, want prepare", m.displayPage())
 	}
 }
+
+// TestSidebarRestoresSessionAndOpenedHistory checks the rail as a set of
+// destinations: history from settings returns to the opened snapshot,
+// the history list is reachable from results, and scan restores the live
+// session slot without loading it again. Clicking the active destination
+// is a no-op.
+func TestSidebarRestoresSessionAndOpenedHistory(t *testing.T) {
+	svc := &fakeService{
+		list: []record.RecordInfo{{
+			ID:      "old",
+			SavedAt: time.Date(2026, 10, 20, 10, 0, 0, 0, time.UTC),
+		}},
+		loads: map[string]*record.Recovery{
+			"s1":  recovery(item(1, record.StatusProduced, "", "", "本次"), item(2, record.StatusProduced, "", "", "本次二")),
+			"old": recovery(item(1, record.StatusProduced, "", "", "旧一")),
+		},
+	}
+	m, q := newTestModel(t, Config{Service: svc, PageLayout: true})
+	tt := ui.NewTester(m.View, 1024, 700)
+	settle(t, m, q, tt)
+	m.Apply(snap("s1", 1, true, scan.PhaseCapturing,
+		scan.Counts{Captured: 2, Produced: 2}, 1, true, ""))
+	drainAll(t, m, q)
+
+	// Give the session slot its own view state, then open history.
+	m.filter = resultFilterAll
+	m.search = "未评价"
+	m.selected = 1
+	m.histChoice = slotHistoryLabel(t, m, "old")
+	m.OpenHistory()
+	settle(t, m, q, tt)
+	if m.activeSlot != resultSlotHistory || m.rec.ID != "old" {
+		t.Fatalf("history did not open: slot %v record %+v", m.activeSlot, m.rec)
+	}
+	historyLoads, sessionLoads := slotLoadCount(svc, "old"), slotLoadCount(svc, "s1")
+
+	if err := tt.Click("设置"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if m.displayPage() != pageSettings {
+		t.Fatalf("settings shows page %v", m.displayPage())
+	}
+	if err := tt.Click("历史"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
+	if m.displayPage() != pageResults || m.activeSlot != resultSlotHistory ||
+		m.rec == nil || m.rec.ID != "old" {
+		t.Fatalf("history from settings = page %v slot %v record %+v",
+			m.displayPage(), m.activeSlot, m.rec)
+	}
+	if slotLoadCount(svc, "old") != historyLoads {
+		t.Fatal("restoring the opened history reloaded it")
+	}
+
+	// From results, history opens its list (the results page belongs to
+	// the scan destination).
+	if err := tt.Click("历史"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if m.displayPage() != pageHistory {
+		t.Fatalf("history from results shows page %v, want the list", m.displayPage())
+	}
+	if err := tt.Click("历史"); err != nil { // active destination: no-op
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if m.displayPage() != pageHistory {
+		t.Fatalf("clicking the active history destination moved to page %v", m.displayPage())
+	}
+
+	if err := tt.Click("扫描"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
+	if m.displayPage() != pageResults || m.activeSlot != resultSlotSession ||
+		m.rec == nil || m.rec.ID != "s1" || !m.rec.Live {
+		t.Fatalf("scan from history = page %v slot %v record %+v",
+			m.displayPage(), m.activeSlot, m.rec)
+	}
+	if m.filter != resultFilterAll || m.search != "未评价" || m.selected != 1 {
+		t.Fatalf("the session slot lost its view: filter %v search %q selected %d",
+			m.filter, m.search, m.selected)
+	}
+	if slotLoadCount(svc, "s1") != sessionLoads {
+		t.Fatal("returning to the live session reloaded it")
+	}
+
+	// The active scan destination and the active settings destination
+	// ignore their own clicks.
+	if err := tt.Click("扫描"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if m.displayPage() != pageResults || m.activeSlot != resultSlotSession {
+		t.Fatal("clicking the active scan destination moved away")
+	}
+	if err := tt.Click("设置"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if err := tt.Click("设置"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if m.displayPage() != pageSettings {
+		t.Fatalf("clicking the active settings destination moved to page %v", m.displayPage())
+	}
+}
+
+// TestSidebarDestinationsGuardDirtyDrafts checks that switching to the
+// scan, history or settings destination never drops an unsaved item: the
+// move waits behind the save/discard/stay prompt, and staying keeps the
+// draft and the current slot.
+func TestSidebarDestinationsGuardDirtyDrafts(t *testing.T) {
+	svc := &fakeService{
+		list: []record.RecordInfo{{
+			ID:      "old",
+			SavedAt: time.Date(2026, 10, 20, 10, 0, 0, 0, time.UTC),
+		}},
+		loads: map[string]*record.Recovery{
+			"s1":  recovery(reviewRowItem(t, 1, 12)),
+			"old": recovery(reviewRowItem(t, 1, 12)),
+		},
+	}
+	installReviewSave(svc)
+	m, q := newTestModel(t, Config{Service: svc, PageLayout: true})
+	tt := ui.NewTester(m.View, 1024, 700)
+	settle(t, m, q, tt)
+	m.Apply(snap("s1", 1, true, scan.PhaseCapturing,
+		scan.Counts{Captured: 1, Produced: 1}, 1, true, ""))
+	drainAll(t, m, q)
+	m.histChoice = slotHistoryLabel(t, m, "old")
+	m.OpenHistory()
+	settle(t, m, q, tt)
+
+	m.startEdit()
+	m.edit.draft.Level = "13"
+	if err := tt.Click("扫描"); err != nil {
+		t.Fatal(err)
+	}
+	if m.navPrompt == nil || m.navPrompt.kind != navShowLive {
+		t.Fatalf("dirty history did not prompt before scan: %+v", m.navPrompt)
+	}
+	if m.displayPage() != pageResults || m.activeSlot != resultSlotHistory {
+		t.Fatal("the dirty history slot switched before the prompt settled")
+	}
+	m.promptStay()
+	if m.edit == nil || m.edit.draft.Level != "13" {
+		t.Fatal("staying lost the dirty history draft")
+	}
+
+	if err := tt.Click("设置"); err != nil {
+		t.Fatal(err)
+	}
+	if m.navPrompt == nil || m.navPrompt.kind != navPage || m.navPrompt.page != pageSettings {
+		t.Fatalf("dirty history did not prompt before settings: %+v", m.navPrompt)
+	}
+	if m.displayPage() != pageResults {
+		t.Fatal("settings opened before the dirty prompt settled")
+	}
+	m.promptDiscardAndContinue()
+	drainAll(t, m, q)
+	if m.displayPage() != pageSettings || m.edit != nil {
+		t.Fatalf("discarding did not open settings: page %v edit %v", m.displayPage(), m.edit)
+	}
+
+	if err := tt.Click("扫描"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
+	if m.activeSlot != resultSlotSession || m.rec == nil || m.rec.ID != "s1" {
+		t.Fatalf("scan from settings did not restore the session: slot %v record %+v",
+			m.activeSlot, m.rec)
+	}
+	m.startEdit()
+	m.edit.draft.Level = "14"
+	if err := tt.Click("历史"); err != nil {
+		t.Fatal(err)
+	}
+	if m.navPrompt == nil || m.navPrompt.kind != navPage || m.navPrompt.page != pageHistory {
+		t.Fatalf("dirty session did not prompt before history: %+v", m.navPrompt)
+	}
+	if m.displayPage() != pageResults || m.activeSlot != resultSlotSession {
+		t.Fatal("the dirty session switched before the prompt settled")
+	}
+	m.promptStay()
+	if m.edit == nil || m.edit.draft.Level != "14" {
+		t.Fatal("staying lost the dirty session draft")
+	}
+}
