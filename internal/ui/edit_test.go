@@ -440,15 +440,15 @@ func TestConfirmStayKeepsItemInPendingSegment(t *testing.T) {
 
 	// Leaving the results destination refreshes the pending segment; the
 	// same confirmed row no longer lingers there on return.
-	if err := tt.Click("历史"); err != nil {
-		t.Fatal(err)
+	if err := tt.Click("← 返回历史"); err != nil {
+		t.Fatalf("click 返回历史: %v", err)
 	}
 	tt.Frame()
 	if m.recentlyConfirmed != nil {
 		t.Fatal("leaving the results page kept the confirmed row")
 	}
-	if err := tt.Click("扫描"); err != nil {
-		t.Fatal(err)
+	if err := tt.Click("打开"); err != nil {
+		t.Fatalf("reopen the record: %v", err)
 	}
 	settle(t, m, q, tt)
 	if m.displayPage() != pageResults {

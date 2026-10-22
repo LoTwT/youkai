@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -9,6 +10,7 @@ import (
 	"github.com/LoTwT/youkai/internal/app"
 	"github.com/LoTwT/youkai/internal/record"
 	"github.com/LoTwT/youkai/internal/scan"
+	"github.com/egoist/mygo/ui"
 )
 
 // slotHistoryLabel returns the picker label of one loaded history record.
@@ -543,5 +545,213 @@ func TestSupersededResultLoadDoesNotClearLoading(t *testing.T) {
 	}
 	if m.rec == nil || len(m.rec.Rows) != 3 {
 		t.Fatalf("the current response did not apply: %+v", m.rec)
+	}
+}
+
+// TestFinalCheckpointLoadingBlocksConfirmation checks the final checkpoint
+// gap from the review side: while the newer checkpoint is in flight the
+// stale rows must not be confirmable or exportable, and a confirmation may
+// not clear the loading guard. The landed checkpoint then provides both
+// rows to the view and to an export.
+func TestFinalCheckpointLoadingBlocksConfirmation(t *testing.T) {
+	initial := recovery(reviewRowItem(t, 1, 12))
+	initial.Checkpoint.Session.SessionID = "s1"
+	final := recovery(
+		uiStructuredItem(t, 1, record.QualityHumanConfirmed),
+		uiStructuredItem(t, 2, record.QualityHumanConfirmed),
+	)
+	final.Checkpoint.Session.SessionID = "s1"
+	svc := &fakeService{loads: map[string]*record.Recovery{"s1": initial}}
+	installReviewSave(svc)
+	saver := &fakeDirectExportSaver{}
+	m, q := newTestModel(t, Config{
+		Service:           svc,
+		PageLayout:        true,
+		DirectExportSaver: saver,
+		AppVersion:        "test-1",
+	})
+	m.SetContentSize(1024, 700)
+	tt := ui.NewTester(m.View, 1024, 700)
+	settle(t, m, q, tt)
+
+	m.Apply(snap("s1", 1, true, scan.PhaseCapturing,
+		scan.Counts{Captured: 1, Produced: 1}, 1, true, ""))
+	drainAll(t, m, q)
+	if m.rec == nil || len(m.rec.Rows) != 1 {
+		t.Fatalf("the initial checkpoint did not load: %+v", m.rec)
+	}
+
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+	svc.mu.Lock()
+	svc.loadFn = func(id string) (*record.Recovery, error) {
+		if id == "s1" {
+			select {
+			case started <- struct{}{}:
+			default:
+			}
+			<-release
+			return final, nil
+		}
+		return svc.loads[id], nil
+	}
+	svc.mu.Unlock()
+
+	m.Apply(snap("s1", 2, false, scan.PhaseEnded,
+		scan.Counts{Captured: 2, Produced: 2}, 2, false, ""))
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the final checkpoint load did not start")
+	}
+	if !m.loading {
+		t.Fatal("the session slot does not mark its final load as pending")
+	}
+
+	// The UI frame shows the stale row and names the reason review actions
+	// are unavailable.
+	tt.Frame()
+	if !tt.HasText("正在加载最新检查点") {
+		t.Fatalf("the results page does not explain the loading guard: %q", tt.Texts())
+	}
+
+	// A button click and the ⌘Enter shortcut must both wait: neither may
+	// save the stale row, and a save must not clear the loading guard.
+	if err := tt.Click("确认并下一项"); err != nil {
+		t.Fatalf("click 确认并下一项: %v", err)
+	}
+	tt.Key(ui.Cmd, ui.KeyEnter)
+	m.confirmCurrentStay()
+	if calls := svc.saveCount(); calls != 0 {
+		t.Fatalf("a review action saved the stale snapshot: %+v", svc.saves)
+	}
+	if !m.loading {
+		t.Fatal("a blocked confirmation cleared the loading guard")
+	}
+	if !strings.Contains(m.reviewErr, "加载最新检查点") {
+		t.Fatalf("a blocked confirmation gave no reason: %q", m.reviewErr)
+	}
+
+	// Export stays blocked too: writing the stale one-row snapshot would
+	// disagree with the checkpoint on disk.
+	m.ExportJSON()
+	if calls := saver.snapshot(); len(calls) != 0 {
+		t.Fatalf("an export started from the stale snapshot: %+v", calls)
+	}
+
+	close(release)
+	drainAll(t, m, q)
+	tt.Frame()
+	if m.loading {
+		t.Fatal("the landed final checkpoint left the slot loading")
+	}
+	if len(m.rec.Rows) != 2 || m.pendingCount() != 0 {
+		t.Fatalf("the final checkpoint is not applied: rows %d pending %d",
+			len(m.rec.Rows), m.pendingCount())
+	}
+	if m.exportData == nil || m.exportData.Summary.Included != 2 {
+		t.Fatalf("the export snapshot did not advance: %+v", m.exportData)
+	}
+
+	if err := tt.Click("导出 JSON"); err != nil {
+		t.Fatalf("click 导出 JSON: %v", err)
+	}
+	drainAll(t, m, q)
+	calls := saver.snapshot()
+	if len(calls) != 1 {
+		t.Fatalf("direct export calls = %+v", calls)
+	}
+	var doc struct {
+		Items []app.ExportItem `json:"items"`
+	}
+	if err := json.Unmarshal(calls[0].data, &doc); err != nil {
+		t.Fatalf("decode the export: %v", err)
+	}
+	if len(doc.Items) != 2 {
+		t.Fatalf("the export wrote %d rows, want the latest checkpoint's 2", len(doc.Items))
+	}
+}
+
+// TestFinalCheckpointLoadingBlocksEditorSave checks the editor while the
+// latest checkpoint loads: its save and confirm actions are disabled, the
+// model refuses a direct save too, and the input survives the rejection.
+func TestFinalCheckpointLoadingBlocksEditorSave(t *testing.T) {
+	initial := recovery(reviewRowItem(t, 1, 12))
+	initial.Checkpoint.Session.SessionID = "s1"
+	final := recovery(reviewRowItem(t, 1, 12), reviewRowItem(t, 2, 10))
+	final.Checkpoint.Session.SessionID = "s1"
+	svc := &fakeService{loads: map[string]*record.Recovery{"s1": initial}}
+	installReviewSave(svc)
+	m, q := newTestModel(t, Config{Service: svc, PageLayout: true})
+	m.SetContentSize(1024, 700)
+	tt := ui.NewTester(m.View, 1024, 700)
+	settle(t, m, q, tt)
+
+	m.Apply(snap("s1", 1, true, scan.PhaseCapturing,
+		scan.Counts{Captured: 1, Produced: 1}, 1, true, ""))
+	drainAll(t, m, q)
+	m.startEdit()
+	if m.edit == nil {
+		t.Fatal("the editor did not open on the initial checkpoint")
+	}
+
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+	svc.mu.Lock()
+	svc.loadFn = func(id string) (*record.Recovery, error) {
+		if id == "s1" {
+			select {
+			case started <- struct{}{}:
+			default:
+			}
+			<-release
+			return final, nil
+		}
+		return svc.loads[id], nil
+	}
+	svc.mu.Unlock()
+
+	// The clean editor does not block the refresh; the load starts behind
+	// it.
+	m.Apply(snap("s1", 2, false, scan.PhaseEnded,
+		scan.Counts{Captured: 2, Produced: 2}, 2, false, ""))
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the final checkpoint load did not start")
+	}
+	if !m.loading {
+		t.Fatal("the session slot does not mark its final load as pending")
+	}
+
+	m.edit.draft.Level = "13"
+	tt.Frame()
+	if err := tt.Click("保存"); err != nil {
+		t.Fatalf("click 保存: %v", err)
+	}
+	tt.Key(ui.Cmd, ui.KeyS)
+	m.saveEdit(reviewSave, nil)
+	if calls := svc.saveCount(); calls != 0 {
+		t.Fatalf("the editor saved over the loading checkpoint: %+v", svc.saves)
+	}
+	if m.edit == nil || m.edit.draft.Level != "13" {
+		t.Fatal("the refused save dropped the unsaved input")
+	}
+	if !strings.Contains(m.reviewErr, "加载最新检查点") {
+		t.Fatalf("the refused save gave no loading reason: %q", m.reviewErr)
+	}
+
+	close(release)
+	drainAll(t, m, q)
+	if m.loading {
+		t.Fatal("the landed final checkpoint left the slot loading")
+	}
+	if len(m.rec.Rows) != 2 {
+		t.Fatalf("the final checkpoint is not applied: %+v", m.rec)
+	}
+	m.discardEdit()
+	if m.rec == nil || len(m.rec.Rows) != 2 || m.pendingCount() != 2 {
+		t.Fatalf("discarding the rejected draft lost the checkpoint: rows %d pending %d",
+			len(m.rec.Rows), m.pendingCount())
 	}
 }
