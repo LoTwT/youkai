@@ -106,6 +106,9 @@ type fakeService struct {
 	loads   map[string]*record.Recovery
 	loadErr map[string]error
 	loadLog []string
+	// loadFn, when set, answers a load instead of loads/loadErr; tests use
+	// it to hold responses and settle them out of order.
+	loadFn func(recordID string) (*record.Recovery, error)
 
 	saves  []saveCall
 	saveFn func(recordID string, sequence, expectedRevision int64, edit app.ItemRevisionEdit) (app.ItemRevisionResult, error)
@@ -191,8 +194,14 @@ func (f *fakeService) HistoryRecords() ([]app.HistoryRecord, error) {
 
 func (f *fakeService) LoadRecord(recordID string) (*record.Recovery, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.loadLog = append(f.loadLog, recordID)
+	fn := f.loadFn
+	f.mu.Unlock()
+	if fn != nil {
+		return fn(recordID)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if err, ok := f.loadErr[recordID]; ok {
 		return nil, err
 	}
