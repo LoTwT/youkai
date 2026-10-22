@@ -195,9 +195,18 @@ func main() {
 			Reason:    "当前构建没有接入游戏扫描源（M2 接入游戏适配）；开发构建可通过环境变量 YOUKAI_DEV_SOURCE 启用开发数据源。",
 		},
 		Evidence: ui.FileEvidence{Root: paths.Data},
-		// Usable-data exports: the system save dialog, then an atomic
-		// write outside the application-managed data root.
+		// Usable-data exports: the page shell writes straight into the
+		// system downloads directory; the legacy layout keeps the save
+		// dialog. Both write atomically outside the managed data root.
 		ExportSaver:       fileExportSaver{dataRoot: paths.Data},
+		DirectExportSaver: fileExportSaver{dataRoot: paths.Data},
+		OpenDownloadsDirectory: func() error {
+			dir, err := mygo.App.Path(mygo.PathDownloads)
+			if err != nil {
+				return err
+			}
+			return mygo.Shell.OpenPath(dir)
+		},
 		OpenDataDirectory: func() error { return mygo.Shell.OpenPath(paths.Data) },
 		// The auto-update corner: MyGo's updater behind the UI's seam. The
 		// running version shows in the area ("当前版本 …"); DevAutoInstall

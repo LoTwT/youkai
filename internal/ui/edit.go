@@ -428,7 +428,7 @@ func (m *Model) editingDirty() bool {
 
 // startEdit opens the editable form on the selected produced row.
 func (m *Model) startEdit() {
-	if m.reviewSaving || m.rec == nil || m.selected < 0 || m.selected >= len(m.rec.Rows) {
+	if m.reviewActionsBlocked() || m.rec == nil || m.selected < 0 || m.selected >= len(m.rec.Rows) {
 		return
 	}
 	row := &m.rec.Rows[m.selected]
@@ -560,6 +560,10 @@ func (m *Model) saveEdit(action reviewAction, after func()) {
 	if m.edit == nil || m.reviewSaving {
 		return
 	}
+	if m.exportBusy() {
+		m.reviewErr = "正在导出，完成前不能保存或确认。"
+		return
+	}
 	m.lastAction = action
 	m.edit.refresh()
 	if len(m.edit.fieldErrors) > 0 || len(m.edit.check.Blocking) > 0 {
@@ -594,6 +598,10 @@ func (m *Model) confirmCurrentStay() {
 // opening the editor.
 func (m *Model) confirmCurrentAction(action reviewAction) {
 	if m.reviewSaving || m.rec == nil || m.selected < 0 || m.selected >= len(m.rec.Rows) {
+		return
+	}
+	if m.exportBusy() {
+		m.reviewErr = "正在导出，完成前不能编辑或确认。"
 		return
 	}
 	m.lastAction = action

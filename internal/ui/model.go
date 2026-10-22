@@ -109,9 +109,16 @@ type Config struct {
 	// Evidence loads evidence images by record and evidence identity;
 	// nil disables images (the details show their texts only).
 	Evidence EvidenceSource
-	// ExportSaver chooses and writes the usable-data JSON/CSV files; nil
-	// hides the export controls.
+	// ExportSaver chooses and writes the usable-data JSON/CSV files through
+	// the system save dialog. The legacy layout keeps this behavior.
 	ExportSaver ExportSaver
+	// DirectExportSaver writes the usable-data files straight into the
+	// system downloads directory. The page shell prefers it; nil falls back
+	// to ExportSaver.
+	DirectExportSaver DirectExportSaver
+	// OpenDownloadsDirectory reveals the direct export directory with the
+	// system file manager; nil hides the "open directory" action.
+	OpenDownloadsDirectory func() error
 	// OpenDataDirectory opens the managed data root with the system file
 	// manager; nil hides the action.
 	OpenDataDirectory func() error
@@ -239,8 +246,11 @@ type Model struct {
 	storagePrompt    *storagePrompt
 
 	// exporting is the shared export slot: one export runs at a time. Its
-	// frozen snapshot and outcome live in the active result slot.
-	exporting bool
+	// frozen snapshot and outcome live in the active result slot;
+	// exportOutcome carries the direct export's global status strip message
+	// so switching destinations cannot hide it.
+	exporting     bool
+	exportOutcome *exportOutcome
 
 	// page is the four-page shell's explicit choice; pageAuto follows
 	// the loaded record/history/update state.

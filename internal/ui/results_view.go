@@ -619,7 +619,7 @@ func (m *Model) reviewActions(c *ui.Context, t *ui.Theme, row *Row, check app.Da
 	unexportable := resultRowUnexportable(row)
 	pending := row.PendingReview()
 	editButton := func() {
-		if ui.Button(c, "编辑").Disabled(m.reviewSaving).Clicked() {
+		if ui.Button(c, "编辑").Disabled(m.reviewActionsBlocked()).Clicked() {
 			m.startEdit()
 		}
 	}
@@ -643,7 +643,7 @@ func (m *Model) reviewActions(c *ui.Context, t *ui.Theme, row *Row, check app.Da
 		}
 	}
 	selectNext := func() {
-		if ui.Button(c, "下一个待校对").Disabled(m.reviewSaving).Clicked() {
+		if ui.Button(c, "下一个待校对").Disabled(m.reviewActionsBlocked()).Clicked() {
 			m.selectNextPendingResult()
 		}
 	}
@@ -687,6 +687,9 @@ func (m *Model) reviewActions(c *ui.Context, t *ui.Theme, row *Row, check app.Da
 			ui.Text(c, "确认前还需："+problem).TextColor(t.TextMuted)
 		}
 	}
+	if m.exportBusy() {
+		ui.Text(c, "正在导出，完成前不能编辑或确认。").TextColor(t.TextMuted)
+	}
 	if m.reviewNotice != "" {
 		ui.Text(c, m.reviewNotice)
 	}
@@ -720,30 +723,30 @@ func (m *Model) editForm(c *ui.Context, t *ui.Theme, row *Row) {
 		ui.Text(c, "稀有度："+row.RarityText()+"（本修订不可编辑）").TextColor(t.TextMuted)
 
 		labeledRow(c, t, "套装", func() {
-			ui.Select(c, &draft.SetID, setChoices(currentID(draft.SetID))).Width(240).Disabled(m.reviewSaving)
+			ui.Select(c, &draft.SetID, setChoices(currentID(draft.SetID))).Width(240).Disabled(m.reviewActionsBlocked())
 		})
 		labeledRow(c, t, "槽位", func() {
-			ui.Select(c, &draft.Slot, slotChoices(currentID(draft.Slot))).Width(120).Disabled(m.reviewSaving)
+			ui.Select(c, &draft.Slot, slotChoices(currentID(draft.Slot))).Width(120).Disabled(m.reviewActionsBlocked())
 		})
 		labeledRow(c, t, "等级", func() {
-			ui.TextInput(c, &draft.Level).Width(80).Disabled(m.reviewSaving)
+			ui.TextInput(c, &draft.Level).Width(80).Disabled(m.reviewActionsBlocked())
 		})
 
 		labeledRow(c, t, "主词条", func() {
 			ui.Row(c).Gap(t.Space(1)).AlignItems(ui.Center).Children(func() {
-				ui.Select(c, &draft.MainAttribute, attributeChoices(attributeTextValue(draft.MainAttribute))).Width(170).Disabled(m.reviewSaving)
-				ui.TextInput(c, &draft.MainValue).Width(100).Disabled(m.reviewSaving)
-				ui.Select(c, &draft.MainUnit, unitChoices(attributeTextValue(draft.MainAttribute), attributeTextValue(draft.MainUnit))).Width(150).Disabled(m.reviewSaving)
+				ui.Select(c, &draft.MainAttribute, attributeChoices(attributeTextValue(draft.MainAttribute))).Width(170).Disabled(m.reviewActionsBlocked())
+				ui.TextInput(c, &draft.MainValue).Width(100).Disabled(m.reviewActionsBlocked())
+				ui.Select(c, &draft.MainUnit, unitChoices(attributeTextValue(draft.MainAttribute), attributeTextValue(draft.MainUnit))).Width(150).Disabled(m.reviewActionsBlocked())
 			})
 		})
 
 		m.editSubstats(c, t, edit)
 
 		labeledRow(c, t, "管理状态", func() {
-			ui.Select(c, &draft.ManagementState, managementChoices(attributeTextValue(draft.ManagementState))).Width(170).Disabled(m.reviewSaving)
+			ui.Select(c, &draft.ManagementState, managementChoices(attributeTextValue(draft.ManagementState))).Width(170).Disabled(m.reviewActionsBlocked())
 		})
 		labeledRow(c, t, "装备", func() {
-			ui.Select(c, &draft.EquippedState, equippedChoices(optionValue(draft.EquippedState))).Width(170).Disabled(m.reviewSaving)
+			ui.Select(c, &draft.EquippedState, equippedChoices(optionValue(draft.EquippedState))).Width(170).Disabled(m.reviewActionsBlocked())
 		})
 		labeledRow(c, t, "代理人", func() {
 			disabled := optionValue(draft.EquippedState) != string(zzz.EquippedStateEquipped)
@@ -836,7 +839,7 @@ func (m *Model) editSubstats(c *ui.Context, t *ui.Theme, edit *editState) {
 		ui.Text(c, "副词条").Width(72).TextColor(t.TextMuted)
 		ui.Column(c).Grow(1).Gap(t.Space(1)).Children(func() {
 			unknown := !draft.SubstatsKnown
-			ui.Checkbox(c, &unknown, "数量未读取（保存为 null）").Disabled(m.reviewSaving)
+			ui.Checkbox(c, &unknown, "数量未读取（保存为 null）").Disabled(m.reviewActionsBlocked())
 			if unknown != !draft.SubstatsKnown {
 				draft.SubstatsKnown = !unknown
 				if !draft.SubstatsKnown {
@@ -873,12 +876,12 @@ func (m *Model) editSubstatRow(c *ui.Context, t *ui.Theme, index int) bool {
 	remove := false
 	ui.Row(c).Gap(t.Space(1)).AlignItems(ui.Center).Children(func() {
 		ui.Textf(c, "%d", index+1).Width(16).TextColor(t.TextMuted)
-		ui.Select(c, &sub.Attribute, attributeChoices(attributeTextValue(sub.Attribute))).Width(160).Disabled(m.reviewSaving)
-		ui.TextInput(c, &sub.Value).Width(90).Disabled(m.reviewSaving)
-		ui.Select(c, &sub.Unit, unitChoices(attributeTextValue(sub.Attribute), attributeTextValue(sub.Unit))).Width(140).Disabled(m.reviewSaving)
+		ui.Select(c, &sub.Attribute, attributeChoices(attributeTextValue(sub.Attribute))).Width(160).Disabled(m.reviewActionsBlocked())
+		ui.TextInput(c, &sub.Value).Width(90).Disabled(m.reviewActionsBlocked())
+		ui.Select(c, &sub.Unit, unitChoices(attributeTextValue(sub.Attribute), attributeTextValue(sub.Unit))).Width(140).Disabled(m.reviewActionsBlocked())
 		ui.Text(c, "强化").TextColor(t.TextMuted)
-		ui.TextInput(c, &sub.Rolls).Width(50).Disabled(m.reviewSaving)
-		if ui.Button(c, "删除").Disabled(m.reviewSaving).Clicked() {
+		ui.TextInput(c, &sub.Rolls).Width(50).Disabled(m.reviewActionsBlocked())
+		if ui.Button(c, "删除").Disabled(m.reviewActionsBlocked()).Clicked() {
 			remove = true
 		}
 	})
@@ -911,7 +914,7 @@ func (m *Model) navigationPrompt(c *ui.Context, t *ui.Theme) {
 			if exit {
 				saveLabel, discardLabel = "保存修改并退出", "放弃修改并退出"
 			}
-			if ui.Button(c, saveLabel).Disabled(m.reviewSaving).Clicked() {
+			if ui.Button(c, saveLabel).Disabled(m.reviewActionsBlocked()).Clicked() {
 				m.promptSaveAndContinue()
 			}
 			if ui.Button(c, discardLabel).Disabled(m.reviewSaving).Clicked() {

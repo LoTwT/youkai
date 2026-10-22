@@ -93,7 +93,7 @@ func (m *Model) completionCard(c *ui.Context, t *ui.Theme) {
 					}
 					ui.Text(c, completionExclusionText(counts)).TextColor(t.TextMuted)
 					ui.Text(c, m.completionCoverageText()).TextColor(t.TextMuted)
-					if m.cfg.ExportSaver == nil {
+					if !m.exportAvailable() {
 						return
 					}
 					blocked := m.exportBlockedReason()
