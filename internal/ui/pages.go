@@ -141,20 +141,9 @@ func (m *Model) pageBody(c *ui.Context, t *ui.Theme) {
 		ui.Column(c).Gap(t.Space(2)).Padding(t.Space(3), t.Space(3)).Children(func() {
 			switch page {
 			case pageHistory:
-				ui.Text(c, "历史记录").FontWeight(600)
-				ui.Text(c, "已保存的扫描修订；打开记录后回到结果与校对。").TextColor(t.TextMuted).
-					FontSize(t.FontSize * 0.9)
-				if len(m.history) == 0 {
-					ui.Text(c, "暂无已保存的记录。").TextColor(t.TextMuted)
-				} else {
-					m.historyActions(c, t)
-				}
+				m.historyPage(c, t)
 			case pageSettings:
-				m.storageArea(c, t)
-				if m.updates != nil {
-					ui.Divider(c)
-					m.updateArea(c, t)
-				}
+				m.settingsPage(c, t)
 			}
 		})
 	})
