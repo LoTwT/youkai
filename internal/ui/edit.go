@@ -507,6 +507,12 @@ func (m *Model) runNavigation(req navigationRequest) {
 	case navShowLive:
 		m.performShowLive()
 	case navPage:
+		if m.displayPage() == pageResults {
+			// Leaving the results page stores the list's actual place, not
+			// just the last captured one: the user may have scrolled the
+			// ListState without any explicit capture.
+			m.captureActiveResult()
+		}
 		m.page = req.page
 	case navExit:
 		m.beginExit()

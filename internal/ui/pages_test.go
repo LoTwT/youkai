@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"image"
 	"image/color"
 	"testing"
@@ -755,5 +756,180 @@ func TestSidebarDestinationsGuardDirtyDrafts(t *testing.T) {
 	m.promptStay()
 	if m.edit == nil || m.edit.draft.Level != "14" {
 		t.Fatal("staying lost the dirty session draft")
+	}
+}
+
+// TestSidebarHistoryRestoresActualScroll scrolls the history table with
+// pointer input, leaves through settings or the prepare page, and returns
+// to the same snapshot. The destination must keep the list's real place,
+// not just the last explicitly captured one.
+func TestSidebarHistoryRestoresActualScroll(t *testing.T) {
+	for _, width := range []int{1440, 1024, 1020, 860} {
+		height := 700
+		switch width {
+		case 1440:
+			height = 900
+		case 860:
+			height = 560
+		}
+		for _, route := range []string{"设置", "扫描"} {
+			t.Run(fmt.Sprintf("%d/%s", width, route), func(t *testing.T) {
+				old := manyPendingRecord(t, 30)
+				old.Checkpoint.Session.SessionID = "old"
+				svc := &fakeService{
+					list: []record.RecordInfo{{
+						ID:      "old",
+						SavedAt: time.Date(2026, 10, 20, 10, 0, 0, 0, time.UTC),
+					}},
+					loads: map[string]*record.Recovery{"old": old},
+				}
+				m, q := newTestModel(t, Config{Service: svc, PageLayout: true})
+				m.SetContentSize(width, height)
+				tt := ui.NewTester(m.View, width, height)
+				settle(t, m, q, tt)
+				m.histChoice = slotHistoryLabel(t, m, "old")
+				m.OpenHistory()
+				settle(t, m, q, tt)
+				if m.activeSlot != resultSlotHistory || m.rec == nil || m.rec.ID != "old" {
+					t.Fatalf("history did not open: slot %v record %+v", m.activeSlot, m.rec)
+				}
+
+				// Actual pointer scrolling: no direct m.scroll or
+				// List.ScrollTo writes.
+				tt.Scroll(350, 350, 0, 240)
+				tt.Advance(time.Second)
+				settle(t, m, q, tt)
+				first, _ := m.list.Visible()
+				if first <= 0 {
+					t.Fatalf("pointer input did not scroll the list: first %d", first)
+				}
+				selected, filter := m.selected, m.filter
+				loads := slotLoadCount(svc, "old")
+
+				if err := tt.Click(route); err != nil {
+					t.Fatalf("click %s: %v", route, err)
+				}
+				settle(t, m, q, tt)
+				if route == "扫描" && m.displayPage() != pageScan {
+					t.Fatalf("scan without a session shows page %v", m.displayPage())
+				}
+				if err := tt.Click("历史"); err != nil {
+					t.Fatalf("click 历史: %v", err)
+				}
+				settle(t, m, q, tt)
+
+				after, _ := m.list.Visible()
+				if m.displayPage() != pageResults || m.activeSlot != resultSlotHistory ||
+					m.rec == nil || m.rec.ID != "old" {
+					t.Fatalf("returning from %s = page %v slot %v record %+v",
+						route, m.displayPage(), m.activeSlot, m.rec)
+				}
+				if m.filter != filter || m.selected != selected {
+					t.Fatalf("returning from %s changed the view: filter %v→%v selected %d→%d",
+						route, filter, m.filter, selected, m.selected)
+				}
+				if after != first {
+					t.Fatalf("returning from %s reset the list: first %d→%d",
+						route, first, after)
+				}
+				if got := slotLoadCount(svc, "old"); got != loads {
+					t.Fatalf("returning from %s reloaded the record (%d loads, want %d)",
+						route, got, loads)
+				}
+			})
+		}
+	}
+}
+
+// TestSidebarSessionConfirmedStayRevisitRevalidates returns to the live
+// session after "confirm and stay" through settings. The confirmed row has
+// left the pending segment, so the revisit must revalidate the selection
+// against the visible rows instead of keeping its hidden detail.
+func TestSidebarSessionConfirmedStayRevisitRevalidates(t *testing.T) {
+	for _, width := range []int{1440, 1024, 1020, 860} {
+		for _, rows := range []int{2, 1} {
+			t.Run(fmt.Sprintf("%d/%drows", width, rows), func(t *testing.T) {
+				items := []record.ItemRecord{
+					reviewRowItem(t, 1, 12),
+					reviewRowItem(t, 2, 10),
+				}[:rows]
+				rec := recovery(items...)
+				rec.Checkpoint.Session.SessionID = "s1"
+				svc := &fakeService{loads: map[string]*record.Recovery{"s1": rec}}
+				installReviewSave(svc)
+				m, q := newTestModel(t, Config{Service: svc, PageLayout: true})
+				height := 700
+				if width == 1440 {
+					height = 900
+				}
+				if width == 860 {
+					height = 560
+				}
+				m.SetContentSize(width, height)
+				tt := ui.NewTester(m.View, width, height)
+				settle(t, m, q, tt)
+				m.Apply(snap("s1", 1, false, scan.PhaseEnded,
+					scan.Counts{Captured: rows, Produced: rows}, rows, false, ""))
+				settle(t, m, q, tt)
+				m.ShowLive()
+				if m.narrowResults() {
+					m.openResultDetail()
+				}
+				settle(t, m, q, tt)
+				if m.activeSlot != resultSlotSession || m.rec == nil || m.rec.ID != "s1" {
+					t.Fatalf("the live session is not active: slot %v record %+v", m.activeSlot, m.rec)
+				}
+
+				if err := tt.Click("确认"); err != nil {
+					t.Fatalf("click 确认: %v", err)
+				}
+				settle(t, m, q, tt)
+				if m.pendingCount() != rows-1 {
+					t.Fatalf("confirm-stay left %d pending rows, want %d", m.pendingCount(), rows-1)
+				}
+
+				if err := tt.Click("设置"); err != nil {
+					t.Fatalf("click 设置: %v", err)
+				}
+				settle(t, m, q, tt)
+				if err := tt.Click("扫描"); err != nil {
+					t.Fatalf("click 扫描: %v", err)
+				}
+				settle(t, m, q, tt)
+
+				visible := m.visibleResultRows()
+				want := -1
+				if len(visible) > 0 {
+					want = visible[0]
+				}
+				if m.displayPage() != pageResults || m.activeSlot != resultSlotSession {
+					t.Fatalf("returning through settings = page %v slot %v",
+						m.displayPage(), m.activeSlot)
+				}
+				if m.selected != want {
+					t.Fatalf("the detail keeps a row outside the filter: selected %d, want %d (visible %v)",
+						m.selected, want, visible)
+				}
+				if m.selected >= 0 && m.selectedSeq() != m.rec.Rows[m.selected].Seq {
+					t.Fatalf("the selection sequence %d does not match row %d",
+						m.selectedSeq(), m.selected)
+				}
+				if m.scroll != 0 {
+					t.Fatalf("the fallback scroll is %d, want the first visible row", m.scroll)
+				}
+				switch rows {
+				case 2:
+					if len(visible) != 1 || visible[0] != 1 || m.selectedSeq() != 2 {
+						t.Fatalf("the revisit shows %v selected %d, want only row 2",
+							visible, m.selected)
+					}
+				case 1:
+					if len(visible) != 0 || m.selected != -1 {
+						t.Fatalf("the completed pending segment shows %v selected %d",
+							visible, m.selected)
+					}
+				}
+			})
+		}
 	}
 }
