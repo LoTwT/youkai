@@ -2,8 +2,10 @@ package ui
 
 import (
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/LoTwT/youkai/internal/app"
 	"github.com/LoTwT/youkai/internal/game/zzz"
@@ -77,6 +79,15 @@ func resultsColumnsFor(contentWidth int) []ui.TableColumn {
 func resultsSideBySide(contentWidth int) bool {
 	return contentWidth >= resultsSideBySideMinWidth
 }
+
+// resultsRowHeight is the design's 32-DIP results row. The narrow composite
+// fixes its rows to it, and its snapping uses the same boundary.
+const resultsRowHeight = 32
+
+// resultsSnapDelay is how long the narrow results composite waits after the
+// last precise scroll move before snapping a small offset to the nearest
+// 32-DIP row.
+const resultsSnapDelay = 120 * time.Millisecond
 
 // resultsArea is the results browser: the current record's items in
 // capture order, the chosen item's evidence and recognized texts, and the
@@ -291,49 +302,15 @@ func (m *Model) tablePane(c *ui.Context) {
 		}
 		return m.rec.Rows[visible[row]].Label()
 	}
-	cellText := func(row int, text string) {
-		cell := ui.Text(c, text).SingleLine()
-		if m.narrowResults() {
-			full := visible[row]
-			cell.OnClick(func() { m.openResultDetailAt(full) })
-		}
-	}
 	buildTable := func() ui.Element {
 		return ui.Table(c, &m.list, columns, len(visible), func(row, col int) {
-			r := &m.rec.Rows[visible[row]]
-			switch col {
-			case 0:
-				cellText(row, fmt.Sprintf("%d", r.Seq))
-			case 1:
-				cellText(row, r.SetColumnText())
-			case 2:
-				cellText(row, r.SlotLevelColumnText())
-			case 3:
-				if m.cfg.PageLayout {
-					text := r.MainStatText()
-					if text == "" {
-						text = "—"
-					}
-					cellText(row, text)
-					return
-				}
-				cellText(row, r.ManagementColumnText())
-			case 4:
-				if m.cfg.PageLayout {
-					m.resultStatusBadge(c, c.Theme(), tok, r, true, m.tableSelected == row)
-					return
-				}
-				cellText(row, r.EquippedColumnText())
-			case 5:
-				cellText(row, r.ResultColumnText())
-			}
+			m.resultCellContent(c, visible, row, col, tok)
 		}).Fill().MinHeight(0)
 	}
 	var table ui.Element
 	if m.cfg.PageLayout && m.narrowResults() {
 		ui.Column(c).Grow(1).MinHeight(0).Bind(&m.resultsTableSlot).Children(func() {
-			table = buildTable()
-			m.fitResultsTableHeight(c, c.Theme(), table)
+			table = m.resultsCompositeTable(c, c.Theme(), tok, visible)
 		})
 	} else {
 		table = buildTable()
@@ -357,20 +334,6 @@ func (m *Model) tablePane(c *ui.Context) {
 	}
 }
 
-// fitResultsTableHeight gives the narrow results table its header and as
-// many whole 32-DIP rows as its filling slot leaves.
-func (m *Model) fitResultsTableHeight(c *ui.Context, t *ui.Theme, table ui.Element) {
-	bounds := m.resultsTableSlot.Bounds(c)
-	if bounds.H <= 0 {
-		// The slot has no committed box yet: measure one.
-		c.Invalidate()
-		return
-	}
-	if height, ok := wholeRowTableHeight(bounds.H, t.Space(8), t.Space(8)+1); ok {
-		table.Height(height)
-	}
-}
-
 // wholeRowTableHeight is a MyGo table's header and divider plus as many
 // whole rows as available leaves. A leftover strip shorter than a row stays
 // blank instead of showing a clipped last row.
@@ -380,6 +343,221 @@ func wholeRowTableHeight(available, row, chrome float32) (float32, bool) {
 	}
 	rows := int((available - chrome) / row)
 	return chrome + float32(rows)*row, true
+}
+
+// resultCellContent builds one results-table cell's content. The native
+// table and the narrow composite share it so the five columns, the status
+// badge and the narrow row action cannot drift apart.
+func (m *Model) resultCellContent(c *ui.Context, visible []int, row, col int, tok *Tokens) {
+	if row < 0 || row >= len(visible) {
+		return
+	}
+	r := &m.rec.Rows[visible[row]]
+	cellText := func(text string) {
+		cell := ui.Text(c, text).SingleLine()
+		if m.narrowResults() {
+			full := visible[row]
+			cell.OnClick(func() { m.openResultDetailAt(full) })
+		}
+	}
+	switch col {
+	case 0:
+		cellText(fmt.Sprintf("%d", r.Seq))
+	case 1:
+		cellText(r.SetColumnText())
+	case 2:
+		cellText(r.SlotLevelColumnText())
+	case 3:
+		if m.cfg.PageLayout {
+			text := r.MainStatText()
+			if text == "" {
+				text = "—"
+			}
+			cellText(text)
+			return
+		}
+		cellText(r.ManagementColumnText())
+	case 4:
+		if m.cfg.PageLayout {
+			m.resultStatusBadge(c, c.Theme(), tok, r, true, m.tableSelected == row)
+			return
+		}
+		cellText(r.EquippedColumnText())
+	case 5:
+		cellText(r.ResultColumnText())
+	}
+}
+
+// resultsCompositeTable is the narrow results list at 1020 and 860. MyGo's
+// Table keeps its rows in an internal scroll container and exposes no
+// offset, so a precise 17-DIP move can stop between two 32-DIP rows. This
+// header and List composite uses the same fixed columns and cell builder,
+// but tracks the List's offset: the header stays above the list, the rows
+// keep their design height, and the rest snap aligns the offset to a row.
+func (m *Model) resultsCompositeTable(c *ui.Context, t *ui.Theme, tok *Tokens, visible []int) ui.Element {
+	columns := resultsColumnsFor(m.contentWidth)
+	ui.Row(c).Height(resultsRowHeight).Shrink(0).Clip().AlignItems(ui.Stretch).Children(func() {
+		for col := range columns {
+			m.resultsCompositeCell(c, t, tok, columns, col, visible, -1, true)
+		}
+	})
+	ui.Divider(c)
+	list := ui.List(c, &m.list, len(visible), func(row int) {
+		line := ui.Row(c).Height(resultsRowHeight).AlignItems(ui.Stretch)
+		line.OnClick(func() { m.openResultDetailAt(visible[row]) })
+		line.Children(func() {
+			for col := range columns {
+				m.resultsCompositeCell(c, t, tok, columns, col, visible, row, false)
+			}
+		})
+	}).MinHeight(0).TrackScroll(&m.resultsScroll)
+
+	m.snapResultsScroll(c, len(visible))
+	if height, measured := m.resultsCompositeListHeight(c); measured {
+		// The header and divider are outside the list; an exact whole-row
+		// height keeps its last row from being clipped.
+		list.Height(height)
+	} else {
+		// Measure the slot once with the list filling the rest, then
+		// rebuild with the snapped viewport.
+		list.Grow(1)
+		c.Invalidate()
+	}
+	return list
+}
+
+// resultsCompositeListHeight is the largest whole number of 32-DIP rows the
+// narrow table's slot leaves under its header and divider. measured is
+// false until the slot has a committed frame.
+func (m *Model) resultsCompositeListHeight(c *ui.Context) (height float32, measured bool) {
+	bounds := m.resultsTableSlot.Bounds(c)
+	if bounds.H <= 0 {
+		return 0, false
+	}
+	table, ok := wholeRowTableHeight(bounds.H, resultsRowHeight, resultsRowHeight+1)
+	if !ok {
+		return 0, false
+	}
+	return table - (resultsRowHeight + 1), true
+}
+
+// resultsCompositeCell is one fixed-width data cell of the narrow composite.
+// The header and rows share it, so their columns cannot drift apart. The
+// row's whole area carries the narrow list's detail action, including the
+// cell padding beside a short value.
+func (m *Model) resultsCompositeCell(c *ui.Context, t *ui.Theme, tok *Tokens, columns []ui.TableColumn, col int, visible []int, row int, header bool) {
+	column := &columns[col]
+	cell := ui.Row(c).Shrink(0).Clip().Padding(t.Space(1.5), t.Space(2.5)).AlignItems(ui.Center)
+	if column.Width > 0 {
+		cell.Width(column.Width)
+	} else {
+		cell.Grow(1).Shrink(1).MinWidth(column.MinWidth)
+	}
+	switch column.Align {
+	case ui.End:
+		cell.Justify(ui.End)
+	case ui.Center:
+		cell.Justify(ui.Center)
+	}
+	if !header {
+		full := visible[row]
+		cell.OnClick(func() { m.openResultDetailAt(full) })
+	}
+	cell.Children(func() {
+		if header {
+			ui.Text(c, column.Title).SingleLine().FontWeight(600).TextColor(t.TextMuted)
+			return
+		}
+		m.resultCellContent(c, visible, row, col, tok)
+	})
+}
+
+// snapResultsScroll aligns the composite's vertical offset with a 32-DIP row
+// boundary a precise scroll leaves between rows. Like the history table's
+// composite, the offset belongs to the input until the motion stops: writing
+// it mid-glide would make MyGo cancel the rest of a wheel's travel.
+func (m *Model) snapResultsScroll(c *ui.Context, rows int) {
+	if rows == 0 {
+		return
+	}
+	wait, snap := m.resultsScrollSnapStep(c.Now())
+	switch {
+	case snap:
+		m.applyResultsScrollSnap(resultRowOffset(m.resultsScroll.Y))
+	case wait > 0:
+		// A repaint between the scroll and the deadline must ask again:
+		// MyGo keeps only the timer the last frame armed.
+		c.After(wait)
+	}
+}
+
+// resultsScrollSnapStep advances the rest debounce at now and reports how
+// long until the next frame it needs; snap reports that the offset has been
+// still for the whole delay and belongs on a row boundary.
+func (m *Model) resultsScrollSnapStep(now time.Time) (wait time.Duration, snap bool) {
+	y := m.resultsScroll.Y
+	if y < 0 {
+		m.resultsScroll.Y = 0
+		y = 0
+	}
+	if y != m.resultsScrollSeen {
+		m.resultsScrollSeen = y
+		m.resultsScrollMovedAt = now
+		if m.resultsScrollSnapAt.IsZero() || !now.Before(m.resultsScrollSnapAt) {
+			m.resultsScrollSnapAt = now.Add(resultsSnapDelay)
+		}
+		return resultsSnapDelay, false
+	}
+	if m.resultsScrollSnapAt.IsZero() {
+		return 0, false
+	}
+	if now.Before(m.resultsScrollSnapAt) {
+		return m.resultsScrollSnapAt.Sub(now), false
+	}
+	if wait := m.resultsScrollMovedAt.Add(resultsSnapDelay).Sub(now); wait > 0 {
+		m.resultsScrollSnapAt = now.Add(wait)
+		return wait, false
+	}
+	m.resultsScrollSnapAt = time.Time{}
+	return 0, true
+}
+
+// resultRowOffset is the nearest row boundary to y.
+func resultRowOffset(y float32) float32 {
+	return float32(math.Round(float64(y)/float64(resultsRowHeight))) * resultsRowHeight
+}
+
+// applyResultsScrollSnap moves the tracked offset and the list to one row
+// boundary. MaxY keeps the end of the content in reach.
+func (m *Model) applyResultsScrollSnap(target float32) {
+	if maxY := m.resultsScroll.MaxY; maxY > 0 && target > maxY {
+		target = maxY
+	}
+	if target < 0 {
+		target = 0
+	}
+	m.resultsScrollSeen = target
+	if target == m.resultsScroll.Y {
+		return
+	}
+	m.resultsScroll.Y = target
+	m.list.ScrollTo(int(math.Round(float64(target)/resultsRowHeight)), ui.Start)
+}
+
+// resetResultsScroll clears the composite's tracked offset before a new
+// ListState takes over, then places it on the row that list will show. A
+// stale offset would otherwise override the restored scroll of another
+// result slot.
+func (m *Model) resetResultsScroll(row int) {
+	m.resultsScroll = ui.ScrollState{}
+	m.resultsScrollSeen = 0
+	m.resultsScrollMovedAt = time.Time{}
+	m.resultsScrollSnapAt = time.Time{}
+	if row <= 0 {
+		return
+	}
+	m.resultsScroll.Y = float32(row) * resultsRowHeight
+	m.resultsScrollSeen = m.resultsScroll.Y
 }
 
 // detailPane shows the chosen item: its outcome and quality, the failure

@@ -187,6 +187,7 @@ func (m *Model) activateResultSlot(kind resultSlotKind) {
 // internals before the slot's own place is restored.
 func (m *Model) resetResultList() {
 	m.list = ui.ListState{Selected: &m.tableSelected}
+	m.resetResultsScroll(0)
 	if m.rec == nil {
 		m.selected = -1
 		m.scroll = 0
@@ -211,6 +212,7 @@ func (m *Model) resetResultList() {
 		m.scroll = rows - 1
 	}
 	if m.scroll > 0 {
+		m.resetResultsScroll(m.scroll)
 		m.list.ScrollTo(m.scroll, ui.Start)
 	}
 }

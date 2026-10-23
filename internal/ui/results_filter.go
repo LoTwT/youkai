@@ -256,6 +256,7 @@ func (m *Model) clampResultScroll() {
 	if m.scroll >= len(visible) {
 		m.scroll = len(visible) - 1
 	}
+	m.resetResultsScroll(m.scroll)
 	m.list.ScrollTo(m.scroll, ui.Start)
 }
 
