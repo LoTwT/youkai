@@ -291,13 +291,16 @@ type Model struct {
 	tableSelected    int
 	textInputFocused bool
 	split            float32
-	// The narrow results table takes a whole number of rows, so a partial
-	// row cannot sit at the bottom. Its slot fills the page whatever the
-	// table's capped height, giving each frame the room to measure.
-	resultsTableSlot ui.Ref
-	// The narrow results composite tracks its list's vertical offset. A
-	// precise scroll may stop between 32-DIP rows; resultsScrollSeen and
-	// the two times debounce the rest snap that aligns it to a row.
+	// The results composite takes a whole number of rows, so a partial row
+	// cannot sit at the bottom. Its slot fills the pane whatever the
+	// table's capped height, giving each frame the room to measure. The
+	// last whole-row height is kept for a page that returns before its
+	// slot has a committed frame.
+	resultsTableSlot   ui.Ref
+	resultsTableHeight float32
+	// The results composite tracks its list's vertical offset. A precise
+	// scroll may stop between 32-DIP rows; resultsScrollSeen and the two
+	// times debounce the rest snap that aligns it to a row.
 	resultsScroll        ui.ScrollState
 	resultsScrollSeen    float32
 	resultsScrollMovedAt time.Time
@@ -407,9 +410,10 @@ func (m *Model) SetContentSize(width, height int) {
 	m.contentWidth, m.contentHeight = width, height
 	m.split = resultsSplitTableWidth(width)
 	if sideBySide != resultsSideBySide(width) && m.rec != nil {
-		// Crossing the split breakpoint swaps the tracked narrow composite
-		// for the native table and back. Re-enter on the first visible row
-		// so a stale tracked offset cannot override the table's place.
+		// Crossing the split breakpoint changes the table pane and its
+		// column widths. Re-enter on the first visible row so the new
+		// layout starts from the same row and a mid-input offset cannot
+		// leave half rows behind.
 		if first, last := m.list.Visible(); last >= first && first >= 0 {
 			m.resetResultsScroll(first)
 			m.list.ScrollTo(first, ui.Start)

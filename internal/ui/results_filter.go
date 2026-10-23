@@ -518,6 +518,15 @@ func (m *Model) narrowResults() bool {
 	return m.cfg.PageLayout && !resultsSideBySide(m.contentWidth)
 }
 
+// resultsRowOpensDetail reports whether a results row's click opens the
+// separate detail page. Only the narrow list page needs that move; the
+// split keeps its detail beside the table, so choosing a row there only
+// updates the selection and the visible detail. This is deliberately
+// separate from whether the table is the composite.
+func (m *Model) resultsRowOpensDetail() bool {
+	return m.narrowResults()
+}
+
 // resultDetailHasRow reports whether a narrow detail page still has a row
 // in the current filtered view. A confirmation can remove the chosen row
 // from the filter while other pending rows remain outside it; the detail
