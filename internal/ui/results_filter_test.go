@@ -63,7 +63,7 @@ func openResponsiveResults(t *testing.T, rec *record.Recovery, width, height int
 		}},
 		loads: map[string]*record.Recovery{"rec": rec},
 	}
-	m, q := newTestModel(t, Config{Service: svc, PageLayout: true})
+	m, q := newTestModel(t, Config{Service: svc})
 	m.SetContentSize(width, height)
 	tt := ui.NewTester(m.View, width, height)
 	settle(t, m, q, tt)
@@ -85,7 +85,7 @@ func openReviewableResults(t *testing.T, rec *record.Recovery, width, height int
 		loads: map[string]*record.Recovery{"rec": rec},
 	}
 	installReviewSave(svc)
-	m, q := newTestModel(t, Config{Service: svc, PageLayout: true})
+	m, q := newTestModel(t, Config{Service: svc})
 	m.SetContentSize(width, height)
 	tt := ui.NewTester(m.View, width, height)
 	settle(t, m, q, tt)
@@ -356,7 +356,7 @@ func TestResultsFilterRestoresPerSlot(t *testing.T) {
 		}},
 		loads: map[string]*record.Recovery{"old": responsiveResultRecord(t), "s1": responsiveResultRecord(t)},
 	}
-	m, q := newTestModel(t, Config{Service: svc, PageLayout: true})
+	m, q := newTestModel(t, Config{Service: svc})
 	m.SetContentSize(1024, 700)
 	tt := ui.NewTester(m.View, 1024, 700)
 	settle(t, m, q, tt)
@@ -521,7 +521,7 @@ func TestResultsEvidenceSizes(t *testing.T) {
 		{width: 1020, height: 700, wantW: 196, wantH: 98},
 		{width: 860, height: 560, wantW: 196, wantH: 98},
 	} {
-		m := New(Config{Service: &fakeService{}, PageLayout: true})
+		m := New(Config{Service: &fakeService{}})
 		m.SetContentSize(tc.width, tc.height)
 		if w, h := m.evidenceDisplaySize(); w != tc.wantW || h != tc.wantH {
 			t.Errorf("evidence at %d is %v×%v, want %v×%v", tc.width, w, h, tc.wantW, tc.wantH)

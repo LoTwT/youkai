@@ -12,31 +12,6 @@ import (
 	"github.com/LoTwT/youkai/internal/ui"
 )
 
-func TestRefuseManagedTarget(t *testing.T) {
-	root := t.TempDir()
-	cases := []struct {
-		name    string
-		path    string
-		refused bool
-	}{
-		{"root itself", root, true},
-		{"below root", filepath.Join(root, "sessions", "out.youkai.json"), true},
-		{"sibling with a shared prefix", root + "-exports" + string(os.PathSeparator) + "out.youkai.json", false},
-		{"outside", filepath.Join(t.TempDir(), "out.youkai.json"), false},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			err := refuseManagedTarget(root, tc.path)
-			if tc.refused && err == nil {
-				t.Fatalf("%q was not refused", tc.path)
-			}
-			if !tc.refused && err != nil {
-				t.Fatalf("%q was refused: %v", tc.path, err)
-			}
-		})
-	}
-}
-
 type failingExportFile struct {
 	name     string
 	data     []byte

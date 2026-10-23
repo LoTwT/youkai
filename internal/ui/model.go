@@ -11,7 +11,6 @@
 package ui
 
 import (
-	"fmt"
 	"strconv"
 	"strings"
 	"sync"
@@ -100,21 +99,14 @@ type ScanSourceInfo struct {
 type Config struct {
 	// Service is the application service the window drives. Required.
 	Service Service
-	// PageLayout selects the four-page shell. The legacy single-column
-	// layout remains for the interaction-test migration.
-	PageLayout bool
 	// ScanSource describes the start availability shown in the prepare
 	// area.
 	ScanSource ScanSourceInfo
 	// Evidence loads evidence images by record and evidence identity;
 	// nil disables images (the details show their texts only).
 	Evidence EvidenceSource
-	// ExportSaver chooses and writes the usable-data JSON/CSV files through
-	// the system save dialog. The legacy layout keeps this behavior.
-	ExportSaver ExportSaver
-	// DirectExportSaver writes the usable-data files straight into the
-	// system downloads directory. The page shell prefers it; nil falls back
-	// to ExportSaver.
+	// DirectExportSaver writes the usable-data JSON/CSV files straight into
+	// the system downloads directory; nil hides the export controls.
 	DirectExportSaver DirectExportSaver
 	// OpenDownloadsDirectory reveals the direct export directory with the
 	// system file manager; nil hides the "open directory" action.
@@ -224,11 +216,7 @@ type Model struct {
 	histChoice       string
 	histErr          string
 	historyFilter    string
-	historySelected  map[string]bool
-	historyNotice    string
-	historyError     string
 	historyExporting string
-	historyBulk      *historyBulkPrompt
 
 	// The history table's choice, place and row menu. historyRow indexes
 	// the visible (date-filtered) entries; the ListState keeps the scroll
@@ -380,7 +368,6 @@ func New(cfg Config) *Model {
 		contentHeight:    700,
 		cache:            newEvidenceCache(cfg.Evidence, limit),
 		promptedSessions: make(map[string]bool),
-		historySelected:  make(map[string]bool),
 		historyRow:       -1,
 		closeBehavior:    closeBehavior,
 	}
@@ -505,7 +492,7 @@ func (m *Model) Apply(snap app.Snapshot) {
 	if prevBusy && !snap.Busy && snap.SessionID != "" {
 		if snap.SaveError == "" && snap.Scan.Phase == scan.PhaseEnded {
 			m.requestSavePrompt(string(snap.SessionID))
-			if m.cfg.PageLayout && m.activeSlot == resultSlotSession &&
+			if m.activeSlot == resultSlotSession &&
 				!m.editingDirty() && !m.reviewSaving {
 				m.page = pageResults
 			}
@@ -608,11 +595,10 @@ func (m *Model) performShowLive() {
 type HistoryEntry struct {
 	// ID is the record identifier to reopen.
 	ID string
-	// Label is the short picker label (date and record id).
+	// Label is the date and record identifier used by the row actions.
 	Label string
 
 	SavedAt       time.Time
-	Client        record.Client
 	CapturedCount int64
 	Coverage      record.CoverageStatus
 	// CoverageExpected is 0 when the record does not know the scope's
@@ -648,7 +634,6 @@ func (m *Model) loadHistory() {
 					ID:               info.ID,
 					Label:            label,
 					SavedAt:          info.SavedAt,
-					Client:           info.Client,
 					CapturedCount:    info.CapturedCount,
 					Coverage:         info.Coverage,
 					CoverageExpected: info.CoverageExpected,
@@ -662,11 +647,6 @@ func (m *Model) loadHistory() {
 				})
 			}
 			m.history = entries
-			for id := range m.historySelected {
-				if !m.hasHistoryID(id) {
-					delete(m.historySelected, id)
-				}
-			}
 			labels := m.HistoryLabels()
 			if m.histChoice == "" && len(labels) > 0 {
 				m.histChoice = labels[0]
@@ -676,15 +656,6 @@ func (m *Model) loadHistory() {
 			}
 		})
 	})
-}
-
-func (m *Model) hasHistoryID(id string) bool {
-	for _, e := range m.history {
-		if e.ID == id {
-			return true
-		}
-	}
-	return false
 }
 
 func (m *Model) hasHistoryLabel(label string) bool {
@@ -745,67 +716,6 @@ func (m *Model) HistoryLabels() []string {
 func (m *Model) historyFilterInvalid() bool {
 	_, ok := m.historyFilterTime()
 	return !ok
-}
-
-func (m *Model) historyLabel(id string) string {
-	for _, e := range m.history {
-		if e.ID == id {
-			return e.Label
-		}
-	}
-	return ""
-}
-
-func (m *Model) setHistorySelected(id string, selected bool) {
-	if selected {
-		m.historySelected[id] = true
-		return
-	}
-	delete(m.historySelected, id)
-}
-
-func (m *Model) selectedHistoryIDs() []string {
-	ids := make([]string, 0, len(m.historySelected))
-	for _, entry := range m.visibleHistory() {
-		if m.historySelected[entry.ID] {
-			ids = append(ids, entry.ID)
-		}
-	}
-	return ids
-}
-
-func (m *Model) historyClientText(client record.Client) string {
-	switch client {
-	case record.ClientWindowsLocal:
-		return "Windows 完整客户端"
-	case record.ClientWindowsCloud:
-		return "Windows 云客户端"
-	case record.ClientMacOSCloud:
-		return "macOS 云客户端"
-	default:
-		return "客户端未知"
-	}
-}
-
-func (m *Model) historyRowText(entry HistoryEntry) string {
-	date := "日期未知"
-	if !entry.SavedAt.IsZero() {
-		date = entry.SavedAt.In(time.Local).Format("2006-01-02 15:04")
-	}
-	review := "已校对"
-	count := fmt.Sprintf("%d 件", entry.CapturedCount)
-	coverage := coverageText(entry.Coverage)
-	switch {
-	case entry.Unreadable:
-		review = "记录不可读"
-		count = "件数未知"
-		coverage = "无法确认"
-	case entry.PendingReview > 0:
-		review = fmt.Sprintf("待校对 %d", entry.PendingReview)
-	}
-	return fmt.Sprintf("%s · %s · %s · 覆盖：%s · %s · %s · %s",
-		date, m.historyClientText(entry.Client), count,
-		coverage, review, formatBytes(entry.TotalBytes), entry.ID)
 }
 
 // OpenHistory opens the chosen history record in the history slot. The

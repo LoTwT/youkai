@@ -3,7 +3,6 @@ package ui
 import (
 	"encoding/json"
 	"fmt"
-	"strings"
 
 	"github.com/LoTwT/youkai/internal/app"
 	"github.com/LoTwT/youkai/internal/game/zzz"
@@ -548,48 +547,6 @@ func (r Row) SlotLevelColumnText() string {
 		return "—"
 	}
 	return r.SlotLevelText()
-}
-
-// ManagementColumnText is the table's management-state cell; null says
-// "未读取" through ManagementStateText.
-func (r Row) ManagementColumnText() string {
-	if r.Structured == nil {
-		return "—"
-	}
-	return r.ManagementStateText()
-}
-
-// EquippedColumnText is the table's equipper cell.
-func (r Row) EquippedColumnText() string {
-	if r.Structured == nil {
-		return "—"
-	}
-	return r.EquippedText()
-}
-
-// ResultColumnText is the table's quality/problem cell: the processing
-// outcome for failed and unprocessed items, and quality plus validation
-// and issue counts for produced ones.
-func (r Row) ResultColumnText() string {
-	switch r.Status {
-	case record.StatusFailed:
-		return "识别失败：" + r.Failure
-	case record.StatusUnprocessed:
-		return r.StatusText()
-	case record.StatusProduced:
-		parts := []string{r.QualityText()}
-		if r.Structured != nil {
-			if validation := r.ValidationText(); validation != "" {
-				parts = append(parts, "校验"+validation)
-			}
-			if issues := r.IssueSummaryText(); issues != "" {
-				parts = append(parts, issues)
-			}
-		}
-		return strings.Join(parts, " · ")
-	default:
-		return r.StatusText()
-	}
 }
 
 // statText renders one affix without dropping an unread part: attribute,

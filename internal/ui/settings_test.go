@@ -33,11 +33,10 @@ func settingsTestModel(t *testing.T) (*Model, *queueUpdater, *fakeService) {
 		}, nil
 	}
 	m, q := newTestModel(t, Config{
-		Service:     svc,
-		PageLayout:  true,
-		ExportSaver: &fakeExportSaver{},
-		Updates:     &fakeUpdates{enabled: false},
-		AppVersion:  "0.6.0 (build 1021)",
+		Service:           svc,
+		DirectExportSaver: &fakeDirectExportSaver{},
+		Updates:           &fakeUpdates{enabled: false},
+		AppVersion:        "0.6.0 (build 1021)",
 	})
 	m.SetContentSize(1440, 900)
 	return m, q, svc

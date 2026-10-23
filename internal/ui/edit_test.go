@@ -15,13 +15,10 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-// The editor tests use two window heights: the four-page 1024 split and the
-// legacy full-width review page. The reveal helper needs the same height to
-// keep its fallback pane bottom inside the real window.
-const (
-	reviewPageHeight   = 700
-	legacyReviewHeight = 950
-)
+// reviewPageHeight is the page shell's 1024 split window height. The reveal
+// helper needs the same height to keep its fallback pane bottom inside the
+// real window.
+const reviewPageHeight = 700
 
 // detailPaneViewport estimates the editor detail pane's scroll viewport from
 // two controls the pane and the shell already show: the form's first line and
@@ -241,27 +238,6 @@ func installReviewSave(svc *fakeService) {
 	}
 }
 
-// openReviewRecord builds a model over one history record with the items
-// and opens it.
-func openReviewRecord(t *testing.T, items ...record.ItemRecord) (*Model, *queueUpdater, *ui.Tester, *fakeService) {
-	t.Helper()
-	svc := &fakeService{
-		list: []record.RecordInfo{{
-			ID:             "r1",
-			SavedAt:        time.Date(2026, 10, 20, 10, 0, 0, 0, time.UTC),
-			LatestRevision: 1,
-		}},
-		loads: map[string]*record.Recovery{"r1": recovery(items...)},
-	}
-	installReviewSave(svc)
-	m, q := newTestModel(t, Config{Service: svc})
-	tt := ui.NewTester(m.View, 1400, legacyReviewHeight)
-	settle(t, m, q, tt)
-	m.OpenHistory()
-	settle(t, m, q, tt)
-	return m, q, tt, svc
-}
-
 // openReviewRecordPage opens one history record on the four-page results
 // destination, where the review actions and completion state live.
 func openReviewRecordPage(t *testing.T, items ...record.ItemRecord) (*Model, *queueUpdater, *ui.Tester, *fakeService) {
@@ -277,7 +253,7 @@ func openReviewRecordPage(t *testing.T, items ...record.ItemRecord) (*Model, *qu
 	rec.Checkpoint.Session.SessionID = "r1"
 	svc.loads = map[string]*record.Recovery{"r1": rec}
 	installReviewSave(svc)
-	m, q := newTestModel(t, Config{Service: svc, PageLayout: true})
+	m, q := newTestModel(t, Config{Service: svc})
 	m.SetContentSize(1024, reviewPageHeight)
 	tt := ui.NewTester(m.View, 1024, reviewPageHeight)
 	settle(t, m, q, tt)
@@ -404,7 +380,7 @@ func TestCatalogChoicesCoverTheFixedTables(t *testing.T) {
 }
 
 func TestEditSavePersistsRevision(t *testing.T) {
-	m, q, tt, svc := openReviewRecord(t, reviewRowItem(t, 1, 12))
+	m, q, tt, svc := openReviewRecordPage(t, reviewRowItem(t, 1, 12))
 	if !tt.HasText("待校对 1 件") {
 		t.Fatalf("the pending count does not show: %q", tt.Texts())
 	}
@@ -466,7 +442,7 @@ func TestEditSavePersistsRevision(t *testing.T) {
 }
 
 func TestConfirmAndNextThroughToEmpty(t *testing.T) {
-	m, q, tt, svc := openReviewRecord(t,
+	m, q, tt, svc := openReviewRecordPage(t,
 		reviewRowItem(t, 1, 12),
 		reviewRowItem(t, 2, 10),
 	)
@@ -495,13 +471,13 @@ func TestConfirmAndNextThroughToEmpty(t *testing.T) {
 		t.Fatal(err)
 	}
 	settle(t, m, q, tt)
-	if m.pendingCount() != 0 || m.reviewNotice != "待校对 0 · 另有 2 件无法导出" {
+	if m.pendingCount() != 0 || m.reviewNotice != "待校对 0 · 全部可导出" {
 		t.Fatalf("after the last item: pending %d notice %q", m.pendingCount(), m.reviewNotice)
 	}
 	if m.selected != 1 {
 		t.Fatalf("the last confirmation moved away from the last item: %d", m.selected)
 	}
-	if !tt.HasText("待校对 0 · 另有 2 件无法导出") {
+	if !tt.HasText("待校对 0 · 全部可导出") {
 		t.Fatalf("the empty pending state does not show: %q", tt.Texts())
 	}
 }
@@ -748,7 +724,7 @@ func TestSaveAndConfirmNextFailureKeepsEditor(t *testing.T) {
 }
 
 func TestConfirmRequiresCompleteValidation(t *testing.T) {
-	m, q, tt, svc := openReviewRecord(t, reviewRowItem(t, 1, 12))
+	m, q, tt, svc := openReviewRecordPage(t, reviewRowItem(t, 1, 12))
 	if err := tt.Click("编辑"); err != nil {
 		t.Fatal(err)
 	}
@@ -778,7 +754,7 @@ func TestConfirmRequiresCompleteValidation(t *testing.T) {
 }
 
 func TestSaveFailureKeepsInputAndRetries(t *testing.T) {
-	m, q, tt, svc := openReviewRecord(t, reviewRowItem(t, 1, 12))
+	m, q, tt, svc := openReviewRecordPage(t, reviewRowItem(t, 1, 12))
 	svc.saveFn = func(string, int64, int64, app.ItemRevisionEdit) (app.ItemRevisionResult, error) {
 		return app.ItemRevisionResult{}, errors.New("disk full")
 	}
@@ -818,7 +794,7 @@ func TestSaveFailureKeepsInputAndRetries(t *testing.T) {
 }
 
 func TestRevisionConflictReloadsCurrentRevision(t *testing.T) {
-	m, q, tt, svc := openReviewRecord(t, reviewRowItem(t, 1, 12))
+	m, q, tt, svc := openReviewRecordPage(t, reviewRowItem(t, 1, 12))
 	if err := tt.Click("编辑"); err != nil {
 		t.Fatal(err)
 	}
@@ -860,7 +836,7 @@ func TestRevisionConflictReloadsCurrentRevision(t *testing.T) {
 }
 
 func TestUnsavedEditSwitchPrompt(t *testing.T) {
-	m, q, tt, svc := openReviewRecord(t,
+	m, q, tt, svc := openReviewRecordPage(t,
 		reviewRowItem(t, 1, 12),
 		reviewRowItem(t, 2, 10),
 	)
@@ -917,7 +893,7 @@ func TestUnsavedEditSwitchPrompt(t *testing.T) {
 }
 
 func TestDiscardUnsavedEditContinues(t *testing.T) {
-	m, q, tt, svc := openReviewRecord(t,
+	m, q, tt, svc := openReviewRecordPage(t,
 		reviewRowItem(t, 1, 12),
 		reviewRowItem(t, 2, 10),
 	)
@@ -947,7 +923,7 @@ func TestDiscardUnsavedEditContinues(t *testing.T) {
 }
 
 func TestLateSaveCannotCrossItems(t *testing.T) {
-	m, q, tt, svc := openReviewRecord(t,
+	m, q, tt, svc := openReviewRecordPage(t,
 		reviewRowItem(t, 1, 12),
 		reviewRowItem(t, 2, 10),
 	)
@@ -1001,7 +977,7 @@ func TestLateSaveCannotCrossItems(t *testing.T) {
 }
 
 func TestSaveKeepsExplicitUnknownsPending(t *testing.T) {
-	m, q, tt, svc := openReviewRecord(t, reviewRowItem(t, 1, 12))
+	m, q, tt, svc := openReviewRecordPage(t, reviewRowItem(t, 1, 12))
 	if err := tt.Click("编辑"); err != nil {
 		t.Fatal(err)
 	}
@@ -1015,9 +991,7 @@ func TestSaveKeepsExplicitUnknownsPending(t *testing.T) {
 	if !m.edit.canSave() || m.edit.canConfirm() {
 		t.Fatalf("explicit unknowns: canSave=%v canConfirm=%v", m.edit.canSave(), m.edit.canConfirm())
 	}
-	if err := tt.Click("保存"); err != nil {
-		t.Fatal(err)
-	}
+	clickRevealedDetailControl(t, tt, reviewPageHeight, "保存")
 	settle(t, m, q, tt)
 
 	if svc.saveCount() != 1 || svc.saves[0].edit.Confirmed {
@@ -1031,13 +1005,13 @@ func TestSaveKeepsExplicitUnknownsPending(t *testing.T) {
 		t.Fatalf("unknowns were not preserved: level %q management %q",
 			row.LevelText(), row.ManagementStateText())
 	}
-	if !tt.HasText("校验预览：不可用") && !tt.HasText("校验不可用") {
+	if !tt.HasText("校验状态") || !tt.HasText("不可用") {
 		t.Fatalf("the incomplete revision claims a validation: %q", tt.Texts())
 	}
 }
 
 func TestNewSessionKeepsDirtyEditor(t *testing.T) {
-	m, q, tt, svc := openReviewRecord(t, reviewRowItem(t, 1, 12))
+	m, q, tt, svc := openReviewRecordPage(t, reviewRowItem(t, 1, 12))
 	svc.loads["s2"] = recovery(reviewRowItem(t, 1, 12))
 	if err := tt.Click("编辑"); err != nil {
 		t.Fatal(err)
@@ -1063,7 +1037,7 @@ func TestNewSessionKeepsDirtyEditor(t *testing.T) {
 		t.Fatalf("the deferred live view is not explained: %q", tt.Texts())
 	}
 
-	clickRevealedDetailControl(t, tt, legacyReviewHeight, "放弃修改")
+	clickRevealedDetailControl(t, tt, reviewPageHeight, "放弃修改")
 	settle(t, m, q, tt)
 	if m.edit != nil || m.navPrompt != nil {
 		t.Fatalf("discarding did not settle the editor: edit=%+v nav=%+v", m.edit, m.navPrompt)
@@ -1079,7 +1053,7 @@ func TestNewSessionKeepsDirtyEditor(t *testing.T) {
 }
 
 func TestExitRefusesWithUnsavedEdit(t *testing.T) {
-	m, q, tt, svc := openReviewRecord(t, reviewRowItem(t, 1, 12))
+	m, q, tt, svc := openReviewRecordPage(t, reviewRowItem(t, 1, 12))
 	if err := tt.Click("编辑"); err != nil {
 		t.Fatal(err)
 	}

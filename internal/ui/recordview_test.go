@@ -165,9 +165,6 @@ func TestBuildRecordViewParsesStructured(t *testing.T) {
 	if got := row.IssueSummaryText(); got != "2 个问题（1 个错误，1 个警告）" {
 		t.Errorf("issue summary = %q", got)
 	}
-	if got := row.ResultColumnText(); got != "未评价 · 校验不可用 · 2 个问题（1 个错误，1 个警告）" {
-		t.Errorf("table result = %q", got)
-	}
 }
 
 // TestBuildRecordViewBackfillsLegacyLines checks the 995 old-checkpoint
@@ -239,15 +236,14 @@ func TestUnreadStatesStayDistinct(t *testing.T) {
 		Level:  intp(15),
 	}
 	tests := []struct {
-		name       string
-		state      *string
-		want       string
-		wantColumn string
+		name  string
+		state *string
+		want  string
 	}{
-		{"null", nil, "未读取", "未读取"},
-		{"none", strp("none"), "无标记", "无标记"},
-		{"locked", strp("locked"), "锁定", "锁定"},
-		{"discarded", strp("discarded"), "弃置", "弃置"},
+		{"null", nil, "未读取"},
+		{"none", strp("none"), "无标记"},
+		{"locked", strp("locked"), "锁定"},
+		{"discarded", strp("discarded"), "弃置"},
 	}
 	for _, tt := range tests {
 		t.Run("management/"+tt.name, func(t *testing.T) {
@@ -259,9 +255,6 @@ func TestUnreadStatesStayDistinct(t *testing.T) {
 			}), nil)).Rows[0]
 			if got := row.ManagementStateText(); got != tt.want {
 				t.Errorf("management = %q, want %q", got, tt.want)
-			}
-			if got := row.ManagementColumnText(); got != tt.wantColumn {
-				t.Errorf("table management = %q, want %q", got, tt.wantColumn)
 			}
 		})
 	}
@@ -287,9 +280,6 @@ func TestUnreadStatesStayDistinct(t *testing.T) {
 			}), nil)).Rows[0]
 			if got := row.EquippedText(); got != tt.want {
 				t.Errorf("equipped = %q, want %q", got, tt.want)
-			}
-			if got := row.EquippedColumnText(); got != tt.want {
-				t.Errorf("table equipped = %q, want %q", got, tt.want)
 			}
 		})
 	}
@@ -376,18 +366,12 @@ func TestFailedAndUnprocessedDoNotFabricateStructured(t *testing.T) {
 	if got := view.Rows[0].SetColumnText(); got != "—" {
 		t.Errorf("failed set cell = %q, want —", got)
 	}
-	if got := view.Rows[0].ResultColumnText(); got != "识别失败：识别超时" {
-		t.Errorf("failed result = %q", got)
-	}
 	if got := view.Rows[0].Summary(); got != "识别失败：识别超时" {
 		t.Errorf("failed summary = %q", got)
 	}
 
 	if view.Rows[1].Structured != nil {
 		t.Error("the unprocessed item showed a structured payload")
-	}
-	if got := view.Rows[1].ResultColumnText(); got != "未处理（中断）" {
-		t.Errorf("unprocessed result = %q", got)
 	}
 	if got := view.Rows[1].Summary(); got != "未处理（中断）" {
 		t.Errorf("unprocessed summary = %q", got)
@@ -398,9 +382,6 @@ func TestFailedAndUnprocessedDoNotFabricateStructured(t *testing.T) {
 	}
 	if got := view.Rows[2].SetColumnText(); got != "未解析" {
 		t.Errorf("raw-only set cell = %q, want 未解析", got)
-	}
-	if got := view.Rows[2].ResultColumnText(); got != "未评价" {
-		t.Errorf("raw-only result = %q, want only the quality", got)
 	}
 }
 

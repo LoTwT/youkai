@@ -13,22 +13,10 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-// resultColumns is the legacy single-column results table: the capture
-// sequence, the structured set/slot/level, the nullable management and
-// equipment states and the quality with its problems.
-var resultColumns = []ui.TableColumn{
-	{Title: "序号", Width: 40, Align: ui.End, Fixed: true},
-	{Title: "套装", Width: 90, Fixed: true},
-	{Title: "槽位/等级", Width: 84, Fixed: true},
-	{Title: "管理状态", Width: 72, Fixed: true},
-	{Title: "装备", Width: 110, Fixed: true},
-	{Title: "质量/问题", MinWidth: 280},
-}
-
-// splitResultColumns is the four-page shell's results table at both the
-// 1024 split and the narrow list: the capture sequence, set, slot/level,
-// main stat and state. Problems stay out of the table and appear in the
-// detail subtitle and evidence description.
+// splitResultColumns is the results table at both the 1024 split and the
+// narrow list: the capture sequence, set, slot/level, main stat and state.
+// Problems stay out of the table and appear in the detail subtitle and
+// evidence description.
 var splitResultColumns = []ui.TableColumn{
 	{Title: "序号", Width: 40, Align: ui.End, Fixed: true},
 	{Title: "套装", Width: 90, Fixed: true},
@@ -91,9 +79,8 @@ const resultsRowHeight = 32
 const resultsSnapDelay = 120 * time.Millisecond
 
 // resultsArea is the results browser: the current record's items in
-// capture order, the chosen item's evidence and recognized texts, and the
-// history list to reopen saved records. The four-page shell starts its
-// side-by-side split at 1024 and switches whole pages below it.
+// capture order, the chosen item's evidence and recognized texts. The shell
+// starts its side-by-side split at 1024 and switches whole pages below it.
 func (m *Model) resultsArea(c *ui.Context, t *ui.Theme) {
 	ui.Column(c).Grow(1).Gap(t.Space(1)).Children(func() {
 		if m.narrowResults() && m.resultsDetail {
@@ -113,12 +100,6 @@ func (m *Model) resultsArea(c *ui.Context, t *ui.Theme) {
 			}
 		}
 		m.resultsHeader(c, t)
-		if !m.cfg.PageLayout {
-			m.savePromptArea(c, t)
-			if len(m.history) > 0 {
-				m.legacyHistoryActions(c, t)
-			}
-		}
 		if m.histErr != "" {
 			ui.Text(c, "历史记录读取失败："+m.histErr).TextColor(t.Danger)
 		}
@@ -143,9 +124,7 @@ func (m *Model) resultsArea(c *ui.Context, t *ui.Theme) {
 			ui.Text(c, m.emptyResultsText()).TextColor(t.TextMuted)
 			return
 		}
-		if m.cfg.PageLayout {
-			m.resultsFilterBar(c, t)
-		}
+		m.resultsFilterBar(c, t)
 		if m.completionVisible() {
 			m.completionArea(c, t)
 			return
@@ -156,7 +135,7 @@ func (m *Model) resultsArea(c *ui.Context, t *ui.Theme) {
 			ui.Text(c, m.filteredEmptyText()).TextColor(t.TextMuted)
 			return
 		}
-		if m.cfg.PageLayout && !resultsSideBySide(m.contentWidth) {
+		if !resultsSideBySide(m.contentWidth) {
 			m.tablePane(c)
 			return
 		}
@@ -184,42 +163,21 @@ func (m *Model) resultsHeader(c *ui.Context, t *ui.Theme) {
 				m.ShowLive()
 			}
 		}
-		if !m.cfg.PageLayout && m.rec != nil && m.rec.ID != m.historyID(m.histChoice) {
-			blocked := m.cleanupBlockedReason()
-			if ui.Button(c, "删除当前记录").Disabled(blocked != "").Clicked() {
-				m.RequestRecordCleanup(m.rec.ID)
-			}
-		}
 		ui.Box(c).Grow(1)
-		if m.cfg.PageLayout {
-			if m.activeSlot == resultSlotHistory {
-				// A history snapshot returns to the list; the new-scan
-				// action belongs to the scan destination.
-				if ui.Button(c, "← 返回历史").Clicked() {
-					m.navigatePage(pageHistory)
-				}
-				return
-			}
-			action := "+ 准备新扫描"
-			if m.snap.Busy || m.startReqID != "" {
-				action = "返回扫描中"
-			}
-			if ui.Button(c, action).Clicked() {
-				m.page = pageScan
+		if m.activeSlot == resultSlotHistory {
+			// A history snapshot returns to the list; the new-scan
+			// action belongs to the scan destination.
+			if ui.Button(c, "← 返回历史").Clicked() {
+				m.navigatePage(pageHistory)
 			}
 			return
 		}
-		if m.histChoice != "" && !m.hasHistoryLabel(m.histChoice) {
-			m.histChoice = ""
+		action := "+ 准备新扫描"
+		if m.snap.Busy || m.startReqID != "" {
+			action = "返回扫描中"
 		}
-		if labels := m.HistoryLabels(); len(labels) > 0 {
-			ui.Text(c, "历史记录").TextColor(t.TextMuted)
-			ui.Select(c, &m.histChoice, labels).Width(220)
-			if ui.Button(c, "打开记录").Disabled(m.historyID(m.histChoice) == "").Clicked() {
-				m.OpenHistory()
-			}
-		} else {
-			ui.Text(c, "历史记录："+m.historyEmptyText()).TextColor(t.TextMuted)
+		if ui.Button(c, action).Clicked() {
+			m.page = pageScan
 		}
 	})
 }
@@ -289,12 +247,7 @@ func (m *Model) tablePane(c *ui.Context) {
 	previousDisplay := resultDisplayIndex(visible, previous)
 	m.tableSelected = previousDisplay
 
-	columns := resultColumns
-	var tok *Tokens
-	if m.cfg.PageLayout {
-		columns = resultsColumnsFor(m.contentWidth)
-		_, tok = themeWithTokens(c.Theme(), c.Preferences())
-	}
+	_, tok := themeWithTokens(c.Theme(), c.Preferences())
 	m.list.Key = func(row int) any {
 		if row < 0 || row >= len(visible) {
 			return row
@@ -307,29 +260,20 @@ func (m *Model) tablePane(c *ui.Context) {
 		}
 		return m.rec.Rows[visible[row]].Label()
 	}
-	buildTable := func() ui.Element {
-		return ui.Table(c, &m.list, columns, len(visible), func(row, col int) {
-			m.resultCellContent(c, visible, row, col, tok)
-		}).Fill().MinHeight(0)
+	// Every results list uses the composite, so the split table gains the
+	// same fixed header and 32-DIP row snapping as the narrow list. The
+	// wrapper gives the composite the slot the page leaves, whatever its
+	// capped height. The narrow page's column has a remaining height to grow
+	// into; the split pane stretches it, so there the wrapper fills that
+	// pane's height explicitly.
+	slot := ui.Column(c).Grow(1).MinHeight(0)
+	if resultsSideBySide(m.contentWidth) {
+		slot = ui.Column(c).FillHeight().MinHeight(0)
 	}
 	var table ui.Element
-	if m.cfg.PageLayout {
-		// Every page-layout results list uses the composite, so the split
-		// table gains the same fixed header and 32-DIP row snapping as the
-		// narrow list. The wrapper gives the composite the slot the page
-		// leaves, whatever its capped height. The narrow page's column has
-		// a remaining height to grow into; the split pane stretches it, so
-		// there the wrapper fills that pane's height explicitly.
-		slot := ui.Column(c).Grow(1).MinHeight(0)
-		if resultsSideBySide(m.contentWidth) {
-			slot = ui.Column(c).FillHeight().MinHeight(0)
-		}
-		slot.Bind(&m.resultsTableSlot).Children(func() {
-			table = m.resultsCompositeTable(c, c.Theme(), tok, visible)
-		})
-	} else {
-		table = buildTable()
-	}
+	slot.Bind(&m.resultsTableSlot).Children(func() {
+		table = m.resultsCompositeTable(c, c.Theme(), tok, visible)
+	})
 	if m.resultsRowOpensDetail() {
 		table.OnClick(func() { m.openResultDetail() })
 	}
@@ -360,9 +304,9 @@ func wholeRowTableHeight(available, row, chrome float32) (float32, bool) {
 	return chrome + float32(rows)*row, true
 }
 
-// resultCellContent builds one results-table cell's content. The legacy
-// table and the composite share it so the five columns, the status badge
-// and the narrow row action cannot drift apart.
+// resultCellContent builds one results-table cell's content. The header and
+// rows share it so the five columns, the status badge and the narrow row
+// action cannot drift apart.
 func (m *Model) resultCellContent(c *ui.Context, visible []int, row, col int, tok *Tokens) {
 	if row < 0 || row >= len(visible) {
 		return
@@ -383,23 +327,13 @@ func (m *Model) resultCellContent(c *ui.Context, visible []int, row, col int, to
 	case 2:
 		cellText(r.SlotLevelColumnText())
 	case 3:
-		if m.cfg.PageLayout {
-			text := r.MainStatText()
-			if text == "" {
-				text = "—"
-			}
-			cellText(text)
-			return
+		text := r.MainStatText()
+		if text == "" {
+			text = "—"
 		}
-		cellText(r.ManagementColumnText())
+		cellText(text)
 	case 4:
-		if m.cfg.PageLayout {
-			m.resultStatusBadge(c, c.Theme(), tok, r, true, m.tableSelected == row)
-			return
-		}
-		cellText(r.EquippedColumnText())
-	case 5:
-		cellText(r.ResultColumnText())
+		m.resultStatusBadge(c, c.Theme(), tok, r, true, m.tableSelected == row)
 	}
 }
 
@@ -613,24 +547,7 @@ func (m *Model) detailPane(c *ui.Context) {
 		ui.Column(c).Gap(t.Space(2)).Children(func() {
 			m.navigationPrompt(c, t)
 			m.detailHeader(c, t, row)
-			if !m.cfg.PageLayout {
-				switch row.Status {
-				case record.StatusFailed:
-					ui.Text(c, "识别失败："+row.Failure).TextColor(t.Danger)
-					ui.Text(c, "该条目没有结构化字段（识别失败）。").TextColor(t.TextMuted)
-				case record.StatusUnprocessed:
-					ui.Text(c, "未处理原因："+unprocessedReasonText(row.Reason)).TextColor(t.TextMuted)
-					ui.Text(c, "该条目没有结构化字段（识别未运行）。").TextColor(t.TextMuted)
-				case record.StatusProduced:
-					if row.Structured == nil {
-						ui.Text(c, "该条目没有结构化字段，原始识别文本见下方证据。").TextColor(t.TextMuted)
-					} else {
-						m.structuredForm(c, t, row)
-					}
-				default:
-					ui.Text(c, "识别尚未完成，暂无结构化字段。").TextColor(t.TextMuted)
-				}
-			} else if row.Status == record.StatusProduced {
+			if row.Status == record.StatusProduced {
 				if row.Structured == nil {
 					ui.Text(c, "该条目没有结构化字段，原始识别文本见下方证据。").TextColor(t.TextMuted)
 				} else {
@@ -648,17 +565,6 @@ func (m *Model) detailPane(c *ui.Context) {
 // the structured form is the main view. A narrow detail page starts with
 // its way back to the list.
 func (m *Model) detailHeader(c *ui.Context, t *ui.Theme, row *Row) {
-	if !m.cfg.PageLayout {
-		ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
-			ui.Textf(c, "序号 %d · %s · 质量：%s", row.Seq, row.StatusText(), row.QualityText()).FontWeight(600)
-			if row.MissingEvidence() {
-				ui.Text(c, "截图已删除或缺失").TextColor(t.TextMuted).FontSize(t.FontSize * 0.9)
-			}
-			ui.Box(c).Grow(1)
-			m.evidenceToggle(c, row)
-		})
-		return
-	}
 	if m.narrowResults() && m.resultsDetail {
 		ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
 			back := ui.Button(c, "← 结果列表").Disabled(m.reviewSaving || m.editingDirty())
@@ -895,7 +801,7 @@ func (m *Model) reviewActions(c *ui.Context, t *ui.Theme, row *Row, check app.Da
 			m.selectNextPendingResult()
 		}
 	}
-	if m.cfg.PageLayout && !m.narrowResults() {
+	if !m.narrowResults() {
 		ui.Column(c).Gap(t.Space(1)).Children(func() {
 			if !unexportable || pending {
 				ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
@@ -922,9 +828,7 @@ func (m *Model) reviewActions(c *ui.Context, t *ui.Theme, row *Row, check app.Da
 			if pending {
 				stayButton()
 			}
-			if m.cfg.PageLayout {
-				selectNext()
-			}
+			selectNext()
 			if pending {
 				nextButton()
 			}
@@ -1051,7 +955,7 @@ func (m *Model) editForm(c *ui.Context, t *ui.Theme, row *Row) {
 				m.saveEdit(reviewConfirmNext, nil)
 			}
 		}
-		if m.cfg.PageLayout && !m.narrowResults() {
+		if !m.narrowResults() {
 			ui.Column(c).Gap(t.Space(1)).Children(func() {
 				ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
 					discardButton()
@@ -1282,17 +1186,13 @@ func (m *Model) evidenceArea(c *ui.Context, t *ui.Theme, row *Row) {
 	}
 	if !m.showEvidence {
 		ui.Text(c, "截图与原始识别文本已折叠。").TextColor(t.TextMuted).FontSize(t.FontSize * 0.9)
-		if m.cfg.PageLayout {
-			ui.Text(c, "证据说明："+resultEvidenceNote(row)).TextColor(t.TextMuted).FontSize(t.FontSize * 0.9)
-		}
+		ui.Text(c, "证据说明："+resultEvidenceNote(row)).TextColor(t.TextMuted).FontSize(t.FontSize * 0.9)
 		return
 	}
 	ui.Divider(c)
 	ui.Text(c, "证据（原始 OCR）").FontWeight(600)
-	if m.cfg.PageLayout {
-		ui.Text(c, "证据说明："+resultEvidenceNote(row)).TextColor(t.TextMuted).
-			FontSize(t.FontSize * 0.9)
-	}
+	ui.Text(c, "证据说明："+resultEvidenceNote(row)).TextColor(t.TextMuted).
+		FontSize(t.FontSize * 0.9)
 	if m.rec != nil && m.rec.EvidenceRemoved {
 		ui.Text(c, "该记录的截图已删除或缺失，无法显示图像；识别文本与字段数据仍保留。").
 			TextColor(t.TextMuted)

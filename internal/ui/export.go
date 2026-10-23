@@ -11,18 +11,9 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-// ExportSaver chooses where one usable-data file goes and writes it. The
-// production implementation uses the system save dialog followed by an
-// atomic write; tests inject a fake. A cancelled dialog returns an empty
-// path and no error. The interface never reads the record or changes the
-// checkpoint: the bytes are already a frozen revision.
-type ExportSaver interface {
-	Save(format app.ExportFormat, defaultName string, data []byte) (path string, err error)
-}
-
 // DirectExportSaver writes one usable-data file without opening a dialog.
-// The page shell uses it to write straight into the system downloads
-// directory; the implementation picks a numbered name instead of
+// The results and history pages use it to write straight into the system
+// downloads directory; the implementation picks a numbered name instead of
 // overwriting an existing file. It never reads the record or changes the
 // checkpoint.
 type DirectExportSaver interface {
@@ -76,24 +67,9 @@ func (m *Model) reviewActionsBlocked() bool {
 	return m.reviewSaving || m.loading || m.recErr != "" || m.exportBusy()
 }
 
-// exportAvailable reports whether this build offers an export entry. The
-// page shell prefers the direct writer and keeps the save dialog for the
-// legacy layout.
+// exportAvailable reports whether this build offers an export entry.
 func (m *Model) exportAvailable() bool {
-	return m.cfg.ExportSaver != nil || m.cfg.DirectExportSaver != nil
-}
-
-// exportWriter picks the save capability for the current layout. The page
-// shell writes directly; the legacy layout keeps the save dialog. A
-// configuration with only the dialog stays usable in either layout.
-func (m *Model) exportWriter() (save func(app.ExportFormat, string, []byte) (string, error), direct bool) {
-	if m.cfg.PageLayout && m.cfg.DirectExportSaver != nil {
-		return m.cfg.DirectExportSaver.SaveDirect, true
-	}
-	if m.cfg.ExportSaver != nil {
-		return m.cfg.ExportSaver.Save, false
-	}
-	return nil, false
+	return m.cfg.DirectExportSaver != nil
 }
 
 // rebuildExport freezes the displayed record's current revision for both
@@ -149,9 +125,9 @@ func (m *Model) exportBlockedReason() string {
 	}
 }
 
-// ExportJSON starts the JSON export: the chosen target and the write run
-// asynchronously, so the dialog never blocks the window. The state of the
-// internal record is untouched on cancel, refusal or write failure.
+// ExportJSON starts the JSON export: the write runs asynchronously, so it
+// never blocks the window. The state of the internal record is untouched on
+// refusal or write failure.
 func (m *Model) ExportJSON() { m.export(app.ExportJSON) }
 
 // ExportCSV starts the CSV export from the same frozen snapshot.
@@ -162,7 +138,7 @@ func (m *Model) ExportCSV() { m.export(app.ExportCSV) }
 // screen, so a concurrent scan save or a reopened record cannot mix
 // revisions inside the file.
 func (m *Model) export(format app.ExportFormat) {
-	save, direct := m.exportWriter()
+	save := m.cfg.DirectExportSaver
 	if save == nil || m.exportData == nil || m.exportBlockedReason() != "" {
 		return
 	}
@@ -177,8 +153,6 @@ func (m *Model) export(format app.ExportFormat) {
 	now := time.Now().UTC()
 
 	m.exporting = true
-	m.exportNotice = ""
-	m.exportError = ""
 	m.exportOutcome = nil
 	m.goAsync(func() {
 		var data []byte
@@ -194,29 +168,14 @@ func (m *Model) export(format app.ExportFormat) {
 		if err != nil {
 			m.update(func() {
 				m.exporting = false
-				if direct {
-					m.finishDirectExport(format, count, recordID, live, "", err)
-					return
-				}
-				m.exportError = "导出失败：" + err.Error()
+				m.finishDirectExport(format, count, recordID, live, "", err)
 			})
 			return
 		}
-		path, err := save(format, name, data)
+		path, err := save.SaveDirect(format, name, data)
 		m.update(func() {
 			m.exporting = false
-			if direct {
-				m.finishDirectExport(format, count, recordID, live, path, err)
-				return
-			}
-			switch {
-			case err != nil:
-				m.exportError = "导出失败：" + err.Error()
-			case path == "":
-				m.exportNotice = "已取消导出。"
-			default:
-				m.exportNotice = fmt.Sprintf("已导出 %s：%s", strings.ToUpper(string(format)), path)
-			}
+			m.finishDirectExport(format, count, recordID, live, path, err)
 		})
 	})
 }
@@ -280,12 +239,6 @@ func (m *Model) exportArea(c *ui.Context, t *ui.Theme) {
 		if blocked != "" && !m.exporting {
 			ui.Text(c, blocked).TextColor(t.TextMuted).FontSize(t.FontSize * 0.9)
 		}
-		if m.exportError != "" {
-			ui.Text(c, m.exportError).TextColor(t.Danger)
-		}
-		if m.exportNotice != "" {
-			ui.Text(c, m.exportNotice)
-		}
 	})
 }
 
@@ -293,7 +246,7 @@ func (m *Model) exportArea(c *ui.Context, t *ui.Theme) {
 // for the export status. The notice is global so switching destinations
 // keeps it visible.
 func (m *Model) exportStatusVisible() bool {
-	return m.cfg.PageLayout && (m.exporting || m.exportOutcome != nil)
+	return m.exporting || m.exportOutcome != nil
 }
 
 // exportStatusArea is the page shell's status strip for a direct export:

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/LoTwT/youkai/internal/app"
+	"github.com/LoTwT/youkai/internal/game/zzz"
 	"github.com/LoTwT/youkai/internal/record"
 	"github.com/LoTwT/youkai/internal/scan"
 	"github.com/egoist/mygo/ui"
@@ -50,12 +51,12 @@ func TestOpenHistoryKeepsSessionAndShowLiveRestoresIt(t *testing.T) {
 		}},
 		loads: map[string]*record.Recovery{
 			"s1": recovery(
-				item(1, record.StatusProduced, "", "", "一号"),
-				item(2, record.StatusProduced, "", "", "二号"),
+				structuredItem(1, zzz.DiscRecord{SetID: intp(31100), Slot: 4, Level: intp(15)}, "一号"),
+				structuredItem(2, zzz.DiscRecord{SetID: intp(31100), Slot: 4, Level: intp(15)}, "二号"),
 			),
 			"old": recovery(
-				item(1, record.StatusProduced, "", "", "旧一"),
-				item(2, record.StatusProduced, "", "", "旧二"),
+				structuredItem(1, zzz.DiscRecord{SetID: intp(99999), Slot: 2, Level: intp(15)}, "旧一"),
+				structuredItem(2, zzz.DiscRecord{SetID: intp(99999), Slot: 2, Level: intp(15)}, "旧二"),
 			),
 		},
 	}
@@ -69,13 +70,12 @@ func TestOpenHistoryKeepsSessionAndShowLiveRestoresIt(t *testing.T) {
 
 	sessionExport := &app.UsableExport{Summary: app.ExportSummary{Included: 2, Captured: 2}}
 	m.filter = resultFilterAll
-	m.search = "crit"
+	m.search = ""
 	m.setFilter = "31100"
 	m.slotFilter = "4"
 	m.selected = 1
 	m.scroll = 1
 	m.exportData = sessionExport
-	m.exportNotice = "session export"
 
 	m.histChoice = slotHistoryLabel(t, m, "old")
 	m.OpenHistory()
@@ -87,15 +87,15 @@ func TestOpenHistoryKeepsSessionAndShowLiveRestoresIt(t *testing.T) {
 		t.Fatalf("opening history cleared the session slot: %+v", m.sessionSlot)
 	}
 	if m.sessionSlot.state.recData == nil || m.sessionSlot.state.selected != 1 || m.sessionSlot.state.scroll != 1 ||
-		m.sessionSlot.state.filter != resultFilterAll || m.sessionSlot.state.search != "crit" ||
+		m.sessionSlot.state.filter != resultFilterAll || m.sessionSlot.state.search != "" ||
 		m.sessionSlot.state.setFilter != "31100" || m.sessionSlot.state.slotFilter != "4" ||
 		m.sessionSlot.state.exportData != sessionExport {
 		t.Fatalf("the session slot lost its view state: %+v", m.sessionSlot.state)
 	}
 
 	historyExport := &app.UsableExport{Summary: app.ExportSummary{Included: 1, Captured: 2}}
-	m.filter = resultFilterUnexportable
-	m.search = "hist"
+	m.filter = resultFilterAll
+	m.search = ""
 	m.setFilter = "99999"
 	m.slotFilter = "2"
 	m.selected = 1
@@ -108,7 +108,7 @@ func TestOpenHistoryKeepsSessionAndShowLiveRestoresIt(t *testing.T) {
 	if m.activeSlot != resultSlotSession || m.rec == nil || m.rec.ID != "s1" || !m.rec.Live {
 		t.Fatalf("ShowLive did not return to the session: %+v", m.rec)
 	}
-	if m.filter != resultFilterAll || m.search != "crit" || m.setFilter != "31100" ||
+	if m.filter != resultFilterAll || m.search != "" || m.setFilter != "31100" ||
 		m.slotFilter != "4" || m.selected != 1 || m.scroll != 1 || m.exportData != sessionExport {
 		t.Fatalf("the session state was not restored: filter %v search %q set %q slot %q selected %d scroll %d",
 			m.filter, m.search, m.setFilter, m.slotFilter, m.selected, m.scroll)
@@ -116,8 +116,8 @@ func TestOpenHistoryKeepsSessionAndShowLiveRestoresIt(t *testing.T) {
 	if slotLoadCount(svc, "s1") != loadsBefore {
 		t.Fatal("ShowLive reloaded the cached session")
 	}
-	if m.historySlot.state.rec == nil || m.historySlot.state.filter != resultFilterUnexportable ||
-		m.historySlot.state.search != "hist" || m.historySlot.state.selected != 1 ||
+	if m.historySlot.state.rec == nil || m.historySlot.state.filter != resultFilterAll ||
+		m.historySlot.state.search != "" || m.historySlot.state.selected != 1 ||
 		m.historySlot.state.exportData != historyExport {
 		t.Fatalf("leaving history lost its state: %+v", m.historySlot.state)
 	}
@@ -127,7 +127,7 @@ func TestOpenHistoryKeepsSessionAndShowLiveRestoresIt(t *testing.T) {
 	if m.activeSlot != resultSlotHistory || m.rec.ID != "old" {
 		t.Fatalf("reopening history did not restore the slot: %+v", m.rec)
 	}
-	if m.filter != resultFilterUnexportable || m.search != "hist" || m.setFilter != "99999" ||
+	if m.filter != resultFilterAll || m.search != "" || m.setFilter != "99999" ||
 		m.slotFilter != "2" || m.selected != 1 || m.scroll != 1 || m.exportData != historyExport {
 		t.Fatalf("the history state was not restored: filter %v search %q selected %d scroll %d",
 			m.filter, m.search, m.selected, m.scroll)
@@ -390,8 +390,8 @@ func TestFinalCheckpointLoadingGatesCompletionAndExport(t *testing.T) {
 	initial := recovery(confirmedReviewItem(t, 1, 12))
 	final := recovery(confirmedReviewItem(t, 1, 12), confirmedReviewItem(t, 2, 10))
 	svc := &fakeService{loads: map[string]*record.Recovery{"s1": initial}}
-	saver := &fakeExportSaver{}
-	m, q := newTestModel(t, Config{Service: svc, PageLayout: true, ExportSaver: saver})
+	saver := &fakeDirectExportSaver{}
+	m, q := newTestModel(t, Config{Service: svc, DirectExportSaver: saver})
 
 	m.Apply(snap("s1", 1, true, scan.PhaseCapturing,
 		scan.Counts{Captured: 1, Produced: 1}, 1, true, ""))
@@ -492,7 +492,7 @@ func TestSupersededResultLoadDoesNotClearLoading(t *testing.T) {
 	svc := &fakeService{loads: map[string]*record.Recovery{
 		"s1": recovery(confirmedReviewItem(t, 1, 12)),
 	}}
-	m, q := newTestModel(t, Config{Service: svc, PageLayout: true})
+	m, q := newTestModel(t, Config{Service: svc})
 	releases := []chan struct{}{make(chan struct{}), make(chan struct{})}
 	started := []chan struct{}{make(chan struct{}, 1), make(chan struct{}, 1)}
 	responses := []*record.Recovery{
@@ -566,7 +566,6 @@ func TestFinalCheckpointLoadingBlocksConfirmation(t *testing.T) {
 	saver := &fakeDirectExportSaver{}
 	m, q := newTestModel(t, Config{
 		Service:           svc,
-		PageLayout:        true,
 		DirectExportSaver: saver,
 		AppVersion:        "test-1",
 	})
@@ -682,7 +681,7 @@ func TestFinalCheckpointLoadingBlocksEditorSave(t *testing.T) {
 	final.Checkpoint.Session.SessionID = "s1"
 	svc := &fakeService{loads: map[string]*record.Recovery{"s1": initial}}
 	installReviewSave(svc)
-	m, q := newTestModel(t, Config{Service: svc, PageLayout: true})
+	m, q := newTestModel(t, Config{Service: svc})
 	m.SetContentSize(1024, 700)
 	tt := ui.NewTester(m.View, 1024, 700)
 	settle(t, m, q, tt)
@@ -765,7 +764,7 @@ func TestFailedRecordLoadBlocksReviewActions(t *testing.T) {
 		"s1": recovery(reviewRowItem(t, 1, 12)),
 	}}
 	installReviewSave(svc)
-	m, q := newTestModel(t, Config{Service: svc, PageLayout: true})
+	m, q := newTestModel(t, Config{Service: svc})
 	tt := ui.NewTester(m.View, 1024, 700)
 	settle(t, m, q, tt)
 	m.Apply(snap("s1", 1, true, scan.PhaseCapturing,

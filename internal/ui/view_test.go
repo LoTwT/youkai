@@ -59,6 +59,7 @@ func TestViewCloseBehaviorPreference(t *testing.T) {
 		saved = append(saved, behavior)
 		return nil
 	}})
+	m.page = pageSettings
 	tt := ui.NewTester(m.View, 1020, 700)
 	settle(t, m, q, tt)
 
@@ -117,28 +118,25 @@ func TestViewStartAndStopByPhase(t *testing.T) {
 		t.Error("the stop means do not show")
 	}
 
-	// Idle with a source: a double click while the request is in flight
-	// issues one request — the button disables itself until the service
-	// answered.
+	// Idle with a source: a second start while the request is in flight
+	// issues nothing — the action bar swaps to stop and the guard refuses.
 	if err := tt.Click("开始扫描"); err != nil {
 		t.Fatal(err)
 	}
-	if err := tt.Click("开始扫描"); err != nil {
-		t.Fatal(err)
-	}
+	m.Start()
 	drainAll(t, m, q)
 	if len(svc.starts) != 1 {
 		t.Fatalf("the start issued %d requests for one click burst", len(svc.starts))
 	}
 
-	// Preparing: the start is disabled, the stop works.
+	// Preparing: the start is unavailable, the stop works.
 	applyAndSettle(t, m, q, tt, snap("s1", 1, true, scan.PhasePreparing,
 		scan.Counts{}, 0, true, ""))
 	if !tt.HasText("阶段：准备中") {
 		t.Error("the preparing phase does not show")
 	}
-	if err := tt.Click("开始扫描"); err != nil {
-		t.Fatal(err)
+	if m.scanStartReady() {
+		t.Error("the start is offered during preparation")
 	}
 	if err := tt.Click("停止扫描"); err != nil {
 		t.Fatal(err)
@@ -172,11 +170,13 @@ func TestViewStartAndStopByPhase(t *testing.T) {
 		Kind: scan.TriggerUser, Code: scan.CodeUserCancelled, Phase: scan.PhaseCapturing,
 	}
 	applyAndSettle(t, m, q, tt, ended)
+	m.page = pageScan
+	tt.Frame()
 	if !tt.HasText("结束：用户取消（用户停止，阶段：采集中（userCancelled））") {
 		t.Errorf("the end reason does not show: %q", tt.Texts())
 	}
-	if err := tt.Click("停止扫描"); err != nil {
-		t.Fatal(err)
+	if err := tt.Click("停止扫描"); err == nil {
+		t.Fatal("the idle page still offers a stop after the session ended")
 	}
 	if err := tt.Click("开始扫描"); err != nil {
 		t.Fatal(err)
@@ -269,13 +269,18 @@ func openTestRecord(t *testing.T, ev EvidenceSource, cacheLimit int) (*Model, *q
 		loads: map[string]*record.Recovery{"r1": testRecord()},
 	}
 	m, q := newTestModel(t, Config{Service: svc, Evidence: ev, EvidenceCacheLimit: cacheLimit})
-	// The evidence sits below the structured form; a taller test window
-	// keeps it in the rendered viewport without changing the product's
-	// scrollable detail pane.
-	tt := ui.NewTester(m.View, 1020, 900)
+	// The 1024 split keeps the detail pane beside the list; the taller test
+	// window keeps the structured form and evidence in the rendered
+	// viewport without changing the product's scrollable detail pane. The
+	// all segment keeps every outcome in the list, as the review flow sees
+	// them.
+	m.SetContentSize(1024, 900)
+	tt := ui.NewTester(m.View, 1024, 900)
 	settle(t, m, q, tt)
 	m.OpenHistory()
 	settle(t, m, q, tt)
+	m.setResultFilter(resultFilterAll)
+	tt.Frame()
 	return m, q, tt
 }
 
@@ -301,7 +306,7 @@ func TestViewDetailMatchesSelection(t *testing.T) {
 	// Every outcome stays in the list, and the recovery mark shows.
 	for _, want := range []string{
 		"结果：历史记录 r1（4 条，中断恢复 1 条）",
-		"河豚电音", "识别失败：识别超时", "未处理（用户取消）", "未处理（中断）",
+		"河豚电音", "失败", "未处理",
 	} {
 		if !tt.HasText(want) {
 			t.Fatalf("the results list does not show %q: %q", want, tt.Texts())
@@ -311,7 +316,7 @@ func TestViewDetailMatchesSelection(t *testing.T) {
 	// The first record is chosen by default. Its structured form shows
 	// while the evidence stays folded; revealing the evidence adds the
 	// raw texts and scores with their images.
-	if !tt.HasText("序号 1 · 已产出 · 质量：未评价") {
+	if !tt.HasText("1 · 河豚电音 · 1 号位 · 15 级") {
 		t.Fatalf("the default selection does not show: %q", tt.Texts())
 	}
 	if tt.HasText("模型分数 0.900") {
@@ -329,11 +334,11 @@ func TestViewDetailMatchesSelection(t *testing.T) {
 	}
 
 	// The failed row: its reason shows and only its images render.
-	if err := tt.Click("识别失败：识别超时"); err != nil {
-		t.Fatal(err)
-	}
+	m.selected = 1
+	m.tableSelected = 1
+	tt.Frame()
 	settle(t, m, q, tt)
-	if !tt.HasText("序号 2 · 失败") {
+	if !tt.HasText("2 · 失败") || !tt.HasText("识别失败：识别超时") {
 		t.Fatalf("the failed row's details do not show: %q", tt.Texts())
 	}
 	if n := countColor(tt.Image(), item2A); n < 100 {
@@ -344,9 +349,9 @@ func TestViewDetailMatchesSelection(t *testing.T) {
 	}
 
 	// The user-cancelled row shows its unprocessed reason.
-	if err := tt.Click("未处理（用户取消）"); err != nil {
-		t.Fatal(err)
-	}
+	m.selected = 2
+	m.tableSelected = 2
+	tt.Frame()
 	settle(t, m, q, tt)
 	if !tt.HasText("未处理原因：用户取消（识别未运行）") {
 		t.Fatalf("the cancelled reason does not show: %q", tt.Texts())
@@ -440,11 +445,11 @@ func TestViewFastSelectionSwitch(t *testing.T) {
 	// The first item is chosen and its loads are scheduled. Switch to the
 	// second item before the loads land, then settle: the second item's
 	// own images show, the first item's do not.
-	if err := tt.Click("识别失败：识别超时"); err != nil {
-		t.Fatal(err)
-	}
+	m.selected = 1
+	m.tableSelected = 1
+	tt.Frame()
 	settle(t, m, q, tt)
-	if !tt.HasText("序号 2 · 失败") {
+	if !tt.HasText("2 · 失败") {
 		t.Fatalf("the switch did not choose the second item: %q", tt.Texts())
 	}
 	if n := countColor(tt.Image(), item2A); n < 100 {
@@ -499,6 +504,7 @@ func TestViewEvidenceFailureShows(t *testing.T) {
 // the retry and shows the saved count.
 func TestViewSaveFailureShowsRetry(t *testing.T) {
 	m, q := newTestModel(t, Config{Service: &fakeService{}})
+	m.page = pageScan
 	tt := ui.NewTester(m.View, 1020, 700)
 	settle(t, m, q, tt)
 
@@ -528,6 +534,7 @@ func TestViewSaveFailureShowsRetry(t *testing.T) {
 func TestViewSaveRetryIsIssued(t *testing.T) {
 	svc := &fakeService{}
 	m, q := newTestModel(t, Config{Service: svc})
+	m.page = pageScan
 	tt := ui.NewTester(m.View, 1020, 700)
 	applyAndSettle(t, m, q, tt, snap("s1", 3, false, scan.PhaseEnded,
 		scan.Counts{Captured: 4, Produced: 4}, 2, true, "磁盘已满"))
@@ -557,6 +564,7 @@ func TestViewExitShowsWrapUp(t *testing.T) {
 	}}
 	settled := 0
 	m, q := newTestModel(t, Config{Service: svc, OnExitSettled: func() { settled++ }})
+	m.page = pageScan
 	tt := ui.NewTester(m.View, 1020, 700)
 	settle(t, m, q, tt)
 
@@ -584,6 +592,7 @@ func TestViewExitShowsWrapUp(t *testing.T) {
 		return errString("app: quit: scan s1 still has an unsaved result: 磁盘已满")
 	}}
 	m2, q2 := newTestModel(t, Config{Service: svc2, OnExitSettled: func() { settled++ }})
+	m2.page = pageScan
 	tt2 := ui.NewTester(m2.View, 1020, 700)
 	settle(t, m2, q2, tt2)
 	if m2.AllowClose() {
@@ -592,6 +601,8 @@ func TestViewExitShowsWrapUp(t *testing.T) {
 	drainAll(t, m2, q2)
 	applyAndSettle(t, m2, q2, tt2, snap("s1", 3, false, scan.PhaseEnded,
 		scan.Counts{Captured: 4, Produced: 4}, 2, true, "磁盘已满"))
+	m2.page = pageScan
+	tt2.Frame()
 	if !tt2.HasText("退出未完成：app: quit: scan s1 still has an unsaved result: 磁盘已满") {
 		t.Fatalf("the wrap-up failure does not show: %q", tt2.Texts())
 	}
@@ -631,7 +642,7 @@ func TestViewHistoryReopen(t *testing.T) {
 	}
 
 	// Open the default entry, then the older one through the picker.
-	if err := tt.Click("打开记录"); err != nil {
+	if err := tt.Click("打开 2026-10-17 09:00 · new"); err != nil {
 		t.Fatal(err)
 	}
 	settle(t, m, q, tt)
@@ -686,7 +697,8 @@ func TestEvidenceCacheIsBounded(t *testing.T) {
 		}
 	}
 	m, q := newTestModel(t, Config{Service: svc, Evidence: ev, EvidenceCacheLimit: 8})
-	tt := ui.NewTester(m.View, 1020, 700)
+	m.SetContentSize(1024, 700)
+	tt := ui.NewTester(m.View, 1024, 700)
 	settle(t, m, q, tt)
 	m.OpenHistory()
 	settle(t, m, q, tt)
@@ -868,8 +880,8 @@ func TestCompletionCardShowsCountsExclusionsAndExports(t *testing.T) {
 		excludedReviewItem(t, 4),
 	)
 	m, q, tt := openResponsiveResults(t, rec, 1024, 700)
-	saver := &fakeExportSaver{}
-	m.cfg.ExportSaver = saver
+	saver := &fakeDirectExportSaver{}
+	m.cfg.DirectExportSaver = saver
 	m.cfg.AppVersion = "test-1"
 	tt.Frame()
 
@@ -903,8 +915,8 @@ func TestCompletionCardShowsCountsExclusionsAndExports(t *testing.T) {
 func TestCompletionCardBlocksZeroExportable(t *testing.T) {
 	rec := recovery(item(1, record.StatusFailed, "", "识别超时"))
 	m, q, tt := openResponsiveResults(t, rec, 1024, 700)
-	saver := &fakeExportSaver{}
-	m.cfg.ExportSaver = saver
+	saver := &fakeDirectExportSaver{}
+	m.cfg.DirectExportSaver = saver
 	tt.Frame()
 
 	if !m.completionVisible() {
@@ -933,8 +945,8 @@ func TestCompletionCardBlocksZeroExportable(t *testing.T) {
 func TestCompletionCardBlocksUnknownExport(t *testing.T) {
 	rec := recovery(confirmedReviewItem(t, 1, 12))
 	m, q, tt := openResponsiveResults(t, rec, 1024, 700)
-	saver := &fakeExportSaver{}
-	m.cfg.ExportSaver = saver
+	saver := &fakeDirectExportSaver{}
+	m.cfg.DirectExportSaver = saver
 	m.exportData = nil
 	m.exportBuildErr = ""
 	tt.Frame()
@@ -1016,8 +1028,8 @@ func TestCompletionRequiresEndedAndSavedSession(t *testing.T) {
 	rec := recovery(confirmedReviewItem(t, 1, 12))
 	rec.Checkpoint.Session.SessionID = "s1"
 	svc := &fakeService{loads: map[string]*record.Recovery{"s1": rec}}
-	saver := &fakeExportSaver{}
-	m, q := newTestModel(t, Config{Service: svc, PageLayout: true, ExportSaver: saver})
+	saver := &fakeDirectExportSaver{}
+	m, q := newTestModel(t, Config{Service: svc, DirectExportSaver: saver})
 	m.SetContentSize(1024, 700)
 	tt := ui.NewTester(m.View, 1024, 700)
 	settle(t, m, q, tt)
@@ -1065,8 +1077,8 @@ func TestCompletionUsesHistoryRecordCounts(t *testing.T) {
 			"old": historyRec,
 		},
 	}
-	saver := &fakeExportSaver{}
-	m, q := newTestModel(t, Config{Service: svc, PageLayout: true, ExportSaver: saver})
+	saver := &fakeDirectExportSaver{}
+	m, q := newTestModel(t, Config{Service: svc, DirectExportSaver: saver})
 	m.SetContentSize(1024, 700)
 	tt := ui.NewTester(m.View, 1024, 700)
 	settle(t, m, q, tt)

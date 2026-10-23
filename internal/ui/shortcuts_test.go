@@ -16,7 +16,7 @@ import (
 // the status bar names it and the key issues the same start as the button.
 func TestScanStartShortcutStartsOnPrepare(t *testing.T) {
 	svc := &fakeService{}
-	m, q := newTestModel(t, Config{Service: svc, PageLayout: true})
+	m, q := newTestModel(t, Config{Service: svc})
 	tt := ui.NewTester(m.View, 1020, 700)
 	settle(t, m, q, tt)
 
@@ -39,7 +39,7 @@ func TestScanStartShortcutStartsOnPrepare(t *testing.T) {
 func TestScanStartShortcutRequiresAPreparableScan(t *testing.T) {
 	t.Run("busy scan", func(t *testing.T) {
 		svc := &fakeService{}
-		m, q := newTestModel(t, Config{Service: svc, PageLayout: true})
+		m, q := newTestModel(t, Config{Service: svc})
 		tt := ui.NewTester(m.View, 1020, 700)
 		settle(t, m, q, tt)
 		applyAndSettle(t, m, q, tt, snap("s1", 1, true, scan.PhaseCapturing,
@@ -64,7 +64,6 @@ func TestScanStartShortcutRequiresAPreparableScan(t *testing.T) {
 		svc := &fakeService{}
 		m, q := newTestModel(t, Config{
 			Service:    svc,
-			PageLayout: true,
 			ScanSource: ScanSourceInfo{Reason: "当前构建没有接入游戏扫描源"},
 		})
 		tt := ui.NewTester(m.View, 1020, 700)
@@ -88,7 +87,7 @@ func TestScanStartShortcutRequiresAPreparableScan(t *testing.T) {
 			}},
 			loads: map[string]*record.Recovery{"rec": responsiveResultRecord(t)},
 		}
-		m, q := newTestModel(t, Config{Service: svc, PageLayout: true})
+		m, q := newTestModel(t, Config{Service: svc})
 		m.SetContentSize(1024, 700)
 		tt := ui.NewTester(m.View, 1024, 700)
 		settle(t, m, q, tt)
@@ -391,7 +390,7 @@ func TestEditSaveShortcut(t *testing.T) {
 // takes the key before the shell and closes the menu.
 func TestEscapeClosesTheRowMenu(t *testing.T) {
 	svc := &fakeService{history: historyTableRecords(3)}
-	m, q := newTestModel(t, Config{Service: svc, PageLayout: true, ExportSaver: &fakeExportSaver{}})
+	m, q := newTestModel(t, Config{Service: svc, DirectExportSaver: &fakeDirectExportSaver{}})
 	m.SetContentSize(1020, 700)
 	tt := ui.NewTester(m.View, 1020, 700)
 	settle(t, m, q, tt)
@@ -469,7 +468,7 @@ func TestEscapeReturnsTheFocusToTheTable(t *testing.T) {
 	t.Run("history", func(t *testing.T) {
 		svc := &fakeService{history: historyTableRecords(3)}
 		m, q := newTestModel(t, Config{
-			Service: svc, PageLayout: true, ExportSaver: &fakeExportSaver{},
+			Service: svc, DirectExportSaver: &fakeDirectExportSaver{},
 			OpenDataDirectory: func() error { return nil },
 		})
 		m.SetContentSize(1020, 700)
@@ -508,7 +507,7 @@ func TestEscapeReturnsTheFocusToTheTable(t *testing.T) {
 // the shell has to keep its hands off while one holds the keyboard.
 func TestEscapeStaysInATextField(t *testing.T) {
 	svc := &fakeService{history: historyTableRecords(3)}
-	m, q := newTestModel(t, Config{Service: svc, PageLayout: true, ExportSaver: &fakeExportSaver{}})
+	m, q := newTestModel(t, Config{Service: svc, DirectExportSaver: &fakeDirectExportSaver{}})
 	m.SetContentSize(1020, 700)
 	tt := ui.NewTester(m.View, 1020, 700)
 	settle(t, m, q, tt)
@@ -666,7 +665,7 @@ func TestEditNextShortcutPromptsForUnsavedEdit(t *testing.T) {
 // keys, results name their list keys, history names Return, and settings
 // names none.
 func TestStatusBarNamesOnlyUsableShortcuts(t *testing.T) {
-	m, q := newTestModel(t, Config{Service: &fakeService{}, PageLayout: true})
+	m, q := newTestModel(t, Config{Service: &fakeService{}})
 	tt := ui.NewTester(m.View, 1020, 700)
 	settle(t, m, q, tt)
 	if got := m.statusShortcutText(); got != "⌘R 开始扫描" {
@@ -692,7 +691,7 @@ func TestStatusBarNamesOnlyUsableShortcuts(t *testing.T) {
 	}
 
 	svc := &fakeService{history: historyTableRecords(3)}
-	m3, q3 := newTestModel(t, Config{Service: svc, PageLayout: true, ExportSaver: &fakeExportSaver{}})
+	m3, q3 := newTestModel(t, Config{Service: svc, DirectExportSaver: &fakeDirectExportSaver{}})
 	m3.SetContentSize(1020, 700)
 	tt3 := ui.NewTester(m3.View, 1020, 700)
 	settle(t, m3, q3, tt3)

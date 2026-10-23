@@ -15,7 +15,7 @@ import (
 // persisted by definition. A failed export snapshot does not hide the
 // state: the card then explains that completion cannot be confirmed.
 func (m *Model) reviewSettled() bool {
-	if !m.cfg.PageLayout || m.rec == nil || m.recData == nil || m.recErr != "" || m.loading {
+	if m.rec == nil || m.recData == nil || m.recErr != "" || m.loading {
 		return false
 	}
 	if m.pendingCount() != 0 || m.reviewSaving || m.editingDirty() {
@@ -107,12 +107,6 @@ func (m *Model) completionCard(c *ui.Context, t *ui.Theme) {
 					})
 					if blocked != "" {
 						ui.Text(c, blocked).TextColor(t.TextMuted).FontSize(t.FontSize * 0.9)
-					}
-					if m.exportError != "" {
-						ui.Text(c, m.exportError).TextColor(t.Danger)
-					}
-					if m.exportNotice != "" {
-						ui.Text(c, m.exportNotice)
 					}
 				})
 		})
