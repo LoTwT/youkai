@@ -30,7 +30,9 @@ func (t cleanupTarget) all() bool {
 // savePrompt is the post-save three-way choice: keep the screenshots,
 // delete them, or postpone. It is opened once per ended session after a
 // successful final save; "稍后处理" (and every other choice) marks the
-// session so it never reopens on its own.
+// session so it never reopens on its own. The state and actions are kept
+// for the confirmed flow, but the page shell does not render the choice
+// yet; screenshot cleanup is available from settings in the meantime.
 type savePrompt struct {
 	recordID string
 	preview  app.CleanupPreview
