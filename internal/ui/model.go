@@ -295,6 +295,13 @@ type Model struct {
 	// row cannot sit at the bottom. Its slot fills the page whatever the
 	// table's capped height, giving each frame the room to measure.
 	resultsTableSlot ui.Ref
+	// The narrow results composite tracks its list's vertical offset. A
+	// precise scroll may stop between 32-DIP rows; resultsScrollSeen and
+	// the two times debounce the rest snap that aligns it to a row.
+	resultsScroll        ui.ScrollState
+	resultsScrollSeen    float32
+	resultsScrollMovedAt time.Time
+	resultsScrollSnapAt  time.Time
 	// historyRowProbe measures the native history table's tallest cell, so
 	// its whole-row cap uses the platform's real line metrics.
 	historyRowProbe ui.Ref
@@ -396,8 +403,18 @@ func (m *Model) SetContentSize(width, height int) {
 	if m.contentWidth == width && m.contentHeight == height {
 		return
 	}
+	sideBySide := resultsSideBySide(m.contentWidth)
 	m.contentWidth, m.contentHeight = width, height
 	m.split = resultsSplitTableWidth(width)
+	if sideBySide != resultsSideBySide(width) && m.rec != nil {
+		// Crossing the split breakpoint swaps the tracked narrow composite
+		// for the native table and back. Re-enter on the first visible row
+		// so a stale tracked offset cannot override the table's place.
+		if first, last := m.list.Visible(); last >= first && first >= 0 {
+			m.resetResultsScroll(first)
+			m.list.ScrollTo(first, ui.Start)
+		}
+	}
 	if m.upd != nil {
 		m.upd.Update(func() {})
 	}
