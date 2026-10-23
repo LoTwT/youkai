@@ -7,8 +7,8 @@ import mgui "github.com/egoist/mygo/ui"
 // should read these semantic roles instead of hard-coding hex values.
 //
 // The names here intentionally match docs/design/uiux-2026-10-21/
-// dark-tokens.md. When a token changes, update that document and the
-// design mockups together.
+// dark-tokens.md. That document is a historical design baseline; the Go
+// tokens and their tests are the source of truth for current values.
 type Tokens struct {
 	// Surfaces. Window/content/card/header/control are distinct roles;
 	// sunken is for wells and bars, overlay for floating surfaces.
