@@ -80,7 +80,15 @@ func TestSavePromptOffersKeepDeleteLater(t *testing.T) {
 		m.savePrompt.preview.EvidenceFiles != 2 || m.savePrompt.preview.PendingReview != 1 {
 		t.Fatalf("the save-completion prompt does not hold the measured preview: %+v", m.savePrompt)
 	}
-	m.SavePromptKeep()
+	for _, label := range []string{"保留截图", "删除截图", "稍后处理"} {
+		if !tt.HasText(label) {
+			t.Fatalf("the save prompt does not offer %q: %q", label, tt.Texts())
+		}
+	}
+	if err := tt.Click("保留截图"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
 	if m.savePrompt != nil {
 		t.Fatal("保留截图 did not dismiss the prompt")
 	}
@@ -97,7 +105,14 @@ func TestSavePromptOffersKeepDeleteLater(t *testing.T) {
 	if m.savePrompt == nil || m.savePrompt.recordID != "live2" {
 		t.Fatalf("the second save prompt does not open: %+v", m.savePrompt)
 	}
-	m.SavePromptDelete()
+	for _, label := range []string{"保留截图", "删除截图", "稍后处理"} {
+		if !tt.HasText(label) {
+			t.Fatalf("the second save prompt does not offer %q: %q", label, tt.Texts())
+		}
+	}
+	if err := tt.Click("删除截图"); err != nil {
+		t.Fatal(err)
+	}
 	settle(t, m, q, tt)
 	screenshots, _, _, _ := svc.cleanupCalls()
 	if len(screenshots) != 1 || screenshots[0] != "live2" {

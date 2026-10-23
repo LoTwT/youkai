@@ -30,9 +30,7 @@ func (t cleanupTarget) all() bool {
 // savePrompt is the post-save three-way choice: keep the screenshots,
 // delete them, or postpone. It is opened once per ended session after a
 // successful final save; "稍后处理" (and every other choice) marks the
-// session so it never reopens on its own. The state and actions are kept
-// for the confirmed flow, but the page shell does not render the choice
-// yet; screenshot cleanup is available from settings in the meantime.
+// session so it never reopens on its own.
 type savePrompt struct {
 	recordID string
 	preview  app.CleanupPreview
@@ -165,6 +163,50 @@ func (m *Model) SavePromptDelete() {
 			m.loadHistory()
 			m.refreshStorage()
 		})
+	})
+}
+
+// savePromptArea is the post-save three-way choice. It appears at the top
+// of the live session's results page until the user answers it. The three
+// choices keep the screenshots, delete only this record's crops, or defer;
+// the record, revisions and review state are never removed here.
+func (m *Model) savePromptArea(c *ui.Context, t *ui.Theme) {
+	p := m.savePrompt
+	if p == nil || m.rec == nil || m.rec.ID != p.recordID || m.activeSlot != resultSlotSession {
+		return
+	}
+	_, tok := themeWithTokens(t, c.Preferences())
+	blocked := m.cleanupBlockedReason()
+	ui.Column(c).Background(tok.SurfaceCard).Border(1, tok.TableBorder).
+		Radius(t.Space(1.5)).Padding(t.Space(2), t.Space(2.5)).
+		Gap(t.Space(1)).Children(func() {
+		ui.Textf(c, "本次扫描已保存：截图 %d 张 · %s · 待校对 %d 项。",
+			p.preview.EvidenceFiles, formatBytes(p.preview.EvidenceBytes), p.preview.PendingReview).
+			TextColor(tok.TextPrimary)
+		if p.preview.Unreadable > 0 {
+			ui.Textf(c, "其中 %d 条记录无法读取，待校对数量不完整。", p.preview.Unreadable).
+				TextColor(tok.TextMuted).FontSize(t.FontSize * 0.9)
+		}
+		ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
+			if ui.Button(c, "保留截图").Disabled(p.running).Clicked() {
+				m.SavePromptKeep()
+			}
+			if ui.Button(c, "删除截图").Disabled(p.running || blocked != "").Clicked() {
+				m.SavePromptDelete()
+			}
+			if ui.Button(c, "稍后处理").Disabled(p.running).Clicked() {
+				m.SavePromptLater()
+			}
+			if p.running {
+				ui.Text(c, "正在删除截图……").TextColor(tok.TextMuted)
+			}
+		})
+		if blocked != "" && !p.running {
+			ui.Text(c, blocked).TextColor(tok.TextMuted).FontSize(t.FontSize * 0.9)
+		}
+		if p.err != "" {
+			ui.Text(c, p.err).TextColor(t.Danger)
+		}
 	})
 }
 
