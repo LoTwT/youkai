@@ -29,11 +29,11 @@ const (
 // of that viewport, horizontally centered on the form.
 //
 // The top is the form line less the detail pane's 8-DIP padding. The bottom
-// is the status shortcut less the status bar's 8-DIP padding and the 1-DIP
-// divider above it; while a new session loads the shortcut is empty, so the
-// helper falls back to a conservative 64 DIP above the window bottom. The
-// helper stays local to editor tests because those anchors describe this
-// pane's editor layout.
+// is the status shortcut less a 48-DIP inset for the status bar, divider,
+// page padding, the detail pane's horizontal scrollbar and a safety margin.
+// While a new session loads the shortcut is empty, so the helper falls back
+// to 64 DIP above the window bottom. The helper stays local to editor tests
+// because those anchors describe this pane's editor layout.
 func detailPaneViewport(t *testing.T, tt *ui.Tester, windowHeight float32) (top, bottom, x, y float32) {
 	t.Helper()
 	form, ok := tt.Find("字段（编辑中）")
@@ -41,13 +41,13 @@ func detailPaneViewport(t *testing.T, tt *ui.Tester, windowHeight float32) (top,
 		t.Fatalf("the editor form is missing: %q", tt.Texts())
 	}
 	top = form.Y - 8
-	// The status shortcut is absent while a new session is loading. Fall
-	// back to a bottom 64 DIP inside the window: the status bar, divider,
-	// page padding and a safety margin, so the pane bottom used here is
-	// never below the real one.
+	// The shortcut measured at the bottom of the shell leaves the status
+	// bar, divider, page padding and a possible horizontal scrollbar below
+	// the detail pane's visible content. The window fallback covers the same
+	// chrome while a new session loads and the shortcut is empty.
 	bottom = windowHeight - 64
 	if shortcut, ok := tt.Find("⌘↵ 保存并确认并下一项  ·  ⌘S 保存修改"); ok {
-		bottom = shortcut.Y - 9
+		bottom = shortcut.Y - 48
 	}
 	x = form.X + form.W/2
 	y = (top + bottom) / 2
