@@ -194,6 +194,10 @@ func (m *Model) settleHistoryRow(count int) {
 // behaviour is not exercised at these widths.
 func (m *Model) historyNativeTable(c *ui.Context, t *ui.Theme, tok *Tokens, entries []HistoryEntry) {
 	columns := historyColumnsFor(m.contentWidth)
+	probeRow, _ := m.historyList.Visible()
+	if probeRow < 0 {
+		probeRow = 0
+	}
 	table := ui.Table(c, &m.historyList, columns, len(entries), func(row, col int) {
 		if row < 0 || row >= len(entries) {
 			return
@@ -210,7 +214,7 @@ func (m *Model) historyNativeTable(c *ui.Context, t *ui.Theme, tok *Tokens, entr
 		case "待校对":
 			m.historyPendingCell(c, t, entry, chosen)
 		case "无法导出":
-			m.historyBlockedCell(c, t, tok, entry, chosen)
+			m.historyBlockedCell(c, t, tok, entry, chosen, row == probeRow)
 		case "覆盖":
 			m.historyCoverageCell(c, t, tok, entry, chosen)
 		case "大小":
@@ -239,10 +243,18 @@ func (m *Model) fitHistoryTableHeight(c *ui.Context, t *ui.Theme, table ui.Eleme
 	}
 	// The panel's own 1-DIP border sits outside the children's frame.
 	available := panel.H - 2 - footer.H
-	row := t.Space(8) + 2*t.Space(1.5)
+	// The time cell sets the row's content height; the split blocked cell
+	// can make it taller when the platform's lines need more room. Measure
+	// that cell when the frame has one, and keep the design height as the
+	// floor.
+	content := t.Space(8)
 	if m.contentWidth < historyWideMinWidth {
-		row = t.Space(9.5) + 2*t.Space(1.5)
+		content = t.Space(9.5)
 	}
+	if probe := m.historyRowProbe.Bounds(c); probe.H > content {
+		content = probe.H
+	}
+	row := content + 2*t.Space(1.5)
 	if height, ok := wholeRowTableHeight(available, row, t.Space(8)+1); ok {
 		table.Height(height)
 	}
@@ -436,7 +448,7 @@ func (m *Model) historyCompositeCell(c *ui.Context, t *ui.Theme, tok *Tokens, en
 		case "待校对":
 			m.historyPendingContent(c, t, entry, chosen)
 		case "无法导出":
-			m.historyBlockedContent(c, t, tok, entry, chosen)
+			m.historyBlockedContent(c, t, tok, entry, chosen, false)
 		case "覆盖":
 			m.historyCoverageContent(c, t, tok, entry, chosen)
 		}
@@ -522,24 +534,33 @@ func (m *Model) historyPendingContent(c *ui.Context, t *ui.Theme, entry HistoryE
 	}
 }
 
-func (m *Model) historyBlockedCell(c *ui.Context, t *ui.Theme, tok *Tokens, entry HistoryEntry, chosen bool) {
-	m.historyBlockedContent(c, t, tok, entry, chosen)
+func (m *Model) historyBlockedCell(c *ui.Context, t *ui.Theme, tok *Tokens, entry HistoryEntry, chosen, probe bool) {
+	m.historyBlockedContent(c, t, tok, entry, chosen, probe)
 }
 
 // historyBlockedContent is "无法导出": the total and the failed,
 // unprocessed and other split, right aligned. It stays one column at every
-// width.
-func (m *Model) historyBlockedContent(c *ui.Context, t *ui.Theme, tok *Tokens, entry HistoryEntry, chosen bool) {
+// width. probe binds the tallest cell so the native table can measure the
+// actual row height, which follows the platform's line metrics.
+func (m *Model) historyBlockedContent(c *ui.Context, t *ui.Theme, tok *Tokens, entry HistoryEntry, chosen, probe bool) {
 	subColor := colorWhenChosen(chosen, tok.TextMuted, t.AccentText)
 	if entry.Unreadable {
-		ui.Column(c).AlignItems(ui.End).Gap(t.Space(0.25)).Children(func() {
+		column := ui.Column(c).AlignItems(ui.End).Gap(t.Space(0.25))
+		if probe {
+			column.Ref(&m.historyRowProbe)
+		}
+		column.Children(func() {
 			ui.Text(c, historyEmptyCell).SingleLine()
 			ui.Text(c, "记录不可读").SingleLine().FontSize(t.FontSize * 0.8).TextColor(subColor)
 		})
 		return
 	}
 	total := entry.FailedCount + entry.UnprocessedCount + entry.OtherCount
-	ui.Column(c).AlignItems(ui.End).Gap(t.Space(0.25)).Children(func() {
+	column := ui.Column(c).AlignItems(ui.End).Gap(t.Space(0.25))
+	if probe {
+		column.Ref(&m.historyRowProbe)
+	}
+	column.Children(func() {
 		ui.Text(c, formatCount(total)).SingleLine()
 		ui.Textf(c, "失败 %s · 未处理 %s · 其他 %s",
 			formatCount(entry.FailedCount), formatCount(entry.UnprocessedCount), formatCount(entry.OtherCount)).

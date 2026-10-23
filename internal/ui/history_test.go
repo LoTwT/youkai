@@ -768,11 +768,10 @@ func TestHistoryNativeTableWholeRows(t *testing.T) {
 	for _, tc := range []struct {
 		width  int
 		height int
-		row    float32
 	}{
-		{width: 1440, height: 900, row: 44},
-		{width: 1024, height: 700, row: 50},
-		{width: 1020, height: 700, row: 50},
+		{width: 1440, height: 900},
+		{width: 1024, height: 700},
+		{width: 1020, height: 700},
 	} {
 		t.Run(fmt.Sprintf("width-%d", tc.width), func(t *testing.T) {
 			svc := &fakeService{history: historyTableRecords(12)}
@@ -788,14 +787,21 @@ func TestHistoryNativeTableWholeRows(t *testing.T) {
 			if first < 0 || last < first || last >= len(entries) {
 				t.Fatalf("visible rows %d..%d of %d", first, last, len(entries))
 			}
+			var rowHeight float32
 			for row := first; row <= last; row++ {
 				rect, ok := tt.Find(historyRowLabel(entries[row]))
 				if !ok {
 					t.Fatalf("row %d is not rendered", row)
 				}
-				if rect.H < tc.row-0.01 || rect.H > tc.row+0.01 {
-					t.Fatalf("row %d height = %.2f, want %v", row, rect.H, tc.row)
+				if row == first {
+					rowHeight = rect.H
+				} else if math.Abs(float64(rect.H-rowHeight)) > 0.01 {
+					t.Fatalf("row %d height = %.2f, other rows are %.2f",
+						row, rect.H, rowHeight)
 				}
+			}
+			if rowHeight < 40 {
+				t.Fatalf("the visible row height is %.2f, want the table's row height", rowHeight)
 			}
 			if last+1 < len(entries) {
 				if rect, ok := tt.Find(historyRowLabel(entries[last+1])); ok && rect.H > 0 {

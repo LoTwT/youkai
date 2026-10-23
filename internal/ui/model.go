@@ -295,6 +295,9 @@ type Model struct {
 	// row cannot sit at the bottom. Its slot fills the page whatever the
 	// table's capped height, giving each frame the room to measure.
 	resultsTableSlot ui.Ref
+	// historyRowProbe measures the native history table's tallest cell, so
+	// its whole-row cap uses the platform's real line metrics.
+	historyRowProbe ui.Ref
 	// resultsDetail opens a narrow results page from its list to the
 	// chosen item's detail; it has no effect in the side-by-side split.
 	resultsDetail bool
