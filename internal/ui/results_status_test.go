@@ -192,6 +192,18 @@ func TestResultStatusBadgesAt1440And860(t *testing.T) {
 					t.Fatalf("the %s badge does not pair its shape and label: %+v / %+v",
 						badge.label, glyph, label)
 				}
+				// Assistive technology sees one combined status instead of
+				// stopping on the shape and the label separately.
+				status, ok := tt.Find(resultStatusAccessibilityLabel(badge.label))
+				if !ok {
+					t.Fatalf("the %s badge has no accessibility label: %q",
+						badge.label, tt.Texts())
+				}
+				if status.X > glyph.X || status.Y > glyph.Y ||
+					status.X+status.W < label.X+label.W || status.Y+status.H < label.Y+label.H {
+					t.Fatalf("the %s accessibility label does not cover the badge: %+v in %+v / %+v",
+						badge.label, status, glyph, label)
+				}
 			}
 
 			// The badges must not grow the table's 32-DIP rows.
