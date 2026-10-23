@@ -376,16 +376,22 @@ func (m *Model) resultsFilterBar(c *ui.Context, t *ui.Theme) {
 				m.setResultFilter(filter)
 			}
 		}
-		search := m.noteTextInputFocus(ui.SearchField(c, &m.search).Width(t.Space(48)).
+		// The search field takes the room the fixed segments and pickers
+		// leave, up to the 192-DIP design width. At 860 the intrinsic
+		// picker widths otherwise push the slot picker past the window's
+		// right edge; shrinking the flexible field keeps every control
+		// whole without dropping one or clipping its border.
+		search := m.noteTextInputFocus(ui.SearchField(c, &m.search).
+			Grow(1).Shrink(1).MinWidth(t.Space(28)).MaxWidth(t.Space(48)).
 			Placeholder("搜索序号、套装、主词条"))
 		if search.Changed() {
 			changed = true
 		}
-		if m.resultFilterSelect(c, t, &m.setFilter, "全部套装",
+		if m.resultFilterSelect(c, t, &m.setFilter, "全部套装", "套装筛选",
 			setFilterOptions(m.rec.Rows, m.setFilter), t.Space(34)) {
 			changed = true
 		}
-		if m.resultFilterSelect(c, t, &m.slotFilter, "全部槽位",
+		if m.resultFilterSelect(c, t, &m.slotFilter, "全部槽位", "槽位筛选",
 			slotFilterOptions(m.slotFilter), t.Space(26)) {
 			changed = true
 		}
@@ -397,10 +403,15 @@ func (m *Model) resultsFilterBar(c *ui.Context, t *ui.Theme) {
 
 // resultFilterSelect is a set/slot picker whose stored value is the id
 // while the trigger and popup show its human label.
-func (m *Model) resultFilterSelect(c *ui.Context, t *ui.Theme, value *string, allLabel string, options []resultFilterOption, width float32) bool {
+func (m *Model) resultFilterSelect(c *ui.Context, t *ui.Theme, value *string, allLabel, name string, options []resultFilterOption, width float32) bool {
 	selected := ui.SelectBase(c, value)
-	selected.Trigger.Width(width).Padding(t.Space(1.5), t.Space(2)).
-		Border(1, t.Border).Radius(t.Radius).Background(t.Surface).Children(func() {
+	// The trigger carries the picker's name and current value as its
+	// accessible label; the same label makes the whole control, not just
+	// its text, findable when a layout test checks the window's right edge.
+	selected.Trigger.Width(width).Shrink(1).MinWidth(t.Space(22)).
+		Padding(t.Space(1.5), t.Space(2)).
+		Border(1, t.Border).Radius(t.Radius).Background(t.Surface).
+		Label(name + "：" + resultFilterLabel(*value, allLabel, options)).Children(func() {
 		ui.Text(c, resultFilterLabel(*value, allLabel, options)).SingleLine()
 	})
 	selected.Popup(func(panel ui.Element) {

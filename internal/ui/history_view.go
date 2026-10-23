@@ -194,6 +194,10 @@ func (m *Model) settleHistoryRow(count int) {
 // behaviour is not exercised at these widths.
 func (m *Model) historyNativeTable(c *ui.Context, t *ui.Theme, tok *Tokens, entries []HistoryEntry) {
 	columns := historyColumnsFor(m.contentWidth)
+	probeRow, _ := m.historyList.Visible()
+	if probeRow < 0 {
+		probeRow = 0
+	}
 	table := ui.Table(c, &m.historyList, columns, len(entries), func(row, col int) {
 		if row < 0 || row >= len(entries) {
 			return
@@ -210,7 +214,7 @@ func (m *Model) historyNativeTable(c *ui.Context, t *ui.Theme, tok *Tokens, entr
 		case "待校对":
 			m.historyPendingCell(c, t, entry, chosen)
 		case "无法导出":
-			m.historyBlockedCell(c, t, tok, entry, chosen)
+			m.historyBlockedCell(c, t, tok, entry, chosen, row == probeRow)
 		case "覆盖":
 			m.historyCoverageCell(c, t, tok, entry, chosen)
 		case "大小":
@@ -221,6 +225,38 @@ func (m *Model) historyNativeTable(c *ui.Context, t *ui.Theme, tok *Tokens, entr
 	}).Fill().MinHeight(0)
 	if table.Submitted() {
 		m.openHistoryRow(m.historyRow)
+	}
+	m.fitHistoryTableHeight(c, t, table)
+}
+
+// fitHistoryTableHeight gives the native history table as many whole rows
+// as its panel leaves above the footer. Its first cell carries the row's
+// content height: 32 DIP at 1440 and 38 below it, plus MyGo's 6-DIP cell
+// padding above and below. Without the cap the panel's remainder shows a
+// clipped last row at 1440, 1024 and 1020.
+func (m *Model) fitHistoryTableHeight(c *ui.Context, t *ui.Theme, table ui.Element) {
+	panel := m.historyPanel.Bounds(c)
+	footer := m.historyFooter.Bounds(c)
+	if panel.H <= 0 || footer.H <= 0 {
+		c.Invalidate()
+		return
+	}
+	// The panel's own 1-DIP border sits outside the children's frame.
+	available := panel.H - 2 - footer.H
+	// The time cell sets the row's content height; the split blocked cell
+	// can make it taller when the platform's lines need more room. Measure
+	// that cell when the frame has one, and keep the design height as the
+	// floor.
+	content := t.Space(8)
+	if m.contentWidth < historyWideMinWidth {
+		content = t.Space(9.5)
+	}
+	if probe := m.historyRowProbe.Bounds(c); probe.H > content {
+		content = probe.H
+	}
+	row := content + 2*t.Space(1.5)
+	if height, ok := wholeRowTableHeight(available, row, t.Space(8)+1); ok {
+		table.Height(height)
 	}
 }
 
@@ -297,12 +333,29 @@ func (m *Model) snapHistoryScroll(c *ui.Context, rows int) {
 	if rows == 0 {
 		return
 	}
+	wait, snap := m.historyScrollSnapStep(c.Now())
+	switch {
+	case snap:
+		m.applyHistoryScrollSnap(historyRowOffset(m.historyScroll.Y))
+	case wait > 0:
+		// MyGo keeps only the timer the last frame armed: a frame that
+		// does not ask again stops the pending one. Ask again on every
+		// frame while the rest debounce waits, so a repaint between the
+		// scroll and the deadline cannot swallow the snap.
+		c.After(wait)
+	}
+}
+
+// historyScrollSnapStep advances the rest debounce at now and reports how
+// long until the next frame it needs; snap reports that the offset has been
+// still for the whole delay and belongs on a row boundary. It keeps the
+// full travel while the offset moves and never writes the offset mid-input.
+func (m *Model) historyScrollSnapStep(now time.Time) (wait time.Duration, snap bool) {
 	y := m.historyScroll.Y
 	if y < 0 {
 		m.historyScroll.Y = 0
 		y = 0
 	}
-	now := c.Now()
 	if y != m.historyScrollSeen {
 		// The offset is still moving: keep the full travel and snap only
 		// after it has been still for the whole debounce.
@@ -311,19 +364,20 @@ func (m *Model) snapHistoryScroll(c *ui.Context, rows int) {
 		if m.historyScrollSnapAt.IsZero() || !now.Before(m.historyScrollSnapAt) {
 			m.historyScrollSnapAt = now.Add(historySnapDelay)
 		}
-		c.After(historySnapDelay)
-		return
+		return historySnapDelay, false
 	}
-	if m.historyScrollSnapAt.IsZero() || now.Before(m.historyScrollSnapAt) {
-		return
+	if m.historyScrollSnapAt.IsZero() {
+		return 0, false
+	}
+	if now.Before(m.historyScrollSnapAt) {
+		return m.historyScrollSnapAt.Sub(now), false
 	}
 	if wait := m.historyScrollMovedAt.Add(historySnapDelay).Sub(now); wait > 0 {
 		m.historyScrollSnapAt = now.Add(wait)
-		c.After(wait)
-		return
+		return wait, false
 	}
 	m.historyScrollSnapAt = time.Time{}
-	m.applyHistoryScrollSnap(historyRowOffset(y))
+	return 0, true
 }
 
 // historyRowOffset is the nearest 52-DIP boundary to y.
@@ -394,7 +448,7 @@ func (m *Model) historyCompositeCell(c *ui.Context, t *ui.Theme, tok *Tokens, en
 		case "待校对":
 			m.historyPendingContent(c, t, entry, chosen)
 		case "无法导出":
-			m.historyBlockedContent(c, t, tok, entry, chosen)
+			m.historyBlockedContent(c, t, tok, entry, chosen, false)
 		case "覆盖":
 			m.historyCoverageContent(c, t, tok, entry, chosen)
 		}
@@ -480,24 +534,33 @@ func (m *Model) historyPendingContent(c *ui.Context, t *ui.Theme, entry HistoryE
 	}
 }
 
-func (m *Model) historyBlockedCell(c *ui.Context, t *ui.Theme, tok *Tokens, entry HistoryEntry, chosen bool) {
-	m.historyBlockedContent(c, t, tok, entry, chosen)
+func (m *Model) historyBlockedCell(c *ui.Context, t *ui.Theme, tok *Tokens, entry HistoryEntry, chosen, probe bool) {
+	m.historyBlockedContent(c, t, tok, entry, chosen, probe)
 }
 
 // historyBlockedContent is "无法导出": the total and the failed,
 // unprocessed and other split, right aligned. It stays one column at every
-// width.
-func (m *Model) historyBlockedContent(c *ui.Context, t *ui.Theme, tok *Tokens, entry HistoryEntry, chosen bool) {
+// width. probe binds the tallest cell so the native table can measure the
+// actual row height, which follows the platform's line metrics.
+func (m *Model) historyBlockedContent(c *ui.Context, t *ui.Theme, tok *Tokens, entry HistoryEntry, chosen, probe bool) {
 	subColor := colorWhenChosen(chosen, tok.TextMuted, t.AccentText)
 	if entry.Unreadable {
-		ui.Column(c).AlignItems(ui.End).Gap(t.Space(0.25)).Children(func() {
+		column := ui.Column(c).AlignItems(ui.End).Gap(t.Space(0.25))
+		if probe {
+			column.Ref(&m.historyRowProbe)
+		}
+		column.Children(func() {
 			ui.Text(c, historyEmptyCell).SingleLine()
 			ui.Text(c, "记录不可读").SingleLine().FontSize(t.FontSize * 0.8).TextColor(subColor)
 		})
 		return
 	}
 	total := entry.FailedCount + entry.UnprocessedCount + entry.OtherCount
-	ui.Column(c).AlignItems(ui.End).Gap(t.Space(0.25)).Children(func() {
+	column := ui.Column(c).AlignItems(ui.End).Gap(t.Space(0.25))
+	if probe {
+		column.Ref(&m.historyRowProbe)
+	}
+	column.Children(func() {
 		ui.Text(c, formatCount(total)).SingleLine()
 		ui.Textf(c, "失败 %s · 未处理 %s · 其他 %s",
 			formatCount(entry.FailedCount), formatCount(entry.UnprocessedCount), formatCount(entry.OtherCount)).
