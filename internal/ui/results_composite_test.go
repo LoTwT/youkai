@@ -338,7 +338,7 @@ func TestResultsSnapStepRearmsAfterRepaint(t *testing.T) {
 	if !snap || wait != 0 {
 		t.Fatalf("at the deadline: wait %v snap %v, want the snap", wait, snap)
 	}
-	if got := resultRowOffset(m.resultsScroll.Y); got != resultsRowHeight {
+	if got := resultRowOffset(m.resultsScroll.Y, resultsRowHeight); got != resultsRowHeight {
 		t.Fatalf("the snapped offset is %v, want %d", got, resultsRowHeight)
 	}
 }

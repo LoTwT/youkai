@@ -19,8 +19,9 @@ const (
 	resultBadgeUnprocessed
 )
 
-// The badges' design metrics: a 22-DIP pill with an 8-DIP side padding,
-// a 5-DIP icon gap, an 11px/600 label and a 12px shape.
+// The badges' 100% design metrics: a 22-DIP pill with an 8-DIP side
+// padding, a 5-DIP icon gap, an 11px/600 label and a 12px shape.
+// resultsMetricsFor scales all of them with the desktop's text size.
 const (
 	resultBadgeHeight    = 22
 	resultBadgePaddingX  = 8
@@ -108,21 +109,24 @@ func resultBadgeStyleFor(kind resultBadgeKind, tok *Tokens, theme *ui.Theme, sel
 }
 
 // resultStatusBadge renders one row's status as the design's shape plus
-// label badge. tableRow keeps the table's 32-DIP row: the cell's 6-DIP
-// vertical padding leaves 20 DIPs, so the 22-DIP badge cancels the two
-// extra DIPs with a negative margin instead of making every row taller.
-// The narrow list's row click still opens the detail page: the badge
-// carries the same action as the table's other cells.
+// label badge. tableRow keeps the table's row height: the cell's 6-DIP
+// vertical padding leaves less than the badge at 100%, so the badge cancels
+// the extra DIPs with a negative margin instead of making every row taller.
+// The metrics follow the text scale, so the badge grows beside the table's
+// text and the row grows with it. The narrow list's row click still opens
+// the detail page: the badge carries the same action as the table's other
+// cells.
 func (m *Model) resultStatusBadge(c *ui.Context, t *ui.Theme, tok *Tokens, row *Row, tableRow, selected bool) {
+	metrics := resultsMetricsFor(m.textScale)
 	style := resultBadgeStyleFor(resultBadgeKindFor(row, m.recentlyConfirmedNow(row)), tok, t, selected)
-	badge := ui.Row(c).Height(resultBadgeHeight).Padding(0, resultBadgePaddingX).
-		Gap(resultBadgeGap).AlignItems(ui.Center).Shrink(0).
+	badge := ui.Row(c).Height(metrics.BadgeHeight).Padding(0, metrics.BadgePaddingX).
+		Gap(metrics.BadgeGap).AlignItems(ui.Center).Shrink(0).
 		Background(style.Background).Border(style.BorderWidth, style.Border).
-		Radius(resultBadgeHeight / 2)
+		Radius(metrics.BadgeHeight / 2)
 	if tableRow {
-		// The table's least row height less its cells' vertical padding.
-		inner := t.Space(8) - 2*t.Space(1.5)
-		if overflow := float32(resultBadgeHeight) - inner; overflow > 0 {
+		// The table's row height less its cells' vertical padding.
+		inner := metrics.RowHeight - 2*t.Space(1.5)
+		if overflow := metrics.BadgeHeight - inner; overflow > 0 {
 			badge.MarginY(-overflow / 2)
 		}
 	}
@@ -133,9 +137,9 @@ func (m *Model) resultStatusBadge(c *ui.Context, t *ui.Theme, tok *Tokens, row *
 		badge.OnClick(onClick)
 	}
 	badge.Children(func() {
-		glyph := ui.Text(c, style.Glyph).FontSize(resultBadgeGlyphSize).FontWeight(600).
+		glyph := ui.Text(c, style.Glyph).FontSize(metrics.BadgeGlyphSize).FontWeight(600).
 			TextColor(style.Text).SingleLine()
-		label := ui.Text(c, m.resultStatusText(row)).FontSize(resultBadgeFontSize).
+		label := ui.Text(c, m.resultStatusText(row)).FontSize(metrics.BadgeFontSize).
 			FontWeight(600).TextColor(style.Text).SingleLine()
 		if onClick != nil {
 			// The press lands on the text above the badge's own box, so
