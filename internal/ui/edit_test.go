@@ -15,6 +15,102 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
+// The editor tests use two window heights: the four-page 1024 split and the
+// legacy full-width review page. The reveal helper needs the same height to
+// keep its fallback pane bottom inside the real window.
+const (
+	reviewPageHeight   = 700
+	legacyReviewHeight = 950
+)
+
+// detailPaneViewport estimates the editor detail pane's scroll viewport from
+// two controls the pane and the shell already show: the form's first line and
+// the editor shortcut in the page status bar. The scroll point is the middle
+// of that viewport, horizontally centered on the form.
+//
+// The top is the form line less the detail pane's 8-DIP padding. The bottom
+// is the status shortcut less the status bar's 8-DIP padding and the 1-DIP
+// divider above it; while a new session loads the shortcut is empty, so the
+// helper falls back to a conservative 64 DIP above the window bottom. The
+// helper stays local to editor tests because those anchors describe this
+// pane's editor layout.
+func detailPaneViewport(t *testing.T, tt *ui.Tester, windowHeight float32) (top, bottom, x, y float32) {
+	t.Helper()
+	form, ok := tt.Find("字段（编辑中）")
+	if !ok {
+		t.Fatalf("the editor form is missing: %q", tt.Texts())
+	}
+	top = form.Y - 8
+	// The status shortcut is absent while a new session is loading. Fall
+	// back to a bottom 64 DIP inside the window: the status bar, divider,
+	// page padding and a safety margin, so the pane bottom used here is
+	// never below the real one.
+	bottom = windowHeight - 64
+	if shortcut, ok := tt.Find("⌘↵ 保存并确认并下一项  ·  ⌘S 保存修改"); ok {
+		bottom = shortcut.Y - 9
+	}
+	x = form.X + form.W/2
+	y = (top + bottom) / 2
+	if bottom <= top {
+		t.Fatalf("the detail pane viewport is empty: top %v bottom %v", top, bottom)
+	}
+	return top, bottom, x, y
+}
+
+// revealDetailControl scrolls the editor detail pane until label sits wholly
+// inside its ScrollBoth viewport. MyGo's Tester.Find reports the laid-out rect
+// even when an ancestor clips the control, and Click only rejects points
+// outside the window, not points clipped by an ancestor; clicking a control
+// below the pane would therefore land on nothing. The helper scrolls at the
+// pane midpoint by the control's distance from that midpoint and then returns
+// the revealed rect. It never bypasses Click's own window checks.
+func revealDetailControl(t *testing.T, tt *ui.Tester, windowHeight float32, label string) ui.Rect {
+	t.Helper()
+	top, bottom, x, y := detailPaneViewport(t, tt, windowHeight)
+	before, ok := tt.Find(label)
+	if !ok {
+		t.Fatalf("%q is missing: %q", label, tt.Texts())
+	}
+	target := before
+	for attempt := 0; attempt < 4; attempt++ {
+		center := target.Y + target.H/2
+		if target.H > 0 && target.Y >= top && target.Y+target.H <= bottom {
+			break
+		}
+		dy := center - y
+		if dy > -1 && dy < 1 {
+			break
+		}
+		tt.Scroll(x, y, 0, dy)
+		tt.Frame()
+		target, ok = tt.Find(label)
+		if !ok {
+			t.Fatalf("%q disappeared while revealing it: %q", label, tt.Texts())
+		}
+	}
+	if target.H <= 0 || target.Y < top || target.Y+target.H > bottom {
+		t.Fatalf("%q is still clipped: before %+v after %+v pane %.1f..%.1f",
+			label, before, target, top, bottom)
+	}
+	if before.H <= 0 && target.Y == before.Y {
+		t.Fatalf("%q was clipped but the pane did not scroll: before %+v after %+v",
+			label, before, target)
+	}
+	t.Logf("%s: y %.1f -> %.1f (pane %.1f..%.1f, scroll point %.1f,%.1f)",
+		label, before.Y, target.Y, top, bottom, x, y)
+	return target
+}
+
+// clickRevealedDetailControl reveals an editor action before clicking it.
+// Click still validates the final point against the window bounds.
+func clickRevealedDetailControl(t *testing.T, tt *ui.Tester, windowHeight float32, label string) {
+	t.Helper()
+	revealDetailControl(t, tt, windowHeight, label)
+	if err := tt.Click(label); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // completeReviewData is a complete, confirmable drive-disc data object.
 func completeReviewData(level int) zzz.DiscData {
 	setID, rarity, slot := 31100, zzz.RarityS, 4
@@ -159,7 +255,7 @@ func openReviewRecord(t *testing.T, items ...record.ItemRecord) (*Model, *queueU
 	}
 	installReviewSave(svc)
 	m, q := newTestModel(t, Config{Service: svc})
-	tt := ui.NewTester(m.View, 1400, 950)
+	tt := ui.NewTester(m.View, 1400, legacyReviewHeight)
 	settle(t, m, q, tt)
 	m.OpenHistory()
 	settle(t, m, q, tt)
@@ -182,8 +278,8 @@ func openReviewRecordPage(t *testing.T, items ...record.ItemRecord) (*Model, *qu
 	svc.loads = map[string]*record.Recovery{"r1": rec}
 	installReviewSave(svc)
 	m, q := newTestModel(t, Config{Service: svc, PageLayout: true})
-	m.SetContentSize(1024, 700)
-	tt := ui.NewTester(m.View, 1024, 700)
+	m.SetContentSize(1024, reviewPageHeight)
+	tt := ui.NewTester(m.View, 1024, reviewPageHeight)
 	settle(t, m, q, tt)
 	m.histChoice = slotHistoryLabel(t, m, "r1")
 	m.OpenHistory()
@@ -527,9 +623,7 @@ func TestEditReviewActionsStayOrAdvance(t *testing.T) {
 		settle(t, m, q, tt)
 		m.edit.draft.Level = "13"
 		tt.Frame()
-		if err := tt.Click("保存并确认并下一项"); err != nil {
-			t.Fatal(err)
-		}
+		clickRevealedDetailControl(t, tt, reviewPageHeight, "保存并确认并下一项")
 		settle(t, m, q, tt)
 		if m.edit != nil || m.selected != 1 || m.pendingCount() != 1 {
 			t.Fatalf("save-and-confirm-next did not move: edit %v selected %d pending %d",
@@ -639,16 +733,14 @@ func TestSaveAndConfirmNextFailureKeepsEditor(t *testing.T) {
 	settle(t, m, q, tt)
 	m.edit.draft.Level = "13"
 	tt.Frame()
-	if err := tt.Click("保存并确认并下一项"); err != nil {
-		t.Fatal(err)
-	}
+	clickRevealedDetailControl(t, tt, reviewPageHeight, "保存并确认并下一项")
 	settle(t, m, q, tt)
 	if m.edit == nil || m.edit.draft.Level != "13" || m.selected != 0 {
 		t.Fatalf("a failed save-and-confirm lost the editor or moved: edit %+v selected %d",
 			m.edit, m.selected)
 	}
-	if _, ok := tt.Find("重试保存并确认并下一项"); !ok {
-		t.Fatalf("the retry action is missing: %q", tt.Texts())
+	if retry := revealDetailControl(t, tt, reviewPageHeight, "重试保存并确认并下一项"); retry.H <= 0 {
+		t.Fatalf("the retry action is not visible: %+v", retry)
 	}
 	if !strings.Contains(m.reviewErr, "disk full") {
 		t.Fatalf("the failure is not reported: %q", m.reviewErr)
@@ -971,9 +1063,7 @@ func TestNewSessionKeepsDirtyEditor(t *testing.T) {
 		t.Fatalf("the deferred live view is not explained: %q", tt.Texts())
 	}
 
-	if err := tt.Click("放弃修改"); err != nil {
-		t.Fatal(err)
-	}
+	clickRevealedDetailControl(t, tt, legacyReviewHeight, "放弃修改")
 	settle(t, m, q, tt)
 	if m.edit != nil || m.navPrompt != nil {
 		t.Fatalf("discarding did not settle the editor: edit=%+v nav=%+v", m.edit, m.navPrompt)
