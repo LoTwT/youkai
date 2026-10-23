@@ -12,6 +12,34 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
+// clickRevealedSettingsControl scrolls the settings page until the control
+// is wholly inside the window before clicking it. MyGo reports laid-out
+// rects for clipped controls, and Click only checks the window bounds, so a
+// tall Windows settings page can otherwise swallow the click.
+func clickRevealedSettingsControl(t *testing.T, tt *ui.Tester, height float32, label string) {
+	t.Helper()
+	for attempt := 0; attempt < 10; attempt++ {
+		rect, ok := tt.Find(label)
+		if !ok {
+			t.Fatalf("%q is missing: %q", label, tt.Texts())
+		}
+		if rect.H > 0 && rect.Y >= 0 && rect.Y+rect.H <= height {
+			if err := tt.Click(label); err != nil {
+				t.Fatal(err)
+			}
+			return
+		}
+		dy := float32(160)
+		if rect.Y < 0 {
+			dy = -160
+		}
+		tt.Scroll(600, height/2, 0, dy)
+		tt.Frame()
+	}
+	rect, _ := tt.Find(label)
+	t.Fatalf("%q stayed clipped: %+v", label, rect)
+}
+
 func cleanupPreview() app.CleanupPreview {
 	return app.CleanupPreview{
 		Records:       1,
@@ -213,9 +241,7 @@ func TestViewStorageBulkCleanupPreviewsAndIndependentEntries(t *testing.T) {
 		t.Fatal(err)
 	}
 	settle(t, m, q, tt)
-	if err := tt.Click("确认删除"); err != nil {
-		t.Fatal(err)
-	}
+	clickRevealedSettingsControl(t, tt, 700, "确认删除")
 	settle(t, m, q, tt)
 	if m.cleanup == nil || !strings.Contains(m.cleanup.err, "删除全部截图失败：截图被占用") {
 		t.Fatalf("the all-screenshots failure does not keep its retry: %+v %q", m.cleanup, tt.Texts())
@@ -239,9 +265,7 @@ func TestViewStorageBulkCleanupPreviewsAndIndependentEntries(t *testing.T) {
 	}
 
 	svc.deleteErr = errString("权限不足")
-	if err := tt.Click("确认删除"); err != nil {
-		t.Fatal(err)
-	}
+	clickRevealedSettingsControl(t, tt, 700, "确认删除")
 	settle(t, m, q, tt)
 	if !tt.HasText("删除全部记录失败：权限不足") {
 		t.Fatalf("the bulk failure does not show: %q", tt.Texts())
@@ -251,9 +275,7 @@ func TestViewStorageBulkCleanupPreviewsAndIndependentEntries(t *testing.T) {
 	}
 
 	svc.deleteErr = nil
-	if err := tt.Click("确认删除"); err != nil {
-		t.Fatal(err)
-	}
+	clickRevealedSettingsControl(t, tt, 700, "确认删除")
 	settle(t, m, q, tt)
 	if m.cleanup != nil {
 		t.Fatal("successful bulk retry did not close the prompt")
