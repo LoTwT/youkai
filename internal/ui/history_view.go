@@ -222,6 +222,30 @@ func (m *Model) historyNativeTable(c *ui.Context, t *ui.Theme, tok *Tokens, entr
 	if table.Submitted() {
 		m.openHistoryRow(m.historyRow)
 	}
+	m.fitHistoryTableHeight(c, t, table)
+}
+
+// fitHistoryTableHeight gives the native history table as many whole rows
+// as its panel leaves above the footer. Its first cell carries the row's
+// content height: 32 DIP at 1440 and 38 below it, plus MyGo's 6-DIP cell
+// padding above and below. Without the cap the panel's remainder shows a
+// clipped last row at 1440, 1024 and 1020.
+func (m *Model) fitHistoryTableHeight(c *ui.Context, t *ui.Theme, table ui.Element) {
+	panel := m.historyPanel.Bounds(c)
+	footer := m.historyFooter.Bounds(c)
+	if panel.H <= 0 || footer.H <= 0 {
+		c.Invalidate()
+		return
+	}
+	// The panel's own 1-DIP border sits outside the children's frame.
+	available := panel.H - 2 - footer.H
+	row := t.Space(8) + 2*t.Space(1.5)
+	if m.contentWidth < historyWideMinWidth {
+		row = t.Space(9.5) + 2*t.Space(1.5)
+	}
+	if height, ok := wholeRowTableHeight(available, row, t.Space(8)+1); ok {
+		table.Height(height)
+	}
 }
 
 // historyCompositeTable is the 860 table from W1's go report: a header and
@@ -297,12 +321,29 @@ func (m *Model) snapHistoryScroll(c *ui.Context, rows int) {
 	if rows == 0 {
 		return
 	}
+	wait, snap := m.historyScrollSnapStep(c.Now())
+	switch {
+	case snap:
+		m.applyHistoryScrollSnap(historyRowOffset(m.historyScroll.Y))
+	case wait > 0:
+		// MyGo keeps only the timer the last frame armed: a frame that
+		// does not ask again stops the pending one. Ask again on every
+		// frame while the rest debounce waits, so a repaint between the
+		// scroll and the deadline cannot swallow the snap.
+		c.After(wait)
+	}
+}
+
+// historyScrollSnapStep advances the rest debounce at now and reports how
+// long until the next frame it needs; snap reports that the offset has been
+// still for the whole delay and belongs on a row boundary. It keeps the
+// full travel while the offset moves and never writes the offset mid-input.
+func (m *Model) historyScrollSnapStep(now time.Time) (wait time.Duration, snap bool) {
 	y := m.historyScroll.Y
 	if y < 0 {
 		m.historyScroll.Y = 0
 		y = 0
 	}
-	now := c.Now()
 	if y != m.historyScrollSeen {
 		// The offset is still moving: keep the full travel and snap only
 		// after it has been still for the whole debounce.
@@ -311,19 +352,20 @@ func (m *Model) snapHistoryScroll(c *ui.Context, rows int) {
 		if m.historyScrollSnapAt.IsZero() || !now.Before(m.historyScrollSnapAt) {
 			m.historyScrollSnapAt = now.Add(historySnapDelay)
 		}
-		c.After(historySnapDelay)
-		return
+		return historySnapDelay, false
 	}
-	if m.historyScrollSnapAt.IsZero() || now.Before(m.historyScrollSnapAt) {
-		return
+	if m.historyScrollSnapAt.IsZero() {
+		return 0, false
+	}
+	if now.Before(m.historyScrollSnapAt) {
+		return m.historyScrollSnapAt.Sub(now), false
 	}
 	if wait := m.historyScrollMovedAt.Add(historySnapDelay).Sub(now); wait > 0 {
 		m.historyScrollSnapAt = now.Add(wait)
-		c.After(wait)
-		return
+		return wait, false
 	}
 	m.historyScrollSnapAt = time.Time{}
-	m.applyHistoryScrollSnap(historyRowOffset(y))
+	return 0, true
 }
 
 // historyRowOffset is the nearest 52-DIP boundary to y.

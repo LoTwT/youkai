@@ -298,35 +298,46 @@ func (m *Model) tablePane(c *ui.Context) {
 			cell.OnClick(func() { m.openResultDetailAt(full) })
 		}
 	}
-	table := ui.Table(c, &m.list, columns, len(visible), func(row, col int) {
-		r := &m.rec.Rows[visible[row]]
-		switch col {
-		case 0:
-			cellText(row, fmt.Sprintf("%d", r.Seq))
-		case 1:
-			cellText(row, r.SetColumnText())
-		case 2:
-			cellText(row, r.SlotLevelColumnText())
-		case 3:
-			if m.cfg.PageLayout {
-				text := r.MainStatText()
-				if text == "" {
-					text = "—"
+	buildTable := func() ui.Element {
+		return ui.Table(c, &m.list, columns, len(visible), func(row, col int) {
+			r := &m.rec.Rows[visible[row]]
+			switch col {
+			case 0:
+				cellText(row, fmt.Sprintf("%d", r.Seq))
+			case 1:
+				cellText(row, r.SetColumnText())
+			case 2:
+				cellText(row, r.SlotLevelColumnText())
+			case 3:
+				if m.cfg.PageLayout {
+					text := r.MainStatText()
+					if text == "" {
+						text = "—"
+					}
+					cellText(row, text)
+					return
 				}
-				cellText(row, text)
-				return
+				cellText(row, r.ManagementColumnText())
+			case 4:
+				if m.cfg.PageLayout {
+					m.resultStatusBadge(c, c.Theme(), tok, r, true, m.tableSelected == row)
+					return
+				}
+				cellText(row, r.EquippedColumnText())
+			case 5:
+				cellText(row, r.ResultColumnText())
 			}
-			cellText(row, r.ManagementColumnText())
-		case 4:
-			if m.cfg.PageLayout {
-				m.resultStatusBadge(c, c.Theme(), tok, r, true, m.tableSelected == row)
-				return
-			}
-			cellText(row, r.EquippedColumnText())
-		case 5:
-			cellText(row, r.ResultColumnText())
-		}
-	}).Fill().MinHeight(0)
+		}).Fill().MinHeight(0)
+	}
+	var table ui.Element
+	if m.cfg.PageLayout && m.narrowResults() {
+		ui.Column(c).Grow(1).MinHeight(0).Bind(&m.resultsTableSlot).Children(func() {
+			table = buildTable()
+			m.fitResultsTableHeight(c, c.Theme(), table)
+		})
+	} else {
+		table = buildTable()
+	}
 	if m.narrowResults() {
 		table.OnClick(func() { m.openResultDetail() })
 	}
@@ -344,6 +355,31 @@ func (m *Model) tablePane(c *ui.Context) {
 	if m.narrowResults() && table.Submitted() {
 		m.openResultDetail()
 	}
+}
+
+// fitResultsTableHeight gives the narrow results table its header and as
+// many whole 32-DIP rows as its filling slot leaves.
+func (m *Model) fitResultsTableHeight(c *ui.Context, t *ui.Theme, table ui.Element) {
+	bounds := m.resultsTableSlot.Bounds(c)
+	if bounds.H <= 0 {
+		// The slot has no committed box yet: measure one.
+		c.Invalidate()
+		return
+	}
+	if height, ok := wholeRowTableHeight(bounds.H, t.Space(8), t.Space(8)+1); ok {
+		table.Height(height)
+	}
+}
+
+// wholeRowTableHeight is a MyGo table's header and divider plus as many
+// whole rows as available leaves. A leftover strip shorter than a row stays
+// blank instead of showing a clipped last row.
+func wholeRowTableHeight(available, row, chrome float32) (float32, bool) {
+	if row <= 0 || chrome <= 0 || available <= chrome {
+		return 0, false
+	}
+	rows := int((available - chrome) / row)
+	return chrome + float32(rows)*row, true
 }
 
 // detailPane shows the chosen item: its outcome and quality, the failure

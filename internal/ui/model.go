@@ -291,6 +291,10 @@ type Model struct {
 	tableSelected    int
 	textInputFocused bool
 	split            float32
+	// The narrow results table takes a whole number of rows, so a partial
+	// row cannot sit at the bottom. Its slot fills the page whatever the
+	// table's capped height, giving each frame the room to measure.
+	resultsTableSlot ui.Ref
 	// resultsDetail opens a narrow results page from its list to the
 	// chosen item's detail; it has no effect in the side-by-side split.
 	resultsDetail bool

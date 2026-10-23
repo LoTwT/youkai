@@ -544,3 +544,77 @@ func TestResultShortcutsMoveSelection(t *testing.T) {
 		t.Fatalf("⌘J chose seq %d (detail %v), want seq 2 on the detail", m.selectedSeq(), m.resultsDetail)
 	}
 }
+
+// TestResultsFilterControlsStayInside860 checks the whole set and slot
+// selectors, not just their text: the trigger's frame must end inside the
+// page. The selectors are the widest controls and used to push the slot
+// picker past the window's right edge at 860.
+func TestResultsFilterControlsStayInside860(t *testing.T) {
+	m, _, tt := openResponsiveResults(t, manyPendingRecord(t, 200), 860, 560)
+	pageRight := float32(860 - 12)
+	for _, label := range []string{"套装筛选：全部套装", "槽位筛选：全部槽位"} {
+		rect, ok := tt.Find(label)
+		if !ok {
+			t.Fatalf("the %q trigger is missing: %q", label, tt.Texts())
+		}
+		if rect.W < 100 || rect.H < 24 {
+			t.Fatalf("the %q box %+v is the label, not the trigger", label, rect)
+		}
+		if rect.X+rect.W > pageRight+0.5 {
+			t.Fatalf("the %q trigger at %+v overflows the 860 page (right edge %.1f)",
+				label, rect, pageRight)
+		}
+	}
+
+	// The whole trigger stays the picker's hit target after the fit.
+	if err := tt.Click("槽位筛选：全部槽位"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if err := tt.Click("1 号位"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if m.slotFilter != "1" {
+		t.Fatalf("choosing 1 号位 stored slot filter %q", m.slotFilter)
+	}
+}
+
+// TestResultsNarrowTableWholeRows checks the initial narrow list: the table
+// gives its header and whole 32-DIP rows the room, leaving no clipped row at
+// the bottom at 1020 or 860.
+func TestResultsNarrowTableWholeRows(t *testing.T) {
+	for _, tc := range []struct {
+		width  int
+		height int
+	}{
+		{width: 1020, height: 700},
+		{width: 860, height: 560},
+	} {
+		t.Run(fmt.Sprintf("width-%d", tc.width), func(t *testing.T) {
+			m, _, tt := openResponsiveResults(t, manyPendingRecord(t, 40), tc.width, tc.height)
+			visible := m.visibleResultRows()
+			first, last := m.list.Visible()
+			if first < 0 || last < first || last >= len(visible) {
+				t.Fatalf("visible rows %d..%d of %d", first, last, len(visible))
+			}
+			for row := first; row <= last; row++ {
+				label := m.rec.Rows[visible[row]].Label()
+				rect, ok := tt.Find(label)
+				if !ok {
+					t.Fatalf("row %d is not rendered", row)
+				}
+				if rect.H < 31.99 || rect.H > 32.01 {
+					t.Fatalf("row %d height = %.2f, want one whole 32-DIP row", row, rect.H)
+				}
+			}
+			if last+1 < len(visible) {
+				label := m.rec.Rows[visible[last+1]].Label()
+				if rect, ok := tt.Find(label); ok && rect.H > 0 {
+					t.Fatalf("row %d below the viewport is clipped into view: %+v",
+						last+1, rect)
+				}
+			}
+		})
+	}
+}

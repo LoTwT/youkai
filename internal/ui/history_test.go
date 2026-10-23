@@ -762,6 +762,50 @@ func TestHistoryCompositeShowsWholeRowsAt860(t *testing.T) {
 	checkWholeRows("bottom")
 }
 
+// TestHistoryNativeTableWholeRows checks the native 1440/1024/1020 table:
+// its panel leaves whole rows, so the footer never follows a clipped row.
+func TestHistoryNativeTableWholeRows(t *testing.T) {
+	for _, tc := range []struct {
+		width  int
+		height int
+		row    float32
+	}{
+		{width: 1440, height: 900, row: 44},
+		{width: 1024, height: 700, row: 50},
+		{width: 1020, height: 700, row: 50},
+	} {
+		t.Run(fmt.Sprintf("width-%d", tc.width), func(t *testing.T) {
+			svc := &fakeService{history: historyTableRecords(12)}
+			m, q := newTestModel(t, Config{Service: svc, PageLayout: true, ExportSaver: &fakeExportSaver{}})
+			m.SetContentSize(tc.width, tc.height)
+			tt := ui.NewTester(m.View, tc.width, tc.height)
+			settle(t, m, q, tt)
+			if historyUsesComposite(m.contentWidth) {
+				t.Fatalf("%d must use the native history table", tc.width)
+			}
+			entries := m.visibleHistory()
+			first, last := m.historyList.Visible()
+			if first < 0 || last < first || last >= len(entries) {
+				t.Fatalf("visible rows %d..%d of %d", first, last, len(entries))
+			}
+			for row := first; row <= last; row++ {
+				rect, ok := tt.Find(historyRowLabel(entries[row]))
+				if !ok {
+					t.Fatalf("row %d is not rendered", row)
+				}
+				if rect.H < tc.row-0.01 || rect.H > tc.row+0.01 {
+					t.Fatalf("row %d height = %.2f, want %v", row, rect.H, tc.row)
+				}
+			}
+			if last+1 < len(entries) {
+				if rect, ok := tt.Find(historyRowLabel(entries[last+1])); ok && rect.H > 0 {
+					t.Fatalf("row %d below the viewport is clipped into view: %+v", last+1, rect)
+				}
+			}
+		})
+	}
+}
+
 // TestHistoryCompositeSnapsPreciseScrollToRowsAt860 checks a touchpad's
 // 26-DIP vertical move: the offset may not stop between two 52-DIP rows,
 // so the table shows whole rows instead of half of the first and last one.
@@ -862,6 +906,76 @@ func TestHistoryCompositeSnapsPreciseScrollToRowsAt860(t *testing.T) {
 	}
 	rest()
 	check("after the rest snap", 3*historyRowHeight860, 3)
+}
+
+// TestHistorySnapStepRearmsAfterRepaint checks the rest debounce asks for
+// the time left after a repaint between a precise scroll and the deadline.
+// MyGo keeps only the timer the last frame armed: a frame that does not ask
+// again stops the pending After, which left the native 860 table on a half
+// row after the wheel had stopped.
+func TestHistorySnapStepRearmsAfterRepaint(t *testing.T) {
+	m := &Model{}
+	m.historyScroll.Y = 26
+	now := time.Date(2026, 10, 23, 12, 0, 0, 0, time.Local)
+
+	wait, snap := m.historyScrollSnapStep(now)
+	if snap || wait != historySnapDelay {
+		t.Fatalf("the first move: wait %v snap %v, want %v and no snap",
+			wait, snap, historySnapDelay)
+	}
+	// The native window built another frame before the deadline. That frame
+	// must ask for the time left, or MyGo stops the only pending timer and
+	// the half row stays.
+	wait, snap = m.historyScrollSnapStep(now.Add(20 * time.Millisecond))
+	if snap {
+		t.Fatal("a repaint snapped the move mid-input")
+	}
+	if want := historySnapDelay - 20*time.Millisecond; wait != want {
+		t.Fatalf("the repaint asks for %v, want the remaining %v", wait, want)
+	}
+
+	wait, snap = m.historyScrollSnapStep(now.Add(historySnapDelay))
+	if !snap || wait != 0 {
+		t.Fatalf("at the deadline: wait %v snap %v, want the snap", wait, snap)
+	}
+	if got := historyRowOffset(m.historyScroll.Y); got != historyRowHeight860 {
+		t.Fatalf("the snapped offset is %v, want %d", got, historyRowHeight860)
+	}
+}
+
+// TestHistoryCompositeSnapSurvivesRepaintAt860 checks the same rest snap in
+// the rendered 860 table: a repaint before the deadline must not leave the
+// first and last rows cut in half.
+func TestHistoryCompositeSnapSurvivesRepaintAt860(t *testing.T) {
+	svc := &fakeService{history: historyTableRecords(12)}
+	m, q := newTestModel(t, Config{Service: svc, PageLayout: true, ExportSaver: &fakeExportSaver{}})
+	m.SetContentSize(860, 560)
+	tt := ui.NewTester(m.View, 860, 560)
+	settle(t, m, q, tt)
+
+	tt.Scroll(400, 300, 0, 26)
+	tt.Frame()
+	if got := m.historyScroll.Y; got != 26 {
+		t.Fatalf("the move was snapped mid-input: offset %v", got)
+	}
+
+	// A repaint before the 120-ms deadline must re-arm the wait, not drop it.
+	tt.Advance(20 * time.Millisecond)
+	tt.Frame()
+	if got := m.historyScroll.Y; got != 26 {
+		t.Fatalf("the repaint moved the offset before the deadline: %v", got)
+	}
+	tt.Advance(historySnapDelay + 40*time.Millisecond)
+	tt.Frame()
+
+	if got := m.historyScroll.Y; got != historyRowHeight860 {
+		t.Fatalf("after the repaint the rest snap left offset %v, want %d",
+			got, historyRowHeight860)
+	}
+	first, last := m.historyList.Visible()
+	if first != 1 || last-first+1 != 7 {
+		t.Fatalf("visible rows = %d..%d, want 1..7 whole rows", first, last)
+	}
 }
 
 // TestHistoryCompositeWheelKeepsFullTravelAt860 checks a mouse wheel's
