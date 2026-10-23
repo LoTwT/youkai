@@ -108,6 +108,13 @@ func resultBadgeStyleFor(kind resultBadgeKind, tok *Tokens, theme *ui.Theme, sel
 	return style
 }
 
+// resultStatusAccessibilityLabel names a badge for assistive technology as
+// one status. The glyph alone is ambiguous, and exposing the glyph and label
+// as separate text nodes makes VoiceOver stop twice for one badge.
+func resultStatusAccessibilityLabel(status string) string {
+	return "状态：" + status
+}
+
 // resultStatusBadge renders one row's status as the design's shape plus
 // label badge. tableRow keeps the table's row height: the cell's 6-DIP
 // vertical padding leaves less than the badge at 100%, so the badge cancels
@@ -119,10 +126,16 @@ func resultBadgeStyleFor(kind resultBadgeKind, tok *Tokens, theme *ui.Theme, sel
 func (m *Model) resultStatusBadge(c *ui.Context, t *ui.Theme, tok *Tokens, row *Row, tableRow, selected bool) {
 	metrics := resultsMetricsFor(m.textScale)
 	style := resultBadgeStyleFor(resultBadgeKindFor(row, m.recentlyConfirmedNow(row)), tok, t, selected)
+	status := m.resultStatusText(row)
 	badge := ui.Row(c).Height(metrics.BadgeHeight).Padding(0, metrics.BadgePaddingX).
 		Gap(metrics.BadgeGap).AlignItems(ui.Center).Shrink(0).
 		Background(style.Background).Border(style.BorderWidth, style.Border).
-		Radius(metrics.BadgeHeight / 2)
+		Radius(metrics.BadgeHeight / 2).
+		// Assistive technology reads the shape and label as one status
+		// instead of two separate text stops. The visible texts stay in
+		// the tree for layout and tests but are hidden from the
+		// accessibility tree, so the badge has one name.
+		Label(resultStatusAccessibilityLabel(status))
 	if tableRow {
 		// The table's row height less its cells' vertical padding.
 		inner := metrics.RowHeight - 2*t.Space(1.5)
@@ -138,9 +151,9 @@ func (m *Model) resultStatusBadge(c *ui.Context, t *ui.Theme, tok *Tokens, row *
 	}
 	badge.Children(func() {
 		glyph := ui.Text(c, style.Glyph).FontSize(metrics.BadgeGlyphSize).FontWeight(600).
-			TextColor(style.Text).SingleLine()
-		label := ui.Text(c, m.resultStatusText(row)).FontSize(metrics.BadgeFontSize).
-			FontWeight(600).TextColor(style.Text).SingleLine()
+			TextColor(style.Text).SingleLine().Role(ui.RoleNone)
+		label := ui.Text(c, status).FontSize(metrics.BadgeFontSize).
+			FontWeight(600).TextColor(style.Text).SingleLine().Role(ui.RoleNone)
 		if onClick != nil {
 			// The press lands on the text above the badge's own box, so
 			// both carry the narrow list's row action.
