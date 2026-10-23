@@ -991,9 +991,7 @@ func TestSaveKeepsExplicitUnknownsPending(t *testing.T) {
 	if !m.edit.canSave() || m.edit.canConfirm() {
 		t.Fatalf("explicit unknowns: canSave=%v canConfirm=%v", m.edit.canSave(), m.edit.canConfirm())
 	}
-	if err := tt.Click("保存"); err != nil {
-		t.Fatal(err)
-	}
+	clickRevealedDetailControl(t, tt, reviewPageHeight, "保存")
 	settle(t, m, q, tt)
 
 	if svc.saveCount() != 1 || svc.saves[0].edit.Confirmed {

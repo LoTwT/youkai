@@ -217,8 +217,8 @@ func TestViewStorageBulkCleanupPreviewsAndIndependentEntries(t *testing.T) {
 		t.Fatal(err)
 	}
 	settle(t, m, q, tt)
-	if !tt.HasText("删除全部截图失败：截图被占用") || m.cleanup == nil {
-		t.Fatalf("the all-screenshots failure does not keep its retry: %q", tt.Texts())
+	if m.cleanup == nil || !strings.Contains(m.cleanup.err, "删除全部截图失败：截图被占用") {
+		t.Fatalf("the all-screenshots failure does not keep its retry: %+v %q", m.cleanup, tt.Texts())
 	}
 	if _, _, records, allRecords := svc.cleanupCalls(); len(records) != 0 || allRecords != 0 {
 		t.Fatal("a failed screenshot cleanup deleted records")
