@@ -47,9 +47,8 @@ func (m *Model) displayPage() Page {
 	}
 }
 
-// viewPages is the sidebar shell used by production builds. The legacy
-// single-column view remains available for the existing interaction tests
-// while the pages are migrated incrementally.
+// viewPages is the sidebar shell: the navigation rail, the current page's
+// body and actions, and the shared status bar.
 func (m *Model) viewPages(c *ui.Context) {
 	tok := ApplyTheme(c)
 	t := c.Theme()

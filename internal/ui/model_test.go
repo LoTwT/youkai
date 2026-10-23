@@ -94,6 +94,7 @@ func TestApplySwitchesSessionAndReloadsSavedGrowth(t *testing.T) {
 	if len(svc.loadLog) != 1 || svc.loadLog[0] != "s1" {
 		t.Fatalf("saved growth did not reload the record: %v", svc.loadLog)
 	}
+	m.setResultFilter(resultFilterAll)
 	if m.selected != 0 {
 		t.Fatalf("the first record was not selected by default: %d", m.selected)
 	}

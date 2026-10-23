@@ -32,15 +32,15 @@ func cleanupPreviewService(list []record.RecordInfo, loads map[string]*record.Re
 	}
 }
 
-func TestViewSavePromptOffersKeepDeleteLater(t *testing.T) {
+func TestSavePromptOffersKeepDeleteLater(t *testing.T) {
 	live := recovery(structuredItem(1, zzz.DiscRecord{SetID: intp(31100), Slot: 1, Level: intp(15)}, "静听嘉音"))
 	second := recovery(structuredItem(1, zzz.DiscRecord{SetID: intp(31200), Slot: 2, Level: intp(15)}, "啄木鸟电音"))
 	svc := cleanupPreviewService(
 		[]record.RecordInfo{{ID: "live", LatestRevision: 1, SavedAt: time.Now()}},
 		map[string]*record.Recovery{"live": live, "live2": second},
 	)
-	m, q := newTestModel(t, Config{Service: svc, ExportSaver: &fakeExportSaver{}})
-	tt := ui.NewTester(m.View, 1020, 700)
+	m, q := newTestModel(t, Config{Service: svc, DirectExportSaver: &fakeDirectExportSaver{}})
+	tt := ui.NewTester(m.View, 1024, 700)
 	settle(t, m, q, tt)
 
 	applyAndSettle(t, m, q, tt, snap("live", 1, true, scan.PhaseCapturing,
@@ -48,19 +48,11 @@ func TestViewSavePromptOffersKeepDeleteLater(t *testing.T) {
 	applyAndSettle(t, m, q, tt, snap("live", 2, false, scan.PhaseEnded,
 		scan.Counts{Captured: 1, Produced: 1}, 1, false, ""))
 
-	want := "本次扫描已保存：截图 2 张 · 2.0 KB · 待校对 1 项。"
-	if !tt.HasText(want) {
-		t.Fatalf("the save-completion prompt does not show %q: %q", want, tt.Texts())
+	if m.savePrompt == nil || m.savePrompt.recordID != "live" ||
+		m.savePrompt.preview.EvidenceFiles != 2 || m.savePrompt.preview.PendingReview != 1 {
+		t.Fatalf("the save-completion prompt does not hold the measured preview: %+v", m.savePrompt)
 	}
-	for _, label := range []string{"保留截图", "删除截图", "稍后处理"} {
-		if !tt.HasText(label) {
-			t.Errorf("the prompt does not offer %q", label)
-		}
-	}
-	if err := tt.Click("保留截图"); err != nil {
-		t.Fatal(err)
-	}
-	settle(t, m, q, tt)
+	m.SavePromptKeep()
 	if m.savePrompt != nil {
 		t.Fatal("保留截图 did not dismiss the prompt")
 	}
@@ -74,12 +66,10 @@ func TestViewSavePromptOffersKeepDeleteLater(t *testing.T) {
 		scan.Counts{Captured: 1, Produced: 1}, 1, false, ""))
 	applyAndSettle(t, m, q, tt, snap("live2", 4, false, scan.PhaseEnded,
 		scan.Counts{Captured: 1, Produced: 1}, 1, false, ""))
-	if !tt.HasText(want) {
-		t.Fatalf("the second save prompt does not show: %q", tt.Texts())
+	if m.savePrompt == nil || m.savePrompt.recordID != "live2" {
+		t.Fatalf("the second save prompt does not open: %+v", m.savePrompt)
 	}
-	if err := tt.Click("删除截图"); err != nil {
-		t.Fatal(err)
-	}
+	m.SavePromptDelete()
 	settle(t, m, q, tt)
 	screenshots, _, _, _ := svc.cleanupCalls()
 	if len(screenshots) != 1 || screenshots[0] != "live2" {
@@ -88,23 +78,23 @@ func TestViewSavePromptOffersKeepDeleteLater(t *testing.T) {
 	if m.savePrompt != nil {
 		t.Fatal("删除截图 did not dismiss the prompt")
 	}
-	if !tt.HasText("已删除本次扫描的 2 张截图（2.0 KB），结果与校对状态保留。") {
-		t.Fatalf("the screenshot deletion result does not show: %q", tt.Texts())
+	if !strings.Contains(m.cleanupNotice, "已删除本次扫描的 2 张截图（2.0 KB）") {
+		t.Fatalf("the screenshot deletion result does not show: %q", m.cleanupNotice)
 	}
 }
 
-func TestViewSavePromptNotShownAfterFailedSave(t *testing.T) {
+func TestSavePromptNotShownAfterFailedSave(t *testing.T) {
 	svc := cleanupPreviewService(nil, map[string]*record.Recovery{})
-	m, q := newTestModel(t, Config{Service: svc, ExportSaver: &fakeExportSaver{}})
-	tt := ui.NewTester(m.View, 1020, 700)
+	m, q := newTestModel(t, Config{Service: svc, DirectExportSaver: &fakeDirectExportSaver{}})
+	tt := ui.NewTester(m.View, 1024, 700)
 	settle(t, m, q, tt)
 
 	applyAndSettle(t, m, q, tt, snap("live", 1, true, scan.PhaseCapturing,
 		scan.Counts{Captured: 1}, 0, false, ""))
 	applyAndSettle(t, m, q, tt, snap("live", 2, false, scan.PhaseEnded,
 		scan.Counts{Captured: 1}, 0, true, "磁盘已满"))
-	if m.savePrompt != nil || tt.HasText("保留截图") {
-		t.Fatalf("a failed save opened the cleanup prompt: %q", tt.Texts())
+	if m.savePrompt != nil {
+		t.Fatalf("a failed save opened the cleanup prompt: %+v", m.savePrompt)
 	}
 }
 
@@ -113,15 +103,19 @@ func TestViewHistoryScreenshotCleanupPreviewsCancelAndFails(t *testing.T) {
 		[]record.RecordInfo{{ID: "r1", LatestRevision: 2, SavedAt: time.Now()}},
 		map[string]*record.Recovery{"r1": testRecord()},
 	)
-	m, q := newTestModel(t, Config{Service: svc, ExportSaver: &fakeExportSaver{}})
+	m, q := newTestModel(t, Config{Service: svc, DirectExportSaver: &fakeDirectExportSaver{}})
 	tt := ui.NewTester(m.View, 1020, 700)
 	settle(t, m, q, tt)
+
+	m.openHistoryMenu("r1")
+	tt.Frame()
+	if !tt.HasText("删除截图") {
+		t.Fatal("the history row menu offers no screenshot cleanup control")
+	}
+	m.closeHistoryMenu()
 	m.OpenHistory()
 	settle(t, m, q, tt)
 
-	if !tt.HasText("删除截图") {
-		t.Fatal("the history row offers no screenshot cleanup control")
-	}
 	m.RequestScreenshotCleanup("r1")
 	settle(t, m, q, tt)
 	prompt := "将删除记录 r1 的 2 张截图（2.0 KB），保留结果、修订与校对状态；待校对 1 项。"
@@ -190,7 +184,8 @@ func TestViewStorageBulkCleanupPreviewsAndIndependentEntries(t *testing.T) {
 		}
 		return preview, nil
 	}
-	m, q := newTestModel(t, Config{Service: svc, ExportSaver: &fakeExportSaver{}})
+	m, q := newTestModel(t, Config{Service: svc, DirectExportSaver: &fakeDirectExportSaver{}})
+	m.page = pageSettings
 	tt := ui.NewTester(m.View, 1020, 700)
 	settle(t, m, q, tt)
 
@@ -276,6 +271,7 @@ func TestViewCleanupDisabledReasons(t *testing.T) {
 	// unavailable in this build.
 	svc := &fakeService{}
 	m, q := newTestModel(t, Config{Service: svc})
+	m.page = pageSettings
 	tt := ui.NewTester(m.View, 1020, 700)
 	settle(t, m, q, tt)
 	if !tt.HasText("当前构建未启用导出，历史清理不可用。") {
@@ -284,7 +280,8 @@ func TestViewCleanupDisabledReasons(t *testing.T) {
 
 	// A running scan blocks cleanup with its reason.
 	svc2 := &fakeService{}
-	m2, q2 := newTestModel(t, Config{Service: svc2, ExportSaver: &fakeExportSaver{}})
+	m2, q2 := newTestModel(t, Config{Service: svc2, DirectExportSaver: &fakeDirectExportSaver{}})
+	m2.page = pageSettings
 	tt2 := ui.NewTester(m2.View, 1020, 700)
 	settle(t, m2, q2, tt2)
 	applyAndSettle(t, m2, q2, tt2, snap("s1", 1, true, scan.PhaseCapturing,
@@ -306,15 +303,19 @@ func TestViewHistoryRecordDeletionClosesResults(t *testing.T) {
 		[]record.RecordInfo{{ID: "r1", LatestRevision: 1, SavedAt: time.Now()}},
 		map[string]*record.Recovery{"r1": testRecord()},
 	)
-	m, q := newTestModel(t, Config{Service: svc, ExportSaver: &fakeExportSaver{}})
+	m, q := newTestModel(t, Config{Service: svc, DirectExportSaver: &fakeDirectExportSaver{}})
 	tt := ui.NewTester(m.View, 1020, 700)
 	settle(t, m, q, tt)
+
+	m.openHistoryMenu("r1")
+	tt.Frame()
+	if !tt.HasText("删除记录") {
+		t.Fatal("the history row menu offers no record deletion control")
+	}
+	m.closeHistoryMenu()
 	m.OpenHistory()
 	settle(t, m, q, tt)
 
-	if !tt.HasText("删除当前记录") {
-		t.Fatal("the history row offers no record deletion control")
-	}
 	m.RequestRecordCleanup("r1")
 	settle(t, m, q, tt)
 	if !tt.HasText("将永久删除记录 r1（共 4.0 KB，其中截图 2 张 2.0 KB）；待校对 1 项。外部导出的 JSON/CSV 不受影响。") {
@@ -341,21 +342,18 @@ func TestViewCleanupBlockedByExportAndUnsavedEdit(t *testing.T) {
 		list:  []record.RecordInfo{{ID: "r1", LatestRevision: 1, SavedAt: time.Now()}},
 		loads: map[string]*record.Recovery{"r1": testRecord()},
 	}
-	m, q := newTestModel(t, Config{Service: svc, ExportSaver: &fakeExportSaver{}})
+	m, q := newTestModel(t, Config{Service: svc, DirectExportSaver: &fakeDirectExportSaver{}})
 	tt := ui.NewTester(m.View, 1020, 700)
 	settle(t, m, q, tt)
 	m.OpenHistory()
 	settle(t, m, q, tt)
 
 	m.exporting = true
+	m.RequestScreenshotCleanup("r1")
 	tt.Frame()
 	if !tt.HasText("正在导出，完成前不能清理。") {
 		t.Fatalf("exporting does not block cleanup: %q", tt.Texts())
 	}
-	if err := tt.Click("删除截图"); err != nil {
-		t.Fatal(err)
-	}
-	drainAll(t, m, q)
 	if screenshots, _, _, _ := svc.cleanupCalls(); len(screenshots) != 0 {
 		t.Fatalf("cleanup ran during an export: %v", screenshots)
 	}
@@ -366,14 +364,11 @@ func TestViewCleanupBlockedByExportAndUnsavedEdit(t *testing.T) {
 		t.Fatal("the editor did not open")
 	}
 	m.edit.draft.Level = "14"
+	m.RequestRecordCleanup("r1")
 	tt.Frame()
 	if !tt.HasText("当前记录有未保存的修改，保存或放弃后才能清理。") {
 		t.Fatalf("an unsaved edit does not block cleanup: %q", tt.Texts())
 	}
-	if err := tt.Click("删除当前记录"); err != nil {
-		t.Fatal(err)
-	}
-	drainAll(t, m, q)
 	if _, _, records, _ := svc.cleanupCalls(); len(records) != 0 {
 		t.Fatalf("cleanup ran with an unsaved edit: %v", records)
 	}
@@ -393,6 +388,7 @@ func TestViewStorageHousekeepingPreviewsAndClears(t *testing.T) {
 			return nil
 		},
 	})
+	m.page = pageSettings
 	tt := ui.NewTester(m.View, 1020, 900)
 	settle(t, m, q, tt)
 
@@ -454,6 +450,7 @@ func TestViewStorageHousekeepingPreviewsAndClears(t *testing.T) {
 func TestViewStorageHousekeepingEmptyAndFailureStates(t *testing.T) {
 	svc := &fakeService{}
 	m, q := newTestModel(t, Config{Service: svc})
+	m.page = pageSettings
 	tt := ui.NewTester(m.View, 1020, 900)
 	settle(t, m, q, tt)
 
@@ -490,6 +487,7 @@ func TestViewOpenDataDirectoryFailure(t *testing.T) {
 			return errString("没有文件管理器")
 		},
 	})
+	m.page = pageSettings
 	tt := ui.NewTester(m.View, 1020, 900)
 	settle(t, m, q, tt)
 	if err := tt.Click("打开数据目录"); err != nil {
@@ -503,7 +501,8 @@ func TestViewOpenDataDirectoryFailure(t *testing.T) {
 
 func TestViewStorageUsageFailureDoesNotShowStaleNumbers(t *testing.T) {
 	svc := &fakeService{storageErr: errString("权限不足")}
-	m, q := newTestModel(t, Config{Service: svc, ExportSaver: &fakeExportSaver{}})
+	m, q := newTestModel(t, Config{Service: svc, DirectExportSaver: &fakeDirectExportSaver{}})
+	m.page = pageSettings
 	tt := ui.NewTester(m.View, 1020, 700)
 	settle(t, m, q, tt)
 	if !tt.HasText("占用读取失败：权限不足") {
@@ -521,8 +520,9 @@ func TestViewMissingEvidenceAfterCleanup(t *testing.T) {
 		list:  []record.RecordInfo{{ID: "r1", LatestRevision: 2, SavedAt: time.Now()}},
 		loads: map[string]*record.Recovery{"r1": recovery(it)},
 	}
-	m, q := newTestModel(t, Config{Service: svc, ExportSaver: &fakeExportSaver{}})
-	tt := ui.NewTester(m.View, 1020, 700)
+	m, q := newTestModel(t, Config{Service: svc, DirectExportSaver: &fakeDirectExportSaver{}})
+	m.SetContentSize(1024, 700)
+	tt := ui.NewTester(m.View, 1024, 700)
 	settle(t, m, q, tt)
 	m.OpenHistory()
 	settle(t, m, q, tt)
@@ -530,7 +530,7 @@ func TestViewMissingEvidenceAfterCleanup(t *testing.T) {
 	if !strings.Contains(m.resultsTitle(), "截图已删除或缺失") {
 		t.Fatalf("the record title does not mark missing screenshots: %q", m.resultsTitle())
 	}
-	if !tt.HasText("序号 1 · 已产出 · 质量：未评价") || !tt.HasText("截图已删除或缺失") {
+	if !tt.HasText("截图已删除或缺失") {
 		t.Fatalf("the missing-evidence mark does not show: %q", tt.Texts())
 	}
 	if err := tt.Click("显示证据"); err != nil {

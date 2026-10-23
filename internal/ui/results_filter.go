@@ -66,16 +66,15 @@ func (m *Model) resultStatusText(row *Row) string {
 	return resultStatusColumnText(row)
 }
 
-// visibleResultRows maps the rendered table to the record's rows. The
-// four-page shell filters by the slot's segment, search text and set/slot
-// choices; the legacy single-column view keeps showing every row.
+// visibleResultRows maps the rendered table to the record's rows, narrowed
+// by the slot's segment, search text and set/slot choices.
 func (m *Model) visibleResultRows() []int {
 	if m.rec == nil {
 		return nil
 	}
 	rows := make([]int, 0, len(m.rec.Rows))
 	for i := range m.rec.Rows {
-		if !m.cfg.PageLayout || m.resultRowMatches(&m.rec.Rows[i]) {
+		if m.resultRowMatches(&m.rec.Rows[i]) {
 			rows = append(rows, i)
 		}
 	}
@@ -451,9 +450,6 @@ func resultFilterLabel(value, allLabel string, options []resultFilterOption) str
 // unsaved prompt. The status bar names only the keys that are registered
 // and usable in the current layout.
 func (m *Model) registerResultsShortcuts(c *ui.Context) {
-	if !m.cfg.PageLayout {
-		return
-	}
 	if m.reviewSaving || m.loading || m.recErr != "" || m.exportBusy() {
 		return
 	}
@@ -515,7 +511,7 @@ func resultDisplayIndex(visible []int, full int) int {
 
 // narrowResults reports the list ↔ detail layout below the 1024 split.
 func (m *Model) narrowResults() bool {
-	return m.cfg.PageLayout && !resultsSideBySide(m.contentWidth)
+	return !resultsSideBySide(m.contentWidth)
 }
 
 // resultsRowOpensDetail reports whether a results row's click opens the
@@ -588,9 +584,6 @@ func (m *Model) closeResultDetail() {
 // 1440, the 1024 split and the narrow list/detail pages. The source crop is
 // never enlarged; every size stays at or below the 412×206 capture.
 func (m *Model) evidenceDisplaySize() (float32, float32) {
-	if !m.cfg.PageLayout {
-		return 0, 0
-	}
 	switch {
 	case m.contentWidth >= 1440:
 		return 340, 170
@@ -618,7 +611,7 @@ func (m *Model) resultsDetailWidth() float32 {
 // evidenceStacked lays a narrow detail pane's evidence out vertically, so
 // the 224-DIP image and its recognized text fit the 408-DIP pane.
 func (m *Model) evidenceStacked() bool {
-	return m.cfg.PageLayout && m.resultsDetailWidth() < 600
+	return m.resultsDetailWidth() < 600
 }
 
 // resultShortcutText is the results page's status-bar keys. An open

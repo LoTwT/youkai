@@ -59,6 +59,7 @@ func (h *fakeUpdateHandle) Install(ctx context.Context, progress func(downloaded
 func TestViewUpdateDisabledBuild(t *testing.T) {
 	src := &fakeUpdates{enabled: false}
 	m, q := newTestModel(t, Config{Service: &fakeService{}, Updates: src})
+	m.page = pageSettings
 	tt := ui.NewTester(m.View, 1020, 700)
 	settle(t, m, q, tt)
 
@@ -92,6 +93,7 @@ func TestViewUpdateCheckFlow(t *testing.T) {
 		},
 	}
 	m, q := newTestModel(t, Config{Service: &fakeService{}, Updates: src})
+	m.page = pageSettings
 	tt := ui.NewTester(m.View, 1020, 700)
 	settle(t, m, q, tt)
 
@@ -149,6 +151,7 @@ func TestViewUpdateShowsCurrentVersion(t *testing.T) {
 				Updates:    src,
 				AppVersion: "0.0.2",
 			})
+			m.page = pageSettings
 			tt := ui.NewTester(m.View, 1020, 700)
 			settle(t, m, q, tt)
 			if !tt.HasText("当前版本 0.0.2") {
@@ -271,6 +274,7 @@ func TestDevAutoInstall(t *testing.T) {
 			relaunched++
 		},
 	})
+	m.page = pageSettings
 	tt := ui.NewTester(m.View, 1020, 700)
 	settle(t, m, q, tt)
 
@@ -291,6 +295,8 @@ func TestDevAutoInstall(t *testing.T) {
 	// the restart hook once.
 	applyAndSettle(t, m, q, tt, snap("s1", 2, false, scan.PhaseEnded,
 		scan.Counts{Captured: 3}, 3, false, ""))
+	m.page = pageSettings
+	tt.Frame()
 	m.CheckUpdates()
 	settle(t, m, q, tt)
 	if found.installs != 1 {
@@ -323,6 +329,7 @@ func TestViewUpdateInstallForbiddenWhileScanning(t *testing.T) {
 		Updates:           src,
 		OnUpdateInstalled: func() { relaunched++ },
 	})
+	m.page = pageSettings
 	tt := ui.NewTester(m.View, 1020, 700)
 	settle(t, m, q, tt)
 	m.CheckUpdates()
@@ -332,6 +339,8 @@ func TestViewUpdateInstallForbiddenWhileScanning(t *testing.T) {
 	// reason, and the disabled button installs nothing.
 	applyAndSettle(t, m, q, tt, snap("s1", 1, true, scan.PhaseCapturing,
 		scan.Counts{Captured: 3, Produced: 2}, 2, true, ""))
+	m.page = pageSettings
+	tt.Frame()
 	if !tt.HasText("扫描会话进行中，等其结束并保存完成后再安装更新。") {
 		t.Error("the running session does not explain the refused install")
 	}
@@ -346,6 +355,8 @@ func TestViewUpdateInstallForbiddenWhileScanning(t *testing.T) {
 	// The wrap-up phase says so.
 	applyAndSettle(t, m, q, tt, snap("s1", 2, true, scan.PhaseFinalizing,
 		scan.Counts{Captured: 5, Produced: 5}, 5, true, ""))
+	m.page = pageSettings
+	tt.Frame()
 	if !tt.HasText("扫描正在收尾保存，等保存完成后再安装更新。") {
 		t.Error("the wrap-up does not explain the refused install")
 	}
@@ -353,6 +364,8 @@ func TestViewUpdateInstallForbiddenWhileScanning(t *testing.T) {
 	// A failed save awaiting its retry keeps the session active.
 	applyAndSettle(t, m, q, tt, snap("s1", 3, true, scan.PhaseEnded,
 		scan.Counts{Captured: 5, Produced: 5}, 5, true, "disk full"))
+	m.page = pageSettings
+	tt.Frame()
 	if !tt.HasText("有保存失败的扫描结果待重试保存，先完成保存再安装更新。") {
 		t.Error("the pending save retry does not explain the refused install")
 	}
@@ -368,6 +381,8 @@ func TestViewUpdateInstallForbiddenWhileScanning(t *testing.T) {
 	// progress, and the restart hook fires once.
 	applyAndSettle(t, m, q, tt, snap("s1", 4, false, scan.PhaseEnded,
 		scan.Counts{Captured: 5, Produced: 5}, 5, false, ""))
+	m.page = pageSettings
+	tt.Frame()
 	if tt.HasText("等保存完成后再安装更新。") {
 		t.Error("a settled session still blocks the install")
 	}
@@ -385,6 +400,8 @@ func TestViewUpdateInstallForbiddenWhileScanning(t *testing.T) {
 		t.Error("the installed state does not show")
 	}
 	// While the restart is imminent, no scan may begin.
+	m.page = pageScan
+	tt.Frame()
 	if err := tt.Click("开始扫描"); err != nil {
 		t.Fatal(err)
 	}
@@ -415,6 +432,7 @@ func TestViewUpdateInstallFailure(t *testing.T) {
 		Updates:           src,
 		OnUpdateInstalled: func() { relaunched++ },
 	})
+	m.page = pageSettings
 	tt := ui.NewTester(m.View, 1020, 700)
 	settle(t, m, q, tt)
 	m.CheckUpdates()

@@ -118,7 +118,7 @@ func TestScaleBuildRecordViewOneAndTenThousandRows(t *testing.T) {
 func TestScaleResultsBrowserRendersThousandRows(t *testing.T) {
 	items := scaleItems(t, 1000, 0)
 	start := time.Now()
-	m, _, tt, _ := openReviewRecord(t, items...)
+	m, _, tt, _ := openReviewRecordPage(t, items...)
 	elapsed := time.Since(start)
 
 	if !tt.HasText("结果：历史记录 r1（1000 条）") {

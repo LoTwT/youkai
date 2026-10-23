@@ -758,17 +758,11 @@ func (m *Model) historyTableFooter(c *ui.Context, t *ui.Theme, tok *Tokens, entr
 		Bind(&m.historyFooter)
 }
 
-// historyNotices shows export/cleanup outcomes, the load error and a
-// pending per-record cleanup confirmation.
+// historyNotices shows the cleanup outcome, the load error and a pending
+// per-record cleanup confirmation.
 func (m *Model) historyNotices(c *ui.Context, t *ui.Theme, tok *Tokens) {
 	if m.cleanupNotice != "" {
 		ui.Text(c, m.cleanupNotice).TextColor(tok.TextMuted)
-	}
-	if m.historyNotice != "" {
-		ui.Text(c, m.historyNotice)
-	}
-	if m.historyError != "" {
-		ui.Text(c, m.historyError).TextColor(t.Danger)
 	}
 	if m.cleanup != nil && !m.cleanup.target.all() {
 		m.cleanupPromptArea(c, t)
@@ -865,87 +859,6 @@ func (m *Model) openHistoryEntry(entry HistoryEntry) {
 	m.historyMenuID = ""
 	m.histChoice = entry.Label
 	m.OpenHistory()
-}
-
-// historyPageLegacy is the old single-column results area's history list.
-// The page shell uses the table above; the legacy list stays for the
-// interaction tests that still drive the pre-shell layout.
-func (m *Model) legacyHistoryActions(c *ui.Context, t *ui.Theme) {
-	blocked := m.cleanupBlockedReason()
-	selected := m.selectedHistoryIDs()
-	ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, "日期筛选").TextColor(t.TextMuted)
-		m.noteTextInputFocus(ui.TextInput(c, &m.historyFilter).Width(110).Placeholder("YYYY-MM-DD"))
-		if ui.Button(c, "清除筛选").Clicked() {
-			m.historyFilter = ""
-		}
-		if m.historyFilterInvalid() {
-			ui.Text(c, "格式应为 YYYY-MM-DD。").TextColor(t.Danger).FontSize(t.FontSize * 0.9)
-		}
-		if len(selected) > 0 {
-			ui.Textf(c, "已选 %d 条", len(selected)).TextColor(t.TextMuted)
-			if ui.Button(c, "删除选中截图").Disabled(blocked != "").Clicked() {
-				m.RequestSelectedScreenshotCleanup()
-			}
-			if ui.Button(c, "删除选中记录").Disabled(blocked != "").Clicked() {
-				m.RequestSelectedRecordCleanup()
-			}
-			if ui.Button(c, "清除选择").Clicked() {
-				m.ClearHistorySelection()
-			}
-		}
-	})
-	ui.ScrollBoth(c).MaxHeight(180).Children(func() {
-		for _, entry := range m.visibleHistory() {
-			m.legacyHistoryRow(c, t, entry, blocked)
-		}
-	})
-	if m.historyBulk != nil {
-		m.historyBulkArea(c, t)
-	}
-	if m.historyNotice != "" {
-		ui.Text(c, m.historyNotice)
-	}
-	if m.historyError != "" {
-		ui.Text(c, m.historyError).TextColor(t.Danger)
-	}
-	if blocked != "" {
-		ui.Text(c, blocked).TextColor(t.TextMuted).FontSize(t.FontSize * 0.9)
-	}
-}
-
-func (m *Model) legacyHistoryRow(c *ui.Context, t *ui.Theme, entry HistoryEntry, blocked string) {
-	ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
-		selected := m.historySelected[entry.ID]
-		if ui.Checkbox(c, &selected, "").Changed() {
-			m.setHistorySelected(entry.ID, selected)
-		}
-		text := m.historyRowText(entry)
-		if m.rec != nil && m.rec.ID == entry.ID {
-			text += "（当前）"
-		}
-		ui.Text(c, text).TextColor(t.TextMuted).SingleLine().Grow(1)
-		if ui.Button(c, "打开").Clicked() {
-			m.histChoice = entry.Label
-			m.OpenHistory()
-		}
-		if !m.cfg.PageLayout {
-			if m.cfg.ExportSaver != nil {
-				if ui.Button(c, "导出 JSON").Disabled(m.historyExportsBlocked()).Clicked() {
-					m.ExportHistory(entry.ID, app.ExportJSON)
-				}
-				if ui.Button(c, "导出 CSV").Disabled(m.historyExportsBlocked()).Clicked() {
-					m.ExportHistory(entry.ID, app.ExportCSV)
-				}
-			}
-			if ui.Button(c, "删除截图").Disabled(blocked != "").Clicked() {
-				m.RequestScreenshotCleanup(entry.ID)
-			}
-			if ui.Button(c, "删除当前记录").Disabled(blocked != "").Clicked() {
-				m.RequestRecordCleanup(entry.ID)
-			}
-		}
-	})
 }
 
 func (m *Model) historyEmptyText() string {

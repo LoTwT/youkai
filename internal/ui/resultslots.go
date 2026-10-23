@@ -63,11 +63,9 @@ type resultSlotState struct {
 	// confirmed, until the page is left or the record is reloaded.
 	recentlyConfirmed map[int64]bool
 
-	// The slot's frozen export snapshot and its outcome.
+	// The slot's frozen export snapshot and its build error.
 	exportData     *app.UsableExport
 	exportBuildErr string
-	exportNotice   string
-	exportError    string
 }
 
 // resultSlot is one results destination: its identity and remembered

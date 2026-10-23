@@ -24,7 +24,7 @@ func TestPageLayoutSidebarWidths(t *testing.T) {
 		{1020, sidebarNarrowWidth},
 		{860, sidebarNarrowWidth},
 	} {
-		m, _ := newTestModel(t, Config{Service: &fakeService{}, PageLayout: true})
+		m, _ := newTestModel(t, Config{Service: &fakeService{}})
 		m.SetContentSize(tc.width, 700)
 		if got := m.sidebarWidth(); got != tc.want {
 			t.Errorf("sidebar width at %d = %v, want %v", tc.width, got, tc.want)
@@ -43,7 +43,7 @@ func TestPageLayoutSidebarItemsFillTheRail(t *testing.T) {
 		{1020, sidebarNarrowWidth},
 		{860, sidebarNarrowWidth},
 	} {
-		m, q := newTestModel(t, Config{Service: &fakeService{}, PageLayout: true})
+		m, q := newTestModel(t, Config{Service: &fakeService{}})
 		m.SetContentSize(tc.width, 700)
 		height := 700
 		if tc.width == 860 {
@@ -104,7 +104,7 @@ func countColorInRect(img *image.RGBA, c color.RGBA, r image.Rectangle) int {
 // TestPageLayoutSidebarActiveState checks that the current destination has
 // the design's accent-soft face and the other items do not.
 func TestPageLayoutSidebarActiveState(t *testing.T) {
-	m, q := newTestModel(t, Config{Service: &fakeService{}, PageLayout: true})
+	m, q := newTestModel(t, Config{Service: &fakeService{}})
 	tt := ui.NewTester(m.View, 1020, 700)
 	settle(t, m, q, tt)
 
@@ -164,7 +164,7 @@ func TestPageLayoutPagesRouteWithoutStageSwitch(t *testing.T) {
 		}},
 		loads: map[string]*record.Recovery{"r1": testRecord()},
 	}
-	m, q := newTestModel(t, Config{Service: svc, PageLayout: true})
+	m, q := newTestModel(t, Config{Service: svc})
 	tt := ui.NewTester(m.View, 1020, 700)
 	settle(t, m, q, tt)
 	m.page = pageScan
@@ -236,7 +236,7 @@ func TestPageLayoutPagesRouteWithoutStageSwitch(t *testing.T) {
 // offers the return-to-progress action instead of a new scan.
 func TestPageLayoutScanActions(t *testing.T) {
 	svc := &fakeService{}
-	m, q := newTestModel(t, Config{Service: svc, PageLayout: true})
+	m, q := newTestModel(t, Config{Service: svc})
 	tt := ui.NewTester(m.View, 1020, 700)
 	settle(t, m, q, tt)
 
@@ -315,7 +315,7 @@ func TestSidebarRestoresSessionAndOpenedHistory(t *testing.T) {
 			"old": recovery(item(1, record.StatusProduced, "", "", "旧一")),
 		},
 	}
-	m, q := newTestModel(t, Config{Service: svc, PageLayout: true})
+	m, q := newTestModel(t, Config{Service: svc})
 	tt := ui.NewTester(m.View, 1024, 700)
 	settle(t, m, q, tt)
 	m.Apply(snap("s1", 1, true, scan.PhaseCapturing,
@@ -440,7 +440,7 @@ func TestSidebarHistoryRoundTripRestoresViewState(t *testing.T) {
 			"old": old,
 		},
 	}
-	m, q := newTestModel(t, Config{Service: svc, PageLayout: true})
+	m, q := newTestModel(t, Config{Service: svc})
 	tt := ui.NewTester(m.View, 1020, 700)
 	settle(t, m, q, tt)
 	m.Apply(snap("s1", 1, true, scan.PhaseCapturing,
@@ -659,7 +659,7 @@ func TestHistoryConfirmedStayListReopenRevalidatesSelection(t *testing.T) {
 					loads: map[string]*record.Recovery{"r1": rec},
 				}
 				installReviewSave(svc)
-				m, q := newTestModel(t, Config{Service: svc, PageLayout: true})
+				m, q := newTestModel(t, Config{Service: svc})
 				height := 700
 				if width == 1440 {
 					height = 900
@@ -769,7 +769,7 @@ func TestHistoryListReopenSettlesSelectionAgainstFilters(t *testing.T) {
 		}},
 		loads: map[string]*record.Recovery{"r1": rec},
 	}
-	m, q := newTestModel(t, Config{Service: svc, PageLayout: true})
+	m, q := newTestModel(t, Config{Service: svc})
 	m.SetContentSize(1024, 700)
 	tt := ui.NewTester(m.View, 1024, 700)
 	settle(t, m, q, tt)
@@ -897,7 +897,7 @@ func TestSidebarDestinationsGuardDirtyDrafts(t *testing.T) {
 		},
 	}
 	installReviewSave(svc)
-	m, q := newTestModel(t, Config{Service: svc, PageLayout: true})
+	m, q := newTestModel(t, Config{Service: svc})
 	tt := ui.NewTester(m.View, 1024, 700)
 	settle(t, m, q, tt)
 	m.Apply(snap("s1", 1, true, scan.PhaseCapturing,
@@ -987,7 +987,7 @@ func TestSidebarHistoryRestoresActualScroll(t *testing.T) {
 					}},
 					loads: map[string]*record.Recovery{"old": old},
 				}
-				m, q := newTestModel(t, Config{Service: svc, PageLayout: true})
+				m, q := newTestModel(t, Config{Service: svc})
 				m.SetContentSize(width, height)
 				tt := ui.NewTester(m.View, width, height)
 				settle(t, m, q, tt)
@@ -1061,7 +1061,7 @@ func TestSidebarSessionConfirmedStayRevisitRevalidates(t *testing.T) {
 				rec.Checkpoint.Session.SessionID = "s1"
 				svc := &fakeService{loads: map[string]*record.Recovery{"s1": rec}}
 				installReviewSave(svc)
-				m, q := newTestModel(t, Config{Service: svc, PageLayout: true})
+				m, q := newTestModel(t, Config{Service: svc})
 				height := 700
 				if width == 1440 {
 					height = 900

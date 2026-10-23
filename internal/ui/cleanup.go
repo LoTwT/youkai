@@ -609,8 +609,6 @@ func (m *Model) clearResultsLocked() {
 	m.recErr = ""
 	m.exportData = nil
 	m.exportBuildErr = ""
-	m.exportNotice = ""
-	m.exportError = ""
 	m.selected = -1
 	m.liveSavedShown = 0
 	m.edit = nil
@@ -620,17 +618,15 @@ func (m *Model) clearResultsLocked() {
 }
 
 // cleanupBlockedReason explains why cleanup is refused now; empty means
-// it may proceed. An unsaved edit blocks every entry because the bulk
+// it may proceed. An unsaved edit blocks every entry because the per-record
 // actions include its record; a scan, save, export or exit blocks them
 // all too. The interface therefore uses one consistent reason.
 func (m *Model) cleanupBlockedReason() string {
 	switch {
-	case m.cfg.ExportSaver == nil:
+	case !m.exportAvailable():
 		return "当前构建未启用导出，历史清理不可用。"
 	case m.cleanup != nil && m.cleanup.running:
 		return "正在执行清理，完成前不能开始另一项。"
-	case m.historyBulk != nil && m.historyBulk.running:
-		return "正在执行选中记录的清理，完成前不能开始另一项。"
 	case m.historyExporting != "":
 		return "正在导出历史记录，完成前不能清理。"
 	case m.exitState == exitRunning || m.exitState == exitDone:
@@ -694,47 +690,8 @@ func cleanupNothingNotice(target cleanupTarget) string {
 	}
 }
 
-// savePromptArea is the post-save three-way choice. It only appears for
-// the record currently shown; navigating away leaves it for that record's
-// next display until it is answered.
-func (m *Model) savePromptArea(c *ui.Context, t *ui.Theme) {
-	p := m.savePrompt
-	if p == nil || m.rec == nil || m.rec.ID != p.recordID {
-		return
-	}
-	blocked := m.cleanupBlockedReason()
-	ui.Column(c).Gap(t.Space(1)).Children(func() {
-		ui.Textf(c, "本次扫描已保存：截图 %d 张 · %s · 待校对 %d 项。",
-			p.preview.EvidenceFiles, formatBytes(p.preview.EvidenceBytes), p.preview.PendingReview)
-		if p.preview.Unreadable > 0 {
-			ui.Textf(c, "其中 %d 条记录无法读取，待校对数量不完整。", p.preview.Unreadable).
-				TextColor(t.TextMuted).FontSize(t.FontSize * 0.9)
-		}
-		ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
-			if ui.Button(c, "保留截图").Disabled(p.running).Clicked() {
-				m.SavePromptKeep()
-			}
-			if ui.Button(c, "删除截图").Disabled(p.running || blocked != "").Clicked() {
-				m.SavePromptDelete()
-			}
-			if ui.Button(c, "稍后处理").Disabled(p.running).Clicked() {
-				m.SavePromptLater()
-			}
-			if p.running {
-				ui.Text(c, "正在删除截图……").TextColor(t.TextMuted)
-			}
-		})
-		if blocked != "" && !p.running {
-			ui.Text(c, blocked).TextColor(t.TextMuted).FontSize(t.FontSize * 0.9)
-		}
-		if p.err != "" {
-			ui.Text(c, p.err).TextColor(t.Danger)
-		}
-	})
-}
-
 // cleanupPromptArea is the measured confirmation shared by the results
-// and storeroom entries.
+// page and the settings danger zone.
 func (m *Model) cleanupPromptArea(c *ui.Context, t *ui.Theme) {
 	p := m.cleanup
 	if p == nil {
@@ -792,19 +749,6 @@ func cleanupPreviewText(p *cleanupPrompt) string {
 	}
 }
 
-// storageArea is the legacy single-column storeroom view. The settings
-// page composes the same pieces as its own cards.
-func (m *Model) storageArea(c *ui.Context, t *ui.Theme) {
-	ui.Column(c).Gap(t.Space(1)).Children(func() {
-		ui.Text(c, "存储管理").FontWeight(600)
-		m.storageSummaryLine(c, t)
-		m.storageHousekeepingRow(c, t, true)
-		m.bulkCleanupRow(c, t)
-		m.cleanupFeedbackArea(c, t)
-		m.closeBehaviorArea(c, t)
-	})
-}
-
 // storageSummaryLine shows the measured footprint, or the state that
 // replaces it; a failed measurement is never presented as stale numbers.
 func (m *Model) storageSummaryLine(c *ui.Context, t *ui.Theme) {
@@ -841,8 +785,8 @@ func (m *Model) storageHousekeepingRow(c *ui.Context, t *ui.Theme, includeOpenDi
 }
 
 // bulkCleanupRow is the two all-record deletion entries. The settings
-// danger zone and the legacy storeroom share it, so wording, the disabled
-// reason and the measured confirmation stay identical.
+// danger zone uses it, so wording, the disabled reason and the measured
+// confirmation stay identical.
 func (m *Model) bulkCleanupRow(c *ui.Context, t *ui.Theme) {
 	_, tok := themeWithTokens(t, c.Preferences())
 	blocked := m.cleanupBlockedReason()
@@ -860,19 +804,6 @@ func (m *Model) bulkCleanupRow(c *ui.Context, t *ui.Theme) {
 			ui.Text(c, blocked).TextColor(t.TextMuted).FontSize(t.FontSize * 0.9)
 		}
 	})
-}
-
-// cleanupFeedbackArea shows the last result and any open measured prompt.
-// The bulk entries only show their own prompt; a single record's prompt
-// lives where that record is shown.
-func (m *Model) cleanupFeedbackArea(c *ui.Context, t *ui.Theme) {
-	if m.cleanupNotice != "" {
-		ui.Text(c, m.cleanupNotice)
-	}
-	m.storagePromptArea(c, t)
-	if m.cleanup != nil && m.cleanup.target.all() {
-		m.cleanupPromptArea(c, t)
-	}
 }
 
 func (m *Model) storageSummary() string {

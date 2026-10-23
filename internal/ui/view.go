@@ -16,49 +16,14 @@ const scanHint = "扫描期间会自动操作游戏。请保持游戏窗口在�
 // unregistered is claimed).
 const stopMeans = "停止方式：点击本窗口的“停止扫描”按钮。"
 
-// View builds the main window's three areas — prepare, progress and
-// results. It runs on the UI thread whenever the window needs a frame and
-// only reads the model; every interaction schedules its work through the
-// model's actions.
+// View builds the main window's page shell. It runs on the UI thread
+// whenever the window needs a frame and only reads the model; every
+// interaction schedules its work through the model's actions.
 func (m *Model) View(c *ui.Context) {
 	// Each build pass notes the text field that holds the keyboard, so the
 	// shell's Escape handler can leave the key to it.
 	m.textInputFocused = false
-	if m.cfg.PageLayout {
-		m.viewPages(c)
-		return
-	}
-	ApplyTheme(c)
-	t := c.Theme()
-	m.list.Key = func(row int) any {
-		if m.rec == nil || row < 0 || row >= len(m.rec.Rows) {
-			return row
-		}
-		return m.rec.Rows[row].Seq
-	}
-	m.list.Label = func(row int) string {
-		if m.rec == nil || row < 0 || row >= len(m.rec.Rows) {
-			return ""
-		}
-		return m.rec.Rows[row].Label()
-	}
-	ui.Column(c).Fill().Gap(t.Space(2)).Padding(t.Space(3), t.Space(3)).Children(func() {
-		m.prepareArea(c, t)
-		if m.snap.SessionID != "" {
-			ui.Divider(c)
-			m.progressArea(c, t)
-		}
-		ui.Divider(c)
-		m.resultsArea(c, t)
-		ui.Divider(c)
-		m.storageArea(c, t)
-		ui.Divider(c)
-		m.updateArea(c, t)
-		if m.exitState != exitIdle {
-			ui.Divider(c)
-			m.exitArea(c, t)
-		}
-	})
+	m.viewPages(c)
 }
 
 // prepareArea is the always-present start area: the confirmed hint, the
@@ -67,11 +32,6 @@ func (m *Model) prepareArea(c *ui.Context, t *ui.Theme) {
 	ui.Column(c).Gap(t.Space(1)).Children(func() {
 		ui.Text(c, scanHint)
 		ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
-			if !m.cfg.PageLayout {
-				if ui.PrimaryButton(c, "开始扫描").Disabled(!m.canStart()).Clicked() {
-					m.Start()
-				}
-			}
 			if note := m.startNote(); note != "" {
 				ui.Text(c, note).TextColor(t.TextMuted)
 			}
@@ -115,11 +75,6 @@ func (m *Model) progressArea(c *ui.Context, t *ui.Theme) {
 				ui.Text(c, "结束："+end)
 			}
 			ui.Box(c).Grow(1)
-			if !m.cfg.PageLayout {
-				if ui.Button(c, "停止扫描").Disabled(!snap.Busy && m.startReqID == "").Clicked() {
-					m.Stop()
-				}
-			}
 		})
 		ui.Text(c, countsText(snap.Scan.Counts))
 		ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {

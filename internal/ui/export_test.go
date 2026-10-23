@@ -24,32 +24,6 @@ type exportCall struct {
 	data   []byte
 }
 
-// fakeExportSaver records every Save call; saveFn may hold the call open
-// or return a failure, so the tests can drive duplicate clicks, cancel
-// and write errors.
-type fakeExportSaver struct {
-	mu     sync.Mutex
-	calls  []exportCall
-	saveFn func(format app.ExportFormat, defaultName string, data []byte) (string, error)
-}
-
-func (f *fakeExportSaver) Save(format app.ExportFormat, defaultName string, data []byte) (string, error) {
-	f.mu.Lock()
-	f.calls = append(f.calls, exportCall{format: format, name: defaultName, data: append([]byte(nil), data...)})
-	fn := f.saveFn
-	f.mu.Unlock()
-	if fn != nil {
-		return fn(format, defaultName, data)
-	}
-	return "/tmp/" + defaultName, nil
-}
-
-func (f *fakeExportSaver) snapshot() []exportCall {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return append([]exportCall(nil), f.calls...)
-}
-
 // fakeDirectExportSaver records direct writes. saveFn may hold the write
 // open or return an actionable directory failure.
 type fakeDirectExportSaver struct {
@@ -110,13 +84,13 @@ func uiStructuredItem(t *testing.T, seq int64, quality record.Quality) record.It
 
 // exportModel builds a model showing one saved history record with two
 // items: one usable and one still pending review.
-func exportModel(t *testing.T, saver ExportSaver) (*Model, *queueUpdater, *fakeService) {
+func exportModel(t *testing.T, saver *fakeDirectExportSaver) (*Model, *queueUpdater, *fakeService) {
 	t.Helper()
 	svc := &fakeService{loads: map[string]*record.Recovery{
 		"rec": recovery(uiStructuredItem(t, 1, record.QualityAutoAccepted),
 			uiStructuredItem(t, 2, record.QualityNeedsReview)),
 	}}
-	m, q := newTestModel(t, Config{Service: svc, ExportSaver: saver, AppVersion: "test-1"})
+	m, q := newTestModel(t, Config{Service: svc, DirectExportSaver: saver, AppVersion: "test-1"})
 	m.reloadRecord("rec", false)
 	drainAll(t, m, q)
 	if m.rec == nil || m.exportData == nil {
@@ -126,7 +100,7 @@ func exportModel(t *testing.T, saver ExportSaver) (*Model, *queueUpdater, *fakeS
 }
 
 func TestExportControlsShowCountsAndSaveBothFormats(t *testing.T) {
-	saver := &fakeExportSaver{}
+	saver := &fakeDirectExportSaver{}
 	m, q, _ := exportModel(t, saver)
 	tt := ui.NewTester(m.View, 1020, 700)
 	settle(t, m, q, tt)
@@ -165,7 +139,7 @@ func TestExportControlsShowCountsAndSaveBothFormats(t *testing.T) {
 	if doc.Format != "youkai.scan" || doc.Session.SavedRevision != 1 || len(doc.Items) != 1 {
 		t.Fatalf("exported JSON = format %q revision %d items %d", doc.Format, doc.Session.SavedRevision, len(doc.Items))
 	}
-	if !tt.HasText("已导出 JSON：/tmp/") {
+	if !tt.HasText("已导出 JSON（1 件，历史记录 rec）") {
 		t.Fatalf("success notice missing: %v", tt.Texts())
 	}
 
@@ -212,7 +186,6 @@ func TestDirectExportKeepsTheSnapshotWhenTheSlotChanges(t *testing.T) {
 	svc := &fakeService{loads: map[string]*record.Recovery{"s1": sessionRec}}
 	m, q := newTestModel(t, Config{
 		Service:           svc,
-		PageLayout:        true,
 		DirectExportSaver: saver,
 		AppVersion:        "test-1",
 	})
@@ -271,7 +244,6 @@ func TestDirectExportUsesTheHistorySlotsOwnSnapshot(t *testing.T) {
 	svc := &fakeService{loads: map[string]*record.Recovery{"s1": sessionRec, "old": historyRec}}
 	m, q := newTestModel(t, Config{
 		Service:           svc,
-		PageLayout:        true,
 		DirectExportSaver: saver,
 		AppVersion:        "test-1",
 	})
@@ -316,7 +288,7 @@ func TestDirectExportUsesTheHistorySlotsOwnSnapshot(t *testing.T) {
 }
 
 func TestExportBlocksWhileEditingOrScanning(t *testing.T) {
-	saver := &fakeExportSaver{}
+	saver := &fakeDirectExportSaver{}
 	m, q, _ := exportModel(t, saver)
 
 	m.selected = 0
@@ -351,31 +323,21 @@ func TestExportBlocksWhileEditingOrScanning(t *testing.T) {
 	}
 }
 
-func TestExportCancelAndWriteFailureDoNotChangeTheRecord(t *testing.T) {
-	saver := &fakeExportSaver{}
+func TestExportWriteFailureDoesNotChangeTheRecord(t *testing.T) {
+	saver := &fakeDirectExportSaver{}
 	m, q, _ := exportModel(t, saver)
 	before := m.recData
 	beforeItems := len(before.Checkpoint.Items)
 	beforeRevision := before.Checkpoint.SavedRevision
-
-	saver.saveFn = func(app.ExportFormat, string, []byte) (string, error) { return "", nil }
-	m.ExportJSON()
-	drainAll(t, m, q)
-	if !m.exportNoticeContains("已取消导出") {
-		t.Fatalf("cancel notice = %q", m.exportNotice)
-	}
-	if m.recData != before || len(m.recData.Checkpoint.Items) != beforeItems ||
-		m.recData.Checkpoint.SavedRevision != beforeRevision {
-		t.Fatal("cancel changed the internal record")
-	}
 
 	saver.saveFn = func(app.ExportFormat, string, []byte) (string, error) {
 		return "", errors.New("磁盘已满")
 	}
 	m.ExportCSV()
 	drainAll(t, m, q)
-	if !strings.Contains(m.exportError, "磁盘已满") {
-		t.Fatalf("write failure = %q", m.exportError)
+	if m.exportOutcome == nil || m.exportOutcome.err == nil ||
+		!strings.Contains(m.exportOutcome.text(), "磁盘已满") {
+		t.Fatalf("write failure = %+v", m.exportOutcome)
 	}
 	if m.recData != before || len(m.recData.Checkpoint.Items) != beforeItems ||
 		m.recData.Checkpoint.SavedRevision != beforeRevision {
@@ -384,7 +346,7 @@ func TestExportCancelAndWriteFailureDoNotChangeTheRecord(t *testing.T) {
 }
 
 func TestExportDisablesDuplicateClicks(t *testing.T) {
-	saver := &fakeExportSaver{}
+	saver := &fakeDirectExportSaver{}
 	m, q, _ := exportModel(t, saver)
 	started := make(chan struct{})
 	release := make(chan struct{})
@@ -405,13 +367,13 @@ func TestExportDisablesDuplicateClicks(t *testing.T) {
 }
 
 func TestExportSnapshotReloadsTheFinalCheckpoint(t *testing.T) {
-	saver := &fakeExportSaver{}
+	saver := &fakeDirectExportSaver{}
 	item := uiStructuredItem(t, 1, record.QualityAutoAccepted)
 	pre := recovery(item)
 	pre.Checkpoint.Session.Termination = nil
 	pre.Checkpoint.Session.EndedAt = nil
 	svc := &fakeService{loads: map[string]*record.Recovery{"rec": pre}}
-	m, q := newTestModel(t, Config{Service: svc, ExportSaver: saver, AppVersion: "test-1"})
+	m, q := newTestModel(t, Config{Service: svc, DirectExportSaver: saver, AppVersion: "test-1"})
 
 	m.Apply(snap("rec", 1, true, scan.PhaseCapturing, scan.Counts{Captured: 1}, 1, true, ""))
 	drainAll(t, m, q)
@@ -449,7 +411,7 @@ func TestExportSnapshotReloadsTheFinalCheckpoint(t *testing.T) {
 }
 
 func TestExportFollowsASavedRevision(t *testing.T) {
-	saver := &fakeExportSaver{}
+	saver := &fakeDirectExportSaver{}
 	m, q, _ := exportModel(t, saver)
 
 	confirmed := uiStructuredItem(t, 2, record.QualityHumanConfirmed)
@@ -554,12 +516,6 @@ func TestDirectExportDisablesReviewActions(t *testing.T) {
 	}
 }
 
-// exportNoticeContains is a small readability helper for the cancellation
-// assertion.
-func (m *Model) exportNoticeContains(part string) bool {
-	return strings.Contains(m.exportNotice, part)
-}
-
 // directExportModel loads one record into the page shell with a direct
 // saver, ready to export.
 func directExportModel(t *testing.T, saver *fakeDirectExportSaver, rec *record.Recovery, live bool) (*Model, *queueUpdater) {
@@ -568,7 +524,6 @@ func directExportModel(t *testing.T, saver *fakeDirectExportSaver, rec *record.R
 	svc := &fakeService{loads: map[string]*record.Recovery{id: rec}}
 	m, q := newTestModel(t, Config{
 		Service:           svc,
-		PageLayout:        true,
 		DirectExportSaver: saver,
 		AppVersion:        "test-1",
 	})
@@ -592,7 +547,6 @@ func TestDirectExportDirectoryFailureOffersActions(t *testing.T) {
 	}}
 	m, q := newTestModel(t, Config{
 		Service:           svc,
-		PageLayout:        true,
 		DirectExportSaver: saver,
 		OpenDownloadsDirectory: func() error {
 			opened++
