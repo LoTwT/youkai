@@ -100,6 +100,7 @@ func (m *Model) resultsArea(c *ui.Context, t *ui.Theme) {
 			}
 		}
 		m.resultsHeader(c, t)
+		m.savePromptArea(c, t)
 		if m.histErr != "" {
 			ui.Text(c, "历史记录读取失败："+m.histErr).TextColor(t.Danger)
 		}
