@@ -1,5 +1,7 @@
 # Youkai 深色模式颜色 token
 
+> **历史文档（2026-10-21）：** 本文件描述改版前的深色 token，已被 2026-10-22 round-3 实现取代；当前 token 与布局以 `internal/ui` 和测试为准。
+
 基于 Evelyn / Sunna / Kimi 第二轮独立讨论，以及 MyGo v0.5.5 的 `ui.Theme`、`Table`、`Modal`、`paint` 源码。
 
 ## 结论

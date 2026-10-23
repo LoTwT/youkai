@@ -1,5 +1,7 @@
 # Youkai UI 系统清单
 
+> **历史文档（2026-10-21）：** 本文件描述改版前的 UI 系统，已被 2026-10-22 round-3 实现取代；当前界面、token 与布局以 `internal/ui` 和测试为准。
+
 这份文档把“界面里有什么、每个东西有哪些状态、颜色从哪里来、开发怎么落地”收在一处。图示见 [README](README.md)，深色 token 细节见 [dark-tokens.md](dark-tokens.md)。
 
 ## 1. 设计原则

@@ -696,29 +696,6 @@ func (m *Model) evidenceToggle(c *ui.Context, row *Row) {
 	}
 }
 
-func (m *Model) resultStatusColor(t *ui.Theme, row *Row) ui.Color {
-	if m.recentlyConfirmedNow(row) {
-		return t.Success
-	}
-	return resultStatusColor(t, row)
-}
-
-func resultStatusColor(t *ui.Theme, row *Row) ui.Color {
-	switch row.Status {
-	case record.StatusFailed:
-		return t.Danger
-	case record.StatusUnprocessed:
-		// Unprocessed means recognition did not run; it is not a
-		// failure. Keep it muted so color never claims an error the
-		// text does not.
-		return t.TextMuted
-	}
-	if row.PendingReview() {
-		return t.Warning
-	}
-	return t.TextMuted
-}
-
 func resultIssueColor(t *ui.Theme, row *Row) ui.Color {
 	if row.Status == record.StatusFailed {
 		return t.Danger
