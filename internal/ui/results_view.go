@@ -68,14 +68,14 @@ func resultsSideBySide(contentWidth int) bool {
 	return contentWidth >= resultsSideBySideMinWidth
 }
 
-// resultsRowHeight is the design's 32-DIP results row. The composite fixes
-// its rows to it at every page-layout width, and its snapping uses the same
-// boundary.
+// resultsRowHeight is the design's 32-DIP results row at 100% text size.
+// resultsMetricsFor scales it for the composite's rows and snapping at
+// every page-layout width.
 const resultsRowHeight = 32
 
 // resultsSnapDelay is how long the results composite waits after the last
-// precise scroll move before snapping a small offset to the nearest 32-DIP
-// row.
+// precise scroll move before snapping a small offset to the nearest
+// text-scaled row.
 const resultsSnapDelay = 120 * time.Millisecond
 
 // resultsArea is the results browser: the current record's items in
@@ -349,7 +349,8 @@ func (m *Model) resultCellContent(c *ui.Context, visible []int, row, col int, to
 // chooses the row the visible detail already follows.
 func (m *Model) resultsCompositeTable(c *ui.Context, t *ui.Theme, tok *Tokens, visible []int) ui.Element {
 	columns := resultsColumnsFor(m.contentWidth)
-	ui.Row(c).Height(resultsRowHeight).Shrink(0).Clip().AlignItems(ui.Stretch).Children(func() {
+	metrics := resultsMetricsFor(m.textScale)
+	ui.Row(c).Height(metrics.RowHeight).Shrink(0).Clip().AlignItems(ui.Stretch).Children(func() {
 		for col := range columns {
 			m.resultsCompositeCell(c, t, tok, columns, col, visible, -1, true)
 		}
@@ -357,7 +358,7 @@ func (m *Model) resultsCompositeTable(c *ui.Context, t *ui.Theme, tok *Tokens, v
 	ui.Divider(c)
 	openDetail := m.resultsRowOpensDetail()
 	list := ui.List(c, &m.list, len(visible), func(row int) {
-		line := ui.Row(c).Height(resultsRowHeight).AlignItems(ui.Stretch)
+		line := ui.Row(c).Height(metrics.RowHeight).AlignItems(ui.Stretch)
 		if openDetail {
 			line.OnClick(func() { m.openResultDetailAt(visible[row]) })
 		}
@@ -391,21 +392,22 @@ func (m *Model) resultsCompositeTable(c *ui.Context, t *ui.Theme, tok *Tokens, v
 	return list
 }
 
-// resultsCompositeListHeight is the largest whole number of 32-DIP rows the
-// results table's slot leaves under its header and divider. measured is
-// false until the slot has a committed frame; the last measured height is
-// then the fallback, so returning from another destination cannot grow the
-// list for a frame.
+// resultsCompositeListHeight is the largest whole number of text-scaled
+// rows the results table's slot leaves under its header and divider.
+// measured is false until the slot has a committed frame; the last measured
+// height is then the fallback, so returning from another destination cannot
+// grow the list for a frame.
 func (m *Model) resultsCompositeListHeight(c *ui.Context) (height float32, measured bool) {
+	rowHeight := resultsMetricsFor(m.textScale).RowHeight
 	bounds := m.resultsTableSlot.Bounds(c)
 	if bounds.H <= 0 {
 		return m.resultsTableHeight, false
 	}
-	table, ok := wholeRowTableHeight(bounds.H, resultsRowHeight, resultsRowHeight+1)
+	table, ok := wholeRowTableHeight(bounds.H, rowHeight, rowHeight+1)
 	if !ok {
 		return 0, false
 	}
-	height = table - (resultsRowHeight + 1)
+	height = table - (rowHeight + 1)
 	m.resultsTableHeight = height
 	return height, true
 }
@@ -442,7 +444,7 @@ func (m *Model) resultsCompositeCell(c *ui.Context, t *ui.Theme, tok *Tokens, co
 	})
 }
 
-// snapResultsScroll aligns the composite's vertical offset with a 32-DIP row
+// snapResultsScroll aligns the composite's vertical offset with a row
 // boundary a precise scroll leaves between rows. Like the history table's
 // composite, the offset belongs to the input until the motion stops: writing
 // it mid-glide would make MyGo cancel the rest of a wheel's travel.
@@ -453,7 +455,7 @@ func (m *Model) snapResultsScroll(c *ui.Context, rows int) {
 	wait, snap := m.resultsScrollSnapStep(c.Now())
 	switch {
 	case snap:
-		m.applyResultsScrollSnap(resultRowOffset(m.resultsScroll.Y))
+		m.applyResultsScrollSnap(resultRowOffset(m.resultsScroll.Y, resultsMetricsFor(m.textScale).RowHeight))
 	case wait > 0:
 		// A repaint between the scroll and the deadline must ask again:
 		// MyGo keeps only the timer the last frame armed.
@@ -492,9 +494,12 @@ func (m *Model) resultsScrollSnapStep(now time.Time) (wait time.Duration, snap b
 	return 0, true
 }
 
-// resultRowOffset is the nearest row boundary to y.
-func resultRowOffset(y float32) float32 {
-	return float32(math.Round(float64(y)/float64(resultsRowHeight))) * resultsRowHeight
+// resultRowOffset is the nearest row boundary to y at the given row height.
+func resultRowOffset(y, rowHeight float32) float32 {
+	if rowHeight <= 0 {
+		return 0
+	}
+	return float32(math.Round(float64(y)/float64(rowHeight))) * rowHeight
 }
 
 // applyResultsScrollSnap moves the tracked offset and the list to one row
@@ -511,7 +516,8 @@ func (m *Model) applyResultsScrollSnap(target float32) {
 		return
 	}
 	m.resultsScroll.Y = target
-	m.list.ScrollTo(int(math.Round(float64(target)/resultsRowHeight)), ui.Start)
+	rowHeight := resultsMetricsFor(m.textScale).RowHeight
+	m.list.ScrollTo(int(math.Round(float64(target)/float64(rowHeight))), ui.Start)
 }
 
 // resetResultsScroll clears the composite's tracked offset before a new
@@ -526,7 +532,7 @@ func (m *Model) resetResultsScroll(row int) {
 	if row <= 0 {
 		return
 	}
-	m.resultsScroll.Y = float32(row) * resultsRowHeight
+	m.resultsScroll.Y = float32(row) * resultsMetricsFor(m.textScale).RowHeight
 	m.resultsScrollSeen = m.resultsScroll.Y
 }
 

@@ -23,6 +23,11 @@ func (m *Model) View(c *ui.Context) {
 	// Each build pass notes the text field that holds the keyboard, so the
 	// shell's Escape handler can leave the key to it.
 	m.textInputFocused = false
+	// The results rows and badges scale with the desktop's text size.
+	// Recording it here lets the scroll/reset handlers, which run from
+	// update paths without a Context, use the same row height as this
+	// frame's layout.
+	m.textScale = c.Preferences().TextScale
 	m.viewPages(c)
 }
 

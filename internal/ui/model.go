@@ -286,9 +286,16 @@ type Model struct {
 	// slot has a committed frame.
 	resultsTableSlot   ui.Ref
 	resultsTableHeight float32
+	// textScale is the desktop's text size as View last read it. The
+	// composite's rows scale with it, and the scroll/reset paths run from
+	// update handlers without a Context, so they read this recorded value
+	// instead of threading a Context through unrelated code. Zero means no
+	// frame has read the preference yet, which resultsMetricsFor treats as
+	// the 100% design.
+	textScale float32
 	// The results composite tracks its list's vertical offset. A precise
-	// scroll may stop between 32-DIP rows; resultsScrollSeen and the two
-	// times debounce the rest snap that aligns it to a row.
+	// scroll may stop between rows; resultsScrollSeen and the two times
+	// debounce the rest snap that aligns it to a row.
 	resultsScroll        ui.ScrollState
 	resultsScrollSeen    float32
 	resultsScrollMovedAt time.Time
