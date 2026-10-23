@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="style.css">
+<style>
+  .tok-head { width:1280px; display:flex; align-items:flex-end; justify-content:space-between; }
+  .tok-head h1 { margin:7px 0 0; font-size:38px; line-height:1.08; letter-spacing:-.035em; font-weight:720; }
+  .tok-head p { margin:9px 0 0; font-size:13.5px; line-height:1.55; color:var(--muted); }
+  .tok-tag { display:flex; gap:8px; }
+  .tok-tag .tag { background:var(--surface-2); border:1px solid var(--border); border-radius:5px; padding:4px 7px; font-size:9px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); }
+
+  .arch { width:1280px; display:flex; align-items:stretch; gap:8px; margin-top:18px; }
+  .arch-box { flex:1; min-width:0; padding:12px 14px; border-radius:9px; background:var(--card-bg); border:1px solid var(--border); box-shadow:0 1px 2px rgba(24,24,27,.035); }
+  .arch-box .k { font-size:9.5px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; color:var(--muted-2); }
+  .arch-box .t { margin-top:4px; font-size:12px; font-weight:650; }
+  .arch-box .d { margin-top:3px; font-size:10px; line-height:1.45; color:var(--muted); }
+  .arch-arrow { display:flex; align-items:center; justify-content:center; width:22px; color:var(--muted-2); font-size:15px; }
+  .arch-box.hot { border-color:var(--accent-border); background:linear-gradient(var(--accent-soft),var(--card-bg)); }
+
+  .token-grid { width:1280px; display:grid; grid-template-columns:repeat(2, 1fr); gap:10px; margin-top:12px; }
+  .group { padding:11px 12px 9px; border-radius:9px; background:var(--card-bg); border:1px solid var(--border); box-shadow:0 1px 2px rgba(24,24,27,.03); }
+  .group h3 { margin:0 0 7px; font-size:11px; font-weight:680; letter-spacing:.01em; }
+  .token-row { display:grid; grid-template-columns: 1.35fr .8fr .8fr; align-items:center; gap:5px; min-height:22px; border-top:1px solid var(--border-soft); font-size:9.5px; }
+  .token-row:first-of-type { border-top:none; }
+  .token-row .name { color:var(--text-2); font-family:"SF Mono",Menlo,monospace; font-size:8.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .val { display:flex; align-items:center; gap:5px; min-width:0; }
+  .chip { width:13px; height:13px; border-radius:4px; flex:0 0 13px; border:1px solid rgba(0,0,0,.10); }
+  .hex { color:var(--muted); font-family:"SF Mono",Menlo,monospace; font-size:8px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .group-note { margin-top:6px; font-size:8.5px; line-height:1.4; color:var(--muted-2); }
+
+  .foot { width:1280px; display:flex; align-items:center; gap:10px; margin-top:12px; }
+  .foot .item { flex:1; padding:9px 11px; border-radius:8px; background:var(--surface-2); border:1px solid var(--border-soft); font-size:9.5px; line-height:1.4; color:var(--muted); }
+  .foot .item b { display:block; color:var(--text-2); font-size:10px; margin-bottom:2px; }
+</style>
+</head>
+<body>
+<div class="board">
+  <div class="tok-head">
+    <div>
+      <div class="board-eyebrow">07 · Design Tokens</div>
+      <h1>同一语义，两套值</h1>
+      <p>开发只引用 semantic token；浅色和深色只是两套映射。组件里不出现 hex，也不按主题写两套组件。</p>
+    </div>
+    <div class="tok-tag">
+      <span class="tag">Semantic first</span>
+      <span class="tag">Light / Dark</span>
+      <span class="tag">MyGo mapping</span>
+    </div>
+  </div>
+
+  <div class="arch">
+    <div class="arch-box">
+      <div class="k">L0 · Runtime</div>
+      <div class="t">MyGo ui.Theme</div>
+      <div class="d">Background / Surface / Border / Text / Accent / Danger / Warning / Success / Focus</div>
+    </div>
+    <div class="arch-arrow">→</div>
+    <div class="arch-box hot">
+      <div class="k">L1 · Youkai</div>
+      <div class="t">Semantic tokens</div>
+      <div class="d">surface.* / text.* / border.* / interact.* / status.* / intent.*</div>
+    </div>
+    <div class="arch-arrow">→</div>
+    <div class="arch-box">
+      <div class="k">L2 · Components</div>
+      <div class="t">Composed widgets</div>
+      <div class="d">table.row / evidence.plate / confirm.bar / danger.zone / status.badge</div>
+    </div>
+  </div>
+
+  <div class="token-grid">
+    <div class="group">
+      <h3>Surface · 层级</h3>
+      <div class="token-row"><span class="name">surface.window</span><span class="val"><span class="chip" style="background:#ffffff"></span><span class="hex">#FFFFFF</span></span><span class="val"><span class="chip" style="background:#101318"></span><span class="hex">#101318</span></span></div>
+      <div class="token-row"><span class="name">surface.content</span><span class="val"><span class="chip" style="background:#ffffff"></span><span class="hex">#FFFFFF</span></span><span class="val"><span class="chip" style="background:#151920"></span><span class="hex">#151920</span></span></div>
+      <div class="token-row"><span class="name">surface.card</span><span class="val"><span class="chip" style="background:#ffffff"></span><span class="hex">#FFFFFF</span></span><span class="val"><span class="chip" style="background:#1b2029"></span><span class="hex">#1B2029</span></span></div>
+      <div class="token-row"><span class="name">surface.header</span><span class="val"><span class="chip" style="background:#fafafb"></span><span class="hex">#FAFAFB</span></span><span class="val"><span class="chip" style="background:#222833"></span><span class="hex">#222833</span></span></div>
+      <div class="token-row"><span class="name">surface.sunken</span><span class="val"><span class="chip" style="background:#f0f0f2"></span><span class="hex">#F0F0F2</span></span><span class="val"><span class="chip" style="background:#0f1217"></span><span class="hex">#0F1217</span></span></div>
+      <div class="token-row"><span class="name">surface.evidence</span><span class="val"><span class="chip" style="background:#f4f4f5"></span><span class="hex">#F4F4F5</span></span><span class="val"><span class="chip" style="background:#090c11"></span><span class="hex">#090C11</span></span></div>
+      <div class="group-note">深色靠亮度台阶 + 1px border；普通卡片不加阴影。</div>
+    </div>
+
+    <div class="group">
+      <h3>Text · 文本</h3>
+      <div class="token-row"><span class="name">text.primary</span><span class="val"><span class="chip" style="background:#18181b"></span><span class="hex">#18181B</span></span><span class="val"><span class="chip" style="background:#f2f4f8"></span><span class="hex">#F2F4F8</span></span></div>
+      <div class="token-row"><span class="name">text.secondary</span><span class="val"><span class="chip" style="background:#3f3f46"></span><span class="hex">#3F3F46</span></span><span class="val"><span class="chip" style="background:#c3c9d3"></span><span class="hex">#C3C9D3</span></span></div>
+      <div class="token-row"><span class="name">text.muted</span><span class="val"><span class="chip" style="background:#6b6b73"></span><span class="hex">#6B6B73</span></span><span class="val"><span class="chip" style="background:#98a1ae"></span><span class="hex">#98A1AE</span></span></div>
+      <div class="token-row"><span class="name">text.disabled</span><span class="val"><span class="chip" style="background:#8a8a93"></span><span class="hex">#8A8A93</span></span><span class="val"><span class="chip" style="background:#6f7886"></span><span class="hex">#6F7886</span></span></div>
+      <div class="token-row"><span class="name">text.code</span><span class="val"><span class="chip" style="background:#3f3f46"></span><span class="hex">#3F3F46</span></span><span class="val"><span class="chip" style="background:#c9d1d9"></span><span class="hex">#C9D1D9</span></span></div>
+      <div class="group-note">禁用不用 opacity 叠加；未读取是有效状态，不用 disabled。</div>
+    </div>
+
+    <div class="group">
+      <h3>Accent · 强调</h3>
+      <div class="token-row"><span class="name">accent.fg</span><span class="val"><span class="chip" style="background:#2563eb"></span><span class="hex">#2563EB</span></span><span class="val"><span class="chip" style="background:#60a5fa"></span><span class="hex">#60A5FA</span></span></div>
+      <div class="token-row"><span class="name">accent.fill</span><span class="val"><span class="chip" style="background:#2563eb"></span><span class="hex">#2563EB</span></span><span class="val"><span class="chip" style="background:#2563eb"></span><span class="hex">#2563EB</span></span></div>
+      <div class="token-row"><span class="name">accent.onFill</span><span class="val"><span class="chip" style="background:#ffffff"></span><span class="hex">#FFFFFF</span></span><span class="val"><span class="chip" style="background:#ffffff"></span><span class="hex">#FFFFFF</span></span></div>
+      <div class="token-row"><span class="name">accent.soft</span><span class="val"><span class="chip" style="background:#eff6ff"></span><span class="hex">#EFF6FF</span></span><span class="val"><span class="chip" style="background:#1a2440"></span><span class="hex">rgba(96,165,250,.14)</span></span></div>
+      <div class="token-row"><span class="name">accent.border</span><span class="val"><span class="chip" style="background:#bfdbfe"></span><span class="hex">#BFDBFE</span></span><span class="val"><span class="chip" style="background:#35507a"></span><span class="hex">rgba(96,165,250,.38)</span></span></div>
+      <div class="group-note">文字/图标与实心填充拆开；白字 on #2563EB ≈ 5.2:1。</div>
+    </div>
+
+    <div class="group">
+      <h3>Status · 数据状态</h3>
+      <div class="token-row"><span class="name">status.pending.fg</span><span class="val"><span class="chip" style="background:#b45309"></span><span class="hex">#B45309</span></span><span class="val"><span class="chip" style="background:#fbbf24"></span><span class="hex">#FBBF24</span></span></div>
+      <div class="token-row"><span class="name">status.failed.fg</span><span class="val"><span class="chip" style="background:#b91c1c"></span><span class="hex">#B91C1C</span></span><span class="val"><span class="chip" style="background:#f87171"></span><span class="hex">#F87171</span></span></div>
+      <div class="token-row"><span class="name">status.confirmed.fg</span><span class="val"><span class="chip" style="background:#15803d"></span><span class="hex">#15803D</span></span><span class="val"><span class="chip" style="background:#4ade80"></span><span class="hex">#4ADE80</span></span></div>
+      <div class="token-row"><span class="name">status.auto.fg</span><span class="val"><span class="chip" style="background:#3f3f46"></span><span class="hex">text.secondary</span></span><span class="val"><span class="chip" style="background:#c3c9d3"></span><span class="hex">text.secondary</span></span></div>
+      <div class="token-row"><span class="name">status.unread.fg</span><span class="val"><span class="chip" style="background:#6b6b73"></span><span class="hex">#6B6B73</span></span><span class="val"><span class="chip" style="background:#858fa0"></span><span class="hex">#858FA0</span></span></div>
+      <div class="group-note">每个状态都有文字 + 图标形状；自动接受用中性色，不铺绿。</div>
+    </div>
+
+    <div class="group">
+      <h3>Interaction · 交互</h3>
+      <div class="token-row"><span class="name">interact.hover</span><span class="val"><span class="chip" style="background:#f4f4f5"></span><span class="hex">#F4F4F5</span></span><span class="val"><span class="chip" style="background:#232a35"></span><span class="hex">rgba(255,255,255,.045)</span></span></div>
+      <div class="token-row"><span class="name">interact.selected</span><span class="val"><span class="chip" style="background:#eff6ff"></span><span class="hex">#EFF6FF</span></span><span class="val"><span class="chip" style="background:#1a2440"></span><span class="hex">rgba(96,165,250,.14)</span></span></div>
+      <div class="token-row"><span class="name">interact.focus</span><span class="val"><span class="chip" style="background:#2563eb"></span><span class="hex">#2563EB</span></span><span class="val"><span class="chip" style="background:#93c5fd"></span><span class="hex">#93C5FD</span></span></div>
+      <div class="token-row"><span class="name">scrim</span><span class="val"><span class="chip" style="background:#18181b"></span><span class="hex">rgba(24,24,27,.32)</span></span><span class="val"><span class="chip" style="background:#04070c"></span><span class="hex">rgba(4,7,12,.64)</span></span></div>
+      <div class="token-row"><span class="name">selection</span><span class="val"><span class="chip" style="background:#dbeafe"></span><span class="hex">rgba(37,99,235,.25)</span></span><span class="val"><span class="chip" style="background:#223454"></span><span class="hex">rgba(96,165,250,.30)</span></span></div>
+      <div class="group-note">焦点环只在键盘态出现；选中行与焦点不能共用同一视觉。</div>
+    </div>
+
+    <div class="group">
+      <h3>Component · 组件</h3>
+      <div class="token-row"><span class="name">table.header</span><span class="val"><span class="chip" style="background:#fafafb"></span><span class="hex">#FAFAFB</span></span><span class="val"><span class="chip" style="background:#222833"></span><span class="hex">#222833</span></span></div>
+      <div class="token-row"><span class="name">table.rowSelected</span><span class="val"><span class="chip" style="background:#eff6ff"></span><span class="hex">#EFF6FF</span></span><span class="val"><span class="chip" style="background:#1a2440"></span><span class="hex">rgba(96,165,250,.14)</span></span></div>
+      <div class="token-row"><span class="name">evidence.plate</span><span class="val"><span class="chip" style="background:#f4f4f5"></span><span class="hex">#F4F4F5</span></span><span class="val"><span class="chip" style="background:#090c11"></span><span class="hex">#090C11</span></span></div>
+      <div class="token-row"><span class="name">intent.destructive</span><span class="val"><span class="chip" style="background:#dc2626"></span><span class="hex">#DC2626</span></span><span class="val"><span class="chip" style="background:#f87171"></span><span class="hex">#F87171</span></span></div>
+      <div class="token-row"><span class="name">confirm.bar</span><span class="val"><span class="chip" style="background:#fafafb"></span><span class="hex">surface.sunken</span></span><span class="val"><span class="chip" style="background:#0f1217"></span><span class="hex">surface.sunken</span></span></div>
+      <div class="group-note">TableHeader / RowSelected / Scrim 当前 MyGo 内置组件未消费，需 app 组合或上游 patch。</div>
+    </div>
+  </div>
+
+  <div class="foot">
+    <div class="item"><b>禁止硬编码</b>组件只引用 token；CSS 与 Go 同名，避免两套事实来源。</div>
+    <div class="item"><b>MyGo 映射</b>复制 Theme → 覆盖字段 → SetTheme；不要改模块缓存。</div>
+    <div class="item"><b>验收</b>对比度、灰度层级、真实截图、键盘焦点、色觉模拟五项。</div>
+  </div>
+</div>
+</body>
+</html>

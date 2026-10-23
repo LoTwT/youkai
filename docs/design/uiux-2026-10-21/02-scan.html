@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="style.css">
+<style>
+  .scan-main { display:flex; gap:18px; flex:1; min-height:0; margin-top:18px; }
+  .scan-left { flex:1; min-width:0; display:flex; flex-direction:column; gap:12px; }
+  .scan-right { width:330px; flex:0 0 330px; display:flex; flex-direction:column; gap:12px; }
+
+  .readiness { padding:15px 16px 13px; }
+  .readiness-head { display:flex; align-items:center; justify-content:space-between; margin-bottom:10px; }
+  .readiness-grid { display:grid; grid-template-columns:1fr 1fr; gap:0 20px; }
+  .ready-item { display:flex; align-items:flex-start; gap:9px; padding:9px 0; border-top:1px solid var(--border-soft); }
+  .ready-item:nth-child(-n+2) { border-top:none; }
+  .ready-item .copy { min-width:0; }
+  .ready-item .name { font-size:11.5px; font-weight:600; color:var(--text-2); }
+  .ready-item .value { margin-top:2px; font-size:10.5px; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .ready-item .value b { color:var(--text-2); font-weight:550; }
+
+  .scope { padding:13px 15px 14px; }
+  .chips { display:flex; flex-wrap:wrap; gap:7px; margin-top:9px; }
+  .chip { display:inline-flex; align-items:center; gap:6px; height:25px; padding:0 9px; border-radius:7px; background:var(--surface-2); border:1px solid var(--border-soft); font-size:10.5px; color:var(--text-2); }
+  .chip .icon { color:var(--muted); }
+  .actions { display:flex; align-items:center; gap:10px; padding-top:2px; }
+  .actions .note { margin-left:auto; font-size:10.5px; color:var(--muted); }
+
+  .last-scan { padding:15px 15px 14px; }
+  .last-head { display:flex; align-items:flex-start; justify-content:space-between; gap:8px; }
+  .last-date { font-size:10.5px; color:var(--muted); }
+  .last-stats { display:grid; grid-template-columns:1fr 1fr; gap:7px; margin-top:12px; }
+  .mini-stat { padding:8px 9px; border-radius:7px; background:var(--surface-2); border:1px solid var(--border-soft); }
+  .mini-stat .k { font-size:9.5px; color:var(--muted); }
+  .mini-stat .v { margin-top:3px; font-size:15px; line-height:1; font-weight:680; font-variant-numeric:tabular-nums; letter-spacing:-.02em; }
+  .mini-stat.warn .v { color:#b45309; }
+  .mini-stat.danger .v { color:var(--danger); }
+  .last-link { display:flex; align-items:center; justify-content:space-between; margin-top:11px; padding-top:10px; border-top:1px solid var(--border-soft); font-size:11px; color:var(--accent); font-weight:600; }
+
+  .stop-card { padding:14px 15px; }
+  .keyline { display:flex; align-items:center; gap:5px; margin-top:10px; }
+  .stop-note { margin-top:9px; font-size:10.5px; line-height:1.5; color:var(--muted); }
+
+  .source-card { padding:13px 15px; }
+  .source-line { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-top:9px; font-size:10.5px; }
+  .source-line .k { color:var(--muted); }
+  .source-line .v { color:var(--text-2); font-weight:550; }
+</style>
+</head>
+<body>
+<div class="board">
+  <div class="board-meta">
+    <div>
+      <div class="board-eyebrow">02 · 扫描</div>
+      <h2 class="board-title">开始前先回答：会发生什么、要多久、怎么停</h2>
+    </div>
+    <div class="board-note">扫描页 · 准备态<br>1020 × 700 起，内容区独立滚动</div>
+  </div>
+
+  <div class="window">
+    <div class="titlebar">
+      <div class="lights"><span class="light red"></span><span class="light yellow"></span><span class="light green"></span></div>
+      <div class="window-title">Youkai</div>
+      <div class="window-meta"><span class="status-dot"></span>本地保存正常</div>
+    </div>
+    <div class="tabbar">
+      <div class="tab active">扫描</div>
+      <div class="tab">结果与校对 <span class="badge warn">130</span></div>
+      <div class="tab">历史 <span class="badge">8</span></div>
+      <div class="tab">设置</div>
+      <div class="tab-spacer"></div>
+      <div class="tab" style="color:var(--muted); font-size:11px;">v0.9.0</div>
+    </div>
+
+    <div class="content">
+      <div class="page-head">
+        <div>
+          <h1 class="page-title">扫描驱动盘仓库</h1>
+          <div class="page-sub">扫描《绝区零》云客户端，完成后自动进入校对。上次扫描：<strong>10 月 20 日 13:42</strong></div>
+        </div>
+        <div class="head-actions">
+          <button class="btn ghost small">扫描设置</button>
+          <button class="btn small">打开数据目录</button>
+        </div>
+      </div>
+
+      <div class="scan-main">
+        <div class="scan-left">
+          <div class="callout warn">
+            <svg class="icon" viewBox="0 0 24 24"><path d="M12 3 2.6 20a1 1 0 0 0 .9 1.5h17a1 1 0 0 0 .9-1.5L12 3Z"/><path d="M12 9v5M12 17.5h.01"/></svg>
+            <div><b>扫描期间会自动操作游戏。</b> 请保持游戏窗口在前台，不要切换应用或手动操作游戏。扫描完成或停止后，即可校对结果。</div>
+          </div>
+
+          <div class="card readiness">
+            <div class="readiness-head">
+              <div>
+                <div class="section-title">扫描准备</div>
+                <div class="section-sub">开始前逐项确认，避免扫描中途才发现环境不匹配</div>
+              </div>
+              <span class="pill success"><span class="dot"></span>6 / 6 就绪</span>
+            </div>
+            <div class="readiness-grid">
+              <div class="ready-item">
+                <span class="check-circle"><svg viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></svg></span>
+                <div class="copy"><div class="name">云客户端</div><div class="value"><b>云·绝区零</b> · 已连接</div></div>
+              </div>
+              <div class="ready-item">
+                <span class="check-circle"><svg viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></svg></span>
+                <div class="copy"><div class="name">游戏窗口</div><div class="value"><b>已找到</b> · 1920 × 1200</div></div>
+              </div>
+              <div class="ready-item">
+                <span class="check-circle"><svg viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></svg></span>
+                <div class="copy"><div class="name">布局与缩放</div><div class="value"><b>已匹配</b> · 16:10 · 100%</div></div>
+              </div>
+              <div class="ready-item">
+                <span class="check-circle"><svg viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></svg></span>
+                <div class="copy"><div class="name">扫描范围</div><div class="value"><b>6 个位置 × 2 层</b> · 全部套装</div></div>
+              </div>
+              <div class="ready-item">
+                <span class="check-circle"><svg viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></svg></span>
+                <div class="copy"><div class="name">保存位置</div><div class="value"><b>本地数据目录</b> · 可用 42.1 GB</div></div>
+              </div>
+              <div class="ready-item">
+                <span class="check-circle"><svg viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></svg></span>
+                <div class="copy"><div class="name">停止方式</div><div class="value"><b>⌃⌥⌘S</b> 或窗口停止按钮</div></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="card scope">
+            <div class="section-title">本次扫描范围</div>
+            <div class="chips">
+              <span class="chip"><svg class="icon sm" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M9 4v16M15 4v16M4 9h16M4 15h16"/></svg>1–6 号位</span>
+              <span class="chip"><svg class="icon sm" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></svg>全部套装</span>
+              <span class="chip"><svg class="icon sm" viewBox="0 0 24 24"><path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01"/></svg>按等级排序</span>
+              <span class="chip"><svg class="icon sm" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/></svg>预计 8–12 分钟</span>
+              <span class="chip"><svg class="icon sm" viewBox="0 0 24 24"><path d="M4 5h16v12H4z"/><path d="M8 21h8"/></svg>自动保存</span>
+            </div>
+          </div>
+
+          <div class="grow"></div>
+          <div class="actions">
+            <button class="btn primary large wide">开始扫描 <span class="kbd" style="border-color:rgba(255,255,255,.35); background:rgba(255,255,255,.16); color:#fff;">⌘R</span></button>
+            <button class="btn large">打开游戏</button>
+            <div class="note">开始后可隐藏到托盘，扫描会继续。</div>
+          </div>
+        </div>
+
+        <div class="scan-right">
+          <div class="card last-scan">
+            <div class="last-head">
+              <div>
+                <div class="section-title">上次扫描</div>
+                <div class="last-date">10 月 20 日 13:42 · 云·绝区零</div>
+              </div>
+              <span class="pill muted">部分覆盖</span>
+            </div>
+            <div class="last-stats">
+              <div class="mini-stat"><div class="k">已采集</div><div class="v">1,005</div></div>
+              <div class="mini-stat"><div class="k">可用</div><div class="v">875</div></div>
+              <div class="mini-stat warn"><div class="k">待校对</div><div class="v">130</div></div>
+              <div class="mini-stat danger"><div class="k">失败</div><div class="v">3</div></div>
+            </div>
+            <div class="last-link"><span>查看本次结果</span><span>→</span></div>
+          </div>
+
+          <div class="card stop-card">
+            <div class="section-title">停止方式</div>
+            <div class="keyline">
+              <span class="kbd">⌃</span><span class="kbd">⌥</span><span class="kbd">⌘</span><span class="kbd">S</span>
+              <span class="muted" style="font-size:10.5px; margin-left:4px;">全局快捷键</span>
+            </div>
+            <div class="stop-note">也可以点击窗口中的“停止扫描”。停止是幂等的，会先保存已完成条目。</div>
+          </div>
+
+          <div class="card source-card">
+            <div class="section-title">扫描源</div>
+            <div class="source-line"><span class="k">正式构建</span><span class="v">自动发现云客户端</span></div>
+            <div class="source-line"><span class="k">当前来源</span><span class="v">云·绝区零</span></div>
+            <div class="source-line"><span class="k">数据目录</span><span class="v mono" style="font-size:9.5px;">~/Library/Application Support/Youkai</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="statusbar">
+      <div class="status-left"><span class="status-dot"></span>就绪 · 自动保存已开启 <span class="status-sep"></span> 上次保存 13:48</div>
+      <div class="status-right">⌘R 开始扫描 <span class="status-sep"></span> ⌃⌥⌘S 停止</div>
+    </div>
+  </div>
+</div>
+</body>
+</html>

@@ -1,6 +1,6 @@
 # 发布与自动更新
 
-更新日期：2026-10-18。本文维护 youkai 的版本规则、两条发布渠道、打标签与发布步骤、更新密钥管理与发布后验证（含升级实测清单）；日常构建命令见[开发指南](development.md)，交付门槛见 [T7](specs/t7-public-release-acceptance.md)，自动更新的范围与规则见[架构第 6 节](specs/scanner-architecture.md#6-首版功能范围)。发布由 `LoTwT/youkai` 的 GitHub Releases 承担，也是 MyGo 内置更新的下载源（MyGo v0.5.5，行为依据其 `docs/updates.md`、`docs/github-actions.md` 与 `internal/update`）。
+更新日期：2026-10-21。本文维护 youkai 的版本规则、两条发布渠道、打标签与发布步骤、更新密钥管理与发布后验证（含升级实测清单）；日常构建命令见[开发指南](development.md)，交付门槛见 [T7](specs/t7-public-release-acceptance.md)，自动更新的范围与规则见[架构第 6 节](specs/scanner-architecture.md#6-首版功能范围)。发布由 `LoTwT/youkai` 的 GitHub Releases 承担，也是 MyGo 内置更新的下载源（MyGo v0.6.2，行为依据其 `docs/updates.md`、`docs/github-actions.md` 与 `internal/update`）。
 
 ## 版本号与两条渠道
 

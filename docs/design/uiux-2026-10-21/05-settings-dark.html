@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="style.css">
+<style>
+  .settings-grid { display:flex; gap:14px; flex:1; min-height:0; margin-top:14px; }
+  .settings-col { display:flex; flex-direction:column; gap:12px; min-height:0; min-width:0; }
+  .settings-col.left { flex:1; min-width:0; }
+  .settings-col.right { width:430px; flex:0 0 430px; }
+  .setting-card { padding:13px 15px; overflow:hidden; }
+  .setting-head { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; min-width:0; }
+  .setting-head > div { min-width:0; }
+  .setting-head > .pill, .setting-head > .btn { flex:0 0 auto; }
+  .setting-title { font-size:12.5px; font-weight:650; }
+  .setting-sub { margin-top:3px; font-size:10.5px; line-height:1.45; color:var(--muted); }
+  .setting-body { margin-top:9px; }
+  .setting-row { display:flex; align-items:flex-start; gap:9px; padding:7px 0; border-top:1px solid var(--border-soft); }
+  .setting-row:first-child { border-top:none; padding-top:0; }
+  .setting-row .copy { min-width:0; flex:1; }
+  .setting-row .name { font-size:11.5px; font-weight:550; color:var(--text-2); }
+  .setting-row .desc { margin-top:2px; font-size:10px; line-height:1.45; color:var(--muted); }
+  .setting-row .right { display:flex; align-items:center; margin-left:auto; flex:0 0 auto; }
+
+  .switch { display:inline-block; width:32px; height:18px; border-radius:9px; background:#d4d4d8; position:relative; }
+  .switch.on { background:var(--accent); }
+  .switch::after { content:""; position:absolute; top:2px; left:2px; width:14px; height:14px; border-radius:50%; background:#fff; box-shadow:0 1px 2px rgba(0,0,0,.18); }
+  .switch.on::after { left:16px; }
+
+  .usage-row { display:flex; gap:8px; margin-top:10px; }
+  .usage { flex:1; padding:9px 10px; border-radius:7px; background:var(--surface-2); border:1px solid var(--border-soft); }
+  .usage .k { font-size:9.5px; color:var(--muted); }
+  .usage .v { margin-top:3px; font-size:13px; font-weight:650; font-variant-numeric:tabular-nums; letter-spacing:-.01em; }
+  .usage .v small { font-size:9px; font-weight:500; color:var(--muted); margin-left:2px; }
+  .storage-buttons { display:flex; align-items:center; gap:7px; margin-top:10px; }
+  .storage-buttons .btn { height:26px; font-size:10.5px; padding:0 9px; }
+  .storage-danger { margin-top:11px; padding:9px 10px; border-radius:7px; background:var(--danger-soft); border:1px solid var(--danger-border); display:flex; align-items:center; gap:8px; }
+  .storage-danger .copy { flex:1; min-width:0; font-size:10px; line-height:1.4; color:#991b1b; }
+  .storage-danger .btn { flex:0 0 auto; margin-left:auto; height:24px; font-size:10px; padding:0 8px; }
+
+  .shortcut-row { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:5px 0; border-top:1px solid var(--border-soft); font-size:11px; }
+  .shortcut-row:first-child { border-top:none; padding-top:0; }
+  .shortcut-row .name { color:var(--text-2); }
+  .keys { display:flex; align-items:center; gap:4px; }
+  .tray-row { display:flex; align-items:flex-start; gap:9px; padding:5px 0; border-top:1px solid var(--border-soft); }
+  .tray-row:first-child { border-top:none; padding-top:0; }
+  .tray-row .state { width:40px; flex:0 0 40px; font-size:9.5px; color:var(--muted-2); padding-top:1px; }
+  .tray-row .copy { font-size:10.5px; line-height:1.45; color:var(--text-2); }
+  .tray-row .copy b { font-weight:600; }
+  .version-box { display:flex; align-items:center; gap:10px; padding:8px 10px; border-radius:8px; background:var(--surface-2); border:1px solid var(--border-soft); }
+  .version-box .mark { width:30px; height:30px; border-radius:8px; background:linear-gradient(145deg,#2563eb,#60a5fa); color:#fff; display:flex; align-items:center; justify-content:center; font-size:12px; font-weight:750; }
+  .version-box .v { font-size:12px; font-weight:650; }
+  .version-box .s { margin-top:2px; font-size:10px; color:var(--muted); }
+</style>
+  <link rel="stylesheet" href="dark.css">
+</head>
+<body>
+<div class="board">
+  <div class="board-meta">
+    <div>
+      <div class="board-eyebrow">05 · 设置</div>
+      <h2 class="board-title">低频配置集中管理，不再和扫描抢首屏</h2>
+    </div>
+    <div class="board-note">二级页面 · 设置<br>关窗行为、存储、更新、快捷键</div>
+  </div>
+
+  <div class="window">
+    <div class="titlebar">
+      <div class="lights"><span class="light red"></span><span class="light yellow"></span><span class="light green"></span></div>
+      <div class="window-title">Youkai</div>
+      <div class="window-meta"><span class="status-dot"></span>v0.9.0</div>
+    </div>
+    <div class="tabbar">
+      <div class="tab">扫描</div>
+      <div class="tab">结果与校对 <span class="badge warn">130</span></div>
+      <div class="tab">历史 <span class="badge">8</span></div>
+      <div class="tab active">设置</div>
+      <div class="tab-spacer"></div>
+      <div class="tab" style="color:var(--muted); font-size:11px;">本地优先</div>
+    </div>
+
+    <div class="content">
+      <div class="page-head">
+        <div>
+          <h1 class="page-title">设置</h1>
+          <div class="page-sub">应用行为、存储与更新。修改会立即保存。</div>
+        </div>
+        <div class="head-actions">
+          <span class="pill success"><span class="dot"></span>所有设置已保存</span>
+        </div>
+      </div>
+
+      <div class="settings-grid">
+        <div class="settings-col left">
+          <div class="card setting-card">
+            <div class="setting-head">
+              <div>
+                <div class="setting-title">窗口与启动</div>
+                <div class="setting-sub">关闭窗口时如何处理扫描与应用生命周期</div>
+              </div>
+            </div>
+            <div class="setting-body">
+              <div class="setting-row">
+                <span class="radio on"></span>
+                <div class="copy"><div class="name">隐藏到托盘，继续运行</div><div class="desc">默认行为。扫描继续，托盘图标显示进度。</div></div>
+              </div>
+              <div class="setting-row">
+                <span class="radio"></span>
+                <div class="copy"><div class="name">停止扫描并退出应用</div><div class="desc">先停止、保存已完成条目，再释放识别资源并退出。</div></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="card setting-card">
+            <div class="setting-head">
+              <div>
+                <div class="setting-title">存储管理</div>
+                <div class="setting-sub">历史 8 条 · 截图 2,545 张 · 数据目录可用 42.1 GB</div>
+              </div>
+              <button class="btn small">打开数据目录</button>
+            </div>
+            <div class="usage-row">
+              <div class="usage"><div class="k">记录数据</div><div class="v">3.2 <small>GB</small></div></div>
+              <div class="usage"><div class="k">截图</div><div class="v">1.8 <small>GB</small></div></div>
+              <div class="usage"><div class="k">缓存</div><div class="v">320 <small>MB</small></div></div>
+              <div class="usage"><div class="k">日志</div><div class="v">48 <small>MB</small></div></div>
+            </div>
+            <div class="storage-buttons">
+              <button class="btn">清缓存</button>
+              <button class="btn">清旧日志</button>
+              <button class="btn">刷新占用</button>
+              <span class="muted" style="margin-left:auto; font-size:9.5px;">最近计算：刚刚</span>
+            </div>
+            <div class="storage-danger">
+              <svg class="icon sm" viewBox="0 0 24 24" style="color:var(--danger);"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg>
+              <div class="copy"><b>删除全部截图 / 记录</b>：会先预览影响范围；待校对 &gt; 0 时入口会弱化。</div>
+              <button class="btn danger">管理删除</button>
+            </div>
+          </div>
+
+          <div class="card setting-card">
+            <div class="setting-head">
+              <div>
+                <div class="setting-title">软件更新</div>
+                <div class="setting-sub">当前版本 v0.9.0 · 构建 20261020</div>
+              </div>
+              <span class="pill success"><span class="dot"></span>已是最新</span>
+            </div>
+            <div class="setting-body">
+              <div class="setting-row">
+                <div class="copy"><div class="name">自动检查更新</div><div class="desc">启动时检查，运行期间每 6 小时检查一次。</div></div>
+                <div class="right"><span class="switch on"></span></div>
+              </div>
+              <div class="setting-row">
+                <div class="copy"><div class="name">上次检查</div><div class="desc">10 分钟前 · 未发现新版本。</div></div>
+                <div class="right"><button class="btn small">检查更新</button></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="settings-col right">
+          <div class="card setting-card">
+            <div class="setting-head">
+              <div>
+                <div class="setting-title">快捷键</div>
+                <div class="setting-sub">按实际注册结果展示，不声称未注册的按键</div>
+              </div>
+            </div>
+            <div class="setting-body">
+              <div class="shortcut-row"><span class="name">停止扫描</span><span class="keys"><span class="kbd">⌃</span><span class="kbd">⌥</span><span class="kbd">⌘</span><span class="kbd">S</span></span></div>
+              <div class="shortcut-row"><span class="name">确认并下一项</span><span class="keys"><span class="kbd">⌘</span><span class="kbd">↵</span></span></div>
+              <div class="shortcut-row"><span class="name">保存修改</span><span class="keys"><span class="kbd">⌘</span><span class="kbd">S</span></span></div>
+              <div class="shortcut-row"><span class="name">下一个待校对</span><span class="keys"><span class="kbd">⌘</span><span class="kbd">J</span></span></div>
+            </div>
+          </div>
+
+          <div class="card setting-card">
+            <div class="setting-head">
+              <div>
+                <div class="setting-title">托盘与窗口</div>
+                <div class="setting-sub">菜单文案随扫描状态变化</div>
+              </div>
+            </div>
+            <div class="setting-body">
+              <div class="tray-row"><div class="state">空闲</div><div class="copy"><b>打开主窗口</b> · 不改变应用状态</div></div>
+              <div class="tray-row"><div class="state">扫描中</div><div class="copy"><b>停止扫描并打开</b> · 先停止，再显示窗口</div></div>
+              <div class="tray-row"><div class="state">退出</div><div class="copy"><b>停止 → 保存 → 退出</b> · 失败时保留窗口并说明</div></div>
+            </div>
+          </div>
+
+          <div class="card setting-card">
+            <div class="setting-head">
+              <div>
+                <div class="setting-title">关于</div>
+              </div>
+            </div>
+            <div class="setting-body">
+              <div class="version-box">
+                <div class="mark">Y</div>
+                <div><div class="v">Youkai v0.9.0</div><div class="s">本地优先的驱动盘扫描与校对工具</div></div>
+                <button class="btn small" style="margin-left:auto;">开源许可</button>
+              </div>
+              <div class="key-value" style="margin-top:7px;"><span class="k">数据目录</span><span class="v mono" style="font-size:9.5px;">~/Library/Application Support/Youkai</span></div>
+              <div class="key-value" style="margin-top:4px;"><span class="k">诊断日志</span><span class="v">保留 7 天 · 48 MB</span></div>
+            </div>
+          </div>
+
+          <div class="card setting-card" style="padding:11px 14px;">
+            <div class="row gap-8">
+              <span class="check-circle"><svg viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></svg></span>
+              <div><div class="setting-title">本地优先</div><div class="setting-sub" style="margin-top:2px;">截图与识别文本只保存在本机，不上传。</div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="statusbar">
+      <div class="status-left"><span class="status-dot"></span>所有设置已保存 <span class="status-sep"></span> 自动保存已开启</div>
+      <div class="status-right">⌘S 保存修改 <span class="status-sep"></span> Esc 放弃</div>
+    </div>
+  </div>
+</div>
+</body>
+</html>

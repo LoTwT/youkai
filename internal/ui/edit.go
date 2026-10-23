@@ -60,6 +60,23 @@ type editState struct {
 	check       app.DataCheck
 }
 
+// reviewAction is one save/confirmation the results page can request. A
+// confirmation may stay on the current item (the secondary action) or move
+// to the next pending one (the primary action); a plain save never changes
+// the item's review quality.
+type reviewAction int
+
+const (
+	reviewSave reviewAction = iota
+	reviewConfirmStay
+	reviewConfirmNext
+)
+
+// confirmed reports whether the action settles the item's review.
+func (a reviewAction) confirmed() bool {
+	return a == reviewConfirmStay || a == reviewConfirmNext
+}
+
 // navKind is a pending navigation the editor must resolve first.
 type navKind int
 
@@ -67,7 +84,9 @@ const (
 	navSelect navKind = iota
 	navOpenHistory
 	navShowLive
+	navPage
 	navExit
+	navStartScan
 )
 
 // navigationRequest is a navigation deferred until unsaved input is saved
@@ -76,6 +95,11 @@ type navigationRequest struct {
 	kind     navKind
 	seq      int64
 	recordID string
+	// page is the destination of a navPage request.
+	page Page
+	// reload forces an explicit history reopen to reload its record instead
+	// of restoring the slot's stored view after a dirty prompt settled.
+	reload bool
 }
 
 // cloneDraft copies a draft including its substat slice.
@@ -408,7 +432,7 @@ func (m *Model) editingDirty() bool {
 
 // startEdit opens the editable form on the selected produced row.
 func (m *Model) startEdit() {
-	if m.reviewSaving || m.rec == nil || m.selected < 0 || m.selected >= len(m.rec.Rows) {
+	if m.reviewActionsBlocked() || m.rec == nil || m.selected < 0 || m.selected >= len(m.rec.Rows) {
 		return
 	}
 	row := &m.rec.Rows[m.selected]
@@ -428,6 +452,7 @@ func (m *Model) startEdit() {
 	m.navPrompt = nil
 	m.reviewErr = ""
 	m.reviewNotice = ""
+	m.lastAction = reviewSave
 }
 
 // clearEdit closes the editor without saving.
@@ -441,6 +466,7 @@ func (m *Model) discardEdit() {
 	m.navPrompt = nil
 	m.reviewErr = ""
 	m.reviewNotice = ""
+	m.lastAction = reviewSave
 	m.catchUpLive()
 }
 
@@ -476,11 +502,22 @@ func (m *Model) runNavigation(req navigationRequest) {
 			m.reviewNotice = ""
 		}
 	case navOpenHistory:
-		m.performOpenHistory(req.recordID)
+		m.page = pageResults
+		m.performOpenHistory(req.recordID, req.reload)
 	case navShowLive:
 		m.performShowLive()
+	case navPage:
+		if m.displayPage() == pageResults {
+			// Leaving the results page stores the list's actual place, not
+			// just the last captured one: the user may have scrolled the
+			// ListState without any explicit capture.
+			m.captureActiveResult()
+		}
+		m.page = req.page
 	case navExit:
 		m.beginExit()
+	case navStartScan:
+		m.Start()
 	}
 }
 
@@ -508,7 +545,7 @@ func (m *Model) promptSaveAndContinue() {
 		m.runNavigation(req)
 		return
 	}
-	m.saveEdit(false, func() { m.runNavigation(req) })
+	m.saveEdit(reviewSave, func() { m.runNavigation(req) })
 }
 
 // promptDiscardAndContinue drops the editor, then runs the held
@@ -534,34 +571,82 @@ func (m *Model) promptStay() {
 
 // saveEdit validates and submits the open editor. after runs only after a
 // successful save (and after the editor settled), never on failure.
-func (m *Model) saveEdit(confirm bool, after func()) {
+func (m *Model) saveEdit(action reviewAction, after func()) {
 	if m.edit == nil || m.reviewSaving {
 		return
 	}
+	if m.recErr != "" {
+		m.reviewErr = "记录读取失败，不能保存或确认旧快照。"
+		return
+	}
+	if m.loading {
+		m.reviewErr = "正在加载最新检查点，加载完成前不能保存或确认。"
+		return
+	}
+	if m.exportBusy() {
+		m.reviewErr = "正在导出，完成前不能保存或确认。"
+		return
+	}
+	m.lastAction = action
 	m.edit.refresh()
 	if len(m.edit.fieldErrors) > 0 || len(m.edit.check.Blocking) > 0 {
 		m.reviewErr = "请先修正标出的字段错误，未保存。"
 		return
 	}
-	if confirm && !m.edit.check.Confirmable() {
+	if action.confirmed() && !m.edit.check.Confirmable() {
 		m.reviewErr = "必需字段仍未读取或校验未通过，不能确认。"
 		return
 	}
-	if !confirm && !m.edit.dirty() {
+	if action == reviewSave && !m.edit.dirty() {
 		m.reviewNotice = "没有修改需要保存。"
 		return
 	}
-	m.submitReview(m.edit.recordID, m.edit.seq, m.edit.baseRevision, m.edit.data, confirm, after)
+	m.submitReview(m.edit.recordID, m.edit.seq, m.edit.baseRevision, m.edit.data, action, after)
 }
 
-// confirmCurrent confirms the selected row as it stands, without opening
-// the editor.
+// confirmCurrent confirms the selected row as it stands and moves to the
+// next pending item when one follows.
 func (m *Model) confirmCurrent() {
-	if m.reviewSaving || m.rec == nil || m.selected < 0 || m.selected >= len(m.rec.Rows) {
+	m.confirmCurrentAction(reviewConfirmNext)
+}
+
+// confirmCurrentStay confirms the selected row without moving away from
+// it. A non-final row stays in the pending segment, marked as confirmed,
+// until the page is left or the record is reloaded.
+func (m *Model) confirmCurrentStay() {
+	m.confirmCurrentAction(reviewConfirmStay)
+}
+
+// confirmCurrentAction confirms the selected row as it stands, without
+// opening the editor.
+func (m *Model) confirmCurrentAction(action reviewAction) {
+	if m.reviewSaving {
 		return
 	}
+	if m.recErr != "" {
+		// The displayed record is only the last good snapshot; a failed
+		// load must not let a confirmation write it over the record on
+		// disk.
+		m.reviewErr = "记录读取失败，不能确认旧快照。"
+		return
+	}
+	if m.loading {
+		// The visible record is a stale snapshot until the latest
+		// checkpoint lands. Confirming it would also clear the loading
+		// guard and drop that checkpoint, so the action waits.
+		m.reviewErr = "正在加载最新检查点，加载完成前不能确认。"
+		return
+	}
+	if m.rec == nil || m.selected < 0 || m.selected >= len(m.rec.Rows) {
+		return
+	}
+	if m.exportBusy() {
+		m.reviewErr = "正在导出，完成前不能编辑或确认。"
+		return
+	}
+	m.lastAction = action
 	row := &m.rec.Rows[m.selected]
-	if row.Status != record.StatusProduced || row.Structured == nil {
+	if row.Status != record.StatusProduced || row.Structured == nil || !row.PendingReview() {
 		return
 	}
 	check := app.CheckDiscData(row.Structured.Data)
@@ -569,22 +654,22 @@ func (m *Model) confirmCurrent() {
 		m.reviewErr = "当前修订还有未读取或未通过的字段，不能确认。"
 		return
 	}
-	m.submitReview(m.rec.ID, row.Seq, row.Revision, row.Structured.Data, true, nil)
+	m.submitReview(m.rec.ID, row.Seq, row.Revision, row.Structured.Data, action, nil)
 }
 
 // submitReview schedules one save/confirmation. The captured identity and
 // serial mean a late response can only update the item it was sent for.
-func (m *Model) submitReview(recordID string, seq, expectedRevision int64, data zzz.DiscData, confirm bool, after func()) {
+func (m *Model) submitReview(recordID string, seq, expectedRevision int64, data zzz.DiscData, action reviewAction, after func()) {
 	m.reviewSerial++
 	serial := m.reviewSerial
 	m.reviewSaving = true
 	m.reviewErr = ""
 	m.reviewNotice = ""
-	m.lastConfirm = confirm
+	m.lastAction = action
 	m.goAsync(func() {
 		result, err := m.cfg.Service.SaveItemRevision(recordID, seq, expectedRevision, app.ItemRevisionEdit{
 			Data:      data,
-			Confirmed: confirm,
+			Confirmed: action.confirmed(),
 		})
 		m.update(func() {
 			if serial != m.reviewSerial {
@@ -607,26 +692,62 @@ func (m *Model) submitReview(recordID string, seq, expectedRevision int64, data 
 				return
 			}
 			m.applySavedItem(result.Item, result.Generation)
-			m.recLoad++ // invalidate an older load started before the save
+			// Invalidate an older load started before the save: this
+			// save's applied revision is the newest view. No current load
+			// remains, so the loading guard must not outlive it.
+			m.recLoad++
+			active := m.activeResultSlot()
+			active.state.recLoad = m.recLoad
+			m.loading = false
+			active.state.loading = false
 			if m.edit != nil && m.edit.recordID == recordID && m.edit.seq == seq {
 				m.edit = nil
 			}
 			m.navPrompt = nil
 			m.reviewErr = ""
-			if confirm {
+			switch action {
+			case reviewConfirmNext:
+				m.forgetRecentlyConfirmed(seq)
 				next := m.nextPendingAfter(seq)
 				if next >= 0 {
 					m.selected = next
+					m.selectedSequence = m.rec.Rows[next].Seq
+					// Keep the table's chosen row and scroll position on
+					// the same visible row the guard chose.
+					if display := resultDisplayIndex(m.visibleResultRows(), next); display >= 0 {
+						m.tableSelected = display
+						m.list.ScrollIntoView(display)
+					}
+				} else if m.pendingCount() > 0 {
+					// Pending work remains but none of it is in the
+					// current segment. Drop a confirmed row that filtered
+					// itself out instead of leaving a hidden selection.
+					m.settleResultSelection()
+					if display := resultDisplayIndex(m.visibleResultRows(), m.selected); display >= 0 {
+						m.tableSelected = display
+						m.list.ScrollIntoView(display)
+					}
 				}
 				switch {
 				case m.pendingCount() == 0:
-					m.reviewNotice = "待校对为空"
+					m.reviewNotice = m.pendingText()
 				case next < 0:
 					m.reviewNotice = "后面没有待校对项。"
 				default:
 					m.reviewNotice = fmt.Sprintf("已确认并定位下一项（序号 %d）。", m.rec.Rows[next].Seq)
 				}
-			} else {
+			case reviewConfirmStay:
+				m.forgetRecentlyConfirmed(seq)
+				if m.pendingCount() == 0 {
+					// The last pending item completes the review even
+					// though the action asked to stay.
+					m.reviewNotice = m.pendingText()
+					break
+				}
+				m.markRecentlyConfirmed(seq)
+				m.reviewNotice = fmt.Sprintf("已确认（序号 %d），仍停留在当前项。", seq)
+			default:
+				m.forgetRecentlyConfirmed(seq)
 				m.reviewNotice = fmt.Sprintf("已保存修订 %d。", result.Item.Revision)
 			}
 			m.catchUpLive()
@@ -694,16 +815,10 @@ func (m *Model) pendingCount() int {
 	return count
 }
 
-// pendingText is the results area's review summary.
-func (m *Model) pendingText() string {
-	if count := m.pendingCount(); count > 0 {
-		return fmt.Sprintf("待校对 %d 件", count)
-	}
-	return "待校对为空"
-}
-
 // nextPendingAfter finds the next pending row after the given capture
-// sequence, in the record's capture order. It never wraps around.
+// sequence in the current filtered view. It walks the visible rows only,
+// in record order, and wraps around at the end so a confirmed row can
+// never move the selection outside the segment the user is looking at.
 func (m *Model) nextPendingAfter(seq int64) int {
 	if m.rec == nil {
 		return -1
@@ -712,9 +827,31 @@ func (m *Model) nextPendingAfter(seq int64) int {
 	if start < 0 {
 		return -1
 	}
-	for i := start + 1; i < len(m.rec.Rows); i++ {
-		if m.rec.Rows[i].PendingReview() {
-			return i
+	visible := m.visibleResultRows()
+	if len(visible) == 0 {
+		return -1
+	}
+	next := func(index int) int {
+		if index == start {
+			return -1
+		}
+		if m.rec.Rows[index].PendingReview() {
+			return index
+		}
+		return -1
+	}
+	for _, index := range visible {
+		if index > start {
+			if found := next(index); found >= 0 {
+				return found
+			}
+		}
+	}
+	for _, index := range visible {
+		if index <= start {
+			if found := next(index); found >= 0 {
+				return found
+			}
 		}
 	}
 	return -1

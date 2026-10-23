@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="style.css">
+<style>
+  .ia-head { width: 1280px; display: flex; align-items: flex-end; justify-content: space-between; }
+  .ia-head h1 { margin: 7px 0 0; font-size: 42px; line-height: 1.08; letter-spacing: -0.035em; font-weight: 720; }
+  .ia-head p { margin: 10px 0 0; font-size: 14px; line-height: 1.55; color: var(--muted); }
+  .ia-tag { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--muted); }
+  .ia-tag .chip { padding: 5px 9px; border-radius: 7px; background: #fff; border: 1px solid var(--border); box-shadow: 0 1px 2px rgba(0,0,0,.03); }
+
+  .shell { width: 1280px; margin-top: 24px; border-radius: 12px; background: #fff; border: 1px solid rgba(24,24,27,.10); box-shadow: 0 12px 34px rgba(24,24,27,.08); overflow: hidden; }
+  .shell-bar { height: 46px; display: flex; align-items: stretch; padding: 0 20px; border-bottom: 1px solid var(--border); background: #fff; }
+  .shell-brand { display: flex; align-items: center; gap: 9px; padding-right: 18px; font-size: 12px; font-weight: 650; }
+  .shell-brand .mark { width: 22px; height: 22px; border-radius: 6px; background: linear-gradient(145deg,#2563eb,#60a5fa); color:#fff; display:flex; align-items:center; justify-content:center; font-size:10px; font-weight:750; }
+  .shell-tabs { display: flex; align-items: stretch; gap: 2px; }
+  .shell-tab { position: relative; display: flex; align-items: center; gap: 7px; padding: 1px 12px 0; font-size: 12px; color: var(--muted); }
+  .shell-tab.active { color: var(--accent); font-weight: 620; }
+  .shell-tab.active::after { content:""; position:absolute; left:10px; right:10px; bottom:-1px; height:2px; background:var(--accent); border-radius:2px; }
+  .shell-right { margin-left:auto; display:flex; align-items:center; gap:10px; font-size:10.5px; color:var(--muted); }
+  .shell-status { height: 30px; display:flex; align-items:center; justify-content:space-between; padding:0 20px; background:var(--surface-2); font-size:10.5px; color:var(--muted); border-top:1px solid var(--border); }
+
+  .pages { width: 1280px; display: flex; align-items: stretch; gap: 10px; margin-top: 16px; }
+  .page-card { flex: 1; min-width: 0; padding: 17px 17px 15px; border-radius: 11px; background:#fff; border:1px solid var(--border); box-shadow:0 2px 6px rgba(24,24,27,.04); position:relative; }
+  .page-card.primary { border-color: var(--accent-border); background: linear-gradient(#f8fbff,#fff 46%); box-shadow: 0 4px 16px rgba(37,99,235,.08); }
+  .page-card .card-top { display:flex; align-items:center; justify-content:space-between; }
+  .page-card .num { font-size:10px; font-weight:700; letter-spacing:.08em; color:var(--muted-2); }
+  .page-card h3 { margin: 13px 0 4px; font-size: 21px; letter-spacing:-.02em; font-weight: 680; }
+  .page-card .role { font-size: 11px; color: var(--muted); }
+  .page-card .line { height:1px; background:var(--border-soft); margin:13px 0 11px; }
+  .page-card ul { margin:0; padding:0; list-style:none; display:flex; flex-direction:column; gap:8px; }
+  .page-card li { display:flex; align-items:flex-start; gap:7px; font-size:11px; line-height:1.35; color:var(--text-2); }
+  .page-card li .dot { width:5px; height:5px; border-radius:50%; background:var(--accent); margin-top:5px; flex:0 0 5px; }
+  .page-card .foot { margin-top:13px; padding-top:10px; border-top:1px dashed var(--border); font-size:10px; line-height:1.45; color:var(--muted); }
+  .page-card .foot b { color:var(--text-2); font-weight:600; }
+  .page-card .icon-box { width:32px; height:32px; border-radius:9px; background:var(--surface); border:1px solid var(--border-soft); display:flex; align-items:center; justify-content:center; color:var(--muted); }
+  .page-card.primary .icon-box { background:var(--accent-soft); border-color:var(--accent-border); color:var(--accent); }
+
+  .journey { width:1280px; margin-top:18px; padding:16px 18px 15px; border-radius:11px; background:#fff; border:1px solid var(--border); box-shadow:0 2px 6px rgba(24,24,27,.04); }
+  .journey-head { display:flex; align-items:baseline; justify-content:space-between; margin-bottom:14px; }
+  .journey-head h3 { margin:0; font-size:12.5px; font-weight:650; }
+  .journey-head span { font-size:10.5px; color:var(--muted); }
+  .flow { display:flex; align-items:center; gap:6px; }
+  .step { flex:1; min-width:0; padding:9px 10px 10px; border-radius:8px; background:var(--surface-2); border:1px solid var(--border-soft); }
+  .step .k { font-size:9.5px; font-weight:650; letter-spacing:.05em; text-transform:uppercase; color:var(--muted-2); }
+  .step .v { margin-top:4px; font-size:11.5px; font-weight:600; color:var(--text-2); }
+  .step .s { margin-top:2px; font-size:9.5px; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .step.done { background:var(--success-soft); border-color:var(--success-border); }
+  .step.done .v { color:#15803d; }
+  .step.hot { background:var(--accent-soft); border-color:var(--accent-border); }
+  .step.hot .v { color:var(--accent); }
+  .step.warn { background:var(--warning-soft); border-color:var(--warning-border); }
+  .step.warn .v { color:#b45309; }
+  .arrow { color:var(--muted-2); font-size:13px; flex:0 0 12px; text-align:center; }
+
+  .principles { width:1280px; display:flex; align-items:center; gap:10px; margin-top:15px; }
+  .principle { flex:1; padding:10px 12px; border-radius:9px; background:rgba(255,255,255,.62); border:1px solid rgba(217,217,222,.8); font-size:10.5px; line-height:1.4; color:var(--muted); }
+  .principle b { display:block; font-size:11px; color:var(--text-2); font-weight:650; margin-bottom:2px; }
+</style>
+</head>
+<body>
+<div class="board">
+  <div class="ia-head">
+    <div>
+      <div class="board-eyebrow">Youkai · UI/UX Review · 2026-10-21</div>
+      <h1>一个窗口，四个任务页</h1>
+      <p>扫描是入口，结果与校对是主工作区；历史与设置退居二级，危险操作集中管理。</p>
+    </div>
+    <div class="ia-tag">
+      <span class="chip">信息架构</span>
+      <span class="chip">任务流</span>
+      <span class="chip">1020 × 700 起</span>
+    </div>
+  </div>
+
+  <div class="shell">
+    <div class="shell-bar">
+      <div class="shell-brand"><span class="mark">Y</span>Youkai</div>
+      <div class="shell-tabs">
+        <div class="shell-tab active">扫描</div>
+        <div class="shell-tab">结果与校对 <span class="badge warn">130</span></div>
+        <div class="shell-tab">历史 <span class="badge">8</span></div>
+        <div class="shell-tab">设置</div>
+      </div>
+      <div class="shell-right"><span class="status-dot"></span>本地保存正常 <span class="status-sep"></span> v0.9.0</div>
+    </div>
+    <div class="shell-status">
+      <span>● 就绪 · 上次扫描 10 月 20 日 13:42</span>
+      <span>⌘↵ 确认并下一项 &nbsp;·&nbsp; ⌘S 保存修改 &nbsp;·&nbsp; ⌃⌥⌘S 停止扫描</span>
+    </div>
+  </div>
+
+  <div class="pages">
+    <div class="page-card primary">
+      <div class="card-top">
+        <span class="num">01</span>
+        <span class="icon-box">
+          <svg class="icon" viewBox="0 0 24 24"><path d="M4 7V5a1 1 0 0 1 1-1h2M17 4h2a1 1 0 0 1 1 1v2M20 17v2a1 1 0 0 1-1 1h-2M7 20H5a1 1 0 0 1-1-1v-2"/><path d="M8 12h8M12 8v8"/></svg>
+        </span>
+      </div>
+      <h3>扫描</h3>
+      <div class="role">入口 · 任务开始</div>
+      <div class="line"></div>
+      <ul>
+        <li><span class="dot"></span>开始前预检：客户端、窗口、布局、保存位置、停止方式</li>
+        <li><span class="dot"></span>扫描中显示位置 n/6 与四项状态计数</li>
+        <li><span class="dot"></span>保存失败、部分覆盖、停止原因就地说明</li>
+      </ul>
+      <div class="foot"><b>默认入口</b> · 收尾后自动进入结果页</div>
+    </div>
+
+    <div class="page-card">
+      <div class="card-top">
+        <span class="num">02</span>
+        <span class="icon-box">
+          <svg class="icon" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M9 9v11"/></svg>
+        </span>
+      </div>
+      <h3>结果与校对</h3>
+      <div class="role">主工作区 · 高频操作</div>
+      <div class="line"></div>
+      <ul>
+        <li><span class="dot"></span>待校对筛选、状态列、下一个待校对</li>
+        <li><span class="dot"></span>表格 + 详情 + 证据同屏对照</li>
+        <li><span class="dot"></span>确认、保存、跳过组成固定操作条</li>
+      </ul>
+      <div class="foot"><b>校对模式</b> · 证据默认展开 · 字段错误就近显示</div>
+    </div>
+
+    <div class="page-card">
+      <div class="card-top">
+        <span class="num">03</span>
+        <span class="icon-box">
+          <svg class="icon" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"/><path d="M8 13h8"/></svg>
+        </span>
+      </div>
+      <h3>历史</h3>
+      <div class="role">二级页面 · 已保存修订</div>
+      <div class="line"></div>
+      <ul>
+        <li><span class="dot"></span>日期、扫描源、覆盖与待校对状态</li>
+        <li><span class="dot"></span>行内“打开”与“⋯”菜单，避免按钮堆叠</li>
+        <li><span class="dot"></span>批量导出、删除截图、删除记录</li>
+      </ul>
+      <div class="foot"><b>危险操作</b> · 统一 Danger 分组 · 默认焦点在取消</div>
+    </div>
+
+    <div class="page-card">
+      <div class="card-top">
+        <span class="num">04</span>
+        <span class="icon-box">
+          <svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.1V21a2 2 0 1 1-4 0v-.09A1.7 1.7 0 0 0 8.6 19.4a1.7 1.7 0 0 0-1.88.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1.1-.4H3a2 2 0 1 1 0-4h.09A1.7 1.7 0 0 0 4.6 8.6a1.7 1.7 0 0 0-.34-1.88l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1.1V3a2 2 0 1 1 4 0v.09A1.7 1.7 0 0 0 15.4 4.6a1.7 1.7 0 0 0 1.88-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9c.2.36.55.7 1 .9H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.51 1.1Z"/></svg>
+        </span>
+      </div>
+      <h3>设置</h3>
+      <div class="role">二级页面 · 低频配置</div>
+      <div class="line"></div>
+      <ul>
+        <li><span class="dot"></span>关窗行为、存储管理、更新、版本</li>
+        <li><span class="dot"></span>托盘与快捷键说明集中在一处</li>
+        <li><span class="dot"></span>从结果页移出，释放首屏高度</li>
+      </ul>
+      <div class="foot"><b>不占主窗口</b> · 更新只在设置与全局状态条出现</div>
+    </div>
+  </div>
+
+  <div class="journey">
+    <div class="journey-head">
+      <h3>用户主路径</h3>
+      <span>每个断点都有唯一、可见的下一步</span>
+    </div>
+    <div class="flow">
+      <div class="step done"><div class="k">01 · 启动</div><div class="v">托盘 / 窗口</div><div class="s">默认落在扫描页</div></div>
+      <div class="arrow">→</div>
+      <div class="step hot"><div class="k">02 · 准备</div><div class="v">预检清单</div><div class="s">开始前知道会发生什么</div></div>
+      <div class="arrow">→</div>
+      <div class="step hot"><div class="k">03 · 扫描</div><div class="v">位置 n/6</div><div class="s">游戏保持前台</div></div>
+      <div class="arrow">→</div>
+      <div class="step"><div class="k">04 · 收尾</div><div class="v">保存修订</div><div class="s">失败可重试</div></div>
+      <div class="arrow">→</div>
+      <div class="step"><div class="k">05 · 校对</div><div class="v">逐项确认</div><div class="s">自动下一个待校对</div></div>
+      <div class="arrow">→</div>
+      <div class="step"><div class="k">06 · 导出</div><div class="v">JSON / CSV</div><div class="s">模态预览范围</div></div>
+      <div class="arrow">→</div>
+      <div class="step warn"><div class="k">07 · 截图</div><div class="v">去留决定</div><div class="s">校对 / 导出后提示</div></div>
+    </div>
+  </div>
+
+  <div class="principles">
+    <div class="principle"><b>单一内容滚动</b>页面内部滚动，窗口不整体滚动。</div>
+    <div class="principle"><b>主操作唯一</b>每屏只有一个 Accent 主按钮。</div>
+    <div class="principle"><b>危险操作分组</b>删除类统一样式，远离常规操作。</div>
+    <div class="principle"><b>状态色有语义</b>Warning / Danger / Success 只在需要时出现。</div>
+  </div>
+</div>
+</body>
+</html>

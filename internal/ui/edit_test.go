@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,6 +14,102 @@ import (
 	"github.com/LoTwT/youkai/internal/scan"
 	"github.com/egoist/mygo/ui"
 )
+
+// The editor tests use two window heights: the four-page 1024 split and the
+// legacy full-width review page. The reveal helper needs the same height to
+// keep its fallback pane bottom inside the real window.
+const (
+	reviewPageHeight   = 700
+	legacyReviewHeight = 950
+)
+
+// detailPaneViewport estimates the editor detail pane's scroll viewport from
+// two controls the pane and the shell already show: the form's first line and
+// the editor shortcut in the page status bar. The scroll point is the middle
+// of that viewport, horizontally centered on the form.
+//
+// The top is the form line less the detail pane's 8-DIP padding. The bottom
+// is the status shortcut less a 48-DIP inset for the status bar, divider,
+// page padding, the detail pane's horizontal scrollbar and a safety margin.
+// While a new session loads the shortcut is empty, so the helper falls back
+// to 64 DIP above the window bottom. The helper stays local to editor tests
+// because those anchors describe this pane's editor layout.
+func detailPaneViewport(t *testing.T, tt *ui.Tester, windowHeight float32) (top, bottom, x, y float32) {
+	t.Helper()
+	form, ok := tt.Find("字段（编辑中）")
+	if !ok {
+		t.Fatalf("the editor form is missing: %q", tt.Texts())
+	}
+	top = form.Y - 8
+	// The shortcut measured at the bottom of the shell leaves the status
+	// bar, divider, page padding and a possible horizontal scrollbar below
+	// the detail pane's visible content. The window fallback covers the same
+	// chrome while a new session loads and the shortcut is empty.
+	bottom = windowHeight - 64
+	if shortcut, ok := tt.Find("⌘↵ 保存并确认并下一项  ·  ⌘S 保存修改"); ok {
+		bottom = shortcut.Y - 48
+	}
+	x = form.X + form.W/2
+	y = (top + bottom) / 2
+	if bottom <= top {
+		t.Fatalf("the detail pane viewport is empty: top %v bottom %v", top, bottom)
+	}
+	return top, bottom, x, y
+}
+
+// revealDetailControl scrolls the editor detail pane until label sits wholly
+// inside its ScrollBoth viewport. MyGo's Tester.Find reports the laid-out rect
+// even when an ancestor clips the control, and Click only rejects points
+// outside the window, not points clipped by an ancestor; clicking a control
+// below the pane would therefore land on nothing. The helper scrolls at the
+// pane midpoint by the control's distance from that midpoint and then returns
+// the revealed rect. It never bypasses Click's own window checks.
+func revealDetailControl(t *testing.T, tt *ui.Tester, windowHeight float32, label string) ui.Rect {
+	t.Helper()
+	top, bottom, x, y := detailPaneViewport(t, tt, windowHeight)
+	before, ok := tt.Find(label)
+	if !ok {
+		t.Fatalf("%q is missing: %q", label, tt.Texts())
+	}
+	target := before
+	for attempt := 0; attempt < 4; attempt++ {
+		center := target.Y + target.H/2
+		if target.H > 0 && target.Y >= top && target.Y+target.H <= bottom {
+			break
+		}
+		dy := center - y
+		if dy > -1 && dy < 1 {
+			break
+		}
+		tt.Scroll(x, y, 0, dy)
+		tt.Frame()
+		target, ok = tt.Find(label)
+		if !ok {
+			t.Fatalf("%q disappeared while revealing it: %q", label, tt.Texts())
+		}
+	}
+	if target.H <= 0 || target.Y < top || target.Y+target.H > bottom {
+		t.Fatalf("%q is still clipped: before %+v after %+v pane %.1f..%.1f",
+			label, before, target, top, bottom)
+	}
+	if before.H <= 0 && target.Y == before.Y {
+		t.Fatalf("%q was clipped but the pane did not scroll: before %+v after %+v",
+			label, before, target)
+	}
+	t.Logf("%s: y %.1f -> %.1f (pane %.1f..%.1f, scroll point %.1f,%.1f)",
+		label, before.Y, target.Y, top, bottom, x, y)
+	return target
+}
+
+// clickRevealedDetailControl reveals an editor action before clicking it.
+// Click still validates the final point against the window bounds.
+func clickRevealedDetailControl(t *testing.T, tt *ui.Tester, windowHeight float32, label string) {
+	t.Helper()
+	revealDetailControl(t, tt, windowHeight, label)
+	if err := tt.Click(label); err != nil {
+		t.Fatal(err)
+	}
+}
 
 // completeReviewData is a complete, confirmable drive-disc data object.
 func completeReviewData(level int) zzz.DiscData {
@@ -63,6 +160,31 @@ func reviewRowItem(t *testing.T, seq int64, level int) record.ItemRecord {
 		t.Fatalf("encode item data: %v", err)
 	}
 	it.Quality = record.QualityNeedsReview
+	return it
+}
+
+// withStructured rewrites one review item's persisted structured payload
+// through mutate, so tests can build an export-excluded revision.
+func withStructured(t *testing.T, it record.ItemRecord, mutate func(*zzz.StructuredDisc)) record.ItemRecord {
+	t.Helper()
+	structured := parseResult(it.Data).Structured
+	if structured == nil {
+		t.Fatal("the item has no structured payload")
+	}
+	mutate(structured)
+	raw, err := json.Marshal(structured)
+	if err != nil {
+		t.Fatalf("marshal structured data: %v", err)
+	}
+	var doc map[string]json.RawMessage
+	if err := json.Unmarshal(it.Data, &doc); err != nil {
+		t.Fatalf("decode item data: %v", err)
+	}
+	doc["structured"] = raw
+	it.Data, err = json.Marshal(doc)
+	if err != nil {
+		t.Fatalf("encode item data: %v", err)
+	}
 	return it
 }
 
@@ -133,8 +255,33 @@ func openReviewRecord(t *testing.T, items ...record.ItemRecord) (*Model, *queueU
 	}
 	installReviewSave(svc)
 	m, q := newTestModel(t, Config{Service: svc})
-	tt := ui.NewTester(m.View, 1400, 950)
+	tt := ui.NewTester(m.View, 1400, legacyReviewHeight)
 	settle(t, m, q, tt)
+	m.OpenHistory()
+	settle(t, m, q, tt)
+	return m, q, tt, svc
+}
+
+// openReviewRecordPage opens one history record on the four-page results
+// destination, where the review actions and completion state live.
+func openReviewRecordPage(t *testing.T, items ...record.ItemRecord) (*Model, *queueUpdater, *ui.Tester, *fakeService) {
+	t.Helper()
+	svc := &fakeService{
+		list: []record.RecordInfo{{
+			ID:             "r1",
+			SavedAt:        time.Date(2026, 10, 20, 10, 0, 0, 0, time.UTC),
+			LatestRevision: 1,
+		}},
+	}
+	rec := recovery(items...)
+	rec.Checkpoint.Session.SessionID = "r1"
+	svc.loads = map[string]*record.Recovery{"r1": rec}
+	installReviewSave(svc)
+	m, q := newTestModel(t, Config{Service: svc, PageLayout: true})
+	m.SetContentSize(1024, reviewPageHeight)
+	tt := ui.NewTester(m.View, 1024, reviewPageHeight)
+	settle(t, m, q, tt)
+	m.histChoice = slotHistoryLabel(t, m, "r1")
 	m.OpenHistory()
 	settle(t, m, q, tt)
 	return m, q, tt, svc
@@ -265,8 +412,11 @@ func TestEditSavePersistsRevision(t *testing.T) {
 		t.Fatal(err)
 	}
 	settle(t, m, q, tt)
-	if !tt.HasText("字段（编辑中）") || !tt.HasText("保存修改") || !tt.HasText("放弃修改") {
+	if !tt.HasText("字段（编辑中）") || !tt.HasText("放弃修改") {
 		t.Fatalf("the editor does not show: %q", tt.Texts())
+	}
+	if _, ok := tt.Find("保存"); !ok {
+		t.Fatalf("the editor does not offer its plain save: %q", tt.Texts())
 	}
 	if m.edit == nil || m.edit.draft.Level != "12" {
 		t.Fatalf("the editor did not start from the row: %+v", m.edit)
@@ -274,7 +424,7 @@ func TestEditSavePersistsRevision(t *testing.T) {
 	if m.edit.canSave() {
 		t.Fatal("an unchanged draft was offered as a modification")
 	}
-	if err := tt.Click("保存修改"); err != nil {
+	if err := tt.Click("保存"); err != nil {
 		t.Fatal(err)
 	}
 	drainAll(t, m, q)
@@ -284,7 +434,7 @@ func TestEditSavePersistsRevision(t *testing.T) {
 
 	m.edit.draft.Level = "13"
 	tt.Frame()
-	if err := tt.Click("保存修改"); err != nil {
+	if err := tt.Click("保存"); err != nil {
 		t.Fatal(err)
 	}
 	settle(t, m, q, tt)
@@ -345,14 +495,255 @@ func TestConfirmAndNextThroughToEmpty(t *testing.T) {
 		t.Fatal(err)
 	}
 	settle(t, m, q, tt)
-	if m.pendingCount() != 0 || m.reviewNotice != "待校对为空" {
+	if m.pendingCount() != 0 || m.reviewNotice != "待校对 0 · 另有 2 件无法导出" {
 		t.Fatalf("after the last item: pending %d notice %q", m.pendingCount(), m.reviewNotice)
 	}
 	if m.selected != 1 {
 		t.Fatalf("the last confirmation moved away from the last item: %d", m.selected)
 	}
-	if !tt.HasText("待校对为空") {
+	if !tt.HasText("待校对 0 · 另有 2 件无法导出") {
 		t.Fatalf("the empty pending state does not show: %q", tt.Texts())
+	}
+}
+
+func TestConfirmStayKeepsItemInPendingSegment(t *testing.T) {
+	m, q, tt, svc := openReviewRecordPage(t,
+		reviewRowItem(t, 1, 12),
+		reviewRowItem(t, 2, 10),
+	)
+	if err := tt.Click("确认"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
+	if svc.saveCount() != 1 || !svc.saves[0].edit.Confirmed {
+		t.Fatalf("confirm-and-stay call = %+v, want one confirmed save", svc.saves)
+	}
+	if m.selected != 0 || m.pendingCount() != 1 {
+		t.Fatalf("confirm-and-stay moved: selected %d pending %d", m.selected, m.pendingCount())
+	}
+	if got := m.visibleResultRows(); len(got) != 2 || got[0] != 0 || got[1] != 1 {
+		t.Fatalf("the confirmed row left the pending segment: rows %v", got)
+	}
+	if !m.recentlyConfirmedNow(&m.rec.Rows[0]) {
+		t.Fatal("the confirmed row is not marked for the pending segment")
+	}
+	if m.resultStatusText(&m.rec.Rows[0]) != "已确认" {
+		t.Fatalf("the confirmed row status = %q", m.resultStatusText(&m.rec.Rows[0]))
+	}
+	if !tt.HasText("已确认（序号 1），仍停留在当前项。") {
+		t.Fatalf("the stay notice does not show: %q", tt.Texts())
+	}
+
+	// Leaving the results destination refreshes the pending segment; the
+	// same confirmed row no longer lingers there on return.
+	if err := tt.Click("← 返回历史"); err != nil {
+		t.Fatalf("click 返回历史: %v", err)
+	}
+	tt.Frame()
+	if m.recentlyConfirmed != nil {
+		t.Fatal("leaving the results page kept the confirmed row")
+	}
+	if err := tt.Click("打开"); err != nil {
+		t.Fatalf("reopen the record: %v", err)
+	}
+	settle(t, m, q, tt)
+	if m.displayPage() != pageResults {
+		t.Fatalf("returning to the scan destination shows page %v", m.displayPage())
+	}
+	if got := m.visibleResultRows(); len(got) != 1 || got[0] != 1 {
+		t.Fatalf("the pending segment after return shows rows %v", got)
+	}
+	if m.resultStatusText(&m.rec.Rows[0]) != "人工确认" {
+		t.Fatalf("the refreshed row status = %q", m.resultStatusText(&m.rec.Rows[0]))
+	}
+}
+
+func TestConfirmLastItemStayEntersCompletion(t *testing.T) {
+	m, q, tt, svc := openReviewRecordPage(t, reviewRowItem(t, 1, 12))
+	if err := tt.Click("确认"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
+	if svc.saveCount() != 1 || !svc.saves[0].edit.Confirmed {
+		t.Fatalf("last confirm-and-stay calls = %+v", svc.saves)
+	}
+	if m.pendingCount() != 0 || !m.completionVisible() {
+		t.Fatalf("the last confirm-and-stay did not complete: pending %d visible %v",
+			m.pendingCount(), m.completionVisible())
+	}
+	if !tt.HasText("校对完成") || !tt.HasText("可导出 1 件") {
+		t.Fatalf("the completion card does not show: %q", tt.Texts())
+	}
+	if tt.HasText("字段（只读）") {
+		t.Fatal("the last confirm-and-stay kept the item detail instead of completion")
+	}
+}
+
+func TestEditReviewActionsStayOrAdvance(t *testing.T) {
+	t.Run("save and confirm stays", func(t *testing.T) {
+		m, q, tt, svc := openReviewRecordPage(t,
+			reviewRowItem(t, 1, 12),
+			reviewRowItem(t, 2, 10),
+		)
+		if err := tt.Click("编辑"); err != nil {
+			t.Fatal(err)
+		}
+		settle(t, m, q, tt)
+		for _, label := range []string{"保存", "保存并确认", "保存并确认并下一项"} {
+			if _, ok := tt.Find(label); !ok {
+				t.Fatalf("the editor does not offer %q: %q", label, tt.Texts())
+			}
+		}
+		m.edit.draft.Level = "13"
+		tt.Frame()
+		if err := tt.Click("保存并确认"); err != nil {
+			t.Fatal(err)
+		}
+		settle(t, m, q, tt)
+		if svc.saveCount() != 1 || !svc.saves[0].edit.Confirmed {
+			t.Fatalf("save-and-confirm calls = %+v", svc.saves)
+		}
+		if m.edit != nil || m.selected != 0 || m.pendingCount() != 1 {
+			t.Fatalf("save-and-confirm moved: edit %v selected %d pending %d",
+				m.edit, m.selected, m.pendingCount())
+		}
+		if !m.recentlyConfirmedNow(&m.rec.Rows[0]) {
+			t.Fatal("save-and-confirm did not keep the row in the pending segment")
+		}
+	})
+
+	t.Run("save and confirm advances", func(t *testing.T) {
+		m, q, tt, _ := openReviewRecordPage(t,
+			reviewRowItem(t, 1, 12),
+			reviewRowItem(t, 2, 10),
+		)
+		if err := tt.Click("编辑"); err != nil {
+			t.Fatal(err)
+		}
+		settle(t, m, q, tt)
+		m.edit.draft.Level = "13"
+		tt.Frame()
+		clickRevealedDetailControl(t, tt, reviewPageHeight, "保存并确认并下一项")
+		settle(t, m, q, tt)
+		if m.edit != nil || m.selected != 1 || m.pendingCount() != 1 {
+			t.Fatalf("save-and-confirm-next did not move: edit %v selected %d pending %d",
+				m.edit, m.selected, m.pendingCount())
+		}
+		if m.reviewNotice != "已确认并定位下一项（序号 2）。" {
+			t.Fatalf("advance notice = %q", m.reviewNotice)
+		}
+	})
+}
+
+func TestAutoAcceptedHasNoConfirmationActions(t *testing.T) {
+	auto := reviewRowItem(t, 1, 12)
+	auto.Quality = record.QualityAutoAccepted
+	_, _, tt, _ := openReviewRecordPage(t, auto)
+	if !tt.HasText("校对完成") {
+		t.Fatalf("the settled record does not show completion: %q", tt.Texts())
+	}
+	if err := tt.Click("全部 1"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if _, ok := tt.Find("编辑"); !ok {
+		t.Fatalf("the auto-accepted item has no edit action: %q", tt.Texts())
+	}
+	for _, label := range []string{"确认", "确认并下一项"} {
+		if _, ok := tt.Find(label); ok {
+			t.Fatalf("the auto-accepted item offers %q", label)
+		}
+	}
+	if !tt.HasText("自动校验通过") {
+		t.Fatalf("the auto-accepted explanation does not show: %q", tt.Texts())
+	}
+}
+
+func TestUnexportableItemHasNoEditOrConfirmation(t *testing.T) {
+	invalid := reviewRowItem(t, 1, 12)
+	invalid.Quality = record.QualityAutoAccepted
+	invalid = withStructured(t, invalid, func(structured *zzz.StructuredDisc) {
+		structured.Data.ManagementState = nil
+	})
+	_, _, tt, _ := openReviewRecordPage(t, invalid)
+	if !tt.HasText("无可导出条目") {
+		t.Fatalf("the excluded record does not show its blocked completion: %q", tt.Texts())
+	}
+	if err := tt.Click("全部 1"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	for _, label := range []string{"编辑", "确认", "确认并下一项"} {
+		if _, ok := tt.Find(label); ok {
+			t.Fatalf("the unexportable item offers %q: %q", label, tt.Texts())
+		}
+	}
+	if _, ok := tt.Find("下一个待校对"); !ok {
+		t.Fatalf("the unexportable item lost its next-pending navigation: %q", tt.Texts())
+	}
+	if !tt.HasText("管理状态") || !tt.HasText("未读取") {
+		t.Fatalf("the read-only reason does not show: %q", tt.Texts())
+	}
+}
+
+func TestConfirmStayFailureKeepsItemAndRetries(t *testing.T) {
+	m, q, tt, svc := openReviewRecordPage(t,
+		reviewRowItem(t, 1, 12),
+		reviewRowItem(t, 2, 10),
+	)
+	svc.saveFn = func(string, int64, int64, app.ItemRevisionEdit) (app.ItemRevisionResult, error) {
+		return app.ItemRevisionResult{}, errors.New("disk full")
+	}
+	if err := tt.Click("确认"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
+	if m.pendingCount() != 2 || m.selected != 0 || m.recentlyConfirmedNow(&m.rec.Rows[0]) {
+		t.Fatalf("a failed confirmation settled the row: pending %d selected %d",
+			m.pendingCount(), m.selected)
+	}
+	if !strings.Contains(m.reviewErr, "disk full") {
+		t.Fatalf("the confirmation failure = %q", m.reviewErr)
+	}
+	if _, ok := tt.Find("重试确认"); !ok {
+		t.Fatalf("the retry confirmation action is missing: %q", tt.Texts())
+	}
+
+	installReviewSave(svc)
+	if err := tt.Click("重试确认"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
+	if m.rec.Rows[0].Quality != record.QualityHumanConfirmed || !m.recentlyConfirmedNow(&m.rec.Rows[0]) {
+		t.Fatalf("the retried confirmation did not stay: quality %q", m.rec.Rows[0].Quality)
+	}
+}
+
+func TestSaveAndConfirmNextFailureKeepsEditor(t *testing.T) {
+	m, q, tt, svc := openReviewRecordPage(t,
+		reviewRowItem(t, 1, 12),
+		reviewRowItem(t, 2, 10),
+	)
+	svc.saveFn = func(string, int64, int64, app.ItemRevisionEdit) (app.ItemRevisionResult, error) {
+		return app.ItemRevisionResult{}, errors.New("disk full")
+	}
+	if err := tt.Click("编辑"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
+	m.edit.draft.Level = "13"
+	tt.Frame()
+	clickRevealedDetailControl(t, tt, reviewPageHeight, "保存并确认并下一项")
+	settle(t, m, q, tt)
+	if m.edit == nil || m.edit.draft.Level != "13" || m.selected != 0 {
+		t.Fatalf("a failed save-and-confirm lost the editor or moved: edit %+v selected %d",
+			m.edit, m.selected)
+	}
+	if retry := revealDetailControl(t, tt, reviewPageHeight, "重试保存并确认并下一项"); retry.H <= 0 {
+		t.Fatalf("the retry action is not visible: %+v", retry)
+	}
+	if !strings.Contains(m.reviewErr, "disk full") {
+		t.Fatalf("the failure is not reported: %q", m.reviewErr)
 	}
 }
 
@@ -368,7 +759,7 @@ func TestConfirmRequiresCompleteValidation(t *testing.T) {
 	if m.edit.canConfirm() {
 		t.Fatal("an unread required field was confirmable")
 	}
-	if err := tt.Click("确认并下一项"); err == nil {
+	if err := tt.Click("保存并确认并下一项"); err == nil {
 		// The button exists but is disabled; a click must save nothing.
 		drainAll(t, m, q)
 	}
@@ -398,7 +789,7 @@ func TestSaveFailureKeepsInputAndRetries(t *testing.T) {
 	settle(t, m, q, tt)
 	m.edit.draft.Level = "13"
 	tt.Frame()
-	if err := tt.Click("保存修改"); err != nil {
+	if err := tt.Click("保存"); err != nil {
 		t.Fatal(err)
 	}
 	settle(t, m, q, tt)
@@ -442,7 +833,7 @@ func TestRevisionConflictReloadsCurrentRevision(t *testing.T) {
 	svc.mu.Unlock()
 
 	tt.Frame()
-	if err := tt.Click("保存修改"); err != nil {
+	if err := tt.Click("保存"); err != nil {
 		t.Fatal(err)
 	}
 	settle(t, m, q, tt)
@@ -579,7 +970,7 @@ func TestLateSaveCannotCrossItems(t *testing.T) {
 	settle(t, m, q, tt)
 	m.edit.draft.Level = "13"
 	tt.Frame()
-	if err := tt.Click("保存修改"); err != nil {
+	if err := tt.Click("保存"); err != nil {
 		t.Fatal(err)
 	}
 	<-started
@@ -624,7 +1015,7 @@ func TestSaveKeepsExplicitUnknownsPending(t *testing.T) {
 	if !m.edit.canSave() || m.edit.canConfirm() {
 		t.Fatalf("explicit unknowns: canSave=%v canConfirm=%v", m.edit.canSave(), m.edit.canConfirm())
 	}
-	if err := tt.Click("保存修改"); err != nil {
+	if err := tt.Click("保存"); err != nil {
 		t.Fatal(err)
 	}
 	settle(t, m, q, tt)
@@ -672,9 +1063,7 @@ func TestNewSessionKeepsDirtyEditor(t *testing.T) {
 		t.Fatalf("the deferred live view is not explained: %q", tt.Texts())
 	}
 
-	if err := tt.Click("放弃修改"); err != nil {
-		t.Fatal(err)
-	}
+	clickRevealedDetailControl(t, tt, legacyReviewHeight, "放弃修改")
 	settle(t, m, q, tt)
 	if m.edit != nil || m.navPrompt != nil {
 		t.Fatalf("discarding did not settle the editor: edit=%+v nav=%+v", m.edit, m.navPrompt)
@@ -736,4 +1125,116 @@ func TestExitRefusesWithUnsavedEdit(t *testing.T) {
 	if svc.quits != 1 || m.exitState != exitDone {
 		t.Fatalf("save-and-exit did not finish: quits %d state %d", svc.quits, m.exitState)
 	}
+}
+
+// TestConfirmNextStaysWithinVisibleFilter checks that confirmation moves
+// only inside the current segment. Rows hidden by the pending or
+// unexportable filter are never selected behind the visible list.
+func TestConfirmNextStaysWithinVisibleFilter(t *testing.T) {
+	t.Run("pending skips hidden rows and completes", func(t *testing.T) {
+		m, q, tt, svc := openReviewRecordPage(t,
+			reviewRowItem(t, 1, 12),
+			confirmedReviewItem(t, 2, 10),
+			reviewRowItem(t, 3, 14),
+		)
+		m.filter = resultFilterPending
+		m.selected = 0
+		tt.Frame()
+		if visible := m.visibleResultRows(); len(visible) != 2 || visible[0] != 0 || visible[1] != 2 {
+			t.Fatalf("the pending segment shows rows %v, want [0 2]", visible)
+		}
+
+		m.confirmCurrent()
+		settle(t, m, q, tt)
+		if svc.saveCount() != 1 {
+			t.Fatalf("confirmation issued %d saves", svc.saveCount())
+		}
+		if m.selected != 2 {
+			t.Fatalf("confirmation selected row %d, want the visible seq 3 (index 2)", m.selected)
+		}
+		visible := m.visibleResultRows()
+		if len(visible) != 1 || visible[0] != 2 || resultDisplayIndex(visible, m.selected) < 0 {
+			t.Fatalf("the selection left the visible pending rows: selected %d visible %v",
+				m.selected, visible)
+		}
+
+		m.confirmCurrent()
+		settle(t, m, q, tt)
+		if m.pendingCount() != 0 || !m.completionVisible() {
+			t.Fatalf("the last confirmation did not complete: pending %d completion %v",
+				m.pendingCount(), m.completionVisible())
+		}
+	})
+
+	t.Run("all wraps to the first pending row", func(t *testing.T) {
+		m, q, tt, _ := openReviewRecordPage(t,
+			reviewRowItem(t, 1, 12),
+			reviewRowItem(t, 2, 10),
+			reviewRowItem(t, 3, 14),
+		)
+		m.filter = resultFilterAll
+		m.selected = 2
+		tt.Frame()
+		m.confirmCurrent()
+		settle(t, m, q, tt)
+		if m.selected != 0 {
+			t.Fatalf("the last pending row did not wrap: selected %d", m.selected)
+		}
+		if !tt.HasText("已确认并定位下一项（序号 1）。") {
+			t.Fatalf("the wrapped next-item notice is missing: %q", tt.Texts())
+		}
+		if visible := m.visibleResultRows(); resultDisplayIndex(visible, m.selected) < 0 {
+			t.Fatalf("the wrapped selection is outside the visible rows: selected %d visible %v",
+				m.selected, visible)
+		}
+	})
+
+	t.Run("unexportable never leaves its segment", func(t *testing.T) {
+		m, _, tt, _ := openReviewRecordPage(t,
+			excludedReviewItem(t, 1),
+			reviewRowItem(t, 2, 10),
+		)
+		m.filter = resultFilterUnexportable
+		m.selected = 0
+		tt.Frame()
+		visible := m.visibleResultRows()
+		if len(visible) != 1 || visible[0] != 0 {
+			t.Fatalf("the unexportable segment shows rows %v, want [0]", visible)
+		}
+		if next := m.nextPendingAfter(m.rec.Rows[0].Seq); next != -1 {
+			t.Fatalf("the unexportable segment selected hidden row %d", next)
+		}
+		if m.selected != 0 || resultDisplayIndex(visible, m.selected) < 0 {
+			t.Fatalf("the selection left the unexportable segment: selected %d visible %v",
+				m.selected, visible)
+		}
+	})
+
+	t.Run("pending with hidden work drops a filtered-out selection", func(t *testing.T) {
+		setItem := func(seq int64, set int) record.ItemRecord {
+			it := reviewRowItem(t, seq, 12)
+			return withStructured(t, it, func(structured *zzz.StructuredDisc) {
+				structured.Data.SetID = &set
+			})
+		}
+		m, q, tt, _ := openReviewRecordPage(t, setItem(1, 31100), setItem(2, 31200))
+		m.filter = resultFilterPending
+		m.setFilter = "31100"
+		m.selected = 0
+		tt.Frame()
+		if visible := m.visibleResultRows(); len(visible) != 1 || visible[0] != 0 {
+			t.Fatalf("the filtered pending segment shows rows %v, want [0]", visible)
+		}
+		m.confirmCurrent()
+		settle(t, m, q, tt)
+		if m.pendingCount() != 1 {
+			t.Fatalf("the hidden pending row disappeared: %d pending", m.pendingCount())
+		}
+		if m.selected != -1 {
+			t.Fatalf("the confirmed row left selection on hidden index %d", m.selected)
+		}
+		if m.completionVisible() {
+			t.Fatal("hidden pending work entered the completion state")
+		}
+	})
 }

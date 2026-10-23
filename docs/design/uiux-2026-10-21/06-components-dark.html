@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="style.css">
+<style>
+  .spec-head { width:1280px; display:flex; align-items:flex-end; justify-content:space-between; }
+  .spec-head h1 { margin:7px 0 0; font-size:38px; line-height:1.08; letter-spacing:-.035em; font-weight:720; }
+  .spec-head p { margin:9px 0 0; font-size:13.5px; line-height:1.55; color:var(--muted); }
+  .spec-grid { width:1280px; display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:22px; }
+  .spec { min-height:214px; padding:15px 16px; border-radius:11px; background:#fff; border:1px solid var(--border); box-shadow:0 2px 8px rgba(24,24,27,.045); display:flex; flex-direction:column; }
+  .spec-head-row { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; }
+  .spec h3 { margin:0; font-size:13px; font-weight:680; letter-spacing:-.01em; }
+  .spec .desc { margin-top:3px; font-size:10.5px; line-height:1.45; color:var(--muted); }
+  .spec .body { margin-top:12px; flex:1; min-height:0; }
+  .tag { font-size:9px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--muted-2); border:1px solid var(--border); border-radius:5px; padding:3px 6px; background:var(--surface-2); }
+
+  .mini-substats { border:1px solid var(--border-soft); border-radius:7px; overflow:hidden; }
+  .mini-substat { display:grid; grid-template-columns:16px 1fr 60px 54px; align-items:center; gap:7px; height:26px; padding:0 8px; border-bottom:1px solid var(--border-soft); font-size:10.5px; }
+  .mini-substat:last-child { border-bottom:none; }
+  .mini-substat .idx { color:var(--muted-2); font-size:9px; }
+  .mini-substat .name { color:var(--text-2); }
+  .mini-substat .val { text-align:right; font-weight:650; font-variant-numeric:tabular-nums; }
+  .mini-substat .val .u { color:var(--muted); font-weight:500; font-size:9px; }
+  .mini-substat .roll { text-align:right; font-size:9.5px; color:var(--muted); }
+  .mini-substat .unread { color:var(--muted-2); font-weight:500; }
+
+  .edit-wire { margin-top:9px; padding:8px; border-radius:7px; background:var(--surface-2); border:1px dashed var(--border); }
+  .edit-line { display:flex; align-items:center; gap:5px; }
+  .fake-input { height:20px; border:1px solid var(--border); border-radius:5px; background:#fff; display:flex; align-items:center; padding:0 6px; font-size:9px; color:var(--muted); }
+  .fake-select { height:20px; border:1px solid var(--border); border-radius:5px; background:#fff; display:flex; align-items:center; padding:0 6px; font-size:9px; color:var(--muted); gap:14px; }
+
+  .action-demo { display:flex; align-items:center; gap:8px; padding:11px 12px; border-radius:8px; background:var(--surface-2); border:1px solid var(--border-soft); }
+  .action-demo .note { margin-left:auto; font-size:9.5px; color:var(--muted); }
+
+  .danger-demo { padding:12px 13px; border-radius:8px; background:var(--danger-soft); border:1px solid var(--danger-border); box-shadow:inset 3px 0 0 var(--danger); }
+  .danger-demo .t { font-size:11.5px; font-weight:650; color:#991b1b; }
+  .danger-demo .s { margin-top:3px; font-size:9.5px; line-height:1.45; color:#b91c1c; }
+  .danger-demo .buttons { display:flex; align-items:center; gap:7px; margin-top:9px; }
+  .focus-ring { outline:2px solid var(--accent); outline-offset:1px; }
+
+  .swatches { display:grid; grid-template-columns:1fr 1fr; gap:7px; }
+  .swatch { display:flex; align-items:center; gap:8px; padding:7px 8px; border-radius:6px; background:var(--surface-2); border:1px solid var(--border-soft); }
+  .swatch .color { width:18px; height:18px; border-radius:5px; flex:0 0 18px; }
+  .swatch .name { font-size:10px; color:var(--text-2); font-weight:550; }
+  .swatch .hex { margin-left:auto; font-size:8.5px; color:var(--muted-2); font-family:"SF Mono",Menlo,monospace; }
+
+  .loading-demo { height:100%; display:flex; flex-direction:column; }
+  .loading-box { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; border:1px dashed var(--border); border-radius:8px; background:var(--surface-2); gap:8px; }
+  .spinner { width:20px; height:20px; border-radius:50%; border:2px solid var(--accent-border); border-top-color:var(--accent); }
+  .loading-box .t { font-size:10.5px; color:var(--text-2); font-weight:550; }
+  .loading-box .s { font-size:9.5px; color:var(--muted); }
+  .disabled-row { display:flex; gap:6px; margin-top:8px; }
+  .disabled-row .btn { color:var(--text-disabled); border-color:var(--border-soft); background:var(--surface-disabled); }
+
+  .empty-demo { height:100%; border:1px dashed var(--border); border-radius:8px; background:var(--surface-2); display:flex; align-items:center; justify-content:center; gap:12px; padding:14px; }
+  .empty-icon { width:34px; height:34px; border-radius:9px; background:#fff; border:1px solid var(--border); display:flex; align-items:center; justify-content:center; color:var(--muted-2); }
+  .empty-demo .t { font-size:11px; font-weight:600; color:var(--text-2); }
+  .empty-demo .s { margin-top:3px; font-size:9.5px; line-height:1.45; color:var(--muted); }
+  .empty-demo .btn { margin-left:auto; }
+</style>
+  <link rel="stylesheet" href="dark.css">
+</head>
+<body>
+<div class="board">
+  <div class="spec-head">
+    <div>
+      <div class="board-eyebrow">06 · 组件与状态</div>
+      <h1>把“看清”和“别误操作”做成可复用的规格</h1>
+      <p>这些组件优先落地，能直接消除当前界面里最影响校对效率与误删风险的几处问题。</p>
+    </div>
+    <div class="ia-tag" style="display:flex; gap:8px; font-size:10.5px; color:var(--muted);">
+      <span class="tag">Read-only spec</span>
+      <span class="tag">MyGo v0.5.5</span>
+    </div>
+  </div>
+
+  <div class="spec-grid">
+    <div class="spec">
+      <div class="spec-head-row">
+        <div><h3>副词条 · 只读四列</h3><div class="desc">属性名、数值、单位、强化档位分层；未读取统一弱化。</div></div>
+        <span class="tag">P0</span>
+      </div>
+      <div class="body" style="display:flex; gap:12px;">
+        <div style="flex:1;">
+          <div class="mini-substats">
+            <div class="mini-substat"><span class="idx">1</span><span class="name">暴击率</span><span class="val">12.0 <span class="u">%</span></span><span class="roll">强化 +4</span></div>
+            <div class="mini-substat"><span class="idx">2</span><span class="name">生命值</span><span class="val">4,480</span><span class="roll">强化 +3</span></div>
+            <div class="mini-substat"><span class="idx">3</span><span class="name">攻击力加成</span><span class="val">19.2 <span class="u">%</span></span><span class="roll">强化 +2</span></div>
+            <div class="mini-substat"><span class="idx">4</span><span class="name" style="color:var(--muted);">防御力</span><span class="val unread">未读取</span><span class="roll">—</span></div>
+          </div>
+          <div class="hint" style="margin-top:7px;">属性列约 110pt；数值右对齐；单位 10pt muted；强化档位弱化。</div>
+        </div>
+        <div style="width:174px; flex:0 0 174px;">
+          <div class="label">编辑态 · 两行</div>
+          <div class="edit-wire">
+            <div class="edit-line"><span class="fake-select" style="flex:1;">暴击率 <span>⌄</span></span></div>
+            <div class="edit-line" style="margin-top:5px;"><span class="fake-input" style="flex:1;">12.0</span><span class="fake-select" style="width:66px;">百分比</span><span class="fake-input" style="width:38px;">+4</span></div>
+          </div>
+          <div class="hint" style="margin-top:7px;">避免 860 宽下横向溢出；删除放在行尾。</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="spec">
+      <div class="spec-head-row">
+        <div><h3>校对操作条 · 主操作唯一</h3><div class="desc">Accent 只给“确认并下一项”；保存、放弃保持次要。</div></div>
+        <span class="tag">P0</span>
+      </div>
+      <div class="body">
+        <div class="action-demo">
+          <button class="btn">编辑</button>
+          <button class="btn primary">确认并下一项 <span class="kbd" style="border-color:rgba(255,255,255,.35); background:rgba(255,255,255,.16); color:#fff;">⌘↵</span></button>
+          <button class="btn ghost">跳过</button>
+          <span class="note">⌘S 保存修改</span>
+        </div>
+        <div class="hint" style="margin-top:10px; line-height:1.55;">
+          操作条固定在详情栏底部，不随字段滚动；确认失败时按钮文案变为“重试确认并下一项”，错误留在本项，不跳走。
+        </div>
+        <div class="action-demo" style="margin-top:10px; background:var(--card-bg);">
+          <span class="pill warn"><span class="dot"></span>校验通过 · 2 个警告</span>
+          <span class="muted" style="font-size:9.5px;">装备字段待补全</span>
+          <button class="btn ghost small" style="margin-left:auto;">查看</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="spec">
+      <div class="spec-head-row">
+        <div><h3>危险操作 · 删除分组</h3><div class="desc">破坏性操作远离常规按钮；默认焦点在“取消”，Enter 不触发删除。</div></div>
+        <span class="tag">P0</span>
+      </div>
+      <div class="body">
+        <div class="danger-demo">
+          <div class="t">删除 130 条记录？</div>
+          <div class="s">将同时删除记录数据与 532 张截图。此操作不可撤销；导出文件不受影响。</div>
+          <div class="buttons">
+            <button class="btn focus-ring">取消</button>
+            <button class="btn danger">删除 130 条</button>
+            <span class="muted" style="font-size:9px; margin-left:auto;">需输入 130 确认</span>
+          </div>
+        </div>
+        <div class="hint" style="margin-top:10px; line-height:1.55;">
+          “删除截图 / 删除记录 / 删除全部”统一 Danger 色和左红条；删除当前记录与历史行删除不复用同名文案。
+        </div>
+      </div>
+    </div>
+
+    <div class="spec">
+      <div class="spec-head-row">
+        <div><h3>状态色 · 只表达语义</h3><div class="desc">颜色不装饰；待校对、失败、已确认、未读取各有固定含义。</div></div>
+        <span class="tag">P1</span>
+      </div>
+      <div class="body">
+        <div class="swatches">
+          <div class="swatch"><span class="color" style="background:var(--warning);"></span><span class="name">待校对</span><span class="hex">#D97706</span></div>
+          <div class="swatch"><span class="color" style="background:var(--danger);"></span><span class="name">失败 / 删除</span><span class="hex">#DC2626</span></div>
+          <div class="swatch"><span class="color" style="background:var(--success);"></span><span class="name">已确认 / 完整</span><span class="hex">#16A34A</span></div>
+          <div class="swatch"><span class="color" style="background:var(--muted-2);"></span><span class="name">未读取 / 次要</span><span class="hex">#A1A1AA</span></div>
+          <div class="swatch"><span class="color" style="background:var(--accent);"></span><span class="name">主操作 / 当前项</span><span class="hex">#2563EB</span></div>
+          <div class="swatch"><span class="color" style="background:var(--surface); border:1px solid var(--border);"></span><span class="name">表面 / 分隔</span><span class="hex">Surface</span></div>
+        </div>
+        <div class="hint" style="margin-top:9px;">“待校对为空”必须同时说明失败/未处理数量，避免被理解为全部可用。</div>
+      </div>
+    </div>
+
+    <div class="spec">
+      <div class="spec-head-row">
+        <div><h3>异步打开 · 旧记录立即失效</h3><div class="desc">加载新记录时清空旧内容；完成前禁用导出、删除、确认。</div></div>
+        <span class="tag">P0 · 数据风险</span>
+      </div>
+      <div class="body loading-demo">
+        <div class="loading-box">
+          <div class="spinner"></div>
+          <div class="t">正在打开历史记录…</div>
+          <div class="s">正在读取修订 2026-10-20 13:42</div>
+        </div>
+        <div class="disabled-row">
+          <button class="btn" disabled>导出 JSON</button>
+          <button class="btn" disabled>导出 CSV</button>
+          <button class="btn danger" disabled>删除当前记录</button>
+          <span class="hint" style="margin-left:auto;">加载完成后恢复</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="spec">
+      <div class="spec-head-row">
+        <div><h3>缺失证据 · 保留可用信息</h3><div class="desc">截图删除后不伪装成“无证据”；字段、OCR 文本仍可查看。</div></div>
+        <span class="tag">P1</span>
+      </div>
+      <div class="body" style="display:flex; flex-direction:column;">
+        <div class="empty-demo" style="flex:1;">
+          <div class="empty-icon">
+            <svg class="icon" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 15 5-4 4 3 3-2 6 5"/><path d="m4 4 16 16"/></svg>
+          </div>
+          <div>
+            <div class="t">该记录的截图已删除或缺失</div>
+            <div class="s">字段数据与原始 OCR 文本仍保留，可以继续校对和导出。</div>
+          </div>
+          <button class="btn small">查看 OCR</button>
+        </div>
+        <div class="hint" style="margin-top:8px;">空状态给下一步，不只给一句“没有数据”。</div>
+      </div>
+    </div>
+  </div>
+</div>
+</body>
+</html>

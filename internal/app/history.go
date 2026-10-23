@@ -17,11 +17,24 @@ type HistoryRecord struct {
 	Client        record.Client
 	CapturedCount int64
 	Coverage      record.CoverageStatus
-	PendingReview int
-	TotalBytes    int64
-	EvidenceBytes int64
-	EvidenceFiles int
-	Unreadable    bool
+	// CoverageExpected is the scope's expected item count; 0 when the
+	// record does not know it. The history table only shows a percentage
+	// when it can divide by a real expected count.
+	CoverageExpected int64
+	PendingReview    int
+	// ExportableCount, FailedCount, UnprocessedCount and OtherCount are the
+	// mutually exclusive parts of CapturedCount after review: exportable
+	// items, items waiting for a person, failed and unprocessed
+	// observations, and everything else (an unreadable structure or a
+	// status the export cannot use).
+	ExportableCount  int64
+	FailedCount      int64
+	UnprocessedCount int64
+	OtherCount       int64
+	TotalBytes       int64
+	EvidenceBytes    int64
+	EvidenceFiles    int
+	Unreadable       bool
 }
 
 // HistoryRecords lists saved records newest first with the metadata the
@@ -51,8 +64,46 @@ func (s *Service) HistoryRecords() ([]HistoryRecord, error) {
 		entry.Client = cp.Session.Client
 		entry.CapturedCount = cp.Session.CapturedCount
 		entry.Coverage = cp.Session.Coverage.Status
+		if cp.Session.Coverage.ExpectedCount != nil {
+			entry.CoverageExpected = *cp.Session.Coverage.ExpectedCount
+		}
 		entry.PendingReview = pendingReviewCount(cp.Items)
+		entry.ExportableCount, entry.FailedCount, entry.UnprocessedCount, entry.OtherCount =
+			historyItemCounts(cp.Items)
 		out = append(out, entry)
 	}
 	return out, nil
+}
+
+// historyItemCounts splits a record's items into the four states the
+// history table shows beside the pending count. Pending is separate: an
+// item waiting for a person is not exportable yet, and failed, unprocessed
+// or structurally unusable observations never are. The parts and
+// PendingReview add up to the captured count, so the table can state the
+// same accounting the results page does.
+func historyItemCounts(items []record.ItemRecord) (exportable, failed, unprocessed, other int64) {
+	for _, item := range items {
+		switch {
+		case item.Status == record.StatusFailed:
+			failed++
+		case item.Status == record.StatusUnprocessed:
+			unprocessed++
+		case item.Status != record.StatusProduced:
+			other++
+		case !hasStructured(item):
+			other++
+		case itemPendingReview(item):
+			// Pending is reported separately; it is not exportable yet.
+		default:
+			// The remaining produced items are exportable only when the
+			// current validation and catalog accept them. The history table
+			// must not promise a record the export would drop.
+			if _, ok := usableItem(&item); ok {
+				exportable++
+			} else {
+				other++
+			}
+		}
+	}
+	return exportable, failed, unprocessed, other
 }

@@ -35,7 +35,7 @@ type historyBulkPrompt struct {
 // disabled. A different record's export still respects the current
 // record's unsaved edit and every shared export/exit guard.
 func (m *Model) historyExportsBlocked() bool {
-	return m.cfg.ExportSaver == nil ||
+	return !m.exportAvailable() ||
 		m.historyExporting != "" ||
 		m.exporting ||
 		m.exitState == exitRunning || m.exitState == exitDone ||
@@ -47,23 +47,33 @@ func (m *Model) historyExportsBlocked() bool {
 // checkpoint. It does not change the results area's current record or its
 // frozen export snapshot.
 func (m *Model) ExportHistory(recordID string, format app.ExportFormat) {
-	if recordID == "" || m.historyExportsBlocked() {
+	save, direct := m.exportWriter()
+	if recordID == "" || save == nil || m.historyExportsBlocked() {
 		return
 	}
-	saver := m.cfg.ExportSaver
 	version := m.cfg.AppVersion
 	m.historyExporting = recordID
 	m.historyNotice = ""
 	m.historyError = ""
 	m.goAsync(func() {
+		fail := func(err error) {
+			m.update(func() {
+				m.historyExporting = ""
+				if direct {
+					m.finishDirectExport(format, 0, recordID, false, "", err)
+					return
+				}
+				m.historyError = "导出失败：" + err.Error()
+			})
+		}
 		rec, err := m.cfg.Service.LoadRecord(recordID)
 		if err != nil {
-			m.historyExportFailed(fmt.Errorf("读取记录：%w", err))
+			fail(fmt.Errorf("读取记录：%w", err))
 			return
 		}
 		export, err := app.BuildUsableExport(rec)
 		if err != nil {
-			m.historyExportFailed(fmt.Errorf("生成导出：%w", err))
+			fail(fmt.Errorf("生成导出：%w", err))
 			return
 		}
 		var data []byte
@@ -76,12 +86,16 @@ func (m *Model) ExportHistory(recordID string, format app.ExportFormat) {
 			err = fmt.Errorf("未知导出格式 %q", format)
 		}
 		if err != nil {
-			m.historyExportFailed(err)
+			fail(err)
 			return
 		}
-		path, err := saver.Save(format, app.DefaultExportName(rec.Checkpoint.Session, format), data)
+		path, err := save(format, app.DefaultExportName(rec.Checkpoint.Session, format), data)
 		m.update(func() {
 			m.historyExporting = ""
+			if direct {
+				m.finishDirectExport(format, export.Summary.Included, recordID, false, path, err)
+				return
+			}
 			switch {
 			case err != nil:
 				m.historyError = "导出失败：" + err.Error()
@@ -91,13 +105,6 @@ func (m *Model) ExportHistory(recordID string, format app.ExportFormat) {
 				m.historyNotice = fmt.Sprintf("已导出 %s：%s", strings.ToUpper(string(format)), path)
 			}
 		})
-	})
-}
-
-func (m *Model) historyExportFailed(err error) {
-	m.update(func() {
-		m.historyExporting = ""
-		m.historyError = "导出失败：" + err.Error()
 	})
 }
 
