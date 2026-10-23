@@ -274,8 +274,10 @@ func (m *Model) tablePane(c *ui.Context) {
 	m.tableSelected = previousDisplay
 
 	columns := resultColumns
+	var tok *Tokens
 	if m.cfg.PageLayout {
 		columns = resultsColumnsFor(m.contentWidth)
+		_, tok = themeWithTokens(c.Theme(), c.Preferences())
 	}
 	m.list.Key = func(row int) any {
 		if row < 0 || row >= len(visible) {
@@ -317,7 +319,7 @@ func (m *Model) tablePane(c *ui.Context) {
 			cellText(row, r.ManagementColumnText())
 		case 4:
 			if m.cfg.PageLayout {
-				cellText(row, m.resultStatusText(r))
+				m.resultStatusBadge(c, c.Theme(), tok, r, true, m.tableSelected == row)
 				return
 			}
 			cellText(row, r.EquippedColumnText())
@@ -425,8 +427,9 @@ func (m *Model) detailHeader(c *ui.Context, t *ui.Theme, row *Row) {
 		ui.Box(c).Grow(1)
 		m.evidenceToggle(c, row)
 	})
+	_, tok := themeWithTokens(t, c.Preferences())
 	ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, m.resultStatusText(row)).TextColor(m.resultStatusColor(t, row)).SingleLine()
+		m.resultStatusBadge(c, t, tok, row, false, false)
 		ui.Text(c, resultIssueText(row)).TextColor(resultIssueColor(t, row)).SingleLine()
 	})
 }
