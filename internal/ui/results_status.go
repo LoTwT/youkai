@@ -127,7 +127,7 @@ func (m *Model) resultStatusBadge(c *ui.Context, t *ui.Theme, tok *Tokens, row *
 		}
 	}
 	var onClick func()
-	if tableRow && m.narrowResults() {
+	if tableRow && m.resultsRowOpensDetail() {
 		full := m.rec.RowOf(row.Seq)
 		onClick = func() { m.openResultDetailAt(full) }
 		badge.OnClick(onClick)

@@ -80,13 +80,14 @@ func resultsSideBySide(contentWidth int) bool {
 	return contentWidth >= resultsSideBySideMinWidth
 }
 
-// resultsRowHeight is the design's 32-DIP results row. The narrow composite
-// fixes its rows to it, and its snapping uses the same boundary.
+// resultsRowHeight is the design's 32-DIP results row. The composite fixes
+// its rows to it at every page-layout width, and its snapping uses the same
+// boundary.
 const resultsRowHeight = 32
 
-// resultsSnapDelay is how long the narrow results composite waits after the
-// last precise scroll move before snapping a small offset to the nearest
-// 32-DIP row.
+// resultsSnapDelay is how long the results composite waits after the last
+// precise scroll move before snapping a small offset to the nearest 32-DIP
+// row.
 const resultsSnapDelay = 120 * time.Millisecond
 
 // resultsArea is the results browser: the current record's items in
@@ -159,10 +160,14 @@ func (m *Model) resultsArea(c *ui.Context, t *ui.Theme) {
 			m.tablePane(c)
 			return
 		}
+		// Grow takes the room the header and filters leave, rather than
+		// 100% of the results area: Fill would let the table viewport run
+		// past the window's bottom, where the window itself would clip a
+		// partial last row whatever the list's row boundary.
 		ui.Split(c, &m.split,
 			func() { m.tablePane(c) },
 			func() { m.detailPane(c) },
-		).Fill()
+		).Grow(1).MinHeight(0)
 	})
 }
 
@@ -308,14 +313,24 @@ func (m *Model) tablePane(c *ui.Context) {
 		}).Fill().MinHeight(0)
 	}
 	var table ui.Element
-	if m.cfg.PageLayout && m.narrowResults() {
-		ui.Column(c).Grow(1).MinHeight(0).Bind(&m.resultsTableSlot).Children(func() {
+	if m.cfg.PageLayout {
+		// Every page-layout results list uses the composite, so the split
+		// table gains the same fixed header and 32-DIP row snapping as the
+		// narrow list. The wrapper gives the composite the slot the page
+		// leaves, whatever its capped height. The narrow page's column has
+		// a remaining height to grow into; the split pane stretches it, so
+		// there the wrapper fills that pane's height explicitly.
+		slot := ui.Column(c).Grow(1).MinHeight(0)
+		if resultsSideBySide(m.contentWidth) {
+			slot = ui.Column(c).FillHeight().MinHeight(0)
+		}
+		slot.Bind(&m.resultsTableSlot).Children(func() {
 			table = m.resultsCompositeTable(c, c.Theme(), tok, visible)
 		})
 	} else {
 		table = buildTable()
 	}
-	if m.narrowResults() {
+	if m.resultsRowOpensDetail() {
 		table.OnClick(func() { m.openResultDetail() })
 	}
 
@@ -329,7 +344,7 @@ func (m *Model) tablePane(c *ui.Context) {
 		m.applyTableSelection(previous)
 		m.tableSelected = resultDisplayIndex(visible, m.selected)
 	}
-	if m.narrowResults() && table.Submitted() {
+	if m.resultsRowOpensDetail() && table.Submitted() {
 		m.openResultDetail()
 	}
 }
@@ -345,9 +360,9 @@ func wholeRowTableHeight(available, row, chrome float32) (float32, bool) {
 	return chrome + float32(rows)*row, true
 }
 
-// resultCellContent builds one results-table cell's content. The native
-// table and the narrow composite share it so the five columns, the status
-// badge and the narrow row action cannot drift apart.
+// resultCellContent builds one results-table cell's content. The legacy
+// table and the composite share it so the five columns, the status badge
+// and the narrow row action cannot drift apart.
 func (m *Model) resultCellContent(c *ui.Context, visible []int, row, col int, tok *Tokens) {
 	if row < 0 || row >= len(visible) {
 		return
@@ -355,7 +370,7 @@ func (m *Model) resultCellContent(c *ui.Context, visible []int, row, col int, to
 	r := &m.rec.Rows[visible[row]]
 	cellText := func(text string) {
 		cell := ui.Text(c, text).SingleLine()
-		if m.narrowResults() {
+		if m.resultsRowOpensDetail() {
 			full := visible[row]
 			cell.OnClick(func() { m.openResultDetailAt(full) })
 		}
@@ -388,12 +403,15 @@ func (m *Model) resultCellContent(c *ui.Context, visible []int, row, col int, to
 	}
 }
 
-// resultsCompositeTable is the narrow results list at 1020 and 860. MyGo's
-// Table keeps its rows in an internal scroll container and exposes no
-// offset, so a precise 17-DIP move can stop between two 32-DIP rows. This
-// header and List composite uses the same fixed columns and cell builder,
-// but tracks the List's offset: the header stays above the list, the rows
-// keep their design height, and the rest snap aligns the offset to a row.
+// resultsCompositeTable is the results list at every page-layout width:
+// the 1020/860 list pages and the 1024/1440 split table. MyGo's Table keeps
+// its rows in an internal scroll container and exposes no offset, so a
+// precise 17-DIP move can stop between two 32-DIP rows. This header and
+// List composite uses the same fixed columns and cell builder, but tracks
+// the List's offset: the header stays above the list, the rows keep their
+// design height, and the rest snap aligns the offset to a row. Only the
+// narrow list page gives a row click the detail action; in the split it
+// chooses the row the visible detail already follows.
 func (m *Model) resultsCompositeTable(c *ui.Context, t *ui.Theme, tok *Tokens, visible []int) ui.Element {
 	columns := resultsColumnsFor(m.contentWidth)
 	ui.Row(c).Height(resultsRowHeight).Shrink(0).Clip().AlignItems(ui.Stretch).Children(func() {
@@ -402,9 +420,12 @@ func (m *Model) resultsCompositeTable(c *ui.Context, t *ui.Theme, tok *Tokens, v
 		}
 	})
 	ui.Divider(c)
+	openDetail := m.resultsRowOpensDetail()
 	list := ui.List(c, &m.list, len(visible), func(row int) {
 		line := ui.Row(c).Height(resultsRowHeight).AlignItems(ui.Stretch)
-		line.OnClick(func() { m.openResultDetailAt(visible[row]) })
+		if openDetail {
+			line.OnClick(func() { m.openResultDetailAt(visible[row]) })
+		}
 		line.Children(func() {
 			for col := range columns {
 				m.resultsCompositeCell(c, t, tok, columns, col, visible, row, false)
@@ -413,11 +434,20 @@ func (m *Model) resultsCompositeTable(c *ui.Context, t *ui.Theme, tok *Tokens, v
 	}).MinHeight(0).TrackScroll(&m.resultsScroll)
 
 	m.snapResultsScroll(c, len(visible))
-	if height, measured := m.resultsCompositeListHeight(c); measured {
+	height, measured := m.resultsCompositeListHeight(c)
+	switch {
+	case height > 0:
 		// The header and divider are outside the list; an exact whole-row
-		// height keeps its last row from being clipped.
+		// height keeps its last row from being clipped. A page that just
+		// returned has no committed slot frame yet: keep the last measured
+		// height and ask for another frame, rather than filling the pane
+		// for one frame and clamping the tracked offset to a transient
+		// end, which would leave half a row.
 		list.Height(height)
-	} else {
+		if !measured {
+			c.Invalidate()
+		}
+	default:
 		// Measure the slot once with the list filling the rest, then
 		// rebuild with the snapped viewport.
 		list.Grow(1)
@@ -427,24 +457,29 @@ func (m *Model) resultsCompositeTable(c *ui.Context, t *ui.Theme, tok *Tokens, v
 }
 
 // resultsCompositeListHeight is the largest whole number of 32-DIP rows the
-// narrow table's slot leaves under its header and divider. measured is
-// false until the slot has a committed frame.
+// results table's slot leaves under its header and divider. measured is
+// false until the slot has a committed frame; the last measured height is
+// then the fallback, so returning from another destination cannot grow the
+// list for a frame.
 func (m *Model) resultsCompositeListHeight(c *ui.Context) (height float32, measured bool) {
 	bounds := m.resultsTableSlot.Bounds(c)
 	if bounds.H <= 0 {
-		return 0, false
+		return m.resultsTableHeight, false
 	}
 	table, ok := wholeRowTableHeight(bounds.H, resultsRowHeight, resultsRowHeight+1)
 	if !ok {
 		return 0, false
 	}
-	return table - (resultsRowHeight + 1), true
+	height = table - (resultsRowHeight + 1)
+	m.resultsTableHeight = height
+	return height, true
 }
 
-// resultsCompositeCell is one fixed-width data cell of the narrow composite.
-// The header and rows share it, so their columns cannot drift apart. The
-// row's whole area carries the narrow list's detail action, including the
-// cell padding beside a short value.
+// resultsCompositeCell is one fixed-width data cell of the composite. The
+// header and rows share it, so their columns cannot drift apart. On the
+// narrow list page the row's whole area carries the detail action,
+// including the cell padding beside a short value; the split leaves the
+// click to the list's own row choice.
 func (m *Model) resultsCompositeCell(c *ui.Context, t *ui.Theme, tok *Tokens, columns []ui.TableColumn, col int, visible []int, row int, header bool) {
 	column := &columns[col]
 	cell := ui.Row(c).Shrink(0).Clip().Padding(t.Space(1.5), t.Space(2.5)).AlignItems(ui.Center)
@@ -459,7 +494,7 @@ func (m *Model) resultsCompositeCell(c *ui.Context, t *ui.Theme, tok *Tokens, co
 	case ui.Center:
 		cell.Justify(ui.Center)
 	}
-	if !header {
+	if !header && m.resultsRowOpensDetail() {
 		full := visible[row]
 		cell.OnClick(func() { m.openResultDetailAt(full) })
 	}
