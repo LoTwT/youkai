@@ -149,6 +149,15 @@ func (m *Model) resultStatusBadge(c *ui.Context, t *ui.Theme, tok *Tokens, row *
 		onClick = func() { m.openResultDetailAt(full) }
 		badge.OnClick(onClick)
 	}
+	if onClick != nil {
+		// A clickable badge is a button, so VoiceOver reads its label in
+		// the same stop. Without an explicit role the label alone would
+		// make it a group whose content is hidden, and VoiceOver would
+		// announce an empty group before the status.
+		badge.Role(ui.RoleButton)
+	} else {
+		badge.Role(ui.RoleText)
+	}
 	badge.Children(func() {
 		glyph := ui.Text(c, style.Glyph).FontSize(metrics.BadgeGlyphSize).FontWeight(600).
 			TextColor(style.Text).SingleLine().Role(ui.RoleNone)
