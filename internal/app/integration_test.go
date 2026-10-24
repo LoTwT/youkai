@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LoTwT/youkai/internal/ocrlayout"
 	"github.com/LoTwT/youkai/internal/recognition"
 	"github.com/LoTwT/youkai/internal/record"
 	"github.com/LoTwT/youkai/internal/scan"
@@ -33,17 +34,12 @@ func integrationResourcePaths(t *testing.T) (libPath, modelPath string, ok bool)
 	if err != nil {
 		t.Fatalf("resolving repository root: %v", err)
 	}
-	var libRel string
-	switch runtime.GOOS {
-	case "darwin":
-		libRel = filepath.Join("resources", "darwin-arm64", "onnxruntime", "libonnxruntime.1.29.0.dylib")
-	case "windows":
-		libRel = filepath.Join("resources", "windows-amd64", "onnxruntime", "onnxruntime.dll")
-	default:
+	libRel := ocrlayout.RuntimeDest(runtime.GOOS, runtime.GOARCH)
+	if libRel == "" {
 		t.Skipf("no pinned ONNX runtime artifact for %s/%s in this repository", runtime.GOOS, runtime.GOARCH)
 	}
-	libPath = filepath.Join(root, libRel)
-	modelPath = filepath.Join(root, "resources", "models", "PP-OCRv6_rec_small.onnx")
+	libPath = filepath.Join(root, "resources", filepath.FromSlash(libRel))
+	modelPath = filepath.Join(root, "resources", filepath.FromSlash(ocrlayout.ModelDest))
 	if _, err := os.Stat(libPath); err != nil {
 		t.Skipf("ONNX runtime library missing (%s); run go run ./tools/fetchdeps -platform current: %v", libPath, err)
 	}

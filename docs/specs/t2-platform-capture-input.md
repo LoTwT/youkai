@@ -54,6 +54,8 @@ T2 负责目标窗口身份、采集、坐标、短输入、平台故障和原�
 
 **实现状态（2026-10-18）：** Windows 平台底座已按本节最小方案实现为普通包 `internal/platform/windows`：不依赖 UI、内核、适配器或识别包，也不定义跨平台接口；Win32 调用全部经 `golang.org/x/sys/windows` 系统调用与少量 user32/gdi32/shcore 过程声明，无 cgo，SendInput 结构布局固定 amd64。已实现并有任意平台可运行的纯逻辑测试（API 替身）：窗口枚举与进程身份核验（窗口替换、PID 复用与进程重启均拒绝沿用旧 HWND）、客户区几何与 DPI 核对（进程 PMv2 核验、目标窗口与显示器 DPI 不一致即拒绝，不用任何 DPI 数乘整张图，几何按版本化并拒绝旧帧坐标）、GDI 客户区裁剪（BGRA→RGBA 自有图像类型、DC/位图逆序释放并逐项记账）、SendInput 串行短输入（0–65535 绝对坐标域转换含虚拟桌面映射与舍入、投递计数、自身按键记账与停止时释放、UIPI 形态的零投递后停发不盲发）、输入前重查实际前台/最小化/几何版本/落点遮挡、`RegisterHotKey` 停止热键（专用线程消息循环、注册冲突开始前报告、干净注销）。PR 4a（2026-10-19）又为端口词汇扩展了点击按住时长（两批 SendInput：[move, down]、停顿、[up]）、拖拽（按下→逐步绝对移动→抬起，步间闸门在许可关闭时立即补抬起并标 Aborted）与最后投递时间记账，并由 `internal/platform` 的 Windows 适配器接入统一端口（观测重测几何、故障分类、停止序列，见 2.1 与第 7 节的 fake 覆盖）。未采用可选的 `SetWinEventHook` 通知路径：输入前仍直接重查实际前台，通知的异步性并不能消除“核验后、投递前”的竞争。实机行为——DPI 虚拟化实际表现、前台限制、遮挡、热键真实触发、句柄生命周期与 SendInput 实际计数——按第 7 节留实测轮 ② 验证。
 
+Windows 未实现可选 `Activator`：开始扫描时不主动切换前台，控制器等待用户自行聚焦，之后的就绪核验和失焦停止规则不变。
+
 ### 2.2 macOS：ScreenCaptureKit 窗口流与 Quartz 输入
 
 **建议**使用 `SCShareableContent` 找到目标 `SCWindow`，以 `SCContentFilter(desktopIndependentWindow:)` 创建单窗口 `SCStream`；只取图像，不采音频或麦克风。输入使用 Quartz 的鼠标、键盘、滚轮事件创建函数及 `CGEventPost`。不通过 AppleScript/System Events，也不依赖游戏暴露完整的辅助功能控件树。

@@ -791,6 +791,17 @@ func (run *inventoryRun) requireFilterState(want FilterState, what string) error
 		run.position, what, state, want))
 }
 
+// observedRarityFilter names the rarity filter the current warehouse frame
+// proves. Only an active funnel after the S selection can claim "S";
+// anything else stays empty, so the observation never repeats the declared
+// range as if it had been observed.
+func (run *inventoryRun) observedRarityFilter() string {
+	if run.listMatch.Filter != nil && run.listMatch.Filter.State == FilterActive {
+		return "S"
+	}
+	return ""
+}
+
 // requireWheelPosition keeps every close of the filter panel tied to the
 // wheel position the position's preparation started on.
 func (run *inventoryRun) requireWheelPosition(step string) error {
@@ -1897,7 +1908,7 @@ func (run *inventoryRun) admit(slot *scan.Slot, out detailOutcome, pre platform.
 		Column:             col,
 		Position:           run.position,
 		Quality:            out.match.Detail.Quality,
-		RarityFilter:       "S",
+		RarityFilter:       run.observedRarityFilter(),
 		ScrollEvidence:     run.lastScrollEvidence,
 		ManagementState:    managementState,
 		ManagementEvidence: managementEvidence,

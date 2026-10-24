@@ -7,6 +7,8 @@ import (
 	"net/url"
 	"path"
 	"testing"
+
+	"github.com/LoTwT/youkai/internal/ocrlayout"
 )
 
 func TestPinnedDeps(t *testing.T) {
@@ -112,6 +114,31 @@ func TestSelectDeps(t *testing.T) {
 		}
 		if platformDeps == 0 {
 			t.Errorf("selectDeps(%q) selected no dependency of that platform", tc.want)
+		}
+	}
+}
+
+// TestOCRLayoutIsSharedWithTheApp pins the manifest destinations to
+// internal/ocrlayout, the same source the application loader uses.
+func TestOCRLayoutIsSharedWithTheApp(t *testing.T) {
+	want := map[string]string{
+		"windows runtime": ocrlayout.RuntimeDest("windows", "amd64"),
+		"macOS runtime":   ocrlayout.RuntimeDest("darwin", "arm64"),
+		"shared model":    ocrlayout.ModelDest,
+	}
+	found := map[string]bool{}
+	for _, d := range deps {
+		for _, tgt := range d.targets() {
+			for name, dest := range want {
+				if tgt.dest == dest {
+					found[name] = true
+				}
+			}
+		}
+	}
+	for name, dest := range want {
+		if !found[name] {
+			t.Errorf("no dependency installs %s at %s", name, dest)
 		}
 	}
 }

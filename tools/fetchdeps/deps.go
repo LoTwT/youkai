@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+
+	"github.com/LoTwT/youkai/internal/ocrlayout"
 )
 
 // kind tells how a dependency's downloaded bytes become files under
@@ -74,7 +76,7 @@ var deps = []dependency{
 		members: []member{
 			{
 				name:   "onnxruntime-win-x64-1.29.0/lib/onnxruntime.dll",
-				dest:   "windows-amd64/onnxruntime/onnxruntime.dll",
+				dest:   ocrlayout.RuntimeDest("windows", "amd64"),
 				sha256: "69d8e6d3879a3b4001cdc74c8ed9ccc7e7f799a5b847059738323404519ec471",
 			},
 			{
@@ -106,7 +108,7 @@ var deps = []dependency{
 				// in the same archive is a same-sized duplicate, which the
 				// digest below rules out unpacking by mistake.
 				name:   "onnxruntime-osx-arm64-1.29.0/lib/libonnxruntime.1.29.0.dylib",
-				dest:   "darwin-arm64/onnxruntime/libonnxruntime.1.29.0.dylib",
+				dest:   ocrlayout.RuntimeDest("darwin", "arm64"),
 				sha256: "68f6e54e695583adc371aef610ec4abb1ffaa3df656582922de7690f7e2000eb",
 			},
 			{
@@ -130,7 +132,7 @@ var deps = []dependency{
 		sha256:   "6f327246b50388f3c176ae304bd95767ea6dc0c9ae92153ef8cbe210b3c14884",
 		platform: "",
 		kind:     kindFile,
-		dest:     "models/PP-OCRv6_rec_small.onnx",
+		dest:     ocrlayout.ModelDest,
 	},
 }
 

@@ -303,6 +303,10 @@ type winSession struct {
 	imageH       int
 }
 
+// Windows has no Activator: the collector falls back to waiting for the
+// user to focus the game, which the readiness gate then verifies.
+var _ Session = (*winSession)(nil)
+
 func (s *winSession) Target() TargetInfo { return s.targetInfo }
 
 // observe runs one ObserveTarget pass and maps its premises.

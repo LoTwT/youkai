@@ -85,9 +85,8 @@ type Config struct {
 	// service takes the scan occupancy through it on every start and
 	// releases the data root itself in the explicit-exit wrap-up.
 	DataLock *DataRootLock
-	// Source supplies the scans the service can start; nil is the M1
-	// production state — starts are refused with a clear error until
-	// the game adapters of M2 arrive.
+	// Source supplies the scans the service can start; nil means no scan
+	// source is wired, and starts are refused with a clear error.
 	Source ScanSource
 	// Store persists records below Paths.Data. Nil opens a
 	// *record.Store; tests inject a failing wrapper through this seam.
@@ -97,6 +96,11 @@ type Config struct {
 	// ready callback — and reused afterwards. Nil loads the bundled OCR
 	// runtime and model from Paths.Resources.
 	NewRecognizer func() (Recognizer, error)
+	// ShutdownOCR destroys the process-wide OCR environment after the
+	// recognizer closes and before the data-root occupancy is released.
+	// Nil calls recognition.Shutdown; tests inject a recorder through
+	// this seam to pin the exit order.
+	ShutdownOCR func() error
 }
 
 // Service is youkai's application service: the owner of the data-root
@@ -115,6 +119,7 @@ type Service struct {
 	cfg           Config
 	store         recordStore
 	newRecognizer func() (Recognizer, error)
+	shutdownOCR   func() error
 
 	mu         sync.Mutex
 	revision   uint64
@@ -201,7 +206,11 @@ func NewService(cfg Config) (*Service, error) {
 			return newOCRRecognizer(cfg.Paths.Resources)
 		}
 	}
-	svc := &Service{cfg: cfg, store: store, newRecognizer: newRecognizer}
+	shutdownOCR := cfg.ShutdownOCR
+	if shutdownOCR == nil {
+		shutdownOCR = recognition.Shutdown
+	}
+	svc := &Service{cfg: cfg, store: store, newRecognizer: newRecognizer, shutdownOCR: shutdownOCR}
 	// Sources that own a stop entry (the game scan source, whose
 	// sessions register a global stop hotkey) receive the service's Stop
 	// here, so a hotkey-driven stop walks the same idempotent entry as
@@ -711,7 +720,7 @@ func (s *Service) teardown() error {
 			errs = append(errs, fmt.Errorf("close recognizer: %w", err))
 		}
 	}
-	if err := recognition.Shutdown(); err != nil {
+	if err := s.shutdownOCR(); err != nil {
 		errs = append(errs, fmt.Errorf("shut down the OCR environment: %w", err))
 	}
 	if err := s.cfg.DataLock.Close(); err != nil {

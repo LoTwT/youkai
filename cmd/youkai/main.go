@@ -191,7 +191,7 @@ func main() {
 		ScanSource: ui.ScanSourceInfo{
 			Available: source != nil,
 			Label:     sourceLabel,
-			Reason:    "当前构建没有接入游戏扫描源（M2 接入游戏适配）；开发构建可通过环境变量 YOUKAI_DEV_SOURCE 启用开发数据源。",
+			Reason:    "当前安装版没有接入扫描源；开发构建可通过环境变量 YOUKAI_DEV_SOURCE 启用开发数据源，或用 YOUKAI_GAME_SOURCE=observe/traverse 接入游戏窗口。",
 		},
 		Evidence: ui.FileEvidence{Root: paths.Data},
 		// Usable-data exports write straight into the system downloads

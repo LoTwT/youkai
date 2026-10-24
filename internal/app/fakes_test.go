@@ -50,8 +50,10 @@ func newTestPaths(t *testing.T) Paths {
 
 // newTestService assembles a service over a fresh data root with the
 // scan-lock base redirected and the given source and recognizer factory.
+// An optional shutdown callback replaces the real OCR-environment
+// teardown, so a test can observe its position in the exit order.
 // It returns the service and the data-root lock it will release at quit.
-func newTestService(t *testing.T, paths Paths, source ScanSource, newRecognizer func() (Recognizer, error)) (*Service, *DataRootLock) {
+func newTestService(t *testing.T, paths Paths, source ScanSource, newRecognizer func() (Recognizer, error), shutdownOCR ...func() error) (*Service, *DataRootLock) {
 	t.Helper()
 	setScanLockBase(t, t.TempDir())
 	dataLock, err := AcquireDataRootLock(paths.Data)
@@ -59,11 +61,16 @@ func newTestService(t *testing.T, paths Paths, source ScanSource, newRecognizer 
 		t.Fatalf("acquire data-root lock: %v", err)
 	}
 	t.Cleanup(func() { dataLock.Close() })
+	var shutdown func() error
+	if len(shutdownOCR) > 0 {
+		shutdown = shutdownOCR[0]
+	}
 	svc, err := NewService(Config{
 		Paths:         paths,
 		DataLock:      dataLock,
 		Source:        source,
 		NewRecognizer: newRecognizer,
+		ShutdownOCR:   shutdown,
 	})
 	if err != nil {
 		t.Fatalf("NewService: %v", err)

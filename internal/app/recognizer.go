@@ -10,40 +10,19 @@ import (
 
 	"github.com/LoTwT/youkai/internal/game/zzz"
 	"github.com/LoTwT/youkai/internal/game/zzz/collect"
+	"github.com/LoTwT/youkai/internal/ocrlayout"
 	"github.com/LoTwT/youkai/internal/recognition"
 	"github.com/LoTwT/youkai/internal/scan"
 )
 
-// The OCR artifacts this app bundles, as fetchdeps lays them out below
-// the resources root. MyGo's packaging merges the per-platform resource
-// directories into the root of the shipped resources (see the framework's
-// resources documentation), so a packaged app — and the development app
-// mygo dev stages — finds the runtime library at onnxruntime/ and the
-// shared model at models/, independently of the platform directory the
-// fetchdeps tool downloads into (docs/specs/t3-ocr-runtime-model-samples.md
-// 固定组合与制品静态核查).
-const (
-	// ocrModelName is the single shared recognition model.
-	ocrModelName = "PP-OCRv6_rec_small.onnx"
-	// onnxRuntimeLibName returns the pinned ONNX Runtime shared library
-	// file name of a supported platform; the version is part of the
-	// pinned combination.
-	onnxRuntimeVersion = "1.29.0"
-)
-
-// onnxRuntimeLibName returns the pinned ONNX Runtime shared library file
-// name for the given GOOS, or an empty string when the platform has no
-// pinned artifact.
-func onnxRuntimeLibName(goos string) string {
-	switch goos {
-	case "darwin":
-		return "libonnxruntime." + onnxRuntimeVersion + ".dylib"
-	case "windows":
-		return "onnxruntime.dll"
-	default:
-		return ""
-	}
-}
+// The OCR artifacts and their names live in internal/ocrlayout, shared
+// with the fetchdeps packaging tool. MyGo's packaging merges the
+// per-platform resource directories into the root of the shipped resources
+// (see the framework's resources documentation), so a packaged app — and
+// the development app mygo dev stages — finds the runtime library at
+// onnxruntime/ and the shared model at models/, independently of the
+// platform directory the fetchdeps tool downloads into
+// (docs/specs/t3-ocr-runtime-model-samples.md 固定组合与制品静态核查).
 
 // OCRResources resolves the OCR runtime and model paths below a resources
 // root, as the bundled layout ships them. It backs both the application
@@ -53,7 +32,7 @@ func onnxRuntimeLibName(goos string) string {
 // the working directory or the system library search path
 // (docs/specs/scanner-architecture.md §4).
 func OCRResources(resourcesRoot string) (recognition.Resources, error) {
-	lib := onnxRuntimeLibName(runtime.GOOS)
+	lib := ocrlayout.RuntimeLibName(runtime.GOOS)
 	if lib == "" {
 		return recognition.Resources{}, fmt.Errorf("app: no pinned ONNX runtime artifact for %s/%s", runtime.GOOS, runtime.GOARCH)
 	}
@@ -62,7 +41,7 @@ func OCRResources(resourcesRoot string) (recognition.Resources, error) {
 	}
 	return recognition.Resources{
 		LibraryPath: filepath.Join(resourcesRoot, "onnxruntime", lib),
-		ModelPath:   filepath.Join(resourcesRoot, "models", ocrModelName),
+		ModelPath:   filepath.Join(resourcesRoot, "models", ocrlayout.ModelName),
 	}, nil
 }
 

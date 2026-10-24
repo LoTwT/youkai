@@ -7,6 +7,7 @@ import (
 	"image"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -124,10 +125,15 @@ func TestStartShowsPreparingWhileRecognizerLoads(t *testing.T) {
 	source := devFixtureSource(t, 1, 0)
 	loaded := make(chan struct{})
 	var once sync.Once
+	var loads atomic.Int32
 	svc, _ := newTestService(t, paths, source, func() (Recognizer, error) {
+		loads.Add(1)
 		<-loaded // stand in for the model load
 		return newFakeRecognizer(), nil
 	})
+	if got := loads.Load(); got != 0 {
+		t.Fatalf("recognizer factory ran at construction: %d calls", got)
+	}
 
 	started := make(chan StartOutcome, 1)
 	go func() {
@@ -154,7 +160,18 @@ func TestStartShowsPreparingWhileRecognizerLoads(t *testing.T) {
 	if out.SessionID != snap.SessionID {
 		t.Fatalf("committed session = %s, want the placeholder %s", out.SessionID, snap.SessionID)
 	}
+	if got := loads.Load(); got != 1 {
+		t.Fatalf("recognizer factory calls after the first start = %d, want 1", got)
+	}
 	waitNotBusy(t, svc)
+	// The process-lifetime recognizer is reused, not recreated per session.
+	if _, err := svc.Start(StartRequest{ID: "r3"}); err != nil {
+		t.Fatalf("second start: %v", err)
+	}
+	waitNotBusy(t, svc)
+	if got := loads.Load(); got != 1 {
+		t.Fatalf("recognizer factory calls after the second start = %d, want 1", got)
+	}
 }
 
 // TestDelivererBatchesAndSavesFinalCheckpoint drives 42 observations
@@ -561,7 +578,20 @@ func TestQuitStopsSessionThenClosesRecognizerThenReleasesOccupancy(t *testing.T)
 	gate := newGatedController()
 	source := staticSource{spec: specOf(gate)}
 	rec := &recordingRecognizer{delegate: newFakeRecognizer()}
-	svc, dataLock := newTestService(t, paths, source, func() (Recognizer, error) { return rec, nil })
+	shutdownCalls := 0
+	svc, dataLock := newTestService(t, paths, source, func() (Recognizer, error) { return rec, nil }, func() error {
+		shutdownCalls++
+		if rec.closeCount != 1 {
+			t.Errorf("OCR shutdown ran before the recognizer closed: close count %d", rec.closeCount)
+		}
+		if other, err := AcquireDataRootLock(paths.Data); err == nil {
+			other.Close()
+			t.Error("data-root occupancy released before the OCR shutdown")
+		} else if !errors.Is(err, ErrLockHeld) {
+			t.Errorf("probe data-root lock during OCR shutdown: %v", err)
+		}
+		return nil
+	})
 	rec.wire(svc)
 
 	if _, err := svc.Start(StartRequest{ID: "r1"}); err != nil {
@@ -596,6 +626,9 @@ func TestQuitStopsSessionThenClosesRecognizerThenReleasesOccupancy(t *testing.T)
 	if rec.phaseAtClose != string(scan.PhaseEnded) {
 		t.Fatalf("session phase at recognizer close = %q, want %q", rec.phaseAtClose, scan.PhaseEnded)
 	}
+	if shutdownCalls != 1 {
+		t.Fatalf("OCR shutdown calls = %d, want exactly once", shutdownCalls)
+	}
 	// The data-root occupancy freed with the teardown: this process can
 	// take the same root again.
 	taken, err := AcquireDataRootLock(paths.Data)
@@ -610,6 +643,9 @@ func TestQuitStopsSessionThenClosesRecognizerThenReleasesOccupancy(t *testing.T)
 	}
 	if rec.closeCount != 1 {
 		t.Fatalf("recognizer closed %d times after a repeated quit, want 1", rec.closeCount)
+	}
+	if shutdownCalls != 1 {
+		t.Fatalf("OCR shutdown calls after a repeated quit = %d, want 1", shutdownCalls)
 	}
 	// Starts are refused once the service is quitting.
 	if _, err := svc.Start(StartRequest{ID: "r2"}); err == nil || !strings.Contains(err.Error(), "quitting") {
