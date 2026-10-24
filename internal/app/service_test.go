@@ -7,6 +7,7 @@ import (
 	"image"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -124,10 +125,15 @@ func TestStartShowsPreparingWhileRecognizerLoads(t *testing.T) {
 	source := devFixtureSource(t, 1, 0)
 	loaded := make(chan struct{})
 	var once sync.Once
+	var loads atomic.Int32
 	svc, _ := newTestService(t, paths, source, func() (Recognizer, error) {
+		loads.Add(1)
 		<-loaded // stand in for the model load
 		return newFakeRecognizer(), nil
 	})
+	if got := loads.Load(); got != 0 {
+		t.Fatalf("recognizer factory ran at construction: %d calls", got)
+	}
 
 	started := make(chan StartOutcome, 1)
 	go func() {
@@ -154,7 +160,18 @@ func TestStartShowsPreparingWhileRecognizerLoads(t *testing.T) {
 	if out.SessionID != snap.SessionID {
 		t.Fatalf("committed session = %s, want the placeholder %s", out.SessionID, snap.SessionID)
 	}
+	if got := loads.Load(); got != 1 {
+		t.Fatalf("recognizer factory calls after the first start = %d, want 1", got)
+	}
 	waitNotBusy(t, svc)
+	// The process-lifetime recognizer is reused, not recreated per session.
+	if _, err := svc.Start(StartRequest{ID: "r3"}); err != nil {
+		t.Fatalf("second start: %v", err)
+	}
+	waitNotBusy(t, svc)
+	if got := loads.Load(); got != 1 {
+		t.Fatalf("recognizer factory calls after the second start = %d, want 1", got)
+	}
 }
 
 // TestDelivererBatchesAndSavesFinalCheckpoint drives 42 observations

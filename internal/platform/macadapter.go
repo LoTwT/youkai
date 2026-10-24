@@ -289,6 +289,11 @@ type macSession struct {
 	reported      map[string]bool
 }
 
+var (
+	_ Session   = (*macSession)(nil)
+	_ Activator = (*macSession)(nil)
+)
+
 func (s *macSession) Target() TargetInfo { return s.targetInfo }
 
 // Activate brings the locked target application to the foreground. The

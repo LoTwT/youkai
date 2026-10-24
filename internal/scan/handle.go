@@ -51,17 +51,19 @@ func (h *ControllerHandle) Acquire(ctx context.Context) *Slot {
 // the controller is in. Wrap the cause in a FaultError to carry a
 // diagnostic code (focusLost, geometryChanged, …); a plain error gets
 // controllerFailed. Faults reported after the session's outcome is already
-// decided are recorded as additional faults and change nothing. Safe to
-// call from any goroutine — the platform session's watcher, for example,
-// reports its faults from a goroutine of its own while the producer runs
-// the collection loop.
+// decided are recorded as additional faults and change nothing; that
+// includes a watcher fault arriving while the range-complete session drains
+// its final recognition work, which must not turn a completed traversal
+// into a failed one. Safe to call from any goroutine — the platform
+// session's watcher, for example, reports its faults from a goroutine of
+// its own while the producer runs the collection loop.
 func (h *ControllerHandle) Fail(err error) {
 	if err == nil {
 		return
 	}
 	h.s.mu.Lock()
 	defer h.s.mu.Unlock()
-	h.s.faultLocked(CodeControllerFailed, err, h.s.phase, true)
+	h.s.faultLocked(CodeControllerFailed, err, h.s.phase, false)
 }
 
 // Slot is one acquired processing slot of the bounded pipeline, held

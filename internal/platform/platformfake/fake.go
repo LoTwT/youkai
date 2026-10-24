@@ -133,6 +133,11 @@ type Session struct {
 	hotkeyAfterStop int
 }
 
+var (
+	_ platform.Session   = (*Session)(nil)
+	_ platform.Activator = (*Session)(nil)
+)
+
 // NewSession returns a plain ready session.
 func NewSession() *Session {
 	return &Session{LockBaselineVer: 1}
@@ -216,19 +221,28 @@ func (s *Session) Frame(ctx context.Context, req platform.FrameRequest) (platfor
 	}, nil
 }
 
-// Dispatch implements platform.Session.
+// Dispatch implements platform.Session. Like the real adapters it refuses
+// after Close and while the kernel's input gate is closed, before calling
+// DispatchFn, so a scripted game cannot accidentally receive input that
+// production would have denied. Every call is still recorded: tests use
+// the attempt count to prove the collector stopped dispatching.
 func (s *Session) Dispatch(op platform.InputOp) platform.InputResult {
 	s.mu.Lock()
 	s.dispatchOps = append(s.dispatchOps, op)
 	fn := s.DispatchFn
 	closed := s.closed
+	gate := s.Gate
 	s.mu.Unlock()
-	if fn != nil {
-		return fn(op)
-	}
 	if closed {
 		return platform.InputResult{Status: platform.InputNotDispatched,
 			Denial: platform.NewFault(platform.CodeCaptureStopped, "the session is closed")}
+	}
+	if gate != nil && !gate.InputPermitted() {
+		return platform.InputResult{Status: platform.InputNotDispatched,
+			Denial: platform.NewFault(platform.CodePermitClosed, "the kernel's input permission is closed")}
+	}
+	if fn != nil {
+		return fn(op)
 	}
 	return platform.InputResult{Status: platform.InputPosted, EventsPlanned: 2, EventsPosted: 2}
 }

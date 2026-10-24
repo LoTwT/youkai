@@ -81,6 +81,10 @@ type Controller struct {
 	trav     Traversal
 }
 
+// The kernel releases the platform session through this optional
+// capability; a rename must fail at compile time, not only in a test.
+var _ scan.Releaser = (*Controller)(nil)
+
 func (c *Controller) budget() time.Duration {
 	if c.PrepareBudget > 0 {
 		return c.PrepareBudget

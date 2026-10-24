@@ -360,3 +360,38 @@ func TestFailFromOtherGoroutineUnblocksAcquire(t *testing.T) {
 		t.Fatalf("Release calls: %d, want 1", releases)
 	}
 }
+
+// K9: a watcher fault reported while a range-complete session is releasing
+// its controller is recorded as an additional fault. It must not turn the
+// completed traversal into a failed session or interrupt the final drain.
+func TestFaultDuringReleaseKeepsCompletion(t *testing.T) {
+	var handle *scan.ControllerHandle
+	ctrl := &releaseProbe{
+		collect: func(_ context.Context, h *scan.ControllerHandle) error {
+			handle = h
+			return nil
+		},
+		release: func() error {
+			handle.Fail(scan.NewFault("focusLost", nil))
+			return nil
+		},
+	}
+	s, _ := startReleaseSession(t, "rel-fault-complete", 1, ctrl)
+	snap := waitEnd(t, s)
+
+	if snap.End != scan.EndCompleted {
+		t.Fatalf("end %s, want completed despite a release-time watcher fault", snap.End)
+	}
+	if snap.Trigger != nil {
+		t.Fatalf("trigger %+v, want none for a completed session", snap.Trigger)
+	}
+	found := false
+	for _, f := range snap.Faults {
+		if f.Code == "focusLost" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("release-time fault missing from the additional faults: %+v", snap.Faults)
+	}
+}

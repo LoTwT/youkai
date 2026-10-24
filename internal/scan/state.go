@@ -175,6 +175,10 @@ func (s *Session) submitLocked(sessionID ID, seq Seq, recognition Recognition) (
 		return Record{}, false, fmt.Errorf("scan: outcome for session %q does not belong to session %q", sessionID, s.id)
 	}
 	if s.sealed {
+		// The terminal-entry check below also rejects this in today's
+		// kernel: the stop path marks every queued/running entry terminal
+		// before sealing. Keep the explicit gate as the contract's first
+		// line and as protection if the entry lifecycle changes.
 		return Record{}, false, errors.New("scan: session sealed; late outcome rejected")
 	}
 	e, ok := s.entries[seq]

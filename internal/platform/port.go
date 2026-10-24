@@ -115,7 +115,8 @@ type Session interface {
 // application to the foreground. A user-initiated scan calls it once
 // before waiting for readiness, so the user does not have to click back
 // to the game. It is never used during scanning: losing focus there is a
-// stop condition, not something to repair.
+// stop condition, not something to repair. The Windows session does not
+// implement it; there the collector falls back to the readiness wait.
 type Activator interface {
 	Activate() error
 }

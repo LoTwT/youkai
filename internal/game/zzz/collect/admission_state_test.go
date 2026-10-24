@@ -80,6 +80,37 @@ func TestTraverseMergesLockFlashAndCarriesPresence(t *testing.T) {
 	}
 }
 
+// TestTraverseUnreadableManagementBadgeStaysNull pins the end-to-end
+// consequence of an unreadable list badge: even when the detail page's top
+// indicator reads unlocked, the observation stays empty (JSON null). It
+// must never collapse to none, which would pass validation and enter the
+// export as a confirmed state.
+func TestTraverseUnreadableManagementBadgeStaysNull(t *testing.T) {
+	game := newScriptedGame(true)
+	h := newTraversalHarness(t, game)
+	h.inv.Matcher = &stateMatcher{
+		Matcher:      h.inv.Matcher,
+		target:       0,
+		beforeList:   collect.ManagementUnknown,
+		afterList:    collect.ManagementUnknown,
+		top:          collect.TopManagementUnlocked,
+		listAvatar:   collect.AvatarAbsent,
+		detailAvatar: collect.AvatarPresent,
+	}
+	h.start()
+	h.endCompleted()
+	obs := h.observations()
+	if len(obs) != 1 {
+		t.Fatalf("admitted %d, want 1", len(obs))
+	}
+	if obs[0].ManagementState != "" {
+		t.Fatalf("managementState = %q, want null for an unreadable list badge", obs[0].ManagementState)
+	}
+	if !strings.Contains(obs[0].ManagementEvidence, "list badge unknown") {
+		t.Fatalf("management evidence = %q, want the unreadable badge recorded", obs[0].ManagementEvidence)
+	}
+}
+
 // TestTraverseConflictingStateEvidenceStaysNull checks that a lock the top
 // indicator does not confirm, and an avatar conflict, both stay empty
 // (JSON null). Neither is collapsed into none or unequipped.
