@@ -162,7 +162,7 @@ type InputOp struct {
 	// default (10), above the bound (32) is refused.
 	Steps int
 	// Duration is the press-to-release span of a drag; zero takes the
-	// default (400 ms), above the bound (1 s) is refused.
+	// default (400 ms), above the platform's maximum is refused.
 	Duration time.Duration
 }
 

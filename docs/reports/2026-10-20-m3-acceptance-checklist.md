@@ -1,6 +1,6 @@
 # M3 规模测试与正式验收清单
 
-更新日期：2026-10-20。状态：合成数据与自动化规模检查已完成；macOS 六位置现场轮已执行三次。较早的 `5d3200e3` 轮覆盖 `unknown`、排序 `unverified`；`5387f071` 干净复跑完成六位置，`coverage:"complete"`，排序标签“稀有度”已验证（仅标签，不读取升降序方向），1005 件、0 失败。`07682b85` 同详情修复复跑再次完成六位置，1011 件、0 失败，10 次 `referenceVerified`；真实相邻同详情 seq 812/813 已由参照往返确认，seq 813 为 `referenceVerified`。2026-10-20 本机 macOS 原生体验（托盘、关窗隐藏、⌘Q/托盘退出、第二实例、`youkai://open`、保存对话框中文输入、文件对话框取消/覆盖/无权限）已执行并通过空闲态验收；扫描中停止/转交已有生命周期与服务层自动化覆盖，真机未验；磁盘不足已有写入故障注入覆盖，真实满盘未验。**正式验收仍未通过**：装备者身份、14 件装备状态不一致、滚动 Lost、管理 `none`、排序方向、Windows 轮 ② 与扫描中托盘/深链接行为仍缺证据；v2 已把装备字段改为可选 warning，不再阻止导出。本文把“已自动化覆盖”“已用合成数据覆盖”“现场执行结果”和“必须真机执行”分开记录，未执行或证据不足的项目不是通过。
+更新日期：2026-10-20（2026-10-25 更新）。状态：合成数据与自动化规模检查已完成；macOS 六位置现场轮已执行三次。**2026-10-25 决策更新：**按用户要求移除独立 Clear 双开，所有模式每位置只做一次筛选面板访问（重置与 S 合并）；回顶遇到 Lost 或仍有位移时继续向上，稳定顶部确认前不得开始遍历。下文历史轮次中的 `YOUKAI_INDEPENDENT_CLEAR=1` 仅记录当时构建，当前构建已不接受该开关。较早的 `5d3200e3` 轮覆盖 `unknown`、排序 `unverified`；`5387f071` 干净复跑完成六位置，`coverage:"complete"`，排序标签“稀有度”已验证（仅标签，不读取升降序方向），1005 件、0 失败。`07682b85` 同详情修复复跑再次完成六位置，1011 件、0 失败，10 次 `referenceVerified`；真实相邻同详情 seq 812/813 已由参照往返确认，seq 813 为 `referenceVerified`。2026-10-20 本机 macOS 原生体验（托盘、关窗隐藏、⌘Q/托盘退出、第二实例、`youkai://open`、保存对话框中文输入、文件对话框取消/覆盖/无权限）已执行并通过空闲态验收；扫描中停止/转交已有生命周期与服务层自动化覆盖，真机未验；磁盘不足已有写入故障注入覆盖，真实满盘未验。**正式验收仍未通过**：装备者身份、14 件装备状态不一致、滚动 Lost、管理 `none`、排序方向、Windows 轮 ② 与扫描中托盘/深链接行为仍缺证据；v2 已把装备字段改为可选 warning，不再阻止导出。本文把“已自动化覆盖”“已用合成数据覆盖”“现场执行结果”和“必须真机执行”分开记录，未执行或证据不足的项目不是通过。
 
 - 被测基线：`main` `b4fa6b2`（规模与验收清单已由 PR #49 合并）；较早现场轮运行于 `main` `4c5f014`；干净覆盖复跑运行于 `main` `7609a32` 加排序/覆盖改动的本地构建；同详情修复复跑运行于分支 `fix/collect-settled-detail-same` 的 `33c501e` + `b01bf3b`。
 - 本文对应分支：`test/m3-scale-acceptance`。
@@ -80,7 +80,7 @@ ok  ./...            real 190.87s
 | 编辑确认、未知字段与旧修订 | `internal/ui/edit_test.go`：`TestEditSavePersistsRevision`、`TestConfirmAndNextThroughToEmpty`、`TestRevisionConflictReloadsCurrentRevision`、`TestLateSaveCannotCrossItems`、`TestSaveKeepsExplicitUnknownsPending`；`internal/app/review_test.go`。 |
 | 导出契约 | `internal/app/export_test.go`：字段、单位、目录子集、覆盖结论、空导出与 JSON/CSV 同源。 |
 | 窗口生命周期与第二实例 | PR #48；`cmd/youkai/lifecycle_test.go` 覆盖默认隐藏、关闭即退出、托盘失败回退、显式退出收尾、第二实例恢复/停止、深链接过滤与扫描中深链接。 |
-| 独立 Clear 与相邻同详情的规则层 | `internal/game/zzz/collect/inventory_test.go`：`TestTraverseIndependentClear...`、`TestSinglePageSameDetail...`。这些是脚本化页面序列，不是真实客户端证据。 |
+| 单次筛选、回顶与相邻同详情的规则层 | `internal/game/zzz/collect/inventory_test.go`：`TestTraverseFilterResetAndSShareOnePanelVisit`、`TestTraverseTopClaimMustSettleAtRealStart`、`TestSinglePageSameDetail...`；`inventory_internal_test.go` 另固定顶部确认拒绝 Lost/位移。这些是脚本化页面序列，不是真实客户端证据。 |
 
 ### 2.3 合成数据的明确边界
 
@@ -106,12 +106,11 @@ ok  ./...            real 190.87s
 go run ./tools/fetchdeps -platform current
 ```
 
-- 正式验收使用独立 Clear 校验（只在验收流程启用，不是日常产品行为）：
+- 启动开发版真实遍历：
 
 ```sh
 CGO_ENABLED=1 \
 YOUKAI_GAME_SOURCE=traverse \
-YOUKAI_INDEPENDENT_CLEAR=1 \
 go tool mygo dev
 ```
 
@@ -125,8 +124,8 @@ go tool mygo dev
 | 检查项 | 执行与预期证据 | 失败处理 |
 | --- | --- | --- |
 | 转盘位置 | 日志出现 `position N: wheel selected`，`capture.position` 为 1–6，且每位置 `viewportIndex` 从 0 重新计数。 | 位置未选中或跳位：记录 `navigationMismatch`/实际日志，停止。 |
-| 独立 Clear | 日志出现 `position N: filter reset and S selected`；独立 Clear 路径在重置后先关闭面板并要求漏斗为 clear，再重新打开勾选 S。若重置未清除旧筛选，必须报 `navigationMismatch` 并停止。 | 出现非 clear 漏斗、面板未关闭或 S 未生效：记录失败码，停止，不继续录入。 |
-| 顶部滑块 | 日志出现 `position N prepared: S filter active, top confirmed` 与 `top confirmation accepted: the thumb stayed at the top`；顶部证据是滑块起点不变（±2 像素）且仍为 Top。 | 连续无进展、Lost 预算耗尽或顶部未确认：停止并保留已接纳结果。 |
+| 筛选面板 | 日志出现 `position N: filter reset and S selected`；每位置只出现一次 `open→reset→s→close`，关闭后漏斗为 Active。若重置使页面不可判定或 S 未生效，必须报 `navigationMismatch` 并停止。 | 出现两次面板开关、非 Active 漏斗、面板未关闭或 S 未生效：记录失败码，停止，不继续录入。 |
+| 顶部滑块 | 日志出现 `position N prepared: S filter active, top confirmed` 与稳定顶部确认；Lost 或位移后必须继续向上，不得把该结果当作到顶。顶部证据是列表稳定非移动、滑块起点不变（±2 像素）且仍为 Top，或 Stationary 且仍为 Top。 | 连续无进展、确认预算耗尽或顶部未稳定：停止并保留已接纳结果。 |
 | Lost | 滚动期间若出现 `lost=true`，确认实现没有立即提交未确认位移：在 `ScrollBudget` 内继续观察，预算耗尽才停止；不得把单个 Lost 动画帧当成结束。自然未触发 Lost 时记“未触发”，不能据此判 Lost 行为通过。 | 预算耗尽仍不停稳：记录 `Lost` 与停止位置；不降低阈值、不猜测跳过的行数。 |
 | 相邻同详情 | 找到至少一组相邻且详情完全相同的 S 盘（或明确的真实重复盘样本），确认两件各自出现、各计一件；日志可出现参照往返，但不得按属性/哈希合并。 | 无法归属：`detailUnattributed` 停止并保留未解决位置；该位置记未通过。 |
 | 管理状态与装备 | 逐位置抽查锁定、弃置、无标记；已装备、未装备、他人装备。列表盘格右下角角标与顶部“拆解”左侧指示在锁定维度一致；顶部不能区分弃置与无标记，弃置/无标记以列表角标为准；详情等级右侧头像与列表格右上角头像一致。冲突或不可读必须为 `null`，不能落成 `none`/未装备。 | 任一冲突或不可读：记录 `null` 与实际画面；不得改写成合法状态。 |
@@ -141,10 +140,11 @@ youkai: collect: position N: wheel selected
 youkai: collect: position N: filter reset and S selected
 youkai: collect: position N prepared: S filter active, top confirmed
 youkai: collect: position N: top confirmation accepted: the thumb stayed at the top
+youkai: collect: position N: top confirmation accepted: the list stayed still
 youkai: collect: position N scroll <before> -> <after>: R rows, M correspondences
 ```
 
-独立 Clear 路径不额外打印一条“clear”日志；它的证据是重置后关闭面板时漏斗为 clear、未出现 `navigationMismatch`，以及随后 S 生效的 “filter reset and S selected”/“prepared” 行。如果日志无法证明这两个检查点，按未验证处理。
+筛选准备只访问一次面板；日志中的 “filter reset and S selected” 与关闭后的 Active 漏斗共同证明重置和 S 已执行。顶部确认可能重试：`lost=true` 或 `displaced=true` 的尝试不算通过，直到出现稳定顶部确认与 “prepared” 行。如果日志无法证明这些检查点，按未验证处理。
 
 #### 记录字段
 
@@ -310,7 +310,7 @@ Windows 实测轮 ② 完成前，不宣称 Windows M3 通过。
 - 每位置准备后的首件间隔约 11.8 秒（位置 2/3/5），包含转盘切换、筛选准备和回顶；单次参照往返约 3.8–5.2 秒。
 - 在本机用同一 OCR 资源对 7 条详情行做离线测量：单件约 236–270 ms；证据截图写入约 49 ms/件。剩余时间主要是一次点击到详情稳定的云端往返，不能只靠并行 OCR 消除。
 - 已实施低成本优化：上一件接纳后的稳定帧作为下一次点击前等待的首个稳定样本，仍保留新鲜/复用帧确认；单件少等约两帧。实际收益待下一次现场轮测量。
-- 筛选准备：日常路径本来就是一次面板访问（打开→重置→选 S→关闭→Active）。`YOUKAI_INDEPENDENT_CLEAR=1` 的额外关闭/重开只用于验收时独立证明 reset 已清除旧筛选；现有面板夹具在 reset 前后面板区域像素一致，无法在面板内替代该证据，因此不合并验收路径。
+- 筛选准备：日常路径本来就是一次面板访问（打开→重置→选 S→关闭→Active）。`YOUKAI_INDEPENDENT_CLEAR=1` 的额外关闭/重开只用于验收时独立证明 reset 已清除旧筛选；现有面板夹具在 reset 前后面板区域像素一致，无法在面板内替代该证据，因此当时不合并验收路径。**该决定已于 2026-10-25 被用户取代：当前所有模式只做一次面板访问，独立 Clear 开关已移除。**
 
 ### 4.5 2026-10-21 预点击稳定帧复跑（未完成）
 
@@ -345,7 +345,7 @@ Windows 实测轮 ② 完成前，不宣称 Windows M3 通过。
 
 - 任何检查未执行、证据不足或无法复现，都记“待执行/未验证”，不能写成通过。
 - 失败时先停止扫描或验收操作，保留当前记录、日志、导出文件与画面截图；不要删除记录或截图，不要手工改检查点。
-- 独立 Clear 或 S 生效失败（`navigationMismatch`）、详情归属失败（`detailUnattributed`）、位置丢失（`positionLost`）、证据失败（`evidenceFailed`）都按安全停止处理；已接纳结果保留为部分结果。
+- 筛选准备或 S 生效失败（`navigationMismatch`）、顶部未稳定、详情归属失败（`detailUnattributed`）、位置丢失（`positionLost`）、证据失败（`evidenceFailed`）都按安全停止处理；已接纳结果保留为部分结果。
 - Lost 到预算仍不停稳时停止，不降低阈值、不反向乱滚寻找“看起来相同”的物品。
 - 覆盖结论只能按 T5 §5 的条件升级；排序标签未验证、末端证据不足或计数冲突时保留 `partial`/`unknown`，字段修正不能改变覆盖结论。
 - 导出与界面不一致时，以同一已保存修订的 JSON/CSV 和会话记录为证据，记录版本、会话 ID、导出时间与文件摘要；不要用新扫描覆盖旧证据。

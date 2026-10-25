@@ -3,6 +3,7 @@ package collect_test
 import (
 	"image"
 	"testing"
+	"time"
 
 	"github.com/LoTwT/youkai/internal/game/zzz/collect"
 	"github.com/LoTwT/youkai/internal/platform"
@@ -32,6 +33,9 @@ func TestMacCloudLayoutValidatesAndFitsContent(t *testing.T) {
 	}
 	if l.PanelS != image.Pt(1225, 615) {
 		t.Fatalf("panel S control %v, want the sample frame's (1225,615)", l.PanelS)
+	}
+	if l.ScrollDuration != 1200*time.Millisecond {
+		t.Fatalf("scroll duration %s, want the slower calibrated 1200ms drag", l.ScrollDuration)
 	}
 	if l.Cell.Management.Empty() || l.Cell.Avatar.Empty() ||
 		l.DetailAvatar.Empty() || l.TopManagement.Empty() {

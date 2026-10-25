@@ -197,6 +197,94 @@ func newScrollRun(l Layout, view SessionView, m Matcher, budget time.Duration) *
 	}
 }
 
+// TestTopConfirmedRejectsMovedClaims pins that a Lost or displaced top
+// claim cannot start traversal even when the scrollbar thumb looks
+// unchanged. Only a settled top (or an undecided, non-moving drag at the
+// same thumb start) is sufficient evidence.
+func TestTopConfirmedRejectsMovedClaims(t *testing.T) {
+	top := PageMatch{Page: PageWarehouse, List: &ListEvidence{Top: true}}
+	notTop := PageMatch{Page: PageWarehouse, List: &ListEvidence{Top: false}}
+	cases := []struct {
+		name     string
+		out      scrollOutcome
+		beforeOK bool
+		afterOK  bool
+		want     bool
+	}{
+		{"stationary top", scrollOutcome{stationary: true, afterMatch: top}, true, true, true},
+		{"undecided stable thumb", scrollOutcome{afterMatch: top}, true, true, true},
+		{"lost with stable thumb", scrollOutcome{lost: true, afterMatch: top}, true, true, false},
+		{"displaced with stable thumb", scrollOutcome{displaced: true, afterMatch: top}, true, true, false},
+		{"stationary but not top", scrollOutcome{stationary: true, afterMatch: notTop}, true, true, false},
+		{"thumb moved", scrollOutcome{afterMatch: top}, true, true, false},
+		{"thumb unreadable", scrollOutcome{afterMatch: top}, false, true, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			beforeStart, afterStart := 226, 226
+			if tc.name == "thumb moved" {
+				afterStart = 240
+			}
+			if got := topConfirmed(tc.out, tc.beforeOK, tc.afterOK, beforeStart, afterStart); got != tc.want {
+				t.Fatalf("topConfirmed = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestAwaitScrollDoesNotCommitRepeatedTotalWhileMoving pins the unsafe
+// case that a repeated row count alone cannot settle: A→B is undecided,
+// the total before→B still reports four rows, but B→C later moves another
+// row. The traversal must stay uncommitted and end as Lost, not accept B.
+func TestAwaitScrollDoesNotCommitRepeatedTotalWhileMoving(t *testing.T) {
+	l := sixRowScrollLayout()
+	content := image.Rect(0, 0, 100, 100)
+	before := platform.Frame{ID: 1, Geometry: 1, Image: image.NewRGBA(content), Content: content}
+	first := platform.Frame{ID: 2, Geometry: 1, Image: image.NewRGBA(content), Content: content}
+	stillMoving := platform.Frame{ID: 3, Geometry: 1, Image: image.NewRGBA(content), Content: content}
+	later := platform.Frame{ID: 4, Geometry: 1, Image: image.NewRGBA(content), Content: content}
+	view := &scrollScriptView{frames: []platform.Frame{first, stillMoving, later}, blockAfter: true}
+	m := &scrollScriptMatcher{rows: l.Rows, columns: l.Columns, verdict: map[scrollPair]ScrollMatch{
+		{1, 2}: displacedScan(l, 4),
+		{2, 3}: {Evidence: "scripted relative frame still moving"},
+		{1, 3}: displacedScan(l, 4),
+		{3, 4}: displacedScan(l, 1),
+		{1, 4}: {Lost: true, Evidence: "scripted total overlap lost after another row"},
+	}}
+	run := newScrollRun(l, view, m, 80*time.Millisecond)
+	out, err := run.awaitScroll(context.Background(), before)
+	if err != nil {
+		t.Fatalf("awaitScroll: %v", err)
+	}
+	if out.displaced || !out.lost || !out.unsettled {
+		t.Fatalf("outcome %+v, want an uncommitted Lost result", out)
+	}
+}
+
+// TestAwaitScrollSettlesIdleReuseWithSameFrameID covers production idle
+// confirmations: the platform copies the latest complete frame into a new
+// RGBA buffer, so the image pointer changes while Frame.ID and content stay
+// the same. That must settle the candidate rather than wait out the budget.
+func TestAwaitScrollSettlesIdleReuseWithSameFrameID(t *testing.T) {
+	l := sixRowScrollLayout()
+	content := image.Rect(0, 0, 100, 100)
+	before := platform.Frame{ID: 1, Geometry: 1, Image: image.NewRGBA(content), Content: content}
+	candidate := platform.Frame{ID: 2, Geometry: 1, Image: image.NewRGBA(content), Content: content}
+	idle := platform.Frame{ID: 2, Geometry: 1, Image: image.NewRGBA(content), Content: content, Reused: true}
+	view := &scrollScriptView{frames: []platform.Frame{candidate, idle}, blockAfter: true}
+	m := &scrollScriptMatcher{rows: l.Rows, columns: l.Columns, verdict: map[scrollPair]ScrollMatch{
+		{1, 2}: displacedScan(l, 4),
+	}}
+	run := newScrollRun(l, view, m, 80*time.Millisecond)
+	out, err := run.awaitScroll(context.Background(), before)
+	if err != nil {
+		t.Fatalf("awaitScroll: %v", err)
+	}
+	if !out.displaced || out.lost || out.after.ID != 2 {
+		t.Fatalf("outcome %+v, want the idle reuse to settle frame 2", out)
+	}
+}
+
 // TestAwaitScrollCommitsLatestSettledCandidate pins the two-stage rule:
 // four rows is only a candidate, a later frame shows five rows total, and
 // the commit waits until a frame relative to the five-row candidate is

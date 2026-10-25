@@ -43,7 +43,7 @@ type Inventory struct {
 	// default.
 	ActionBudget time.Duration
 	// ScrollBudget bounds a scroll's settle wait after the drag. It is
-	// longer than ActionBudget because a 1000ms drag plus inertial
+	// longer than ActionBudget because a 1200ms drag plus inertial
 	// settling outlasts a click. Zero takes the default. The default was
 	// raised to 5s after a field scroll displaced four rows but did not
 	// settle within the former 3s budget (T5 §5).
@@ -63,12 +63,6 @@ type Inventory struct {
 	// the deadline). Zero takes the default; negative disables retries —
 	// the first ineffective action already stops the walk.
 	MaxRetries int
-	// IndependentClear enables the acceptance-only filter preparation:
-	// after the reset, close the panel and require a clear funnel, then
-	// reopen it to select S. The default false keeps the daily one-visit
-	// preparation (open, reset, select S, close, require Active); the extra
-	// open/close exists only to prove the old filters were cleared.
-	IndependentClear bool
 	// RecheckEvery paces re-observation after an idle (Reused) frame.
 	// Zero takes the default.
 	RecheckEvery time.Duration
@@ -553,7 +547,8 @@ const maxTopFlings = 16
 
 // run is the two-layer collection loop (T5 §1): for each wheel position,
 // prepare the position automatically — switch the wheel, reset the
-// filters and verify the funnel is clear, then reach and confirm the top —
+// filters, select S and verify the funnel is active, then reach and
+// confirm the top —
 // and walk its list with the single-page state machine. The next position
 // starts only after the current one completed; any preparation or
 // traversal failure stops the walk and keeps what was already admitted
@@ -723,42 +718,19 @@ func (run *inventoryRun) switchWheel(ctx context.Context, pos int) error {
 	}
 }
 
-// resetFilters applies the S rarity filter. The daily path makes one panel
-// visit: open, reset, select S, close and require the funnel to be active.
-// The Reset and S clicks are separate actions, but their effects cannot be
-// observed separately without closing the panel between them. The user
-// decided on 2026-10-19 to save that extra open/close per position: the
-// Active reading after closing proves the S filter is in effect, while a
-// reset that failed to remove an older filter is a documented residual risk
-// (T5 §3).
-//
-// IndependentClear is the acceptance-only alternative. It closes after the
-// reset and requires a clear funnel, which is independent evidence that the
-// old filters (including an older S selection) were cleared; only then does
-// it reopen the panel, select S, close and require Active. That costs one
-// extra panel open/close per position and never runs in the default path.
-// A funnel that does not match the expected state at either checkpoint, or
-// an unconfirmed S selection, stops the walk instead of guessing.
+// resetFilters applies the S rarity filter in one panel visit: open, reset,
+// select S, close and require the funnel to be active. Reset and S cannot be
+// observed separately without closing the panel between them; the user
+// decided on 2026-10-25 to keep one visit in every mode. The Active reading
+// after closing proves the S filter is in effect, while a reset that failed
+// to remove an older filter remains a documented residual risk (T5 §3).
+// An unconfirmed S selection stops the walk instead of guessing.
 func (run *inventoryRun) resetFilters(ctx context.Context) error {
 	if err := run.openFilterPanel(ctx); err != nil {
 		return err
 	}
 	if err := run.resetFilterPanel(ctx); err != nil {
 		return err
-	}
-	if run.inv.IndependentClear {
-		if err := run.closeFilterPanel(ctx); err != nil {
-			return err
-		}
-		if err := run.requireWheelPosition("independent clear verification"); err != nil {
-			return err
-		}
-		if err := run.requireFilterState(FilterClear, "the independent CLEAR check failed"); err != nil {
-			return err
-		}
-		if err := run.openFilterPanel(ctx); err != nil {
-			return err
-		}
 	}
 	if err := run.selectRarityS(ctx); err != nil {
 		return err
@@ -1045,13 +1017,15 @@ func (run *inventoryRun) panelVerdict(m PageMatch) bool {
 // upward (or, when the matcher cannot report the thumb, to displace the
 // list), and stops after two consecutive flings without progress or the
 // fling bound. Lost during these flings is allowed: the position has no
-// visit records yet, and the next fling re-establishes the base. After
-// the top claim, one more fling toward the top must be stationary.
+// visit records yet, but it proves neither the destination nor that the
+// top was reached, so the next fling re-establishes the base. After a
+// settled top claim, confirmTop must prove the list can move no farther.
 func (run *inventoryRun) scrollToTop(ctx context.Context) error {
 	flings := 0
 	noProgress := 0
+	topProven := run.listMatch.List != nil && run.listMatch.List.Top
 	for {
-		if run.listMatch.List != nil && run.listMatch.List.Top {
+		if topProven && run.listMatch.List != nil && run.listMatch.List.Top {
 			break
 		}
 		if noProgress >= 2 {
@@ -1096,6 +1070,7 @@ func (run *inventoryRun) scrollToTop(ctx context.Context) error {
 			out.stationary, out.displaced, out.lost, out.match.Rows)
 		flings++
 		progressed := false
+		topProven = false
 		switch {
 		case out.lost:
 			if !run.listVerdict(out.afterMatch) {
@@ -1107,7 +1082,8 @@ func (run *inventoryRun) scrollToTop(ctx context.Context) error {
 			run.lastFrame = out.after
 			// A fling that overshot the overlap certainly moved; the
 			// direction is the fling's own. This is allowed here because
-			// no visit exists in this position yet.
+			// no visit exists in this position yet. Its final position is
+			// unknown, so it cannot prove the top.
 			progressed = true
 		case out.displaced:
 			run.listMatch = out.afterMatch
@@ -1120,11 +1096,13 @@ func (run *inventoryRun) scrollToTop(ctx context.Context) error {
 			}
 			if run.listMatch.List != nil && run.listMatch.List.Top {
 				progressed = true
+				topProven = true
 			}
 		case out.stationary:
 			run.listMatch = out.afterMatch
 			run.lastFrame = out.after
 			progressed = out.afterMatch.List != nil && out.afterMatch.List.Top
+			topProven = progressed
 		default:
 			// Undecided: neither progress nor a verdict. The fling bound
 			// still caps the attempts.
@@ -1156,10 +1134,14 @@ type thumbReporter interface {
 }
 
 // confirmTop performs the "drag again and nothing changes" top evidence:
-// once the scrollbar claims the top, one more fling toward the beginning
-// must leave the list stationary (T5 §5).
+// once the scrollbar claims the top, further flings toward the beginning
+// must leave the list stationary (T5 §5). Lost or moving outcomes are not
+// top evidence: they mean the earlier claim was premature or the list was
+// still settling, so the loop keeps flinging toward the beginning. The
+// bounded attempt count stops the walk rather than admitting items from an
+// unverified position.
 func (run *inventoryRun) confirmTop(ctx context.Context) error {
-	for attempt := 0; ; attempt++ {
+	for attempt := 0; attempt < maxTopFlings; attempt++ {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -1187,44 +1169,56 @@ func (run *inventoryRun) confirmTop(ctx context.Context) error {
 			return err
 		}
 		afterStart, afterOK := run.thumbStart(out.after)
+		listOK := run.listVerdict(out.afterMatch) && out.afterMatch.List != nil
 		log.Printf("youkai: collect: position %d: top confirmation attempt %d: top=%t thumb %d/%t -> %d/%t stationary=%t displaced=%t lost=%t evidence=%s",
 			run.position, attempt+1,
-			run.listMatch.List != nil && run.listMatch.List.Top,
+			listOK && out.afterMatch.List.Top,
 			beforeStart, beforeOK, afterStart, afterOK,
 			out.stationary, out.displaced, out.lost, out.match.Evidence)
-		// The scrollbar is independent of the animated list pixels: if it
-		// stayed at the top with the same thumb start, the drag did not
-		// scroll the list even when the pixel verdict is undecided because
-		// of live UI animation or rubber-band noise.
-		if beforeOK && afterOK && absInt(afterStart-beforeStart) <= 2 &&
-			run.listVerdict(out.afterMatch) && out.afterMatch.List != nil && out.afterMatch.List.Top {
-			log.Printf("youkai: collect: position %d: top confirmation accepted: the thumb stayed at the top", run.position)
-			run.listMatch = out.afterMatch
-			run.lastFrame = out.after
-			return nil
+		if !listOK && (out.lost || out.displaced) {
+			return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
+				"collect: wheel position %d: the top confirmation moved the list without a warehouse verdict: %s",
+				run.position, out.match.Evidence))
 		}
-		switch {
-		case out.stationary:
+		if listOK {
 			run.listMatch = out.afterMatch
 			run.lastFrame = out.after
-			return nil
-		case out.lost:
-			return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
-				"collect: wheel position %d: the top confirmation lost the list position: %s",
-				run.position, out.match.Evidence))
-		case out.displaced:
-			return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
-				"collect: wheel position %d: the top confirmation moved the list, so the top evidence did not hold: %s",
-				run.position, out.match.Evidence))
-		default:
-			if attempt < run.inv.maxRetries() {
-				continue
+		}
+		// The scrollbar is independent of the animated list pixels: a
+		// stable thumb at the top plus a settled non-moving outcome proves
+		// the drag did not scroll the list even when the pixel comparison
+		// is undecided because of live UI animation. Lost or displaced is
+		// movement, so it cannot support a top claim.
+		if topConfirmed(out, beforeOK, afterOK, beforeStart, afterStart) {
+			if out.stationary {
+				log.Printf("youkai: collect: position %d: top confirmation accepted: the list stayed still", run.position)
+			} else {
+				log.Printf("youkai: collect: position %d: top confirmation accepted: the thumb stayed at the top", run.position)
 			}
-			return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
-				"collect: wheel position %d: the top confirmation produced no verifiable verdict within the budget (attempt %d)",
-				run.position, attempt+1))
+			return nil
 		}
+		// Lost, displaced or undecided: keep dragging toward the beginning
+		// from the latest verified frame. The next drag can only move the
+		// list closer to its start.
 	}
+	return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
+		"collect: wheel position %d: the top confirmation did not settle after %d attempts", run.position, maxTopFlings))
+}
+
+// topConfirmed accepts only a warehouse frame at the scrollbar's top after
+// a stationary, thumb-stable outcome. Lost and displaced outcomes prove the
+// list moved, so their top claim is premature and must not start traversal.
+func topConfirmed(out scrollOutcome, beforeOK, afterOK bool, beforeStart, afterStart int) bool {
+	if out.afterMatch.Page != PageWarehouse || out.afterMatch.List == nil || !out.afterMatch.List.Top {
+		return false
+	}
+	if out.lost || out.displaced {
+		return false
+	}
+	if out.stationary {
+		return true
+	}
+	return beforeOK && afterOK && absInt(afterStart-beforeStart) <= 2
 }
 
 // confirmBottom pairs the scrollbar's bottom evidence with one more drag
@@ -2145,6 +2139,9 @@ func (run *inventoryRun) scroll(ctx context.Context) error {
 		}
 		switch {
 		case out.lost:
+			log.Printf("youkai: collect: position %d scroll %d -> %d lost: unsettled=%t after=%d rows=%d matches=%d evidence=%s",
+				run.position, before.ID, out.after.ID, out.unsettled, out.after.ID,
+				out.match.Rows, len(out.match.Matches), out.match.Evidence)
 			if out.unsettled {
 				return scan.NewFault(CodePositionLost, fmt.Errorf(
 					"collect: the list displaced but did not settle within the scroll budget, so its final position is unverified (last candidate frame %d): %s",
@@ -2155,10 +2152,13 @@ func (run *inventoryRun) scroll(ctx context.Context) error {
 				out.after.ID, out.match.Evidence))
 		case out.displaced:
 			if len(out.match.Matches) == 0 {
+				log.Printf("youkai: collect: position %d scroll %d -> %d displaced without correspondences: rows=%d evidence=%s",
+					run.position, before.ID, out.after.ID, out.match.Rows, out.match.Evidence)
 				return scan.NewFault(CodePositionLost, errors.New(
 					"collect: the list displaced but the matcher reported no correspondences"))
 			}
 			if err := run.applyTransition(before, out.after, run.listMatch, out.afterMatch, out.match); err != nil {
+				log.Printf("youkai: collect: position %d scroll %d -> %d rejected: %v", run.position, before.ID, out.after.ID, err)
 				return err
 			}
 			run.listMatch = out.afterMatch
@@ -2209,13 +2209,20 @@ func (run *inventoryRun) currentList(ctx context.Context) (platform.Frame, error
 	return f, nil
 }
 
-// sameFrameContent is a fast path for callers that may reuse one immutable
-// frame image (the scripted tests and the replay do). Production adapters
-// create a new image for every Frame, so the identical-pointer check only
-// short-circuits the equal-object case; MatchScroll remains the primary
-// evidence for every other pair.
+// sameFrameContent reports whether two observations carry the same complete
+// frame. The scripted tests and replay may reuse one immutable image, but
+// production copies the latest frame into a new RGBA buffer for every
+// request; an idle confirmation keeps the complete frame's ID. Frame IDs are
+// session-monotonic, so equal non-zero IDs under one geometry are the
+// content invariant even when the buffer differs.
 func sameFrameContent(a, b platform.Frame) bool {
-	return a.Image != nil && a.Image == b.Image && a.Content == b.Content
+	if a.Content != b.Content || a.Geometry != b.Geometry {
+		return false
+	}
+	if a.ID != 0 && a.ID == b.ID {
+		return true
+	}
+	return a.Image != nil && a.Image == b.Image
 }
 
 // scrollOutcome is one awaitScroll's terminal result.

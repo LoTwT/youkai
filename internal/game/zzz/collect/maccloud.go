@@ -99,10 +99,14 @@ func MacCloudLayout() Layout {
 		ListViewport: image.Rect(60, 195, 512, 930), // shift tool's region.
 		// The thumb column; the two end caps (215–218 and 909–911) are
 		// outside the rect on purpose.
-		ScrollTrack:    image.Rect(47, 220, 48, 905),
-		ScrollFrom:     image.Pt(286, 848),
-		ScrollTo:       image.Pt(286, 262),
-		ScrollDuration: time.Second, // platform drag bound; 1000ms = 4 rows.
+		ScrollTrack: image.Rect(47, 220, 48, 905),
+		ScrollFrom:  image.Pt(286, 848),
+		ScrollTo:    image.Pt(286, 262),
+		// 1000ms and 1200ms both landed exactly four rows in the sample
+		// round. Use the slower bound: field runs showed the faster drag
+		// occasionally carrying a fifth row after release, which leaves no
+		// full overlap for position correspondence.
+		ScrollDuration: 1200 * time.Millisecond,
 		TopFrom:        image.Pt(286, 295),
 		TopTo:          image.Pt(286, 862),
 		TopDuration:    150 * time.Millisecond,
