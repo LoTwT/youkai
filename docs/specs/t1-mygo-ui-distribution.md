@@ -32,7 +32,7 @@ MyGo 的 [Menus and the tray](https://mygo.egoist.dev/docs/menus#tray-icons) 提
 
 ### 首轮框架与工具链候选
 
-正式功能使用 **MyGo v0.6.2 + Go 1.27.2**。v0.6.2 是当前最新发布版（2026-10-21 核对），固定提交 `cf26587264f26ea68bd1b8abbf5c9723f35e0a70`，[go.mod](https://github.com/egoist/mygo/blob/cf26587264f26ea68bd1b8abbf5c9723f35e0a70/go.mod) 要求 Go 1.27.1。main 分支在此之后的提交未发布，不跟随；升级时重新核对本文和架构中引用的源码行为。
+正式功能使用 **MyGo v0.6.2 + Go 1.27.3**。v0.6.2 是当前最新发布版（2026-10-21 核对），固定提交 `cf26587264f26ea68bd1b8abbf5c9723f35e0a70`，[go.mod](https://github.com/egoist/mygo/blob/cf26587264f26ea68bd1b8abbf5c9723f35e0a70/go.mod) 要求 Go 1.27.1。main 分支在此之后的提交未发布，不跟随；升级时重新核对本文和架构中引用的源码行为。
 
 当前版本由 2026-10-16 选定的 v0.5.5 升级而来。v0.5.5 的原选择依据是分栏布局、列表点击修复和 cgo 文件的原生 UI 检查（[vet_ui.go](https://github.com/egoist/mygo/blob/cf26587264f26ea68bd1b8abbf5c9723f35e0a70/cmd/mygo/vet_ui.go)）。2026-10-21 升级到 [v0.6.2 发布记录](https://github.com/egoist/mygo/releases/tag/v0.6.2)：v0.6.0 系列带来原生 UI 局部重绘与增量布局、loading 插件、安装器非 ASCII 路径修复等变化。升级后已在 v0.6.2 源码上复核本项目引用的单实例、cgo 默认值、资源合并、NSIS、深链接注册、文件对话框和 `App.Exit` 行为，未发现与 v0.5.5 阅读结论冲突；macOS arm64 打包与 `YOUKAI_SELFTEST` 识别自检通过。Windows 实机、安装器与自动更新链路未随本次升级重测，仍需按 [T7](t7-public-release-acceptance.md) 验收。
 

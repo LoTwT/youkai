@@ -33,6 +33,7 @@ const (
 	faultClose
 	faultRemove
 	faultRemoveAll
+	faultReadDir
 )
 
 type faultRule struct {
@@ -77,7 +78,12 @@ func (f *faultFS) Stat(path string) (fs.FileInfo, error) { return f.inner.Stat(p
 
 func (f *faultFS) Lstat(path string) (fs.FileInfo, error) { return f.inner.Lstat(path) }
 
-func (f *faultFS) ReadDir(dir string) ([]fs.DirEntry, error) { return f.inner.ReadDir(dir) }
+func (f *faultFS) ReadDir(dir string) ([]fs.DirEntry, error) {
+	if r := f.rule(faultReadDir, dir); r != nil {
+		return nil, r.err
+	}
+	return f.inner.ReadDir(dir)
+}
 
 func (f *faultFS) Remove(path string) error {
 	if r := f.rule(faultRemove, path); r != nil {
@@ -161,12 +167,13 @@ func (f *faultFile) Close() error {
 
 // The injected failures the tests distinguish by errors.Is.
 var (
-	errFaultCreate = errors.New("fault: create refused")
-	errFaultWrite  = errors.New("fault: write failed")
-	errDiskFull    = errors.New("fault: no space left on device")
-	errFaultSync   = errors.New("fault: sync failed")
-	errFaultClose  = errors.New("fault: close failed")
-	errFaultRemove = errors.New("fault: remove refused")
+	errFaultCreate  = errors.New("fault: create refused")
+	errFaultWrite   = errors.New("fault: write failed")
+	errDiskFull     = errors.New("fault: no space left on device")
+	errFaultSync    = errors.New("fault: sync failed")
+	errFaultClose   = errors.New("fault: close failed")
+	errFaultRemove  = errors.New("fault: remove refused")
+	errFaultReadDir = errors.New("fault: read directory refused")
 )
 
 func newFaultStore(t *testing.T) (*Store, *faultFS, string) {

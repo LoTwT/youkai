@@ -379,6 +379,76 @@ func TestWrapUpDoesNotReviveAStaleSaveFailureAfterRetry(t *testing.T) {
 	}
 }
 
+// TestFinishRefusesNonTerminalItemsAndRetrySettlesInterrupted pins the
+// broken-invariant path: the kernel sealed without a terminal delivery,
+// so finish refuses to save and the failure is visible. A retry cannot
+// invent the missing outcome; it settles the entry as interrupted
+// instead of persisting a completed session with a mid-flight row.
+func TestFinishRefusesNonTerminalItemsAndRetrySettlesInterrupted(t *testing.T) {
+	dir := t.TempDir()
+	store, err := record.Open(dir)
+	if err != nil {
+		t.Fatalf("record.Open: %v", err)
+	}
+	const id = "finish-invariant"
+	if err := store.CreateRecord(id); err != nil {
+		t.Fatalf("CreateRecord: %v", err)
+	}
+	deliverer := newRecordDeliverer(store, record.SessionShell{
+		SessionID: id,
+		Game:      "zzz",
+		Entity:    "driveDisc",
+		Client:    record.ClientMacOSCloud,
+		Locale:    "zh-CN",
+		Scope:     json.RawMessage(`{"kind":"finish-invariant"}`),
+		StartedAt: nowUTC(),
+		Coverage:  record.Coverage{Status: record.CoverageComplete},
+	}, nil)
+	if err := deliverer.Admitted(1, "observation"); err != nil {
+		t.Fatalf("Admitted: %v", err)
+	}
+
+	err = deliverer.finish(scan.Snapshot{End: scan.EndCompleted})
+	if err == nil || !strings.Contains(err.Error(), "still queued") {
+		t.Fatalf("finish = %v, want the non-terminal refusal", err)
+	}
+	if !deliverer.failed() {
+		t.Fatal("failed() is false after the refused final generation")
+	}
+	if st := deliverer.status(); !st.pending || st.err == nil {
+		t.Fatalf("status = %+v, want a visible pending failure", st)
+	}
+	if _, err := store.Peek(id); !errors.Is(err, record.ErrNoValidCheckpoint) {
+		t.Fatalf("Peek after the refusal = %v, want no saved generation", err)
+	}
+
+	if err := deliverer.retry(); err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	if deliverer.failed() || !deliverer.settled() {
+		t.Fatalf("after retry failed=%v settled=%v, want a settled record",
+			deliverer.failed(), deliverer.settled())
+	}
+	rec, err := store.Load(id)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if rec.Checkpoint.SavedRevision != 1 {
+		t.Errorf("saved revision = %d, want 1", rec.Checkpoint.SavedRevision)
+	}
+	term := rec.Checkpoint.Session.Termination
+	if term == nil || term.Kind != record.TerminationInterrupted {
+		t.Fatalf("termination = %+v, want interrupted", term)
+	}
+	item := rec.Checkpoint.Items[0]
+	if item.Status != record.StatusUnprocessed || item.Reason != record.ReasonInterrupted {
+		t.Fatalf("item = %s/%s, want unprocessed/interrupted", item.Status, item.Reason)
+	}
+	if rec.Checkpoint.Session.Coverage.Status != record.CoveragePartial {
+		t.Errorf("coverage = %q, want the complete claim downgraded", rec.Checkpoint.Session.Coverage.Status)
+	}
+}
+
 // countingSource counts NewScan calls; LoadRecord must never trigger one.
 type countingSource struct {
 	mu    sync.Mutex

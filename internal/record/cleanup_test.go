@@ -195,6 +195,58 @@ func TestDeleteEvidenceFileFailureLeavesLoadableRecordAndRetry(t *testing.T) {
 	}
 }
 
+// A ReadDir failure must surface its own cause: without the listing
+// nothing is deleted, so the directory cannot be removed either, and
+// reporting "directory not empty" would hide the real reason and leave
+// the leftover list empty. The fault is injected on the removal scan
+// directly; DeleteEvidence measures usage first, which would fail at the
+// same call before reaching this path.
+func TestRemoveEvidenceReadDirFailureReportsCauseAndKeepsDirectory(t *testing.T) {
+	st, ffs, root := newFaultStore(t)
+	id := "rec-1"
+	cleanupRecord(t, st, id)
+	evidenceDir := filepath.Join(root, "sessions", id, "evidence")
+
+	ffs.inject(faultReadDir, filepath.Join(id, "evidence"), errFaultReadDir)
+	st.mu.Lock()
+	removed, removedBytes, leftovers, err := st.removeEvidenceFilesLocked(id)
+	st.mu.Unlock()
+	if !errors.Is(err, errFaultReadDir) {
+		t.Fatalf("removeEvidenceFilesLocked = %v, want the ReadDir failure", err)
+	}
+	if !strings.Contains(err.Error(), "read evidence directory") {
+		t.Errorf("error = %v, want it to name the failed read", err)
+	}
+	if removed != 0 || removedBytes != 0 || len(leftovers) != 0 {
+		t.Errorf("removal = %d files, %d bytes, leftovers %v; want nothing touched",
+			removed, removedBytes, leftovers)
+	}
+	for _, name := range []string{"detail-1.png", "coverage-end.png"} {
+		if _, statErr := os.Stat(filepath.Join(evidenceDir, name)); statErr != nil {
+			t.Errorf("%s was deleted despite the failed read: %v", name, statErr)
+		}
+	}
+	if _, statErr := os.Stat(evidenceDir); statErr != nil {
+		t.Errorf("evidence directory was removed despite the failed read: %v", statErr)
+	}
+
+	// Clearing the fault lets the same scan remove the files and the
+	// directory: the failed attempt left nothing half-done.
+	ffs.clear()
+	st.mu.Lock()
+	removed, _, leftovers, err = st.removeEvidenceFilesLocked(id)
+	st.mu.Unlock()
+	if err != nil {
+		t.Fatalf("retry removeEvidenceFilesLocked: %v", err)
+	}
+	if removed != 2 || len(leftovers) != 0 {
+		t.Errorf("retry removed %d files with leftovers %v, want 2 and none", removed, leftovers)
+	}
+	if _, statErr := os.Stat(evidenceDir); !errors.Is(statErr, os.ErrNotExist) {
+		t.Errorf("evidence directory survived the retry (err %v)", statErr)
+	}
+}
+
 func TestDeleteEvidenceDoesNotFollowEvidenceSymlinks(t *testing.T) {
 	st, root := newTestStore(t)
 	id := "rec-1"

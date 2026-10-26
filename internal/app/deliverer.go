@@ -104,6 +104,10 @@ type recordDeliverer struct {
 	saveErr error
 	// finished reports that finish ran (the kernel sealed).
 	finished bool
+	// finalRefused reports that finish refused the final generation
+	// because an admitted item was still queued or running. A retry must
+	// settle those entries instead of persisting them as the final state.
+	finalRefused bool
 }
 
 // newRecordDeliverer builds the deliverer of one session's record. The
@@ -419,8 +423,16 @@ func (d *recordDeliverer) finish(final scan.Snapshot) error {
 	for i := range d.items {
 		switch d.items[i].Status {
 		case record.StatusQueued, record.StatusRunning:
-			return fmt.Errorf("app: record %s: item %d is still %s at the end of the session",
+			// The kernel seals only after every admitted sequence reached
+			// a terminal outcome, so this is a broken invariant. Refuse to
+			// record the kernel's end while an item is still mid-flight;
+			// the failure stays visible, and a retry settles the entries as
+			// interrupted instead of persisting a completed session with
+			// unfinished rows.
+			d.saveErr = fmt.Errorf("app: record %s: item %d is still %s at the end of the session",
 				d.recordID, d.items[i].Sequence, d.items[i].Status)
+			d.finalRefused = true
+			return d.saveErr
 		}
 	}
 	ended := nowUTC()
@@ -436,18 +448,45 @@ func (d *recordDeliverer) finish(final scan.Snapshot) error {
 }
 
 // retry re-attempts the failed save as a new generation. It is a no-op
-// while clean.
+// while clean. When the final generation was refused because an item
+// never reached a terminal outcome, the retry cannot invent that outcome:
+// it settles the record the way recovery reads an interrupted session —
+// the unfinished entries become unprocessed/interrupted, a complete
+// coverage claim is downgraded, and the termination says interrupted.
+// Without that settlement a successful retry would persist a mid-flight
+// row as the final result.
 func (d *recordDeliverer) retry() error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.saveErr == nil {
 		return nil
 	}
+	if d.finalRefused {
+		for i := range d.items {
+			switch d.items[i].Status {
+			case record.StatusQueued, record.StatusRunning:
+				d.items[i].Status = record.StatusUnprocessed
+				d.items[i].Reason = record.ReasonInterrupted
+			}
+		}
+		if d.shell.Coverage.Status == record.CoverageComplete {
+			// Missing terminal outcomes cannot uphold a complete scan.
+			d.shell.Coverage.Status = record.CoveragePartial
+		}
+		ended := nowUTC()
+		d.shell.EndedAt = &ended
+		d.shell.Termination = &record.Termination{
+			Kind:  record.TerminationInterrupted,
+			Code:  "interrupted",
+			Phase: record.PhaseCapturing,
+		}
+	}
 	if err := d.saveLocked(); err != nil {
 		d.saveErr = err
 		return err
 	}
 	d.saveErr = nil
+	d.finalRefused = false
 	return nil
 }
 

@@ -338,6 +338,16 @@ func (s *Service) Start(req StartRequest) (StartOutcome, error) {
 	if err := s.store.CreateRecord(recordID); err != nil {
 		return rollback(err)
 	}
+	// discardRecord removes the record directory this start just created
+	// when a later step refuses the session. It holds no checkpoint, so
+	// keeping it would list an unrecoverable record in history. A deletion
+	// failure is logged without replacing the refusal the caller sees.
+	discardRecord := func(cause error) (StartOutcome, error) {
+		if _, err := s.store.DeleteRecord(recordID); err != nil {
+			log.Printf("youkai: delete the refused session's record %s: %v", recordID, err)
+		}
+		return rollback(cause)
+	}
 	shell := record.SessionShell{
 		SessionID: recordID,
 		Game:      spec.Game,
@@ -375,7 +385,7 @@ func (s *Service) Start(req StartRequest) (StartOutcome, error) {
 		OnAdmit: deliverer.Admitted,
 	})
 	if err != nil {
-		return rollback(err)
+		return discardRecord(err)
 	}
 
 	// Commit under the lock: a quit that began during the preparation
@@ -385,7 +395,7 @@ func (s *Service) Start(req StartRequest) (StartOutcome, error) {
 		s.mu.Unlock()
 		kernel.Cancel()
 		<-kernel.Done()
-		return rollback(errors.New("the service began quitting while preparing"))
+		return discardRecord(errors.New("the service began quitting while preparing"))
 	}
 	a.kernel = kernel
 	a.deliverer = deliverer
