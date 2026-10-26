@@ -1166,6 +1166,71 @@ type thumbReporter interface {
 	ThumbStart(frame platform.Frame) (int, bool)
 }
 
+// awaitTopBase waits until two consecutive fresh observations are
+// pixel-stationary before the first top-confirmation drag. The top claim
+// itself is already proven by scrollToTop; this wait only keeps a
+// still-settling list from wasting a confirmation attempt. A timeout is
+// not a failure: confirmTop still validates its own drag, so the walk
+// proceeds with the latest verified frame.
+func (run *inventoryRun) awaitTopBase(ctx context.Context) error {
+	if run.lastFrame.ID == 0 {
+		return nil
+	}
+	deadline := time.Now().Add(run.inv.actionBudget())
+	prev := run.lastFrame
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if !time.Now().Before(deadline) {
+			log.Printf("youkai: collect: position %d: top base did not prove stillness within %s; confirming from frame %d",
+				run.position, run.inv.actionBudget(), run.lastFrame.ID)
+			return nil
+		}
+		fctx, cancel := context.WithDeadline(ctx, deadline)
+		f, err := run.view.Frame(fctx, platform.FrameRequest{After: run.lastArrived})
+		cancel()
+		if err != nil {
+			switch {
+			case ctx.Err() != nil:
+				return ctx.Err()
+			case errors.Is(err, context.DeadlineExceeded):
+				log.Printf("youkai: collect: position %d: no frame for the top base before the budget; confirming from frame %d",
+					run.position, run.lastFrame.ID)
+				return nil
+			default:
+				return wrapObservationErr(err)
+			}
+		}
+		if f.Geometry != run.geo {
+			return run.geometryChanged(f)
+		}
+		if !f.Reused {
+			run.lastArrived = f.ArrivedAt
+		}
+		m := run.inv.matcher().Match(f)
+		if !run.positionListVerdict(m) {
+			if f.Reused {
+				if err := sleepCtx(ctx, run.inv.recheckEvery()); err != nil {
+					return err
+				}
+			}
+			continue
+		}
+		run.listMatch = m
+		run.lastFrame = f
+		if sameFrameContent(prev, f) || run.inv.matcher().MatchScroll(prev, f).Stationary {
+			return nil
+		}
+		prev = f
+		if f.Reused {
+			if err := sleepCtx(ctx, run.inv.recheckEvery()); err != nil {
+				return err
+			}
+		}
+	}
+}
+
 // confirmTop performs the "drag again and nothing changes" top evidence:
 // once the scrollbar claims the top, further flings toward the beginning
 // must leave the list stationary (T5 §5). Lost or moving outcomes are not
@@ -1174,6 +1239,16 @@ type thumbReporter interface {
 // bounded attempt count stops the walk rather than admitting items from an
 // unverified position.
 func (run *inventoryRun) confirmTop(ctx context.Context) error {
+	// The return-to-top fling can still be settling when the top claim
+	// first holds. Confirming immediately then compares the first drag
+	// against a moving base frame; every observed miss costs a full
+	// ScrollBudget before the next attempt. Wait for two frame
+	// observations to be pixel-stationary first. This is only a pacing
+	// optimization: if stillness cannot be proven within the action
+	// budget, the confirmation below still verifies the drag itself.
+	if err := run.awaitTopBase(ctx); err != nil {
+		return err
+	}
 	for attempt := 0; attempt < maxTopFlings; attempt++ {
 		if err := ctx.Err(); err != nil {
 			return err
