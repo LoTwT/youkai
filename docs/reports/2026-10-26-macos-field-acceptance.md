@@ -230,7 +230,7 @@ YOUKAI_GAME_SOURCE=traverse \
 
 会话 `685f16b7-ed49-4172-be75-9c8782561ed5` 在修复构建上运行到位置 4，用户手动停止。位置 1–3 的顶部确认第一次尝试直接接受；位置 4 第一次尝试仍为 `lost`（零位移误差 5.51），但滚动条稳定在顶部，日志记录 `top confirmation accepted: the thumb stayed at the top`，没有再执行第二次尝试。该结果验证了“未定 + 滑块稳定”的补充证据；修复在位置 1–4 上消除了第二次 5 秒等待。
 
-这次运行最终记录为 `ended (failed): positionLost`，而不是 `cancelled`：383 采集、382 produced、1 unprocessed，位置 1–3 完整、位置 4 部分，平台会话正常关闭。用户表示是手动停止；停止与一次滚动故障的先后顺序尚未区分，需单独复核停止优先级。不能把这次结束记录当作正常的用户取消验收。
+这次运行最终记录为 `ended (failed): positionLost`，而不是 `cancelled`：383 采集、382 produced、1 unprocessed，位置 1–3 完整、位置 4 部分，平台会话正常关闭。检查点中第 383 件的 `unprocessedReason` 是 `interrupted`，说明第一终止触发是故障而不是用户停止；停止发生在故障之后，或至少没有先取得终止权。`positionLost` 的所有滚动/位移分支都会先写日志，日志中没有对应行，因此剩余可能是 `visitSlot` 的选中格位移守卫（该分支此前不写日志）。已在该分支补充前后选中 slot、最后帧和 pre-click 帧的日志；下次复现可直接区分是否是云客户端在点击后自动移动了选中格。
 
 ## 证据
 

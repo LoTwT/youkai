@@ -1481,6 +1481,9 @@ func (run *inventoryRun) visitSlot(ctx context.Context, i int) error {
 		// should move the list, so a changed or vanished selection means
 		// the next click would address a different grid position.
 		if run.selectionMoved(pre.match) {
+			log.Printf("youkai: collect: %s: selection moved from slot %d to %d between visits (last frame %d, pre-click frame %d); stopping before the click (%s)",
+				target, run.listMatch.List.Selected, pre.match.List.Selected,
+				run.lastFrame.ID, pre.frame.ID, pre.match.Evidence)
 			slot.Discard()
 			return scan.NewFault(CodePositionLost, fmt.Errorf(
 				"collect: the list selection moved from slot %d to %d between visits; the grid no longer maps to the visited positions (%s)",
