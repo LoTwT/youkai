@@ -232,6 +232,25 @@ YOUKAI_GAME_SOURCE=traverse \
 
 这次运行最终记录为 `ended (failed): positionLost`，而不是 `cancelled`：383 采集、382 produced、1 unprocessed，位置 1–3 完整、位置 4 部分，平台会话正常关闭。检查点中第 383 件的 `unprocessedReason` 是 `interrupted`，说明第一终止触发是故障而不是用户停止；停止发生在故障之后，或至少没有先取得终止权。`positionLost` 的所有滚动/位移分支都会先写日志，日志中没有对应行，因此剩余可能是 `visitSlot` 的选中格位移守卫（该分支此前不写日志）。已在该分支补充前后选中 slot、最后帧和 pre-click 帧的日志；下次复现可直接区分是否是云客户端在点击后自动移动了选中格。
 
+### 选中格守卫的现场复现
+
+会话 `e3bf895b-73d8-4dde-8350-22d1b4f67215` 从位置 1 开始跑完位置 1–5，在位置 6 的视口 5、目标 slot 18（row 4, column 2）停止：886 captured、885 produced、1 unprocessed，终止 `failed / positionLost / capturing`，覆盖 `partial`。位置 6 尚未完成。
+
+新日志给出了具体原因：
+
+```text
+selection moved from slot 17 to -1 between visits
+(last frame 58591 reused=false, pre-click frame 58601 reused=false)
+```
+
+上一件（seq 886，row 4, column 1）的详情帧仍是选中状态，随后 10 帧内的 pre-click 帧选中标记变为 `-1`；两帧都是 fresh，因此不是停表/复用帧造成的旧画面，也不是手动停止。守卫在点击 slot 18 前停止，seq 886 因中断未产出；885 件已产出记录保持完整。这个结果说明守卫本身按设计工作，但单帧选中标记消失是否是云客户端动画，需要先复核再决定是否可继续。
+
+另外，本轮在游戏里先切到位置 4 再开始，记录的 `observedScope.startPosition` 是 4，但外层遍历代码固定按 `for pos := 1; pos <= 6; pos++` 执行，所以实际仍从位置 1 开始。`startPosition` 只是准备前的观测元数据，不是扫描起点；之前让用户先切到位置 4 的说明是错误的。
+
+针对这次单帧消失，`visitSlot` 已改为：发现选中格变化后，在一个 action budget 内继续观察，只有选中格回到上一件或稳定在另一格才产生结论；回到上一件则继续，持续消失/移动才按 `positionLost` 停止。新增 `awaitSelectionReturned` 及瞬时消失/持续消失两个单元测试；完整 `go test ./internal/game/zzz/collect` 通过。该修复仍需一次现场复测确认能否跨过 seq 886。
+
+顶部确认在本次六个位置均无第二次尝试：位置 1/2/4/5 首次 Stationary 接受，位置 3/6 首次 Lost 但滑块稳定在顶部，日志记录 `the thumb stayed at the top`。因此顶部优化在 1–6 全范围成立。
+
 ## 证据
 
 ```text

@@ -1424,6 +1424,17 @@ func (run *inventoryRun) selectionMoved(pre PageMatch) bool {
 	return pre.List.Selected != run.listMatch.List.Selected
 }
 
+// awaitSelectionReturned gives the selected border a bounded chance to
+// reappear after a transient animation or a single undecidable frame. It
+// still requires the target to stay occupied and the previous selection to
+// be stable again; a persistent move or disappearance reaches the deadline
+// and remains a position loss.
+func (run *inventoryRun) awaitSelectionReturned(ctx context.Context, target, expected int) awaitOutcome {
+	return run.awaitSettledSeeded(ctx, func(m PageMatch) bool {
+		return run.positionListVerdict(m) && m.List.Occupied[target] && m.List.Selected == expected
+	}, nil)
+}
+
 // visitSlot processes one occupied, unvisited slot: acquire capacity,
 // re-check the premises, verify the pre-click list evidence, click (or
 // take the initial read when the target already carries the selection),
@@ -1479,15 +1490,37 @@ func (run *inventoryRun) visitSlot(ctx context.Context, i int) error {
 		// A click can make the client scroll the selected item into view
 		// after the detail settled. No input since the last admitted item
 		// should move the list, so a changed or vanished selection means
-		// the next click would address a different grid position.
+		// the next click would address a different grid position. A live
+		// cloud stream can also lose the selection border for a frame or
+		// two while the UI animates; do not turn that transient miss into
+		// a position loss until a bounded fresh observation confirms it.
 		if run.selectionMoved(pre.match) {
-			log.Printf("youkai: collect: %s: selection moved from slot %d to %d between visits (last frame %d reused=%t, pre-click frame %d reused=%t); stopping before the click (%s)",
-				target, run.listMatch.List.Selected, pre.match.List.Selected,
-				run.lastFrame.ID, run.lastFrame.Reused, pre.frame.ID, pre.frame.Reused, pre.match.Evidence)
-			slot.Discard()
-			return scan.NewFault(CodePositionLost, fmt.Errorf(
-				"collect: the list selection moved from slot %d to %d between visits; the grid no longer maps to the visited positions (%s)",
-				run.listMatch.List.Selected, pre.match.List.Selected, pre.match.Evidence))
+			expected := run.listMatch.List.Selected
+			log.Printf("youkai: collect: %s: selection moved from slot %d to %d between visits (last frame %d reused=%t, pre-click frame %d reused=%t); waiting for slot %d to return before the click (%s)",
+				target, expected, pre.match.List.Selected,
+				run.lastFrame.ID, run.lastFrame.Reused, pre.frame.ID, pre.frame.Reused, expected, pre.match.Evidence)
+			restored := run.awaitSelectionReturned(ctx, i, expected)
+			switch restored.class {
+			case awaitStable:
+				log.Printf("youkai: collect: %s: selection returned to slot %d on frame %d; continuing with the pre-click evidence",
+					target, expected, restored.frame.ID)
+				pre = restored
+			case awaitCanceled, awaitFrameErr:
+				slot.Discard()
+				return restored.err
+			case awaitGeometry:
+				slot.Discard()
+				return run.geometryChanged(restored.frame)
+			default:
+				slot.Discard()
+				lastSeen := -2
+				if restored.match.List != nil {
+					lastSeen = restored.match.List.Selected
+				}
+				return scan.NewFault(CodePositionLost, fmt.Errorf(
+					"collect: the list selection did not return to slot %d (last seen %d) while preparing %s; the grid no longer maps to the visited positions (%s)",
+					expected, lastSeen, target, restored.match.Evidence))
+			}
 		}
 		run.listMatch = pre.match
 		run.lastFrame = pre.frame
