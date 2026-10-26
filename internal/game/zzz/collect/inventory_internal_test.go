@@ -299,10 +299,10 @@ func newScrollRun(l Layout, view SessionView, m Matcher, budget time.Duration) *
 	}
 }
 
-// TestTopConfirmedRejectsMovedClaims pins that a Lost or displaced top
-// claim cannot start traversal even when the scrollbar thumb looks
-// unchanged. Only a settled top (or an undecided, non-moving drag at the
-// same thumb start) is sufficient evidence.
+// TestTopConfirmedRejectsMovedClaims pins that a genuine Lost or a
+// displaced top claim cannot start traversal even when the scrollbar thumb
+// looks unchanged. An Undecided comparison is different: it carries no
+// movement evidence, so a stable thumb at the top may support the claim.
 func TestTopConfirmedRejectsMovedClaims(t *testing.T) {
 	top := PageMatch{Page: PageWarehouse, List: &ListEvidence{Top: true}}
 	notTop := PageMatch{Page: PageWarehouse, List: &ListEvidence{Top: false}}
@@ -316,6 +316,8 @@ func TestTopConfirmedRejectsMovedClaims(t *testing.T) {
 		{"stationary top", scrollOutcome{stationary: true, afterMatch: top}, true, true, true},
 		{"undecided stable thumb", scrollOutcome{afterMatch: top}, true, true, true},
 		{"lost with stable thumb", scrollOutcome{lost: true, afterMatch: top}, true, true, false},
+		{"lost undecided stable thumb", scrollOutcome{lost: true, afterMatch: top, match: ScrollMatch{Undecided: true}}, true, true, true},
+		{"lost undecided moved thumb", scrollOutcome{lost: true, afterMatch: top, match: ScrollMatch{Undecided: true}}, true, true, false},
 		{"displaced with stable thumb", scrollOutcome{displaced: true, afterMatch: top}, true, true, false},
 		{"stationary but not top", scrollOutcome{stationary: true, afterMatch: notTop}, true, true, false},
 		{"thumb moved", scrollOutcome{afterMatch: top}, true, true, false},
@@ -324,7 +326,7 @@ func TestTopConfirmedRejectsMovedClaims(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			beforeStart, afterStart := 226, 226
-			if tc.name == "thumb moved" {
+			if tc.name == "thumb moved" || tc.name == "lost undecided moved thumb" {
 				afterStart = 240
 			}
 			if got := topConfirmed(tc.out, tc.beforeOK, tc.afterOK, beforeStart, afterStart); got != tc.want {

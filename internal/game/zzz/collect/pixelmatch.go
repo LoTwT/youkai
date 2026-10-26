@@ -540,7 +540,7 @@ func (m *PixelMatcher) MatchScroll(before, after platform.Frame) ScrollMatch {
 			"frames %d → %d: the list changed (zero-displacement error %.2f ≥ %.1f) but the best shift %d is not a whole row (error %.2f) — the overlap was lost",
 			before.ID, after.ID, err0, m.C.ScrollLostMin, dy, bestErr)}
 	}
-	return ScrollMatch{Evidence: fmt.Sprintf(
+	return ScrollMatch{Undecided: true, Evidence: fmt.Sprintf(
 		"frames %d → %d: undecided (zero-displacement error %.2f, best shift %d at error %.2f)",
 		before.ID, after.ID, err0, dy, bestErr)}
 }

@@ -1313,20 +1313,28 @@ func (run *inventoryRun) confirmTop(ctx context.Context) error {
 		"collect: wheel position %d: the top confirmation did not settle after %d attempts", run.position, maxTopFlings))
 }
 
-// topConfirmed accepts only a warehouse frame at the scrollbar's top after
-// a stationary, thumb-stable outcome. Lost and displaced outcomes prove the
-// list moved, so their top claim is premature and must not start traversal.
+// topConfirmed accepts a warehouse frame at the scrollbar's top. A settled
+// stationary outcome is direct evidence. An undecided pixel comparison
+// with an independent, unchanged thumb start is also safe: live UI
+// animation can raise the zero-shift error without moving the list, and a
+// real row displacement is not Undecided. A true Lost (a row alignment
+// existed but could not be accepted) or a Displaced outcome still rejects
+// the claim.
 func topConfirmed(out scrollOutcome, beforeOK, afterOK bool, beforeStart, afterStart int) bool {
 	if out.afterMatch.Page != PageWarehouse || out.afterMatch.List == nil || !out.afterMatch.List.Top {
 		return false
 	}
-	if out.lost || out.displaced {
+	if out.displaced {
 		return false
+	}
+	thumbStable := beforeOK && afterOK && absInt(afterStart-beforeStart) <= 2
+	if out.lost {
+		return out.match.Undecided && thumbStable
 	}
 	if out.stationary {
 		return true
 	}
-	return beforeOK && afterOK && absInt(afterStart-beforeStart) <= 2
+	return thumbStable
 }
 
 // confirmBottom pairs the scrollbar's bottom evidence with one more drag
