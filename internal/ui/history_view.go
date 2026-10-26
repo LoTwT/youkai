@@ -581,8 +581,17 @@ func (m *Model) historyCoverageContent(c *ui.Context, t *ui.Theme, tok *Tokens, 
 		ui.Text(c, "无法确认").TextColor(colorWhenChosen(chosen, tok.TextMuted, t.AccentText))
 		return
 	}
+	termLabel := historyTerminationLabel(entry.Termination)
+	termColor := tok.WarningFG
+	if entry.Termination != nil && entry.Termination.Kind == record.TerminationFailed {
+		termColor = tok.DangerFG
+	}
 	percent, ok := historyCoveragePercent(entry)
 	if !ok {
+		if termLabel != "" {
+			ui.Text(c, termLabel).TextColor(colorWhenChosen(chosen, termColor, t.AccentText))
+			return
+		}
 		ui.Text(c, coverageText(entry.Coverage)).TextColor(colorWhenChosen(chosen, tok.TextMuted, t.AccentText))
 		return
 	}
@@ -593,6 +602,9 @@ func (m *Model) historyCoverageContent(c *ui.Context, t *ui.Theme, tok *Tokens, 
 		bar = tok.WarningStrong
 		textColor = tok.WarningFG
 	}
+	if termLabel != "" {
+		textColor = colorWhenChosen(chosen, termColor, t.AccentText)
+	}
 	if chosen {
 		bar = t.AccentText
 		textColor = t.AccentText
@@ -600,6 +612,9 @@ func (m *Model) historyCoverageContent(c *ui.Context, t *ui.Theme, tok *Tokens, 
 	label := fmt.Sprintf("%d%%", percent)
 	if partial {
 		label += " 部分"
+	}
+	if termLabel != "" {
+		label += " · " + termLabel
 	}
 	ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
 		ui.Box(c).Width(t.Space(12)).Height(t.Space(1.25)).Background(tok.SurfaceSunken).

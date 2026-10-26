@@ -74,6 +74,12 @@ func (m *Model) recordCounts() recordCounts {
 }
 
 func reviewSummaryText(c recordCounts) string {
+	if c.Captured == 0 && c.Pending+c.Failed+c.Unprocessed+c.OtherExcluded == 0 {
+		if c.ExportKnown {
+			return "没有可导出的条目"
+		}
+		return "没有条目"
+	}
 	blocked := c.Failed + c.Unprocessed + c.OtherExcluded
 	if c.Pending > 0 {
 		if blocked > 0 {

@@ -76,6 +76,7 @@ func TestServiceHistoryRecordsIncludesExportBreakdown(t *testing.T) {
 	unprocessed := record.ItemRecord{Sequence: 4, Status: record.StatusUnprocessed, Reason: record.ReasonCancelled, Quality: record.QualityNotEvaluated}
 	other := record.ItemRecord{Sequence: 5, Status: record.StatusQueued, Quality: record.QualityNotEvaluated}
 	expected := int64(6)
+	termination := &record.Termination{Kind: record.TerminationFailed, Code: "navigationMismatch", Phase: record.PhaseCapturing}
 	cp := record.Checkpoint{
 		Session: record.SessionShell{
 			SessionID:     id,
@@ -85,6 +86,7 @@ func TestServiceHistoryRecordsIncludesExportBreakdown(t *testing.T) {
 			Locale:        "zh-CN",
 			Scope:         json.RawMessage(`{"rarity":"S"}`),
 			StartedAt:     time.Now().UTC(),
+			Termination:   termination,
 			Coverage:      record.Coverage{Status: record.CoveragePartial, ExpectedCount: &expected},
 			CapturedCount: 5,
 		},
@@ -113,5 +115,8 @@ func TestServiceHistoryRecordsIncludesExportBreakdown(t *testing.T) {
 	}
 	if rec.ExportableCount+int64(rec.PendingReview)+rec.FailedCount+rec.UnprocessedCount+rec.OtherCount != rec.CapturedCount {
 		t.Fatal("the history breakdown does not add up to the captured count")
+	}
+	if rec.Termination == nil || *rec.Termination != *termination {
+		t.Fatalf("termination = %+v, want %+v", rec.Termination, termination)
 	}
 }

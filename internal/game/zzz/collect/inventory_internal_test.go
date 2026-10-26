@@ -112,6 +112,108 @@ func (v *scrollScriptView) Frame(ctx context.Context, req platform.FrameRequest)
 	return platform.Frame{}, context.DeadlineExceeded
 }
 
+// A cloud-client activation can restart the video stream: one warehouse
+// sample followed by a stalled stream must not end the whole scan. The
+// retry gets a fresh action budget and settles once frames resume.
+func TestEstablishListRetriesStalledStart(t *testing.T) {
+	inv := &Inventory{
+		Layout:       MacCloudLayout(),
+		Matcher:      &scrollScriptMatcher{rows: 4, columns: 5},
+		ActionBudget: 60 * time.Millisecond,
+		StableFrames: 3,
+	}
+	view := &stalledListStartView{}
+	run := &inventoryRun{inv: inv, view: view, geo: 1, position: 1}
+
+	if err := run.establishList(context.Background()); err != nil {
+		t.Fatalf("establishList after a stalled start: %v", err)
+	}
+	if !view.blocked {
+		t.Fatal("the scripted stream never stalled, so the retry was not exercised")
+	}
+	if run.listMatch.List == nil || len(run.listMatch.List.Occupied) != len(inv.Layout.Slots) {
+		t.Fatalf("settled list = %+v, want the full grid", run.listMatch.List)
+	}
+	if run.lastFrame.ID == 0 {
+		t.Fatal("the retry did not keep the settled frame")
+	}
+}
+
+type stalledListStartView struct {
+	frames  int
+	blocked bool
+}
+
+func (v *stalledListStartView) Observe() (platform.Observation, error) {
+	return platform.Observation{Ready: true, Geometry: 1}, nil
+}
+
+func (v *stalledListStartView) Dispatch(op platform.InputOp) platform.InputResult {
+	return platform.InputResult{Status: platform.InputPosted}
+}
+
+func (v *stalledListStartView) Frame(ctx context.Context, req platform.FrameRequest) (platform.Frame, error) {
+	if v.frames == 0 {
+		v.frames++
+		return platform.Frame{ID: 1, Geometry: 1, ArrivedAt: time.Now()}, nil
+	}
+	if !v.blocked {
+		v.blocked = true
+		<-ctx.Done()
+		return platform.Frame{}, ctx.Err()
+	}
+	v.frames++
+	return platform.Frame{ID: uint64(v.frames + 1), Geometry: 1, ArrivedAt: time.Now()}, nil
+}
+
+// The first wait can also end without any decidable frame at all: the
+// precheck already verified the page, but activation can leave the stream
+// silent until the client redraws. The retry must not depend on having
+// seen one warehouse verdict in the failed wait.
+func TestEstablishListRetriesSilentStart(t *testing.T) {
+	inv := &Inventory{
+		Layout:       MacCloudLayout(),
+		Matcher:      &scrollScriptMatcher{rows: 4, columns: 5},
+		ActionBudget: 60 * time.Millisecond,
+		StableFrames: 3,
+	}
+	view := &silentListStartView{}
+	run := &inventoryRun{inv: inv, view: view, geo: 1, position: 1}
+
+	if err := run.establishList(context.Background()); err != nil {
+		t.Fatalf("establishList after a silent start: %v", err)
+	}
+	if !view.blocked {
+		t.Fatal("the scripted stream never blocked, so the retry was not exercised")
+	}
+	if run.listMatch.List == nil || len(run.listMatch.List.Occupied) != len(inv.Layout.Slots) {
+		t.Fatalf("settled list = %+v, want the full grid", run.listMatch.List)
+	}
+}
+
+type silentListStartView struct {
+	frames  int
+	blocked bool
+}
+
+func (v *silentListStartView) Observe() (platform.Observation, error) {
+	return platform.Observation{Ready: true, Geometry: 1}, nil
+}
+
+func (v *silentListStartView) Dispatch(op platform.InputOp) platform.InputResult {
+	return platform.InputResult{Status: platform.InputPosted}
+}
+
+func (v *silentListStartView) Frame(ctx context.Context, req platform.FrameRequest) (platform.Frame, error) {
+	if !v.blocked {
+		v.blocked = true
+		<-ctx.Done()
+		return platform.Frame{}, ctx.Err()
+	}
+	v.frames++
+	return platform.Frame{ID: uint64(v.frames), Geometry: 1, ArrivedAt: time.Now()}, nil
+}
+
 // A prior stable observation counts toward the settle window without
 // replacing the fresh confirmations: with StableFrames=3, a seed plus two
 // fresh frames must settle even though two alone would not.

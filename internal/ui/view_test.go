@@ -857,6 +857,34 @@ func excludedReviewItem(t *testing.T, seq int64) record.ItemRecord {
 	})
 }
 
+// TestFailedSessionExplainsTermination checks that a zero-item failure is
+// not summarized only as item-level "失败 0 件": the results page states
+// the session's termination code and phase, and the empty state says no
+// item was saved.
+func TestFailedSessionExplainsTermination(t *testing.T) {
+	rec := recovery()
+	rec.Checkpoint.Session.Termination = &record.Termination{
+		Kind: record.TerminationFailed, Code: "navigationMismatch", Phase: record.PhaseCapturing,
+	}
+	rec.Checkpoint.Session.Coverage = record.Coverage{Status: record.CoveragePartial}
+	m, _, tt := openResponsiveResults(t, rec, 1024, 700)
+
+	if !tt.HasText("扫描失败：navigationMismatch（采集阶段），未保留任何条目") {
+		t.Fatalf("the failed session does not name its termination: %q", tt.Texts())
+	}
+	if !tt.HasText("无可导出条目") {
+		t.Fatalf("the zero-item completion state is missing: %q", tt.Texts())
+	}
+	m.filter = resultFilterAll
+	tt.Frame()
+	if !tt.HasText("本次扫描失败，没有已保存的条目。") {
+		t.Fatalf("the failed empty state still reads as a running session: %q", tt.Texts())
+	}
+	if tt.HasText("该记录没有条目。") {
+		t.Fatalf("the failed empty state uses the generic history text: %q", tt.Texts())
+	}
+}
+
 // TestCompletionCardEmptyRecord checks that a saved record with no rows
 // still reaches the pending-zero surface and does not offer an export.
 func TestCompletionCardEmptyRecord(t *testing.T) {

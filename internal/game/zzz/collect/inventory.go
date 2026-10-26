@@ -913,22 +913,34 @@ func (run *inventoryRun) nextSlot() int {
 
 // establishList waits for the warehouse list to show stably — the state
 // every click builds its pre-click evidence on. The top evidence is
-// established per position by scrollToTop after the filter reset.
+// established per position by scrollToTop after the filter reset. A first
+// wait that ends at its deadline is retried once: activating the cloud
+// client can restart the video stream, and the first stream frames after
+// activation may not yield a decidable page at all. The retry only delays
+// a real page fault by one action budget; it never accepts a page that was
+// not seen as the warehouse for StableFrames consecutive observations.
 func (run *inventoryRun) establishList(ctx context.Context) error {
-	out := run.awaitSettled(ctx, run.listVerdict)
-	switch out.class {
-	case awaitStable:
-		run.listMatch = out.match
-		run.lastFrame = out.frame
-		return nil
-	case awaitCanceled, awaitFrameErr:
-		return out.err
-	case awaitGeometry:
-		return run.geometryChanged(out.frame)
-	default:
-		return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
-			"collect: the warehouse list never showed stably within the budget (last verdict %s): %s",
-			out.match.Page, out.match.Evidence))
+	for attempt := 0; ; attempt++ {
+		out := run.awaitSettled(ctx, run.listVerdict)
+		switch out.class {
+		case awaitStable:
+			run.listMatch = out.match
+			run.lastFrame = out.frame
+			return nil
+		case awaitCanceled, awaitFrameErr:
+			return out.err
+		case awaitGeometry:
+			return run.geometryChanged(out.frame)
+		default:
+			if attempt == 0 && ctx.Err() == nil {
+				log.Printf("youkai: collect: the warehouse list did not settle within %s; retrying once (last verdict %s): %s",
+					run.inv.actionBudget(), out.match.Page, out.match.Evidence)
+				continue
+			}
+			return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
+				"collect: the warehouse list never showed stably within the budget (last verdict %s): %s",
+				out.match.Page, out.match.Evidence))
+		}
 	}
 }
 

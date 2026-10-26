@@ -100,6 +100,7 @@ func (m *Model) resultsArea(c *ui.Context, t *ui.Theme) {
 			}
 		}
 		m.resultsHeader(c, t)
+		m.sessionTerminationArea(c, t)
 		m.savePromptArea(c, t)
 		if m.histErr != "" {
 			ui.Text(c, "历史记录读取失败："+m.histErr).TextColor(t.Danger)
@@ -198,6 +199,7 @@ func (m *Model) resultsDetailArea(c *ui.Context, t *ui.Theme) {
 	if m.cleanupNotice != "" {
 		ui.Text(c, m.cleanupNotice)
 	}
+	m.sessionTerminationArea(c, t)
 	if m.rec == nil || len(m.rec.Rows) == 0 {
 		ui.Text(c, m.emptyResultsText()).TextColor(t.TextMuted)
 		return
@@ -228,6 +230,9 @@ func (m *Model) resultsTitle() string {
 func (m *Model) emptyResultsText() string {
 	if m.rec == nil {
 		return "还没有扫描结果。开始一次扫描，或从历史记录打开一条已保存的记录。"
+	}
+	if text := m.emptyResultsTextForTermination(); text != "" {
+		return text
 	}
 	if m.rec.Live {
 		return "本次扫描还没有已保存的条目；扫描过程中条目按批次保存，收尾后全部可见。"
