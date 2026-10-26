@@ -22,6 +22,10 @@ type HistoryRecord struct {
 	// when it can divide by a real expected count.
 	CoverageExpected int64
 	PendingReview    int
+	// Termination is the session's first termination trigger, when the
+	// checkpoint recorded one. The list shows its kind and code so a
+	// zero-item failure is not summarized only as item-level "失败 0 件".
+	Termination *record.Termination
 	// ExportableCount, FailedCount, UnprocessedCount and OtherCount are the
 	// mutually exclusive parts of CapturedCount after review: exportable
 	// items, items waiting for a person, failed and unprocessed
@@ -64,6 +68,10 @@ func (s *Service) HistoryRecords() ([]HistoryRecord, error) {
 		entry.Client = cp.Session.Client
 		entry.CapturedCount = cp.Session.CapturedCount
 		entry.Coverage = cp.Session.Coverage.Status
+		if cp.Session.Termination != nil {
+			term := *cp.Session.Termination
+			entry.Termination = &term
+		}
 		if cp.Session.Coverage.ExpectedCount != nil {
 			entry.CoverageExpected = *cp.Session.Coverage.ExpectedCount
 		}

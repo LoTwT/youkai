@@ -21,6 +21,13 @@ import (
 // validation.
 var ErrRevisionInvalid = errors.New("item revision is invalid")
 
+// ErrRecordActive rejects a manual revision of a record whose scan still
+// owns it. The scan deliverer rewrites the whole checkpoint from its
+// in-memory item copy; letting an edit land before the final save would
+// let that copy overwrite the revision. Once the scan has wrapped, the
+// record is editable again.
+var ErrRecordActive = errors.New("record is still being written by an active scan")
+
 // RevisionInvalidError explains why an edit could not be saved or
 // confirmed. Issues are the blocking field problems; Reason carries the
 // non-field explanation of a refused confirmation.
@@ -98,7 +105,9 @@ func (c DataCheck) Confirmable() bool {
 //
 // A successful save notifies the service's subscribers, so any UI reading
 // snapshots learns that the record changed even when the saved count did
-// not grow.
+// not grow. A record whose scan has not wrapped is refused with
+// ErrRecordActive: the deliverer still owns that checkpoint and would
+// overwrite the revision with its in-memory copy.
 func (s *Service) SaveItemRevision(recordID string, sequence, expectedRevision int64, edit ItemRevisionEdit) (ItemRevisionResult, error) {
 	check := CheckDiscData(edit.Data)
 	if len(check.Blocking) > 0 {
@@ -109,6 +118,20 @@ func (s *Service) SaveItemRevision(recordID string, sequence, expectedRevision i
 			Reason: "required fields are still unread or the current validation has not passed",
 			Issues: check.Gaps,
 		}
+	}
+
+	// The scan deliverer owns the complete checkpoint until its final save
+	// succeeds. Saving a revision into that window would be overwritten by
+	// the deliverer's next full-document write, so refuse it here, before
+	// the store's revision check can report success.
+	s.mu.Lock()
+	active := s.active
+	busy := active != nil && !active.wrapped && string(active.id) == recordID
+	s.mu.Unlock()
+	if busy {
+		return ItemRevisionResult{}, fmt.Errorf(
+			"app: save item revision of %q: the scan is still writing this record; wait for it to finish: %w",
+			recordID, ErrRecordActive)
 	}
 
 	rec, err := s.store.Load(recordID)

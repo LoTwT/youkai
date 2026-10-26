@@ -101,9 +101,6 @@ func TestScanSourceTraverseWiresOnDarwin(t *testing.T) {
 	if inv.Matcher == nil {
 		t.Fatal("the inventory has no matcher")
 	}
-	if inv.IndependentClear {
-		t.Fatal("the default traverse must keep the daily one-visit filter preparation")
-	}
 	spec, err := game.NewScan()
 	if err != nil {
 		t.Fatalf("NewScan: %v", err)
@@ -117,27 +114,6 @@ func TestScanSourceTraverseWiresOnDarwin(t *testing.T) {
 	}
 	if scope.Kind != "zzzInventory" || scope.Mode != "traverse" {
 		t.Fatalf("scope = %+v, want zzzInventory/traverse", scope)
-	}
-}
-
-// T49b: the acceptance-only independent Clear switch is wired into every
-// traverse session's Inventory, and any non-empty value enables it.
-func TestScanSourceTraverseWiresIndependentClear(t *testing.T) {
-	host := func() (platform.Port, error) { return &platformfake.Port{}, nil }
-	source, _, err := scanSourceFrom(envOf(map[string]string{
-		"YOUKAI_GAME_SOURCE":       "traverse",
-		"YOUKAI_INDEPENDENT_CLEAR": "1",
-	}), "darwin", host)
-	if err != nil {
-		t.Fatalf("scanSourceFrom: %v", err)
-	}
-	game := source.(*app.GameScanSource)
-	inv, ok := game.Traversal().(*collect.Inventory)
-	if !ok {
-		t.Fatalf("traversal = %T, want *collect.Inventory", game.Traversal())
-	}
-	if !inv.IndependentClear {
-		t.Fatal("YOUKAI_INDEPENDENT_CLEAR did not enable the independent Clear check")
 	}
 }
 

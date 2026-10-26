@@ -198,9 +198,10 @@ const (
 	DefaultDragSteps = 10
 	MaxDragSteps     = 32
 	// DefaultDragDuration is the press-to-release span of a drag whose
-	// Duration is zero; MaxDragDuration bounds it.
+	// Duration is zero; MaxDragDuration bounds it. The inventory scroll
+	// uses the calibrated 1200ms slow drag, so the bound must admit it.
 	DefaultDragDuration = 400 * time.Millisecond
-	MaxDragDuration     = 1 * time.Second
+	MaxDragDuration     = 1500 * time.Millisecond
 )
 
 // InputOperation is one bounded single operation. Position and Button

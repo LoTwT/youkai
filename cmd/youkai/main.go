@@ -127,6 +127,11 @@ func main() {
 		defer logFile.Close()
 		log.SetOutput(logFile)
 	}
+	if crashPath, err := app.EnableCrashOutput(paths.Logs); err != nil {
+		log.Printf("youkai: crash output unavailable: %v", err)
+	} else {
+		log.Printf("youkai: Go crash output -> %s", crashPath)
+	}
 	// The first file line of every run identifies the build a user-attached
 	// log came from (T7's problem-report requirement): the version, the VCS
 	// revision the binary was built from when the build carries it, the
@@ -411,10 +416,6 @@ func selfTest(root string) {
 //   - YOUKAI_GAME_SOURCE=traverse wires the calibrated macOS cloud
 //     inventory traversal (darwin only; Windows has no calibrated
 //     layout);
-//   - YOUKAI_INDEPENDENT_CLEAR (any non-empty value) makes the traverse
-//     preparation verify a clear funnel between reset and S selection —
-//     the acceptance-only independent Clear check, which costs one extra
-//     panel open/close per wheel position; unset keeps the daily path;
 //   - YOUKAI_DEV_SOURCE and YOUKAI_GAME_SOURCE set at once is a wiring
 //     error the entry point refuses;
 //   - neither leaves the production state: no source, starts refused
@@ -500,18 +501,16 @@ func gameScanSourceFrom(mode, goos string, getenv func(string) string, host func
 	// The calibrated traverse: one immutable layout shared by the session
 	// traversals; each session gets its own matcher and Inventory.
 	layout := collect.MacCloudLayout()
-	independentClear := getenv("YOUKAI_INDEPENDENT_CLEAR") != ""
 	src.Mode = "traverse"
 	src.Traversal = func() collect.Traversal {
 		return &collect.Inventory{
-			Layout:           layout,
-			Matcher:          collect.NewPixelMatcher(layout, collect.MacCloudCalibration()),
-			Project:          app.ProjectDiscObservation,
-			IndependentClear: independentClear,
+			Layout:  layout,
+			Matcher: collect.NewPixelMatcher(layout, collect.MacCloudCalibration()),
+			Project: app.ProjectDiscObservation,
 		}
 	}
-	log.Printf("youkai: game scan source wired (traverse): client=%s target=%+v independentClear=%v",
-		client, target, independentClear)
+	log.Printf("youkai: game scan source wired (traverse): client=%s target=%+v",
+		client, target)
 	return src, "游戏窗口（自动遍历）", nil
 }
 

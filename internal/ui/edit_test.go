@@ -835,6 +835,38 @@ func TestRevisionConflictReloadsCurrentRevision(t *testing.T) {
 	}
 }
 
+func TestSaveWhileScanWritesRecordExplainsInChinese(t *testing.T) {
+	m, q, tt, svc := openReviewRecordPage(t, reviewRowItem(t, 1, 12))
+	svc.saveFn = func(string, int64, int64, app.ItemRevisionEdit) (app.ItemRevisionResult, error) {
+		return app.ItemRevisionResult{}, fmt.Errorf("app: save item revision: %w", app.ErrRecordActive)
+	}
+
+	if err := tt.Click("编辑"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
+	m.edit.draft.Level = "13"
+	tt.Frame()
+	loadsBefore := len(svc.loadLog)
+	if err := tt.Click("保存"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
+
+	if m.edit == nil || m.edit.draft.Level != "13" {
+		t.Fatalf("the active-record refusal lost the input: %+v", m.edit)
+	}
+	if !tt.HasText("扫描仍在写入该记录，扫描结束后再保存。输入已保留。") || !tt.HasText("重试保存") {
+		t.Fatalf("the active-record refusal is not explained: %q", tt.Texts())
+	}
+	if strings.Contains(m.reviewErr, "record is still being written") {
+		t.Fatalf("the internal English error reached the UI: %q", m.reviewErr)
+	}
+	if len(svc.loadLog) != loadsBefore {
+		t.Fatalf("the active-record refusal reloaded the record: %v", svc.loadLog)
+	}
+}
+
 func TestUnsavedEditSwitchPrompt(t *testing.T) {
 	m, q, tt, svc := openReviewRecordPage(t,
 		reviewRowItem(t, 1, 12),

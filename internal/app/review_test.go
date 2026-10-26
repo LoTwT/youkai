@@ -9,6 +9,7 @@ import (
 
 	"github.com/LoTwT/youkai/internal/game/zzz"
 	"github.com/LoTwT/youkai/internal/record"
+	"github.com/LoTwT/youkai/internal/scan"
 )
 
 // reviewData is a complete structured data object that passes the
@@ -323,6 +324,40 @@ func TestSaveItemRevisionRejectsInvalidValues(t *testing.T) {
 	}
 	if got := loadedItem(t, svc, id, 1); got.Revision != 0 || string(got.Data) == "" {
 		t.Fatalf("an invalid edit reached the store: revision %d", got.Revision)
+	}
+}
+
+func TestSaveItemRevisionRefusesActiveRecordUntilScanWrapped(t *testing.T) {
+	svc, id := reviewService(t, nil, reviewItem(t, 1, reviewData()))
+
+	svc.mu.Lock()
+	svc.active = &activeSession{id: scan.ID(id)}
+	svc.mu.Unlock()
+
+	_, err := svc.SaveItemRevision(id, 1, 0, ItemRevisionEdit{Data: reviewData()})
+	if !errors.Is(err, ErrRecordActive) {
+		t.Fatalf("editing an active record = %v, want ErrRecordActive", err)
+	}
+	if got := loadedItem(t, svc, id, 1); got.Revision != 0 {
+		t.Fatalf("the refused edit wrote revision %d", got.Revision)
+	}
+
+	svc.mu.Lock()
+	svc.active.wrapped = true
+	svc.mu.Unlock()
+	if _, err := svc.SaveItemRevision(id, 1, 0, ItemRevisionEdit{Data: reviewData()}); err != nil {
+		t.Fatalf("editing after the scan wrapped: %v", err)
+	}
+}
+
+func TestSaveItemRevisionAllowsAnotherRecordWhileScanActive(t *testing.T) {
+	svc, id := reviewService(t, nil, reviewItem(t, 1, reviewData()))
+	svc.mu.Lock()
+	svc.active = &activeSession{id: scan.ID("00000000-0000-4000-8000-000000000000")}
+	svc.mu.Unlock()
+
+	if _, err := svc.SaveItemRevision(id, 1, 0, ItemRevisionEdit{Data: reviewData()}); err != nil {
+		t.Fatalf("editing an unrelated record during a scan: %v", err)
 	}
 }
 

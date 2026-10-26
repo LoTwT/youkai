@@ -268,6 +268,11 @@ type ScrollMatch struct {
 	// overlap range (a fling overshot it). The position is at risk; the
 	// machine stops rather than guessing how far it went.
 	Lost bool
+	// Undecided: the pixels changed but neither displacement nor loss met
+	// their thresholds (for example a live UI animation over a list that
+	// did not move). It is not movement evidence; callers may combine it
+	// with an independent probe such as the scrollbar thumb.
+	Undecided bool
 	// Evidence describes what the verdict rests on, in prose.
 	Evidence string
 }

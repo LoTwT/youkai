@@ -72,22 +72,20 @@ type scriptedGame struct {
 	scrollJump        int  // non-zero: the advance drag jumps this many rows
 	topStuck          bool // the top fling does not move the list
 	topJumpRows       int  // non-zero: the top fling moves up this many rows
+	// falseTopViewport makes the scrollbar claim the top while the list is
+	// still at or above this non-zero viewport, modelling a stale thumb
+	// during a cloud-video animation.
+	falseTopViewport int
 	// sClickDoesNothing makes every S rarity click a no-op;
 	// sClickDoesNothingAt does so only at one wheel position. The funnel
 	// then stays clear after the panel closes.
 	sClickDoesNothing   bool
 	sClickDoesNothingAt int
-	// resetDoesNothing leaves the current filter (and its S selection) in
-	// place, modelling a reset that silently failed. resetMakesUnknown
-	// instead makes the panel page undecidable after the reset.
-	resetDoesNothing  bool
+	// resetMakesUnknown makes the panel page undecidable after the reset.
 	resetMakesUnknown bool
 	// sSelected is the panel's S rarity selection. It is test state only:
 	// the current layout has no calibrated pixel probe for this control.
-	sSelected bool
-	// panelOpenSStates records the S selection at every panel opening, so
-	// the strict test can prove the reopen followed the reset.
-	panelOpenSStates []bool
+	sSelected        bool
 	scrollExtraRows  int // >0: the advance drag keeps moving this many more rows
 	scrollExtraDelay int // frame calls between the two displacement stages (default 2)
 	// respectDispatchCursor serves the pre-action frame to any Frame request
@@ -410,6 +408,9 @@ func (g *scriptedGame) renderScrollbar(img *image.RGBA) {
 			end = track.Max.Y - 1
 		}
 	}
+	if g.falseTopViewport > 0 && g.viewport <= g.falseTopViewport {
+		start = track.Min.Y
+	}
 	thumb := color.RGBA{R: 200, G: 200, B: 200, A: 255}
 	for y := start; y <= end; y++ {
 		img.SetRGBA(x, y, thumb)
@@ -511,9 +512,6 @@ func (g *scriptedGame) dispatch(op platform.InputOp) platform.InputResult {
 						g.sSelected = false
 						return
 					}
-					if g.resetDoesNothing {
-						return
-					}
 					g.filter = "clear"
 					g.sSelected = false
 				}})
@@ -555,7 +553,6 @@ func (g *scriptedGame) dispatch(op platform.InputOp) platform.InputResult {
 			return posted(now)
 		}
 		if op.At.Eq(g.layout.FilterButton) {
-			g.panelOpenSStates = append(g.panelOpenSStates, g.sSelected)
 			g.pending = append(g.pending, pendingEffect{dueAt: lag, apply: func(g *scriptedGame) {
 				g.page = pagePanel
 			}})
@@ -707,12 +704,6 @@ func (g *scriptedGame) sSelectedState() bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	return g.sSelected
-}
-
-func (g *scriptedGame) panelOpenSStatesSnapshot() []bool {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	return append([]bool(nil), g.panelOpenSStates...)
 }
 
 var (
@@ -2193,15 +2184,13 @@ func TestTraverseDailyFilterPreparationKeepsOnePanelVisit(t *testing.T) {
 	}
 }
 
-// T32d: the independent Clear path verifies the reset base before selecting
-// S. With an old S selection active, the reset clears it, the closed funnel
-// reports clear, and only the reopened panel selects S again.
-func TestTraverseIndependentClearSelectsSAfterVerifiedClear(t *testing.T) {
+// T32d: an active old filter is reset and S is selected in the same panel
+// visit. Every position opens and closes the filter panel exactly once.
+func TestTraverseFilterResetAndSShareOnePanelVisit(t *testing.T) {
 	game := newScriptedGame(true)
 	game.filter = "active"
 	game.sSelected = true
 	h := newTraversalHarness(t, game)
-	h.inv.IndependentClear = true
 	h.inv.ScrollBudget = 80 * time.Millisecond
 	h.start()
 	h.endCompleted()
@@ -2213,85 +2202,28 @@ func TestTraverseIndependentClearSelectsSAfterVerifiedClear(t *testing.T) {
 		t.Fatalf("funnel %q after preparation, want active", got)
 	}
 	if !game.sSelectedState() {
-		t.Fatal("the S rarity control is not selected after the strict preparation")
-	}
-	opens := game.panelOpenSStatesSnapshot()
-	if len(opens) < 2 || !opens[0] || opens[1] {
-		t.Fatalf("S selection at panel openings = %v, want old selection, then reset-cleared before the S pass", opens)
+		t.Fatal("the S rarity control is not selected after the combined preparation")
 	}
 	ops := game.opsSnapshot()
-	if got := countOps(ops, platform.InputClick, game.layout.FilterButton, image.Point{}); got != 6*2 {
-		t.Fatalf("%d panel opens, want reset and S visits for every position", got)
+	if got := countOps(ops, platform.InputClick, game.layout.FilterButton, image.Point{}); got != 6 {
+		t.Fatalf("%d panel opens, want one per position", got)
 	}
-	if got := countOps(ops, platform.InputClick, game.layout.PanelClose, image.Point{}); got != 6*2 {
-		t.Fatalf("%d panel closes, want reset and S visits for every position", got)
-	}
-	if got := countFilterClicks(ops, game.layout); got != 6*6 {
-		t.Fatalf("%d filter-control clicks, want two visits per position", got)
+	if got := countOps(ops, platform.InputClick, game.layout.PanelClose, image.Point{}); got != 6 {
+		t.Fatalf("%d panel closes, want one per position", got)
 	}
 	sequence := filterControlSequence(ops, game.layout)
-	want := []string{"open", "reset", "close", "open", "s", "close"}
+	want := []string{"open", "reset", "s", "close"}
 	if len(sequence) != 6*len(want) || fmt.Sprint(sequence[:len(want)]) != fmt.Sprint(want) {
 		t.Fatalf("filter sequence starts %v, want %v repeated for every position", sequence, want)
 	}
 }
 
-// T32e: an old filter that survives the reset is Active at the funnel, so
-// the daily Active check cannot see it. The independent Clear check rejects
-// it before S selection and keeps the walk at zero admissions.
-func TestTraverseIndependentClearRejectsResidualActiveFilter(t *testing.T) {
-	game := newScriptedGame(true)
-	game.filter = "active"
-	game.sSelected = true
-	game.resetDoesNothing = true
-	h := newTraversalHarness(t, game)
-	h.inv.IndependentClear = true
-	h.inv.ActionBudget = 100 * time.Millisecond
-	h.start()
-	snap := h.endFailed(collect.CodeNavigationMismatch)
-	if snap.Counts.Captured != 0 {
-		t.Fatalf("a failed Clear check admits nothing: %+v", snap.Counts)
-	}
-	ops := game.opsSnapshot()
-	if got := countOps(ops, platform.InputClick, game.layout.FilterButton, image.Point{}); got != 1 {
-		t.Fatalf("%d panel opens, want only the reset visit before stopping", got)
-	}
-	if got := countOps(ops, platform.InputClick, game.layout.PanelS, image.Point{}); got != 0 {
-		t.Fatalf("%d S clicks after an unverified Clear", got)
-	}
-	if got := countFilterClicks(ops, game.layout); got != 3 {
-		t.Fatalf("%d filter-control clicks, want open/reset/close only", got)
-	}
-}
-
-// T32f: a clear reset followed by an S click that does not take effect stops
-// on the missing Active verdict instead of admitting the unfiltered list.
-func TestTraverseIndependentClearStopsWithoutSSelection(t *testing.T) {
-	game := newScriptedGame(true)
-	game.sClickDoesNothing = true
-	h := newTraversalHarness(t, game)
-	h.inv.IndependentClear = true
-	h.inv.ActionBudget = 100 * time.Millisecond
-	h.start()
-	snap := h.endFailed(collect.CodeNavigationMismatch)
-	if snap.Counts.Captured != 0 {
-		t.Fatalf("a failed S selection admits nothing: %+v", snap.Counts)
-	}
-	if game.sSelectedState() {
-		t.Fatal("the fake S control is selected although its click was a no-op")
-	}
-	if got := countFilterClicks(game.opsSnapshot(), game.layout); got != 6 {
-		t.Fatalf("%d filter-control clicks, want two complete visits before stopping", got)
-	}
-}
-
-// T32g: a reset that makes the panel page undecidable stops the strict path
-// with navigationMismatch; the traversal never closes or clicks around it.
-func TestTraverseIndependentClearStopsOnUndecidableResetPage(t *testing.T) {
+// T32e: a reset that makes the panel page undecidable stops with
+// navigationMismatch; the traversal never closes or clicks around it.
+func TestTraverseFilterResetStopsOnUndecidablePanel(t *testing.T) {
 	game := newScriptedGame(true)
 	game.resetMakesUnknown = true
 	h := newTraversalHarness(t, game)
-	h.inv.IndependentClear = true
 	h.inv.ActionBudget = 100 * time.Millisecond
 	h.start()
 	snap := h.endFailed(collect.CodeNavigationMismatch)
@@ -2304,27 +2236,6 @@ func TestTraverseIndependentClearStopsOnUndecidableResetPage(t *testing.T) {
 	}
 	if got := countOps(ops, platform.InputClick, game.layout.PanelClose, image.Point{}); got != 0 {
 		t.Fatalf("%d close clicks after the reset page became undecidable", got)
-	}
-}
-
-// T32h: a later position's failed strict preparation keeps the earlier
-// position's admissions.
-func TestTraverseIndependentClearRetainsAdmittedOnLaterFailure(t *testing.T) {
-	game := newScriptedGame(listOf(2)...)
-	game.setList(2, listOf(1))
-	game.sClickDoesNothingAt = 2
-	h := newTraversalHarness(t, game)
-	h.inv.IndependentClear = true
-	h.inv.ActionBudget = 100 * time.Millisecond
-	h.inv.ScrollBudget = 80 * time.Millisecond
-	h.start()
-	snap := h.endFailed(collect.CodeNavigationMismatch)
-	if snap.Counts.Captured != 2 {
-		t.Fatalf("captured = %+v, want the first position's two admissions", snap.Counts)
-	}
-	obs := h.observations()
-	if len(obs) != 2 || obs[0].Position != 1 || obs[1].Position != 1 {
-		t.Fatalf("observations = %v, want two at position 1", positions(obs))
 	}
 }
 
@@ -2388,6 +2299,31 @@ func TestTraversePrecheckAcceptsMidListStart(t *testing.T) {
 	}
 	if scope := string(h.inv.ObservedScope()); !strings.Contains(scope, `"startPosition":1`) {
 		t.Fatalf("observed scope %s lacks the start position", scope)
+	}
+}
+
+// T35b: a stale scrollbar that claims the top while the list is still
+// mid-way must not start traversal there. The confirmation drag moves the
+// list closer to its real start, and only the settled top admits items.
+func TestTraverseTopClaimMustSettleAtRealStart(t *testing.T) {
+	game := newScriptedGame(listOf(36)...) // nine rows
+	game.viewport = 4
+	game.topJumpRows = 2
+	game.falseTopViewport = 2
+	h := newTraversalHarness(t, game)
+	h.inv.ScrollBudget = 800 * time.Millisecond
+	h.start()
+	h.endCompleted()
+
+	obs := h.observations()
+	if len(obs) != 36 {
+		t.Fatalf("admitted %d, want all 36 after the real top settled", len(obs))
+	}
+	if obs[0].Viewport != 0 || obs[0].Row != 0 || obs[0].Column != 0 {
+		t.Fatalf("first admission = %+v, want the top of the list", obs[0])
+	}
+	if drags := countOps(game.opsSnapshot(), platform.InputDrag, game.layout.TopFrom, game.layout.TopTo); drags != 8 {
+		t.Fatalf("%d top drags, want one fling and two confirmations at position 1 plus one per empty position", drags)
 	}
 }
 

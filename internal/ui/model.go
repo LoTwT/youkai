@@ -613,6 +613,9 @@ type HistoryEntry struct {
 	// percentage.
 	CoverageExpected int64
 	PendingReview    int
+	// Termination is the session's first termination trigger; nil for a
+	// record whose checkpoint predates the field or never ended.
+	Termination      *record.Termination
 	ExportableCount  int64
 	FailedCount      int64
 	UnprocessedCount int64
@@ -645,6 +648,7 @@ func (m *Model) loadHistory() {
 					Coverage:         info.Coverage,
 					CoverageExpected: info.CoverageExpected,
 					PendingReview:    info.PendingReview,
+					Termination:      info.Termination,
 					ExportableCount:  info.ExportableCount,
 					FailedCount:      info.FailedCount,
 					UnprocessedCount: info.UnprocessedCount,

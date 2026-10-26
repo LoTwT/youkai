@@ -166,9 +166,8 @@ type Layout struct {
 	// PanelReset, PanelClose and PanelS are the panel's click points. The
 	// pixel matcher never reads them. PanelS selects the S rarity filter;
 	// the recorded frames contain no selected-S sample, so no selected-state
-	// probe is calibrated. The daily path verifies the effect through the
-	// active funnel after closing; the acceptance-only IndependentClear path
-	// additionally proves the reset base is clear before selecting S (T5 §3).
+	// probe is calibrated. The effect is verified through the active funnel
+	// after the single panel visit closes (T5 §3).
 	PanelReset, PanelClose, PanelS image.Point
 	// SortLabel is the filter panel's sort dropdown region and the
 	// reference image it must match. The label names the active order

@@ -112,6 +112,108 @@ func (v *scrollScriptView) Frame(ctx context.Context, req platform.FrameRequest)
 	return platform.Frame{}, context.DeadlineExceeded
 }
 
+// A cloud-client activation can restart the video stream: one warehouse
+// sample followed by a stalled stream must not end the whole scan. The
+// retry gets a fresh action budget and settles once frames resume.
+func TestEstablishListRetriesStalledStart(t *testing.T) {
+	inv := &Inventory{
+		Layout:       MacCloudLayout(),
+		Matcher:      &scrollScriptMatcher{rows: 4, columns: 5},
+		ActionBudget: 60 * time.Millisecond,
+		StableFrames: 3,
+	}
+	view := &stalledListStartView{}
+	run := &inventoryRun{inv: inv, view: view, geo: 1, position: 1}
+
+	if err := run.establishList(context.Background()); err != nil {
+		t.Fatalf("establishList after a stalled start: %v", err)
+	}
+	if !view.blocked {
+		t.Fatal("the scripted stream never stalled, so the retry was not exercised")
+	}
+	if run.listMatch.List == nil || len(run.listMatch.List.Occupied) != len(inv.Layout.Slots) {
+		t.Fatalf("settled list = %+v, want the full grid", run.listMatch.List)
+	}
+	if run.lastFrame.ID == 0 {
+		t.Fatal("the retry did not keep the settled frame")
+	}
+}
+
+type stalledListStartView struct {
+	frames  int
+	blocked bool
+}
+
+func (v *stalledListStartView) Observe() (platform.Observation, error) {
+	return platform.Observation{Ready: true, Geometry: 1}, nil
+}
+
+func (v *stalledListStartView) Dispatch(op platform.InputOp) platform.InputResult {
+	return platform.InputResult{Status: platform.InputPosted}
+}
+
+func (v *stalledListStartView) Frame(ctx context.Context, req platform.FrameRequest) (platform.Frame, error) {
+	if v.frames == 0 {
+		v.frames++
+		return platform.Frame{ID: 1, Geometry: 1, ArrivedAt: time.Now()}, nil
+	}
+	if !v.blocked {
+		v.blocked = true
+		<-ctx.Done()
+		return platform.Frame{}, ctx.Err()
+	}
+	v.frames++
+	return platform.Frame{ID: uint64(v.frames + 1), Geometry: 1, ArrivedAt: time.Now()}, nil
+}
+
+// The first wait can also end without any decidable frame at all: the
+// precheck already verified the page, but activation can leave the stream
+// silent until the client redraws. The retry must not depend on having
+// seen one warehouse verdict in the failed wait.
+func TestEstablishListRetriesSilentStart(t *testing.T) {
+	inv := &Inventory{
+		Layout:       MacCloudLayout(),
+		Matcher:      &scrollScriptMatcher{rows: 4, columns: 5},
+		ActionBudget: 60 * time.Millisecond,
+		StableFrames: 3,
+	}
+	view := &silentListStartView{}
+	run := &inventoryRun{inv: inv, view: view, geo: 1, position: 1}
+
+	if err := run.establishList(context.Background()); err != nil {
+		t.Fatalf("establishList after a silent start: %v", err)
+	}
+	if !view.blocked {
+		t.Fatal("the scripted stream never blocked, so the retry was not exercised")
+	}
+	if run.listMatch.List == nil || len(run.listMatch.List.Occupied) != len(inv.Layout.Slots) {
+		t.Fatalf("settled list = %+v, want the full grid", run.listMatch.List)
+	}
+}
+
+type silentListStartView struct {
+	frames  int
+	blocked bool
+}
+
+func (v *silentListStartView) Observe() (platform.Observation, error) {
+	return platform.Observation{Ready: true, Geometry: 1}, nil
+}
+
+func (v *silentListStartView) Dispatch(op platform.InputOp) platform.InputResult {
+	return platform.InputResult{Status: platform.InputPosted}
+}
+
+func (v *silentListStartView) Frame(ctx context.Context, req platform.FrameRequest) (platform.Frame, error) {
+	if !v.blocked {
+		v.blocked = true
+		<-ctx.Done()
+		return platform.Frame{}, ctx.Err()
+	}
+	v.frames++
+	return platform.Frame{ID: uint64(v.frames), Geometry: 1, ArrivedAt: time.Now()}, nil
+}
+
 // A prior stable observation counts toward the settle window without
 // replacing the fresh confirmations: with StableFrames=3, a seed plus two
 // fresh frames must settle even though two alone would not.
@@ -194,6 +296,96 @@ func newScrollRun(l Layout, view SessionView, m Matcher, budget time.Duration) *
 		},
 		view: view,
 		geo:  1,
+	}
+}
+
+// TestTopConfirmedRejectsMovedClaims pins that a genuine Lost or a
+// displaced top claim cannot start traversal even when the scrollbar thumb
+// looks unchanged. An Undecided comparison is different: it carries no
+// movement evidence, so a stable thumb at the top may support the claim.
+func TestTopConfirmedRejectsMovedClaims(t *testing.T) {
+	top := PageMatch{Page: PageWarehouse, List: &ListEvidence{Top: true}}
+	notTop := PageMatch{Page: PageWarehouse, List: &ListEvidence{Top: false}}
+	cases := []struct {
+		name     string
+		out      scrollOutcome
+		beforeOK bool
+		afterOK  bool
+		want     bool
+	}{
+		{"stationary top", scrollOutcome{stationary: true, afterMatch: top}, true, true, true},
+		{"undecided stable thumb", scrollOutcome{afterMatch: top}, true, true, true},
+		{"lost with stable thumb", scrollOutcome{lost: true, afterMatch: top}, true, true, false},
+		{"lost undecided stable thumb", scrollOutcome{lost: true, afterMatch: top, match: ScrollMatch{Undecided: true}}, true, true, true},
+		{"lost undecided moved thumb", scrollOutcome{lost: true, afterMatch: top, match: ScrollMatch{Undecided: true}}, true, true, false},
+		{"displaced with stable thumb", scrollOutcome{displaced: true, afterMatch: top}, true, true, false},
+		{"stationary but not top", scrollOutcome{stationary: true, afterMatch: notTop}, true, true, false},
+		{"thumb moved", scrollOutcome{afterMatch: top}, true, true, false},
+		{"thumb unreadable", scrollOutcome{afterMatch: top}, false, true, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			beforeStart, afterStart := 226, 226
+			if tc.name == "thumb moved" || tc.name == "lost undecided moved thumb" {
+				afterStart = 240
+			}
+			if got := topConfirmed(tc.out, tc.beforeOK, tc.afterOK, beforeStart, afterStart); got != tc.want {
+				t.Fatalf("topConfirmed = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestAwaitScrollDoesNotCommitRepeatedTotalWhileMoving pins the unsafe
+// case that a repeated row count alone cannot settle: A→B is undecided,
+// the total before→B still reports four rows, but B→C later moves another
+// row. The traversal must stay uncommitted and end as Lost, not accept B.
+func TestAwaitScrollDoesNotCommitRepeatedTotalWhileMoving(t *testing.T) {
+	l := sixRowScrollLayout()
+	content := image.Rect(0, 0, 100, 100)
+	before := platform.Frame{ID: 1, Geometry: 1, Image: image.NewRGBA(content), Content: content}
+	first := platform.Frame{ID: 2, Geometry: 1, Image: image.NewRGBA(content), Content: content}
+	stillMoving := platform.Frame{ID: 3, Geometry: 1, Image: image.NewRGBA(content), Content: content}
+	later := platform.Frame{ID: 4, Geometry: 1, Image: image.NewRGBA(content), Content: content}
+	view := &scrollScriptView{frames: []platform.Frame{first, stillMoving, later}, blockAfter: true}
+	m := &scrollScriptMatcher{rows: l.Rows, columns: l.Columns, verdict: map[scrollPair]ScrollMatch{
+		{1, 2}: displacedScan(l, 4),
+		{2, 3}: {Evidence: "scripted relative frame still moving"},
+		{1, 3}: displacedScan(l, 4),
+		{3, 4}: displacedScan(l, 1),
+		{1, 4}: {Lost: true, Evidence: "scripted total overlap lost after another row"},
+	}}
+	run := newScrollRun(l, view, m, 80*time.Millisecond)
+	out, err := run.awaitScroll(context.Background(), before)
+	if err != nil {
+		t.Fatalf("awaitScroll: %v", err)
+	}
+	if out.displaced || !out.lost || !out.unsettled {
+		t.Fatalf("outcome %+v, want an uncommitted Lost result", out)
+	}
+}
+
+// TestAwaitScrollSettlesIdleReuseWithSameFrameID covers production idle
+// confirmations: the platform copies the latest complete frame into a new
+// RGBA buffer, so the image pointer changes while Frame.ID and content stay
+// the same. That must settle the candidate rather than wait out the budget.
+func TestAwaitScrollSettlesIdleReuseWithSameFrameID(t *testing.T) {
+	l := sixRowScrollLayout()
+	content := image.Rect(0, 0, 100, 100)
+	before := platform.Frame{ID: 1, Geometry: 1, Image: image.NewRGBA(content), Content: content}
+	candidate := platform.Frame{ID: 2, Geometry: 1, Image: image.NewRGBA(content), Content: content}
+	idle := platform.Frame{ID: 2, Geometry: 1, Image: image.NewRGBA(content), Content: content, Reused: true}
+	view := &scrollScriptView{frames: []platform.Frame{candidate, idle}, blockAfter: true}
+	m := &scrollScriptMatcher{rows: l.Rows, columns: l.Columns, verdict: map[scrollPair]ScrollMatch{
+		{1, 2}: displacedScan(l, 4),
+	}}
+	run := newScrollRun(l, view, m, 80*time.Millisecond)
+	out, err := run.awaitScroll(context.Background(), before)
+	if err != nil {
+		t.Fatalf("awaitScroll: %v", err)
+	}
+	if !out.displaced || out.lost || out.after.ID != 2 {
+		t.Fatalf("outcome %+v, want the idle reuse to settle frame 2", out)
 	}
 }
 

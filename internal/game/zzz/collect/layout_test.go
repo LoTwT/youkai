@@ -3,6 +3,7 @@ package collect_test
 import (
 	"image"
 	"testing"
+	"time"
 
 	"github.com/LoTwT/youkai/internal/game/zzz/collect"
 	"github.com/LoTwT/youkai/internal/platform"
@@ -32,6 +33,9 @@ func TestMacCloudLayoutValidatesAndFitsContent(t *testing.T) {
 	}
 	if l.PanelS != image.Pt(1225, 615) {
 		t.Fatalf("panel S control %v, want the sample frame's (1225,615)", l.PanelS)
+	}
+	if l.ScrollDuration != 1200*time.Millisecond {
+		t.Fatalf("scroll duration %s, want the slower calibrated 1200ms drag", l.ScrollDuration)
 	}
 	if l.Cell.Management.Empty() || l.Cell.Avatar.Empty() ||
 		l.DetailAvatar.Empty() || l.TopManagement.Empty() {
@@ -173,6 +177,7 @@ func TestMacCloudCalibrationRejectsUnorderedTiers(t *testing.T) {
 		{"avatar core bands overlap", func(c *collect.Calibration) { c.AvatarCoreMeanMin = c.AvatarAbsentCoreMeanMax }},
 		{"top management bands overlap", func(c *collect.Calibration) { c.TopLockedDimMin = c.TopUnlockedDimMax }},
 		{"scroll thresholds unordered", func(c *collect.Calibration) { c.ScrollDisplacedMax = c.ScrollStationaryMax }},
+		{"scroll shift margin negative", func(c *collect.Calibration) { c.ScrollShiftMargin = -1 }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

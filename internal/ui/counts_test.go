@@ -47,6 +47,8 @@ func TestReviewSummaryText(t *testing.T) {
 		want  string
 	}{
 		{"pending only", recordCounts{Pending: 2}, "待校对 2 件"},
+		{"empty known export", recordCounts{Captured: 0, ExportKnown: true}, "没有可导出的条目"},
+		{"empty unknown export", recordCounts{Captured: 0}, "没有条目"},
 		{"pending with blocked", recordCounts{Pending: 1, Failed: 1, Unprocessed: 1}, "待校对 1 件 · 另有 2 件无法导出"},
 		{"zero pending with blocked", recordCounts{Failed: 2, OtherExcluded: 1}, "待校对 0 · 另有 3 件无法导出"},
 		{"all exportable", recordCounts{Captured: 2, Exportable: 2, ExportKnown: true}, "待校对 0 · 全部可导出"},

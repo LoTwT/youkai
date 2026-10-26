@@ -771,6 +771,10 @@ func (m *Model) handleReviewError(recordID string, err error) {
 		}
 		return
 	}
+	if errors.Is(err, app.ErrRecordActive) {
+		m.reviewErr = "扫描仍在写入该记录，扫描结束后再保存。输入已保留。"
+		return
+	}
 	m.reviewErr = "保存失败：" + err.Error() + "。输入已保留，可重试。"
 }
 

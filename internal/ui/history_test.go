@@ -73,6 +73,25 @@ func TestViewHistoryShowsMetadataAndDateFilter(t *testing.T) {
 	}
 }
 
+func TestViewHistoryShowsSessionTermination(t *testing.T) {
+	history := historyMetadata(
+		time.Date(2026, 10, 17, 9, 0, 0, 0, time.UTC),
+		time.Date(2026, 10, 16, 9, 0, 0, 0, time.UTC),
+	)
+	history[0].Termination = &record.Termination{
+		Kind: record.TerminationFailed, Code: "navigationMismatch", Phase: record.PhaseCapturing,
+	}
+	svc := &fakeService{history: history}
+	m, q := newTestModel(t, Config{Service: svc})
+	m.SetContentSize(1440, 700)
+	tt := ui.NewTester(m.View, 1440, 1000)
+	settle(t, m, q, tt)
+
+	if !tt.HasText("失败：navigationMismatch") {
+		t.Fatalf("history does not show the failed session code: %q", tt.Texts())
+	}
+}
+
 func TestHistoryExportFailure(t *testing.T) {
 	svc := &fakeService{
 		history: historyMetadata(time.Now(), time.Now().Add(-time.Hour)),

@@ -495,7 +495,7 @@ func (m *PixelMatcher) MatchScroll(before, after platform.Frame) ScrollMatch {
 			"frames %d → %d: list viewport error at zero displacement %.2f < %.1f — the list did not move",
 			before.ID, after.ID, err0, m.C.ScrollStationaryMax)}
 	}
-	dy, bestErr, ok := m.bestShift(before.Image, after.Image)
+	dy, bestErr, rowErrors, ok := m.bestShift(before.Image, after.Image)
 	if !ok {
 		return ScrollMatch{Evidence: fmt.Sprintf("pixel matcher: frames %d → %d have too few comparable list samples",
 			before.ID, after.ID)}
@@ -512,6 +512,14 @@ func (m *PixelMatcher) MatchScroll(before, after platform.Frame) ScrollMatch {
 	aligned := rows >= 1 && rows <= m.C.ScrollMaxRows &&
 		absInt(absInt(dy)-rows*m.L.RowPitch) <= m.C.ScrollRowTolerance
 	if aligned && bestErr <= m.C.ScrollDisplacedMax && bestErr <= err0-m.C.ScrollDisplacedMargin {
+		// A repeated row pattern can make more than one whole-row shift
+		// fit. Choosing the smallest error would then silently pick one
+		// of several possible positions; the traversal must stop instead.
+		if rivalRows, rivalErr, ambiguous := m.rivalShift(direction*rows, bestErr, rowErrors); ambiguous {
+			return ScrollMatch{Lost: true, Evidence: fmt.Sprintf(
+				"frames %d → %d: row shift %d (error %.2f) and %d (error %.2f) are both plausible; the alignments do not uniquely identify the displacement (margin %.1f)",
+				before.ID, after.ID, rows, bestErr, rivalRows, rivalErr, m.C.ScrollShiftMargin)}
+		}
 		matches := make([]PositionPair, 0, (m.L.Rows-rows)*m.L.Columns)
 		for r := 0; r < m.L.Rows-rows; r++ {
 			for c := 0; c < m.L.Columns; c++ {
@@ -532,7 +540,7 @@ func (m *PixelMatcher) MatchScroll(before, after platform.Frame) ScrollMatch {
 			"frames %d → %d: the list changed (zero-displacement error %.2f ≥ %.1f) but the best shift %d is not a whole row (error %.2f) — the overlap was lost",
 			before.ID, after.ID, err0, m.C.ScrollLostMin, dy, bestErr)}
 	}
-	return ScrollMatch{Evidence: fmt.Sprintf(
+	return ScrollMatch{Undecided: true, Evidence: fmt.Sprintf(
 		"frames %d → %d: undecided (zero-displacement error %.2f, best shift %d at error %.2f)",
 		before.ID, after.ID, err0, dy, bestErr)}
 }
@@ -560,10 +568,14 @@ func (m *PixelMatcher) zeroShiftError(before, after *image.RGBA) (float64, bool)
 }
 
 // bestShift finds the vertical displacement with the smallest error over
-// the overlap, sampling the list viewport at the calibrated steps.
-func (m *PixelMatcher) bestShift(before, after *image.RGBA) (int, float64, bool) {
+// the overlap, sampling the list viewport at the calibrated steps. It also
+// returns the best error of every whole-row candidate: MatchScroll uses
+// those to reject a displacement that a repeated row pattern makes
+// ambiguous.
+func (m *PixelMatcher) bestShift(before, after *image.RGBA) (int, float64, map[int]float64, bool) {
 	r := m.L.ListViewport
 	bestDy, bestErr := 0, math.Inf(1)
+	rowErrors := make(map[int]float64)
 	// A shift that leaves less than one row of overlap cannot establish a
 	// correspondence: the surviving sliver may be identical background in
 	// both frames (the field samples show 27-pixel edge slivers matching at
@@ -593,14 +605,56 @@ func (m *PixelMatcher) bestShift(before, after *image.RGBA) (int, float64, bool)
 		if n < m.C.ScrollMinSamples {
 			continue
 		}
-		if err := sum / float64(n); err < bestErr {
+		err := sum / float64(n)
+		if err < bestErr {
 			bestDy, bestErr = dy, err
+		}
+		if row, ok := m.wholeRow(dy); ok && row != 0 {
+			if old, seen := rowErrors[row]; !seen || err < old {
+				rowErrors[row] = err
+			}
 		}
 	}
 	if math.IsInf(bestErr, 1) {
+		return 0, 0, nil, false
+	}
+	return bestDy, bestErr, rowErrors, true
+}
+
+// wholeRow returns the signed whole-row displacement a pixel shift names,
+// or false when the shift is not within the row tolerance.
+func (m *PixelMatcher) wholeRow(dy int) (int, bool) {
+	rows := int(math.Round(float64(absInt(dy)) / float64(m.L.RowPitch)))
+	if absInt(absInt(dy)-rows*m.L.RowPitch) > m.C.ScrollRowTolerance {
+		return 0, false
+	}
+	if dy < 0 {
+		return -rows, true
+	}
+	return rows, true
+}
+
+// rivalShift reports a different whole-row alignment whose error is too
+// close to the chosen one to distinguish. The chosen row is the only
+// alignment excluded; the caller has already checked that it is the best
+// overall shift and that it passes the displacement thresholds.
+func (m *PixelMatcher) rivalShift(chosen int, chosenErr float64, rowErrors map[int]float64) (int, float64, bool) {
+	rivalRows, rivalErr := 0, math.Inf(1)
+	for row, err := range rowErrors {
+		// Opposite-direction matches are not competing for the same drag
+		// result; a drag whose direction is reversed is already outside
+		// the transition the traversal dispatched.
+		if row == chosen || (row > 0) != (chosen > 0) {
+			continue
+		}
+		if err < rivalErr {
+			rivalRows, rivalErr = row, err
+		}
+	}
+	if math.IsInf(rivalErr, 1) || rivalErr >= chosenErr+m.C.ScrollShiftMargin {
 		return 0, 0, false
 	}
-	return bestDy, bestErr, true
+	return rivalRows, rivalErr, true
 }
 
 // CompareDetail implements Matcher: the mean of the seven per-line
