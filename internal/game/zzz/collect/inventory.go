@@ -1317,9 +1317,11 @@ func (run *inventoryRun) confirmTop(ctx context.Context) error {
 // stationary outcome is direct evidence. An undecided pixel comparison
 // with an independent, unchanged thumb start is also safe: live UI
 // animation can raise the zero-shift error without moving the list, and a
-// real row displacement is not Undecided. A true Lost (a row alignment
-// existed but could not be accepted) or a Displaced outcome still rejects
-// the claim.
+// real row displacement is not Undecided. A Displaced outcome always
+// rejects. A Lost outcome also rejects, except when the last comparison is
+// Undecided and the thumb stayed put: the wait may have seen a transient
+// Lost (such as a top bounce) while the final frame relative to the
+// pre-drag frame is undecided.
 func topConfirmed(out scrollOutcome, beforeOK, afterOK bool, beforeStart, afterStart int) bool {
 	if out.afterMatch.Page != PageWarehouse || out.afterMatch.List == nil || !out.afterMatch.List.Top {
 		return false
