@@ -186,11 +186,55 @@ observedScope.positions: 位置 1，1 视口，0 访问
 - 长闲置断开后的自动重连不在应用职责内；本轮记录的是断连对扫描启动的影响。
 - 本轮的 1,200 ms 滚动等待与顶部确认在当前客户端上未再出现 `positionLost`，但这不能证明所有客户端都不会因云惯性多滚一行；结构性 3 行步长与 `ScrollStepRows` 校准仍属于后续改进项。
 
+## 修复后真机回归（2026-10-26 14:08）
+
+本轮修复（活动记录编辑保护、滚动位移唯一性、选中/转盘连续性守卫、崩溃输出）在 `4dbe84f` 工作区上完成后，重新做了一次真实全量扫描。应用用独立进程启动，避免 `go tool mygo dev` 的后台终端被回收：
+
+```text
+YOUKAI_GAME_SOURCE=traverse \
+  .mygo/dev/darwin-arm64/Youkai Dev.app/Contents/MacOS/Youkai Dev
+```
+
+| 项目 | 结果 |
+|---|---|
+| 会话 | `006cfef2-0c35-42c0-bb6a-a299396a307f` |
+| 时间 | 13:50:41–14:08:58，约 18 分 17 秒 |
+| 采集 / 产出 / 未处理 | 1,007 / 1,007 / 0 |
+| 自动接受 | 1,007 件 |
+| 终止 | `completed / verifiedEnd / capturing` |
+| 覆盖 | `complete` |
+| 检查点 | 128 代，最终约 10.39 MB |
+| 证据 | 10,831 个文件，约 55.5 MB |
+| 守卫故障 | `positionLost`、`selectionMoved`、转盘不一致、`navigationMismatch` 均为 0 |
+
+六位置账目与修复前的 1,007 件全量扫描一致：
+
+| 位置 | 视口 | 访问 | 顶部 | 底部 | 完整 |
+|---|---:|---:|---|---|---|
+| 1 | 6 | 96 | 是 | 是 | 是 |
+| 2 | 7 | 114 | 是 | 是 | 是 |
+| 3 | 7 | 103 | 是 | 是 | 是 |
+| 4 | 15 | 229 | 是 | 是 | 是 |
+| 5 | 16 | 246 | 是 | 是 | 是 |
+| 6 | 14 | 219 | 是 | 是 | 是 |
+
+共 59 次已提交滚动：54 次 4 行、3 次 1 行、1 次 3 行、1 次 2 行。`record.Load` 复核结果：0 件 interrupted、覆盖未降级、1,007 件证据文件大小与 SHA-256 全部通过。CSV 为界面实际导出，JSON 由同一 `BuildUsableExport` 数据层生成；两者均为 1,007 件、`excludedCount: 0`、全部 `autoAccepted` / `passed`。
+
+同一次回归中还有一段被外部终止的会话 `f3ce9fdd-a6ec-4512-a593-694e425b8b6e`：完成位置 1（96 件）并进入位置 2 后，应用进程在 13:45:13 消失，检查点 26 保存了 197 件（196 produced、1 unprocessed），无终止记录、无崩溃输出。该次由代理后台终端回收造成，不是扫描逻辑故障；其守卫同样没有误报。
+
+**本轮未关闭：** 顶部确认仍有 3 个位置首次尝试 `lost`，每次约多等 5 秒；筛选重置是否生效仍是已接受的残余风险；历史页面的可视化重开未在本次自动化检查中点击复核。
+
 ## 证据
 
 ```text
 检查点（全量）:
 ~/Library/Application Support/Youkai Dev/sessions/2bbfd723-881d-492e-a28d-27058063014b/checkpoints/128.json
+
+检查点（修复后全量）:
+~/Library/Application Support/Youkai Dev/sessions/006cfef2-0c35-42c0-bb6a-a299396a307f/checkpoints/128.json
+
+检查点（修复后中途终止）:
+~/Library/Application Support/Youkai Dev/sessions/f3ce9fdd-a6ec-4512-a593-694e425b8b6e/checkpoints/26.json
 
 检查点（中途停止）:
 ~/Library/Application Support/Youkai Dev/sessions/dc9b0f9e-4232-45b7-aa74-29dc3e521bd7/checkpoints/7.json
@@ -208,6 +252,8 @@ observedScope.positions: 位置 1，1 视口，0 访问
 导出:
 ~/Downloads/youkai-2026-10-26-2bbfd723.youkai.json
 ~/Downloads/youkai-2026-10-26-2bbfd723.youkai.csv
+~/Downloads/youkai-2026-10-26-006cfef2.youkai.json
+~/Downloads/youkai-2026-10-26-006cfef2.youkai.csv
 ```
 
 ## 复现方式

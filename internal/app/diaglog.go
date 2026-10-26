@@ -20,6 +20,12 @@ import (
 // observation of missing on-disk logs).
 const diagnosticLogFileName = "youkai.log"
 
+// crashLogFileName is the additional Go runtime crash output file. It is
+// separate from the rotating diagnostic log because SetCrashOutput holds
+// a duplicated descriptor across the process lifetime; rotation must not
+// move the descriptor's target underneath a crash.
+const crashLogFileName = "youkai.crash.log"
+
 // Rotation limits of the diagnostic log. The architecture fixes rotation
 // by size — logs are diagnostic data, never user history, so no
 // time-based cleanup applies to them and the size bound is what keeps the
@@ -73,6 +79,38 @@ type DiagnosticLog struct {
 // keeps logging to stderr and reports the reason once.
 func OpenDiagnosticLog(dir string) (*DiagnosticLog, error) {
 	return openDiagnosticLog(dir, diagnosticLogMaxSize, diagnosticLogBackups)
+}
+
+// EnableCrashOutput configures the Go runtime to append unhandled panic
+// and fatal-error output to a dedicated file under dir, in addition to
+// stderr. An installed GUI process has no visible stderr and SIGSEGV in
+// cgo code may not produce a macOS crash report, so without this sink an
+// unexplained process disappearance has no application-side evidence.
+// It returns the crash file path for the startup log. The runtime
+// duplicates the descriptor, so the returned file is closed before this
+// function returns; the file remains append-only and is not rotated.
+func EnableCrashOutput(dir string) (string, error) {
+	if dir == "" || !filepath.IsAbs(dir) {
+		return "", fmt.Errorf("app: enable crash output: directory %q is not an absolute path", dir)
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", fmt.Errorf("app: enable crash output in %q: create directory: %w", dir, err)
+	}
+	path := filepath.Join(dir, crashLogFileName)
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
+	if err != nil {
+		return "", fmt.Errorf("app: enable crash output: open %s: %w", path, err)
+	}
+	if err := debug.SetCrashOutput(file, debug.CrashOptions{}); err != nil {
+		_ = file.Close()
+		return "", fmt.Errorf("app: enable crash output: %w", err)
+	}
+	// SetCrashOutput duplicated the descriptor; closing the local handle
+	// leaves the runtime's copy valid.
+	if err := file.Close(); err != nil {
+		return path, fmt.Errorf("app: enable crash output: close %s: %w", path, err)
+	}
+	return path, nil
 }
 
 // openDiagnosticLog parameterizes the rotation limits for the tests,

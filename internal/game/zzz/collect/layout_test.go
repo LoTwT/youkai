@@ -177,6 +177,7 @@ func TestMacCloudCalibrationRejectsUnorderedTiers(t *testing.T) {
 		{"avatar core bands overlap", func(c *collect.Calibration) { c.AvatarCoreMeanMin = c.AvatarAbsentCoreMeanMax }},
 		{"top management bands overlap", func(c *collect.Calibration) { c.TopLockedDimMin = c.TopUnlockedDimMax }},
 		{"scroll thresholds unordered", func(c *collect.Calibration) { c.ScrollDisplacedMax = c.ScrollStationaryMax }},
+		{"scroll shift margin negative", func(c *collect.Calibration) { c.ScrollShiftMargin = -1 }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -503,6 +503,13 @@ type inventoryRun struct {
 	// verified scroll maps keep their state; genuinely new positions
 	// start unvisited. It is cleared for every wheel position.
 	visited []bool
+	// selectionTracked reports that this position has resolved at least
+	// one target, so the next pre-click frame can be checked for an
+	// unexpected list shift through the selected cell. A click can make
+	// the client scroll the selected item into view after the detail
+	// settled; the selection border then moves or disappears, and the
+	// next click would silently act on a different grid position.
+	selectionTracked bool
 	// visitIndex counts admitted visits; the next admission takes
 	// visitIndex+1.
 	visitIndex int
@@ -593,6 +600,7 @@ func (run *inventoryRun) preparePosition(ctx context.Context, pos int) error {
 	run.position = pos
 	run.viewport = 0
 	run.visited = make([]bool, len(run.inv.Layout.Slots))
+	run.selectionTracked = false
 	run.allowInitial = true
 	run.positionVisits = 0
 	run.listEstablished = false
@@ -633,6 +641,11 @@ func (run *inventoryRun) collectPosition(ctx context.Context) error {
 		}
 		if !run.h.InputPermitted() {
 			return ctx.Err()
+		}
+		if !run.positionListVerdict(run.listMatch) {
+			return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
+				"collect: wheel position %d: the list no longer shows this position: %s",
+				run.position, run.listMatch.Evidence))
 		}
 		i := run.nextSlot()
 		if i < 0 {
@@ -933,15 +946,23 @@ func (run *inventoryRun) establishList(ctx context.Context) error {
 			return run.geometryChanged(out.frame)
 		default:
 			if attempt == 0 && ctx.Err() == nil {
-				log.Printf("youkai: collect: the warehouse list did not settle within %s; retrying once (last verdict %s): %s",
-					run.inv.actionBudget(), out.match.Page, out.match.Evidence)
+				log.Printf("youkai: collect: the warehouse list did not settle within %s; retrying once (last verdict %s, %s): %s",
+					run.inv.actionBudget(), out.match.Page, frameDiagnostic(out.frame), out.match.Evidence)
 				continue
 			}
 			return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
-				"collect: the warehouse list never showed stably within the budget (last verdict %s): %s",
-				out.match.Page, out.match.Evidence))
+				"collect: the warehouse list never showed stably within the budget (last verdict %s, %s): %s",
+				out.match.Page, frameDiagnostic(out.frame), out.match.Evidence))
 		}
 	}
+}
+
+// frameDiagnostic names the frame a failed wait rested on. The frame ID,
+// geometry, bounds and Reused flag are what distinguish a missing/reshaped
+// capture from a stable frame whose verdict fell between tiers.
+func frameDiagnostic(f platform.Frame) string {
+	return fmt.Sprintf("frame %d (geometry %d, image %v, content %v, reused %t)",
+		f.ID, f.Geometry, boundsOrNil(f.Image), f.Content, f.Reused)
 }
 
 // clickUntilPage dispatches one click and waits for the wanted page to
@@ -1264,6 +1285,11 @@ func (run *inventoryRun) confirmBottom(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+		if out.afterMatch.Page == PageWarehouse && !run.positionListVerdict(out.afterMatch) {
+			return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
+				"collect: wheel position %d: the bottom confirmation left the list at another wheel position: %s",
+				run.position, out.afterMatch.Evidence))
+		}
 		switch {
 		case out.stationary:
 			run.listMatch = out.afterMatch
@@ -1291,6 +1317,28 @@ func (run *inventoryRun) confirmBottom(ctx context.Context) error {
 // rather than papered over.
 func (run *inventoryRun) listVerdict(m PageMatch) bool {
 	return m.Page == PageWarehouse && m.List != nil && len(m.List.Occupied) == len(run.inv.Layout.Slots)
+}
+
+// positionListVerdict adds the wheel invariant to listVerdict: collection
+// is only allowed to act while the frame still shows the wheel position
+// this traversal prepared. A wheel change under the same page/geometry
+// would otherwise keep the old position's visited map and range.
+func (run *inventoryRun) positionListVerdict(m PageMatch) bool {
+	return run.listVerdict(m) && m.Wheel != nil && m.Wheel.Position == run.position
+}
+
+// selectionMoved reports an unexpected grid shift between the last
+// committed list frame and the fresh pre-click frame. It only applies
+// after this position resolved a target: the first target may legitimately
+// arrive with any selection. A previous frame with no selection (for
+// example after the selected item scrolled out of view) has no identity to
+// compare and stays unguarded rather than failing a valid walk.
+func (run *inventoryRun) selectionMoved(pre PageMatch) bool {
+	if !run.selectionTracked || pre.List == nil ||
+		run.listMatch.List == nil || run.listMatch.List.Selected < 0 {
+		return false
+	}
+	return pre.List.Selected != run.listMatch.List.Selected
 }
 
 // visitSlot processes one occupied, unvisited slot: acquire capacity,
@@ -1324,7 +1372,7 @@ func (run *inventoryRun) visitSlot(ctx context.Context, i int) error {
 		// made after the previous action, so it can seed this wait; fresh
 		// frames still have to confirm the current list before the click.
 		pre := run.awaitSettledSeeded(ctx, func(m PageMatch) bool {
-			return run.listVerdict(m) && m.List.Occupied[i]
+			return run.positionListVerdict(m) && m.List.Occupied[i]
 		}, run.preClickSeed(i))
 		switch pre.class {
 		case awaitStable:
@@ -1344,6 +1392,16 @@ func (run *inventoryRun) visitSlot(ctx context.Context, i int) error {
 			return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
 				"collect: the list never showed %s occupied and stable within the budget (last verdict %s)",
 				target, pre.match.Page))
+		}
+		// A click can make the client scroll the selected item into view
+		// after the detail settled. No input since the last admitted item
+		// should move the list, so a changed or vanished selection means
+		// the next click would address a different grid position.
+		if run.selectionMoved(pre.match) {
+			slot.Discard()
+			return scan.NewFault(CodePositionLost, fmt.Errorf(
+				"collect: the list selection moved from slot %d to %d between visits; the grid no longer maps to the visited positions (%s)",
+				run.listMatch.List.Selected, pre.match.List.Selected, pre.match.Evidence))
 		}
 		run.listMatch = pre.match
 		run.lastFrame = pre.frame
@@ -1882,6 +1940,7 @@ func (run *inventoryRun) admit(slot *scan.Slot, out detailOutcome, pre platform.
 	case QualityNotS:
 		run.positionVisits++
 		run.visited[i] = true
+		run.selectionTracked = true
 		run.listMatch = out.match
 		run.lastFrame = out.frame
 		run.lastDetailFrame = out.frame
@@ -1953,6 +2012,7 @@ func (run *inventoryRun) admit(slot *scan.Slot, out detailOutcome, pre platform.
 	run.listMatch = out.match
 	run.lastFrame = out.frame
 	run.lastDetailFrame = out.frame
+	run.selectionTracked = true
 	run.lastScrollEvidence = ""
 	return nil
 }
@@ -2149,6 +2209,11 @@ func (run *inventoryRun) scroll(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+		if out.afterMatch.Page == PageWarehouse && !run.positionListVerdict(out.afterMatch) {
+			return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
+				"collect: wheel position %d: the scroll left the list at another wheel position: %s",
+				run.position, out.afterMatch.Evidence))
+		}
 		switch {
 		case out.lost:
 			log.Printf("youkai: collect: position %d scroll %d -> %d lost: unsettled=%t after=%d rows=%d matches=%d evidence=%s",
@@ -2212,9 +2277,10 @@ func (run *inventoryRun) currentList(ctx context.Context) (platform.Frame, error
 		run.lastArrived = f.ArrivedAt
 	}
 	m := run.inv.matcher().Match(f)
-	if !run.listVerdict(m) {
+	if !run.positionListVerdict(m) {
 		return platform.Frame{}, scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
-			"collect: the current list frame (id %d) is not a verifiable warehouse list: %s", f.ID, m.Evidence))
+			"collect: the current list frame (id %d) is not a verifiable warehouse list at wheel position %d: %s",
+			f.ID, run.position, m.Evidence))
 	}
 	run.listMatch = m
 	run.lastFrame = f

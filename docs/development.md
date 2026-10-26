@@ -96,8 +96,8 @@ M2 平台会话集成后可用另一组开关接入真实游戏窗口做仅观�
 | --- | --- |
 | 正式版日志目录 | Windows `%LOCALAPPDATA%\Youkai\logs\`；macOS `~/Library/Logs/Youkai/`（`Paths.Logs`，见[架构第 5 节](specs/scanner-architecture.md#本地目录保留与清理)） |
 | 开发版日志目录 | 同规则按应用名单独命名（macOS 为 `~/Library/Logs/Youkai Dev/`），与正式版互不混写 |
-| 文件 | `youkai.log` 为当前文件，跨运行追加、不截断（重启不抹掉上一次运行的证据）；`youkai.log.1`…`youkai.log.3` 为轮转备份，`.1` 最新 |
-| 轮转与保留 | 单文件 1 MiB 上限、保留 3 份备份（`internal/app` 的常量，按实机证据调整），日志目录上限 4 个文件；日志只按大小轮转，属诊断数据，不按时间清理，与历史记录的删除分开（架构第 5 节） |
+| 文件 | `youkai.log` 为当前文件，跨运行追加、不截断（重启不抹掉上一次运行的证据）；`youkai.log.1`…`youkai.log.3` 为轮转备份，`.1` 最新；`youkai.crash.log` 为 Go 运行时 panic/fatal 输出的追加文件（`runtime/debug.SetCrashOutput`），不参与轮转，外部终止或 SIGKILL 不会被它捕获 |
+| 轮转与保留 | 单文件 1 MiB 上限、保留 3 份备份（`internal/app` 的常量，按实机证据调整），轮转文件上限 4 个；`youkai.crash.log` 另计且不轮转。日志只按大小轮转，属诊断数据，不按时间清理，与历史记录的删除分开（架构第 5 节） |
 
 - 打开时机在数据根占用之后：第二实例占用失败即退出，不会打开日志文件，因此两个进程不会交错或截断同一文件；代价是路径解析失败、占用失败等早期错误只在 stderr（开发期可见；安装版无从看到，但这类错误本身也意味着应用未能启动）。
 - 每次运行的第一行日志写明版本、构建提交（取 `debug.ReadBuildInfo` 的 VCS 信息，工作区有本地修改时加 `-modified` 后缀；构建未打标时为 `unknown`）、平台与数据根，用户反馈附带日志即可定位构建。发布与打包 workflow 保证这个提交号干净：对 `mygo.json` 的改写（版本/渠道前缀/移除 updates）经 `git update-index --skip-worktree` 对 Git 隐藏；VCS 戳记按 `git status` 判定，未跟踪文件同样算作修改，因此构建前的其余过程文件只进被 `.gitignore` 忽略的目录（fetchdeps 产物、VC++ DLL）或 runner 的临时目录（`RUNNER_TEMP`，VC++ 步骤的说明文件）——test-v0.0.1 至 test-v0.0.4 的 Windows 构建曾因该说明文件写在仓库根而携带 `-modified`，已修复。构建产物因此携带标签或提交的干净提交号，不带 `-modified`。

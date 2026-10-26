@@ -127,6 +127,11 @@ func main() {
 		defer logFile.Close()
 		log.SetOutput(logFile)
 	}
+	if crashPath, err := app.EnableCrashOutput(paths.Logs); err != nil {
+		log.Printf("youkai: crash output unavailable: %v", err)
+	} else {
+		log.Printf("youkai: Go crash output -> %s", crashPath)
+	}
 	// The first file line of every run identifies the build a user-attached
 	// log came from (T7's problem-report requirement): the version, the VCS
 	// revision the binary was built from when the build carries it, the

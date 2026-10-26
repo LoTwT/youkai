@@ -265,6 +265,7 @@ type Calibration struct {
 	ScrollStationaryMax      float64 // err0 < this: stationary (1.35–1.88)
 	ScrollDisplacedMax       float64 // best err ≤ this (6.78–9.67)
 	ScrollDisplacedMargin    float64 // and err0 − err ≥ this (≥3)
+	ScrollShiftMargin        float64 // competing whole-row alignments must be this much worse
 	ScrollRowTolerance       int     // |dy − k·RowPitch| ≤; also the retained-overlap margin
 	ScrollMaxRows            int     // k = 1..Rows-1
 	ScrollLostMin            float64 // err0 ≥ this with no alignment → Lost (13.3)
@@ -319,6 +320,7 @@ func MacCloudCalibration() Calibration {
 		ScrollStationaryMax:   4.0,
 		ScrollDisplacedMax:    10.0,
 		ScrollDisplacedMargin: 3.0,
+		ScrollShiftMargin:     2.0,
 		ScrollRowTolerance:    3,
 		ScrollMaxRows:         4,
 		ScrollLostMin:         10.0,
@@ -361,6 +363,8 @@ func (c Calibration) validate() error {
 		return errCalibration("scroll sampling")
 	case c.ScrollStationaryMax <= 0 || c.ScrollDisplacedMax <= c.ScrollStationaryMax || c.ScrollDisplacedMargin < 0:
 		return errCalibration("scroll thresholds")
+	case c.ScrollShiftMargin < 0:
+		return errCalibration("scroll shift uniqueness")
 	case c.ScrollRowTolerance < 0 || c.ScrollMaxRows < 1 || c.ScrollLostMin < c.ScrollDisplacedMax:
 		return errCalibration("scroll rows")
 	case c.ScrollbarBrightMin < 0 || c.ScrollbarTopStartMax < 0 || c.ScrollbarBottomEndMin < 0:
