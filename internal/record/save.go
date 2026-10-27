@@ -69,13 +69,14 @@ func generationNumber(name string) (int64, bool) {
 // SaveCheckpoint persists cp as a new checkpoint generation and returns
 // the revision it was saved under. The store stamps the envelope (format,
 // format version, saved revision — the caller's values, if any, are
-// ignored), validates the document and requires every indexed evidence
-// file to be on disk.
+// ignored), validates the document, requires every indexed evidence file
+// to be on disk and syncs any pending cited evidence before writing.
 //
 // Success is reported only after the generation file is completely
-// written, synced and closed. A failure at any step removes the partial
-// file, leaves every existing generation untouched and returns the error,
-// so the record keeps its last valid state and the caller can retry.
+// written, synced and closed. A failure at any step — including an
+// evidence sync — writes no generation, leaves every existing generation
+// untouched and returns the error, so the record keeps its last valid state
+// and the caller can retry; evidence that failed to sync stays pending.
 // Retention then keeps this generation and the previous valid one (see
 // prune).
 func (s *Store) SaveCheckpoint(recordID string, cp Checkpoint) (int64, error) {
@@ -118,7 +119,10 @@ func (s *Store) CheckpointBytes(recordID string, revision int64) (int64, error) 
 
 // writeGeneration stamps, validates and writes doc as the next
 // generation, whose revision is one above the highest generation file on
-// disk. Writing goes directly to the new file — os.Rename is not atomic
+// disk. Evidence the document cites is checked on disk and any pending
+// files it names are synced before the generation file is opened; a failure
+// at either step writes nothing and leaves the evidence pending for a
+// retry. Writing goes directly to the new file — os.Rename is not atomic
 // on Windows, so nothing is renamed over an existing generation and no
 // valid file is ever truncated in place; a retry after a failed write
 // simply produces the next revision. Callers hold mu.
@@ -138,6 +142,9 @@ func (s *Store) writeGeneration(recordID string, state *recordState, doc *Checkp
 		return 0, fmt.Errorf("record: save checkpoint of %q: %w", recordID, err)
 	}
 	if err := s.checkEvidenceOnDisk(recordID, doc.Evidence); err != nil {
+		return 0, fmt.Errorf("record: save checkpoint of %q: %w", recordID, err)
+	}
+	if err := s.syncEvidenceLocked(recordID, state, doc.Evidence); err != nil {
 		return 0, fmt.Errorf("record: save checkpoint of %q: %w", recordID, err)
 	}
 	data, err := json.MarshalIndent(doc, "", "  ")

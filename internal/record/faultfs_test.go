@@ -22,6 +22,9 @@ type faultFS struct {
 	rules []faultRule
 	// written counts the bytes each path received, for write budgets.
 	written map[string]int64
+	// synced counts the flush attempts each path saw, so tests can tell a
+	// deferred sync from one that never happened.
+	synced map[string]int
 }
 
 type faultOp uint8
@@ -30,6 +33,7 @@ const (
 	faultCreate faultOp = iota + 1
 	faultWrite
 	faultSync
+	faultSyncDir
 	faultClose
 	faultRemove
 	faultRemoveAll
@@ -99,6 +103,32 @@ func (f *faultFS) RemoveAll(path string) error {
 	return f.inner.RemoveAll(path)
 }
 
+func (f *faultFS) SyncDir(dir string) error {
+	f.recordSync(dir)
+	if r := f.rule(faultSyncDir, dir); r != nil {
+		return r.err
+	}
+	return f.inner.SyncDir(dir)
+}
+
+func (f *faultFS) recordSync(path string) {
+	if f.synced == nil {
+		f.synced = make(map[string]int)
+	}
+	f.synced[path]++
+}
+
+// syncCount reports how many flushes matched one path suffix.
+func (f *faultFS) syncCount(suffix string) int {
+	n := 0
+	for path, count := range f.synced {
+		if strings.HasSuffix(path, suffix) {
+			n += count
+		}
+	}
+	return n
+}
+
 func (f *faultFS) OpenFile(path string, flag int, perm fs.FileMode) (File, error) {
 	if flag&os.O_CREATE != 0 {
 		if r := f.rule(faultCreate, path); r != nil {
@@ -145,6 +175,7 @@ func (f *faultFile) Write(p []byte) (int, error) {
 }
 
 func (f *faultFile) Sync() error {
+	f.fs.recordSync(f.path)
 	if r := f.fs.rule(faultSync, f.path); r != nil {
 		return r.err
 	}
@@ -171,6 +202,7 @@ var (
 	errFaultWrite   = errors.New("fault: write failed")
 	errDiskFull     = errors.New("fault: no space left on device")
 	errFaultSync    = errors.New("fault: sync failed")
+	errFaultSyncDir = errors.New("fault: directory sync failed")
 	errFaultClose   = errors.New("fault: close failed")
 	errFaultRemove  = errors.New("fault: remove refused")
 	errFaultReadDir = errors.New("fault: read directory refused")
@@ -196,6 +228,25 @@ func readEvidenceFile(t *testing.T, root, id, name string) []byte {
 	return data
 }
 
+// checkpointWithEvidence returns a valid one-item checkpoint that cites
+// exactly the given evidence files.
+func checkpointWithEvidence(evs ...EvidenceFile) Checkpoint {
+	cp := Checkpoint{Session: testShell()}
+	cp.Session.CapturedCount = 1
+	ids := make([]string, 0, len(evs))
+	for _, ev := range evs {
+		ids = append(ids, ev.ID)
+	}
+	cp.Items = []ItemRecord{{
+		Sequence:    1,
+		Status:      StatusProduced,
+		Quality:     QualityNotEvaluated,
+		EvidenceIDs: ids,
+	}}
+	cp.Evidence = evs
+	return cp
+}
+
 func TestEvidenceWriteFailures(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -205,7 +256,6 @@ func TestEvidenceWriteFailures(t *testing.T) {
 		{"create refused", func(f *faultFS) { f.inject(faultCreate, "shot-1.png", errFaultCreate) }, errFaultCreate},
 		{"write truncated", func(f *faultFS) { f.injectShortWrite("shot-1.png", 2, errFaultWrite) }, errFaultWrite},
 		{"disk full at first block", func(f *faultFS) { f.injectShortWrite("shot-1.png", 0, errDiskFull) }, errDiskFull},
-		{"sync failed", func(f *faultFS) { f.inject(faultSync, "shot-1.png", errFaultSync) }, errFaultSync},
 		{"close failed", func(f *faultFS) { f.inject(faultClose, "shot-1.png", errFaultClose) }, errFaultClose},
 	}
 	for _, tc := range cases {
@@ -225,6 +275,106 @@ func TestEvidenceWriteFailures(t *testing.T) {
 			}
 			if after := readEvidenceFile(t, root, id, "shot-0.png"); !bytes.Equal(before, after) {
 				t.Error("earlier evidence file was damaged by the failed write")
+			}
+		})
+	}
+}
+
+// Evidence writes do not flush per image: the sync is deferred and done
+// once for the batch the next checkpoint cites, including the evidence
+// directory entry. A file already synced is not flushed again.
+func TestEvidenceSyncIsDeferredToCheckpoint(t *testing.T) {
+	st, ffs, _ := newFaultStore(t)
+	id := newRecord(t, st)
+	first := writeEvidence(t, st, id, "shot-1", []byte("first"))
+	second := writeEvidence(t, st, id, "shot-2", []byte("second"))
+	if got := ffs.syncCount(".png"); got != 0 {
+		t.Fatalf("WriteEvidence performed %d evidence sync(s), want none", got)
+	}
+
+	cp := checkpointWithEvidence(first, second)
+	if rev := saveCheckpoint(t, st, id, cp); rev != 1 {
+		t.Fatalf("first save revision = %d, want 1", rev)
+	}
+	if got := ffs.syncCount(".png"); got != 2 {
+		t.Errorf("evidence syncs = %d, want one per cited file (2)", got)
+	}
+	evidenceDir := filepath.Join("sessions", id, "evidence")
+	if got := ffs.syncCount(evidenceDir); got != 1 {
+		t.Errorf("evidence directory syncs = %d, want 1", got)
+	}
+
+	// The same files are already durable; citing them again must not pay
+	// for another flush.
+	if _, err := st.SaveCheckpoint(id, cp); err != nil {
+		t.Fatalf("second save: %v", err)
+	}
+	if got := ffs.syncCount(".png"); got != 2 {
+		t.Errorf("evidence syncs after resaving the same files = %d, want 2", got)
+	}
+}
+
+// A failed evidence sync fails the checkpoint before any generation is
+// written and keeps the file pending: every retry while the fault lasts
+// attempts the sync again, and the save succeeds normally once it clears.
+func TestEvidenceSyncFailureKeepsPendingForRetry(t *testing.T) {
+	cases := []struct {
+		name   string
+		inject func(*faultFS, string)
+		target func(string) string
+		want   error
+	}{
+		{
+			name:   "file sync",
+			inject: func(f *faultFS, _ string) { f.inject(faultSync, "shot-1.png", errFaultSync) },
+			target: func(string) string { return "shot-1.png" },
+			want:   errFaultSync,
+		},
+		{
+			name: "directory sync",
+			inject: func(f *faultFS, id string) {
+				f.inject(faultSyncDir, filepath.Join("sessions", id, "evidence"), errFaultSyncDir)
+			},
+			target: func(id string) string { return filepath.Join("sessions", id, "evidence") },
+			want:   errFaultSyncDir,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			st, ffs, root := newFaultStore(t)
+			id := newRecord(t, st)
+			base := Checkpoint{Session: testShell()}
+			base.Session.Coverage.Status = CoverageUnknown
+			saveCheckpoint(t, st, id, base)
+
+			ev := writeEvidence(t, st, id, "shot-1", []byte("image"))
+			cp := checkpointWithEvidence(ev)
+			tc.inject(ffs, id)
+			for attempt := 1; attempt <= 2; attempt++ {
+				if _, err := st.SaveCheckpoint(id, cp); !errors.Is(err, tc.want) {
+					t.Fatalf("save attempt %d = %v, want %v", attempt, err, tc.want)
+				}
+				if files := generationFiles(t, root, id); len(files) != 1 || files[0] != "1.json" {
+					t.Fatalf("attempt %d generations = %v, want the prior [1.json]", attempt, files)
+				}
+			}
+
+			ffs.clear()
+			rev, err := st.SaveCheckpoint(id, cp)
+			if err != nil {
+				t.Fatalf("retry after clearing the fault: %v", err)
+			}
+			if rev != 2 {
+				t.Errorf("retry revision = %d, want 2", rev)
+			}
+			if got := ffs.syncCount(tc.target(id)); got != 3 {
+				t.Errorf("sync attempts = %d, want 3 (two failures and the retry)", got)
+			}
+			if files := generationFiles(t, root, id); len(files) != 2 || files[0] != "1.json" || files[1] != "2.json" {
+				t.Errorf("generations after retry = %v, want [1.json 2.json]", files)
+			}
+			if rec := mustLoad(t, st, id); rec.Checkpoint.SavedRevision != 2 {
+				t.Errorf("loaded revision = %d, want 2", rec.Checkpoint.SavedRevision)
 			}
 		})
 	}

@@ -128,10 +128,11 @@ func newRecordDeliverer(store recordStore, shell record.SessionShell, onChange f
 }
 
 // Admitted persists one admitted observation: its evidence images are
-// written completely (synced and closed) first, then its item joins the
-// document in the queued state, then a batched checkpoint saves when
-// due. It implements the kernel's admission hook and runs on the
-// controller's producer goroutine.
+// written completely and closed first, then its item joins the document in
+// the queued state, then a batched checkpoint saves when due. The store
+// syncs the evidence cited by that checkpoint before writing it, so capture
+// no longer pays one device flush per image. It implements the kernel's
+// admission hook and runs on the controller's producer goroutine.
 //
 // An evidence failure does not withdraw the admission — the kernel
 // already assigned the sequence number, and the captured count must
@@ -213,11 +214,12 @@ func (d *recordDeliverer) Deliver(rec scan.Record) error {
 }
 
 // buildAdmittedLocked writes one observation's evidence and builds its
-// queued item. Evidence first: every image is completely written before
-// any checkpoint may reference it (the store enforces the write-once,
-// sync and close discipline). A failing line does not stop the others —
-// the evidence that survives is what the record keeps — and the first
-// error is returned. Callers hold mu.
+// queued item. Evidence first: every image is completely written and
+// closed before any checkpoint may reference it; the store enforces the
+// write-once discipline and syncs the cited files when that checkpoint is
+// saved. A failing line does not stop the others — the evidence that
+// survives is what the record keeps — and the first error is returned.
+// Callers hold mu.
 func (d *recordDeliverer) buildAdmittedLocked(seq scan.Seq, observation any) (record.ItemRecord, []record.EvidenceFile, error) {
 	item := record.ItemRecord{
 		Sequence: int64(seq),

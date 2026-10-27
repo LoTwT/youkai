@@ -22,15 +22,19 @@ var (
 
 // WriteEvidence persists one evidence image as evidence/<evidence-id>.png
 // and returns the descriptor a checkpoint must cite for it. The bytes are
-// completely written, synced and closed before the descriptor is
-// returned, so a checkpoint can only reference evidence that is fully on
-// disk; any failure along the way removes the partial file and reports
-// the error. The store persists the bytes as given — the .png layout
-// contract belongs to the capture stack that hands them over.
+// completely written and closed before the descriptor is returned; the
+// device flush is deferred until the next checkpoint that cites the file
+// (see SaveCheckpoint), so capture pays one batch of syncs instead of one
+// sync per image. Any write or close failure along the way removes the
+// partial file and reports the error. The store persists the bytes as
+// given — the .png layout contract belongs to the capture stack that hands
+// them over.
 //
 // An existing evidence file is never overwritten: ids are unique per
 // record, and a duplicate write fails with ErrEvidenceExists instead of
-// truncating the only copy.
+// truncating the only copy. A duplicate is still marked for syncing
+// before it may be cited, because a survivor left by an earlier failed
+// attempt or a previous process has no proof of durability in this one.
 func (s *Store) WriteEvidence(recordID, evidenceID string, image []byte) (EvidenceFile, error) {
 	if err := checkID("record", recordID); err != nil {
 		return EvidenceFile{}, err
@@ -46,10 +50,12 @@ func (s *Store) WriteEvidence(recordID, evidenceID string, image []byte) (Eviden
 	if err := s.ensureRecord(recordID); err != nil {
 		return EvidenceFile{}, err
 	}
+	state := s.state(recordID)
 	path := s.evidencePath(recordID, evidenceID)
 	file, err := s.fs.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 	if err != nil {
 		if errors.Is(err, fs.ErrExist) {
+			state.pendingEvidence[evidenceID] = struct{}{}
 			return EvidenceFile{}, fmt.Errorf("evidence %q of %q: %w", evidenceID, recordID, ErrEvidenceExists)
 		}
 		return EvidenceFile{}, fmt.Errorf("record: write evidence %q of %q: %w", evidenceID, recordID, err)
@@ -58,10 +64,6 @@ func (s *Store) WriteEvidence(recordID, evidenceID string, image []byte) (Eviden
 		err = s.discard(file, path, err)
 		return EvidenceFile{}, fmt.Errorf("record: write evidence %q of %q: %w", evidenceID, recordID, err)
 	}
-	if err := file.Sync(); err != nil {
-		err = s.discard(file, path, err)
-		return EvidenceFile{}, fmt.Errorf("record: write evidence %q of %q: sync: %w", evidenceID, recordID, err)
-	}
 	if err := file.Close(); err != nil {
 		// os.File.Close releases the handle even when it errors, so
 		// removePartial can delete the file; if that also fails, the
@@ -69,6 +71,7 @@ func (s *Store) WriteEvidence(recordID, evidenceID string, image []byte) (Eviden
 		err = s.removePartial(path, err)
 		return EvidenceFile{}, fmt.Errorf("record: write evidence %q of %q: close: %w", evidenceID, recordID, err)
 	}
+	state.pendingEvidence[evidenceID] = struct{}{}
 	sum := sha256.Sum256(image)
 	return EvidenceFile{
 		ID:         evidenceID,
@@ -77,12 +80,58 @@ func (s *Store) WriteEvidence(recordID, evidenceID string, image []byte) (Eviden
 	}, nil
 }
 
+// syncEvidenceLocked flushes the pending evidence cited by index before a
+// checkpoint generation may reference it. File contents are synced first,
+// then the evidence directory entry through SyncDir (a no-op where the
+// platform exposes no reliable directory flush), so a crash cannot leave a
+// checkpoint whose files are absent or incomplete. Only the cited pending
+// files are synced; the rest stay pending for a later checkpoint. A failure
+// leaves every cited file pending, so the caller's retry syncs them again
+// instead of assuming the failed attempt made them durable. Callers hold mu.
+func (s *Store) syncEvidenceLocked(recordID string, state *recordState, index []EvidenceFile) error {
+	var synced []string
+	for _, ev := range index {
+		if _, ok := state.pendingEvidence[ev.ID]; !ok {
+			continue
+		}
+		if err := s.syncEvidenceFile(recordID, ev.ID); err != nil {
+			return fmt.Errorf("sync evidence %q: %w", ev.ID, err)
+		}
+		synced = append(synced, ev.ID)
+	}
+	if len(synced) == 0 {
+		return nil
+	}
+	if err := s.fs.SyncDir(s.evidenceDir(recordID)); err != nil {
+		return fmt.Errorf("sync evidence directory: %w", err)
+	}
+	for _, id := range synced {
+		delete(state.pendingEvidence, id)
+	}
+	return nil
+}
+
+// syncEvidenceFile flushes one completed evidence file. It is reopened with
+// write access because Windows' FlushFileBuffers does not accept a
+// read-only handle; opening without O_TRUNC or O_CREATE leaves the bytes
+// and the write-once rule untouched. A close failure is reported as well:
+// the file is not confirmed durable until both steps succeed.
+func (s *Store) syncEvidenceFile(recordID, evidenceID string) error {
+	file, err := s.fs.OpenFile(s.evidencePath(recordID, evidenceID), os.O_WRONLY, 0)
+	if err != nil {
+		return err
+	}
+	return errors.Join(file.Sync(), file.Close())
+}
+
 // WriteResource persists one recheck resource as
 // resources/<resource-id>.json with the same write-once discipline as
-// evidence: complete write, sync and close before success, partial file
-// removed on failure, existing file never truncated. Resources hold the
-// session's recheck material (the capture profile and friends); they are
-// not referenced by checkpoints and not verified at recovery.
+// evidence: complete write and close before success, partial file removed
+// on failure, existing file never truncated. Because resources are not
+// cited by checkpoints, there is no later checkpoint save to defer to, so
+// the bytes are synced here. Resources hold the session's recheck material
+// (the capture profile and friends); they are not referenced by checkpoints
+// and not verified at recovery.
 func (s *Store) WriteResource(recordID, resourceID string, content []byte) error {
 	if err := checkID("record", recordID); err != nil {
 		return err
