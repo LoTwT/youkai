@@ -282,6 +282,10 @@ func (s *Store) deleteEvidenceLocked(recordID string) (EvidenceRemoval, error) {
 	if err != nil {
 		return removal, fmt.Errorf("record: delete screenshots of %q: %w", recordID, err)
 	}
+	// Every file the pending set could describe is gone, and the checkpoint
+	// just written references none of them. Keeping the ids would make a
+	// later save try to sync files that no longer exist.
+	clear(state.pendingEvidence)
 	// The measured total is the bytes actually reclaimed; when files
 	// vanished between the load and the scan they are simply not
 	// counted.
