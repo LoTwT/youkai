@@ -18,17 +18,17 @@
 
 ### 1.1 当前遍历是整次会话的单条控制流
 
-**[事实]** `Inventory` 一个实例服务一次会话，`Collect` 在生产者 goroutine 上调用 `run`；`run` 固定按 `for pos := 1; pos <= 6; pos++` 推进，每个位置先 `preparePosition`，再 `collectPosition`。任一准备或遍历错误都会记录当前位置的不完整账目并直接返回，后续位置不再尝试。[inventory.go](../../internal/game/zzz/collect/inventory.go#L594) [inventory.go](../../internal/game/zzz/collect/inventory.go#L678) [inventory.go](../../internal/game/zzz/collect/inventory.go#L730)
+**[事实]** `Inventory` 一个实例服务一次会话，`Collect` 在生产者 goroutine 上调用 `run`；`run` 固定按 `for pos := 1; pos <= 6; pos++` 推进，每个位置先 `preparePosition`，再 `collectPosition`。任一准备或遍历错误都会记录当前位置的不完整账目并直接返回，后续位置不再尝试。[inventory.go](../../internal/game/zzz/collect/inventory.go#L617) [inventory.go](../../internal/game/zzz/collect/inventory.go#L697) [inventory.go](../../internal/game/zzz/collect/inventory.go#L751)
 
-**[事实]** 每个位置开始时，`preparePosition` 重置 `viewport`、`visited`、`selectionTracked`、`allowInitial`、`positionVisits`、`listEstablished`、`topVerified`、`lastScrollRows`、`lastScrollEvidence`、`lastDetailFrame` 和耗时累计；位置之间没有继承导航状态。[inventory.go](../../internal/game/zzz/collect/inventory.go#L681)
+**[事实]** 每个位置开始时，`preparePosition` 重置 `viewport`、`visited`、`selectionTracked`、`allowInitial`、`positionVisits`、`listEstablished`、`topVerified`、`lastScrollRows`、`lastScrollEvidence`、`lastDetailFrame` 和耗时累计；位置之间没有继承导航状态。[inventory.go](../../internal/game/zzz/collect/inventory.go#L697)
 
-**[事实]** 位置级证据已经存在：`positionScope` 记录 `position`、`viewports`、`visits`、`topVerified`、`bottomVerified`、`complete`；`recordPosition` 追加一条位置账目；`updateCoverage` 只有六个位置全部 `complete`、顺序为 1–6 且排序已验证时才给出 `complete`，否则为 `partial` 或 `unknown`。[inventory.go](../../internal/game/zzz/collect/inventory.go#L277) [inventory.go](../../internal/game/zzz/collect/inventory.go#L295) [inventory.go](../../internal/game/zzz/collect/inventory.go#L432)
+**[事实]** 位置级证据已经存在：`positionScope` 记录 `position`、`viewports`、`visits`、`topVerified`、`bottomVerified`、`complete`；`recordPosition` 追加一条位置账目；`updateCoverage` 只有六个位置全部 `complete`、顺序为 1–6 且排序已验证时才给出 `complete`，否则为 `partial` 或 `unknown`。[inventory.go](../../internal/game/zzz/collect/inventory.go#L290) [inventory.go](../../internal/game/zzz/collect/inventory.go#L308) [inventory.go](../../internal/game/zzz/collect/inventory.go#L445)
 
-**[事实]** `positionLost` 有两个来源：滚动无法建立唯一位置对应（含未停稳、无对应、`applyTransition` 校验失败），以及点击前的选中格守卫发现选中框没有回到预期位置。前者见 [inventory.go](../../internal/game/zzz/collect/inventory.go#L2506)，后者见 [inventory.go](../../internal/game/zzz/collect/inventory.go#L1615)；两者共用 `CodePositionLost`。[traversal.go](../../internal/game/zzz/collect/traversal.go#L63)
+**[事实]** `positionLost` 有两个来源：滚动无法建立唯一位置对应（含未停稳、无对应、`applyTransition` 校验失败），以及点击前的选中格守卫发现选中框没有回到预期位置。前者见 [inventory.go](../../internal/game/zzz/collect/inventory.go#L2574)，后者见 [inventory.go](../../internal/game/zzz/collect/inventory.go#L1664)；两者共用 `CodePositionLost`。[traversal.go](../../internal/game/zzz/collect/traversal.go#L63)
 
-**[事实]** `navigationMismatch` 覆盖的是另一类问题：页面或列表不再可验证、转盘未切到目标位置、筛选未 `Active`、滚动未产生位移或结果不可判定等。它和 `positionLost` 共用停止路径，但语义不同。[inventory.go](../../internal/game/zzz/collect/inventory.go#L743) [inventory.go](../../internal/game/zzz/collect/inventory.go#L780) [inventory.go](../../internal/game/zzz/collect/inventory.go#L2499)
+**[事实]** `navigationMismatch` 覆盖的是另一类问题：页面或列表不再可验证、转盘未切到目标位置、筛选未 `Active`、滚动未产生位移或结果不可判定等。它和 `positionLost` 共用停止路径，但语义不同。[inventory.go](../../internal/game/zzz/collect/inventory.go#L761) [inventory.go](../../internal/game/zzz/collect/inventory.go#L793) [inventory.go](../../internal/game/zzz/collect/inventory.go#L2570)
 
-**[事实]** 接纳序号由内核在 `Slot.Admit` 时按会话单调分配；未接纳的尝试不消耗序号。`visitIndex` 只对 S 级接纳递增，非 S 跳过不消耗。`capturedCount` 等于已接纳观测数（含后来失败或未处理项）。[handle.go](../../internal/scan/handle.go#L78) [types.go](../../internal/scan/types.go#L16) [inventory.go](../../internal/game/zzz/collect/inventory.go#L2183) [checkpoint.go](../../internal/record/checkpoint.go#L243)
+**[事实]** 接纳序号由内核在 `Slot.Admit` 时按会话单调分配；未接纳的尝试不消耗序号。`visitIndex` 只对 S 级接纳递增，非 S 跳过不消耗。`capturedCount` 等于已接纳观测数（含后来失败或未处理项）。[handle.go](../../internal/scan/handle.go#L78) [types.go](../../internal/scan/types.go#L16) [inventory.go](../../internal/game/zzz/collect/inventory.go#L2234) [checkpoint.go](../../internal/record/checkpoint.go#L243)
 
 **[事实]** `observedScope` 在预检成功后先上报一次；`Controller.Collect` 只在 `trav.Collect` 返回后再次上报，遍历过程中不会把每个位置的账目持续送到记录层。[controller.go](../../internal/game/zzz/collect/controller.go#L245) [controller.go](../../internal/game/zzz/collect/controller.go#L262)
 
@@ -87,8 +87,9 @@ A1 与 A2 的共同点：重试仍发生在同一次 `Collect` 内，`session.id
 
 - 失败后重新执行该位置的完整准备（转盘、筛选、回顶），从顶部重新访问所有格位。
 - 第一次尝试已接纳的条目保留在记录中，但标记为“被后续尝试取代”；可用导出只取最新一次尝试。
+- 同一绝对格位可能被接纳两次，但两次观测必须有不同 `seq`；旧版本标记为被取代并排除出可用导出，同一格位最多只有一个最新可用版本。若最新版本失败或未处理，该格位没有可用版本，旧版本不得回退为可用。不得复用序号或删除旧观测。
 - 新尝试的接纳继续使用新的会话序号；`capturedCount` 仍按“所有已接纳观测”计数，因此旧尝试会进入 `excludedCount`。
-- 覆盖只认最新尝试；最新尝试完成时位置可 `complete`。
+- 覆盖只认最新尝试；最新尝试完成时，位置只有在 `expectedCount` 对账也成立时才能 `complete`。若可信 `expectedCount=N`，第一次尝试已接纳 K 件、A1 重走又接纳 M 件，则 `capturedCount=K+M`，通常大于 N（评审例子把 M=N 的情形写成 N+K）；v2 的“可信总数必须与采集数一致”不成立，只能 `partial`/`unknown`。详见 5.2。
 
 #### A2：回到顶部续走，继承已解决的绝对格位（推荐）
 
@@ -99,11 +100,11 @@ A1 与 A2 的共同点：重试仍发生在同一次 `Collect` 内，`session.id
 
 #### A3：只重试失败的动作
 
-现有代码已经在动作层做了有界重试：无效点击在预算内重发，滚动未位移时重试拖拽，选中框瞬时消失时在 action budget 内等待恢复。[inventory.go](../../internal/game/zzz/collect/inventory.go#L1559) [inventory.go](../../internal/game/zzz/collect/inventory.go#L2444) [inventory.go](../../internal/game/zzz/collect/inventory.go#L1615) 这一层应当保留，但它解决不了“已经无法建立位置对应”或“选中框持续不回”的情况；位置级重试是它的外层，不应在位置层再重复同一动作的重发。
+现有代码已经在动作层做了有界重试：无效点击在预算内重发，滚动未位移时重试拖拽，选中框瞬时消失时在 action budget 内等待恢复。[inventory.go](../../internal/game/zzz/collect/inventory.go#L1605) [inventory.go](../../internal/game/zzz/collect/inventory.go#L2497) [inventory.go](../../internal/game/zzz/collect/inventory.go#L1664) 这一层应当保留，但它解决不了“已经无法建立位置对应”或“选中框持续不回”的情况；位置级重试是它的外层，不应在位置层再重复同一动作的重发。
 
 ### 3.2 方案 B：新会话从指定位置开始，导出时合并
 
-- 开始扫描时允许选择起始位置（1–6），新会话只扫描该位置及之后的位置。**注意：** 现有 `observedScope.startPosition` 只是准备前观测到的转盘位置，不是扫描起点；外层循环固定从 1 开始，因此 B 需要新的起点参数和循环范围。[inventory.go](../../internal/game/zzz/collect/inventory.go#L594) [2026-10-26 报告](../reports/2026-10-26-macos-field-acceptance.md#选中格守卫的现场复现)
+- 开始扫描时允许选择起始位置（1–6），新会话只扫描该位置及之后的位置。**注意：** 现有 `observedScope.startPosition` 只是准备前观测到的转盘位置，不是扫描起点；外层循环固定从 1 开始，因此 B 需要新的起点参数和循环范围。[inventory.go](../../internal/game/zzz/collect/inventory.go#L617) [2026-10-26 报告](../reports/2026-10-26-macos-field-acceptance.md#选中格守卫的现场复现)
 - 每次扫描仍是独立记录；用户需要在新会话结束后把多次扫描的结果合并导出。
 - B1：不合并，分别导出多个文件。每个文件的 `coverage` 只覆盖自己的位置，不能单独声称整仓 `complete`。
 - B2：导出时合并为一份文件。需要新的组合标识、跨文件序号或来源引用、合并后的 `capturedCount`/`excludedCount` 语义、证据归属和清理规则。
@@ -116,8 +117,8 @@ A1 与 A2 的共同点：重试仍发生在同一次 `Collect` 内，`session.id
 
 | 方案 | 重试/续扫单位 | 已接纳条目 | 序号与计数 | 覆盖与合同 | 主要代价 | 结论 |
 | --- | --- | --- | --- | --- | --- | --- |
-| A1 | 当前位置整段重走 | 保留，标记被取代；导出只取最新尝试 | 新序号继续分配；`capturedCount` 含两次尝试，`excludedCount` 增大 | 最新尝试完成才 `complete`；内部记录需加尝试/取代字段 | 重复点击、OCR、证据和磁盘；旧尝试的部分成果不进入可用导出 | 可作为 A2 的退路；不作为首选 |
-| A2 | 当前位置回到顶部续走 | 保留且不重复接纳；绝对格位继承 | 序号、`capturedCount`、`excludedCount` 均不因重试增加 | 两次尝试的并集；内部 `observedScope` 增加尝试账目；公开 v2 形状不变；跳过前必须逐行像素核验 | 需要保留行图并逐行核对；依赖排序标签一致与列表顺序不变，方向不可见 | **推荐，但以逐行核验和排序一致为前提；否则退到 A1** |
+| A1 | 当前位置整段重走 | 保留，标记被取代；导出只取最新尝试；同格可有不同序号的多条观测 | 新序号继续分配；`capturedCount` 含两次尝试，`excludedCount` 增大 | 最新尝试完成才可能 `complete`；可信 `expectedCount` 与 `K+M`（K 首次、M 重走）冲突时 v2 只能 `partial`，需合同决策 | 重复点击、OCR、证据和磁盘；旧尝试的部分成果不进入可用导出 | 仅作证据不足时的数据救援退路；不能解决可信总数对账，不作为首选 |
+| A2 | 当前位置回到顶部续走 | 保留且不重复接纳；绝对格位继承 | 序号、`capturedCount`、`excludedCount` 均不因重试增加 | 两次尝试的并集；内部 `observedScope` 增加尝试账目；公开 v2 形状不变；跳过前必须逐行像素核验 | 需要保留行图并逐行核对；依赖排序标签一致与列表顺序不变，方向不可见 | **推荐，但以逐行核验和排序一致为前提；仅证据不足时退 A1，证明变化时停止** |
 | B1 | 新会话，从位置 P 开始 | 各记录独立保留 | 各记录独立编号与计数 | 每个文件只能 `partial`；无法跨文件声称 `complete` | 用户要管理多个文件；整仓结论缺失 | 只适合临时救急，不解决目标 |
 | B2 | 新会话 + 导出合并 | 各记录独立保留 | 需要全局序号或来源引用；合并会改变计数语义 | 需要 scan JSON v3、记录组、证据与清理规则 | 合同、界面、历史、清理和身份全面改动 | 不作为首版；会话级故障再评估 |
 | C | 同一记录多段采集 | 保留在一条记录 | 序号继续递增 | 覆盖账目合并；内部记录多段 | 重新打开已封存记录、多段生命周期和保存语义 | 可作后续方向，成本高于 A2 |
@@ -126,7 +127,7 @@ A1 与 A2 的共同点：重试仍发生在同一次 `Collect` 内，`session.id
 
 **[推断]**
 
-1. 它直接利用现有“位置 × 列表”状态机已经在维护的格位账目：`visited`、`applyTransition` 和 `positionScope` 本来就把格位当作遍历单位。[inventory.go](../../internal/game/zzz/collect/inventory.go#L500) [inventory.go](../../internal/game/zzz/collect/inventory.go#L2799)
+1. 它直接利用现有“位置 × 列表”状态机已经在维护的格位账目：`visited`、`applyTransition` 和 `positionScope` 本来就把格位当作遍历单位。[inventory.go](../../internal/game/zzz/collect/inventory.go#L509) [inventory.go](../../internal/game/zzz/collect/inventory.go#L2867)
 2. 它不制造重复观测。A1 需要用“被取代”概念解释两份同一件盘的记录；A2 在重走时直接跳过已解决格位，`capturedCount` 与可用导出的语义完全不变。
 3. 它不需要公共合同升版。重试账目只进入不透明的 `observedScope` 和捕获证据；JSON v2 的 `session`、`items`、`coverage`、`capturedCount`、`excludedCount` 都不改形状。
 4. 它的代价与故障位置相关：只需要滚动经过已解决的行，不必重新点击和重新识别。对 `e3bf895b` 这类后段失败，前提是选中格消失只是瞬时动画且修复后的复测能跨过；对 `16ef968e` 这类短步失败，前提是能通过重新标定或独立证据解决，而不是单纯延长预算。否则重试仍会安全失败（见 4.5、4.6）。
@@ -137,9 +138,9 @@ A1 与 A2 的共同点：重试仍发生在同一次 `Collect` 内，`session.id
 - **排序：** 扫描期间用户不改变排序、筛选或库存状态，这是 [T5 §3](t5-zzz-inventory-traversal.md#3-开始前必须核对的页面条件) 已经要求的既有前提。重试时面板排序标签必须仍为已验证状态，且与第一次尝试的同一标签一致；否则不进入跳过路径：标签未验证时停止或退 A1（覆盖只能 partial）；读到与第一次不同的标签时，按 T5 §3 视为可观察变化，必须停止，A1 也不能继续把该位置当作同一范围。T5 §3 还要求运行中观察到筛选、排序、库存数量或布局变化时停止并撤销整仓结论。T5 的探针不读取升降序方向，方向翻转仍是不可见的残余风险（见第 8 节）。
 - **列表：** 不能只用 `ListEvidence.Occupied` 证明“同一列表、同一顺序”。S 筛选后列表紧密排列，已覆盖行几乎全是占用；换位、排序方向翻转和置顶盘变化都可能不改变占用模式。A2 必须为每个已覆盖绝对行保留遮罩后的行图，重走时逐行做灰度核验；任何一行不匹配就停止，不跳过（见 4.2）。如果第一次尝试中存在重复行图，行图不能证明实例身份，这些行也不得跳过。
 - **去重边界：** 行图核验只证明“同一绝对格位现在是否仍显示第一次尝试的同一视觉内容”，用于决定能否继承已有接纳；它不是按内容判断两件盘相同，也不用于合并、删除或跨格位匹配观测。
-- **退路：** 如果上述排序前提或逐行核验不被接受，A2 不成立；应退到 A1（全量重走、旧尝试标记取代）或直接停止，而不是执行无核验的跳过。
+- **退路：** 如果只是**证据不足**（标签不可读、行图被淘汰、重复行图无法区分实例），可以停止或退到 A1（全量重走、旧尝试标记取代）并保持 `partial`；如果已经**证明列表或排序发生变化**（标签读到不同值、行图/占用核验显示内容或顺序变化），必须停止并阻止 `complete`，不能退 A1 继续把该位置当作同一范围。
 
-**评审后的推荐边界：** A2 仍是首选，但初稿把它描述成“只靠占用位和排序标签”的轻量方案是不成立的。逐行像素核验、排序标签一致和方向不可见风险接受，是 A2 的三个前提；任一项不能满足时，推荐改为 A1，而不是降低证据标准。若目标库存中存在大量行图相同的行，或无法在重走时证明行图能区分这些行，A2 的跳过条件经常不成立，首版应直接采用 A1，把 A2 留作后续优化。
+**评审后的推荐边界：** A2 仍是首选，但初稿把它描述成“只靠占用位和排序标签”的轻量方案是不成立的。逐行像素核验、排序标签一致和方向不可见风险接受，是 A2 的三个前提。任一项只能证明**证据不足**时，可以改为 A1 并保持 `partial`；一旦证明列表/排序发生变化，必须停止并阻止 `complete`，不能改为 A1 继续。若目标库存中存在大量行图相同的行，或无法在重走时证明行图能区分这些行，A2 的跳过条件经常不成立，首版应直接采用 A1，把 A2 留作后续优化。
 
 ## 4. 推荐方案 A2 的详细设计
 
@@ -149,8 +150,8 @@ A1 与 A2 的共同点：重试仍发生在同一次 `Collect` 内，`session.id
 
 | 故障码/来源 | 含义 | 位置级自动重试 | 条件与动作 |
 | --- | --- | --- | --- |
-| `positionLost`（滚动） | 列表移动但无法建立唯一对应、未停稳、无对应，或 `applyTransition` 校验失败 | 是，最多一次 | 页面仍是仓库、同一转盘位置、漏斗 `Active`、几何未变、输入许可仍开；排序标签必须已验证且与第一次尝试一致，否则不跳过（未验证：停止或 A1，覆盖 partial；不同：停止）。重走时逐行做遮罩行图核验 |
-| `positionLost`（选中格守卫） | 点击前选中框没有回到上一件，且 action budget 内持续缺失或移到别格 | 是，最多一次 | 先沿用现有的有界等待；仍失败后重新准备该位置并从顶部续走；A2 的排序标签一致与逐行核验前提同样适用；若消失是点击末行触发的客户端自动滚动，重试可能再次触发（见 4.6） |
+| `positionLost`（滚动） | 列表移动但无法建立唯一对应、未停稳、无对应，或 `applyTransition` 校验失败 | 是，最多一次 | 页面仍是仓库、同一转盘位置、漏斗 `Active`、几何未变、输入许可仍开；排序标签必须已验证且与第一次尝试一致，否则不跳过（未验证：停止或 A1，覆盖 partial；不同：停止）。重走时逐行做遮罩行图核验：行图证明变化时停止，重复行图/行图淘汰只属证据不足，可停止或 A1 |
+| `positionLost`（选中格守卫） | 点击前选中框没有回到上一件，且 action budget 内持续缺失或移到别格 | 是，最多一次 | 先沿用现有的有界等待；仍失败后重新准备该位置并从顶部续走；A2 的排序标签一致与逐行核验前提同样适用；若消失只跟随 slot 17 的特定点击，A1 会重放、A2 会跳过；若任意末行点击都触发，A2 也可能再次失败（见 4.6） |
 | `navigationMismatch` | 页面/列表不可验证、转盘未切换、筛选非 `Active`、滚动无位移/不可判定、列表已不在目标位置 | 否 | 现有动作级重试已经覆盖“点击/拖拽没生效”；剩下的属于范围、页面或筛选证据失效，原地重试只会重复同一失败。停止并保留已接纳结果 |
 | `focusLost` | 目标窗口失焦 | 否 | 输入许可已关闭；按架构第 5 节收尾，用户重新开始新会话 |
 | `targetHidden`、`targetAmbiguous`、`targetLost` | 遮挡、身份歧义或目标丢失 | 否 | 页面前提失效；停止并保留已接纳结果 |
@@ -166,18 +167,29 @@ A1 与 A2 的共同点：重试仍发生在同一次 `Collect` 内，`session.id
 
 **实现注意：** 不要按错误消息文本判断是否可重试。建议在 `collect` 内引入一个明确的“位置级可重试”分类（例如包装 `scan.FaultError` 的结构化标记），由产生故障的分支自己标注；`positionLost` 的两个来源都标为可重试，`navigationMismatch` 默认不可重试。这样不会因为后续文案变化误重试。[推断] `navigationMismatch` 目前是一个较宽的代码；如果后续实测表明某个瞬态分支（例如 `currentList` 的短时不可判定）是主要的一次性故障，应先拆分诊断码并取得证据，再决定是否纳入重试，而不是直接按字符串放行。
 
+**可观察变化与证据不足的分界（A1/A2 共用）：**
+
+- **可观察变化，必须停止并撤销/阻止整仓 `complete`：** 排序标签读到不同值；筛选 `Active` 丢失；转盘位置变化；占用或逐行核验证明列表内容/顺序变化；布局、几何或可信库存数量发生可观察变化。此时不能退 A1 继续，也不能把已变化的列表当作同一范围。
+- **证据不足，但未证明变化：** 标签不可读/未验证；行图被淘汰；第一次尝试存在重复行图、无法区分实例；`positionLost` 没有对应证据。此时可以不跳过并停止，或按明确规则退 A1 并保持 `partial`；不得声称 `complete`。
+
 ### 4.2 重试流程
 
 1. **在位置边界接住错误。** `run` 在 `collectPosition` 返回错误后判断分类；不可重试或预算用尽时，记录不完整位置并返回。可重试时先记录第一次尝试的失败，不把它当作会话终止原因。
-2. **先区分滚动失败是“未停稳”还是“停稳但无法对应”。** **[事实]** `awaitScroll` 已经会在 Lost 后继续观察到 `ScrollBudget` 结束，并对每个新帧重新与拖动前帧比较；`unsettled=true` 只在已经看到 candidate、但相对 candidate 未停稳时出现，`unsettled=false` 表示到预算结束仍没有 candidate（可能是停稳但无法建立对应）。[inventory.go](../../internal/game/zzz/collect/inventory.go#L2628) 对 `unsettled=false` 再等一个预算只是把等待时间加倍，不能据此假设会恢复；只有 `unsettled=true` 或新证据表明列表仍在移动时，才值得延长等待。底部短步还需要独立证据（例如滑块位移交叉验证）或重新标定；不能只因为滑块在底部就接受一个 `Lost`。
+2. **先区分滚动失败是“未停稳”还是“停稳但无法对应”。** **[事实]** `awaitScroll` 已经会在 Lost 后继续观察到 `ScrollBudget` 结束，并对每个新帧重新与拖动前帧比较；`unsettled=true` 只在已经看到 candidate、但相对 candidate 未停稳时出现，`unsettled=false` 表示到预算结束仍没有可提交的 candidate（可能是停稳但无法建立对应，也可能是后续新帧尚未到达）；它不证明列表已停稳，也不排除后续新帧恢复。[inventory.go](../../internal/game/zzz/collect/inventory.go#L2696) 因此，`unsettled=false` 时当前证据不支持默认延长预算；不要把“再等一个预算”当作默认修复。独立证据（例如滑块位移交叉验证）或重新标定仍是推荐方向；不能只因为滑块在底部就接受一个 `Lost`。
 3. **重新准备同一个位置。** 保留该位置已解决的绝对格位集合，重置本尝试的 `viewport`、`visited`、`selectionTracked`、`allowInitial`、`lastScrollRows`、`lastScrollEvidence`、`lastDetailFrame` 和耗时累计；如果第一次尝试已有已解决格位，重试开始时将 `selectionTracked` 设为 true，避免重试后的首次点击绕过选中格守卫。然后依次 `establishList`、`switchWheel(pos)`、`resetFilters`（一次面板访问：打开→重置→勾选 S→关闭→要求漏斗 `Active`，并记录本次排序标签）、`scrollToTop` 并取得稳定的顶部确认。转盘、漏斗、几何或输入许可不成立时中止重试，按该步的原始故障码停止；排序标签必须已验证且与第一次尝试同一标签，否则不进入跳过路径（未验证：停止或 A1，覆盖 partial；不同：停止）。
 4. **从顶部续走。** 每个新视口进入时，把已解决绝对格位标成 `visited`；`nextSlot` 只返回未解决且占用的格位。已解决格位不发点击，只允许滚动和列表证据观察。
-5. **逐行核对列表没有改变（不是只核对 Occupied）。** **[事实]** `nextSlot` 只根据 `visited` 与 `ListEvidence.Occupied` 选择下一个格位；S 筛选后列表紧密排列，已覆盖行几乎全为“占用”，占用模式对换位、排序方向翻转和当前装备置顶变化几乎没有区分力。[inventory.go](../../internal/game/zzz/collect/inventory.go#L1019) 第一次尝试必须为每个已覆盖绝对行保留一份遮罩后的行图（或视口帧加偏移）；重走时对每个要跳过的行做与 `MatchScroll` 同类的灰度比较，遮掉选中框（`Border`/`Bar`）和锁定/装备角标（`Management`/`Avatar`）区域；任一行超过标定阈值即停止，不跳过。占用位只作前置快速检查。行图核验只证明同一绝对格位的内容未变，不是按内容去重（见 4.3）；如果第一次尝试中有两行遮罩行图相同，行图无法在重排后区分它们，这些行不得按绝对行继承，必须停止或退到 A1。
+5. **逐行核对列表没有改变（不是只核对 Occupied）。** **[事实]** `nextSlot` 只根据 `visited` 与 `ListEvidence.Occupied` 选择下一个格位；S 筛选后列表紧密排列，已覆盖行几乎全为“占用”，占用模式对换位、排序方向翻转和当前装备置顶变化几乎没有区分力。[inventory.go](../../internal/game/zzz/collect/inventory.go#L1032) 第一次尝试必须为每个已覆盖绝对行保留一份遮罩后的行图（或视口帧加偏移）；重走时对每个要跳过的行做与 `MatchScroll` 同类的灰度比较，遮掉选中框（`Border`/`Bar`）和锁定/装备角标（`Management`/`Avatar`）区域；任一行超过标定阈值即停止，不跳过。占用位只作前置快速检查。行图核验只证明同一绝对格位的内容未变，不是按内容去重（见 4.3）；如果第一次尝试中有两行遮罩行图相同，行图无法在重排后区分它们，这些行不得按绝对行继承，必须停止或退到 A1。
 6. **继续接纳。** 新格位的点击、详情归属、S 判定、`seq`、`visitIndex`、证据与第一次尝试完全相同；不允许因为“这是重试”而降低稳定帧、详情归属或 S 徽章的要求，也不使用 `initialVerified`（见 4.3 的旧详情风险）。
 7. **结束该位置。** 取得底部独立证据后，把该位置记为完成；覆盖取两次尝试的并集。若重试再次失败，记录第二次尝试的不完整账目，停止会话（默认，见开放问题 3）。
 8. **记录与上报。** 每次尝试结束都更新 `observedScope` 的位置账目；至少在本位置第一次失败后、开始重试前，把账目送到记录层，避免重试过程中崩溃丢失“曾经失败”的事实。
 
-**绝对行状态（实现说明）：** 当前 `inventoryRun` 只有 `viewport` 计数，没有绝对行偏移。[inventory.go](../../internal/game/zzz/collect/inventory.go#L500) A2 需要新增 `rowBase`：每次该位置的顶部确认后置 0；只有 `applyTransition` 完成全部校验并提交 `Rows` 后，才执行 `rowBase += Rows`。也就是说，`rowBase` 是从顶部起所有已提交滚动的 `Rows` 累计值，绝对行 = `rowBase + row`（`row` 为当前视口内行）。一次 `Lost`、`unsettled`、ambiguous 或被 `applyTransition` 拒绝的滚动都不更新 `rowBase`，也不把 after 帧映射成新的绝对行；因此失败前最后一个已映射视口仍是 `rowBase..rowBase+Rows-1`，重试从顶部重新开始，只继承这些已映射行。不能把 `viewport` 计数当作绝对行。
+**绝对行状态（实现说明）：** 当前 `inventoryRun` 只有 `viewport` 计数，没有绝对行偏移。[inventory.go](../../internal/game/zzz/collect/inventory.go#L509) A2 需要区分两个不同的行数：`scrollRows` 是一次已提交滚动的位移行数（`ScrollMatch.Rows`，当前约束为 1..`Layout.Rows-1`），`viewportRows` 是一个视口可见的网格行数（`Layout.Rows`，当前为 5）。[inventory.go](../../internal/game/zzz/collect/inventory.go#L2867) [layout.go](../../internal/game/zzz/collect/layout.go#L123)
+
+- 每次该位置的顶部确认后 `rowBase = 0`。
+- 只有 `applyTransition` 完成全部校验并提交 `scrollRows` 后，才执行 `rowBase += scrollRows`；不能用 `scrollRows` 推导视口行数，也不能用视口行数累加 `rowBase`。
+- 当前视口的绝对行范围是 `rowBase .. rowBase + viewportRows - 1`，绝对行 = `rowBase + row`（`row` 为当前视口内行）。
+- 重试从顶部开始时只继承该范围内、第一次尝试已经解决的格位；范围外的行（顶部之前的负数行、视口尾部之外的行）不继承。尾部视口有空格时，只处理其中实际占用/已解决的格位。
+- 一次 `Lost`、`unsettled`、ambiguous 或被 `applyTransition` 拒绝的滚动都不更新 `rowBase`，也不把 after 帧映射成新的绝对行；因此失败前最后一个已映射视口的范围仍是旧 `rowBase .. 旧 rowBase + viewportRows - 1`，不是用 `scrollRows` 当视口高度。不能把 `viewport` 计数当作绝对行。
 
 ### 4.3 已接纳条目如何处理
 
@@ -194,10 +206,10 @@ A1 与 A2 的共同点：重试仍发生在同一次 `Collect` 内，`session.id
 ### 4.4 序号、`capturedCount` 与位置账目
 
 - `seq` 仍由内核按会话单调分配；重试只对**新解决**的格位调用 `Admit`，已解决格位不消耗序号，不产生重复序号。[handle.go](../../internal/scan/handle.go#L91)
-- `visitIndex` 仍只在 S 级接纳时递增；重试跳过的已接纳件保留原 `visitIndex`，新接纳继续递增。[inventory.go](../../internal/game/zzz/collect/inventory.go#L2216)
+- `visitIndex` 仍只在 S 级接纳时递增；重试跳过的已接纳件保留原 `visitIndex`，新接纳继续递增。[inventory.go](../../internal/game/zzz/collect/inventory.go#L2267)
 - `capturedCount` 仍等于条目记录数；A2 不改变这个定义，也不把跳过的格位算成新捕获。[deliverer.go](../../internal/app/deliverer.go#L391)
 - `excludedCount` 仍等于 `capturedCount - items.length`；A2 不会因为重试新增被排除项，也不会为同一格位新增第二条条目。此前已接纳的条目仍在 `items` 中，除非它们自身不可用。[export.go](../../internal/app/export.go#L251)
-- 位置账目建议改为**每个位置一条**，内部带尝试数组；不能用“每次尝试追加一条 position 记录”的方式，因为现有 `updateCoverage` 要求六条记录顺序为 1–6。[inventory.go](../../internal/game/zzz/collect/inventory.go#L446)
+- 位置账目建议改为**每个位置一条**，内部带尝试数组；不能用“每次尝试追加一条 position 记录”的方式，因为现有 `updateCoverage` 要求六条记录顺序为 1–6。[inventory.go](../../internal/game/zzz/collect/inventory.go#L455)
 
 示意（数字仅说明形状，不是实测值；下面只展示位置 6，`coverage: complete` 以其余五个位置也完成为前提）：
 
@@ -247,9 +259,9 @@ A1 与 A2 的共同点：重试仍发生在同一次 `Collect` 内，`session.id
 
 ### 4.5 底部短步：重试不一定能解决 `16ef968e`
 
-**[事实]** 当前 `MatchScroll` 只有在最佳整行位移误差不超过 10、且比零位移至少低 3 时才判 `Displaced`；否则可能判 `Lost`。`Lost` 结果不携带 `Rows`/`Matches`，`applyTransition` 无法据此推进。[pixelmatch.go](../../internal/game/zzz/collect/pixelmatch.go#L480) [maccloud.go](../../internal/game/zzz/collect/maccloud.go#L321) [inventory.go](../../internal/game/zzz/collect/inventory.go#L2799)
+**[事实]** 当前 `MatchScroll` 只有在最佳整行位移误差不超过 10、且比零位移至少低 3 时才判 `Displaced`；否则可能判 `Lost`。`Lost` 结果不携带 `Rows`/`Matches`，`applyTransition` 无法据此推进。[pixelmatch.go](../../internal/game/zzz/collect/pixelmatch.go#L480) [maccloud.go](../../internal/game/zzz/collect/maccloud.go#L321) [inventory.go](../../internal/game/zzz/collect/inventory.go#L2867)
 
-**[事实]** `awaitScroll` 不是“只观察一次就判 Lost”：它在 Lost 后继续观察到 `ScrollBudget` 结束，并对每个新帧重新与拖动前帧比较；`unsettled=true` 只在已经出现 candidate、但相对 candidate 未停稳时置位，`unsettled=false` 表示到预算结束仍没有 candidate（可能是停稳但无法建立对应）。[inventory.go](../../internal/game/zzz/collect/inventory.go#L2628) 因此“再观察一个 ScrollBudget”只是把预算加倍，不是新增一种证据。
+**[事实]** `awaitScroll` 不是“只观察一次就判 Lost”：它在 Lost 后继续观察到 `ScrollBudget` 结束，并对每个新帧重新与拖动前帧比较；`unsettled=true` 只在已经出现 candidate、但相对 candidate 未停稳时置位，`unsettled=false` 表示到预算结束仍没有 candidate（可能是停稳但无法建立对应）。[inventory.go](../../internal/game/zzz/collect/inventory.go#L2696) 因此，在没有新帧的固定 fake 中，“再观察一个 ScrollBudget”只是把预算加倍；实时流可能随后产生新帧，不能据此断言一定无效，但也不能把它当作默认修复。
 
 **[用户输入/评审提供]** 会话 `16ef968e` 的失败日志为：
 
@@ -259,12 +271,14 @@ evidence=frames 5959 → 6324: undecided (zero-displacement error 18.58, best sh
 drag_ms=1425 settle_ms=5079
 ```
 
-**[推断]** 这次滚动已经用满了 5 秒的默认 `ScrollBudget`（`settle_ms=5079`），仍然没有 candidate、`rows=0`、`matches=0`；`unsettled=false`。**在这次证据下，延长预算无效**：没有理由假设同一个 after 帧会在再等一个预算后变成可对应，它只会延长等待。3 行短步的误差 11.20 只比 10.0 略高，可能是列表尚未完全停稳或短步吸附造成的测量偏差，也可能在同一位置的第二次遍历中重复出现。若重复出现，A2 的位置重试会在同一底部再次失败，不能解决该实例。
+（该文本是评审提供的 `16ef968e` 现场日志，早于本轮 main 合入的 `row candidates` 诊断增强；新构建会在同类证据后追加 `row candidates +N=…`，不改变本次结论。）
+
+**[推断]** 这次滚动已经用满了 5 秒的默认 `ScrollBudget`（`settle_ms=5079`），仍然没有 candidate、`rows=0`、`matches=0`；`unsettled=false`。**这次失败在预算内没有恢复；当前证据不支持把延长预算作为默认修复**：在固定 fake 没有新帧时，再等一个预算不会改变结论；实时流可能有后续新帧，因此不能把“不会恢复”写成绝对结论。3 行短步的误差 11.20 只比 10.0 略高，可能是列表尚未完全停稳或短步吸附造成的测量偏差，也可能在同一位置的第二次遍历中重复出现。若重复出现，A2 的位置重试会在同一底部再次失败，不能解决该实例。
 
 可选做法（按证据强度排序）：
 
 1. **重新标定或增加独立证据（真正可能改变结论）。** 例如把滑块位移作为独立的交叉验证，或重新标定 `ScrollDisplacedMax` / 短步阈值；任何新规则都必须用新样本单独验收，不能把 10.0 静默改成 12.0，也不能仅凭“滑块在底部”接受 `Lost`。
-2. **只在 `unsettled=true` 时考虑延长等待。** 如果列表确实还在移动，现有预算可能不足；这需要新的 `unsettled` 样本和更长的预算标定，而不是默认加倍。
+2. **只在后续帧证明列表仍在移动时考虑延长等待。** `unsettled=true` 是一种提示；实时流也可能在 `unsettled=false` 之后才产生新帧。任何延长都需要新的现场样本和预算标定，而不是默认加倍；固定 fake 不变不能推广到实时流。
 3. **保持现状，重试失败就停止。** 这样不会削弱既有证据，但 `16ef968e` 这类确定性短步仍会留下 `partial`。
 
 本草案不推荐把“再观察一个 ScrollBudget”作为 `16ef968e` 的修复；第 1 项作为开放问题，不纳入 A2 的最小实现。
@@ -273,13 +287,14 @@ drag_ms=1425 settle_ms=5079
 
 **[事实]** `e3bf895b` 停止时还没有 `awaitSelectionReturned` 的有界等待；该修复是在这次现场之后加入的，修复后的真机复测尚未执行。[2026-10-26 报告](../reports/2026-10-26-macos-field-acceptance.md#选中格守卫的现场复现)
 
-**[推断]** 如果选中框消失是点击末行触发客户端自动滚动或重排，重试从顶部再走到同一行、再点同一格，可能再次触发同样的反应；即使 `awaitSelectionReturned` 能吸收瞬时消失，也不保证能吸收一个由点击本身稳定触发的位移。位置重试在这种情况下会在同一处再次失败。
+**[推断]** 现场停止点在点击 slot 18 之前，slot 17（seq 886）已经接纳。若选中框消失是由 **slot 17 这次特定点击**触发的客户端自动滚动/重排，A1 重走会再次点击 slot 17，可能重放同一反应；A2 会跳过已接纳的 slot 17，反而可能避开它。只有进一步证实**任意末行点击（包括 A2 首次点击 slot 18）**都会触发同样反应，才能推断 A2 也可能在同一位置重复失败。不能把“再点同一格”写成现有现场已经证明的事实。
 
 因此：
 
 - 先做 `awaitSelectionReturned` 修复后的真机复测，再判断 A2 对 `e3bf895b` 是否还有价值（见开放问题 11）。
-- 若消失是确定性的末行行为，A2 不是修复手段；应单独研究“避开末行点击/改用其他推进动作”。A1 只改变重复条目的处理与导出口径，同样不解决确定性行为，也不能替代位置证据。
-- 若消失只是单帧动画，现有有界等待或位置重试可能足够；这需要现场日志证明，而不能用本实例直接推断。
+- 复测要区分：反应只跟随 slot 17 的特定点击，还是任何末行点击都会触发。前者 A1 会重放、A2 会跳过；后者 A2/A1 都可能再次失败，需要单独研究“避开末行点击/改用其他推进动作”。
+- 若消失只是单帧动画，现有有界等待或位置重试可能足够；这需要现场日志证明，不能用本实例直接推断。
+- 无论哪种情况，都不得跳过位置证据或把失败当成成功。
 
 ### 4.7 重试预算与终止
 
@@ -300,9 +315,9 @@ drag_ms=1425 settle_ms=5079
 
 ### 5.1 记录与检查点
 
-- **内部 `observedScope` 扩展。[推断，需实现]** 增加每位置的 `attempts[]`、`recovered`，并保持每个位置一条记录；`recordPosition` 从“追加”改为“按 position 更新”，`updateCoverage` 仍要求位置 1–6 各一条。[inventory.go](../../internal/game/zzz/collect/inventory.go#L436)
-- **逐行核验状态。[推断，需实现]** 为每个位置保留 `rowBase`、已解决绝对行集合和遮罩后的行图。第一次尝试进入每个稳定视口时，为其中每个已覆盖/占用的绝对行保存行图，滚动后仍可比较。行图只在本次会话内存中保留，按位置有界（一个位置最多几十行），不写入检查点或公共 JSON；崩溃后不续扫，因此不要求跨进程恢复。行图用于 4.2 的逐行灰度核验，任何不匹配即停止，不跳过；如果行图因内存上限被淘汰，对应行也不得跳过，必须停止或退 A1。
-- **捕获证据增加尝试号。[推断，可选]** 在 `collect.Observation` 中增加 `attempt`（1 起），让同一位置两次遍历的 `viewportIndex` 不混淆。该字段位于不透明的 `capture` JSON 中，记录层不解析。[inventory.go](../../internal/game/zzz/collect/inventory.go#L174) [gameobservation.go](../../internal/app/gameobservation.go#L42)
+- **内部 `observedScope` 扩展。[推断，需实现]** 增加每位置的 `attempts[]`、`recovered`，并保持每个位置一条记录；`recordPosition` 从“追加”改为“按 position 更新”，`updateCoverage` 仍要求位置 1–6 各一条。[inventory.go](../../internal/game/zzz/collect/inventory.go#L445)
+- **逐行核验状态。[推断，需实现]** 为每个位置保留 `rowBase`、`rowBase..rowBase+viewportRows-1` 范围内的已解决行集合和遮罩后的行图。第一次尝试进入每个稳定视口时，为其中每个已覆盖/占用的绝对行保存行图，滚动后仍可比较。行图只在本次会话内存中保留，按位置有界（一个位置最多几十行），不写入检查点或公共 JSON；崩溃后不续扫，因此不要求跨进程恢复。行图用于 4.2 的逐行灰度核验，任何不匹配即停止，不跳过；如果行图因内存上限被淘汰，对应行也不得跳过，必须停止或退 A1。
+- **捕获证据增加尝试号。[推断，可选]** 在 `collect.Observation` 中增加 `attempt`（1 起），让同一位置两次遍历的 `viewportIndex` 不混淆。该字段位于不透明的 `capture` JSON 中，记录层不解析。[inventory.go](../../internal/game/zzz/collect/inventory.go#L183) [gameobservation.go](../../internal/app/gameobservation.go#L42)
 - **检查点信封版本。[推断]** 如果新增字段只放在不透明的 `observedScope` 和 `capture` 中，`record.SessionShell` 的结构不变，`record.FormatVersion` 不必升级；`validate` 只检查 `observedScope` 是 JSON 文档。[checkpoint.go](../../internal/record/checkpoint.go#L15) [checkpoint.go](../../internal/record/checkpoint.go#L305) 如果改为在 `ItemRecord` 或 `SessionShell` 上增加 `attempt`/`superseded` 字段，则必须把内部检查点格式升到 v3，并让新读取端继续能读 v2 代次。
 - **遍历中持久化。[事实与推断]** 当前 `observedScope` 只在预检后和 `Collect` 返回后上报，重试中的位置账目不会在中途落盘。[controller.go](../../internal/game/zzz/collect/controller.go#L262) 建议在“第一次尝试失败、决定重试”时推送一次 scope；否则进程在重试中崩溃时，记录只能看到预检范围或最终不完整状态，虽然不会错误升级覆盖，但会丢失“刚才失败过”的可审计事实。
 - **恢复。[事实]** 崩溃恢复仍只加载最近有效检查点，排队/运行条目转为中断未处理，已存储的 `complete` 降为 `partial`，不自动续扫。[load.go](../../internal/record/load.go#L21) A2 是会话内重试；崩溃后仍按现有恢复语义处理，不新增断点续扫。
@@ -318,11 +333,11 @@ drag_ms=1425 settle_ms=5079
 - `coverage.status` 仍只由六位置账目和排序证据推出；成功重试的位置只有在逐行核验和排序一致前提下才可以 `complete`，重试失败则为 `partial`/`unknown`。
 - v2 的 `coverage` 只有 `status` 和 `expectedCount`；位置尝试账目留在内部 `observedScope`，不进入公共文件。如果产品要求导出文件披露“曾重试”，必须在 v3 增加字段，不能塞进 v2。
 
-**如果选择 A1：** 需要把“被取代的尝试”排除出可用导出；`excludedCount` 会包含这些条目。v2 的字段形状仍可容纳，因为 `excludedCount` 的语义是“本文件排除的已采集记录数”，但界面和文档必须明确说明重试前的条目不计入可用数据；如果还要逐件标注“被取代”，则需要内部字段或 v3。[JSON v2 §2](scan-json-format.md#2-公共外壳)
+**如果选择 A1：** 需要把“被取代的尝试”排除出可用导出；`excludedCount` 会包含这些条目，界面和文档必须明确说明重试前的条目不计入可用数据。**但 v2 的总数对账没有闭合：** 若可信 `expectedCount=N`，第一次尝试已接纳 K 件、A1 重走又接纳 M 件，`capturedCount=K+M`（旧尝试仍计入已接纳观测），通常大于 N（评审例子把 M=N 的情形写成 N+K）；v2 要求可信总数与采集数一致，否则只能 `partial`/`unknown`。`excludedCount` 只能解释可用条目的排除，不能消除 `capturedCount` 与 `expectedCount` 的冲突。若 `expectedCount` 为 `null`，这条总数冲突不存在，但 A1 仍受位置、排序和证据约束。因此 A1 在已知可信总数时只能作为部分结果救援；要声称整仓 `complete`，必须先由用户决定合同方案（例如 v3 增加“有效/被取代”计数，或改变 `capturedCount` 语义），不能现在声称“字段形状可容纳已解决”。[JSON v2 §2](scan-json-format.md#2-公共外壳)
 
 **如果选择 B2：** 合并多次扫描会改变 `session`、`sequence`、`capturedCount`、`excludedCount` 和证据归属，属于新的公共合同；应按 v3 处理，不能复用 v2 的单会话语义。[JSON v2 §2](scan-json-format.md#2-公共外壳) [JSON v2 校验](scan-json-format.md#6-示例与校验边界)
 
-**结论：** 推荐 A2 时不需要 scan JSON v2 升版；需要升版的是 A1 的逐件取代标注（如果要做）和 B2 的跨会话合并。
+**结论：** 推荐 A2 时不需要 scan JSON v2 升版。A1 的逐件取代标注和“可信 `expectedCount` 与 `capturedCount` 对账”都需要用户决定：在 v2 下只能接受 `partial`/`unknown`；若要 A1 在已知总数时声称 `complete`，需要 v3 或明确的语义变更，不能擅自修改 v2。B2 的跨会话合并需要 v3。
 
 | 变更 | 版本影响 | 说明 |
 | --- | --- | --- |
@@ -330,16 +345,18 @@ drag_ms=1425 settle_ms=5079
 | `capture.attempt`（可选） | 不升内部检查点信封，不升 scan JSON | 位于不透明的 `observed` 载荷；导出不读取 |
 | 行图 / `rowBase` / 已解决绝对行集合 | 不升内部检查点信封，不升 scan JSON | 仅本次会话内存；不持久化，不进入公共 JSON |
 | `ItemRecord.attempt` / `superseded` | 内部检查点 v3 | 记录结构新增字段，旧代次仍由新读取端兼容 |
+| A1 与可信 `expectedCount` 对账 | scan JSON v3 或保持 partial | 旧尝试仍计入 `capturedCount`；`capturedCount=K+M` 与 `expectedCount=N` 冲突，v2 不能声称 complete |
 | 公共 JSON 披露重试 | scan JSON v3 | v2 拒绝未定义字段；不能偷偷塞入 |
 | 多次扫描合并导出 | scan JSON v3 | `session`、序号、计数和证据归属都改变 |
 
 ### 5.3 覆盖结论
 
-- `coverage: complete` 仍要求六个位置全部完成、顺序正确、每个位置的最终尝试取得顶部与底部证据、所有已打开面板的排序标签验证通过。[inventory.go](../../internal/game/zzz/collect/inventory.go#L442)
+- `coverage: complete` 仍要求六个位置全部完成、顺序正确、每个位置的最终尝试取得顶部与底部证据、所有已打开面板的排序标签验证通过。[inventory.go](../../internal/game/zzz/collect/inventory.go#L455)
 - A2 的“位置完成”定义：最终尝试取得顶部与底部独立证据，且**最终尝试中每个视口的每个占用格位**要么在本次尝试访问/解决，要么在此前尝试的同一绝对格位已解决并逐行核验通过。重试不是一次“未解释的跳跃”：`attempts` 记录失败位置、重新建立顶部和继承集合；这些记录不完整时不能 `complete`。
 - A2 的跳过还要求重试时排序标签已验证且与第一次尝试的同一标签一致；未验证时不跳过（停止或 A1，覆盖 partial），读到不同标签时停止。排序方向不可见是残余风险，不能把 `sort:"verified"` 当作方向证明（见第 8 节）。
 - 重试成功不会把 `expectedCount` 变成已知；它仍只在有可信同范围总数时填写。
-- 重试失败、崩溃恢复、排序标签未验证或不一致、转场不完整或逐行核验失败都必须阻止 `complete`，不能因为“大部分位置已完成”推断整仓。
+- A1 的 `capturedCount` 含旧尝试，且与可信 `expectedCount` 的总数对账见 5.2；即使位置本身完成，总数冲突仍阻止 `complete`。
+- 重试失败、崩溃恢复、排序标签未验证或读到不同值、转场不完整或逐行核验失败都必须阻止 `complete`，不能因为“大部分位置已完成”推断整仓。读到不同标签、行图证明列表变化等可观察变化还必须停止，不能退 A1 继续；只有证据不足且未证明变化时才可 A1/partial。
 - 已接纳但未处理/失败的条目不影响覆盖结论的“遍历完整性”，但会影响可用导出数量；这与现有语义一致。[架构第 5 节](scanner-architecture.md#完整性与身份)
 
 ### 5.4 界面
@@ -363,31 +380,33 @@ drag_ms=1425 settle_ms=5079
 
 ## 6. 不变量与测试
 
-### 6.1 必须始终成立的不变量
+### 6.1 不变量与适用方案
 
-| 编号 | 不变量 | 验证方式 |
-| --- | --- | --- |
-| I1 | 每个 `seq` 只接纳一次，重试不复用、不重编号；未接纳动作不消耗序号 | 内核既有不变量 + 重试场景断言 |
-| I2 | 同一位置的同一绝对格位在一次会话中最多产生一次 S 级接纳 | 绝对格位集合断言；重试时不点击已解决格位 |
-| I3 | 重试只跳过第一次尝试中已经接纳 S 或确认非 S 的绝对格位，不跳过未知格位 | 继承集合与点击序列断言 |
-| I4 | 最终尝试中每个视口的每个占用格位都被本次访问或先前解决并逐行核验覆盖；否则位置不能 `complete` | 位置账目、行图核验与访问序列断言 |
-| I5 | 重走时每个要跳过的绝对行必须通过遮罩行图的灰度核验；占用位相同但行图不同、或第一次尝试存在重复行图而无法区分实例时，停止或退 A1，不跳过 | fake 序列 + 真机日志 |
-| I6 | `capturedCount` 等于条目记录数；`excludedCount` 等于两者之差；重试不制造重复条目 | 检查点保存/加载与导出测试 |
-| I7 | `coverage: complete` 只在六位置完成、排序已验证且重试标签与第一次一致、最终尝试顶部/底部成立时出现 | 覆盖账目测试 |
-| I8 | 任何会话级故障、证据/存储故障、详情归属/识别缺口都不触发位置重试 | 故障码矩阵测试 |
-| I9 | 重试准备必须重新验证转盘、`Active` 漏斗、几何和输入许可；排序标签必须已验证且与第一次尝试同一标签；未验证时不跳过（停止或 A1，partial），不同则停止 | fake 场景与真机验收 |
-| I10 | 第一次尝试的证据和已接纳结果不删除、不改写；重试失败不把 `complete` 升级 | 记录/恢复测试 |
-| I11 | 重试期间的停止、焦点丢失、几何变化立即中止，且不产生迟到接纳 | 并发/取消测试 |
-| I12 | 重试不使用 `initialVerified`；首个未解决格位已选中时必须取得新的参照归属证据 | fake 场景断言 |
-| I13 | 行图核验不得用于判断两件盘相同、跨尝试合并或删除观测；它只决定同一绝对格位能否继承 | 代码审查 + fake 序列 |
+| 编号 | 适用 | 不变量 | 验证方式 |
+| --- | --- | --- | --- |
+| I1 | 共同 | 每个 `seq` 只接纳一次，重试不复用、不重编号；未接纳动作不消耗序号 | 内核既有不变量 + 重试场景断言 |
+| I2 | A2 | 同一位置的同一绝对格位在一次会话中最多产生一次 S 级接纳；重试不点击已解决格位 | 绝对格位集合与点击序列断言 |
+| I3 | A2 | 重试只跳过第一次尝试中已经接纳 S 或确认非 S、且位于当前 `rowBase..rowBase+viewportRows-1` 范围内的绝对格位，不跳过未知格位 | 继承集合与点击序列断言 |
+| I4 | A2 | 最终尝试中每个视口的每个占用格位都被本次访问或先前解决并逐行核验覆盖，且继承行位于当前视口绝对行范围内；否则位置不能 `complete` | 位置账目、行图核验与访问序列断言 |
+| I5 | A2 | 重走时每个要跳过的绝对行必须通过遮罩行图的灰度核验；行图不同属可观察变化，必须停止并阻止 `complete`；重复行图/行图淘汰属证据不足，可停止或退 A1，均不跳过 | fake 序列 + 真机日志 |
+| I6 | 共同 | `capturedCount` 等于条目记录数；`excludedCount` 等于两者之差；每个已接纳观测恰好有一个结局和一条记录 | 检查点保存/加载与导出测试 |
+| I7 | 共同 | `coverage: complete` 只在六位置完成、排序已验证且重试标签与第一次一致、最终尝试顶部/底部成立时出现 | 覆盖账目测试 |
+| I8 | 共同 | 任何会话级故障、证据/存储故障、详情归属/识别缺口都不触发位置重试 | 故障码矩阵测试 |
+| I9 | 共同/A2 | 重试准备必须重新验证转盘、`Active` 漏斗、几何和输入许可；A2 的排序标签必须已验证且与第一次尝试同一标签；未验证时不跳过（停止或 A1，partial），不同则停止 | fake 场景与真机验收 |
+| I10 | 共同 | 第一次尝试的证据和已接纳结果不删除、不改写；重试失败不把 `complete` 升级 | 记录/恢复测试 |
+| I11 | 共同 | 重试期间的停止、焦点丢失、几何变化立即中止，且不产生迟到接纳 | 并发/取消测试 |
+| I12 | A2 | 重试不使用 `initialVerified`；首个未解决格位已选中时必须取得新的参照归属证据 | fake 场景断言 |
+| I13 | 共同/A2 | 行图核验不得用于判断两件盘相同、跨尝试合并或删除观测；它只决定同一绝对格位能否继承 | 代码审查 + fake 序列 |
+| I14 | A1 | 同一绝对格位可以有多条不同 `seq` 的观测；旧版本标记为被取代并排除出可用导出，同一格位最多只有一个最新可用版本；最新版本失败/未处理时该格位没有可用版本；不得复用序号或删除旧观测 | 记录/导出测试；序列与老版本断言 |
+| I15 | A1 | 可信 `expectedCount=N`、第一次接纳 K、A1 重走又接纳 M 时，`capturedCount=K+M` 通常大于 N；在合同方案确定前只能 `partial`/`unknown`，不能声称 `complete` | 覆盖与导出对账测试 |
 
 ### 6.2 脚本化 fake 场景
 
 以下场景应通过真实 `collect.Inventory` + 脚本化 `SessionView`/`Matcher` 驱动，不另写一套“重试状态机”替身；沿用现有 fake 画面序列风格。[replay_test.go](../../internal/game/zzz/collect/replay_test.go) [inventory_internal_test.go](../../internal/game/zzz/collect/inventory_internal_test.go)
 
 1. **滚动中段 `positionLost`，重试成功：** 第一次尝试访问 N 件后在滚动处失败；第二次从顶部重走，跳过前 N 件，访问剩余格位并取得底部证据；断言无重复 seq、无重复点击、`capturedCount` 只增加新件、位置 `recovered`、六位置 `complete`。
-2. **选中格守卫 `positionLost`，重试成功：** 选中框持续缺失超过 action budget；重试重新准备并跳过已接纳格位；断言守卫前的已接纳件不被重复接纳。另一个变体是重试点击同一行后选中框再次持续消失，断言重试不再重试并安全停止。
-3. **底部短步（`16ef968e` 形态）：** `unsettled=false`、`rows=0`、误差 11.20 的序列；断言再增加一个 `ScrollBudget` 不会改变结论，位置安全停止且不伪造 `complete`。另一个变体是 `unsettled=true` 的序列，才测试延长等待是否能停稳。
+2. **选中格守卫 `positionLost`，重试成功：** 选中框持续缺失超过 action budget；重试重新准备并跳过已接纳格位；断言守卫前的已接纳件不被重复接纳。另一个变体是 A1 重放 slot 17 的特定点击后选中框再次持续消失，断言不再重试并安全停止；若任意末行点击都触发，则 A2 首次点击 slot 18 也应停止。
+3. **底部短步（`16ef968e` 形态）：** `unsettled=false`、`rows=0`、误差 11.20 的固定 fake 序列；断言在没有新帧时再增加一个 `ScrollBudget` 不会改变结论，位置安全停止且不伪造 `complete`。该结果不能推广到实时流；另一个变体是后续出现新帧或 `unsettled=true` 的序列，才测试延长等待是否能停稳。
 4. **重试准备失败：** 第二次打开筛选后漏斗不是 `Active`，或转盘位置不对；断言不发送任何物品点击、位置保持不完整、终止码为对应的 `navigationMismatch`。排序标签未验证的变体断言不进入跳过路径（停止或 A1，覆盖 partial）；读到不同标签的变体断言停止，而不是继续跳过。
 5. **重试期间失焦/几何变化：** 输入许可关闭或 frame 几何版本变化；断言立即中止、没有第三次尝试、没有迟到接纳。
 6. **重试再次 `positionLost`：** 第二次尝试在另一处失败；断言只重试一次、位置不完整、会话停止、第一次尝试的条目仍在。
@@ -398,6 +417,9 @@ drag_ms=1425 settle_ms=5079
 11. **账目与持久化：** 每次尝试更新同一 position 条目；`observedScope` 只有一条 position 6；失败后立即上报 scope 的检查点可读；重试中崩溃恢复为 `partial` 且不自动续扫。
 12. **幂等与上限：** 两个位置各失败一次时最多重试两次；同一位置第二次失败不再重试；用户停止优先于重试预算。
 13. **回归：** 无故障六位置扫描的条目数、序号、覆盖和导出与基线一致；相邻同详情、非 S 跳过、空位置、短列表等既有场景不受影响。
+14. **绝对行边界：** 顶部确认后 `rowBase=0`，不得继承负行；短滚动 `scrollRows=3` 后范围应为 3..7，而不是 3..5 或 0..4；尾部视口只继承范围内实际占用/已解决的行，视口外行不得进入继承集合。三种序列都断言点击集合与行图核验集合一致。
+15. **A1 取代与序号：** 同一绝对格位在两次尝试各接纳一次；断言两条观测有不同 `seq`，旧版本被标记取代并排除出可用导出，新版本若产出则是唯一可用版本，若失败/未处理则该格位没有可用版本；`capturedCount` 包含两条，`excludedCount` 包含旧版本；不得删除旧观测或复用序号。
+16. **A1 与可信 expectedCount：** 设可信 `expectedCount=N`，第一次尝试已接纳 K 件，A1 重走又接纳 M 件；断言 `capturedCount=K+M`（评审例子 M=N 时为 N+K）、`expectedCount=N`，v2 对账失败，覆盖只能 `partial`/`unknown`，不能 `complete`；同时断言 `excludedCount` 只解释可用条目排除，不能消除总数冲突。
 
 ### 6.3 真机验收
 
@@ -405,7 +427,7 @@ drag_ms=1425 settle_ms=5079
 
 1. **基线对照：** 在 macOS 云客户端用同一库存快照跑一次无故障六位置扫描，记录总数、每位置访问数、序号范围、覆盖结论和导出 `capturedCount`/`excludedCount`。
 2. **重试成功路径：** 复现一个自然的 `positionLost`（滚动或选中格守卫），或使用仅在测试构建中开启的一次性故障注入。确认日志依次出现第一次尝试失败、重试准备、继承行数、逐行核验通过、第二次尝试完成；导出总数与基线一致，无重复物品、无序号空洞（除既有失败/未处理项），`coverage: complete`。
-3. **选中格守卫复测（`e3bf895b`）：** 先在 `awaitSelectionReturned` 修复后的构建上复测位置 6 的 seq 886 边界；确认当前代码是否能跨过该次停止。若修复后已能跨过，A2 对该实例的价值下降；若仍稳定停止，记录是否为末行点击触发的确定性行为，再决定 4.6 的处理方式。
+3. **选中格守卫复测（`e3bf895b`）：** 先在 `awaitSelectionReturned` 修复后的构建上复测位置 6 的 seq 886 边界；确认当前代码是否能跨过该次停止。若修复后已能跨过，A2 对该实例的价值下降；若仍稳定停止，记录反应是只跟随 slot 17 的特定点击，还是任意末行点击都触发，再决定 4.6 的处理方式。
 4. **`16ef968e` 形态：** 在位置 1 末尾复现 3 行短步，确认 `unsettled=false`；不要在未改变证据的情况下重复等待预算。验证独立证据（如滑块位移交叉验证）或重新标定能否跨过 11.20；若不能，确认重试后安全停止且不声称 `complete`。
 5. **重试失败路径：** 制造第二次 `positionLost`，确认只重试一次、会话停止、覆盖 `partial`、结果和证据保留；导出的 `capturedCount` 与条目数一致。
 6. **不可重试路径：** 在一次扫描中触发 `focusLost` 或 `permissionRevoked`，确认没有位置重试，输入关闭，按既有收尾保存。
@@ -421,20 +443,21 @@ drag_ms=1425 settle_ms=5079
 | 2 | 每个位置重试几次、整个会话重试几次？ | 每位置 1 次 + 会话 2 次 / 每位置 1 次不设会话上限 / 其他 | **每位置 1 次，全会话 2 次** | 防止系统性故障下反复重试拖长错误状态 |
 | 3 | 重试再次失败后是否继续后续位置？ | 停止 / 继续剩余位置并保持 `partial` | **先停止**；继续后续位置会改变现有“任一失败即停止”的用户决定，需要单独批准 | 影响可挽回的数据量和安全边界 |
 | 4 | 已接纳条目如何处理？ | A2 继承跳过（逐行核验）/ A1 全量重走并标记取代 / 只补采未处理项 | **A2 继承跳过**；不自动补采未处理项 | 决定是否产生重复、是否需要 `excludedCount`/UI 说明 |
-| 5 | 成功重试的位置能否声明 `complete`？ | 可以（满足并集、逐行核验与顶部/底部证据）/ 一律 `partial` | **可以**；否则重试失去完成整仓的意义 | 决定覆盖结论和导出语义 |
+| 5 | 成功重试的位置能否声明 `complete`？ | A2 可以（满足并集、逐行核验与顶部/底部证据）/ A1 还需 `expectedCount` 对账或合同决策 / 一律 `partial` | **A2 可以**；A1 在已知可信总数时只能 `partial`；否则重试失去完成整仓的意义 | 决定覆盖结论和导出语义 |
 | 6 | 公共 JSON 是否要披露重试？ | 不披露（v2 不变）/ 增加字段（v3） | **不披露**；重试留在内部账目、日志和界面 | 决定是否需要 scan JSON v3 |
-| 7 | 底部短步是否单独放宽证据？ | 只延长观察 / 新增“Bottom + 唯一短步 + 更长稳定”规则 / 重新标定或独立证据 / 保持 10.0 | **先区分 `unsettled`**：`unsettled=false` 不延长预算，改为重新标定或独立证据；不新增“Bottom + Lost”接受规则 | 决定 `16ef968e` 能否被覆盖，以及是否削弱既有权衡 |
+| 7 | 底部短步是否单独放宽证据？ | 延长观察 / 新增“Bottom + 唯一短步 + 更长稳定”规则 / 重新标定或独立证据 / 保持 10.0 | **不默认延长预算**：当前 `unsettled=false` 证据不支持；优先重新标定或独立证据，并接受实时流后续新帧的不确定性；不新增“Bottom + Lost”接受规则 | 决定 `16ef968e` 能否被覆盖，以及是否削弱既有权衡 |
 | 8 | 重试是否自动进行，还是需要用户确认？ | 自动一次并显示进度 / 弹窗确认 / 只记录不重试 | **自动一次并显示非阻塞进度**；弹窗会抢焦点并触发停止 | 决定交互和扫描期间的焦点安全 |
 | 9 | 是否需要跨会话/崩溃续扫？ | 暂不需要 / 采用 B 或 C | **暂不需要**；先验证 A2 的真机收益 | 决定是否启动 v3 或记录多段设计 |
 | 10 | 未处理/失败的旧条目是否允许重读？ | 不重读（A2）/ 重读并标记旧条目被取代（A1） | **不重读**；保持无重复，接受少量未处理项 | 影响可用数据完整性和导出口径 |
-| 11 | 是否先做 `awaitSelectionReturned` 修复后的真机复测，再决定 A2？ | 先复测 / 直接实现 A2 | **先复测**；`e3bf895b` 早于修复，不能证明当前仍会在同一处停止 | 决定 A2 对选中格守卫场景是否值得做 |
+| 11 | 是否先做 `awaitSelectionReturned` 修复后的真机复测，再决定 A2？ | 先复测并区分 slot 17 特定点击/任意末行点击 / 直接实现 A2 | **先复测并区分触发范围**；`e3bf895b` 早于修复，不能证明当前仍会在同一处停止 | 决定 A2 对选中格守卫场景是否值得做，以及 A1/A2 谁更可能重放失败 |
 | 12 | 排序方向不可见是否可接受？ | 接受并依赖逐行核验 / 先补方向探针 / 退到 A1 | **先接受并记录残余风险，或在 A2 前补方向探针**；不能把 `sort:"verified"` 当作方向证明 | 决定 A2 的跳过证据是否足够严格 |
+| 13 | A1 与可信 `expectedCount` 如何对账？ | 接受 `partial` / v3 增加“有效或被取代”计数 / 改变 `capturedCount` 语义 / 已知总数时不用 A1 | **在用户决定前接受 `partial`，不声称 `complete`，不擅自改 v2 语义** | 决定 A1 能否在已知总数的库存上使用，以及是否需要 scan JSON v3 |
 
 ## 8. 事实、推断与未验证事项
 
 **已确认的事实（基线）**
 
-- 当前遍历在第一个位置错误处停止，后续位置不执行；每个位置有独立账目和独立准备。[inventory.go](../../internal/game/zzz/collect/inventory.go#L594)
+- 当前遍历在第一个位置错误处停止，后续位置不执行；每个位置有独立账目和独立准备。[inventory.go](../../internal/game/zzz/collect/inventory.go#L617)
 - `positionLost` 同时覆盖滚动位置丢失和选中格守卫；`navigationMismatch` 覆盖页面、转盘、筛选、滚动无位移等另一类问题。[traversal.go](../../internal/game/zzz/collect/traversal.go#L63)
 - 序号、`visitIndex`、`capturedCount`、`excludedCount` 和覆盖结论的现有语义。[handle.go](../../internal/scan/handle.go#L91) [checkpoint.go](../../internal/record/checkpoint.go#L330) [export.go](../../internal/app/export.go#L251)
 - 当前 `observedScope` 只在预检后和 `Collect` 返回后上报；重试中不会持续落盘。[controller.go](../../internal/game/zzz/collect/controller.go#L262)
@@ -444,8 +467,9 @@ drag_ms=1425 settle_ms=5079
 **推断（需要实现或验收）**
 
 - A2 的绝对格位继承不能靠 `Occupied` 证明；必须对每个要跳过的绝对行保留遮罩行图并逐行核验。即使如此，排序方向翻转、行图完全相同但顺序变化等情况仍可能不可见；如果第一次尝试存在重复行图，行图不能证明实例身份，必须停止或退 A1。这些是残余风险，不能按内容去重处理。
-- 重试成功的位置可以诚实声明 `complete`；这取决于并集覆盖、逐行核验和最终顶部/底部证据，而不是自动重试本身。
-- `16ef968e` 的 `unsettled=false` 已用满 5 秒预算且没有 candidate；延长观察不能据此改变结论，只能靠重新标定或独立证据。第 4.5 节把它单列为开放问题。
+- A2 重试成功的位置在排序标签一致、并集覆盖、逐行核验和最终顶部/底部证据都成立时可以声明 `complete`；方向不可见仍是残余风险，自动重试本身不构成完成证据。A1 还受 `expectedCount` 对账约束。
+- `16ef968e` 的 `unsettled=false` 已用满 5 秒预算且没有 candidate；本次预算内未恢复，当前证据不支持默认延长，不排除实时流后续新帧。优先考虑重新标定或独立证据；第 4.5 节把它单列为开放问题。
+- A1 的旧尝试仍计入 `capturedCount`；可信 `expectedCount=N` 时 `capturedCount=K+M`（重走又接纳 M）会与 v2 的总数对账冲突，`excludedCount` 不能消除冲突。未作合同决策前 A1 只能 `partial`/`unknown`，不能声称 `complete`。
 - A2 不需要 scan JSON v2 升版；如果只改不透明的 `observedScope`/`capture`，内部检查点信封也不必升级。
 - 重试的时间成本约为“滚动经过已解决行 + 点击未解决行 + 一次位置准备”，低于整位置重走，但尚未用真机计时；逐行行图核验还会增加内存与比较成本。
 
