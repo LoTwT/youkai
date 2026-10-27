@@ -38,11 +38,12 @@ type Inventory struct {
 	// the Observation unchanged.
 	Project func(Observation) (any, error)
 	// DiagnosticDir, when non-empty, receives PNG crops of the list
-	// before and after a scroll whose outcome stopped the walk (lost,
-	// ambiguous or unconfirmed), so a field failure can be re-examined
-	// against the matcher's thresholds. It is observation only and
-	// bounded: a few dumps per walk, and the directory keeps only the
-	// newest files. Empty disables the dumps.
+	// before and after a scroll or bottom confirmation whose outcome
+	// stopped the walk (wrong position, lost, ambiguous, rejected or
+	// unconfirmed), so a field failure can be re-examined against the
+	// matcher's thresholds. It is observation only and bounded: a few
+	// dumps per walk, and the directory keeps only the newest files. Empty
+	// disables the dumps.
 	DiagnosticDir string
 
 	// ActionBudget bounds one action's whole effect-and-settle wait —
@@ -1487,6 +1488,9 @@ func (run *inventoryRun) confirmBottom(ctx context.Context) error {
 			return err
 		}
 		if out.afterMatch.Page == PageWarehouse && !run.positionListVerdict(out.afterMatch) {
+			if out.after.ID != 0 && out.after.Image != nil {
+				run.dumpScrollFrames("bottom-wrong-position", before, out.after)
+			}
 			return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
 				"collect: wheel position %d: the bottom confirmation left the list at another wheel position: %s",
 				run.position, out.afterMatch.Evidence))
@@ -1507,6 +1511,9 @@ func (run *inventoryRun) confirmBottom(ctx context.Context) error {
 		default:
 			if attempt < run.inv.maxRetries() {
 				continue
+			}
+			if out.after.ID != 0 && out.after.Image != nil {
+				run.dumpScrollFrames("bottom-undecided", before, out.after)
 			}
 			return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
 				"collect: the bottom confirmation produced no verifiable verdict within the budget (attempt %d)", attempt+1))
@@ -2482,17 +2489,27 @@ func (run *inventoryRun) scroll(ctx context.Context) (err error) {
 		if attempts == 0 {
 			return
 		}
-		if err != nil && afterFrame.ID != 0 && outcome != "error" {
-			run.dumpScrollFrames("scroll-"+outcome, before, afterFrame)
-		}
+		// Time and log first: the dump below encodes and writes PNGs, and
+		// that cost must not inflate total_ms or the position's scroll_ms.
 		elapsed := time.Since(started)
 		run.positionScrollMs += elapsed
 		log.Printf("youkai: collect: scroll position=%d viewport_from=%d viewport_to=%d outcome=%s attempts=%d drag_ms=%d settle_ms=%d total_ms=%d rows=%d before_frame=%d after_frame=%d",
 			run.position, fromViewport, run.viewport, outcome, attempts,
 			drag.Milliseconds(), settle.Milliseconds(), elapsed.Milliseconds(),
 			rows, before.ID, afterID)
+		if err != nil && afterFrame.ID != 0 && outcome != "error" {
+			run.dumpScrollFrames("scroll-"+outcome, before, afterFrame)
+		}
 	}()
 	for attempt := 0; ; attempt++ {
+		// A retry starts a fresh judgement: neither the previous attempt's
+		// after frame nor its outcome may label a failure that happened
+		// before this attempt produced a verdict (focus loss, geometry
+		// change, cancellation), or the defer above would write a dump for
+		// the earlier attempt.
+		afterID = 0
+		afterFrame = platform.Frame{}
+		outcome = "error"
 		if err := ctx.Err(); err != nil {
 			return err
 		}

@@ -113,7 +113,7 @@ M2 平台会话集成后可用另一组开关接入真实游戏窗口做仅观�
 - `youkai: collect: position=N summary ...`：每个位置结束时一行；`establish_ms` 建列表、`wheel_ms` 切转盘、`filter_ms` 筛选准备、`top_ms` 回顶（甩动+确认）、`visit_ms` 逐件合计、`scroll_ms` 滚动合计、`bottom_ms` 底部确认拖动（以短步结束时为 0）、`collect_ms` 采集总耗时、`total_ms` 位置总耗时；`visits` 为已完成的访问次数（含跳过的非 S 件），`scrolls` 为已验证滚动次数。
 - 检查点保存行在原有条目数后追加 `bytes`（生成文件字节数）与 `ms`（本次保存耗时）。
 - `youkai: scan <id> stop trigger: ...`：会话结束时记录第一个停止触发的 `kind`、`code`、`phase` 与原始 `message`，之后的附加故障各记一行 `later fault`；检查点的 `termination` 只保存种类、代码和阶段。
-- 滚动或底部确认失败（Lost、无对应、被拒或未确认）时，匹配器证据追加各整行候选的误差（`row candidates +1=… +3=…`），并把拖动前后两帧的列表与滚动条区域裁剪为 PNG 写入日志目录下的 `diagnostics/`（如 `~/Library/Logs/Youkai Dev/diagnostics/`），日志行 `collect: diagnostics:` 给出路径。每次遍历最多 6 组，目录只保留最新 48 个文件。
+- 滚动或底部确认失败并停止遍历时（位置不符、Lost、无对应、被拒或未确认），把拖动前后两帧的列表与滚动条区域裁剪为 PNG 写入日志目录下的 `diagnostics/`（如 `~/Library/Logs/Youkai Dev/diagnostics/`），日志行 `collect: diagnostics:` 给出路径。每次遍历最多 6 组，目录只保留最新 48 个文件。Lost 写出的 after 帧是最后观察到的候选帧，不保证是最终停稳的位置。匹配器证据中的整行候选误差（`row candidates +1=… +3=…`）只出现在“最佳位移不是整行”的 Lost 和 Undecided 两类证据里；多候选歧义的 Lost、被拒（`applyTransition`）和 unsettled 的 Lost 不带。
 
 ## GitHub Actions 检查
 

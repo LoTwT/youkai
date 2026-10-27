@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"image"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -537,6 +539,148 @@ func TestAwaitScrollContinuousStreamRespectsBudget(t *testing.T) {
 	}
 	if !out.stationary || out.displaced || out.lost {
 		t.Fatalf("outcome %+v, want Stationary at the budget", out)
+	}
+}
+
+// failingObserveView fails the readiness check from the configured call
+// onward, leaving the scripted frame stream untouched.
+type failingObserveView struct {
+	*scrollScriptView
+	observes int
+	failAt   int
+}
+
+func (v *failingObserveView) Observe() (platform.Observation, error) {
+	v.observes++
+	if v.observes >= v.failAt {
+		return platform.Observation{}, errors.New("scripted observation failure")
+	}
+	return platform.Observation{Ready: true, Geometry: 1}, nil
+}
+
+// scrollSessionController runs one scripted scroll on the session's
+// producer goroutine, so scroll sees a real input-permission handle.
+type scrollSessionController struct {
+	run   *inventoryRun
+	errCh chan error
+}
+
+func (c *scrollSessionController) Prepare(context.Context, *scan.ControllerHandle) error { return nil }
+
+func (c *scrollSessionController) Collect(ctx context.Context, h *scan.ControllerHandle) error {
+	c.run.h = h
+	err := c.run.scroll(ctx)
+	c.errCh <- err
+	return err
+}
+
+func runScriptedScroll(t *testing.T, run *inventoryRun) error {
+	t.Helper()
+	ctrl := &scrollSessionController{run: run, errCh: make(chan error, 1)}
+	sess, err := scan.Start(scan.Config{
+		ID:         scan.ID("scripted-scroll-diagnostics"),
+		Capacity:   1,
+		Workers:    1,
+		Controller: ctrl,
+		Recognizer: noopRecognizer{},
+		Deliverer:  noopDeliverer{},
+	})
+	if err != nil {
+		t.Fatalf("scan.Start: %v", err)
+	}
+	select {
+	case err := <-ctrl.errCh:
+		select {
+		case <-sess.Done():
+		case <-time.After(5 * time.Second):
+			t.Fatal("the scripted scroll session never sealed")
+		}
+		return err
+	case <-time.After(5 * time.Second):
+		t.Fatal("the scripted scroll never returned")
+		return nil
+	}
+}
+
+func newScriptedScrollRun(l Layout, view SessionView, m Matcher, dir string, retries int, budget time.Duration) *inventoryRun {
+	return &inventoryRun{
+		inv: &Inventory{
+			Layout:        l,
+			Matcher:       m,
+			DiagnosticDir: dir,
+			MaxRetries:    retries,
+			ScrollBudget:  budget,
+		},
+		view:     view,
+		geo:      1,
+		position: 1,
+		viewport: 3,
+	}
+}
+
+func diagnosticPNGs(t *testing.T, dir string) []string {
+	t.Helper()
+	files, err := filepath.Glob(filepath.Join(dir, "*.png"))
+	if err != nil {
+		t.Fatalf("glob diagnostics: %v", err)
+	}
+	return files
+}
+
+// TestScrollVerdictFailureWritesDiagnostics drives the real scroll path to
+// its Stationary limit: the verdict stopped the walk, so one before/after
+// pair is written before the fault returns.
+func TestScrollVerdictFailureWritesDiagnostics(t *testing.T) {
+	l := sixRowScrollLayout()
+	frame := func(id uint64) platform.Frame {
+		return platform.Frame{ID: id, Geometry: 1, Image: image.NewRGBA(image.Rect(0, 0, 1280, 1000))}
+	}
+	view := &scrollScriptView{frames: []platform.Frame{frame(1), frame(2)}, blockAfter: true}
+	m := &scrollScriptMatcher{rows: l.Rows, columns: l.Columns, verdict: map[scrollPair]ScrollMatch{
+		{1, 2}: {Stationary: true, Evidence: "scripted stationary"},
+	}}
+	dir := t.TempDir()
+	run := newScriptedScrollRun(l, view, m, dir, -1, 40*time.Millisecond)
+
+	if err := runScriptedScroll(t, run); err == nil {
+		t.Fatal("a Stationary limit must stop the scroll")
+	}
+	files := diagnosticPNGs(t, dir)
+	if len(files) != 2 {
+		t.Fatalf("the stopped scroll wrote %d crops, want a before/after pair", len(files))
+	}
+	for _, path := range files {
+		if !strings.Contains(filepath.Base(path), "-scroll-stationary-") {
+			t.Fatalf("crop %q does not name the stopping verdict", path)
+		}
+	}
+}
+
+// TestScrollRetryAfterVerdictDoesNotDumpPreviousAttempt pins the reset
+// between attempts: the first try ends Stationary and retries, the second
+// stops before producing a verdict, and no frame from the first try may be
+// reported as this failure's evidence.
+func TestScrollRetryAfterVerdictDoesNotDumpPreviousAttempt(t *testing.T) {
+	l := sixRowScrollLayout()
+	frame := func(id uint64) platform.Frame {
+		return platform.Frame{ID: id, Geometry: 1, Image: image.NewRGBA(image.Rect(0, 0, 1280, 1000))}
+	}
+	view := &failingObserveView{
+		scrollScriptView: &scrollScriptView{frames: []platform.Frame{frame(1), frame(2)}, blockAfter: true},
+		failAt:           2,
+	}
+	m := &scrollScriptMatcher{rows: l.Rows, columns: l.Columns, verdict: map[scrollPair]ScrollMatch{
+		{1, 2}: {Stationary: true, Evidence: "scripted stationary"},
+	}}
+	dir := t.TempDir()
+	run := newScriptedScrollRun(l, view, m, dir, 1, 40*time.Millisecond)
+
+	err := runScriptedScroll(t, run)
+	if err == nil || !strings.Contains(err.Error(), "scripted observation failure") {
+		t.Fatalf("scroll error = %v, want the second attempt's readiness failure", err)
+	}
+	if files := diagnosticPNGs(t, dir); len(files) != 0 {
+		t.Fatalf("a failure before the verdict wrote %v, want no crops", files)
 	}
 }
 

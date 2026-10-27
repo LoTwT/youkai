@@ -56,9 +56,11 @@ func (run *inventoryRun) dumpScrollFrames(kind string, before, after platform.Fr
 	pruneDiagnostics(dir, maxDiagnosticFiles)
 }
 
-// writeRegionPNG encodes the region of img as a PNG file. A nil image or
-// an empty intersection is reported rather than written.
-func writeRegionPNG(path string, img image.Image, region image.Rectangle) error {
+// writeRegionPNG encodes the region of img as a PNG file. The parameter is
+// the concrete *image.RGBA of platform.Frame.Image: a typed nil assigned to
+// image.Image would not compare equal to nil and would panic in Bounds. A
+// nil image or an empty intersection is reported rather than written.
+func writeRegionPNG(path string, img *image.RGBA, region image.Rectangle) error {
 	if img == nil {
 		return fmt.Errorf("no image")
 	}
