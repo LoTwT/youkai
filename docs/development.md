@@ -108,10 +108,12 @@ M2 平台会话集成后可用另一组开关接入真实游戏窗口做仅观�
 
 日志时间戳使用微秒级格式（`log.LstdFlags|log.Lmicroseconds`），便于与行内毫秒耗时对照。遍历与保存新增的计时字段都只用于观测，不改变导航、阈值或等待时长：
 
-- `youkai: collect: item ...`：每件被接纳或跳过的物品一行。`visit_index` 为访问序号，`seq` 为内核接纳序号（跳过件为 0，可与 `item N recognized` 日志对照）；`acquire_ms` 为等待处理槽（`Acquire`，反映 OCR 背压）；`pre_click_ms` 为点击前稳定等待，其中 `select_wait_ms` 是选中框恢复等待（包含在 `pre_click_ms` 内）；`click_detail_ms` 为点击到详情稳定（`awaitDetail`）；`reference_ms` 为参照往返（不含接纳）；`retries` 为无效点击重试次数；`admit_ms` 为接纳交付（`slot.Admit`，含证据与检查点持久化）；`total_ms` 为本件总耗时。
+- `youkai: collect: item ...`：每件被接纳或跳过的物品一行。`visit_index` 为访问序号，`seq` 为内核接纳序号（跳过件为 0，可与 `item N recognized` 日志对照）；`acquire_ms` 为等待处理槽（`Acquire`，反映 OCR 背压）；`ready_ms` 为点击前的平台就绪复查（`Observe`，含窗口枚举）；`pre_click_ms` 为点击前稳定等待，其中 `select_wait_ms` 是选中框恢复等待（包含在 `pre_click_ms` 内）；`click_ms` 为点击派发（含平台派发前复查与按住时长）；`click_detail_ms` 为点击到详情稳定（`awaitDetail`）；`reference_ms` 为参照往返（不含接纳）；`retries` 为无效点击重试次数；`project_ms` 为接纳前的投影（裁剪识别行）；`admit_ms` 为接纳交付（`slot.Admit`，含证据与检查点持久化）；`total_ms` 为本件总耗时。
 - `youkai: collect: scroll ...`：每次滚动的 `drag_ms`（拖动派发）与 `settle_ms`（等待停稳）。
 - `youkai: collect: position=N summary ...`：每个位置结束时一行；`establish_ms` 建列表、`wheel_ms` 切转盘、`filter_ms` 筛选准备、`top_ms` 回顶（甩动+确认）、`visit_ms` 逐件合计、`scroll_ms` 滚动合计、`bottom_ms` 底部确认拖动（以短步结束时为 0）、`collect_ms` 采集总耗时、`total_ms` 位置总耗时；`visits` 为已完成的访问次数（含跳过的非 S 件），`scrolls` 为已验证滚动次数。
 - 检查点保存行在原有条目数后追加 `bytes`（生成文件字节数）与 `ms`（本次保存耗时）。
+- `youkai: scan <id> stop trigger: ...`：会话结束时记录第一个停止触发的 `kind`、`code`、`phase` 与原始 `message`，之后的附加故障各记一行 `later fault`；检查点的 `termination` 只保存种类、代码和阶段。
+- 滚动或底部确认失败（Lost、无对应、被拒或未确认）时，匹配器证据追加各整行候选的误差（`row candidates +1=… +3=…`），并把拖动前后两帧的列表与滚动条区域裁剪为 PNG 写入日志目录下的 `diagnostics/`（如 `~/Library/Logs/Youkai Dev/diagnostics/`），日志行 `collect: diagnostics:` 给出路径。每次遍历最多 6 组，目录只保留最新 48 个文件。
 
 ## GitHub Actions 检查
 
