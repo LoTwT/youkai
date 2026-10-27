@@ -596,6 +596,7 @@ func (s *Service) forwardKernel(a *activeSession) {
 func (s *Service) wrapUp(a *activeSession) {
 	<-a.kernel.Done()
 	final := a.kernel.Snapshot()
+	logSessionTrigger(a.id, final)
 	err := a.deliverer.finish(final)
 	if lockErr := a.scanLock.Close(); lockErr != nil {
 		// The OS releases the occupancy at process exit anyway; the
@@ -629,6 +630,20 @@ func (s *Service) wrapUp(a *activeSession) {
 	a.kernelSub.Close()
 	s.notifyLocked()
 	s.mu.Unlock()
+}
+
+// logSessionTrigger writes the sealed session's first stop trigger and
+// the faults recorded after it. The checkpoint's termination keeps only
+// the kind, code and phase, so without this line a field failure such as
+// focusLost or navigationMismatch leaves no explanation of its own.
+func logSessionTrigger(id scan.ID, final scan.Snapshot) {
+	if t := final.Trigger; t != nil {
+		log.Printf("youkai: scan %s stop trigger: kind=%s code=%s phase=%s message=%q",
+			id, t.Kind, t.Code, t.Phase, t.Message)
+	}
+	for _, f := range final.Faults {
+		log.Printf("youkai: scan %s later fault: code=%s phase=%s message=%q", id, f.Code, f.Phase, f.Message)
+	}
 }
 
 // RetrySave re-attempts the pending persistence of the active session

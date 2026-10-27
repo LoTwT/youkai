@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"runtime"
 	"sync"
 	"time"
@@ -175,7 +176,7 @@ func main() {
 		}
 	}
 
-	source, sourceLabel := scanSource()
+	source, sourceLabel := scanSource(filepath.Join(paths.Logs, "diagnostics"))
 	svc, err := app.NewService(app.Config{
 		Paths:    paths,
 		DataLock: dataLock,
@@ -426,12 +427,32 @@ func selfTest(root string) {
 //     error the entry point refuses;
 //   - neither leaves the production state: no source, starts refused
 //     with the documented reason.
-func scanSource() (app.ScanSource, string) {
+func scanSource(diagnosticDir string) (app.ScanSource, string) {
 	source, label, err := scanSourceFrom(os.Getenv, runtime.GOOS, platform.Host)
 	if err != nil {
 		log.Fatalf("youkai: %v", err)
 	}
+	withDiagnosticDir(source, diagnosticDir)
 	return source, label
+}
+
+// withDiagnosticDir points every traversal the source creates at dir for
+// the frame crops of a scroll that stopped the walk (field diagnostics
+// only; see collect.Inventory.DiagnosticDir). Sources without a
+// calibrated traversal are left alone.
+func withDiagnosticDir(source app.ScanSource, dir string) {
+	gs, ok := source.(*app.GameScanSource)
+	if !ok || gs.Traversal == nil || dir == "" {
+		return
+	}
+	next := gs.Traversal
+	gs.Traversal = func() collect.Traversal {
+		t := next()
+		if inv, ok := t.(*collect.Inventory); ok {
+			inv.DiagnosticDir = dir
+		}
+		return t
+	}
 }
 
 // scanSourceFrom is scanSource with its environment, platform and host
