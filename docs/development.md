@@ -104,6 +104,15 @@ M2 平台会话集成后可用另一组开关接入真实游戏窗口做仅观�
 - 日志打不开（如目录不可写）不阻止启动：stderr 照常输出并提示一次原因；运行中文件写入失败同样只退回 stderr 镜像（降级逻辑在 `internal/app`，Windows 上备份文件被杀毒或备份软件占用时轮转重试而不丢行，每轮失败只提示一次）。
 - `YOUKAI_SELFTEST` 自检在路径解析之前运行，仍只写 stderr（安装布局验证按[打包与安装包](#打包与安装包)的重定向方式读取）。
 
+### 扫描耗时诊断
+
+日志时间戳使用微秒级格式（`log.LstdFlags|log.Lmicroseconds`），便于与行内毫秒耗时对照。遍历与保存新增的计时字段都只用于观测，不改变导航、阈值或等待时长：
+
+- `youkai: collect: item ...`：每件被接纳或跳过的物品一行。`visit_index` 为访问序号，`seq` 为内核接纳序号（跳过件为 0，可与 `item N recognized` 日志对照）；`acquire_ms` 为等待处理槽（`Acquire`，反映 OCR 背压）；`pre_click_ms` 为点击前稳定等待，其中 `select_wait_ms` 是选中框恢复等待（包含在 `pre_click_ms` 内）；`click_detail_ms` 为点击到详情稳定（`awaitDetail`）；`reference_ms` 为参照往返（不含接纳）；`retries` 为无效点击重试次数；`admit_ms` 为接纳交付（`slot.Admit`，含证据与检查点持久化）；`total_ms` 为本件总耗时。
+- `youkai: collect: scroll ...`：每次滚动的 `drag_ms`（拖动派发）与 `settle_ms`（等待停稳）。
+- `youkai: collect: position=N summary ...`：每个位置结束时一行；`establish_ms` 建列表、`wheel_ms` 切转盘、`filter_ms` 筛选准备、`top_ms` 回顶（甩动+确认）、`visit_ms` 逐件合计、`scroll_ms` 滚动合计、`bottom_ms` 底部确认拖动（以短步结束时为 0）、`collect_ms` 采集总耗时、`total_ms` 位置总耗时；`visits` 为已完成的访问次数（含跳过的非 S 件），`scrolls` 为已验证滚动次数。
+- 检查点保存行在原有条目数后追加 `bytes`（生成文件字节数）与 `ms`（本次保存耗时）。
+
 ## GitHub Actions 检查
 
 `.github/workflows/ci.yml` 在每个 pull request 与推送到 `main` 时，于 `macos-latest`（Apple Silicon）与 `windows-latest` 两个 runner 上运行轻量检查：`gofmt -l .`（要求无输出）、`go vet ./...`、`go test ./...`，macOS 上额外运行 `go tool mygo vet .`。检查不打安装包、不跑长时间测试、不下载 OCR 资源；供 Windows 测试的安装包由手动触发的 Package workflow 按需构建（见[打包 workflow](#打包-workflow)）。仓库根 `.gitattributes` 将文本文件统一为 LF 换行，Windows 检出不会因此产生 `gofmt` 误报。

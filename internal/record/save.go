@@ -99,6 +99,23 @@ func (s *Store) SaveCheckpoint(recordID string, cp Checkpoint) (int64, error) {
 	return gen, nil
 }
 
+// CheckpointBytes reports the on-disk size of one saved generation. It is
+// a diagnostic read: callers log an unavailable size rather than treat it
+// as a failed save, so a missing or unreadable generation is reported as
+// an error here and nowhere else.
+func (s *Store) CheckpointBytes(recordID string, revision int64) (int64, error) {
+	if err := checkID("record", recordID); err != nil {
+		return 0, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	info, err := s.fs.Stat(s.generationPath(recordID, revision))
+	if err != nil {
+		return 0, fmt.Errorf("record: stat checkpoint generation %d of %q: %w", revision, recordID, err)
+	}
+	return info.Size(), nil
+}
+
 // writeGeneration stamps, validates and writes doc as the next
 // generation, whose revision is one above the highest generation file on
 // disk. Writing goes directly to the new file — os.Rename is not atomic
