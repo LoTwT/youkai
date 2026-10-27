@@ -547,6 +547,45 @@ type inventoryRun struct {
 	// position; the next admitted observation carries it, then it is
 	// cleared so one viewport transition is not repeated on every item.
 	lastScrollEvidence string
+	// positionVisitMs, positionScrollMs, positionBottomMs and
+	// positionScrolls are the current position's diagnostic accumulators:
+	// the summed per-item totals, the summed scroll-call totals, the
+	// bottom confirmation drag, and the count of verified scrolls. They
+	// are reset for every wheel position and never feed a navigation
+	// decision.
+	positionVisitMs  time.Duration
+	positionScrollMs time.Duration
+	positionBottomMs time.Duration
+	positionScrolls  int
+}
+
+// positionTiming is one wheel position's preparation stage durations for
+// the position summary. It is diagnostic only and lives on the producer
+// goroutine.
+type positionTiming struct {
+	establish time.Duration
+	wheel     time.Duration
+	filter    time.Duration
+	top       time.Duration
+}
+
+// visitTiming is one visitSlot call's stage durations for the per-item
+// diagnostic line. The helpers that perform a stage add their own
+// duration; no timing value influences a decision.
+type visitTiming struct {
+	acquire     time.Duration
+	preClick    time.Duration
+	selectWait  time.Duration
+	detail      time.Duration
+	reference   time.Duration
+	admit       time.Duration
+	retries     int
+	quality     Quality
+	association Association
+	visitIndex  int
+	seq         int
+	admitted    bool
+	completed   bool
 }
 
 // maxTopFlings bounds one position's automatic return-to-top.
@@ -562,15 +601,23 @@ const maxTopFlings = 16
 // (the user's "execute automatically, stop on failure" decision).
 func (run *inventoryRun) run(ctx context.Context) error {
 	for pos := 1; pos <= 6; pos++ {
-		if err := run.preparePosition(ctx, pos); err != nil {
+		positionStart := time.Now()
+		var timing positionTiming
+		if err := run.preparePosition(ctx, pos, &timing); err != nil {
+			positionMs := time.Since(positionStart)
 			run.inv.recordPosition(run.positionScope(false))
+			run.logPositionSummary(timing, 0, positionMs, false)
 			return err
 		}
-		if err := run.collectPosition(ctx); err != nil {
-			run.inv.recordPosition(run.positionScope(false))
+		collectStart := time.Now()
+		err := run.collectPosition(ctx)
+		collectMs := time.Since(collectStart)
+		positionMs := time.Since(positionStart)
+		run.inv.recordPosition(run.positionScope(err == nil))
+		run.logPositionSummary(timing, collectMs, positionMs, err == nil)
+		if err != nil {
 			return err
 		}
-		run.inv.recordPosition(run.positionScope(true))
 	}
 	return nil
 }
@@ -593,10 +640,45 @@ func (run *inventoryRun) positionScope(complete bool) positionScope {
 	}
 }
 
+// logVisit writes one resolved visit's fixed-field timing line: every
+// accepted S disc and every calibrated non-S skip. The values are
+// diagnostic only and never feed a decision.
+func (run *inventoryRun) logVisit(i int, timing *visitTiming, total time.Duration) {
+	outcome := "skipped"
+	if timing.admitted {
+		outcome = "admitted"
+	}
+	quality := "unknown"
+	if timing.quality != QualityUnknown {
+		quality = string(timing.quality)
+	}
+	association := "none"
+	if timing.admitted {
+		association = string(timing.association)
+	}
+	log.Printf("youkai: collect: item position=%d viewport=%d slot=%d visit_index=%d seq=%d outcome=%s quality=%s association=%s retries=%d acquire_ms=%d pre_click_ms=%d select_wait_ms=%d click_detail_ms=%d reference_ms=%d admit_ms=%d total_ms=%d",
+		run.position, run.viewport, i, timing.visitIndex, timing.seq, outcome, quality, association,
+		timing.retries, timing.acquire.Milliseconds(), timing.preClick.Milliseconds(),
+		timing.selectWait.Milliseconds(), timing.detail.Milliseconds(),
+		timing.reference.Milliseconds(), timing.admit.Milliseconds(), total.Milliseconds())
+}
+
+// logPositionSummary writes one wheel position's fixed-field stage totals
+// when its preparation and walk ended, successfully or not. visits counts
+// every resolved visit, admitted S discs and skipped non-S discs alike.
+func (run *inventoryRun) logPositionSummary(timing positionTiming, collect, total time.Duration, complete bool) {
+	log.Printf("youkai: collect: position=%d summary complete=%t establish_ms=%d wheel_ms=%d filter_ms=%d top_ms=%d visit_ms=%d scroll_ms=%d bottom_ms=%d collect_ms=%d total_ms=%d visits=%d scrolls=%d",
+		run.position, complete, timing.establish.Milliseconds(), timing.wheel.Milliseconds(),
+		timing.filter.Milliseconds(), timing.top.Milliseconds(), run.positionVisitMs.Milliseconds(),
+		run.positionScrollMs.Milliseconds(), run.positionBottomMs.Milliseconds(),
+		collect.Milliseconds(), total.Milliseconds(),
+		run.positionVisits, run.positionScrolls)
+}
+
 // preparePosition resets one wheel position's traversal state and performs
 // its automatic preparation. The state reset comes first so a failed
 // preparation never inherits another position's bookkeeping.
-func (run *inventoryRun) preparePosition(ctx context.Context, pos int) error {
+func (run *inventoryRun) preparePosition(ctx context.Context, pos int, timing *positionTiming) error {
 	run.position = pos
 	run.viewport = 0
 	run.visited = make([]bool, len(run.inv.Layout.Slots))
@@ -608,20 +690,36 @@ func (run *inventoryRun) preparePosition(ctx context.Context, pos int) error {
 	run.lastScrollRows = 0
 	run.lastScrollEvidence = ""
 	run.lastDetailFrame = platform.Frame{}
+	run.positionVisitMs = 0
+	run.positionScrollMs = 0
+	run.positionBottomMs = 0
+	run.positionScrolls = 0
 
-	if err := run.establishList(ctx); err != nil {
+	started := time.Now()
+	err := run.establishList(ctx)
+	timing.establish = time.Since(started)
+	if err != nil {
 		return err
 	}
 	run.listEstablished = true
-	if err := run.switchWheel(ctx, pos); err != nil {
+	started = time.Now()
+	err = run.switchWheel(ctx, pos)
+	timing.wheel = time.Since(started)
+	if err != nil {
 		return err
 	}
 	log.Printf("youkai: collect: position %d: wheel selected", pos)
-	if err := run.resetFilters(ctx); err != nil {
+	started = time.Now()
+	err = run.resetFilters(ctx)
+	timing.filter = time.Since(started)
+	if err != nil {
 		return err
 	}
 	log.Printf("youkai: collect: position %d: filter reset and S selected", pos)
-	if err := run.scrollToTop(ctx); err != nil {
+	started = time.Now()
+	err = run.scrollToTop(ctx)
+	timing.top = time.Since(started)
+	if err != nil {
 		return err
 	}
 	run.topVerified = true
@@ -660,7 +758,10 @@ func (run *inventoryRun) collectPosition(ctx context.Context) error {
 				if run.lastScrollRows > 0 && run.lastScrollRows < run.inv.Layout.Rows-1 {
 					return nil
 				}
-				return run.confirmBottom(ctx)
+				bottomStart := time.Now()
+				err := run.confirmBottom(ctx)
+				run.positionBottomMs += time.Since(bottomStart)
+				return err
 			}
 			if err := run.scroll(ctx); err != nil {
 				return err
@@ -1442,10 +1543,21 @@ func (run *inventoryRun) awaitSelectionReturned(ctx context.Context, target, exp
 // take the initial read when the target already carries the selection),
 // wait for the detail to settle on the target with a content change as the
 // association evidence, admit the capture and continue in the same page.
-func (run *inventoryRun) visitSlot(ctx context.Context, i int) error {
+func (run *inventoryRun) visitSlot(ctx context.Context, i int) (err error) {
 	row, col := run.inv.Layout.slotPosition(i)
 	target := fmt.Sprintf("wheel position %d viewport %d slot %d (row %d, column %d)", run.position, run.viewport, i, row, col)
+	timing := &visitTiming{}
+	started := time.Now()
+	defer func() {
+		if err != nil || !timing.completed {
+			return
+		}
+		elapsed := time.Since(started)
+		run.positionVisitMs += elapsed
+		run.logVisit(i, timing, elapsed)
+	}()
 	for attempt := 0; ; attempt++ {
+		timing.retries = attempt
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -1454,7 +1566,9 @@ func (run *inventoryRun) visitSlot(ctx context.Context, i int) error {
 		}
 		// Capacity first (T5 §4: 控制者先取得队列容量), then the platform
 		// premises (重查平台条件), then the pre-click evidence.
+		acquireStart := time.Now()
 		slot := run.h.Acquire(ctx)
+		timing.acquire += time.Since(acquireStart)
 		if slot == nil {
 			return ctx.Err()
 		}
@@ -1467,9 +1581,11 @@ func (run *inventoryRun) visitSlot(ctx context.Context, i int) error {
 		// 可对应). The last admitted frame is already a stable observation
 		// made after the previous action, so it can seed this wait; fresh
 		// frames still have to confirm the current list before the click.
+		preStart := time.Now()
 		pre := run.awaitSettledSeeded(ctx, func(m PageMatch) bool {
 			return run.positionListVerdict(m) && m.List.Occupied[i]
 		}, run.preClickSeed(i))
+		timing.preClick += time.Since(preStart)
 		switch pre.class {
 		case awaitStable:
 		case awaitCanceled, awaitFrameErr:
@@ -1501,7 +1617,11 @@ func (run *inventoryRun) visitSlot(ctx context.Context, i int) error {
 			log.Printf("youkai: collect: %s: selection moved from slot %d to %d between visits (last frame %d reused=%t, pre-click frame %d reused=%t); waiting for slot %d to return before the click (%s)",
 				target, expected, pre.match.List.Selected,
 				run.lastFrame.ID, run.lastFrame.Reused, pre.frame.ID, pre.frame.Reused, expected, pre.match.Evidence)
+			restoreStart := time.Now()
 			restored := run.awaitSelectionReturned(ctx, i, expected)
+			restoreElapsed := time.Since(restoreStart)
+			timing.preClick += restoreElapsed
+			timing.selectWait += restoreElapsed
 			switch restored.class {
 			case awaitStable:
 				log.Printf("youkai: collect: %s: selection returned to slot %d on frame %d; continuing with the pre-click evidence",
@@ -1540,14 +1660,16 @@ func (run *inventoryRun) visitSlot(ctx context.Context, i int) error {
 					"collect: %s is already selected after a click was sent earlier in this position; the shown detail cannot be attributed to a transition",
 					target))
 			}
+			detailStart := time.Now()
 			out, err := run.awaitDetail(ctx, platform.Frame{}, i, true)
+			timing.detail += time.Since(detailStart)
 			if err != nil {
 				slot.Discard()
 				return err
 			}
 			switch out.class {
 			case awaitStable:
-				return run.admit(slot, out, pre.frame, pre.match, i, row, col, AssociationInitial, 0, nil, attempt+1, target)
+				return run.admit(slot, out, pre.frame, pre.match, i, row, col, AssociationInitial, 0, nil, attempt+1, target, timing)
 			case awaitCanceled, awaitFrameErr:
 				slot.Discard()
 				return out.err
@@ -1574,14 +1696,16 @@ func (run *inventoryRun) visitSlot(ctx context.Context, i int) error {
 		run.allowInitial = false
 
 		baseline := run.detailBaseline(pre.frame)
+		detailStart := time.Now()
 		out, err := run.awaitDetail(ctx, baseline, i, false)
+		timing.detail += time.Since(detailStart)
 		if err != nil {
 			slot.Discard()
 			return err
 		}
 		switch out.class {
 		case awaitStable:
-			return run.admit(slot, out, pre.frame, pre.match, i, row, col, AssociationTransition, pre.frame.ID, nil, attempt+1, target)
+			return run.admit(slot, out, pre.frame, pre.match, i, row, col, AssociationTransition, pre.frame.ID, nil, attempt+1, target, timing)
 		case awaitCanceled, awaitFrameErr:
 			slot.Discard()
 			return out.err
@@ -1606,7 +1730,7 @@ func (run *inventoryRun) visitSlot(ctx context.Context, i int) error {
 				// stayed the same as the comparison baseline. One reference
 				// round trip may still prove the target's detail; it is not
 				// a retry of the ineffective click above (T5 §4).
-				return run.referenceRoundTrip(ctx, slot, out, pre.frame, pre.match, i, preSelected, row, col, attempt, target)
+				return run.referenceRoundTrip(ctx, slot, out, pre.frame, pre.match, i, preSelected, row, col, attempt, target, timing)
 			}
 			slot.Discard()
 			return run.detailFault(out, baseline, preSelected, i, false, target)
@@ -1711,7 +1835,11 @@ func (run *inventoryRun) referenceSlot(m PageMatch, target, previous int) (int, 
 // ineffective reference click, the same reference detail, a failed return
 // click or an unstable pane — stops the walk and keeps the already
 // admitted results. There is exactly one round trip: no retry, no scroll.
-func (run *inventoryRun) referenceRoundTrip(ctx context.Context, slot *scan.Slot, targetOut detailOutcome, pre platform.Frame, preMatch PageMatch, target, previous, row, column, attempt int, targetName string) error {
+func (run *inventoryRun) referenceRoundTrip(ctx context.Context, slot *scan.Slot, targetOut detailOutcome, pre platform.Frame, preMatch PageMatch, target, previous, row, column, attempt int, targetName string, timing *visitTiming) error {
+	referenceStart := time.Now()
+	if timing == nil {
+		timing = &visitTiming{}
+	}
 	ref, ok := run.referenceSlot(targetOut.match, target, previous)
 	if !ok {
 		slot.Discard()
@@ -1810,8 +1938,9 @@ func (run *inventoryRun) referenceRoundTrip(ctx context.Context, slot *scan.Slot
 	case awaitStable:
 		log.Printf("youkai: collect: %s: return click selected the target and its detail differs from reference frame %d, stable on frame %d",
 			targetName, refOut.frame.ID, backOut.frame.ID)
+		timing.reference += time.Since(referenceStart)
 		return run.admit(slot, backOut, pre, preMatch, target, row, column, AssociationReference, pre.ID,
-			&referenceCapture{slot: ref, row: refRow, column: refColumn, frame: refOut.frame}, attempt+1, targetName)
+			&referenceCapture{slot: ref, row: refRow, column: refColumn, frame: refOut.frame}, attempt+1, targetName, timing)
 	case awaitCanceled, awaitFrameErr:
 		slot.Discard()
 		return backOut.err
@@ -2051,12 +2180,17 @@ func avatarName(state AvatarState) string {
 // is marked visited and discarded without a record; an undecidable rarity
 // or line count stops the walk with detailUnresolved. ref is non-nil only
 // for a referenceVerified admission.
-func (run *inventoryRun) admit(slot *scan.Slot, out detailOutcome, pre platform.Frame, preMatch PageMatch, i, row, col int, assoc Association, preID uint64, ref *referenceCapture, attempt int, target string) error {
+func (run *inventoryRun) admit(slot *scan.Slot, out detailOutcome, pre platform.Frame, preMatch PageMatch, i, row, col int, assoc Association, preID uint64, ref *referenceCapture, attempt int, target string, timing *visitTiming) error {
 	if out.match.Detail == nil {
 		slot.Discard()
 		return scan.NewFault(CodeDetailUnresolved, fmt.Errorf(
 			"collect: %s settled without a decidable detail pane: %s", target, out.match.Evidence))
 	}
+	if timing == nil {
+		timing = &visitTiming{}
+	}
+	timing.quality = out.match.Detail.Quality
+	timing.association = assoc
 	switch out.match.Detail.Quality {
 	case QualityNotS:
 		run.positionVisits++
@@ -2066,6 +2200,7 @@ func (run *inventoryRun) admit(slot *scan.Slot, out detailOutcome, pre platform.
 		run.lastFrame = out.frame
 		run.lastDetailFrame = out.frame
 		slot.Discard()
+		timing.completed = true
 		return nil
 	case QualityS:
 	default:
@@ -2125,11 +2260,18 @@ func (run *inventoryRun) admit(slot *scan.Slot, out detailOutcome, pre platform.
 		}
 		payload = projected
 	}
-	if _, err := slot.Admit(payload); err != nil {
+	admitStart := time.Now()
+	seq, admitErr := slot.Admit(payload)
+	timing.admit += time.Since(admitStart)
+	if admitErr != nil {
 		slot.Discard()
 		return scan.NewFault(CodeEvidenceFailed, fmt.Errorf(
-			"collect: admit %s: %w", target, err))
+			"collect: admit %s: %w", target, admitErr))
 	}
+	timing.admitted = true
+	timing.visitIndex = run.visitIndex
+	timing.seq = int(seq)
+	timing.completed = true
 	run.listMatch = out.match
 	run.lastFrame = out.frame
 	run.lastDetailFrame = out.frame
@@ -2299,11 +2441,29 @@ func (run *inventoryRun) awaitDetail(ctx context.Context, baseline platform.Fram
 // the same warehouse, so only the matcher's overlap correspondences
 // prove where the list went — a stable warehouse verdict alone proves
 // nothing.
-func (run *inventoryRun) scroll(ctx context.Context) error {
+func (run *inventoryRun) scroll(ctx context.Context) (err error) {
 	before, err := run.currentList(ctx)
 	if err != nil {
 		return err
 	}
+	started := time.Now()
+	fromViewport := run.viewport
+	var drag, settle time.Duration
+	attempts := 0
+	rows := 0
+	var afterID uint64
+	outcome := "error"
+	defer func() {
+		if attempts == 0 {
+			return
+		}
+		elapsed := time.Since(started)
+		run.positionScrollMs += elapsed
+		log.Printf("youkai: collect: scroll position=%d viewport_from=%d viewport_to=%d outcome=%s attempts=%d drag_ms=%d settle_ms=%d total_ms=%d rows=%d before_frame=%d after_frame=%d",
+			run.position, fromViewport, run.viewport, outcome, attempts,
+			drag.Milliseconds(), settle.Milliseconds(), elapsed.Milliseconds(),
+			rows, before.ID, afterID)
+	}()
 	for attempt := 0; ; attempt++ {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -2314,6 +2474,7 @@ func (run *inventoryRun) scroll(ctx context.Context) error {
 		if err := run.observeReady(ctx); err != nil {
 			return err
 		}
+		dispatchStart := time.Now()
 		res := run.view.Dispatch(platform.InputOp{
 			Kind:     platform.InputDrag,
 			Geometry: run.geo,
@@ -2323,20 +2484,27 @@ func (run *inventoryRun) scroll(ctx context.Context) error {
 			Steps:    10,
 			Duration: run.inv.Layout.ScrollDuration,
 		})
+		drag += time.Since(dispatchStart)
+		attempts++
 		if err := run.dispatchOutcome(ctx, res); err != nil {
 			return err
 		}
+		settleStart := time.Now()
 		out, err := run.awaitScroll(ctx, before)
+		settle += time.Since(settleStart)
 		if err != nil {
 			return err
 		}
+		afterID = out.after.ID
 		if out.afterMatch.Page == PageWarehouse && !run.positionListVerdict(out.afterMatch) {
+			outcome = "wrong-position"
 			return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
 				"collect: wheel position %d: the scroll left the list at another wheel position: %s",
 				run.position, out.afterMatch.Evidence))
 		}
 		switch {
 		case out.lost:
+			outcome = "lost"
 			log.Printf("youkai: collect: position %d scroll %d -> %d lost: unsettled=%t after=%d rows=%d matches=%d evidence=%s",
 				run.position, before.ID, out.after.ID, out.unsettled, out.after.ID,
 				out.match.Rows, len(out.match.Matches), out.match.Evidence)
@@ -2350,15 +2518,20 @@ func (run *inventoryRun) scroll(ctx context.Context) error {
 				out.after.ID, out.match.Evidence))
 		case out.displaced:
 			if len(out.match.Matches) == 0 {
+				outcome = "ambiguous"
 				log.Printf("youkai: collect: position %d scroll %d -> %d displaced without correspondences: rows=%d evidence=%s",
 					run.position, before.ID, out.after.ID, out.match.Rows, out.match.Evidence)
 				return scan.NewFault(CodePositionLost, errors.New(
 					"collect: the list displaced but the matcher reported no correspondences"))
 			}
 			if err := run.applyTransition(before, out.after, run.listMatch, out.afterMatch, out.match); err != nil {
+				outcome = "rejected"
 				log.Printf("youkai: collect: position %d scroll %d -> %d rejected: %v", run.position, before.ID, out.after.ID, err)
 				return err
 			}
+			outcome = "displaced"
+			rows = out.match.Rows
+			run.positionScrolls++
 			run.listMatch = out.afterMatch
 			run.lastFrame = out.after
 			run.lastScrollRows = out.match.Rows
@@ -2369,12 +2542,14 @@ func (run *inventoryRun) scroll(ctx context.Context) error {
 				run.position, before.ID, out.after.ID, out.match.Rows, len(out.match.Matches))
 			return nil
 		case out.stationary:
+			outcome = "stationary"
 			if attempt < run.inv.maxRetries() {
 				continue
 			}
 			return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
 				"collect: the drag never displaced the list within the budget (attempt %d) and no end evidence held", attempt+1))
 		default:
+			outcome = "undecided"
 			if attempt < run.inv.maxRetries() {
 				continue
 			}

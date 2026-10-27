@@ -27,6 +27,12 @@ import (
 )
 
 func main() {
+	// Microsecond timestamps: the scan diagnostics measure per-item stages
+	// and checkpoint saves, and second precision cannot separate them. No
+	// code or tooling parses the log timestamp format (checked across the
+	// repository), so the whole process output uses one format.
+	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
+
 	// The install-time recognition self-check: an explicit environment
 	// switch (any non-empty YOUKAI_SELFTEST) turns the process into a
 	// one-shot check of the artifacts this build actually ships — load the

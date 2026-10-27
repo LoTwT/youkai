@@ -41,6 +41,10 @@ type recordStore interface {
 	CreateRecord(id string) error
 	WriteEvidence(recordID, evidenceID string, image []byte) (record.EvidenceFile, error)
 	SaveCheckpoint(recordID string, cp record.Checkpoint) (int64, error)
+	// CheckpointBytes is the saved generation's on-disk size for the
+	// checkpoint diagnostic line. A failure only leaves the size unknown;
+	// it never fails the save.
+	CheckpointBytes(recordID string, revision int64) (int64, error)
 	// SaveRevision appends one manual revision to a finished item of the
 	// newest saved checkpoint. The review flow reaches it through the
 	// service, never through the scan deliverer.
@@ -394,14 +398,21 @@ func (d *recordDeliverer) saveLocked() error {
 		Items:    append([]record.ItemRecord(nil), d.items...),
 		Evidence: append([]record.EvidenceFile(nil), d.evidence...),
 	}
+	started := time.Now()
 	gen, err := d.store.SaveCheckpoint(d.recordID, doc)
+	elapsed := time.Since(started)
 	if err != nil {
 		return fmt.Errorf("app: save checkpoint of %s: %w", d.recordID, err)
+	}
+	size, sizeErr := d.store.CheckpointBytes(d.recordID, gen)
+	if sizeErr != nil {
+		size = -1
 	}
 	d.savedGeneration = gen
 	d.savedItems = len(d.items)
 	d.sinceSave = 0
-	log.Printf("youkai: scan %s: checkpoint generation %d saved (%d items)", d.recordID, gen, d.savedItems)
+	log.Printf("youkai: scan %s: checkpoint generation %d saved (%d items, %d bytes, %d ms)",
+		d.recordID, gen, d.savedItems, size, elapsed.Milliseconds())
 	return nil
 }
 
