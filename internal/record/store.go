@@ -8,14 +8,21 @@
 // filename-safe character set, so a record can never reach outside its
 // directory.
 //
-// Durability rules (architecture section 5): evidence is written, synced
-// and closed before a checkpoint may reference it; every save writes a new
-// generation file and reports success only after a complete write, sync
-// and close — os.Rename is not relied on, because it is not atomic on
-// Windows; recovery loads the newest generation that verifies, falls back
-// to the previous one and marks what the crash left unfinished as
-// interrupted unprocessed, never upgrading the coverage conclusion. All
-// writes go through one serial writer inside Store.
+// Durability rules (architecture section 5): evidence files are written
+// and closed as they arrive; the pending ones a checkpoint cites are synced,
+// together with the evidence directory, before that generation is written.
+// Sync is File.Sync, so darwin uses F_FULLFSYNC where the filesystem supports
+// it and Go falls back to fsync on ENOTSUP; Windows has no directory flush
+// and relies on its file sync plus the filesystem's metadata journal. Every
+// save writes a new generation file and reports success only after a
+// complete write, sync and close — os.Rename is not relied on, because it
+// is not atomic on Windows; recovery loads the newest generation that
+// verifies, falls back to the previous one and marks what the crash left
+// unfinished as interrupted unprocessed, never upgrading the coverage
+// conclusion. Recovery re-reads and re-hashes evidence, so a retried fsync
+// that reports success after losing the data (possible on Linux) surfaces
+// as a failed generation and falls back to the previous one. All writes go
+// through one serial writer inside Store.
 //
 // Checkpoints are an internal, versioned format, deliberately not the
 // public scan.json contract: they carry running state (queued and running
@@ -66,6 +73,11 @@ type recordState struct {
 	// completed writes and fully loaded generations. Retention consults
 	// it to decide which older generation is worth keeping.
 	valid map[int64]bool
+	// pendingEvidence names the evidence files whose contents or
+	// directory entry this process has not synced yet. A checkpoint save
+	// syncs the ones it cites before writing the generation; a failed
+	// sync leaves them here for the retry.
+	pendingEvidence map[string]struct{}
 }
 
 var (
@@ -136,7 +148,10 @@ func (s *Store) generationPath(id string, revision int64) string {
 func (s *Store) state(id string) *recordState {
 	st, ok := s.records[id]
 	if !ok {
-		st = &recordState{valid: make(map[int64]bool)}
+		st = &recordState{
+			valid:           make(map[int64]bool),
+			pendingEvidence: make(map[string]struct{}),
+		}
 		s.records[id] = st
 	}
 	return st

@@ -45,6 +45,26 @@ func cleanupRecord(t *testing.T, st *Store, id string) (EvidenceFile, EvidenceFi
 	return detail, coverage
 }
 
+// Deleting the screenshots also drops the pending-sync bookkeeping of the
+// files it removed; otherwise a later save would try to sync paths that no
+// longer exist.
+func TestDeleteEvidenceClearsPendingEvidence(t *testing.T) {
+	st, _ := newTestStore(t)
+	id := "rec-1"
+	cleanupRecord(t, st, id)
+	writeEvidence(t, st, id, "late-1", []byte("written after the checkpoint"))
+	if pending := st.state(id).pendingEvidence; len(pending) != 1 {
+		t.Fatalf("pending evidence = %d entries, want 1", len(pending))
+	}
+
+	if _, err := st.DeleteEvidence(id); err != nil {
+		t.Fatalf("DeleteEvidence: %v", err)
+	}
+	if pending := st.state(id).pendingEvidence; len(pending) != 0 {
+		t.Errorf("pending evidence after deletion = %v, want empty", pending)
+	}
+}
+
 func TestDeleteEvidenceWritesNewGenerationAndKeepsReviewState(t *testing.T) {
 	st, root := newTestStore(t)
 	id := "rec-1"
