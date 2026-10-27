@@ -39,11 +39,12 @@ type Inventory struct {
 	Project func(Observation) (any, error)
 	// DiagnosticDir, when non-empty, receives PNG crops of the list
 	// before and after a scroll or bottom confirmation whose outcome
-	// stopped the walk (wrong position, lost, ambiguous, rejected or
-	// unconfirmed), so a field failure can be re-examined against the
-	// matcher's thresholds. It is observation only and bounded: a few
-	// dumps per walk, and the directory keeps only the newest files. Empty
-	// disables the dumps.
+	// stopped the walk (wrong position, lost, ambiguous, rejected, a
+	// bottom confirmation that displaced the list, a scroll that stayed
+	// stationary, or an exhausted undecided wait), so a field failure can
+	// be re-examined against the matcher's thresholds. It is observation
+	// only and bounded: a few dumps per walk, and the directory keeps only
+	// the newest files. Empty disables the dumps.
 	DiagnosticDir string
 
 	// ActionBudget bounds one action's whole effect-and-settle wait —
@@ -773,10 +774,7 @@ func (run *inventoryRun) collectPosition(ctx context.Context) error {
 				if run.lastScrollRows > 0 && run.lastScrollRows < run.inv.Layout.Rows-1 {
 					return nil
 				}
-				bottomStart := time.Now()
-				err := run.confirmBottom(ctx)
-				run.positionBottomMs += time.Since(bottomStart)
-				return err
+				return run.confirmBottomStep(ctx)
 			}
 			if err := run.scroll(ctx); err != nil {
 				return err
@@ -1455,20 +1453,42 @@ func topConfirmed(out scrollOutcome, beforeOK, afterOK bool, beforeStart, afterS
 	return thumbStable
 }
 
+// failureFrames is a failed step's before/after pair, returned to the
+// caller so the diagnostic write happens after the step's timing is
+// recorded. A nil pair means the failure has no usable after frame.
+type failureFrames struct {
+	kind   string
+	before platform.Frame
+	after  platform.Frame
+}
+
+// confirmBottomStep runs confirmBottom, accumulates its duration, and only
+// then writes any failure crops. Keeping the write outside the timed span
+// keeps bottom_ms a decision cost, matching scroll_ms.
+func (run *inventoryRun) confirmBottomStep(ctx context.Context) error {
+	started := time.Now()
+	frames, err := run.confirmBottom(ctx)
+	run.positionBottomMs += time.Since(started)
+	if frames != nil {
+		run.dumpScrollFrames(frames.kind, frames.before, frames.after)
+	}
+	return err
+}
+
 // confirmBottom pairs the scrollbar's bottom evidence with one more drag
 // in the advance direction that must leave the list stationary: at the
 // list's end the content cannot move further (T5 §5's "再拖一次，前后帧
 // 列表区误差 < 4"). The complete walk needs both kinds of evidence.
-func (run *inventoryRun) confirmBottom(ctx context.Context) error {
+func (run *inventoryRun) confirmBottom(ctx context.Context) (*failureFrames, error) {
 	for attempt := 0; ; attempt++ {
 		if err := ctx.Err(); err != nil {
-			return err
+			return nil, err
 		}
 		if !run.h.InputPermitted() {
-			return ctx.Err()
+			return nil, ctx.Err()
 		}
 		if err := run.observeReady(ctx); err != nil {
-			return err
+			return nil, err
 		}
 		res := run.view.Dispatch(platform.InputOp{
 			Kind:     platform.InputDrag,
@@ -1480,43 +1500,45 @@ func (run *inventoryRun) confirmBottom(ctx context.Context) error {
 			Duration: run.inv.Layout.ScrollDuration,
 		})
 		if err := run.dispatchOutcome(ctx, res); err != nil {
-			return err
+			return nil, err
 		}
 		before := run.lastFrame
 		out, err := run.awaitScroll(ctx, before)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if out.afterMatch.Page == PageWarehouse && !run.positionListVerdict(out.afterMatch) {
-			if out.after.ID != 0 && out.after.Image != nil {
-				run.dumpScrollFrames("bottom-wrong-position", before, out.after)
-			}
-			return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
+			fault := scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
 				"collect: wheel position %d: the bottom confirmation left the list at another wheel position: %s",
 				run.position, out.afterMatch.Evidence))
+			if out.after.ID != 0 && out.after.Image != nil {
+				return &failureFrames{kind: "bottom-wrong-position", before: before, after: out.after}, fault
+			}
+			return nil, fault
 		}
 		switch {
 		case out.stationary:
 			run.listMatch = out.afterMatch
 			run.lastFrame = out.after
-			return nil
+			return nil, nil
 		case out.lost:
-			run.dumpScrollFrames("bottom-lost", before, out.after)
-			return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
+			fault := scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
 				"collect: the bottom confirmation could not verify that the list stayed at the end: %s", out.match.Evidence))
+			return &failureFrames{kind: "bottom-lost", before: before, after: out.after}, fault
 		case out.displaced:
-			run.dumpScrollFrames("bottom-displaced", before, out.after)
-			return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
+			fault := scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
 				"collect: the bottom confirmation moved the list, contradicting the scrollbar's bottom evidence: %s", out.match.Evidence))
+			return &failureFrames{kind: "bottom-displaced", before: before, after: out.after}, fault
 		default:
 			if attempt < run.inv.maxRetries() {
 				continue
 			}
-			if out.after.ID != 0 && out.after.Image != nil {
-				run.dumpScrollFrames("bottom-undecided", before, out.after)
-			}
-			return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
+			fault := scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
 				"collect: the bottom confirmation produced no verifiable verdict within the budget (attempt %d)", attempt+1))
+			if out.after.ID != 0 && out.after.Image != nil {
+				return &failureFrames{kind: "bottom-undecided", before: before, after: out.after}, fault
+			}
+			return nil, fault
 		}
 	}
 }

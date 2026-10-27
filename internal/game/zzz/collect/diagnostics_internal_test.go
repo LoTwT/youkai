@@ -60,6 +60,18 @@ func TestScrollFailureDumpWritesBoundedCrops(t *testing.T) {
 	off.dumpScrollFrames("scroll-lost", frame(1), frame(2))
 }
 
+// TestScrollFailureDumpSkipsNilImages pins the typed-nil guard: frames
+// without an image are reported and skipped instead of panicking in
+// Bounds, and no file is written.
+func TestScrollFailureDumpSkipsNilImages(t *testing.T) {
+	dir := t.TempDir()
+	run := &inventoryRun{inv: &Inventory{Layout: MacCloudLayout(), DiagnosticDir: dir}, position: 1, viewport: 4}
+	run.dumpScrollFrames("scroll-lost", platform.Frame{ID: 10}, platform.Frame{ID: 11})
+	if files, err := filepath.Glob(filepath.Join(dir, "*.png")); err != nil || len(files) != 0 {
+		t.Fatalf("nil images wrote %v (err %v), want no files", files, err)
+	}
+}
+
 // TestPruneDiagnosticsKeepsNewest pins the directory bound: only the
 // newest files by their timestamped names survive.
 func TestPruneDiagnosticsKeepsNewest(t *testing.T) {

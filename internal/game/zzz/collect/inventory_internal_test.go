@@ -558,25 +558,29 @@ func (v *failingObserveView) Observe() (platform.Observation, error) {
 	return platform.Observation{Ready: true, Geometry: 1}, nil
 }
 
-// scrollSessionController runs one scripted scroll on the session's
-// producer goroutine, so scroll sees a real input-permission handle.
-type scrollSessionController struct {
-	run   *inventoryRun
-	errCh chan error
+// scriptedSessionController runs one scripted traversal step on the
+// session's producer goroutine, so the step sees a real input-permission
+// handle.
+type scriptedSessionController struct {
+	run    *inventoryRun
+	action func(context.Context, *inventoryRun) error
+	errCh  chan error
 }
 
-func (c *scrollSessionController) Prepare(context.Context, *scan.ControllerHandle) error { return nil }
+func (c *scriptedSessionController) Prepare(context.Context, *scan.ControllerHandle) error {
+	return nil
+}
 
-func (c *scrollSessionController) Collect(ctx context.Context, h *scan.ControllerHandle) error {
+func (c *scriptedSessionController) Collect(ctx context.Context, h *scan.ControllerHandle) error {
 	c.run.h = h
-	err := c.run.scroll(ctx)
+	err := c.action(ctx, c.run)
 	c.errCh <- err
 	return err
 }
 
-func runScriptedScroll(t *testing.T, run *inventoryRun) error {
+func runScriptedSession(t *testing.T, run *inventoryRun, action func(context.Context, *inventoryRun) error) error {
 	t.Helper()
-	ctrl := &scrollSessionController{run: run, errCh: make(chan error, 1)}
+	ctrl := &scriptedSessionController{run: run, action: action, errCh: make(chan error, 1)}
 	sess, err := scan.Start(scan.Config{
 		ID:         scan.ID("scripted-scroll-diagnostics"),
 		Capacity:   1,
@@ -593,13 +597,20 @@ func runScriptedScroll(t *testing.T, run *inventoryRun) error {
 		select {
 		case <-sess.Done():
 		case <-time.After(5 * time.Second):
-			t.Fatal("the scripted scroll session never sealed")
+			t.Fatal("the scripted traversal session never sealed")
 		}
 		return err
 	case <-time.After(5 * time.Second):
-		t.Fatal("the scripted scroll never returned")
+		t.Fatal("the scripted traversal step never returned")
 		return nil
 	}
+}
+
+func runScriptedScroll(t *testing.T, run *inventoryRun) error {
+	t.Helper()
+	return runScriptedSession(t, run, func(ctx context.Context, run *inventoryRun) error {
+		return run.scroll(ctx)
+	})
 }
 
 func newScriptedScrollRun(l Layout, view SessionView, m Matcher, dir string, retries int, budget time.Duration) *inventoryRun {
@@ -681,6 +692,44 @@ func TestScrollRetryAfterVerdictDoesNotDumpPreviousAttempt(t *testing.T) {
 	}
 	if files := diagnosticPNGs(t, dir); len(files) != 0 {
 		t.Fatalf("a failure before the verdict wrote %v, want no crops", files)
+	}
+}
+
+// TestConfirmBottomFailureWritesDiagnostics drives the real bottom
+// confirmation to a displaced failure through confirmBottomStep, the timed
+// caller that writes the pair after bottom_ms is accumulated. The write
+// must not change the fault.
+func TestConfirmBottomFailureWritesDiagnostics(t *testing.T) {
+	l := sixRowScrollLayout()
+	frame := func(id uint64) platform.Frame {
+		return platform.Frame{ID: id, Geometry: 1, Image: image.NewRGBA(image.Rect(0, 0, 1280, 1000))}
+	}
+	view := &scrollScriptView{frames: []platform.Frame{frame(2), frame(3)}}
+	m := &scrollScriptMatcher{rows: l.Rows, columns: l.Columns, verdict: map[scrollPair]ScrollMatch{
+		{1, 2}: displacedScan(l, 4),
+		{2, 3}: {Stationary: true, Evidence: "scripted settled"},
+	}}
+	dir := t.TempDir()
+	run := newScriptedScrollRun(l, view, m, dir, 0, time.Second)
+	run.lastFrame = frame(1)
+
+	err := runScriptedSession(t, run, func(ctx context.Context, run *inventoryRun) error {
+		return run.confirmBottomStep(ctx)
+	})
+	if err == nil {
+		t.Fatal("a displaced bottom confirmation must stop the walk")
+	}
+	if run.positionBottomMs <= 0 {
+		t.Fatal("the bottom confirmation did not record its decision time")
+	}
+	files := diagnosticPNGs(t, dir)
+	if len(files) != 2 {
+		t.Fatalf("the displaced bottom confirmation wrote %d crops, want a before/after pair", len(files))
+	}
+	for _, path := range files {
+		if !strings.Contains(filepath.Base(path), "-bottom-displaced-") {
+			t.Fatalf("crop %q does not name the bottom-confirmation verdict", path)
+		}
 	}
 }
 
