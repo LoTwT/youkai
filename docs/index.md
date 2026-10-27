@@ -9,6 +9,7 @@
 - [T3：OCR 运行库、模型与样本](specs/t3-ocr-runtime-model-samples.md)：固定的绑定、运行库与模型组合及制品核查、预处理与解码基准、三组样本与识别质量门槛。
 - T4：扫描会话与结果契约：直接在[架构第 5 节](specs/scanner-architecture.md#5-扫描会话与结果语义)维护。
 - [T5：绝区零仓库遍历与详情归属](specs/t5-zzz-inventory-traversal.md)：页面预检、选中与详情归属、滚动衔接、末尾判断和完整性验收；macOS 云客户端的布局、阈值、单页流程（4b-1）与位置×列表两层遍历（4b-2）已标定并实现，面板排序标签模板验证与六位置覆盖账目已接入 observedScope；2026-10-20 现场干净运行完成 1,005 件、六位置 `complete` 且排序验证为“稀有度”。
+- [按位置重试与续扫（草案）](specs/position-retry-design.md)：位置级故障的一次自动重试与会话内续走设计；比较全量重走、绝对格位继承、新会话合并三种取舍，推荐带绝对格位继承的会话内重试（A2）；状态为草案，未经用户确认，不代表已采纳。
 - [T6：用户操作、结果校对与导出](specs/t6-review-export-workflow.md)：准备到导出的操作流程、逐件校对、JSON/CSV 两种导出、历史与截图/记录清理。
 - [扫描结果 JSON/CSV v2](specs/scan-json-format.md)：自有可用数据文件契约（JSON 与同源 CSV），附[合成示例](examples/scan-usable-v2.json)；导出与自动接受已实现并合并，真机验收待完成。
 - [T7：构建打包与交付验收](specs/t7-public-release-acceptance.md)：首版交付门槛、无付费证书的打包路线、最低系统候选。
