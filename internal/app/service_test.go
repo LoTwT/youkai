@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"image"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -114,6 +116,56 @@ func TestStartInvalidRequests(t *testing.T) {
 	}
 	if records, err := svc2.ListRecords(); err != nil || len(records) != 0 {
 		t.Fatalf("refused start persisted %v (err %v), want nothing", records, err)
+	}
+}
+
+// TestQuitDuringFirstModelLoadDiscardsCreatedRecord covers the refusal
+// after the record directory already exists: the model load holds the
+// start in its preparation window, Quit begins, and the commit then
+// refuses the session. The just-created record has no checkpoint, so it
+// must be removed instead of appearing in history as unrecoverable.
+func TestQuitDuringFirstModelLoadDiscardsCreatedRecord(t *testing.T) {
+	paths := newTestPaths(t)
+	loading := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	svc, _ := newTestService(t, paths, staticSource{spec: specOf(newGatedController())}, func() (Recognizer, error) {
+		once.Do(func() { close(loading) })
+		<-release
+		return newFakeRecognizer(), nil
+	}, func() error { return nil })
+
+	started := make(chan error, 1)
+	go func() {
+		_, err := svc.Start(StartRequest{ID: "r1"})
+		started <- err
+	}()
+	<-loading
+	sessionID := svc.Snapshot().SessionID
+	if sessionID == "" {
+		t.Fatal("the preparing start has no session id")
+	}
+
+	quit := make(chan error, 1)
+	go func() { quit <- svc.Quit() }()
+	waitFor(t, 10*time.Second, "the service to begin quitting", func() bool {
+		svc.mu.Lock()
+		defer svc.mu.Unlock()
+		return svc.quitting
+	})
+	close(release)
+
+	if err := <-started; err == nil || !strings.Contains(err.Error(), "quitting") {
+		t.Fatalf("start during quit: err = %v, want the quitting refusal", err)
+	}
+	if err := <-quit; err != nil {
+		t.Fatalf("Quit: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(paths.Data, "sessions", string(sessionID))); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("refused session directory survived: stat err = %v", err)
+	}
+	if records, err := svc.ListRecords(); err != nil || len(records) != 0 {
+		t.Fatalf("records after the refused start = %+v err %v, want none", records, err)
 	}
 }
 

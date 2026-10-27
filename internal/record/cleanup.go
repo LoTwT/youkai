@@ -308,6 +308,11 @@ func (s *Store) removeEvidenceFilesLocked(recordID string) (removed int, removed
 		return 0, 0, nil, errors.New("the evidence path is not a directory")
 	}
 	entries, err := s.fs.ReadDir(dir)
+	if err != nil {
+		// Without the listing nothing was deleted, so the directory must
+		// stay; report the real cause instead of a later "not empty".
+		return 0, 0, nil, fmt.Errorf("read evidence directory: %w", err)
+	}
 	var errs []error
 	unknown := false
 	for _, e := range entries {
