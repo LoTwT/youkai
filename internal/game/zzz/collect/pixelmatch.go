@@ -517,8 +517,8 @@ func (m *PixelMatcher) MatchScroll(before, after platform.Frame) ScrollMatch {
 		// of several possible positions; the traversal must stop instead.
 		if rivalRows, rivalErr, ambiguous := m.rivalShift(direction*rows, bestErr, rowErrors); ambiguous {
 			return ScrollMatch{Lost: true, Evidence: fmt.Sprintf(
-				"frames %d → %d: row shift %d (error %.2f) and %d (error %.2f) are both plausible; the alignments do not uniquely identify the displacement (margin %.1f)",
-				before.ID, after.ID, rows, bestErr, rivalRows, rivalErr, m.C.ScrollShiftMargin)}
+				"frames %d → %d: row shift %d (error %.2f) and %d (error %.2f) are both plausible; the alignments do not uniquely identify the displacement (margin %.1f); row candidates %s",
+				before.ID, after.ID, rows, bestErr, rivalRows, rivalErr, m.C.ScrollShiftMargin, formatRowErrors(rowErrors))}
 		}
 		matches := make([]PositionPair, 0, (m.L.Rows-rows)*m.L.Columns)
 		for r := 0; r < m.L.Rows-rows; r++ {

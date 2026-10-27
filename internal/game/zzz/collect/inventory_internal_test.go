@@ -697,8 +697,10 @@ func TestScrollRetryAfterVerdictDoesNotDumpPreviousAttempt(t *testing.T) {
 
 // TestConfirmBottomFailureWritesDiagnostics drives the real bottom
 // confirmation to a displaced failure through confirmBottomStep, the timed
-// caller that writes the pair after bottom_ms is accumulated. The write
-// must not change the fault.
+// caller that writes the pair after bottom_ms is accumulated. A controlled
+// clock pins the order: the write's stamp is the third reading, so moving
+// the PNG write back inside the timed span would report its full second in
+// bottom_ms. The write must not change the fault.
 func TestConfirmBottomFailureWritesDiagnostics(t *testing.T) {
 	l := sixRowScrollLayout()
 	frame := func(id uint64) platform.Frame {
@@ -713,14 +715,33 @@ func TestConfirmBottomFailureWritesDiagnostics(t *testing.T) {
 	run := newScriptedScrollRun(l, view, m, dir, 0, time.Second)
 	run.lastFrame = frame(1)
 
+	// Start, elapsed, then the dump's file stamp. If the dump is timed,
+	// the elapsed reading becomes the third time (one second later).
+	base := time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC)
+	clockTimes := []time.Time{base, base.Add(time.Millisecond), base.Add(time.Second)}
+	clockCalls := 0
+	previousNow := diagnosticNow
+	diagnosticNow = func() time.Time {
+		i := clockCalls
+		clockCalls++
+		if i >= len(clockTimes) {
+			return clockTimes[len(clockTimes)-1]
+		}
+		return clockTimes[i]
+	}
+	t.Cleanup(func() { diagnosticNow = previousNow })
+
 	err := runScriptedSession(t, run, func(ctx context.Context, run *inventoryRun) error {
 		return run.confirmBottomStep(ctx)
 	})
 	if err == nil {
 		t.Fatal("a displaced bottom confirmation must stop the walk")
 	}
-	if run.positionBottomMs <= 0 {
-		t.Fatal("the bottom confirmation did not record its decision time")
+	if clockCalls != 3 {
+		t.Fatalf("the diagnostic clock was read %d times, want the start, elapsed and one dump stamp", clockCalls)
+	}
+	if run.positionBottomMs != time.Millisecond {
+		t.Fatalf("bottom_ms = %s, want the 1ms decision span; a timed dump would report 1s", run.positionBottomMs)
 	}
 	files := diagnosticPNGs(t, dir)
 	if len(files) != 2 {

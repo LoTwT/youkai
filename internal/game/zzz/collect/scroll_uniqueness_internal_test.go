@@ -27,6 +27,10 @@ func TestMatchScrollRejectsCloseSameDirectionRow(t *testing.T) {
 	if !strings.Contains(sm.Evidence, "do not uniquely identify") {
 		t.Fatalf("ambiguous evidence = %q, want the competing alignments named", sm.Evidence)
 	}
+	const wantCandidates = "row candidates -4=94.88 -3=146.80 -2=2.92 -1=121.59 +1=1.48 +2=131.23 +3=146.89 +4=0.00"
+	if !strings.HasSuffix(sm.Evidence, wantCandidates) {
+		t.Fatalf("ambiguous evidence = %q, want the full %q", sm.Evidence, wantCandidates)
+	}
 }
 
 // gradientListFrame paints a three-row periodic pattern plus a slow

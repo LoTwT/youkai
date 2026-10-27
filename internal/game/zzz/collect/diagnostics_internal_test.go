@@ -1,9 +1,12 @@
 package collect
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
 	"image"
 	"image/png"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -69,6 +72,47 @@ func TestScrollFailureDumpSkipsNilImages(t *testing.T) {
 	run.dumpScrollFrames("scroll-lost", platform.Frame{ID: 10}, platform.Frame{ID: 11})
 	if files, err := filepath.Glob(filepath.Join(dir, "*.png")); err != nil || len(files) != 0 {
 		t.Fatalf("nil images wrote %v (err %v), want no files", files, err)
+	}
+}
+
+// TestPruneDiagnosticsLogsFailures pins the best-effort cleanup's
+// observability: a directory read failure and every file removal failure
+// are logged with the path and error, and pruning still returns no error
+// to the walk.
+func TestPruneDiagnosticsLogsFailures(t *testing.T) {
+	dir := t.TempDir()
+	logs := &bytes.Buffer{}
+	previous := log.Writer()
+	log.SetOutput(logs)
+	t.Cleanup(func() { log.SetOutput(previous) })
+
+	readErr := errors.New("scripted read failure")
+	pruneDiagnosticsWith(dir, 2, func(string) ([]os.DirEntry, error) {
+		return nil, readErr
+	}, func(string) error {
+		t.Fatal("prune removed a file after a failed read")
+		return nil
+	})
+	if got := logs.String(); !strings.Contains(got, "read "+dir) || !strings.Contains(got, readErr.Error()) {
+		t.Fatalf("read failure log = %q, want the directory %q and %v", got, dir, readErr)
+	}
+
+	for i := 0; i < 3; i++ {
+		path := filepath.Join(dir, fmt.Sprintf("2026102%d-000000000-x.png", i))
+		if err := os.WriteFile(path, []byte("png"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	logs.Reset()
+	removeErr := errors.New("scripted remove failure")
+	pruneDiagnosticsWith(dir, 1, os.ReadDir, func(string) error { return removeErr })
+	if got := logs.String(); strings.Count(got, removeErr.Error()) != 2 {
+		t.Fatalf("removal failure log = %q, want one line for each of the two oldest files", got)
+	}
+	for _, name := range []string{"20261020-000000000-x.png", "20261021-000000000-x.png"} {
+		if path := filepath.Join(dir, name); !strings.Contains(logs.String(), "remove "+path) {
+			t.Fatalf("removal failure log = %q, want the path %q", logs.String(), path)
+		}
 	}
 }
 

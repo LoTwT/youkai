@@ -1466,9 +1466,9 @@ type failureFrames struct {
 // then writes any failure crops. Keeping the write outside the timed span
 // keeps bottom_ms a decision cost, matching scroll_ms.
 func (run *inventoryRun) confirmBottomStep(ctx context.Context) error {
-	started := time.Now()
+	started := diagnosticNow()
 	frames, err := run.confirmBottom(ctx)
-	run.positionBottomMs += time.Since(started)
+	run.positionBottomMs += diagnosticNow().Sub(started)
 	if frames != nil {
 		run.dumpScrollFrames(frames.kind, frames.before, frames.after)
 	}
