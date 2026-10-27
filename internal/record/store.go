@@ -9,11 +9,11 @@
 // directory.
 //
 // Durability rules (architecture section 5): evidence files are written
-// and closed as they arrive. The pending ones a checkpoint cites are
-// fsynced, then the evidence directory is flushed, before that generation
-// is written; darwin batches its per-file fsync calls behind one
-// F_FULLFSYNC directory barrier, while Windows has no directory flush and
-// relies on its file sync plus the filesystem's metadata journal. Every
+// and closed as they arrive; the pending ones a checkpoint cites are synced,
+// together with the evidence directory, before that generation is written.
+// Sync is File.Sync, so darwin uses F_FULLFSYNC where the filesystem supports
+// it and Go falls back to fsync on ENOTSUP; Windows has no directory flush
+// and relies on its file sync plus the filesystem's metadata journal. Every
 // save writes a new generation file and reports success only after a
 // complete write, sync and close — os.Rename is not relied on, because it
 // is not atomic on Windows; recovery loads the newest generation that

@@ -1,4 +1,4 @@
-//go:build !darwin && !windows
+//go:build !windows
 
 package record
 
@@ -8,9 +8,9 @@ import (
 )
 
 // syncDir flushes the directory entries to stable storage. Unix exposes a
-// directory as a readable handle whose fsync flushes the entries; the error
-// is returned because losing a new entry would make a checkpoint that cites
-// the file unrecoverable after a crash.
+// directory as a readable handle whose File.Sync flushes the entries; the
+// error is returned because losing a new entry would make a checkpoint that
+// cites the file unrecoverable after a crash.
 func syncDir(dir string) error {
 	file, err := os.Open(dir)
 	if err != nil {

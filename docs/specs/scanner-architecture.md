@@ -193,7 +193,7 @@ ZZZ 侧消费这些约束的遍历骨架（页面匹配契约、导航状态机�
 
 检查点用有界批次写入，每次写新代次文件，完整写入、同步、关闭后才报告已保存。证据文件按采集顺序写入并关闭，但不逐张同步；检查点引用的待同步证据在**该代次写入前**统一同步文件内容，并在有目录同步原语的平台同步证据目录项。同步失败则不写检查点并保留待同步状态供重试。保留当前与上一份有效代次。异常后只恢复最近可验证的检查点并标记中断：排队或运行条目转为中断未处理，覆盖不能升级为全部；没有有效检查点时显示无法恢复。断电与磁盘故障另作故障验收。非 Unix 平台的 `os.Rename` 不保证原子，因此采用新代次加保留旧文件；`File.Sync` 与关闭错误都要处理。[os.Rename](https://pkg.go.dev/os#Rename) · [Sync](https://pkg.go.dev/os#File.Sync)
 
-darwin 上 Go 的 `File.Sync` 会逐次调用 `F_FULLFSYNC`；因此批次内证据文件只做普通 `fsync`，再由证据目录上的一次 `F_FULLFSYNC` 作为屏障。依据 Apple [fsync(2)](https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/fsync.2.html)：`fsync` 把数据交给设备，`F_FULLFSYNC` 才要求设备刷新缓存，严格写入顺序需要后者。Windows 无可靠的目录刷新原语，依赖文件同步与文件系统元数据日志。部分平台（如 Linux）的 `fsync` 失败后重试可能返回成功但数据已丢失；恢复时重算证据哈希会发现并回退到上一代次。
+darwin 上 `File.Sync` 使用 `F_FULLFSYNC`；完整的设备缓存屏障只在支持该操作的文件系统上成立（当前为 HFS、FAT、UDF、APFS）。SMB 等返回 `ENOTSUP` 时，Go 按既有策略降级为 `fsync`，仍继续写代次，但不再有完整设备缓存屏障。Apple [fcntl(2)](https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/fcntl.2.html) 说明 `F_FULLFSYNC` 会排空同一设备的写队列并作为屏障，此前在同一设备上 `fsync` 的数据在返回时已持久化。Windows 无可靠的目录刷新原语，依赖文件同步与文件系统元数据日志。部分平台（如 Linux）的 `fsync` 失败后重试可能返回成功但数据已丢失；恢复时重算证据哈希会发现并回退到上一代次。
 
 访问账目、物品记录和计数来自同一检查点快照。取消、故障或中断时，已分配访问号但未接纳 S 级、也未确认非 S 跳过的访问转为 `unresolved`（无品质依据用 `unknown`，`sequence=null`）；已接纳的 `capturedS` 不变，只把其排队或运行任务标为中断未处理。访问与物品无法对账的检查点无效，回退上一代次。（实现状态：逐访问账目与 `unresolved` 持久化尚未落地；当前检查点只保存已接纳访问的 `visitIndex` 与不透明的 `observedScope`，对账校验待实现。）
 
