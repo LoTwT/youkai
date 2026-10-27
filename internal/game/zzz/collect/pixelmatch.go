@@ -517,8 +517,8 @@ func (m *PixelMatcher) MatchScroll(before, after platform.Frame) ScrollMatch {
 		// of several possible positions; the traversal must stop instead.
 		if rivalRows, rivalErr, ambiguous := m.rivalShift(direction*rows, bestErr, rowErrors); ambiguous {
 			return ScrollMatch{Lost: true, Evidence: fmt.Sprintf(
-				"frames %d → %d: row shift %d (error %.2f) and %d (error %.2f) are both plausible; the alignments do not uniquely identify the displacement (margin %.1f)",
-				before.ID, after.ID, rows, bestErr, rivalRows, rivalErr, m.C.ScrollShiftMargin)}
+				"frames %d → %d: row shift %d (error %.2f) and %d (error %.2f) are both plausible; the alignments do not uniquely identify the displacement (margin %.1f); row candidates %s",
+				before.ID, after.ID, rows, bestErr, rivalRows, rivalErr, m.C.ScrollShiftMargin, formatRowErrors(rowErrors))}
 		}
 		matches := make([]PositionPair, 0, (m.L.Rows-rows)*m.L.Columns)
 		for r := 0; r < m.L.Rows-rows; r++ {
@@ -537,12 +537,34 @@ func (m *PixelMatcher) MatchScroll(before, after platform.Frame) ScrollMatch {
 	}
 	if err0 >= m.C.ScrollLostMin && !aligned {
 		return ScrollMatch{Lost: true, Evidence: fmt.Sprintf(
-			"frames %d → %d: the list changed (zero-displacement error %.2f ≥ %.1f) but the best shift %d is not a whole row (error %.2f) — the overlap was lost",
-			before.ID, after.ID, err0, m.C.ScrollLostMin, dy, bestErr)}
+			"frames %d → %d: the list changed (zero-displacement error %.2f ≥ %.1f) but the best shift %d is not a whole row (error %.2f) — the overlap was lost; row candidates %s",
+			before.ID, after.ID, err0, m.C.ScrollLostMin, dy, bestErr, formatRowErrors(rowErrors))}
 	}
 	return ScrollMatch{Undecided: true, Evidence: fmt.Sprintf(
-		"frames %d → %d: undecided (zero-displacement error %.2f, best shift %d at error %.2f)",
-		before.ID, after.ID, err0, dy, bestErr)}
+		"frames %d → %d: undecided (zero-displacement error %.2f, best shift %d at error %.2f; displaced needs error ≤ %.1f and ≥ %.1f below zero); row candidates %s",
+		before.ID, after.ID, err0, dy, bestErr, m.C.ScrollDisplacedMax, m.C.ScrollDisplacedMargin, formatRowErrors(rowErrors))}
+}
+
+// formatRowErrors renders every whole-row candidate's best error in row
+// order, so a field log shows how close each alignment came to the
+// displacement thresholds. It is diagnostic text only.
+func formatRowErrors(rowErrors map[int]float64) string {
+	if len(rowErrors) == 0 {
+		return "none"
+	}
+	rows := make([]int, 0, len(rowErrors))
+	for row := range rowErrors {
+		rows = append(rows, row)
+	}
+	sort.Ints(rows)
+	out := ""
+	for i, row := range rows {
+		if i > 0 {
+			out += " "
+		}
+		out += fmt.Sprintf("%+d=%.2f", row, rowErrors[row])
+	}
+	return out
 }
 
 // zeroShiftError is the mean absolute grayscale difference of the list

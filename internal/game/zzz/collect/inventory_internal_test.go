@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"image"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -537,6 +539,218 @@ func TestAwaitScrollContinuousStreamRespectsBudget(t *testing.T) {
 	}
 	if !out.stationary || out.displaced || out.lost {
 		t.Fatalf("outcome %+v, want Stationary at the budget", out)
+	}
+}
+
+// failingObserveView fails the readiness check from the configured call
+// onward, leaving the scripted frame stream untouched.
+type failingObserveView struct {
+	*scrollScriptView
+	observes int
+	failAt   int
+}
+
+func (v *failingObserveView) Observe() (platform.Observation, error) {
+	v.observes++
+	if v.observes >= v.failAt {
+		return platform.Observation{}, errors.New("scripted observation failure")
+	}
+	return platform.Observation{Ready: true, Geometry: 1}, nil
+}
+
+// scriptedSessionController runs one scripted traversal step on the
+// session's producer goroutine, so the step sees a real input-permission
+// handle.
+type scriptedSessionController struct {
+	run    *inventoryRun
+	action func(context.Context, *inventoryRun) error
+	errCh  chan error
+}
+
+func (c *scriptedSessionController) Prepare(context.Context, *scan.ControllerHandle) error {
+	return nil
+}
+
+func (c *scriptedSessionController) Collect(ctx context.Context, h *scan.ControllerHandle) error {
+	c.run.h = h
+	err := c.action(ctx, c.run)
+	c.errCh <- err
+	return err
+}
+
+func runScriptedSession(t *testing.T, run *inventoryRun, action func(context.Context, *inventoryRun) error) error {
+	t.Helper()
+	ctrl := &scriptedSessionController{run: run, action: action, errCh: make(chan error, 1)}
+	sess, err := scan.Start(scan.Config{
+		ID:         scan.ID("scripted-scroll-diagnostics"),
+		Capacity:   1,
+		Workers:    1,
+		Controller: ctrl,
+		Recognizer: noopRecognizer{},
+		Deliverer:  noopDeliverer{},
+	})
+	if err != nil {
+		t.Fatalf("scan.Start: %v", err)
+	}
+	select {
+	case err := <-ctrl.errCh:
+		select {
+		case <-sess.Done():
+		case <-time.After(5 * time.Second):
+			t.Fatal("the scripted traversal session never sealed")
+		}
+		return err
+	case <-time.After(5 * time.Second):
+		t.Fatal("the scripted traversal step never returned")
+		return nil
+	}
+}
+
+func runScriptedScroll(t *testing.T, run *inventoryRun) error {
+	t.Helper()
+	return runScriptedSession(t, run, func(ctx context.Context, run *inventoryRun) error {
+		return run.scroll(ctx)
+	})
+}
+
+func newScriptedScrollRun(l Layout, view SessionView, m Matcher, dir string, retries int, budget time.Duration) *inventoryRun {
+	return &inventoryRun{
+		inv: &Inventory{
+			Layout:        l,
+			Matcher:       m,
+			DiagnosticDir: dir,
+			MaxRetries:    retries,
+			ScrollBudget:  budget,
+		},
+		view:     view,
+		geo:      1,
+		position: 1,
+		viewport: 3,
+	}
+}
+
+func diagnosticPNGs(t *testing.T, dir string) []string {
+	t.Helper()
+	files, err := filepath.Glob(filepath.Join(dir, "*.png"))
+	if err != nil {
+		t.Fatalf("glob diagnostics: %v", err)
+	}
+	return files
+}
+
+// TestScrollVerdictFailureWritesDiagnostics drives the real scroll path to
+// its Stationary limit: the verdict stopped the walk, so one before/after
+// pair is written before the fault returns.
+func TestScrollVerdictFailureWritesDiagnostics(t *testing.T) {
+	l := sixRowScrollLayout()
+	frame := func(id uint64) platform.Frame {
+		return platform.Frame{ID: id, Geometry: 1, Image: image.NewRGBA(image.Rect(0, 0, 1280, 1000))}
+	}
+	view := &scrollScriptView{frames: []platform.Frame{frame(1), frame(2)}, blockAfter: true}
+	m := &scrollScriptMatcher{rows: l.Rows, columns: l.Columns, verdict: map[scrollPair]ScrollMatch{
+		{1, 2}: {Stationary: true, Evidence: "scripted stationary"},
+	}}
+	dir := t.TempDir()
+	run := newScriptedScrollRun(l, view, m, dir, -1, 40*time.Millisecond)
+
+	if err := runScriptedScroll(t, run); err == nil {
+		t.Fatal("a Stationary limit must stop the scroll")
+	}
+	files := diagnosticPNGs(t, dir)
+	if len(files) != 2 {
+		t.Fatalf("the stopped scroll wrote %d crops, want a before/after pair", len(files))
+	}
+	for _, path := range files {
+		if !strings.Contains(filepath.Base(path), "-scroll-stationary-") {
+			t.Fatalf("crop %q does not name the stopping verdict", path)
+		}
+	}
+}
+
+// TestScrollRetryAfterVerdictDoesNotDumpPreviousAttempt pins the reset
+// between attempts: the first try ends Stationary and retries, the second
+// stops before producing a verdict, and no frame from the first try may be
+// reported as this failure's evidence.
+func TestScrollRetryAfterVerdictDoesNotDumpPreviousAttempt(t *testing.T) {
+	l := sixRowScrollLayout()
+	frame := func(id uint64) platform.Frame {
+		return platform.Frame{ID: id, Geometry: 1, Image: image.NewRGBA(image.Rect(0, 0, 1280, 1000))}
+	}
+	view := &failingObserveView{
+		scrollScriptView: &scrollScriptView{frames: []platform.Frame{frame(1), frame(2)}, blockAfter: true},
+		failAt:           2,
+	}
+	m := &scrollScriptMatcher{rows: l.Rows, columns: l.Columns, verdict: map[scrollPair]ScrollMatch{
+		{1, 2}: {Stationary: true, Evidence: "scripted stationary"},
+	}}
+	dir := t.TempDir()
+	run := newScriptedScrollRun(l, view, m, dir, 1, 40*time.Millisecond)
+
+	err := runScriptedScroll(t, run)
+	if err == nil || !strings.Contains(err.Error(), "scripted observation failure") {
+		t.Fatalf("scroll error = %v, want the second attempt's readiness failure", err)
+	}
+	if files := diagnosticPNGs(t, dir); len(files) != 0 {
+		t.Fatalf("a failure before the verdict wrote %v, want no crops", files)
+	}
+}
+
+// TestConfirmBottomFailureWritesDiagnostics drives the real bottom
+// confirmation to a displaced failure through confirmBottomStep, the timed
+// caller that writes the pair after bottom_ms is accumulated. A controlled
+// clock pins the order: the write's stamp is the third reading, so moving
+// the PNG write back inside the timed span would report its full second in
+// bottom_ms. The write must not change the fault.
+func TestConfirmBottomFailureWritesDiagnostics(t *testing.T) {
+	l := sixRowScrollLayout()
+	frame := func(id uint64) platform.Frame {
+		return platform.Frame{ID: id, Geometry: 1, Image: image.NewRGBA(image.Rect(0, 0, 1280, 1000))}
+	}
+	view := &scrollScriptView{frames: []platform.Frame{frame(2), frame(3)}}
+	m := &scrollScriptMatcher{rows: l.Rows, columns: l.Columns, verdict: map[scrollPair]ScrollMatch{
+		{1, 2}: displacedScan(l, 4),
+		{2, 3}: {Stationary: true, Evidence: "scripted settled"},
+	}}
+	dir := t.TempDir()
+	run := newScriptedScrollRun(l, view, m, dir, 0, time.Second)
+	run.lastFrame = frame(1)
+
+	// Start, elapsed, then the dump's file stamp. If the dump is timed,
+	// the elapsed reading becomes the third time (one second later).
+	base := time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC)
+	clockTimes := []time.Time{base, base.Add(time.Millisecond), base.Add(time.Second)}
+	clockCalls := 0
+	previousNow := diagnosticNow
+	diagnosticNow = func() time.Time {
+		i := clockCalls
+		clockCalls++
+		if i >= len(clockTimes) {
+			return clockTimes[len(clockTimes)-1]
+		}
+		return clockTimes[i]
+	}
+	t.Cleanup(func() { diagnosticNow = previousNow })
+
+	err := runScriptedSession(t, run, func(ctx context.Context, run *inventoryRun) error {
+		return run.confirmBottomStep(ctx)
+	})
+	if err == nil {
+		t.Fatal("a displaced bottom confirmation must stop the walk")
+	}
+	if clockCalls != 3 {
+		t.Fatalf("the diagnostic clock was read %d times, want the start, elapsed and one dump stamp", clockCalls)
+	}
+	if run.positionBottomMs != time.Millisecond {
+		t.Fatalf("bottom_ms = %s, want the 1ms decision span; a timed dump would report 1s", run.positionBottomMs)
+	}
+	files := diagnosticPNGs(t, dir)
+	if len(files) != 2 {
+		t.Fatalf("the displaced bottom confirmation wrote %d crops, want a before/after pair", len(files))
+	}
+	for _, path := range files {
+		if !strings.Contains(filepath.Base(path), "-bottom-displaced-") {
+			t.Fatalf("crop %q does not name the bottom-confirmation verdict", path)
+		}
 	}
 }
 

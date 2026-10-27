@@ -37,6 +37,15 @@ type Inventory struct {
 	// would cycle collect → app), so the caller injects it. Nil admits
 	// the Observation unchanged.
 	Project func(Observation) (any, error)
+	// DiagnosticDir, when non-empty, receives PNG crops of the list
+	// before and after a scroll or bottom confirmation whose outcome
+	// stopped the walk (wrong position, lost, ambiguous, rejected, a
+	// bottom confirmation that displaced the list, a scroll that stayed
+	// stationary, or an exhausted undecided wait), so a field failure can
+	// be re-examined against the matcher's thresholds. It is observation
+	// only and bounded: a few dumps per walk, and the directory keeps only
+	// the newest files. Empty disables the dumps.
+	DiagnosticDir string
 
 	// ActionBudget bounds one action's whole effect-and-settle wait —
 	// from the dispatch to the stable expected verdict. Zero takes the
@@ -557,6 +566,9 @@ type inventoryRun struct {
 	positionScrollMs time.Duration
 	positionBottomMs time.Duration
 	positionScrolls  int
+	// diagnosticDumps counts this walk's scroll failure dumps (see
+	// dumpScrollFrames); it never feeds a navigation decision.
+	diagnosticDumps int
 }
 
 // positionTiming is one wheel position's preparation stage durations for
@@ -574,10 +586,13 @@ type positionTiming struct {
 // duration; no timing value influences a decision.
 type visitTiming struct {
 	acquire     time.Duration
+	ready       time.Duration
 	preClick    time.Duration
 	selectWait  time.Duration
+	click       time.Duration
 	detail      time.Duration
 	reference   time.Duration
+	project     time.Duration
 	admit       time.Duration
 	retries     int
 	quality     Quality
@@ -656,11 +671,12 @@ func (run *inventoryRun) logVisit(i int, timing *visitTiming, total time.Duratio
 	if timing.admitted {
 		association = string(timing.association)
 	}
-	log.Printf("youkai: collect: item position=%d viewport=%d slot=%d visit_index=%d seq=%d outcome=%s quality=%s association=%s retries=%d acquire_ms=%d pre_click_ms=%d select_wait_ms=%d click_detail_ms=%d reference_ms=%d admit_ms=%d total_ms=%d",
+	log.Printf("youkai: collect: item position=%d viewport=%d slot=%d visit_index=%d seq=%d outcome=%s quality=%s association=%s retries=%d acquire_ms=%d ready_ms=%d pre_click_ms=%d select_wait_ms=%d click_ms=%d click_detail_ms=%d reference_ms=%d project_ms=%d admit_ms=%d total_ms=%d",
 		run.position, run.viewport, i, timing.visitIndex, timing.seq, outcome, quality, association,
-		timing.retries, timing.acquire.Milliseconds(), timing.preClick.Milliseconds(),
-		timing.selectWait.Milliseconds(), timing.detail.Milliseconds(),
-		timing.reference.Milliseconds(), timing.admit.Milliseconds(), total.Milliseconds())
+		timing.retries, timing.acquire.Milliseconds(), timing.ready.Milliseconds(),
+		timing.preClick.Milliseconds(), timing.selectWait.Milliseconds(), timing.click.Milliseconds(),
+		timing.detail.Milliseconds(), timing.reference.Milliseconds(), timing.project.Milliseconds(),
+		timing.admit.Milliseconds(), total.Milliseconds())
 }
 
 // logPositionSummary writes one wheel position's fixed-field stage totals
@@ -758,10 +774,7 @@ func (run *inventoryRun) collectPosition(ctx context.Context) error {
 				if run.lastScrollRows > 0 && run.lastScrollRows < run.inv.Layout.Rows-1 {
 					return nil
 				}
-				bottomStart := time.Now()
-				err := run.confirmBottom(ctx)
-				run.positionBottomMs += time.Since(bottomStart)
-				return err
+				return run.confirmBottomStep(ctx)
 			}
 			if err := run.scroll(ctx); err != nil {
 				return err
@@ -1440,20 +1453,42 @@ func topConfirmed(out scrollOutcome, beforeOK, afterOK bool, beforeStart, afterS
 	return thumbStable
 }
 
+// failureFrames is a failed step's before/after pair, returned to the
+// caller so the diagnostic write happens after the step's timing is
+// recorded. A nil pair means the failure has no usable after frame.
+type failureFrames struct {
+	kind   string
+	before platform.Frame
+	after  platform.Frame
+}
+
+// confirmBottomStep runs confirmBottom, accumulates its duration, and only
+// then writes any failure crops. Keeping the write outside the timed span
+// keeps bottom_ms a decision cost, matching scroll_ms.
+func (run *inventoryRun) confirmBottomStep(ctx context.Context) error {
+	started := diagnosticNow()
+	frames, err := run.confirmBottom(ctx)
+	run.positionBottomMs += diagnosticNow().Sub(started)
+	if frames != nil {
+		run.dumpScrollFrames(frames.kind, frames.before, frames.after)
+	}
+	return err
+}
+
 // confirmBottom pairs the scrollbar's bottom evidence with one more drag
 // in the advance direction that must leave the list stationary: at the
 // list's end the content cannot move further (T5 §5's "再拖一次，前后帧
 // 列表区误差 < 4"). The complete walk needs both kinds of evidence.
-func (run *inventoryRun) confirmBottom(ctx context.Context) error {
+func (run *inventoryRun) confirmBottom(ctx context.Context) (*failureFrames, error) {
 	for attempt := 0; ; attempt++ {
 		if err := ctx.Err(); err != nil {
-			return err
+			return nil, err
 		}
 		if !run.h.InputPermitted() {
-			return ctx.Err()
+			return nil, ctx.Err()
 		}
 		if err := run.observeReady(ctx); err != nil {
-			return err
+			return nil, err
 		}
 		res := run.view.Dispatch(platform.InputOp{
 			Kind:     platform.InputDrag,
@@ -1465,34 +1500,45 @@ func (run *inventoryRun) confirmBottom(ctx context.Context) error {
 			Duration: run.inv.Layout.ScrollDuration,
 		})
 		if err := run.dispatchOutcome(ctx, res); err != nil {
-			return err
+			return nil, err
 		}
-		out, err := run.awaitScroll(ctx, run.lastFrame)
+		before := run.lastFrame
+		out, err := run.awaitScroll(ctx, before)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if out.afterMatch.Page == PageWarehouse && !run.positionListVerdict(out.afterMatch) {
-			return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
+			fault := scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
 				"collect: wheel position %d: the bottom confirmation left the list at another wheel position: %s",
 				run.position, out.afterMatch.Evidence))
+			if out.after.ID != 0 && out.after.Image != nil {
+				return &failureFrames{kind: "bottom-wrong-position", before: before, after: out.after}, fault
+			}
+			return nil, fault
 		}
 		switch {
 		case out.stationary:
 			run.listMatch = out.afterMatch
 			run.lastFrame = out.after
-			return nil
+			return nil, nil
 		case out.lost:
-			return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
+			fault := scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
 				"collect: the bottom confirmation could not verify that the list stayed at the end: %s", out.match.Evidence))
+			return &failureFrames{kind: "bottom-lost", before: before, after: out.after}, fault
 		case out.displaced:
-			return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
+			fault := scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
 				"collect: the bottom confirmation moved the list, contradicting the scrollbar's bottom evidence: %s", out.match.Evidence))
+			return &failureFrames{kind: "bottom-displaced", before: before, after: out.after}, fault
 		default:
 			if attempt < run.inv.maxRetries() {
 				continue
 			}
-			return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
+			fault := scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
 				"collect: the bottom confirmation produced no verifiable verdict within the budget (attempt %d)", attempt+1))
+			if out.after.ID != 0 && out.after.Image != nil {
+				return &failureFrames{kind: "bottom-undecided", before: before, after: out.after}, fault
+			}
+			return nil, fault
 		}
 	}
 }
@@ -1572,9 +1618,12 @@ func (run *inventoryRun) visitSlot(ctx context.Context, i int) (err error) {
 		if slot == nil {
 			return ctx.Err()
 		}
-		if err := run.observeReady(ctx); err != nil {
+		readyStart := time.Now()
+		readyErr := run.observeReady(ctx)
+		timing.ready += time.Since(readyStart)
+		if readyErr != nil {
 			slot.Discard()
-			return err
+			return readyErr
 		}
 		// The pre-click evidence: the list shows stably with the target
 		// slot occupied (T5 §4.1: 列表仍属于同一范围，目标格位有物品且位置
@@ -1683,12 +1732,14 @@ func (run *inventoryRun) visitSlot(ctx context.Context, i int) (err error) {
 		}
 
 		// One short click on the target slot (T5 §4: 再发一次短点击).
+		clickStart := time.Now()
 		res := run.view.Dispatch(platform.InputOp{
 			Kind:     platform.InputClick,
 			Geometry: run.geo,
 			FrameID:  pre.frame.ID,
 			At:       run.inv.Layout.slotCenter(i),
 		})
+		timing.click += time.Since(clickStart)
 		if err := run.dispatchOutcome(ctx, res); err != nil {
 			slot.Discard()
 			return err
@@ -2252,7 +2303,9 @@ func (run *inventoryRun) admit(slot *scan.Slot, out detailOutcome, pre platform.
 	}
 	payload := any(obs)
 	if run.inv.Project != nil {
+		projectStart := time.Now()
 		projected, err := run.inv.Project(obs)
+		timing.project += time.Since(projectStart)
 		if err != nil {
 			slot.Discard()
 			return scan.NewFault(CodeEvidenceFailed, fmt.Errorf(
@@ -2452,19 +2505,33 @@ func (run *inventoryRun) scroll(ctx context.Context) (err error) {
 	attempts := 0
 	rows := 0
 	var afterID uint64
+	var afterFrame platform.Frame
 	outcome := "error"
 	defer func() {
 		if attempts == 0 {
 			return
 		}
+		// Time and log first: the dump below encodes and writes PNGs, and
+		// that cost must not inflate total_ms or the position's scroll_ms.
 		elapsed := time.Since(started)
 		run.positionScrollMs += elapsed
 		log.Printf("youkai: collect: scroll position=%d viewport_from=%d viewport_to=%d outcome=%s attempts=%d drag_ms=%d settle_ms=%d total_ms=%d rows=%d before_frame=%d after_frame=%d",
 			run.position, fromViewport, run.viewport, outcome, attempts,
 			drag.Milliseconds(), settle.Milliseconds(), elapsed.Milliseconds(),
 			rows, before.ID, afterID)
+		if err != nil && afterFrame.ID != 0 && outcome != "error" {
+			run.dumpScrollFrames("scroll-"+outcome, before, afterFrame)
+		}
 	}()
 	for attempt := 0; ; attempt++ {
+		// A retry starts a fresh judgement: neither the previous attempt's
+		// after frame nor its outcome may label a failure that happened
+		// before this attempt produced a verdict (focus loss, geometry
+		// change, cancellation), or the defer above would write a dump for
+		// the earlier attempt.
+		afterID = 0
+		afterFrame = platform.Frame{}
+		outcome = "error"
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -2496,6 +2563,7 @@ func (run *inventoryRun) scroll(ctx context.Context) (err error) {
 			return err
 		}
 		afterID = out.after.ID
+		afterFrame = out.after
 		if out.afterMatch.Page == PageWarehouse && !run.positionListVerdict(out.afterMatch) {
 			outcome = "wrong-position"
 			return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(

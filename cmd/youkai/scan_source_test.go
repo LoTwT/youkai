@@ -147,3 +147,58 @@ func TestScanSourceUnknownGameMode(t *testing.T) {
 		t.Fatalf("err = %v, want the supported-mode refusal", err)
 	}
 }
+
+// withDiagnosticDir points every traversal the traverse source builds at
+// the failure-crop directory, including later sessions that call the
+// factory again.
+func TestWithDiagnosticDirWiresTraverseInventories(t *testing.T) {
+	host := func() (platform.Port, error) { return &platformfake.Port{}, nil }
+	source, _, err := scanSourceFrom(envOf(map[string]string{
+		"YOUKAI_GAME_SOURCE": "traverse",
+	}), "darwin", host)
+	if err != nil {
+		t.Fatalf("scanSourceFrom: %v", err)
+	}
+	dir := t.TempDir()
+	withDiagnosticDir(source, dir)
+	game := source.(*app.GameScanSource)
+	for i := 0; i < 2; i++ {
+		trav := game.Traversal()
+		inv, ok := trav.(*collect.Inventory)
+		if !ok {
+			t.Fatalf("traversal %d = %T, want *collect.Inventory", i+1, trav)
+		}
+		if inv.DiagnosticDir != dir {
+			t.Fatalf("traversal %d DiagnosticDir = %q, want %q", i+1, inv.DiagnosticDir, dir)
+		}
+	}
+}
+
+// An observe-only source has no traversal to configure, and an empty
+// directory keeps the traverse source on its default (dumps disabled).
+func TestWithDiagnosticDirLeavesObserveAndEmptyUnchanged(t *testing.T) {
+	host := func() (platform.Port, error) { return &platformfake.Port{}, nil }
+
+	observe, _, err := scanSourceFrom(envOf(map[string]string{
+		"YOUKAI_GAME_SOURCE": "observe",
+	}), "darwin", host)
+	if err != nil {
+		t.Fatalf("scanSourceFrom observe: %v", err)
+	}
+	withDiagnosticDir(observe, t.TempDir())
+	if game := observe.(*app.GameScanSource); game.Traversal != nil {
+		t.Fatal("withDiagnosticDir gave the observe source a traversal factory")
+	}
+
+	traverse, _, err := scanSourceFrom(envOf(map[string]string{
+		"YOUKAI_GAME_SOURCE": "traverse",
+	}), "darwin", host)
+	if err != nil {
+		t.Fatalf("scanSourceFrom traverse: %v", err)
+	}
+	withDiagnosticDir(traverse, "")
+	inv := traverse.(*app.GameScanSource).Traversal().(*collect.Inventory)
+	if inv.DiagnosticDir != "" {
+		t.Fatalf("DiagnosticDir = %q, want dumps left disabled", inv.DiagnosticDir)
+	}
+}
