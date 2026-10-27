@@ -32,7 +32,7 @@
 
 **[事实]** `observedScope` 在预检成功后先上报一次；`Controller.Collect` 只在 `trav.Collect` 返回后再次上报，遍历过程中不会把每个位置的账目持续送到记录层。[controller.go](../../internal/game/zzz/collect/controller.go#L245) [controller.go](../../internal/game/zzz/collect/controller.go#L262)
 
-**[事实]** 保存时 `capturedCount` 必须等于条目记录数；恢复时排队/运行条目转为中断未处理，且存储的 `complete` 覆盖会被降为 `partial`。应用首次启动扫描总是新建记录；历史记录只能重开校对，不能继续扫描，不存在“从上次位置继续”的入口。[deliverer.go](../../internal/app/deliverer.go#L391) [checkpoint.go](../../internal/record/checkpoint.go#L330) [load.go](../../internal/record/load.go#L21) [service.go](../../internal/app/service.go#L239)
+**[事实]** 保存时 `capturedCount` 必须等于条目记录数；恢复时排队/运行条目转为中断未处理，且存储的 `complete` 覆盖会被降为 `partial`。应用首次启动扫描总是新建记录；历史记录只能重开校对，不能继续扫描，不存在“从上次位置继续”的入口。[deliverer.go](../../internal/app/deliverer.go#L396) [checkpoint.go](../../internal/record/checkpoint.go#L330) [load.go](../../internal/record/load.go#L21) [service.go](../../internal/app/service.go#L239)
 
 ### 1.2 两个真机实例
 
@@ -207,7 +207,7 @@ A1 与 A2 的共同点：重试仍发生在同一次 `Collect` 内，`session.id
 
 - `seq` 仍由内核按会话单调分配；重试只对**新解决**的格位调用 `Admit`，已解决格位不消耗序号，不产生重复序号。[handle.go](../../internal/scan/handle.go#L91)
 - `visitIndex` 仍只在 S 级接纳时递增；重试跳过的已接纳件保留原 `visitIndex`，新接纳继续递增。[inventory.go](../../internal/game/zzz/collect/inventory.go#L2267)
-- `capturedCount` 仍等于条目记录数；A2 不改变这个定义，也不把跳过的格位算成新捕获。[deliverer.go](../../internal/app/deliverer.go#L391)
+- `capturedCount` 仍等于条目记录数；A2 不改变这个定义，也不把跳过的格位算成新捕获。[deliverer.go](../../internal/app/deliverer.go#L396)
 - `excludedCount` 仍等于 `capturedCount - items.length`；A2 不会因为重试新增被排除项，也不会为同一格位新增第二条条目。此前已接纳的条目仍在 `items` 中，除非它们自身不可用。[export.go](../../internal/app/export.go#L251)
 - 位置账目建议改为**每个位置一条**，内部带尝试数组；不能用“每次尝试追加一条 position 记录”的方式，因为现有 `updateCoverage` 要求六条记录顺序为 1–6。[inventory.go](../../internal/game/zzz/collect/inventory.go#L455)
 
