@@ -24,11 +24,11 @@ var (
 // and returns the descriptor a checkpoint must cite for it. The bytes are
 // completely written and closed before the descriptor is returned; the
 // device flush is deferred until the next checkpoint that cites the file
-// (see SaveCheckpoint), so capture pays one batch of syncs instead of one
-// sync per image. Any write or close failure along the way removes the
-// partial file and reports the error. The store persists the bytes as
-// given — the .png layout contract belongs to the capture stack that hands
-// them over.
+// (see SaveCheckpoint), so capture pays no flush per image and a batch pays
+// one darwin F_FULLFSYNC barrier. Any write or close failure along the way
+// removes the partial file and reports the error. The store persists the
+// bytes as given — the .png layout contract belongs to the capture stack
+// that hands them over.
 //
 // An existing evidence file is never overwritten: ids are unique per
 // record, and a duplicate write fails with ErrEvidenceExists instead of
@@ -81,10 +81,10 @@ func (s *Store) WriteEvidence(recordID, evidenceID string, image []byte) (Eviden
 }
 
 // syncEvidenceLocked flushes the pending evidence cited by index before a
-// checkpoint generation may reference it. File contents are synced first,
-// then the evidence directory entry through SyncDir (a no-op where the
-// platform exposes no reliable directory flush), so a crash cannot leave a
-// checkpoint whose files are absent or incomplete. Only the cited pending
+// checkpoint generation may reference it. File contents are delivered with
+// SyncFileData first, then SyncDir flushes the evidence directory and, on
+// darwin, provides the batch's single F_FULLFSYNC barrier (a no-op where
+// the platform exposes no reliable directory flush). Only the cited pending
 // files are synced; the rest stay pending for a later checkpoint. A failure
 // leaves every cited file pending, so the caller's retry syncs them again
 // instead of assuming the failed attempt made them durable. Callers hold mu.
@@ -94,7 +94,7 @@ func (s *Store) syncEvidenceLocked(recordID string, state *recordState, index []
 		if _, ok := state.pendingEvidence[ev.ID]; !ok {
 			continue
 		}
-		if err := s.syncEvidenceFile(recordID, ev.ID); err != nil {
+		if err := s.fs.SyncFileData(s.evidencePath(recordID, ev.ID)); err != nil {
 			return fmt.Errorf("sync evidence %q: %w", ev.ID, err)
 		}
 		synced = append(synced, ev.ID)
@@ -109,19 +109,6 @@ func (s *Store) syncEvidenceLocked(recordID string, state *recordState, index []
 		delete(state.pendingEvidence, id)
 	}
 	return nil
-}
-
-// syncEvidenceFile flushes one completed evidence file. It is reopened with
-// write access because Windows' FlushFileBuffers does not accept a
-// read-only handle; opening without O_TRUNC or O_CREATE leaves the bytes
-// and the write-once rule untouched. A close failure is reported as well:
-// the file is not confirmed durable until both steps succeed.
-func (s *Store) syncEvidenceFile(recordID, evidenceID string) error {
-	file, err := s.fs.OpenFile(s.evidencePath(recordID, evidenceID), os.O_WRONLY, 0)
-	if err != nil {
-		return err
-	}
-	return errors.Join(file.Sync(), file.Close())
 }
 
 // WriteResource persists one recheck resource as

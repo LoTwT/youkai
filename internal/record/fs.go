@@ -32,9 +32,16 @@ type FS interface {
 	// RemoveAll deletes path and everything below it, like os.RemoveAll.
 	// It removes symbolic links themselves instead of following them.
 	RemoveAll(path string) error
+	// SyncFileData flushes path's contents to the storage device without
+	// requiring the device-cache flush that File.Sync performs where the
+	// platform distinguishes them (darwin fsync vs F_FULLFSYNC). Callers
+	// that batch files follow with one SyncDir barrier.
+	SyncFileData(path string) error
 	// SyncDir flushes dir's directory entries to stable storage, so files
 	// created in it survive a crash once the directory has been synced.
-	// Platforms without a reliable directory flush return nil.
+	// On darwin it also issues the single final device-cache flush for
+	// the files synced before it. Platforms without a reliable directory
+	// flush return nil.
 	SyncDir(dir string) error
 }
 
@@ -68,5 +75,7 @@ func (osFS) OpenFile(path string, flag int, perm fs.FileMode) (File, error) {
 func (osFS) Remove(path string) error { return os.Remove(path) }
 
 func (osFS) RemoveAll(path string) error { return os.RemoveAll(path) }
+
+func (osFS) SyncFileData(path string) error { return syncFileData(path) }
 
 func (osFS) SyncDir(dir string) error { return syncDir(dir) }

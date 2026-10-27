@@ -25,6 +25,15 @@ type faultFS struct {
 	// synced counts the flush attempts each path saw, so tests can tell a
 	// deferred sync from one that never happened.
 	synced map[string]int
+	// events preserves the order of the operations that matter to the
+	// write discipline, so a test can assert sync-before-create instead of
+	// inferring it from the final directory contents.
+	events []faultEvent
+}
+
+type faultEvent struct {
+	op   faultOp
+	path string
 }
 
 type faultOp uint8
@@ -33,6 +42,7 @@ const (
 	faultCreate faultOp = iota + 1
 	faultWrite
 	faultSync
+	faultSyncFileData
 	faultSyncDir
 	faultClose
 	faultRemove
@@ -103,12 +113,26 @@ func (f *faultFS) RemoveAll(path string) error {
 	return f.inner.RemoveAll(path)
 }
 
+func (f *faultFS) SyncFileData(path string) error {
+	f.recordEvent(faultSyncFileData, path)
+	f.recordSync(path)
+	if r := f.rule(faultSyncFileData, path); r != nil {
+		return r.err
+	}
+	return f.inner.SyncFileData(path)
+}
+
 func (f *faultFS) SyncDir(dir string) error {
+	f.recordEvent(faultSyncDir, dir)
 	f.recordSync(dir)
 	if r := f.rule(faultSyncDir, dir); r != nil {
 		return r.err
 	}
 	return f.inner.SyncDir(dir)
+}
+
+func (f *faultFS) recordEvent(op faultOp, path string) {
+	f.events = append(f.events, faultEvent{op: op, path: path})
 }
 
 func (f *faultFS) recordSync(path string) {
@@ -129,8 +153,30 @@ func (f *faultFS) syncCount(suffix string) int {
 	return n
 }
 
+// eventIndex returns the first recorded operation index matching op and the
+// path suffix, or -1. Event order is the operation order the store used.
+func (f *faultFS) eventIndex(op faultOp, suffix string) int {
+	for i, e := range f.events {
+		if e.op == op && strings.HasSuffix(e.path, suffix) {
+			return i
+		}
+	}
+	return -1
+}
+
+func (f *faultFS) eventCount(op faultOp, suffix string) int {
+	n := 0
+	for _, e := range f.events {
+		if e.op == op && strings.HasSuffix(e.path, suffix) {
+			n++
+		}
+	}
+	return n
+}
+
 func (f *faultFS) OpenFile(path string, flag int, perm fs.FileMode) (File, error) {
 	if flag&os.O_CREATE != 0 {
+		f.recordEvent(faultCreate, path)
 		if r := f.rule(faultCreate, path); r != nil {
 			return nil, r.err
 		}
@@ -175,6 +221,7 @@ func (f *faultFile) Write(p []byte) (int, error) {
 }
 
 func (f *faultFile) Sync() error {
+	f.fs.recordEvent(faultSync, f.path)
 	f.fs.recordSync(f.path)
 	if r := f.fs.rule(faultSync, f.path); r != nil {
 		return r.err
@@ -198,14 +245,15 @@ func (f *faultFile) Close() error {
 
 // The injected failures the tests distinguish by errors.Is.
 var (
-	errFaultCreate  = errors.New("fault: create refused")
-	errFaultWrite   = errors.New("fault: write failed")
-	errDiskFull     = errors.New("fault: no space left on device")
-	errFaultSync    = errors.New("fault: sync failed")
-	errFaultSyncDir = errors.New("fault: directory sync failed")
-	errFaultClose   = errors.New("fault: close failed")
-	errFaultRemove  = errors.New("fault: remove refused")
-	errFaultReadDir = errors.New("fault: read directory refused")
+	errFaultCreate   = errors.New("fault: create refused")
+	errFaultWrite    = errors.New("fault: write failed")
+	errDiskFull      = errors.New("fault: no space left on device")
+	errFaultSync     = errors.New("fault: sync failed")
+	errFaultSyncData = errors.New("fault: file data sync failed")
+	errFaultSyncDir  = errors.New("fault: directory sync failed")
+	errFaultClose    = errors.New("fault: close failed")
+	errFaultRemove   = errors.New("fault: remove refused")
+	errFaultReadDir  = errors.New("fault: read directory refused")
 )
 
 func newFaultStore(t *testing.T) (*Store, *faultFS, string) {
@@ -304,6 +352,31 @@ func TestEvidenceSyncIsDeferredToCheckpoint(t *testing.T) {
 		t.Errorf("evidence directory syncs = %d, want 1", got)
 	}
 
+	// The generation file is created only after the cited files and the
+	// directory entry have been flushed; the event log proves the order,
+	// not just the final state.
+	genCreate := ffs.eventIndex(faultCreate, "1.json")
+	if genCreate < 0 {
+		t.Fatal("generation 1.json was never created")
+	}
+	if got := ffs.eventCount(faultCreate, "1.json"); got != 1 {
+		t.Errorf("generation 1.json create attempts = %d, want 1", got)
+	}
+	for _, ev := range []EvidenceFile{first, second} {
+		syncAt := ffs.eventIndex(faultSyncFileData, ev.ID+".png")
+		if syncAt < 0 {
+			t.Errorf("evidence %s was never synced before the save", ev.ID)
+		} else if syncAt > genCreate {
+			t.Errorf("evidence %s synced at event %d, after generation create at %d", ev.ID, syncAt, genCreate)
+		}
+	}
+	dirSync := ffs.eventIndex(faultSyncDir, evidenceDir)
+	if dirSync < 0 {
+		t.Error("evidence directory was never synced")
+	} else if dirSync > genCreate {
+		t.Errorf("evidence directory synced at event %d, after generation create at %d", dirSync, genCreate)
+	}
+
 	// The same files are already durable; citing them again must not pay
 	// for another flush.
 	if _, err := st.SaveCheckpoint(id, cp); err != nil {
@@ -311,6 +384,53 @@ func TestEvidenceSyncIsDeferredToCheckpoint(t *testing.T) {
 	}
 	if got := ffs.syncCount(".png"); got != 2 {
 		t.Errorf("evidence syncs after resaving the same files = %d, want 2", got)
+	}
+}
+
+// A restarted store has no in-memory record of the evidence written by the
+// previous process. A duplicate write is still a cue to flush that file
+// before a checkpoint may cite it; without marking the ErrEvidenceExists
+// path pending, this checkpoint would be written without a sync.
+func TestEvidenceExistsAfterRestartIsSyncedBeforeCheckpoint(t *testing.T) {
+	root := t.TempDir()
+	firstFS := &faultFS{inner: osFS{}}
+	first, err := newStore(root, firstFS)
+	if err != nil {
+		t.Fatalf("newStore (first): %v", err)
+	}
+	id := newRecord(t, first)
+	image := []byte("survivor from the previous process")
+	ev, err := first.WriteEvidence(id, "shot-1", image)
+	if err != nil {
+		t.Fatalf("first WriteEvidence: %v", err)
+	}
+
+	secondFS := &faultFS{inner: osFS{}}
+	second, err := newStore(root, secondFS)
+	if err != nil {
+		t.Fatalf("newStore (second): %v", err)
+	}
+	if _, err := second.WriteEvidence(id, "shot-1", image); !errors.Is(err, ErrEvidenceExists) {
+		t.Fatalf("WriteEvidence after restart = %v, want ErrEvidenceExists", err)
+	}
+	cp := checkpointWithEvidence(ev)
+	if rev := saveCheckpoint(t, second, id, cp); rev != 1 {
+		t.Fatalf("save revision = %d, want 1", rev)
+	}
+
+	genCreate := secondFS.eventIndex(faultCreate, "1.json")
+	syncAt := secondFS.eventIndex(faultSyncFileData, "shot-1.png")
+	if syncAt < 0 {
+		t.Fatal("the surviving evidence was cited without a sync")
+	}
+	if genCreate < 0 {
+		t.Fatal("generation 1.json was never created")
+	}
+	if syncAt > genCreate {
+		t.Errorf("evidence synced at event %d, after generation create at %d", syncAt, genCreate)
+	}
+	if got := secondFS.eventCount(faultSyncFileData, "shot-1.png"); got != 1 {
+		t.Errorf("evidence sync attempts = %d, want 1", got)
 	}
 }
 
@@ -326,9 +446,9 @@ func TestEvidenceSyncFailureKeepsPendingForRetry(t *testing.T) {
 	}{
 		{
 			name:   "file sync",
-			inject: func(f *faultFS, _ string) { f.inject(faultSync, "shot-1.png", errFaultSync) },
+			inject: func(f *faultFS, _ string) { f.inject(faultSyncFileData, "shot-1.png", errFaultSyncData) },
 			target: func(string) string { return "shot-1.png" },
-			want:   errFaultSync,
+			want:   errFaultSyncData,
 		},
 		{
 			name: "directory sync",
@@ -356,6 +476,9 @@ func TestEvidenceSyncFailureKeepsPendingForRetry(t *testing.T) {
 				}
 				if files := generationFiles(t, root, id); len(files) != 1 || files[0] != "1.json" {
 					t.Fatalf("attempt %d generations = %v, want the prior [1.json]", attempt, files)
+				}
+				if got := ffs.eventCount(faultCreate, "2.json"); got != 0 {
+					t.Fatalf("attempt %d created a 2.json generation despite the sync failure", attempt)
 				}
 			}
 

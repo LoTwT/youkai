@@ -9,15 +9,20 @@
 // directory.
 //
 // Durability rules (architecture section 5): evidence files are written
-// and closed as they arrive; the pending ones a checkpoint cites are synced
-// just before that generation is written, together with the evidence
-// directory entry where the platform exposes a directory flush. Every save
-// writes a new generation file and reports success only after a complete
-// write, sync and close — os.Rename is not relied on, because it is not
-// atomic on Windows; recovery loads the newest generation that verifies,
-// falls back to the previous one and marks what the crash left unfinished
-// as interrupted unprocessed, never upgrading the coverage conclusion. All
-// writes go through one serial writer inside Store.
+// and closed as they arrive. The pending ones a checkpoint cites are
+// fsynced, then the evidence directory is flushed, before that generation
+// is written; darwin batches its per-file fsync calls behind one
+// F_FULLFSYNC directory barrier, while Windows has no directory flush and
+// relies on its file sync plus the filesystem's metadata journal. Every
+// save writes a new generation file and reports success only after a
+// complete write, sync and close — os.Rename is not relied on, because it
+// is not atomic on Windows; recovery loads the newest generation that
+// verifies, falls back to the previous one and marks what the crash left
+// unfinished as interrupted unprocessed, never upgrading the coverage
+// conclusion. Recovery re-reads and re-hashes evidence, so a retried fsync
+// that reports success after losing the data (possible on Linux) surfaces
+// as a failed generation and falls back to the previous one. All writes go
+// through one serial writer inside Store.
 //
 // Checkpoints are an internal, versioned format, deliberately not the
 // public scan.json contract: they carry running state (queued and running
