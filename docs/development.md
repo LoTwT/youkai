@@ -109,11 +109,13 @@ M2 平台会话集成后可用另一组开关接入真实游戏窗口做仅观�
 日志时间戳使用微秒级格式（`log.LstdFlags|log.Lmicroseconds`），便于与行内毫秒耗时对照。遍历与保存新增的计时字段都只用于观测，不改变导航、阈值或等待时长：
 
 - `youkai: collect: item ...`：每件被接纳或跳过的物品一行。`visit_index` 为访问序号，`seq` 为内核接纳序号（跳过件为 0，可与 `item N recognized` 日志对照）；`acquire_ms` 为等待处理槽（`Acquire`，反映 OCR 背压）；`ready_ms` 为点击前的平台就绪复查（`Observe`，含窗口枚举）；`pre_click_ms` 为点击前稳定等待，其中 `select_wait_ms` 是选中框恢复等待（包含在 `pre_click_ms` 内）；`click_ms` 为点击派发（含平台派发前复查与按住时长）；`click_detail_ms` 为点击到详情稳定（`awaitDetail`）；`reference_ms` 为参照往返（不含接纳）；`retries` 为无效点击重试次数；`project_ms` 为接纳前的投影（裁剪识别行）；`admit_ms` 为接纳交付（`slot.Admit`，含证据与检查点持久化）；`total_ms` 为本件总耗时。
-- `youkai: collect: scroll ...`：每次滚动的 `drag_ms`（拖动派发）与 `settle_ms`（等待停稳）。
+- `youkai: collect: scroll ...`：每次滚动的 `drag_ms`（拖动派发）与 `settle_ms`（等待停稳），行尾追加本次等待的判定余量（见下）。
+- `youkai: collect: position N: top fling ...`、`top confirmation attempt ...`、`bottom confirmation attempt ...`：回顶与到底确认各自的等待结果，行尾追加同一组判定余量。
+- 判定余量字段：`err0` 为零位移误差；`stationary_margin` 为 `ScrollStationaryMax − err0`；`best_err` 为最佳位移误差；`displaced_margin` 为 `ScrollDisplacedMax − best_err`；`rival_gap` 为最佳与次优整行候选误差之差；`settle_err0` 为候选相对停稳确认的零位移误差。正余量表示在阈值内；`none` 表示匹配器未测量该数值（例如 Stationary 判决不搜索位移，或停稳由相同帧内容而非匹配器证明）。这些数值只用于观测与阈值标定，不参与判定。
 - `youkai: collect: position=N summary ...`：每个位置结束时一行；`establish_ms` 建列表、`wheel_ms` 切转盘、`filter_ms` 筛选准备、`top_ms` 回顶（甩动+确认）、`visit_ms` 逐件合计、`scroll_ms` 滚动合计、`bottom_ms` 底部确认拖动（以短步结束时为 0）、`collect_ms` 采集总耗时、`total_ms` 位置总耗时；`visits` 为已完成的访问次数（含跳过的非 S 件），`scrolls` 为已验证滚动次数。
 - 检查点保存行在原有条目数后追加 `bytes`（生成文件字节数）与 `ms`（本次保存耗时）。
 - `youkai: scan <id> stop trigger: ...`：会话结束时记录第一个停止触发的 `kind`、`code`、`phase` 与原始 `message`，之后的附加故障各记一行 `later fault`；检查点的 `termination` 只保存种类、代码和阶段。
-- 滚动或底部确认失败并停止遍历时（位置不符、Lost、无对应、被拒、底部确认的 displaced、滚动的 stationary 或未确认），把拖动前后两帧的列表与滚动条区域裁剪为 PNG 写入日志目录下的 `diagnostics/`（如 `~/Library/Logs/Youkai Dev/diagnostics/`），日志行 `collect: diagnostics:` 给出路径。每次遍历最多 6 组，目录只保留最新 48 个文件。Lost 写出的 after 帧是最后观察到的候选帧，不保证是最终停稳的位置。匹配器证据中的整行候选误差（`row candidates +1=… +3=…`）出现在“最佳位移不是整行”的 Lost、多候选歧义的 Lost 和 Undecided 证据里；被拒（`applyTransition`）、unsettled 的 Lost 与“位移但无对应”的 Lost 不带。
+- 滚动、回顶或底部确认失败并停止遍历时（位置不符、Lost、unsettled、无对应、被拒、滚动的 stationary 或未确认、回顶无进展或未确认、底部确认的 displaced 或未决），把该次等待保留的整段帧序列与清单写入日志目录下 `diagnostics/` 的一个子目录（如 `~/Library/Logs/Youkai Dev/diagnostics/`）。子目录名沿用 `<时间戳>-pos<N>-vp<V>-<结局>`；其中 `manifest.json` 逐帧记录 frame id、到达时间（绝对时间与相对拖动前帧的毫秒）、相对拖动前帧和相对当时候选帧的 `MatchScroll` 结果（Stationary/Displaced/Lost/Undecided、err0、best dy、best err、各整行候选误差），其余为按序号的列表与滚动条区域裁剪 PNG（`0000-f<id>.png`）。等待未评估的帧对写 `null`，不虚构匹配数值。等待期间最多保留 64 帧与 64 MiB 裁剪；保留拖动前基线帧、其后前 15 帧、第一次相对拖动前帧非 Stationary 的帧、当前候选帧与最新帧，超出时从没有固定标记的中间最旧帧开始丢弃（仅当仍超出时才牺牲头段），丢弃数量记入清单的 `dropped_frames`/`dropped_bytes` 与 `retention`。每次遍历最多 6 组，目录只保留最新 12 组（含旧版单文件裁剪）。PNG 与清单的写入发生在滚动、回顶与到底计时之后，不计入 `scroll_ms`、`top_ms`、`bottom_ms`；日志行 `collect: diagnostics:` 给出子目录与帧数。Lost 写出的 after 帧是最后观察到的候选帧，不保证是最终停稳的位置。匹配器证据中的整行候选误差（`row candidates +1=… +3=…`）出现在“最佳位移不是整行”的 Lost、多候选歧义的 Lost 和 Undecided 证据里；被拒（`applyTransition`）、unsettled 的 Lost 与“位移但无对应”的 Lost 不带。
 
 ## GitHub Actions 检查
 

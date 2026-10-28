@@ -37,14 +37,13 @@ type Inventory struct {
 	// would cycle collect → app), so the caller injects it. Nil admits
 	// the Observation unchanged.
 	Project func(Observation) (any, error)
-	// DiagnosticDir, when non-empty, receives PNG crops of the list
-	// before and after a scroll or bottom confirmation whose outcome
-	// stopped the walk (wrong position, lost, ambiguous, rejected, a
-	// bottom confirmation that displaced the list, a scroll that stayed
-	// stationary, or an exhausted undecided wait), so a field failure can
-	// be re-examined against the matcher's thresholds. It is observation
-	// only and bounded: a few dumps per walk, and the directory keeps only
-	// the newest files. Empty disables the dumps.
+	// DiagnosticDir, when non-empty, receives failure diagnostics for a
+	// scroll wait that stopped the walk: a bounded frame sequence plus a
+	// manifest in a timestamped subdirectory, so a field failure can be
+	// re-examined against the matcher's thresholds. The artifacts, limits
+	// and retention policy are described in docs/development.md's
+	// "扫描耗时诊断" section. It is observation only: write failures are
+	// logged and swallowed. Empty disables the dumps.
 	DiagnosticDir string
 
 	// ActionBudget bounds one action's whole effect-and-settle wait —
@@ -566,8 +565,8 @@ type inventoryRun struct {
 	positionScrollMs time.Duration
 	positionBottomMs time.Duration
 	positionScrolls  int
-	// diagnosticDumps counts this walk's scroll failure dumps (see
-	// dumpScrollFrames); it never feeds a navigation decision.
+	// diagnosticDumps counts this walk's scan-failure diagnostic groups
+	// (see dumpScrollTrace); it never feeds a navigation decision.
 	diagnosticDumps int
 }
 
@@ -691,6 +690,17 @@ func (run *inventoryRun) logPositionSummary(timing positionTiming, collect, tota
 		run.positionVisits, run.positionScrolls)
 }
 
+// topStep runs scrollToTop, records the phase's decision span, and only
+// then writes any failure dump. Keeping the write outside the span keeps
+// top_ms a decision cost, matching scroll_ms and bottom_ms.
+func (run *inventoryRun) topStep(ctx context.Context, timing *positionTiming) error {
+	started := time.Now()
+	frames, err := run.scrollToTop(ctx)
+	timing.top = time.Since(started)
+	run.dumpFailure(frames)
+	return err
+}
+
 // preparePosition resets one wheel position's traversal state and performs
 // its automatic preparation. The state reset comes first so a failed
 // preparation never inherits another position's bookkeeping.
@@ -732,9 +742,7 @@ func (run *inventoryRun) preparePosition(ctx context.Context, pos int, timing *p
 		return err
 	}
 	log.Printf("youkai: collect: position %d: filter reset and S selected", pos)
-	started = time.Now()
-	err = run.scrollToTop(ctx)
-	timing.top = time.Since(started)
+	err = run.topStep(ctx, timing)
 	if err != nil {
 		return err
 	}
@@ -1167,61 +1175,70 @@ func (run *inventoryRun) panelVerdict(m PageMatch) bool {
 // visit records yet, but it proves neither the destination nor that the
 // top was reached, so the next fling re-establishes the base. After a
 // settled top claim, confirmTop must prove the list can move no farther.
-func (run *inventoryRun) scrollToTop(ctx context.Context) error {
+func (run *inventoryRun) scrollToTop(ctx context.Context) (*failureFrames, error) {
 	flings := 0
 	noProgress := 0
 	topProven := run.listMatch.List != nil && run.listMatch.List.Top
+	var lastBefore platform.Frame
+	var lastOut scrollOutcome
+	haveWait := false
 	for {
 		if topProven && run.listMatch.List != nil && run.listMatch.List.Top {
 			break
 		}
 		if noProgress >= 2 {
-			return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
+			return topWaitFailure("top", lastBefore, lastOut, haveWait), scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
 				"collect: wheel position %d: two consecutive flings produced no progress toward the top: %s",
 				run.position, run.listMatch.Evidence))
 		}
 		if flings >= maxTopFlings {
-			return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
+			return topWaitFailure("top", lastBefore, lastOut, haveWait), scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
 				"collect: wheel position %d: the top was not reached after %d flings: %s",
 				run.position, flings, run.listMatch.Evidence))
 		}
 		if err := ctx.Err(); err != nil {
-			return err
+			return nil, err
 		}
 		if !run.h.InputPermitted() {
-			return ctx.Err()
+			return nil, ctx.Err()
 		}
 		if err := run.observeReady(ctx); err != nil {
-			return err
+			return nil, err
 		}
-		beforeStart, beforeOK := run.thumbStart(run.lastFrame)
+		before := run.lastFrame
+		beforeStart, beforeOK := run.thumbStart(before)
 		res := run.view.Dispatch(platform.InputOp{
 			Kind:     platform.InputDrag,
 			Geometry: run.geo,
-			FrameID:  run.lastFrame.ID,
+			FrameID:  before.ID,
 			At:       run.inv.Layout.TopFrom,
 			To:       run.inv.Layout.TopTo,
 			Steps:    10,
 			Duration: run.inv.Layout.TopDuration,
 		})
 		if err := run.dispatchOutcome(ctx, res); err != nil {
-			return err
+			return nil, err
 		}
-		out, err := run.awaitScroll(ctx, run.lastFrame)
+		// Release the previous wait's trace before the next wait allocates
+		// its own; two capped traces must not be live together.
+		lastOut = scrollOutcome{}
+		out, err := run.awaitScroll(ctx, before)
 		if err != nil {
-			return err
+			return nil, err
 		}
+		lastBefore, lastOut, haveWait = before, out, true
 		afterStart, afterOK := run.thumbStart(out.after)
-		log.Printf("youkai: collect: position %d: top fling %d: thumb %d/%t -> %d/%t, stationary=%t displaced=%t lost=%t rows=%d",
+		log.Printf("youkai: collect: position %d: top fling %d: thumb %d/%t -> %d/%t, stationary=%t displaced=%t lost=%t rows=%d %s",
 			run.position, flings+1, beforeStart, beforeOK, afterStart, afterOK,
-			out.stationary, out.displaced, out.lost, out.match.Rows)
+			out.stationary, out.displaced, out.lost, out.match.Rows,
+			scrollMarginFields(run.inv.matcher(), out.match, out.settleMatch))
 		flings++
 		progressed := false
 		topProven = false
 		switch {
 		case out.lost:
 			if !run.listVerdict(out.afterMatch) {
-				return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
+				return waitFailure(waitKind("top", out), before, out), scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
 					"collect: wheel position %d: the top fling lost the list and left no warehouse verdict: %s",
 					run.position, out.match.Evidence))
 			}
@@ -1261,6 +1278,30 @@ func (run *inventoryRun) scrollToTop(ctx context.Context) error {
 		}
 	}
 	return run.confirmTop(ctx)
+}
+
+// waitKind names a wait-phase failure by the last wait's verdict, so the
+// dump directory follows the scroll dump's outcome naming.
+func waitKind(prefix string, out scrollOutcome) string {
+	switch {
+	case out.lost:
+		return prefix + "-lost"
+	case out.displaced:
+		return prefix + "-displaced"
+	case out.stationary:
+		return prefix + "-stationary"
+	default:
+		return prefix + "-undecided"
+	}
+}
+
+// topWaitFailure is the deferred dump for a top-phase failure. A failure
+// before the first wait has no frame sequence to report.
+func topWaitFailure(prefix string, before platform.Frame, out scrollOutcome, haveWait bool) *failureFrames {
+	if !haveWait {
+		return nil
+	}
+	return waitFailure(waitKind(prefix, out), before, out)
 }
 
 // thumbStart reads the current frame's scrollbar thumb start through the
@@ -1352,7 +1393,7 @@ func (run *inventoryRun) awaitTopBase(ctx context.Context) error {
 // still settling, so the loop keeps flinging toward the beginning. The
 // bounded attempt count stops the walk rather than admitting items from an
 // unverified position.
-func (run *inventoryRun) confirmTop(ctx context.Context) error {
+func (run *inventoryRun) confirmTop(ctx context.Context) (*failureFrames, error) {
 	// The return-to-top fling can still be settling when the top claim
 	// first holds. Confirming immediately then compares the first drag
 	// against a moving base frame; every observed miss costs a full
@@ -1361,44 +1402,53 @@ func (run *inventoryRun) confirmTop(ctx context.Context) error {
 	// optimization: if stillness cannot be proven within the action
 	// budget, the confirmation below still verifies the drag itself.
 	if err := run.awaitTopBase(ctx); err != nil {
-		return err
+		return nil, err
 	}
+	before := run.lastFrame
+	var lastOut scrollOutcome
+	haveWait := false
 	for attempt := 0; attempt < maxTopFlings; attempt++ {
 		if err := ctx.Err(); err != nil {
-			return err
+			return nil, err
 		}
 		if !run.h.InputPermitted() {
-			return ctx.Err()
+			return nil, ctx.Err()
 		}
 		if err := run.observeReady(ctx); err != nil {
-			return err
+			return nil, err
 		}
-		beforeStart, beforeOK := run.thumbStart(run.lastFrame)
+		before = run.lastFrame
+		beforeStart, beforeOK := run.thumbStart(before)
 		res := run.view.Dispatch(platform.InputOp{
 			Kind:     platform.InputDrag,
 			Geometry: run.geo,
-			FrameID:  run.lastFrame.ID,
+			FrameID:  before.ID,
 			At:       run.inv.Layout.TopFrom,
 			To:       run.inv.Layout.TopTo,
 			Steps:    10,
 			Duration: run.inv.Layout.TopDuration,
 		})
 		if err := run.dispatchOutcome(ctx, res); err != nil {
-			return err
+			return nil, err
 		}
-		out, err := run.awaitScroll(ctx, run.lastFrame)
+		// Release the previous wait's trace before the next wait allocates
+		// its own; two capped traces must not be live together.
+		lastOut = scrollOutcome{}
+		out, err := run.awaitScroll(ctx, before)
 		if err != nil {
-			return err
+			return nil, err
 		}
+		lastOut, haveWait = out, true
 		afterStart, afterOK := run.thumbStart(out.after)
 		listOK := run.listVerdict(out.afterMatch) && out.afterMatch.List != nil
-		log.Printf("youkai: collect: position %d: top confirmation attempt %d: top=%t thumb %d/%t -> %d/%t stationary=%t displaced=%t lost=%t evidence=%s",
+		log.Printf("youkai: collect: position %d: top confirmation attempt %d: top=%t thumb %d/%t -> %d/%t stationary=%t displaced=%t lost=%t evidence=%s %s",
 			run.position, attempt+1,
 			listOK && out.afterMatch.List.Top,
 			beforeStart, beforeOK, afterStart, afterOK,
-			out.stationary, out.displaced, out.lost, out.match.Evidence)
+			out.stationary, out.displaced, out.lost, out.match.Evidence,
+			scrollMarginFields(run.inv.matcher(), out.match, out.settleMatch))
 		if !listOK && (out.lost || out.displaced) {
-			return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
+			return waitFailure(waitKind("top", out), before, out), scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
 				"collect: wheel position %d: the top confirmation moved the list without a warehouse verdict: %s",
 				run.position, out.match.Evidence))
 		}
@@ -1417,13 +1467,13 @@ func (run *inventoryRun) confirmTop(ctx context.Context) error {
 			} else {
 				log.Printf("youkai: collect: position %d: top confirmation accepted: the thumb stayed at the top", run.position)
 			}
-			return nil
+			return nil, nil
 		}
 		// Lost, displaced or undecided: keep dragging toward the beginning
 		// from the latest verified frame. The next drag can only move the
 		// list closer to its start.
 	}
-	return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
+	return topWaitFailure("top", before, lastOut, haveWait), scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
 		"collect: wheel position %d: the top confirmation did not settle after %d attempts", run.position, maxTopFlings))
 }
 
@@ -1453,13 +1503,38 @@ func topConfirmed(out scrollOutcome, beforeOK, afterOK bool, beforeStart, afterS
 	return thumbStable
 }
 
-// failureFrames is a failed step's before/after pair, returned to the
-// caller so the diagnostic write happens after the step's timing is
-// recorded. A nil pair means the failure has no usable after frame.
+// failureFrames is a failed step's wait evidence, returned to the caller
+// so the diagnostic write happens after the step's timing is recorded. A
+// nil value means the failure has no usable after frame.
 type failureFrames struct {
-	kind   string
-	before platform.Frame
-	after  platform.Frame
+	kind         string
+	before       platform.Frame
+	after        platform.Frame
+	trace        *scrollTrace
+	candidate    platform.Frame
+	hasCandidate bool
+}
+
+// waitFailure captures one failed wait for a dump. The wait's trace must
+// already exist (awaitScroll always builds one).
+func waitFailure(kind string, before platform.Frame, out scrollOutcome) *failureFrames {
+	return &failureFrames{
+		kind:         kind,
+		before:       before,
+		after:        out.after,
+		trace:        out.trace,
+		candidate:    out.candidate,
+		hasCandidate: out.hasCandidate,
+	}
+}
+
+// dumpFailure writes a failed step's deferred dump, if any. Callers invoke
+// it after the step's timing has been recorded.
+func (run *inventoryRun) dumpFailure(frames *failureFrames) {
+	if frames == nil {
+		return
+	}
+	run.dumpScrollTrace(frames.kind, frames.before, frames.after, frames.trace, frames.candidate, frames.hasCandidate)
 }
 
 // confirmBottomStep runs confirmBottom, accumulates its duration, and only
@@ -1469,9 +1544,7 @@ func (run *inventoryRun) confirmBottomStep(ctx context.Context) error {
 	started := diagnosticNow()
 	frames, err := run.confirmBottom(ctx)
 	run.positionBottomMs += diagnosticNow().Sub(started)
-	if frames != nil {
-		run.dumpScrollFrames(frames.kind, frames.before, frames.after)
-	}
+	run.dumpFailure(frames)
 	return err
 }
 
@@ -1507,12 +1580,15 @@ func (run *inventoryRun) confirmBottom(ctx context.Context) (*failureFrames, err
 		if err != nil {
 			return nil, err
 		}
+		log.Printf("youkai: collect: position %d: bottom confirmation attempt %d: stationary=%t displaced=%t lost=%t rows=%d %s",
+			run.position, attempt+1, out.stationary, out.displaced, out.lost, out.match.Rows,
+			scrollMarginFields(run.inv.matcher(), out.match, out.settleMatch))
 		if out.afterMatch.Page == PageWarehouse && !run.positionListVerdict(out.afterMatch) {
 			fault := scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
 				"collect: wheel position %d: the bottom confirmation left the list at another wheel position: %s",
 				run.position, out.afterMatch.Evidence))
 			if out.after.ID != 0 && out.after.Image != nil {
-				return &failureFrames{kind: "bottom-wrong-position", before: before, after: out.after}, fault
+				return waitFailure("bottom-wrong-position", before, out), fault
 			}
 			return nil, fault
 		}
@@ -1524,11 +1600,11 @@ func (run *inventoryRun) confirmBottom(ctx context.Context) (*failureFrames, err
 		case out.lost:
 			fault := scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
 				"collect: the bottom confirmation could not verify that the list stayed at the end: %s", out.match.Evidence))
-			return &failureFrames{kind: "bottom-lost", before: before, after: out.after}, fault
+			return waitFailure("bottom-lost", before, out), fault
 		case out.displaced:
 			fault := scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
 				"collect: the bottom confirmation moved the list, contradicting the scrollbar's bottom evidence: %s", out.match.Evidence))
-			return &failureFrames{kind: "bottom-displaced", before: before, after: out.after}, fault
+			return waitFailure("bottom-displaced", before, out), fault
 		default:
 			if attempt < run.inv.maxRetries() {
 				continue
@@ -1536,7 +1612,7 @@ func (run *inventoryRun) confirmBottom(ctx context.Context) (*failureFrames, err
 			fault := scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
 				"collect: the bottom confirmation produced no verifiable verdict within the budget (attempt %d)", attempt+1))
 			if out.after.ID != 0 && out.after.Image != nil {
-				return &failureFrames{kind: "bottom-undecided", before: before, after: out.after}, fault
+				return waitFailure("bottom-undecided", before, out), fault
 			}
 			return nil, fault
 		}
@@ -2506,6 +2582,7 @@ func (run *inventoryRun) scroll(ctx context.Context) (err error) {
 	rows := 0
 	var afterID uint64
 	var afterFrame platform.Frame
+	var waitOut scrollOutcome
 	outcome := "error"
 	defer func() {
 		if attempts == 0 {
@@ -2515,12 +2592,13 @@ func (run *inventoryRun) scroll(ctx context.Context) (err error) {
 		// that cost must not inflate total_ms or the position's scroll_ms.
 		elapsed := time.Since(started)
 		run.positionScrollMs += elapsed
-		log.Printf("youkai: collect: scroll position=%d viewport_from=%d viewport_to=%d outcome=%s attempts=%d drag_ms=%d settle_ms=%d total_ms=%d rows=%d before_frame=%d after_frame=%d",
+		log.Printf("youkai: collect: scroll position=%d viewport_from=%d viewport_to=%d outcome=%s attempts=%d drag_ms=%d settle_ms=%d total_ms=%d rows=%d before_frame=%d after_frame=%d %s",
 			run.position, fromViewport, run.viewport, outcome, attempts,
 			drag.Milliseconds(), settle.Milliseconds(), elapsed.Milliseconds(),
-			rows, before.ID, afterID)
+			rows, before.ID, afterID,
+			scrollMarginFields(run.inv.matcher(), waitOut.match, waitOut.settleMatch))
 		if err != nil && afterFrame.ID != 0 && outcome != "error" {
-			run.dumpScrollFrames("scroll-"+outcome, before, afterFrame)
+			run.dumpScrollTrace("scroll-"+outcome, before, afterFrame, waitOut.trace, waitOut.candidate, waitOut.hasCandidate)
 		}
 	}()
 	for attempt := 0; ; attempt++ {
@@ -2531,6 +2609,7 @@ func (run *inventoryRun) scroll(ctx context.Context) (err error) {
 		// the earlier attempt.
 		afterID = 0
 		afterFrame = platform.Frame{}
+		waitOut = scrollOutcome{}
 		outcome = "error"
 		if err := ctx.Err(); err != nil {
 			return err
@@ -2562,6 +2641,7 @@ func (run *inventoryRun) scroll(ctx context.Context) (err error) {
 		if err != nil {
 			return err
 		}
+		waitOut = out
 		afterID = out.after.ID
 		afterFrame = out.after
 		if out.afterMatch.Page == PageWarehouse && !run.positionListVerdict(out.afterMatch) {
@@ -2679,6 +2759,18 @@ type scrollOutcome struct {
 	after      platform.Frame
 	afterMatch PageMatch
 	match      ScrollMatch
+	// settleMatch is the candidate-relative comparison that confirmed the
+	// candidate stopped moving. It is zero when the settle rested on
+	// identical frame content instead of a matcher comparison, or when the
+	// wait did not settle.
+	settleMatch ScrollMatch
+	// candidate and hasCandidate describe the wait's final candidate for
+	// the failure dump; they never feed a decision.
+	candidate    platform.Frame
+	hasCandidate bool
+	// trace retains the frames the wait received. The failure dump writes
+	// it after the callers record their timings.
+	trace *scrollTrace
 }
 
 // awaitScroll waits for the scroll's effect and its settling on fresh
@@ -2696,7 +2788,8 @@ type scrollOutcome struct {
 func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame) (scrollOutcome, error) {
 	deadline := time.Now().Add(run.inv.scrollBudget())
 	after := run.lastArrived
-	out := scrollOutcome{}
+	trace := newScrollTrace(run.inv.Layout, before)
+	out := scrollOutcome{trace: trace}
 	var (
 		candidate       platform.Frame
 		candidateMatch  PageMatch
@@ -2709,6 +2802,7 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 	settle := func() (scrollOutcome, error) {
 		out.displaced = true
 		out.after, out.afterMatch, out.match = candidate, candidateMatch, candidateScroll
+		out.candidate, out.hasCandidate = candidate, true
 		return out, nil
 	}
 	finish := func() (scrollOutcome, error) {
@@ -2718,6 +2812,7 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 			// nothing and stop at the unverified position (T5 §5).
 			out.lost, out.unsettled = true, true
 			out.after, out.afterMatch, out.match = candidate, candidateMatch, candidateScroll
+			out.candidate, out.hasCandidate = candidate, true
 		case sawLost || sawAmbiguous:
 			out.lost = true
 		case sawStationary:
@@ -2747,6 +2842,7 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 				return scrollOutcome{}, wrapObservationErr(err)
 			}
 		}
+		trace.record(f)
 		if f.Geometry != run.geo {
 			return scrollOutcome{}, run.geometryChanged(f)
 		}
@@ -2761,8 +2857,10 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 						return settle()
 					}
 					rel := run.inv.matcher().MatchScroll(candidate, f)
+					trace.noteCandidate(candidate, f, rel)
 					out.match = rel
 					if rel.Stationary {
+						out.settleMatch = rel
 						return settle()
 					}
 				} else {
@@ -2770,6 +2868,7 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 						sawStationary = true
 					} else {
 						sm := run.inv.matcher().MatchScroll(before, f)
+						trace.noteBefore(f, sm)
 						out.match = sm
 						if sm.Stationary {
 							sawStationary = true
@@ -2798,16 +2897,20 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 				return settle()
 			}
 			rel := run.inv.matcher().MatchScroll(candidate, f)
+			trace.noteCandidate(candidate, f, rel)
 			out.match = rel
 			if rel.Stationary {
+				out.settleMatch = rel
 				return settle()
 			}
 			total := run.inv.matcher().MatchScroll(before, f)
+			trace.noteBefore(f, total)
 			switch {
 			case total.Displaced && len(total.Matches) > 0:
 				// The list moved further: the latest total displacement is
 				// the candidate, still uncommitted until it settles.
 				candidate, candidateMatch, candidateScroll = f, m, total
+				trace.pinCandidate(f)
 				out.match = total
 				sawLost, sawAmbiguous = false, false
 			case total.Lost:
@@ -2840,11 +2943,13 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 			continue
 		}
 		sm := run.inv.matcher().MatchScroll(before, f)
+		trace.noteBefore(f, sm)
 		out.match = sm
 		switch {
 		case sm.Displaced && len(sm.Matches) > 0:
 			haveCandidate = true
 			candidate, candidateMatch, candidateScroll = f, m, sm
+			trace.pinCandidate(f)
 			sawStationary, sawLost, sawAmbiguous = false, false, false
 		case sm.Lost:
 			sawLost, sawStationary, sawAmbiguous = true, false, false
