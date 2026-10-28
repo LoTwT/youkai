@@ -565,8 +565,8 @@ type inventoryRun struct {
 	positionScrollMs time.Duration
 	positionBottomMs time.Duration
 	positionScrolls  int
-	// diagnosticDumps counts this walk's scroll failure dumps (see
-	// dumpScrollFrames); it never feeds a navigation decision.
+	// diagnosticDumps counts this walk's scan-failure diagnostic groups
+	// (see dumpScrollTrace); it never feeds a navigation decision.
 	diagnosticDumps int
 }
 
