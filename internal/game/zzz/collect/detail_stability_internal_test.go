@@ -79,13 +79,14 @@ func (v *pacedFrameView) Frame(ctx context.Context, _ platform.FrameRequest) (pl
 }
 
 // TestAwaitDetailRequiresWallClockStability pins the span's independent
-// role beside StableFrames. The cloud stream runs at roughly 56fps, so three
-// identical observations can arrive in about 54ms while a click's detail
-// settles over 374–415ms (T5 §4). A crossfade can therefore hold a wrong
-// pane for StableFrames samples without being stable. The test scripts that
-// pane for the first three frames and the target pane afterwards; the
-// traversal must wait out DetailStableSpan and admit the target, never settle
-// on the three-frame transient.
+// role beside StableFrames on the initial-read path. The cloud stream runs
+// at roughly 56fps, so three identical observations can arrive in about
+// 54ms. When a position's list is first established, the pane can still be
+// finishing its transition to the selected disc; that transient content can
+// hold for StableFrames samples and must not be admitted as the initial
+// read. The test scripts the transient pane for the first three frames and
+// the target pane afterwards; the traversal must wait out DetailStableSpan
+// and settle on the target, never on the three-frame transient.
 func TestAwaitDetailRequiresWallClockStability(t *testing.T) {
 	l := MacCloudLayout()
 	inv := &Inventory{
