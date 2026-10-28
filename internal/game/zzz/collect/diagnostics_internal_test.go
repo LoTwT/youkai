@@ -172,10 +172,19 @@ func TestScrollFailureDumpKeepsSameMillisecondDumps(t *testing.T) {
 	}
 }
 
-// TestScrollTraceRetainsFirstAndNewest pins the bounded retention: the
-// pre-drag baseline and the newest frames survive, the middle is dropped,
-// and both the frame and byte limits hold.
-func TestScrollTraceRetainsFirstAndNewest(t *testing.T) {
+// traceFrameIDs returns a trace's retained frame IDs in order.
+func traceFrameIDs(trace *scrollTrace) []uint64 {
+	ids := make([]uint64, 0, len(trace.frames))
+	for _, frame := range trace.frames {
+		ids = append(ids, frame.id)
+	}
+	return ids
+}
+
+// TestScrollTraceRetainsHeadAndTail pins the bounded retention: a long
+// wait keeps the leading frames and the newest frames while the middle is
+// dropped, under both the frame and byte limits.
+func TestScrollTraceRetainsHeadAndTail(t *testing.T) {
 	layout := Layout{
 		ListViewport: image.Rect(0, 0, 4, 4),
 		ScrollTrack:  image.Rect(4, 0, 5, 4),
@@ -186,34 +195,68 @@ func TestScrollTraceRetainsFirstAndNewest(t *testing.T) {
 	frameBytes := 4 * 5 * 4
 
 	trace := newScrollTrace(layout, frame(1))
-	trace.maxFrames, trace.maxBytes = 4, 1<<20
-	for i := uint64(2); i <= 7; i++ {
+	trace.maxFrames, trace.maxBytes, trace.headFrames = 8, 1<<20, 3
+	for i := uint64(2); i <= 10; i++ {
 		trace.record(frame(i))
 	}
-	ids := make([]uint64, 0, len(trace.frames))
-	for _, f := range trace.frames {
-		ids = append(ids, f.id)
+	if ids := traceFrameIDs(trace); fmt.Sprint(ids) != "[1 2 3 6 7 8 9 10]" {
+		t.Fatalf("retained frames %v, want the head and the newest frames", ids)
 	}
-	if fmt.Sprint(ids) != "[1 5 6 7]" {
-		t.Fatalf("retained frames %v, want the baseline and newest three", ids)
-	}
-	if trace.dropped != 3 || trace.droppedBytes != 3*frameBytes {
-		t.Fatalf("dropped %d frames / %d bytes, want the three middle frames", trace.dropped, trace.droppedBytes)
+	if trace.dropped != 2 || trace.droppedBytes != 2*frameBytes {
+		t.Fatalf("dropped %d frames / %d bytes, want the two middle frames", trace.dropped, trace.droppedBytes)
 	}
 	if !strings.Contains(trace.retentionPolicy(), "baseline") {
 		t.Fatalf("retention policy %q does not explain the kept baseline", trace.retentionPolicy())
 	}
 
 	byBytes := newScrollTrace(layout, frame(1))
-	byBytes.maxFrames, byBytes.maxBytes = 100, 2*frameBytes+1
-	for i := uint64(2); i <= 7; i++ {
+	byBytes.maxFrames, byBytes.maxBytes, byBytes.headFrames = 100, 5*frameBytes, 2
+	for i := uint64(2); i <= 10; i++ {
 		byBytes.record(frame(i))
 	}
-	if len(byBytes.frames) != 2 || byBytes.frames[0].id != 1 || byBytes.frames[1].id != 7 {
-		t.Fatalf("byte-capped trace kept %d frames, want only the baseline and newest", len(byBytes.frames))
+	if ids := traceFrameIDs(byBytes); fmt.Sprint(ids) != "[1 2 8 9 10]" {
+		t.Fatalf("byte-capped trace kept %v, want the head and the newest frames", ids)
 	}
 	if byBytes.bytes > byBytes.maxBytes {
 		t.Fatalf("byte-capped trace holds %d bytes, limit %d", byBytes.bytes, byBytes.maxBytes)
+	}
+}
+
+// TestScrollTraceKeepsFirstMovedAndCandidate pins the pinned frames across a
+// long wait: the first comparison that was not Stationary and the latest
+// candidate survive even when both fall in the dropped middle, and a newer
+// candidate replaces the previous pin.
+func TestScrollTraceKeepsFirstMovedAndCandidate(t *testing.T) {
+	layout := Layout{
+		ListViewport: image.Rect(0, 0, 4, 4),
+		ScrollTrack:  image.Rect(4, 0, 5, 4),
+	}
+	frame := func(id uint64) platform.Frame {
+		return platform.Frame{ID: id, Geometry: 1, Image: image.NewRGBA(image.Rect(0, 0, 5, 4))}
+	}
+	trace := newScrollTrace(layout, frame(1))
+	trace.maxFrames, trace.maxBytes, trace.headFrames = 10, 1<<20, 4
+	for i := uint64(2); i <= 100; i++ {
+		trace.record(frame(i))
+		switch i {
+		case 5:
+			// The drag's first visible effect, far behind the tail soon.
+			trace.noteBefore(frame(i), ScrollMatch{Lost: true, Evidence: "first movement"})
+		case 40:
+			trace.pinCandidate(frame(i))
+		case 80:
+			// A later candidate replaces the frame-40 pin.
+			trace.pinCandidate(frame(i))
+		}
+	}
+	if ids := traceFrameIDs(trace); fmt.Sprint(ids) != "[1 2 3 4 5 80 97 98 99 100]" {
+		t.Fatalf("long wait retained %v, want the head, first movement, final candidate and tail", ids)
+	}
+	if trace.bytes > trace.maxBytes || len(trace.frames) > trace.maxFrames {
+		t.Fatalf("long wait holds %d frames / %d bytes, want the caps to hold", len(trace.frames), trace.bytes)
+	}
+	if policy := trace.retentionPolicy(); !strings.Contains(policy, "not stationary") || !strings.Contains(policy, "candidate") {
+		t.Fatalf("retention policy %q does not explain the pinned frames", policy)
 	}
 }
 

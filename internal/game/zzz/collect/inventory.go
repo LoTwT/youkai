@@ -37,14 +37,13 @@ type Inventory struct {
 	// would cycle collect → app), so the caller injects it. Nil admits
 	// the Observation unchanged.
 	Project func(Observation) (any, error)
-	// DiagnosticDir, when non-empty, receives PNG crops of the list
-	// before and after a scroll or bottom confirmation whose outcome
-	// stopped the walk (wrong position, lost, ambiguous, rejected, a
-	// bottom confirmation that displaced the list, a scroll that stayed
-	// stationary, or an exhausted undecided wait), so a field failure can
-	// be re-examined against the matcher's thresholds. It is observation
-	// only and bounded: a few dumps per walk, and the directory keeps only
-	// the newest files. Empty disables the dumps.
+	// DiagnosticDir, when non-empty, receives failure diagnostics for a
+	// scroll wait that stopped the walk: a bounded frame sequence plus a
+	// manifest in a timestamped subdirectory, so a field failure can be
+	// re-examined against the matcher's thresholds. The artifacts, limits
+	// and retention policy are described in docs/development.md's
+	// "扫描耗时诊断" section. It is observation only: write failures are
+	// logged and swallowed. Empty disables the dumps.
 	DiagnosticDir string
 
 	// ActionBudget bounds one action's whole effect-and-settle wait —
@@ -1220,6 +1219,9 @@ func (run *inventoryRun) scrollToTop(ctx context.Context) (*failureFrames, error
 		if err := run.dispatchOutcome(ctx, res); err != nil {
 			return nil, err
 		}
+		// Release the previous wait's trace before the next wait allocates
+		// its own; two capped traces must not be live together.
+		lastOut = scrollOutcome{}
 		out, err := run.awaitScroll(ctx, before)
 		if err != nil {
 			return nil, err
@@ -1429,6 +1431,9 @@ func (run *inventoryRun) confirmTop(ctx context.Context) (*failureFrames, error)
 		if err := run.dispatchOutcome(ctx, res); err != nil {
 			return nil, err
 		}
+		// Release the previous wait's trace before the next wait allocates
+		// its own; two capped traces must not be live together.
+		lastOut = scrollOutcome{}
 		out, err := run.awaitScroll(ctx, before)
 		if err != nil {
 			return nil, err
@@ -2905,6 +2910,7 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 				// The list moved further: the latest total displacement is
 				// the candidate, still uncommitted until it settles.
 				candidate, candidateMatch, candidateScroll = f, m, total
+				trace.pinCandidate(f)
 				out.match = total
 				sawLost, sawAmbiguous = false, false
 			case total.Lost:
@@ -2943,6 +2949,7 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 		case sm.Displaced && len(sm.Matches) > 0:
 			haveCandidate = true
 			candidate, candidateMatch, candidateScroll = f, m, sm
+			trace.pinCandidate(f)
 			sawStationary, sawLost, sawAmbiguous = false, false, false
 		case sm.Lost:
 			sawLost, sawStationary, sawAmbiguous = true, false, false
