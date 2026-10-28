@@ -3,6 +3,7 @@ package collect
 import (
 	"context"
 	"errors"
+	"fmt"
 	"image"
 	"path/filepath"
 	"strings"
@@ -629,15 +630,6 @@ func newScriptedScrollRun(l Layout, view SessionView, m Matcher, dir string, ret
 	}
 }
 
-func diagnosticPNGs(t *testing.T, dir string) []string {
-	t.Helper()
-	files, err := filepath.Glob(filepath.Join(dir, "*.png"))
-	if err != nil {
-		t.Fatalf("glob diagnostics: %v", err)
-	}
-	return files
-}
-
 // TestScrollVerdictFailureWritesDiagnostics drives the real scroll path to
 // its Stationary limit: the verdict stopped the walk, so one before/after
 // pair is written before the fault returns.
@@ -656,14 +648,19 @@ func TestScrollVerdictFailureWritesDiagnostics(t *testing.T) {
 	if err := runScriptedScroll(t, run); err == nil {
 		t.Fatal("a Stationary limit must stop the scroll")
 	}
-	files := diagnosticPNGs(t, dir)
-	if len(files) != 2 {
-		t.Fatalf("the stopped scroll wrote %d crops, want a before/after pair", len(files))
+	dumps := diagnosticDumpDirs(t, dir)
+	if len(dumps) != 1 {
+		t.Fatalf("the stopped scroll wrote %v, want one dump", dumps)
 	}
-	for _, path := range files {
-		if !strings.Contains(filepath.Base(path), "-scroll-stationary-") {
-			t.Fatalf("crop %q does not name the stopping verdict", path)
-		}
+	if !strings.Contains(filepath.Base(dumps[0]), "-scroll-stationary") {
+		t.Fatalf("dump %q does not name the stopping verdict", dumps[0])
+	}
+	files := dumpPNGs(t, dumps[0])
+	if len(files) != 2 {
+		t.Fatalf("the stopped scroll wrote %d crops, want the before and received frame", len(files))
+	}
+	if ids := manifestFrameIDs(readDumpManifest(t, dumps[0])); len(ids) != 2 {
+		t.Fatalf("manifest frames %v, want the before frame and the received frame", ids)
 	}
 }
 
@@ -690,17 +687,17 @@ func TestScrollRetryAfterVerdictDoesNotDumpPreviousAttempt(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "scripted observation failure") {
 		t.Fatalf("scroll error = %v, want the second attempt's readiness failure", err)
 	}
-	if files := diagnosticPNGs(t, dir); len(files) != 0 {
-		t.Fatalf("a failure before the verdict wrote %v, want no crops", files)
+	if dumps := diagnosticDumpDirs(t, dir); len(dumps) != 0 {
+		t.Fatalf("a failure before the verdict wrote %v, want no dumps", dumps)
 	}
 }
 
 // TestConfirmBottomFailureWritesDiagnostics drives the real bottom
 // confirmation to a displaced failure through confirmBottomStep, the timed
-// caller that writes the pair after bottom_ms is accumulated. A controlled
-// clock pins the order: the write's stamp is the third reading, so moving
-// the PNG write back inside the timed span would report its full second in
-// bottom_ms. The write must not change the fault.
+// caller that writes the sequence after bottom_ms is accumulated. A
+// controlled clock pins the order: the write's stamp is the third reading,
+// so moving the write back inside the timed span would report its full
+// second in bottom_ms. The write must not change the fault.
 func TestConfirmBottomFailureWritesDiagnostics(t *testing.T) {
 	l := sixRowScrollLayout()
 	frame := func(id uint64) platform.Frame {
@@ -731,11 +728,19 @@ func TestConfirmBottomFailureWritesDiagnostics(t *testing.T) {
 	}
 	t.Cleanup(func() { diagnosticNow = previousNow })
 
+	observedBottom := time.Duration(-1)
+	calls := slowDiagnosticWrites(t, 0, func() { observedBottom = run.positionBottomMs })
 	err := runScriptedSession(t, run, func(ctx context.Context, run *inventoryRun) error {
 		return run.confirmBottomStep(ctx)
 	})
 	if err == nil {
 		t.Fatal("a displaced bottom confirmation must stop the walk")
+	}
+	if *calls == 0 {
+		t.Fatal("the displaced bottom confirmation wrote no diagnostic artifact")
+	}
+	if observedBottom != time.Millisecond {
+		t.Fatalf("the first write observed bottom_ms = %s, want the already-recorded 1ms decision span", observedBottom)
 	}
 	if clockCalls != 3 {
 		t.Fatalf("the diagnostic clock was read %d times, want the start, elapsed and one dump stamp", clockCalls)
@@ -743,14 +748,200 @@ func TestConfirmBottomFailureWritesDiagnostics(t *testing.T) {
 	if run.positionBottomMs != time.Millisecond {
 		t.Fatalf("bottom_ms = %s, want the 1ms decision span; a timed dump would report 1s", run.positionBottomMs)
 	}
-	files := diagnosticPNGs(t, dir)
-	if len(files) != 2 {
-		t.Fatalf("the displaced bottom confirmation wrote %d crops, want a before/after pair", len(files))
+	dumps := diagnosticDumpDirs(t, dir)
+	if len(dumps) != 1 {
+		t.Fatalf("the displaced bottom confirmation wrote %v, want one dump", dumps)
 	}
-	for _, path := range files {
-		if !strings.Contains(filepath.Base(path), "-bottom-displaced-") {
-			t.Fatalf("crop %q does not name the bottom-confirmation verdict", path)
+	if !strings.Contains(filepath.Base(dumps[0]), "-bottom-displaced") {
+		t.Fatalf("dump %q does not name the bottom-confirmation verdict", dumps[0])
+	}
+	if files := dumpPNGs(t, dumps[0]); len(files) != 3 {
+		t.Fatalf("the displaced bottom confirmation wrote %d crops, want the before and both received frames", len(files))
+	}
+}
+
+// TestScrollSuccessWritesNoImages pins the success side: a committed
+// scroll logs its margins but writes no dump.
+func TestScrollSuccessWritesNoImages(t *testing.T) {
+	l := sixRowScrollLayout()
+	frame := func(id uint64) platform.Frame {
+		return platform.Frame{ID: id, Geometry: 1, Image: image.NewRGBA(image.Rect(0, 0, 1280, 1000))}
+	}
+	view := &scrollScriptView{frames: []platform.Frame{frame(1), frame(2), frame(3)}}
+	m := &scrollScriptMatcher{rows: l.Rows, columns: l.Columns, verdict: map[scrollPair]ScrollMatch{
+		{1, 2}: displacedScan(l, 4),
+		{2, 3}: {Stationary: true, Evidence: "scripted settled"},
+	}}
+	dir := t.TempDir()
+	run := newScriptedScrollRun(l, view, m, dir, 0, time.Second)
+	run.visited = make([]bool, len(l.Slots))
+
+	if err := runScriptedScroll(t, run); err != nil {
+		t.Fatalf("the settled scroll must succeed: %v", err)
+	}
+	if dumps := diagnosticDumpDirs(t, dir); len(dumps) != 0 {
+		t.Fatalf("a successful scroll wrote %v, want no diagnostics", dumps)
+	}
+}
+
+// TestScrollUnsettledWritesSequenceManifest drives the real scroll path to
+// the failed settle the field reports: the whole received sequence is
+// written, every entry carries the matcher result the wait recorded, and
+// the candidate-relative comparison names the candidate it was measured
+// against.
+func TestScrollUnsettledWritesSequenceManifest(t *testing.T) {
+	l := sixRowScrollLayout()
+	base := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
+	frame := func(id uint64) platform.Frame {
+		return platform.Frame{ID: id, Geometry: 1, ArrivedAt: base.Add(time.Duration(id) * 40 * time.Millisecond),
+			Image: image.NewRGBA(image.Rect(0, 0, 1280, 1000))}
+	}
+	metrics := func(err0, bestErr float64) *ScrollMetrics {
+		return &ScrollMetrics{Err0: err0, Measured: true, BestDy: 147, BestErr: bestErr,
+			RowErrors: map[int]float64{1: bestErr, 2: bestErr + 1}}
+	}
+	verdicts := map[scrollPair]ScrollMatch{
+		{1, 2}: {Displaced: true, Rows: 4, Matches: scriptedDisplacement(l, 4), Evidence: "scripted four rows", Metrics: metrics(6.0, 3.0)},
+		{2, 3}: {Evidence: "scripted still moving", Metrics: &ScrollMetrics{Err0: 2.5}},
+		{1, 3}: {Displaced: true, Rows: 5, Matches: scriptedDisplacement(l, 5), Evidence: "scripted five rows", Metrics: metrics(7.0, 4.0)},
+		{3, 4}: {Evidence: "scripted still moving", Metrics: &ScrollMetrics{Err0: 2.75}},
+		{1, 4}: {Displaced: true, Rows: 4, Matches: scriptedDisplacement(l, 4), Evidence: "scripted back to four rows", Metrics: metrics(8.0, 5.0)},
+	}
+	view := &scrollScriptView{frames: []platform.Frame{frame(1), frame(2), frame(3), frame(4)}, blockAfter: true}
+	m := &scrollScriptMatcher{rows: l.Rows, columns: l.Columns, verdict: verdicts}
+	dir := t.TempDir()
+	run := newScriptedScrollRun(l, view, m, dir, 0, 40*time.Millisecond)
+
+	err := runScriptedScroll(t, run)
+	if err == nil || !strings.Contains(err.Error(), "did not settle") {
+		t.Fatalf("scroll error %v, want the unsettled displacement", err)
+	}
+	dumps := diagnosticDumpDirs(t, dir)
+	if len(dumps) != 1 || !strings.Contains(filepath.Base(dumps[0]), "-scroll-lost") {
+		t.Fatalf("the unsettled scroll wrote %v, want one scroll-lost dump", dumps)
+	}
+	manifest := readDumpManifest(t, dumps[0])
+	if ids := manifestFrameIDs(manifest); fmt.Sprint(ids) != "[1 2 3 4]" {
+		t.Fatalf("manifest frames %v, want the complete received sequence", ids)
+	}
+	if manifest.BeforeFrame != 1 || manifest.AfterFrame != 4 || manifest.CandidateFrame != 4 {
+		t.Fatalf("manifest frames before=%d after=%d candidate=%d, want 1/4/4",
+			manifest.BeforeFrame, manifest.AfterFrame, manifest.CandidateFrame)
+	}
+	for i, pair := range []scrollPair{{1, 2}, {1, 3}, {1, 4}} {
+		entry := manifest.Frames[i+1]
+		want := verdicts[pair]
+		if entry.VsBefore == nil || entry.VsBefore.ReferenceFrame != pair.before ||
+			entry.VsBefore.Verdict != scrollVerdict(want) {
+			t.Fatalf("frame %d vs_before %+v, want the matcher's %+v", entry.Frame, entry.VsBefore, want)
 		}
+		if entry.VsBefore.Err0 == nil || *entry.VsBefore.Err0 != want.Metrics.Err0 ||
+			entry.VsBefore.BestDy == nil || *entry.VsBefore.BestDy != want.Metrics.BestDy ||
+			entry.VsBefore.BestErr == nil || *entry.VsBefore.BestErr != want.Metrics.BestErr {
+			t.Fatalf("frame %d vs_before numbers %+v, want the matcher's %+v", entry.Frame, entry.VsBefore, want.Metrics)
+		}
+	}
+	for i, pair := range []scrollPair{{2, 3}, {3, 4}} {
+		entry := manifest.Frames[i+2]
+		want := verdicts[pair]
+		if entry.VsCandidate == nil || entry.VsCandidate.ReferenceFrame != pair.before ||
+			entry.VsCandidate.Err0 == nil || *entry.VsCandidate.Err0 != want.Metrics.Err0 {
+			t.Fatalf("frame %d vs_candidate %+v, want the matcher's %+v against frame %d",
+				entry.Frame, entry.VsCandidate, want, pair.before)
+		}
+	}
+	if entry := manifest.Frames[1]; entry.VsCandidate != nil {
+		t.Fatalf("frame 2 vs_candidate %+v, want none before a candidate existed", entry.VsCandidate)
+	}
+}
+
+// slowDiagnosticWrites delays the first artifact write and observes the
+// timer state at that moment, so a test can prove the write happens after
+// the decision timer was recorded.
+func slowDiagnosticWrites(t *testing.T, delay time.Duration, observe func()) *int {
+	t.Helper()
+	previous := writeDiagnosticFile
+	calls := 0
+	writeDiagnosticFile = func(path string, data []byte) error {
+		calls++
+		if calls == 1 {
+			if observe != nil {
+				observe()
+			}
+			time.Sleep(delay)
+		}
+		return previous(path, data)
+	}
+	t.Cleanup(func() { writeDiagnosticFile = previous })
+	return &calls
+}
+
+// TestScrollDumpStaysOutsideScrollTimer pins the timing contract: the
+// failure dump's encode and write cost is not part of scroll_ms.
+func TestScrollDumpStaysOutsideScrollTimer(t *testing.T) {
+	l := sixRowScrollLayout()
+	frame := func(id uint64) platform.Frame {
+		return platform.Frame{ID: id, Geometry: 1, Image: image.NewRGBA(image.Rect(0, 0, 1280, 1000))}
+	}
+	view := &scrollScriptView{frames: []platform.Frame{frame(1), frame(2)}, blockAfter: true}
+	m := &scrollScriptMatcher{rows: l.Rows, columns: l.Columns, verdict: map[scrollPair]ScrollMatch{
+		{1, 2}: {Stationary: true, Evidence: "scripted stationary"},
+	}}
+	dir := t.TempDir()
+	run := newScriptedScrollRun(l, view, m, dir, -1, 40*time.Millisecond)
+	observed := time.Duration(-1)
+	calls := slowDiagnosticWrites(t, 500*time.Millisecond, func() { observed = run.positionScrollMs })
+
+	if err := runScriptedScroll(t, run); err == nil {
+		t.Fatal("a Stationary limit must stop the scroll")
+	}
+	if *calls == 0 {
+		t.Fatal("the failure wrote no diagnostic artifact")
+	}
+	if observed <= 0 {
+		t.Fatalf("the first write began before scroll_ms was recorded (observed %s)", observed)
+	}
+	if run.positionScrollMs >= 300*time.Millisecond {
+		t.Fatalf("scroll_ms = %s, want the decision cost without the 500ms diagnostic write", run.positionScrollMs)
+	}
+}
+
+// TestTopDumpStaysOutsideTopTimer pins the same contract for the
+// return-to-top phase: topStep records top_ms before writing the failed
+// wait's sequence.
+func TestTopDumpStaysOutsideTopTimer(t *testing.T) {
+	l := sixRowScrollLayout()
+	frame := func(id uint64) platform.Frame {
+		return platform.Frame{ID: id, Geometry: 1, Image: image.NewRGBA(image.Rect(0, 0, 1280, 1000))}
+	}
+	view := &endlessFrameView{}
+	m := &scrollScriptMatcher{rows: l.Rows, columns: l.Columns, alwaysStationary: true}
+	dir := t.TempDir()
+	run := newScriptedScrollRun(l, view, m, dir, 0, 30*time.Millisecond)
+	run.lastFrame = frame(1)
+	run.listMatch = m.Match(frame(1))
+
+	var timing positionTiming
+	observed := time.Duration(-1)
+	calls := slowDiagnosticWrites(t, 500*time.Millisecond, func() { observed = timing.top })
+	err := runScriptedSession(t, run, func(ctx context.Context, run *inventoryRun) error {
+		return run.topStep(ctx, &timing)
+	})
+	if err == nil {
+		t.Fatal("two flings without progress must stop the top phase")
+	}
+	if *calls == 0 {
+		t.Fatal("the failed top phase wrote no diagnostic artifact")
+	}
+	if observed <= 0 {
+		t.Fatalf("the first write began before top_ms was recorded (observed %s)", observed)
+	}
+	if timing.top >= 300*time.Millisecond {
+		t.Fatalf("top_ms = %s, want the decision cost without the 500ms diagnostic write", timing.top)
+	}
+	dumps := diagnosticDumpDirs(t, dir)
+	if len(dumps) != 1 || !strings.Contains(filepath.Base(dumps[0]), "-top-stationary") {
+		t.Fatalf("the failed top phase wrote %v, want one top-stationary dump", dumps)
 	}
 }
 

@@ -275,6 +275,27 @@ type ScrollMatch struct {
 	Undecided bool
 	// Evidence describes what the verdict rests on, in prose.
 	Evidence string
+	// Metrics are the raw numbers behind the verdict. They exist for field
+	// diagnostics — threshold calibration needs to know how close a frame
+	// came to each limit — and never feed a traversal decision. Nil means
+	// the matcher could not measure the pair.
+	Metrics *ScrollMetrics
+}
+
+// ScrollMetrics is the numeric evidence behind one ScrollMatch: the
+// zero-displacement error and, when the matcher searched shifts, the best
+// shift with its error and the best error of every whole-row candidate.
+// RowErrors is keyed by signed rows.
+type ScrollMetrics struct {
+	// Err0 is the list viewport's mean absolute error at zero displacement.
+	Err0 float64
+	// Measured reports that the shift search ran; when false, BestDy,
+	// BestErr and RowErrors are unset (the stationary path decides on Err0
+	// alone and does not pay for the search).
+	Measured  bool
+	BestDy    int
+	BestErr   float64
+	RowErrors map[int]float64
 }
 
 // Matcher is the traversal's evidence engine: it turns frames into the

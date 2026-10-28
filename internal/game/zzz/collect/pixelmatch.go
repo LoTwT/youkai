@@ -493,13 +493,15 @@ func (m *PixelMatcher) MatchScroll(before, after platform.Frame) ScrollMatch {
 	if err0 < m.C.ScrollStationaryMax {
 		return ScrollMatch{Stationary: true, Evidence: fmt.Sprintf(
 			"frames %d → %d: list viewport error at zero displacement %.2f < %.1f — the list did not move",
-			before.ID, after.ID, err0, m.C.ScrollStationaryMax)}
+			before.ID, after.ID, err0, m.C.ScrollStationaryMax),
+			Metrics: &ScrollMetrics{Err0: err0}}
 	}
 	dy, bestErr, rowErrors, ok := m.bestShift(before.Image, after.Image)
 	if !ok {
 		return ScrollMatch{Evidence: fmt.Sprintf("pixel matcher: frames %d → %d have too few comparable list samples",
 			before.ID, after.ID)}
 	}
+	metrics := &ScrollMetrics{Err0: err0, Measured: true, BestDy: dy, BestErr: bestErr, RowErrors: rowErrors}
 	direction, rows := 0, 0
 	switch {
 	case dy > 0:
@@ -518,7 +520,8 @@ func (m *PixelMatcher) MatchScroll(before, after platform.Frame) ScrollMatch {
 		if rivalRows, rivalErr, ambiguous := m.rivalShift(direction*rows, bestErr, rowErrors); ambiguous {
 			return ScrollMatch{Lost: true, Evidence: fmt.Sprintf(
 				"frames %d → %d: row shift %d (error %.2f) and %d (error %.2f) are both plausible; the alignments do not uniquely identify the displacement (margin %.1f); row candidates %s",
-				before.ID, after.ID, rows, bestErr, rivalRows, rivalErr, m.C.ScrollShiftMargin, formatRowErrors(rowErrors))}
+				before.ID, after.ID, rows, bestErr, rivalRows, rivalErr, m.C.ScrollShiftMargin, formatRowErrors(rowErrors)),
+				Metrics: metrics}
 		}
 		matches := make([]PositionPair, 0, (m.L.Rows-rows)*m.L.Columns)
 		for r := 0; r < m.L.Rows-rows; r++ {
@@ -533,16 +536,28 @@ func (m *PixelMatcher) MatchScroll(before, after platform.Frame) ScrollMatch {
 		}
 		return ScrollMatch{Displaced: true, Rows: rows, Matches: matches, Evidence: fmt.Sprintf(
 			"frames %d → %d: list displaced %d row(s) (dy %d, error %.2f ≤ %.1f and ≥ %.1f below the zero-displacement error %.2f)",
-			before.ID, after.ID, rows, dy, bestErr, m.C.ScrollDisplacedMax, m.C.ScrollDisplacedMargin, err0)}
+			before.ID, after.ID, rows, dy, bestErr, m.C.ScrollDisplacedMax, m.C.ScrollDisplacedMargin, err0),
+			Metrics: metrics}
 	}
 	if err0 >= m.C.ScrollLostMin && !aligned {
 		return ScrollMatch{Lost: true, Evidence: fmt.Sprintf(
 			"frames %d → %d: the list changed (zero-displacement error %.2f ≥ %.1f) but the best shift %d is not a whole row (error %.2f) — the overlap was lost; row candidates %s",
-			before.ID, after.ID, err0, m.C.ScrollLostMin, dy, bestErr, formatRowErrors(rowErrors))}
+			before.ID, after.ID, err0, m.C.ScrollLostMin, dy, bestErr, formatRowErrors(rowErrors)),
+			Metrics: metrics}
 	}
 	return ScrollMatch{Undecided: true, Evidence: fmt.Sprintf(
 		"frames %d → %d: undecided (zero-displacement error %.2f, best shift %d at error %.2f; displaced needs error ≤ %.1f and ≥ %.1f below zero); row candidates %s",
-		before.ID, after.ID, err0, dy, bestErr, m.C.ScrollDisplacedMax, m.C.ScrollDisplacedMargin, formatRowErrors(rowErrors))}
+		before.ID, after.ID, err0, dy, bestErr, m.C.ScrollDisplacedMax, m.C.ScrollDisplacedMargin, formatRowErrors(rowErrors)),
+		Metrics: metrics}
+}
+
+// ScrollThresholds reports the scroll thresholds MatchScroll applies. It
+// exists for the diagnostic logs' decision margins, not for a decision.
+func (m *PixelMatcher) ScrollThresholds() (stationaryMax, displacedMax float64) {
+	if m == nil {
+		return 0, 0
+	}
+	return m.C.ScrollStationaryMax, m.C.ScrollDisplacedMax
 }
 
 // formatRowErrors renders every whole-row candidate's best error in row
