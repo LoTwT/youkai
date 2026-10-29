@@ -10,9 +10,9 @@
 - T4：扫描会话与结果契约：直接在[架构第 5 节](specs/scanner-architecture.md#5-扫描会话与结果语义)维护。
 - [T5：绝区零仓库遍历与详情归属](specs/t5-zzz-inventory-traversal.md)：页面预检、选中与详情归属、滚动衔接、末尾判断和完整性验收；macOS 云客户端的布局、阈值、单页流程（4b-1）与位置×列表两层遍历（4b-2）已标定并实现，面板排序标签模板验证与六位置覆盖账目已接入 observedScope；2026-10-20 现场干净运行完成 1,005 件、六位置 `complete` 且排序验证为“稀有度”。2026-10-29 按决策同步 F1–F7/F4b 证据、筛选范围证明、选中框为主的滚动证据与停稳模型、位置准备/位置证明失败的位置级降级、单件未采集重访；正文区分“目标设计（待阶段 N 实现）”与“当前实现”。
 - [按位置重试与续扫（历史草案，部分被取代）](specs/position-retry-design.md)：位置级故障的一次自动重试与会话内续走草案；A2 的逐行继承方案已被决策 K1 改写，Q1–Q13 的逐条处置见文档文首及[决策 §9.3](decisions/2026-10-28-scanner-rearchitecture.md#93-position-retry-designmd92-历史草案已逐条处置)，当前恢复边界以架构与 T5 为准。
-- [扫描器重新架构决策（已定稿）](decisions/2026-10-28-scanner-rearchitecture.md)：2026-10-28 真机失败后的重新架构方向，2026-10-29 定稿——保留技术栈与串行控制骨架，按阶段替换遍历证据模型；记录 K1–K5、F1–F7/F4b 真机核实、位置准备失败的位置级降级、三客户端 profile、阶段路线与规格同步结果，F8（Windows）另行安排。
+- [扫描器重新架构决策（已定稿）](decisions/2026-10-28-scanner-rearchitecture.md)：2026-10-28 真机失败后的重新架构方向，2026-10-29 定稿——保留技术栈与串行控制骨架，按阶段替换遍历证据模型；记录 K1–K5、F1–F7/F4b 真机核实、位置准备失败的位置级降级、范围未证明位置的已接纳物品保留、三客户端 profile、阶段路线与规格同步结果，F8（Windows）另行安排。
 - [T6：用户操作、结果校对与导出](specs/t6-review-export-workflow.md)：准备到导出的操作流程、逐件校对、JSON/CSV 两种导出、历史与截图/记录清理。
-- [扫描结果 JSON/CSV v2](specs/scan-json-format.md)：自有可用数据文件契约（JSON 与同源 CSV），附[合成示例](examples/scan-usable-v2.json)；导出与自动接受已实现并合并，真机验收待完成。2026-10-29 明确重访不产生新序号、v2 格式与计数等式不变（决策 §9.4(a)）。
+- [扫描结果 JSON/CSV v2](specs/scan-json-format.md)：自有可用数据文件契约（JSON 与同源 CSV），附[合成示例](examples/scan-usable-v2.json)；导出与自动接受已实现并合并，真机验收待完成。2026-10-29 明确重访不产生新序号、位置范围未证明位置的已接纳物品仍可用且不计入 `excludedCount`，v2 格式与计数等式不变（决策 §9.4(a)/§4.6）。
 - [T7：构建打包与交付验收](specs/t7-public-release-acceptance.md)：首版交付门槛、无付费证书的打包路线、最低系统候选。
 - [历史 UI 设计基线（已过时）](design/uiux-2026-10-21/README.md)：2026-10-21 的设计稿与评审记录，仅作历史参考；当前界面、token 与布局以 `internal/ui` 和测试为准。
 - [扫描器背景与参考实现](scanner-handoff.md)：项目起因、参考扫描器研究结论和与 fairy 的边界。
