@@ -29,12 +29,12 @@
 | 项目 | 观测 | 来源 |
 | --- | --- | --- |
 | 位移 | 整行位移 588–589 帧像素，行距 147，即 4 行 | `manifest.json` 的 `best_dy`；`internal/game/zzz/collect/maccloud.go:97` 的 `RowPitch: 147` |
-| 停留 | 5096–5357 之间 34 个相对基准比较帧全部为 `Undecided`；控制者摘要称约 33 帧 | `manifest.json`；控制者提供任务摘要 |
+| 停留 | 5096–5357 之间 34 个可见相对基准比较帧全部为 `Undecided`；5096→5154 之间有帧被保留策略丢弃（`dropped_frames=8`），其判定不可见；控制者摘要称约 33 帧 | `manifest.json`；控制者提供任务摘要 |
 | 最佳误差 | 10.90–13.11，全部高于 `ScrollDisplacedMax=10.0` | `manifest.json`；`maccloud.go:321` |
-| 次优整行 | 最后一次比较的 `rival_gap=8.63`（日志字段） | [youkai.log](</Users/caoyujie/Library/Logs/Youkai Dev/youkai.log>) 第 2353 行附近 |
-| 判定 | 全程 `Undecided`，最终 `positionLost`；没有提交 `visited`/`viewport` | `manifest.json`；[inventory.go:2675](../../internal/game/zzz/collect/inventory.go#L2675) 仅在 displaced 时调用 `applyTransition`，[inventory.go:3030](../../internal/game/zzz/collect/inventory.go#L3030) 才更新 `visited` |
-| 同轮成功滚动 | 前四次成功滚动的 `displaced_margin` 仅 0.10–0.29（最佳误差 9.71–9.90） | [youkai.log](</Users/caoyujie/Library/Logs/Youkai Dev/youkai.log>) 2148–2393 行 |
-| 历史静止误差 | 静止内容/顶部候选的零位移误差约 1.48–6.18；样本标定值为 1.35–1.88 | `youkai.log.1:275`（1.48，判 stationary）、`:1686`（6.18，顶部候选判 undecided）；`maccloud.go:265` 的注释区间 |
+| 次优整行 | 最后一次比较的 `rival_gap=8.63`（日志字段） | `~/Library/Logs/Youkai Dev/youkai.log` 第 2347 行 |
+| 判定 | 有判定的 35 帧：5090 `Lost`（dy=152，err=22.09，第二次拖动中）；5096–5357 的 34 帧 `Undecided`。终局 `positionLost` 来自 5090 的 `sawLost` 未被后续 `Undecided` 清除，**不是全程 Undecided**；没有提交 `visited`/`viewport` | `manifest.json`；[inventory.go:2816](../../internal/game/zzz/collect/inventory.go#L2816) 的 `sawLost` 汇总、[inventory.go:2948](../../internal/game/zzz/collect/inventory.go#L2948) 的判定 switch；[inventory.go:2675](../../internal/game/zzz/collect/inventory.go#L2675) 仅在 displaced 时调用 `applyTransition` |
+| 同轮成功滚动 | 前四次成功滚动的 `displaced_margin` 仅 0.10–0.29（最佳误差 9.71–9.90） | `~/Library/Logs/Youkai Dev/youkai.log` 2148–2393 行 |
+| 历史静止误差 | 静止内容/顶部候选的零位移误差约 1.48–6.18；样本标定值为 1.35–1.88 | `youkai.log.1:275`（1.48，判 stationary）、`:1686`（6.18，判 lost，evidence 文本为 undecided）；`maccloud.go:265` 的注释区间 |
 
 **[事实]** 直接阻塞条件不是“没有正确位移证据”，而是“正确位移的误差略高于绝对上限”。同轮成功滚动的余量只有 0.10–0.29，说明 10.0 这个上限已经贴着真机分布的边缘；任何画质、编码、动画或选中效果的小变化都会把正确位移推到阈值之外。
 
@@ -50,17 +50,19 @@
 
 ### 1.2 动作状态机缺陷：效果未知时再次拖动
 
-**[事实]** `awaitScroll` 的终局汇总只有三条分支：已有 candidate 但未停稳、见过 `Lost`/ambiguous、见过 `Stationary`；没有显式的 `Undecided` 状态。`Undecided` 帧不会清除此前的 `sawStationary`/`sawLost`/`sawAmbiguous`，因此“先见过 Stationary、后又出现 Undecided”会在预算到期时汇总成旧的 `Stationary`。
+**[事实]** `awaitScroll` 的终局汇总只有三条分支：已有 candidate 但未停稳、见过 `Lost`/ambiguous、见过 `Stationary`；没有显式的 `Undecided` 状态。`Undecided` 帧不会清除此前的 `sawStationary`/`sawLost`/`sawAmbiguous`，因此“先见过 Stationary、后又出现 Undecided”会在预算到期时汇总成旧的 `Stationary`；本次现场是同一缺陷的另一种表现：5090 先判 `Lost`，其后的 34 帧 `Undecided` 没有清除 `sawLost`，终局因此仍是 `lost`。
 
-见 [inventory.go:2808](../../internal/game/zzz/collect/inventory.go#L2808) 的 `finish` 与 [inventory.go:2948](../../internal/game/zzz/collect/inventory.go#L2948) 的判定 switch。
+见 [inventory.go:2808](../../internal/game/zzz/collect/inventory.go#L2808) 的 `finish`、[inventory.go:2816](../../internal/game/zzz/collect/inventory.go#L2816) 的 `sawLost` 汇总与 [inventory.go:2948](../../internal/game/zzz/collect/inventory.go#L2948) 的判定 switch。日志的 `outcome=lost` 与 “no unique correspondence verified” 文案就是这个汇总路径的结果。
 
 **[事实]** `scroll()` 在尝试循环外取 `before`（[inventory.go:2574](../../internal/game/zzz/collect/inventory.go#L2574)），重试时仍用同一个旧基准拖动并比较；每次 `awaitScroll` 又新建 trace（[inventory.go:2791](../../internal/game/zzz/collect/inventory.go#L2791)），`waitOut` 被覆盖，诊断只保留最后一次等待。见 [inventory.go:2604](../../internal/game/zzz/collect/inventory.go#L2604)。
 
 **[事实]** `scroll()` 在 `out.stationary` 和默认的无明确终局分支都会再次拖动（[inventory.go:2692](../../internal/game/zzz/collect/inventory.go#L2692)、[inventory.go:2699](../../internal/game/zzz/collect/inventory.go#L2699)）。默认分支正是“没有可验证终局”，也就是动作效果未知；此时再发一次拖动，违反 T5 “首次动作效果尚不明确时，不发送验证用的下一次动作”的约束（[T5 §4](../specs/t5-zzz-inventory-traversal.md#4-一件物品何时可以进入识别队列)）。
 
-**[事实]** 最新失败日志为 `attempts=2`、`drag_ms=2812`、`settle_ms=10023`，与“两次 5 秒等待”一致。首次尝试的判定和帧证据没有被保留，因此**不能从现有产物确认第一次是 `Stationary` 还是无终局**；能确认的是状态机允许在这两种情况下再次拖动，且第二次仍用旧基准。两份评审都明确指出了这一限制。
+**[事实]** 最新失败日志为 `attempts=2`、`drag_ms=2812`、`settle_ms=10023`，与“两次 5 秒等待”一致。第一次尝试的帧/判定仍未被保留；第二次尝试可见 5090 `Lost` 与随后 34 帧 `Undecided`（5096→5154 间有帧被保留策略丢弃，总计 `dropped_frames=8`，判定不可见），终局 `lost` 来自 5090 的 `sawLost` 未被清除，而不是 34 帧都没有判定。状态机允许在 `stationary` 和无明确终局分支再次拖动，且第二次仍用旧基准；两份评审都指出了这一限制。
 
-**[推断]** 这条缺陷把“一次未决的滚动”放大成“两次拖动叠加、旧基准比较、首次证据丢失”。它和 1.1 的阈值问题独立：即使阈值完全正确，效果未知时再次拖动也可能制造更复杂的位移；即使状态机正确，10.0 仍会拒绝本次正确位移。两者都必须先修，不能只在 K5 上增加重试。
+**[推断]** 1.1 与 1.2 的叠加方式：1.1 的绝对阈值使 5096–5357 的正确 4 行位移全部落在 `Undecided`，无法形成 candidate；1.2 的粘滞状态使 5090 的 `Lost` 不被后续 `Undecided` 清除，`finish` 因此把终局标成 `lost`。只修 1.1，5096+ 会变成 `Displaced` 并可能停稳；只修 1.2，仍然没有可提交的 candidate，扫描仍不能完成。两者必须都修。
+
+**[推断]** 这条缺陷把一次未决的滚动放大成两次拖动叠加、旧基准比较和首次证据丢失；不能只在 K5 上增加重试。
 
 ### 1.3 其他故障类别
 
@@ -105,7 +107,7 @@
 
 固定版本：[controller.rs](https://github.com/wormtql/yas/blob/757689f062d0f3c2dc0bd48e16544f5f6e8e78d1/yas-genshin/src/scanner_controller/repository_layout/controller.rs)。
 
-- **借鉴：** 先 OCR 总数、按行闭环推进、以计数终止；云端切换详情使用单独的等待路径（[#L324](https://github.com/wormtql/yas/blob/757689f062d0f3c2dc0bd48e16544f5f6e8e78d1/yas-genshin/src/scanner_controller/repository_layout/controller.rs#L324)）；学习滚动量后做单步校正（[#L291](https://github.com/wormtql/yas/blob/757689f062d0f3c2dc0bd48e16544f5f6e8e78d1/yas-genshin/src/scanner_controller/repository_layout/controller.rs#L291)）。
+- **借鉴：** 先 OCR 总数、按行闭环推进、以计数终止；云端切换详情使用单独的等待路径（`wait_until_switched` 的 `is_cloud → cloud_wait_switch_item`，[#L355](https://github.com/wormtql/yas/blob/757689f062d0f3c2dc0bd48e16544f5f6e8e78d1/yas-genshin/src/scanner_controller/repository_layout/controller.rs#L355)）；学习滚动量后做单步校正（[#L291](https://github.com/wormtql/yas/blob/757689f062d0f3c2dc0bd48e16544f5f6e8e78d1/yas-genshin/src/scanner_controller/repository_layout/controller.rs#L291)、[#L324](https://github.com/wormtql/yas/blob/757689f062d0f3c2dc0bd48e16544f5f6e8e78d1/yas-genshin/src/scanner_controller/repository_layout/controller.rs#L324)）。
 - **不照搬：** 忽略切换/对齐错误的写法；固定滚动量或参考项目的等待时间不能当成安全证明。
 
 ### 3.2 ZZZ-Scanner.Next `ff908911`
@@ -174,7 +176,7 @@
 - **内容指纹：** 格子缩略图签名、行签名、详情指纹只用于筛候选。它们不能证明“两件盘相同”，不能跨格位合并、删除或跳过观测。
 - **继承条件：** 当前可见内容在账本中只能对应**唯一**候选时，才允许继承该候选的已采集状态；继承只免除重复接纳，不免除当前帧的占用、位置连续性和范围核验。候选不唯一时，可用相邻行/滚动轨迹消歧；仍不唯一则回到已证明的顶部重走；重走仍无法建立位置证明时，把该位置标为不完整，继续后续位置，最终报部分。
 - **禁止：** 不得按指纹匹配直接跳过格位，不得把两个观测合并成一件，不得用计数反推“缺的那一件在哪一行”。计数只能证明数量，不能提供位置身份。
-- **重访：** 同一格位标记未解决后重访成功，新观测取代旧观测，结果只算一件；旧 attempt 作为“已被取代的尝试”保留在诊断记录，不计入任何件数（不进 `excludedCount`）。
+- **重访：** 同一格位标记未解决后重访成功，新观测取代旧观测，结果只算一件；旧 attempt 作为“已被取代的尝试”保留在诊断记录，不计入任何件数（不进 `excludedCount`）。若旧观测在接纳前已经分配 `sequence`，这与 scan JSON v2 的计数等式冲突，实现路径见 §9.4。
 - **重走：** 回顶重走必须重新证明顶部、范围、排序和方向；重走时继承已解决格位要逐行/逐格核验当前内容，不能只靠旧截图或旧绝对行。
 
 **[推断]** 这条决定与“不去重、不猜”一致：内容特征可以帮助“找候选”，但不能单独承担“这就是同一件”的结论。真正相同的相邻盘仍各算一件；无法消歧时宁可把该位置标为不完整并继续后续位置，也不合并观测。
@@ -198,7 +200,7 @@
 **决定：** 选中驱动（边缘点击、方向键、`d` 键等）是候选路径，不是默认路径；只有对应客户端实测通过后才启用。
 
 - **动作闭环：** 任何动作（点击、拖拽、键盘）都要在动作后确认实际位移/选中变化；不能“点了就假定一行”。
-- **动作未决：** 上一次动作效果未知时，不得切换另一种输入方式补救（例如点击未确认就改拖拽）；先重新观察或定位，仍无法确认则按 K5 停止或重建位置。
+- **动作未决：** 上一次动作效果未知时，不得切换另一种输入方式补救（例如点击未确认就改拖拽）；先重新观察或定位，仍无法确认则重建位置；仍失败则该位置不完整并继续后续位置（会话致命除外）。
 - **每个客户端一条已验证路径：** 拖拽仍是基线；边缘点击/键盘推进按客户端分别验证（F2/F3/F5）。未验证的客户端保留拖拽或停止，不共享“某个客户端有效”的结论。
 - **坐标事务：** 边缘点击可能带动列表；点击前的坐标和点击后的位置必须分开记账，旧坐标不能直接用于下一次点击。
 
@@ -232,7 +234,7 @@
 | 可重建位置 | 滚动位置丢失、绝对行无法确认、列表仍同范围 | 有界自动重新建立位置证明：唯一候选继承，或回已证明顶部重走 | 预算耗尽仍无法建立→该位置标为不完整，继续后续位置，最终 `coverage=partial`；不猜行数 |
 | 会话致命 | 失焦、窗口替换/`targetLost`、几何变化、权限撤回、`pageUnverified`（云断连）、采集流停止、存储/证据失败、运行库故障、用户取消 | 停止输入、收尾、保存已接纳结果 | 停止整次扫描；覆盖保持部分/无法确认；不自动续扫 |
 
-> 覆盖与结果完整分开：范围、顶部、连续覆盖、每格结局、底部都成立时 `coverage` 可为 `complete`；未解决格位只在可用结果/导出中标出。位置级重建失败只让该位置不完整并继续后续位置；只有会话致命故障停止整次扫描。每次物品重访或位置重建的内容都记录在结果/诊断中，供用户查看。
+> 覆盖与结果完整分开：范围、顶部、连续覆盖、每格结局、底部都成立时 `coverage` 可为 `complete`；未解决格位只在可用结果/导出中标出。位置级重建失败只让该位置不完整并继续后续位置；只有会话致命故障停止整次扫描。每次物品重访或位置重建的内容都记录在结果/诊断中，供用户查看。物品局部的旧尝试记录同样受 §9.4 的 v2 计数等式约束。
 
 动作状态必须区分：
 
@@ -267,7 +269,7 @@
 以下不变量不因重新架构而放宽：
 
 1. 不按属性、图像哈希或详情指纹去重；相邻同详情盘各算一件。
-2. 不猜滚动行数；没有唯一对应就停止或重建位置。
+2. 不猜滚动行数；没有唯一对应就重建位置；仍失败则该位置不完整并继续后续位置（会话致命除外）。
 3. 每个已接纳观测恰好一个结局；不重编号、不删除旧观测。
 4. 一次只发送一个短动作；动作效果未知不得叠加下一次动作。
 5. 单件失败不升级为整次失败；会话致命故障不因“还能重试”而继续。
@@ -292,6 +294,8 @@
 
 **[事实]** 架构 §5 原本要求“可用的同范围总数”；用户于 2026-10-28 确认当前游戏界面不直接显示数量，所以 (a) 是对架构原文的**有意放宽**，不是回到原文；PR-D2 必须同步修改架构与 T5。**[推断]** (b) 是本轮真正的新产品行为：它要求把“物品局部失败”从“位置/会话失败”中拆出来，并把“覆盖完整”与“结果完整”分开。
 
+**[记录冲突]** 上述“旧尝试不计入任何件数/不进 `excludedCount`”与 scan JSON v2 的 `capturedCount = items.length + excludedCount`（[scan-json-format.md:31](../specs/scan-json-format.md#L31)、[:53](../specs/scan-json-format.md#L53)、[:163](../specs/scan-json-format.md#L163)）不能同时无条件成立。产品决定本身不变；PR-D2 必须按 §9.4 的 (a)/(b) 选择实现路径，不能一边保留已分配序号的旧观测、一边声称 v2 计数等式仍成立。
+
 ## 6. 阶段路线
 
 每个阶段都可独立合并；合并后现有扫描路径仍可用。阶段 1 之前不实施更广泛的 K5 恢复。
@@ -300,9 +304,9 @@
 | --- | --- | --- | --- |
 | 1. 动作状态机与逐次证据 | 修 `awaitScroll` 的 Undecided 汇总、效果未知重试、旧 `before` 和首次 trace 丢失 | 明确 `Undecided` 终局；效果未知不重发；每次尝试独立 `before`/trace/判定；回归测试覆盖 `Stationary→Undecided`、无终局不二次拖动、每次尝试证据保留 | 脚本化序列通过；正常遍历策略不变；日志能区分每次尝试 |
 | 2. 新滚动判定 | 沿现有 `Matcher` 接口增加归一化特征、最佳对次优竞争、多帧停稳 | 新的 `MatchScroll` 实现/参数；旧判定保留为回退；失败帧与历史成功帧回放 | 2026-10-28 失败序列只作调参与回归；另采独立完整扫描验收；历史负样本不误接受；失败关闭（fail-closed） |
-| 3. 绝对格位账本 + 范围证明（计数可选） | 引入 `rowBase`、逐格 resolved/unresolved、S/筛选/排序方向证据；记录“当前无计数”的状态 | 内部 `observedScope` 扩展；范围证据；“本次未做计数对账”标注；证据不全时降级 `partial`；公共 JSON 暂不变 | fake 序列 + 真机范围核对；无计数不影响 `complete`；范围/顶部/连续/每格/底部不成立才 `partial`；每格有结局 |
+| 3. 绝对格位账本 + 范围证明（计数可选） | 引入 `rowBase`、逐格 resolved/unresolved、S/筛选/排序方向证据；记录“当前无计数”的状态 | 内部 `observedScope` 扩展；范围证据；“本次未做计数对账”标注；证据不全时降级 `partial`；公共 JSON 是否保持 v2 取决于 §9.4 的旧尝试记录方案 | fake 序列 + 真机范围核对；无计数不影响 `complete`；范围/顶部/连续/每格/底部不成立才 `partial`；每格有结局 |
 | 4. 三客户端 profile 与实测推进 | 分离布局/遮罩/噪声/时序/导航能力；只在实测通过的客户端启用边缘点击/键盘 | profile 选择与校验；GDI 画面/输入探针；按键词汇按需扩展；Windows 未通过则保留拖拽或拒绝 | F2–F5、F7、F8 对应客户端通过；F1 若安排则作为计数候选；未验证配置拒绝而不是猜；三客户端分别记录 |
-| 5. 同一次扫描内有界恢复 | 先物品重访（成功替换旧观测），再回顶重建；唯一候选继承；位置失败标不完整并继续后续位置；恢复自动进行 | 物品未解决队列与自动重访；位置重建；不打断扫描的恢复状态；每次恢复内容记录；旧尝试只留诊断；位置失败继续扫描 | 故障注入 + 真机重试；无重复序号/观测；旧尝试不进 `excludedCount`；会话致命停止；不跨重启 |
+| 5. 同一次扫描内有界恢复 | 先物品重访（成功替换旧观测），再回顶重建；唯一候选继承；位置失败标不完整并继续后续位置；恢复自动进行 | 物品未解决队列与自动重访；位置重建；不打断扫描的恢复状态；每次恢复内容记录；旧尝试只留诊断；位置失败继续扫描 | 故障注入 + 真机重试；无重复序号/观测；旧尝试不进 `excludedCount`（实现前提见 §9.4）；会话致命停止；不跨重启 |
 | 6. 三客户端人工基准库存验收 | 用人工核对库存逐出现次数验收；计数不作为门槛；结果注明未做计数对账；之后评估跨重启续扫 | 验收报告、失败样本库、阈值/时序定稿 | 三客户端分别至少三次；重复盘、短列表、底部、迟到动作、断连恢复覆盖；Windows 时间另定 |
 
 ## 7. 待核实事实及核实方法
@@ -416,7 +420,7 @@
 
 ## 9. 与现有文档的关系（PR-D2 待办）
 
-本 PR 只新增本文并在 `docs/index.md` 加导航，**不修改**以下规格正文。以下冲突/取代项留给 PR-D2 定稿时处理。
+本 PR 只新增本文并在 `docs/index.md` 加导航，**不修改**以下规格正文。以下冲突/取代项留给 PR-D2 定稿时处理。PR-D2 还须按 [docs/index.md:51](../index.md#L51) 的维护约定，在架构、T5、scan-json-format 的对应章节引用本决策记录，保持单一事实来源。
 
 ### 9.1 scanner-architecture.md
 
@@ -435,10 +439,10 @@
 | §1 | 三种客户端使用相同证据规则，出现差异再分支，不预先维护三套遍历器 | 共享安全规则/账本，但布局、遮罩、噪声、时序、导航能力必须分 profile；不是三套控制器 | 改写为“共享规则 + 分离 profile”，避免被读成同一套阈值 |
 | §1 失败语义 | 任一准备/校验失败即停止并保留已接纳结果 | 单件失败改为未解决 + 自动重访；位置级重建失败标该位置不完整并继续后续位置；会话致命才停止 | 重写 §1 的停止语义，与 §4/§6 保持一致 |
 | §3 | S 选中态无像素探针；排序探针只验证标签、不读方向；失败即停 | K4 要求 S 选中态、其他筛选清空、排序方向；否则 `partial` | 补 F4 证据与探针；更新开始前条件与验收 |
-| §4 | 详情归属失败即停止；`detailUnattributed`/`detailUnresolved` 保留位置未解决，不跳下一件 | 产品 (b) 改为单件标记未解决、自动稍后重访；成功时新观测取代旧观测，结果只算一件，旧尝试只留诊断；覆盖可仍 `complete` | 重写失败处理；定义替换关系、旧尝试诊断保留、`excludedCount`/导出语义和重访预算 |
+| §4 | 详情归属失败即停止；`detailUnattributed`/`detailUnresolved` 保留位置未解决，不跳下一件 | 产品 (b) 改为单件标记未解决、自动稍后重访；成功时新观测取代旧观测，结果只算一件，旧尝试只留诊断；覆盖可仍 `complete`（旧尝试与 v2 计数的冲突见 §9.4） | 重写失败处理；定义替换关系、旧尝试诊断保留、`excludedCount`/导出语义和重访预算 |
 | §5 | 滚动用绝对阈值（stationary <4.0；displaced ≤10.0 且比零位移低 ≥3.0）；停稳后提交；底部短步/Stationary | K2 改归一化/竞争/多帧；绝对阈值保留为质量闸门，不作唯一判据 | 重写滚动判定；保留最小重叠/信息量；更新回放验收 |
 | §5 完整性 | 排序标签验证 + “若存在可信计数” + 末端证据 | 计数不再是必要条件；完整覆盖改为范围+顶部+连续+每格结局+底部，并注明“本次未做计数对账”；这是对架构原文的有意放宽 | 重写“宣布全部覆盖”的条件；删除计数门槛；增加未做计数对账标注；保留未来可选对账 |
-| §6 | 证据与验收按现有 T5 规则 | 新增每次尝试的输入/帧/判定、范围证据、可选计数证据、profile 证据；旧尝试只留内部诊断 | 扩展证据清单；保留原始观测与尝试记录；明确旧尝试不计入公共计数 |
+| §6 | 证据与验收按现有 T5 规则 | 新增每次尝试的输入/帧/判定、范围证据、可选计数证据、profile 证据；旧尝试只留内部诊断（实现路径见 §9.4） | 扩展证据清单；保留原始观测与尝试记录；明确旧尝试不计入公共计数 |
 
 ### 9.3 position-retry-design.md（#92 草案，Q1–Q13）
 
@@ -447,9 +451,9 @@
 | #92 位置 | 冲突/被取代 | PR-D2 待办 |
 | --- | --- | --- |
 | §3.5、§4.2 A2 | 以“逐行行图核验 + 绝对格位继承”为主，允许在满足条件时 `complete` | 改为“重新建立位置证明”；指纹只筛候选；唯一才继承；否则回顶重走；仍失败该位置不完整并继续后续位置；保留有界恢复与逐行核验原则 |
-| §4.3 已接纳条目 | 已解决格位继承跳过；未处理件不补采 | 产品 (b) 允许自动稍后重访未解决件；成功时新观测取代旧观测，结果只算一件，旧尝试只留诊断，不进 `excludedCount` |
+| §4.3 已接纳条目 | 已解决格位继承跳过；未处理件不补采 | 产品 (b) 允许自动稍后重访未解决件；成功时新观测取代旧观测，结果只算一件，旧尝试只留诊断，不进 `excludedCount`（实现路径见 §9.4） |
 | §4.7 重试预算 | 每位置 1 次 + 全会话 2 次；重试失败停止 | 预算需按 F7 重新标定；物品局部与位置级分开；位置级重建失败标该位置不完整并继续后续位置，物品级继续 |
-| §5.2 导出 | A2 不改变 v2；重试留在内部 | 暂保持 v2；旧尝试只留内部诊断，不进公共计数；重访/重试是否披露、是否需要 v3，PR-D2 决定 |
+| §5.2 导出 | A2 不改变 v2；重试留在内部 | 是否保持 v2 取决于 §9.4：若旧尝试在接纳前截住、不分配 `sequence`，v2 可保持；若已分配 `sequence`，则与 v2 的计数等式冲突，需改语义或升 v3。旧尝试只留内部诊断；是否披露由 PR-D2 决定 |
 | §5.3 覆盖 | A2 成功重试可在条件下 `complete` | 完整覆盖改为范围+顶部+连续+每格结局+底部；计数非必需；结果注明“本次未做计数对账”；位置级失败使该位置不完整，最终 `partial` |
 
 Q1–Q13 的处置：
@@ -459,20 +463,28 @@ Q1–Q13 的处置：
 | Q1 采用哪种方案（A1/A2/B/C） | 被 K1/K5 取代：不再是 A2 vs A1 的二选一；改为“重新建立位置证明 + 有界恢复”；PR-D2 重写 |
 | Q2 每位置/全会话重试次数 | 未定；阶段 1/5 先实现有界预算，具体次数由 F7 和真机标定；**待确认** |
 | Q3 重试失败后是否继续后续位置 | 物品局部按产品 (b) 继续；位置级重建失败把该位置标为不完整并继续后续位置，最终 `partial`；会话致命仍停止 |
-| Q4 已接纳条目如何处理 | 唯一候选可继承；否则回顶重走；不按指纹跳过；重访成功时新观测取代旧观测，结果只算一件，旧尝试只留诊断，不进 `excludedCount` |
+| Q4 已接纳条目如何处理 | 唯一候选可继承；否则回顶重走；不按指纹跳过；重访成功时新观测取代旧观测，结果只算一件，旧尝试只留诊断，不进 `excludedCount`（实现前提见 §9.4） |
 | Q5 成功重试能否 `complete` | 完整覆盖改为范围+顶部+连续+每格结局+底部；计数非必需；位置全完成可 `complete`，未解决格位在结果/导出标出；位置级失败最终 `partial` |
-| Q6 公共 JSON 是否披露重试 | 暂不改 v2；内部 `observedScope`/证据保留；旧尝试只留内部诊断；PR-D2 评估 v3 |
+| Q6 公共 JSON 是否披露重试 | 是否保持 v2 取决于 §9.4：旧尝试在接纳前截住且不分配 `sequence` 时可保持；否则需修改计数语义或升 v3。内部 `observedScope`/证据保留 |
 | Q7 底部短步是否放宽 10.0 | 不再以放宽绝对阈值解决；K2 重新标定/相对竞争；真机回放验收；旧阈值不静默放宽 |
 | Q8 重试自动还是用户确认 | 自动进行；只显示不打断扫描的状态提示，不弹窗；结果记录每次恢复的内容 |
 | Q9 跨会话/崩溃续扫 | 产品 (c) 暂不做；先会话内；三客户端验收后单独评审 |
-| Q10 未处理/失败旧条目是否重读 | 允许自动稍后重访；成功时新观测取代旧观测，结果只算一件；旧尝试只留诊断，不进 `excludedCount` |
+| Q10 未处理/失败旧条目是否重读 | 允许自动稍后重访；成功时新观测取代旧观测，结果只算一件；旧尝试只留诊断，不进 `excludedCount`（实现前提见 §9.4） |
 | Q11 选中格守卫复测 | 仍需 F5/F2；旧 `e3bf895b` 实例早于修复，不能证明当前行为；复测后决定 |
 | Q12 排序方向不可见 | K4 要求方向证据；F4 核实；未取得则 `partial`；不能把 `sort:"verified"` 当方向证明 |
 | Q13 A1 与 `expectedCount` | A1 不再默认；若未来采用，只有存在可信计数且不一致时才阻止 `complete`；无计数时不适用 |
 
-### 9.4 docs/index.md
+### 9.4 scan-json-format.md
+
+| 位置 | 现有内容 | 本决策的关系 | PR-D2 待办 |
+| --- | --- | --- | --- |
+| §2 公共外壳 / §6 校验 | `excludedCount = capturedCount - items.length`；`capturedCount` 包括后来失败或未处理项；校验要求 `capturedCount = items.length + excludedCount`（[scan-json-format.md:31](../specs/scan-json-format.md#L31)、[:53](../specs/scan-json-format.md#L53)、[:163](../specs/scan-json-format.md#L163)） | 产品 (b) 要求旧未解决尝试不计入任何件数、不进 `excludedCount`；若旧件已被 K5 接纳并分配 `sequence`，v2 等式无法同时成立 | 二选一：(a) 旧尝试在接纳前截住，不分配 `sequence`，旧诊断另行保存，v2 可保持；(b) 修改 `capturedCount`/`excludedCount` 语义或引入 v3。选定前不得声称 v2 不变 |
+
+### 9.5 docs/index.md
 
 本 PR 只加一条导航，指向本文；不改变现有导航条目或规格状态。
+
+**跨规格待办：** 按 [docs/index.md:51](../index.md#L51) 的维护约定，PR-D2 在架构、T5、scan-json-format 的对应章节引用本决策记录，避免同一知识维护两份。
 
 ## 10. 仍未决
 
@@ -487,6 +499,6 @@ F1–F8 仍是“待核实事实”，不是需要用户再决定的产品问题
 - 失败诊断：`~/Library/Logs/Youkai Dev/diagnostics/20261028-164452514-pos1-vp4-scroll-lost/manifest.json` 及同目录 49 张帧图。
 - 现场日志：`~/Library/Logs/Youkai Dev/youkai.log`（2026-10-28 16:43–16:55，重点 2148–2393 行）；历史日志 `youkai.log.1`。
 - 代码：`internal/game/zzz/collect/inventory.go`、`pixelmatch.go`、`maccloud.go`、`cmd/youkai/main.go`、`internal/platform/keys.go`、`internal/ocrlayout/ocrlayout.go`。
-- 规格：[架构](../specs/scanner-architecture.md)、[T5](../specs/t5-zzz-inventory-traversal.md)、[#92 草案](../specs/position-retry-design.md)、[扫描器背景与参考实现](../scanner-handoff.md)。
+- 规格：[架构](../specs/scanner-architecture.md)、[T5](../specs/t5-zzz-inventory-traversal.md)、[#92 草案](../specs/position-retry-design.md)、[JSON/CSV v2](../specs/scan-json-format.md)、[扫描器背景与参考实现](../scanner-handoff.md)。
 - 评审：[Kimi 会话](lody://session/ab09f5ca-0ffc-4cf8-b5af-ef08b9175a82?workspace=jh71jrcd7n3s48y9vbscr9p8w98dgyyz)、[Sol 会话](lody://session/c0d3c7c0-9039-461a-b090-7d2fd2574ac1?workspace=jh71jrcd7n3s48y9vbscr9p8w98dgyyz)。
 - 外部固定版本：YAS `757689f0`、ZZZ-Scanner.Next `ff908911`、AdeptiScanner-ZZZ `96441078`、HSR-Scanner `cad008e2`、Inventory Kamera `01e08c05`；链接见第 3 节。
