@@ -1,6 +1,6 @@
 # Youkai 扫描结果 JSON 与 CSV v2
 
-更新日期：2026-10-20。状态：v2 契约已冻结；结构化解析、结果浏览、自动接受与 JSON/CSV 导出已实现并合并到 `main`，真实六位置与 Windows 验收仍未完成。2026-10-20 冻结 v2 数据模型与导出：管理状态合并为 `managementState`，套装与代理人使用 fairy 数值 ID；`equipped` 从必填改为可选，装备状态或装备者未解析只作为字段警告，不再阻止可用导出；导出仍只提供 JSON 与 CSV，不提供 archive 视图、ZIP 或档案导入导出。v1 文件保留原 `equipped: required` 语义；v2 读取端不得把 v1 文件按 v2 解释。会话、保存与物品身份以[公共架构第 5 节](scanner-architecture.md#5-扫描会话与结果语义)为准；操作流程见 [T6](t6-review-export-workflow.md)。
+更新日期：2026-10-29。状态：v2 契约已冻结；结构化解析、结果浏览、自动接受与 JSON/CSV 导出已实现并合并到 `main`，真实六位置与 Windows 验收仍未完成。2026-10-20 冻结 v2 数据模型与导出：管理状态合并为 `managementState`，套装与代理人使用 fairy 数值 ID；`equipped` 从必填改为可选，装备状态或装备者未解析只作为字段警告，不再阻止可用导出；导出仍只提供 JSON 与 CSV，不提供 archive 视图、ZIP 或档案导入导出。2026-10-29 按[重新架构决策 §9.4(a)](../decisions/2026-10-28-scanner-rearchitecture.md#94-scan-json-formatmd已同步选定-a) 明确：重访只针对尚未确认采集的失败，在接纳前截住、不分配新序号；v2 格式与 `capturedCount = items.length + excludedCount` 不变。v1 文件保留原 `equipped: required` 语义；v2 读取端不得把 v1 文件按 v2 解释。会话、保存与物品身份以[公共架构第 5 节](scanner-architecture.md#5-扫描会话与结果语义)为准；操作流程见 [T6](t6-review-export-workflow.md)。
 
 ## 1. 两种导出格式，同一数据源
 
@@ -49,8 +49,10 @@
 | `startedAt` / `endedAt` | 开始和实际收尾时间；中断恢复且结束时刻不可知时，`endedAt` 为 `null`，不拿恢复时间冒充结束。 |
 | `termination` | `{ "kind": "completed" 或 "cancelled" 或 "failed" 或 "interrupted", "code": string, "phase": "preparing" 或 "capturing" 或 "finalizing" }`。保留首个结束触发。 |
 | `scope` | `{ "rarity": "S", "slots": [1,2,3,4,5,6], "minLevel": 0, "maxLevel": 15, "sets": "all", "locked": "all", "discarded": "all", "equipped": "all" }`。这些是游戏筛选条件与声明范围，不是 `data` 字段。首版范围为全部套装，且不按锁定、弃置或装备状态排除盘；缩小范围须明确更新契约，不能把 UI 临时筛选偷换为来源范围。 |
-| `coverage` | `{ "status": "complete" 或 "partial" 或 "unknown", "expectedCount": integer 或 null }`。总数只有同范围可信证据时才填。 |
-| `capturedCount` | 已接纳的 S 级物品观测数，包括后来失败或未处理项。导航尝试、参照物截图和明确非 S 项不计入。 |
+| `coverage` | `{ "status": "complete" 或 "partial" 或 "unknown", "expectedCount": integer 或 null }`。总数只有同范围可信证据时才填；它不是 `complete` 的必要条件。 |
+| `capturedCount` | 已接纳的 S 级物品观测数，包括后来失败或未处理项。导航尝试、参照物截图、重访前被截住的失败和明确非 S 项不计入。 |
+
+**重访口径（[决策 §9.4(a)](../decisions/2026-10-28-scanner-rearchitecture.md#94-scan-json-formatmd已同步选定-a)，2026-10-29）：** 只有尚未确认采集的失败（如详情归属未确认）才稍后重访；重访在接纳前截住，不分配 `sequence`，不产生第二条观测。已采集但 OCR/字段有问题的件交给现有逐件校对流程，不重访。旧尝试只留内部诊断，不计入任何件数、不进 `excludedCount`。因此 `capturedCount` 仍只计已接纳观测，`capturedCount = items.length + excludedCount` 与 v2 格式不变；`expectedCount` 仍只在有可信同范围证据时填写，且不是完整覆盖的必要条件（[决策 §4.5](../decisions/2026-10-28-scanner-rearchitecture.md#45-k4完整性)）。
 
 `termination.code` 为非空诊断代码，建议使用 `verifiedEnd`、`userCancelled`、`focusLost`、`geometryChanged`、`permissionRevoked`、`navigationMismatch`、`evidenceFailed`、`runtimeFailure`、`storageFailure` 或 `interrupted`。`evidenceFailed` 表示已接纳截图的投影或入队失败，保留原始错误；它只用于解释，不授权额外动作；读取端可展示不认识的代码，不能因此把 `kind` 改为正常完成。后续故障不会覆盖首个触发。
 
@@ -64,7 +66,7 @@
 
 | 字段 | 规则 |
 | --- | --- |
-| `sequence` | 从 1 开始的采集序号。可用数据可有间断，但不重编号。禁止用属性哈希或数组位置充当身份。 |
+| `sequence` | 从 1 开始的采集序号。可用数据可有间断，但不重编号。重访只对尚未确认采集的失败发生，且在接纳前截住，不分配新序号。禁止用属性哈希或数组位置充当身份。 |
 | `revision` | 原始结果为 0；每次已保存的人工修改或整件确认递增。只反映此件变化。 |
 | `quality` | `autoAccepted`、`needsReview`、`humanConfirmed`、`notEvaluated`。记录本修订的识别或人工确认状态，不说明库存覆盖，也不能代替当前资料校验。 |
 | `issues` | 本修订的识别或人工校对问题数组，元素为 `{ "field": string 或 null, "code": string, "severity": "error" 或 "warning", "message": string }`。`null` 表示整件问题。 |
@@ -160,7 +162,7 @@ CSV 只承载物品行，不重复会话外壳、`catalog`、`excludedCount` 或
 实现时按顺序检查：
 
 1. **文件与结构：**UTF-8、重复键、大小写、格式版本、必需字段、允许字段、枚举、时间、整数和十进制语法。Go 默认 JSON 解码不能单独满足所有要求，重复键和缺失布尔值应显式检查。
-2. **关联与对账：**会话及序号唯一、顺序、采集与排除数、目录标识、修订连续性和当前校验。`capturedCount = items.length + excludedCount`；同一序号只出现一次；`catalog` 只含实际引用条目，数值 ID 与十进制字符串键一致。
+2. **关联与对账：**会话及序号唯一、顺序、采集与排除数、目录标识、修订连续性和当前校验。`capturedCount = items.length + excludedCount`；同一序号只出现一次；`catalog` 只含实际引用条目，数值 ID 与十进制字符串键一致。重访只对尚未确认采集的失败发生，且在接纳前截住、不分配新序号；旧尝试不进公共文件，也不改变本条等式。
 3. **领域与质量：**固定资料中的套装与代理人数值 ID、槽位与主词条组合、副词条类型、单位、等级范围、副词条强化档位 0–5、字段策略和当前修订确认状态；数值只检查格式。遍历全部合法属性与单位，包含六号位 `impact + percent`、`anomalyMastery + percent`。`managementState` 只接受三种真实状态或 `null`；`equipped` 的不变量按第 3 节检查。结构合法不等于识别正确，人工确认也不保证客观零错误。
 4. **往返：**同属性双盘仍为两件；`null` 不变否定，`managementState=null` 不写成 `none`；导出再读取保留精确值、部分覆盖和原始序号；JSON 与 CSV 来自同一修订和同一批记录。没有截图时仍能解释缺失，不伪造证据。
 
