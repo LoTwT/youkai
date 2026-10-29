@@ -2,11 +2,11 @@
 
 > 状态：**草案**（2026-10-28）。本文只记录重新架构的方向、已确认事实与当前决定，不修改任何现有规格正文。最终版需在“待核实事实”取得真机证据后由 PR-D2 定稿，并同步修改[架构](../specs/scanner-architecture.md)与 [T5](../specs/t5-zzz-inventory-traversal.md)。F1–F7 的证据是定稿前提；F8 的 Windows 证据按用户安排另行取得，未完成前 Windows 相关结论保持待验证。
 >
-> 范围：只讨论《绝区零》驱动盘仓库六位置遍历的感知、位置证明、完整性核验与故障恢复。字段识别、导出格式、UI 外壳与平台后端不在本文重写；它们按现有契约继续使用。
+> 范围：只讨论《绝区零》驱动盘仓库六位置遍历的感知、位置证明、完整性核验与故障恢复。字段识别、导出格式、UI 外壳与平台后端不在本文重写；它们按现有契约继续使用（旧尝试计数的例外见 §9.4）。
 >
 > 阅读标记：**[事实]** 直接读代码、日志或文档；**[评审]** 来自两份独立评审会话；**[控制者提供]** 任务摘要或消融实验结论；**[推断]** 设计判断，需实现或实机验收；**[待核实]** 需真机证据，见第 7 节。
 >
-> 2026-10-28 用户已回答先前的五个未决事项，结论并入 §4.6 与 §5；仅余重试预算一项未决（§10）。
+> 2026-10-28 用户已回答先前的五个未决事项，结论并入 §4.6 与 §5；重试预算仍未决（§10），§9.4 的 (a)/(b) 实现路径待 PR-D2 决定；若选 (b)（修改 `capturedCount`/`excludedCount` 语义或升 v3），属公共契约变更，需用户另行确认。
 
 ## 结论摘要
 
@@ -32,7 +32,7 @@
 | 停留 | 5096–5357 之间 34 个可见相对基准比较帧全部为 `Undecided`；5096→5154 之间有帧被保留策略丢弃（`dropped_frames=8`），其判定不可见；控制者摘要称约 33 帧 | `manifest.json`；控制者提供任务摘要 |
 | 最佳误差 | 10.90–13.11，全部高于 `ScrollDisplacedMax=10.0` | `manifest.json`；`maccloud.go:321` |
 | 次优整行 | 最后一次比较的 `rival_gap=8.63`（日志字段） | `~/Library/Logs/Youkai Dev/youkai.log` 第 2347 行 |
-| 判定 | 有判定的 35 帧：5090 `Lost`（dy=152，err=22.09，第二次拖动中）；5096–5357 的 34 帧 `Undecided`。终局 `positionLost` 来自 5090 的 `sawLost` 未被后续 `Undecided` 清除，**不是全程 Undecided**；没有提交 `visited`/`viewport` | `manifest.json`；[inventory.go:2816](../../internal/game/zzz/collect/inventory.go#L2816) 的 `sawLost` 汇总、[inventory.go:2948](../../internal/game/zzz/collect/inventory.go#L2948) 的判定 switch；[inventory.go:2675](../../internal/game/zzz/collect/inventory.go#L2675) 仅在 displaced 时调用 `applyTransition` |
+| 判定 | 有判定的 35 帧：5090 `Lost`（dy=152，err=22.09；基准后 8232ms 到达，第二次拖动后的等待中）；可见的 5096–5357 34 帧 `Undecided`。终局 `positionLost` 来自此前的 Lost/歧义状态（可见的是 5090）未被后续可见 `Undecided` 清除，**不是全程 Undecided**；没有提交 `visited`/`viewport` | `manifest.json`；[inventory.go:2816](../../internal/game/zzz/collect/inventory.go#L2816) 的 `sawLost` 汇总、[inventory.go:2948](../../internal/game/zzz/collect/inventory.go#L2948) 的判定 switch（[inventory.go:2954](../../internal/game/zzz/collect/inventory.go#L2954) 处理 `sm.Lost`）；[inventory.go:2675](../../internal/game/zzz/collect/inventory.go#L2675) 仅在 displaced 时调用 `applyTransition` |
 | 同轮成功滚动 | 前四次成功滚动的 `displaced_margin` 仅 0.10–0.29（最佳误差 9.71–9.90） | `~/Library/Logs/Youkai Dev/youkai.log` 2148–2393 行 |
 | 历史静止误差 | 静止内容/顶部候选的零位移误差约 1.48–6.18；样本标定值为 1.35–1.88 | `youkai.log.1:275`（1.48，判 stationary）、`:1686`（6.18，判 lost，evidence 文本为 undecided）；`maccloud.go:265` 的注释区间 |
 
@@ -50,17 +50,19 @@
 
 ### 1.2 动作状态机缺陷：效果未知时再次拖动
 
-**[事实]** `awaitScroll` 的终局汇总只有三条分支：已有 candidate 但未停稳、见过 `Lost`/ambiguous、见过 `Stationary`；没有显式的 `Undecided` 状态。`Undecided` 帧不会清除此前的 `sawStationary`/`sawLost`/`sawAmbiguous`，因此“先见过 Stationary、后又出现 Undecided”会在预算到期时汇总成旧的 `Stationary`；本次现场是同一缺陷的另一种表现：5090 先判 `Lost`，其后的 34 帧 `Undecided` 没有清除 `sawLost`，终局因此仍是 `lost`。
+**[事实]** `awaitScroll` 的终局汇总只有三条分支：已有 candidate 但未停稳、见过 `Lost`/ambiguous、见过 `Stationary`；没有显式的 `Undecided` 状态。`Undecided` 帧不会清除此前的 `sawStationary`/`sawLost`/`sawAmbiguous`，因此“先见过 Stationary、后又出现 Undecided”会在预算到期时汇总成旧的 `Stationary`；本次现场是同一缺陷的另一种表现：5090 在基准后 8232ms 到达，处于第二次拖动后的等待中，先判 `Lost`（可见），其后的可见 34 帧 `Undecided` 没有清除此前的 Lost/歧义状态，终局因此仍是 `lost`。
 
-见 [inventory.go:2808](../../internal/game/zzz/collect/inventory.go#L2808) 的 `finish`、[inventory.go:2816](../../internal/game/zzz/collect/inventory.go#L2816) 的 `sawLost` 汇总与 [inventory.go:2948](../../internal/game/zzz/collect/inventory.go#L2948) 的判定 switch。日志的 `outcome=lost` 与 “no unique correspondence verified” 文案就是这个汇总路径的结果。
+见 [inventory.go:2808](../../internal/game/zzz/collect/inventory.go#L2808) 的 `finish`、[inventory.go:2816](../../internal/game/zzz/collect/inventory.go#L2816) 的 `sawLost` 汇总与 [inventory.go:2948](../../internal/game/zzz/collect/inventory.go#L2948) 的判定 switch（[inventory.go:2954](../../internal/game/zzz/collect/inventory.go#L2954) 处理 `sm.Lost`）。日志的 `outcome=lost` 与 “no unique correspondence verified” 文案就是这个汇总路径的结果。
 
 **[事实]** `scroll()` 在尝试循环外取 `before`（[inventory.go:2574](../../internal/game/zzz/collect/inventory.go#L2574)），重试时仍用同一个旧基准拖动并比较；每次 `awaitScroll` 又新建 trace（[inventory.go:2791](../../internal/game/zzz/collect/inventory.go#L2791)），`waitOut` 被覆盖，诊断只保留最后一次等待。见 [inventory.go:2604](../../internal/game/zzz/collect/inventory.go#L2604)。
 
 **[事实]** `scroll()` 在 `out.stationary` 和默认的无明确终局分支都会再次拖动（[inventory.go:2692](../../internal/game/zzz/collect/inventory.go#L2692)、[inventory.go:2699](../../internal/game/zzz/collect/inventory.go#L2699)）。默认分支正是“没有可验证终局”，也就是动作效果未知；此时再发一次拖动，违反 T5 “首次动作效果尚不明确时，不发送验证用的下一次动作”的约束（[T5 §4](../specs/t5-zzz-inventory-traversal.md#4-一件物品何时可以进入识别队列)）。
 
-**[事实]** 最新失败日志为 `attempts=2`、`drag_ms=2812`、`settle_ms=10023`，与“两次 5 秒等待”一致。第一次尝试的帧/判定仍未被保留；第二次尝试可见 5090 `Lost` 与随后 34 帧 `Undecided`（5096→5154 间有帧被保留策略丢弃，总计 `dropped_frames=8`，判定不可见），终局 `lost` 来自 5090 的 `sawLost` 未被清除，而不是 34 帧都没有判定。状态机允许在 `stationary` 和无明确终局分支再次拖动，且第二次仍用旧基准；两份评审都指出了这一限制。
+**[事实]** 最新失败日志为 `attempts=2`、`drag_ms=2812`、`settle_ms=10023`，与“两次 5 秒等待”一致。第一次尝试的帧/判定仍未被保留；第二次拖动后的等待中可见 5090 `Lost` 与随后可见的 34 帧 `Undecided`（5096→5154 间有帧被保留策略丢弃，总计 `dropped_frames=8`，判定不可见）。状态机允许在 `stationary` 和无明确终局分支再次拖动，且第二次仍用旧基准；两份评审都指出了这一限制。
 
-**[推断]** 1.1 与 1.2 的叠加方式：1.1 的绝对阈值使 5096–5357 的正确 4 行位移全部落在 `Undecided`，无法形成 candidate；1.2 的粘滞状态使 5090 的 `Lost` 不被后续 `Undecided` 清除，`finish` 因此把终局标成 `lost`。只修 1.1，5096+ 会变成 `Displaced` 并可能停稳；只修 1.2，仍然没有可提交的 candidate，扫描仍不能完成。两者必须都修。
+**[推断]** 由 `unsettled=false` 和终局 `lost` 只能推出被丢弃帧不是带唯一对应的 `Displaced` 或 `Stationary`，仍可能是 `Lost` 或歧义 `Displaced`；终局 `lost` 来自此前的 Lost/歧义状态（可见的是 5090）未被后续可见 `Undecided` 清除，而不是 34 帧都没有判定。
+
+**[推断]** 1.1 与 1.2 的叠加方式：1.1 的绝对阈值使可见的 5096–5357 34 帧正确 4 行位移全部落在 `Undecided`，无法形成 candidate；1.2 的粘滞状态使此前的 Lost/歧义状态（可见的是 5090）不被后续可见 `Undecided` 清除，`finish` 因此把终局标成 `lost`。只修 1.1，可见的 5096+ 帧会变成 `Displaced` 并可能停稳；只修 1.2，仍然没有可提交的 candidate，扫描仍不能完成。两者必须都修。
 
 **[推断]** 这条缺陷把一次未决的滚动放大成两次拖动叠加、旧基准比较和首次证据丢失；不能只在 K5 上增加重试。
 
@@ -294,7 +296,7 @@
 
 **[事实]** 架构 §5 原本要求“可用的同范围总数”；用户于 2026-10-28 确认当前游戏界面不直接显示数量，所以 (a) 是对架构原文的**有意放宽**，不是回到原文；PR-D2 必须同步修改架构与 T5。**[推断]** (b) 是本轮真正的新产品行为：它要求把“物品局部失败”从“位置/会话失败”中拆出来，并把“覆盖完整”与“结果完整”分开。
 
-**[记录冲突]** 上述“旧尝试不计入任何件数/不进 `excludedCount`”与 scan JSON v2 的 `capturedCount = items.length + excludedCount`（[scan-json-format.md:31](../specs/scan-json-format.md#L31)、[:53](../specs/scan-json-format.md#L53)、[:163](../specs/scan-json-format.md#L163)）不能同时无条件成立。产品决定本身不变；PR-D2 必须按 §9.4 的 (a)/(b) 选择实现路径，不能一边保留已分配序号的旧观测、一边声称 v2 计数等式仍成立。
+**[记录冲突]** 上述“旧尝试不计入任何件数/不进 `excludedCount`”与 scan JSON v2 的 `capturedCount = items.length + excludedCount`（`scan-json-format.md` 第 31、53、163 行；见 [§2 公共外壳](../specs/scan-json-format.md#2-公共外壳) 与 [§6 示例与校验边界](../specs/scan-json-format.md#6-示例与校验边界)）不能同时无条件成立。产品决定本身不变；PR-D2 必须按 §9.4 的 (a)/(b) 选择实现路径，不能一边保留已分配序号的旧观测、一边声称 v2 计数等式仍成立。
 
 ## 6. 阶段路线
 
@@ -420,7 +422,7 @@
 
 ## 9. 与现有文档的关系（PR-D2 待办）
 
-本 PR 只新增本文并在 `docs/index.md` 加导航，**不修改**以下规格正文。以下冲突/取代项留给 PR-D2 定稿时处理。PR-D2 还须按 [docs/index.md:51](../index.md#L51) 的维护约定，在架构、T5、scan-json-format 的对应章节引用本决策记录，保持单一事实来源。
+本 PR 只新增本文并在 `docs/index.md` 加导航，**不修改**以下规格正文。以下冲突/取代项留给 PR-D2 定稿时处理。PR-D2 还须按 [docs/index.md 第 51 行](../index.md#内容维护) 的维护约定，在架构、T5、scan-json-format 的对应章节引用本决策记录，保持单一事实来源。
 
 ### 9.1 scanner-architecture.md
 
@@ -478,19 +480,22 @@ Q1–Q13 的处置：
 
 | 位置 | 现有内容 | 本决策的关系 | PR-D2 待办 |
 | --- | --- | --- | --- |
-| §2 公共外壳 / §6 校验 | `excludedCount = capturedCount - items.length`；`capturedCount` 包括后来失败或未处理项；校验要求 `capturedCount = items.length + excludedCount`（[scan-json-format.md:31](../specs/scan-json-format.md#L31)、[:53](../specs/scan-json-format.md#L53)、[:163](../specs/scan-json-format.md#L163)） | 产品 (b) 要求旧未解决尝试不计入任何件数、不进 `excludedCount`；若旧件已被 K5 接纳并分配 `sequence`，v2 等式无法同时成立 | 二选一：(a) 旧尝试在接纳前截住，不分配 `sequence`，旧诊断另行保存，v2 可保持；(b) 修改 `capturedCount`/`excludedCount` 语义或引入 v3。选定前不得声称 v2 不变 |
+| §2 公共外壳 / §6 校验 | `excludedCount = capturedCount - items.length`；`capturedCount` 包括后来失败或未处理项；校验要求 `capturedCount = items.length + excludedCount`（`scan-json-format.md` 第 31、53、163 行；见 [§2 公共外壳](../specs/scan-json-format.md#2-公共外壳)、[§6 示例与校验边界](../specs/scan-json-format.md#6-示例与校验边界)） | 产品 (b) 要求旧未解决尝试不计入任何件数、不进 `excludedCount`；若旧件已被 K5 接纳并分配 `sequence`，v2 等式无法同时成立 | 二选一：(a) 旧尝试在接纳前截住，不分配 `sequence`，旧诊断另行保存，v2 可保持；(b) 修改 `capturedCount`/`excludedCount` 语义或引入 v3；若选 (b)，属公共契约变更，需用户另行确认。选定前不得声称 v2 不变 |
 
 ### 9.5 docs/index.md
 
 本 PR 只加一条导航，指向本文；不改变现有导航条目或规格状态。
 
-**跨规格待办：** 按 [docs/index.md:51](../index.md#L51) 的维护约定，PR-D2 在架构、T5、scan-json-format 的对应章节引用本决策记录，避免同一知识维护两份。
+**跨规格待办：** 按 [docs/index.md 第 51 行](../index.md#内容维护) 的维护约定，PR-D2 在架构、T5、scan-json-format 的对应章节引用本决策记录，避免同一知识维护两份。
 
 ## 10. 仍未决
 
 先前列出的五项未决事项已由用户于 2026-10-28 回答，并写入 §4.6 与 §5；其中“计数粒度”随“当前界面不显示数量”一并消解，不再作为未决项。
 
-仅剩 **重试预算**（#92 Q2）：每位置/全会话的重试次数、总时长和退避尚未确定；阶段 1/5 先实现有界预算，具体值需结合 F7 动作时序矩阵与真机重试标定。该值不阻塞本决策草案，但会影响阶段 5 的验收门槛。
+仍未决的有两项：
+
+1. **重试预算（#92 Q2）**：每位置/全会话的重试次数、总时长和退避尚未确定；阶段 1/5 先实现有界预算，具体值需结合 F7 动作时序矩阵与真机重试标定。该值不阻塞本决策草案，但会影响阶段 5 的验收门槛。
+2. **§9.4 的 (a)/(b) 实现路径**：PR-D2 需决定旧尝试是在接纳前截住（不分配 `sequence`，v2 可保持），还是修改 `capturedCount`/`excludedCount` 语义或升 v3。若选 (b)，属公共契约变更，需用户另行确认；本文的用户产品决定不变。
 
 F1–F8 仍是“待核实事实”，不是需要用户再决定的产品问题；在取得证据前不写成已成立事实。
 
