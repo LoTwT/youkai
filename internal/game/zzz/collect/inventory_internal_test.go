@@ -931,10 +931,11 @@ func TestScrollDumpStaysOutsideScrollTimer(t *testing.T) {
 // the deadline between two frames, as a live stream without new content
 // does.
 type scriptedBlockView struct {
-	frames     []platform.Frame
-	blockAt    []int
-	calls      int
-	dispatches int
+	frames         []platform.Frame
+	blockAt        []int
+	calls          int
+	dispatches     int
+	dispatchFrames []uint64
 }
 
 func (v *scriptedBlockView) Observe() (platform.Observation, error) {
@@ -943,6 +944,7 @@ func (v *scriptedBlockView) Observe() (platform.Observation, error) {
 
 func (v *scriptedBlockView) Dispatch(op platform.InputOp) platform.InputResult {
 	v.dispatches++
+	v.dispatchFrames = append(v.dispatchFrames, op.FrameID)
 	return platform.InputResult{Status: platform.InputPosted}
 }
 
@@ -1207,11 +1209,14 @@ func TestConfirmBottomUnknownOutcomeDoesNotDragAgain(t *testing.T) {
 	}
 }
 
-// TestScrollToTopUndecidedDoesNotFlingAgain pins the top fling rule: an
-// undecided fling stops instead of sending another drag.
-func TestScrollToTopUndecidedDoesNotFlingAgain(t *testing.T) {
+// TestScrollToTopUndecidedContinuesFromLatestFrame pins the top-fling
+// exception: an undecided fling is an exploratory action toward a hard
+// boundary, so the loop sends the next fling from the newest verified
+// frame, still stops after two consecutive flings without progress, and
+// never exceeds the existing bounds.
+func TestScrollToTopUndecidedContinuesFromLatestFrame(t *testing.T) {
 	l := sixRowScrollLayout()
-	view := &scrollScriptView{frames: []platform.Frame{scrollFrame(2)}, blockAfter: true}
+	view := &scriptedBlockView{frames: []platform.Frame{scrollFrame(2)}, blockAt: []int{2}}
 	m := &scrollScriptMatcher{rows: l.Rows, columns: l.Columns, verdict: map[scrollPair]ScrollMatch{
 		{1, 2}: {Undecided: true, Evidence: "scripted undecided"},
 	}}
@@ -1227,13 +1232,20 @@ func TestScrollToTopUndecidedDoesNotFlingAgain(t *testing.T) {
 	if !errors.As(err, &fault) || fault.Code != CodeNavigationMismatch {
 		t.Fatalf("top fling error %v, want navigationMismatch", err)
 	}
-	if view.dispatches != 1 {
-		t.Fatalf("the undecided top fling sent %d drags, want one", view.dispatches)
+	if !strings.Contains(err.Error(), "no progress toward the top") {
+		t.Fatalf("top fling error %v, want the no-progress bound", err)
+	}
+	if view.dispatches != 2 {
+		t.Fatalf("the undecided fling sent %d drags, want one continuation and the no-progress stop", view.dispatches)
+	}
+	if got := fmt.Sprint(view.dispatchFrames); got != "[1 2]" {
+		t.Fatalf("top flings used before frames %s, want the first frame then the newest verified frame", got)
 	}
 }
 
-// TestConfirmTopUndecidedDoesNotDragAgain pins the top confirmation rule:
-// a wait without a verdict stops instead of re-dragging.
+// TestConfirmTopUndecidedDoesNotDragAgain pins the stricter top
+// confirmation rule: once the scrollbar claims the top, a wait without a
+// verdict stops instead of re-dragging.
 func TestConfirmTopUndecidedDoesNotDragAgain(t *testing.T) {
 	l := sixRowScrollLayout()
 	view := &scrollScriptView{frames: []platform.Frame{scrollFrame(2)}, blockAfter: true}

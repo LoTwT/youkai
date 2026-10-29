@@ -1171,10 +1171,12 @@ func (run *inventoryRun) panelVerdict(m PageMatch) bool {
 // top evidence holds, requires each fling to move the thumb's start
 // upward (or, when the matcher cannot report the thumb, to displace the
 // list), and stops after two consecutive flings without progress or the
-// fling bound. Lost during these flings is allowed: the position has no
-// visit records yet, but it proves neither the destination nor that the
-// top was reached, so the next fling re-establishes the base. After a
-// settled top claim, confirmTop must prove the list can move no farther.
+// fling bound. Lost or Undecided during these flings is allowed: the
+// position has no visit records yet, but neither proves the destination
+// or that the top was reached, so the next fling re-establishes the base
+// from the newest verified frame. After a settled top claim, confirmTop
+// must prove the list can move no farther; there an Undecided wait stops
+// instead of re-dragging.
 func (run *inventoryRun) scrollToTop(ctx context.Context) (*failureFrames, error) {
 	flings := 0
 	noProgress := 0
@@ -1268,13 +1270,16 @@ func (run *inventoryRun) scrollToTop(ctx context.Context) (*failureFrames, error
 			progressed = out.afterMatch.List != nil && out.afterMatch.List.Top
 			topProven = progressed
 		default:
-			// Undecided: the fling's effect is unknown, so sending
-			// another fling would stack an action on an unproven result
-			// (T5 §4). Lost and displaced flings still continue upward
-			// above: they prove the list moved.
-			return waitFailure(waitKind("top", out), before, out), scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
-				"collect: wheel position %d: the top fling produced no verifiable verdict within the budget; no further fling is sent: %s",
-				run.position, out.match.Evidence))
+			// Undecided: a fling is an exploratory action toward a hard
+			// boundary, so like Lost it keeps moving toward the top
+			// instead of stacking a verification action. It still counts
+			// as no progress and stays inside the fling and no-progress
+			// bounds; the next fling starts from the newest verified
+			// frame. confirmTop below stays strict.
+			if run.listVerdict(out.afterMatch) {
+				run.listMatch = out.afterMatch
+				run.lastFrame = out.after
+			}
 		}
 		if progressed {
 			noProgress = 0
