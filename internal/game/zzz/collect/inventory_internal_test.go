@@ -1314,6 +1314,96 @@ func TestScrollRetryBaseNavigationMismatchKeepsAttemptDiagnostics(t *testing.T) 
 	}
 }
 
+// TestScrollToTopUndecidedReusedNonListEvidence pins the stop message: a
+// reused non-list frame still counts as a received frame and its evidence
+// is reported, not "no frame received" or an older list frame's evidence.
+func TestScrollToTopUndecidedReusedNonListEvidence(t *testing.T) {
+	l := sixRowScrollLayout()
+	reused := func(id uint64) platform.Frame {
+		return platform.Frame{ID: id, Geometry: 1, Reused: true}
+	}
+	cases := []struct {
+		name    string
+		frames  []platform.Frame
+		verdict map[scrollPair]ScrollMatch
+		nonList map[uint64]bool
+	}{
+		{
+			name:    "only the reused non-list frame",
+			frames:  []platform.Frame{reused(2)},
+			nonList: map[uint64]bool{2: true},
+		},
+		{
+			name:   "a list frame then the reused non-list frame",
+			frames: []platform.Frame{scrollFrame(2), reused(3)},
+			verdict: map[scrollPair]ScrollMatch{
+				{1, 2}: {Undecided: true, Evidence: "scripted undecided"},
+			},
+			nonList: map[uint64]bool{3: true},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			view := &scrollScriptView{frames: tc.frames}
+			m := &scrollScriptMatcher{rows: l.Rows, columns: l.Columns, verdict: tc.verdict, nonListFrames: tc.nonList}
+			run := newScriptedScrollRun(l, view, m, "", 0, 40*time.Millisecond)
+			run.lastFrame = scrollFrame(1)
+			run.listMatch = m.Match(scrollFrame(1))
+
+			err := runScriptedSession(t, run, func(ctx context.Context, run *inventoryRun) error {
+				_, err := run.scrollToTop(ctx)
+				return err
+			})
+			var fault *scan.FaultError
+			if !errors.As(err, &fault) || fault.Code != CodeNavigationMismatch {
+				t.Fatalf("top fling error %v, want navigationMismatch", err)
+			}
+			if !strings.Contains(err.Error(), "scripted non-list page") {
+				t.Fatalf("top fling error %v, want the last frame's evidence", err)
+			}
+			if strings.Contains(err.Error(), "no frame received") {
+				t.Fatalf("top fling error %v, but frames were received", err)
+			}
+			if view.dispatches != 1 {
+				t.Fatalf("the non-list fling sent %d drags, want only the first", view.dispatches)
+			}
+		})
+	}
+}
+
+// TestScrollRetryBaseOperationalErrorWritesNoDiagnostics pins the other
+// side of the retry-base classification: a geometry change while reading
+// the new base is an operational error, so no dump is written.
+func TestScrollRetryBaseOperationalErrorWritesNoDiagnostics(t *testing.T) {
+	l := sixRowScrollLayout()
+	view := &scriptedBlockView{
+		frames: []platform.Frame{
+			scrollFrame(1),
+			scrollFrame(2),
+			{ID: 3, Geometry: 2},
+		},
+		blockAt: []int{3},
+	}
+	m := &scrollScriptMatcher{rows: l.Rows, columns: l.Columns, verdict: map[scrollPair]ScrollMatch{
+		{1, 2}: {Stationary: true, Evidence: "scripted stationary"},
+	}}
+	dir := t.TempDir()
+	run := newScriptedScrollRun(l, view, m, dir, 1, 40*time.Millisecond)
+	run.visited = make([]bool, len(l.Slots))
+
+	err := runScriptedScroll(t, run)
+	var fault *scan.FaultError
+	if !errors.As(err, &fault) || fault.Code != platform.CodeGeometryChanged {
+		t.Fatalf("scroll error %v, want geometryChanged", err)
+	}
+	if view.dispatches != 1 {
+		t.Fatalf("scroll dispatched %d drags, want only the first attempt", view.dispatches)
+	}
+	if dumps := diagnosticDumpDirs(t, dir); len(dumps) != 0 {
+		t.Fatalf("an operational retry-base error wrote %v, want no diagnostics", dumps)
+	}
+}
+
 // TestScrollToTopUndecidedContinuesFromLatestFrame pins the top-fling
 // exception: an undecided fling is an exploratory action toward a hard
 // boundary, so the loop sends the next fling from the newest verified

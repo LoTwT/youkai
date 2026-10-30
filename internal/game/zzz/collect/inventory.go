@@ -1279,9 +1279,12 @@ func (run *inventoryRun) scrollToTop(ctx context.Context) (*failureFrames, error
 			// warehouse or a wait with no frame at all is a page-level
 			// failure, as in the Lost branch above.
 			if !out.sawFrame || !out.lastFrameIsList {
-				evidence := out.afterMatch.Evidence
-				if evidence == "" {
-					evidence = "no frame received"
+				evidence := "no frame received"
+				if out.sawFrame {
+					evidence = out.lastEvidence
+					if evidence == "" {
+						evidence = "the last frame had no page evidence"
+					}
 				}
 				return waitFailure(waitKind("top", out), before, out), scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
 					"collect: wheel position %d: the top fling ended without a verifiable warehouse list: %s",
@@ -2845,6 +2848,11 @@ type scrollOutcome struct {
 	// (popup, loading) or a wait with no frames at all.
 	sawFrame        bool
 	lastFrameIsList bool
+	// lastEvidence is the page-match evidence of the most recently
+	// received observation, even when that frame is not a verifiable
+	// warehouse list. A stop message can then describe what was actually
+	// last seen instead of an older list frame or "no frame received".
+	lastEvidence string
 	// unsettled reports a displacement that never settled relative to its
 	// candidate within the budget. It is a Lost outcome, but the position
 	// was verified to have moved; only where it finally stopped is unknown.
@@ -2968,6 +2976,7 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 		m := run.inv.matcher().Match(f)
 		out.sawFrame = true
 		out.lastFrameIsList = run.listVerdict(m)
+		out.lastEvidence = m.Evidence
 		if f.Reused {
 			// Unchanged content can prove the candidate stayed still; it
 			// cannot prove a displacement not yet seen fresh.
