@@ -85,7 +85,7 @@ func TestScrollFailureDumpWritesBoundedSequence(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		trace.record(frame(uint64(11 + i)))
 	}
-	run.dumpScrollTrace("scroll-lost", frame(10), frame(15), trace, platform.Frame{}, false)
+	run.dumpScrollTrace("scroll-lost", 0, frame(10), frame(15), trace, platform.Frame{}, false)
 
 	dumps := diagnosticDumpDirs(t, dir)
 	if len(dumps) != 1 {
@@ -128,14 +128,14 @@ func TestScrollFailureDumpWritesBoundedSequence(t *testing.T) {
 		id := uint64(100 + 2*i)
 		fresh := newScrollTrace(layout, frame(id))
 		fresh.record(frame(id + 1))
-		run.dumpScrollTrace("scroll-lost", frame(id), frame(id+1), fresh, platform.Frame{}, false)
+		run.dumpScrollTrace("scroll-lost", 0, frame(id), frame(id+1), fresh, platform.Frame{}, false)
 	}
 	if dumps := diagnosticDumpDirs(t, dir); len(dumps) != maxDiagnosticDumpsPerRun {
 		t.Fatalf("a walk wrote %d dumps, want the per-run bound of %d", len(dumps), maxDiagnosticDumpsPerRun)
 	}
 
 	off := &inventoryRun{inv: &Inventory{Layout: layout}}
-	off.dumpScrollTrace("scroll-lost", frame(1), frame(2), nil, platform.Frame{}, false)
+	off.dumpScrollTrace("scroll-lost", 0, frame(1), frame(2), nil, platform.Frame{}, false)
 }
 
 // TestScrollFailureDumpKeepsSameMillisecondDumps pins the exclusive dump
@@ -156,7 +156,7 @@ func TestScrollFailureDumpKeepsSameMillisecondDumps(t *testing.T) {
 	for i := 0; i < 2; i++ {
 		id := uint64(10 + 2*i)
 		trace := newScrollTrace(layout, frame(id))
-		run.dumpScrollTrace("scroll-lost", frame(id), frame(id+1), trace, platform.Frame{}, false)
+		run.dumpScrollTrace("scroll-lost", 0, frame(id), frame(id+1), trace, platform.Frame{}, false)
 	}
 	dumps := diagnosticDumpDirs(t, dir)
 	if len(dumps) != 2 {
@@ -288,7 +288,7 @@ func TestScrollFailureManifestCarriesMatcherNumbers(t *testing.T) {
 
 	dir := t.TempDir()
 	run := &inventoryRun{inv: &Inventory{Layout: layout, DiagnosticDir: dir}, position: 1, viewport: 4}
-	run.dumpScrollTrace("scroll-lost", before, moving, trace, moving, true)
+	run.dumpScrollTrace("scroll-lost", 0, before, moving, trace, moving, true)
 
 	dumps := diagnosticDumpDirs(t, dir)
 	if len(dumps) != 1 {
@@ -347,7 +347,7 @@ func TestScrollFailureDumpSkipsNilImages(t *testing.T) {
 	run := &inventoryRun{inv: &Inventory{Layout: layout, DiagnosticDir: dir}, position: 1, viewport: 4}
 	trace := newScrollTrace(layout, platform.Frame{ID: 10})
 	trace.record(platform.Frame{ID: 11})
-	run.dumpScrollTrace("scroll-lost", platform.Frame{ID: 10}, platform.Frame{ID: 11}, trace, platform.Frame{}, false)
+	run.dumpScrollTrace("scroll-lost", 0, platform.Frame{ID: 10}, platform.Frame{ID: 11}, trace, platform.Frame{}, false)
 
 	dumps := diagnosticDumpDirs(t, dir)
 	if len(dumps) != 1 {

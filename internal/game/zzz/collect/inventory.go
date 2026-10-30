@@ -1171,10 +1171,12 @@ func (run *inventoryRun) panelVerdict(m PageMatch) bool {
 // top evidence holds, requires each fling to move the thumb's start
 // upward (or, when the matcher cannot report the thumb, to displace the
 // list), and stops after two consecutive flings without progress or the
-// fling bound. Lost during these flings is allowed: the position has no
-// visit records yet, but it proves neither the destination nor that the
-// top was reached, so the next fling re-establishes the base. After a
-// settled top claim, confirmTop must prove the list can move no farther.
+// fling bound. Lost or Undecided during these flings is allowed: the
+// position has no visit records yet, but neither proves the destination
+// or that the top was reached, so the next fling re-establishes the base
+// from the newest verified frame. After a settled top claim, confirmTop
+// must prove the list can move no farther; there an Undecided wait stops
+// instead of re-dragging.
 func (run *inventoryRun) scrollToTop(ctx context.Context) (*failureFrames, error) {
 	flings := 0
 	noProgress := 0
@@ -1268,8 +1270,28 @@ func (run *inventoryRun) scrollToTop(ctx context.Context) (*failureFrames, error
 			progressed = out.afterMatch.List != nil && out.afterMatch.List.Top
 			topProven = progressed
 		default:
-			// Undecided: neither progress nor a verdict. The fling bound
-			// still caps the attempts.
+			// Undecided: a fling is an exploratory action toward a hard
+			// boundary, so like Lost it keeps moving toward the top
+			// instead of stacking a verification action. It still counts
+			// as no progress and stays inside the fling and no-progress
+			// bounds. Continuing requires the latest observation to be
+			// the verifiable warehouse list; a page that left the
+			// warehouse or a wait with no frame at all is a page-level
+			// failure, as in the Lost branch above.
+			if !out.sawFrame || !out.lastFrameIsList {
+				evidence := "no frame received"
+				if out.sawFrame {
+					evidence = out.lastEvidence
+					if evidence == "" {
+						evidence = "the last frame had no page evidence"
+					}
+				}
+				return waitFailure(waitKind("top", out), before, out), scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
+					"collect: wheel position %d: the top fling ended without a verifiable warehouse list: %s",
+					run.position, evidence))
+			}
+			run.listMatch = out.afterMatch
+			run.lastFrame = out.after
 		}
 		if progressed {
 			noProgress = 0
@@ -1280,19 +1302,27 @@ func (run *inventoryRun) scrollToTop(ctx context.Context) (*failureFrames, error
 	return run.confirmTop(ctx)
 }
 
+// scrollOutcomeName names one wait's terminal verdict for logs, attempt
+// records and dump kinds.
+func scrollOutcomeName(out scrollOutcome) string {
+	switch {
+	case out.lost:
+		return "lost"
+	case out.displaced && len(out.match.Matches) == 0:
+		return "ambiguous"
+	case out.displaced:
+		return "displaced"
+	case out.stationary:
+		return "stationary"
+	default:
+		return "undecided"
+	}
+}
+
 // waitKind names a wait-phase failure by the last wait's verdict, so the
 // dump directory follows the scroll dump's outcome naming.
 func waitKind(prefix string, out scrollOutcome) string {
-	switch {
-	case out.lost:
-		return prefix + "-lost"
-	case out.displaced:
-		return prefix + "-displaced"
-	case out.stationary:
-		return prefix + "-stationary"
-	default:
-		return prefix + "-undecided"
-	}
+	return prefix + "-" + scrollOutcomeName(out)
 }
 
 // topWaitFailure is the deferred dump for a top-phase failure. A failure
@@ -1390,9 +1420,10 @@ func (run *inventoryRun) awaitTopBase(ctx context.Context) error {
 // once the scrollbar claims the top, further flings toward the beginning
 // must leave the list stationary (T5 §5). Lost or moving outcomes are not
 // top evidence: they mean the earlier claim was premature or the list was
-// still settling, so the loop keeps flinging toward the beginning. The
-// bounded attempt count stops the walk rather than admitting items from an
-// unverified position.
+// still settling, so the loop keeps flinging toward the beginning. An
+// undecided wait proves neither movement nor stillness and stops instead
+// of stacking another drag. The bounded attempt count stops the walk
+// rather than admitting items from an unverified position.
 func (run *inventoryRun) confirmTop(ctx context.Context) (*failureFrames, error) {
 	// The return-to-top fling can still be settling when the top claim
 	// first holds. Confirming immediately then compares the first drag
@@ -1469,9 +1500,16 @@ func (run *inventoryRun) confirmTop(ctx context.Context) (*failureFrames, error)
 			}
 			return nil, nil
 		}
-		// Lost, displaced or undecided: keep dragging toward the beginning
-		// from the latest verified frame. The next drag can only move the
-		// list closer to its start.
+		// Lost or displaced means the list moved toward the beginning, so
+		// the earlier top claim was premature; another drag is the same
+		// upward action from the latest verified frame. An undecided wait
+		// proves neither movement nor stillness: another drag would stack
+		// an action on an unknown effect (T5 §4).
+		if !out.lost && !out.displaced && !out.stationary {
+			return waitFailure(waitKind("top", out), before, out), scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
+				"collect: wheel position %d: the top confirmation produced no verifiable verdict within the budget (attempt %d); no further drag is sent",
+				run.position, attempt+1))
+		}
 	}
 	return topWaitFailure("top", before, lastOut, haveWait), scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
 		"collect: wheel position %d: the top confirmation did not settle after %d attempts", run.position, maxTopFlings))
@@ -1482,10 +1520,11 @@ func (run *inventoryRun) confirmTop(ctx context.Context) (*failureFrames, error)
 // with an independent, unchanged thumb start is also safe: live UI
 // animation can raise the zero-shift error without moving the list, and a
 // real row displacement is not Undecided. A Displaced outcome always
-// rejects. A Lost outcome also rejects, except when the last comparison is
-// Undecided and the thumb stayed put: the wait may have seen a transient
-// Lost (such as a top bounce) while the final frame relative to the
-// pre-drag frame is undecided.
+// rejects. A Lost outcome also rejects: under the latest-verdict rule a
+// later Undecided comparison clears Lost, so the "transient Lost, final
+// comparison Undecided" case arrives as an undecided terminal and is
+// accepted by the thumb guard below. The Lost branch keeps its match check
+// as a safety net for a lost candidate whose final comparison is undecided.
 func topConfirmed(out scrollOutcome, beforeOK, afterOK bool, beforeStart, afterStart int) bool {
 	if out.afterMatch.Page != PageWarehouse || out.afterMatch.List == nil || !out.afterMatch.List.Top {
 		return false
@@ -1534,7 +1573,7 @@ func (run *inventoryRun) dumpFailure(frames *failureFrames) {
 	if frames == nil {
 		return
 	}
-	run.dumpScrollTrace(frames.kind, frames.before, frames.after, frames.trace, frames.candidate, frames.hasCandidate)
+	run.dumpScrollTrace(frames.kind, 0, frames.before, frames.after, frames.trace, frames.candidate, frames.hasCandidate)
 }
 
 // confirmBottomStep runs confirmBottom, accumulates its duration, and only
@@ -1551,71 +1590,68 @@ func (run *inventoryRun) confirmBottomStep(ctx context.Context) error {
 // confirmBottom pairs the scrollbar's bottom evidence with one more drag
 // in the advance direction that must leave the list stationary: at the
 // list's end the content cannot move further (T5 §5's "再拖一次，前后帧
-// 列表区误差 < 4"). The complete walk needs both kinds of evidence.
+// 列表区误差 < 4"). The complete walk needs both kinds of evidence. A
+// terminal Undecided means the drag's effect is unknown, so it stops the
+// walk instead of stacking another drag on an unproven result (T5 §4).
 func (run *inventoryRun) confirmBottom(ctx context.Context) (*failureFrames, error) {
-	for attempt := 0; ; attempt++ {
-		if err := ctx.Err(); err != nil {
-			return nil, err
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if !run.h.InputPermitted() {
+		return nil, ctx.Err()
+	}
+	if err := run.observeReady(ctx); err != nil {
+		return nil, err
+	}
+	before := run.lastFrame
+	res := run.view.Dispatch(platform.InputOp{
+		Kind:     platform.InputDrag,
+		Geometry: run.geo,
+		FrameID:  before.ID,
+		At:       run.inv.Layout.ScrollFrom,
+		To:       run.inv.Layout.ScrollTo,
+		Steps:    10,
+		Duration: run.inv.Layout.ScrollDuration,
+	})
+	if err := run.dispatchOutcome(ctx, res); err != nil {
+		return nil, err
+	}
+	out, err := run.awaitScroll(ctx, before)
+	if err != nil {
+		return nil, err
+	}
+	log.Printf("youkai: collect: position %d: bottom confirmation attempt 1: stationary=%t displaced=%t lost=%t rows=%d %s",
+		run.position, out.stationary, out.displaced, out.lost, out.match.Rows,
+		scrollMarginFields(run.inv.matcher(), out.match, out.settleMatch))
+	if out.afterMatch.Page == PageWarehouse && !run.positionListVerdict(out.afterMatch) {
+		fault := scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
+			"collect: wheel position %d: the bottom confirmation left the list at another wheel position: %s",
+			run.position, out.afterMatch.Evidence))
+		if out.after.ID != 0 && out.after.Image != nil {
+			return waitFailure("bottom-wrong-position", before, out), fault
 		}
-		if !run.h.InputPermitted() {
-			return nil, ctx.Err()
+		return nil, fault
+	}
+	switch {
+	case out.stationary:
+		run.listMatch = out.afterMatch
+		run.lastFrame = out.after
+		return nil, nil
+	case out.lost:
+		fault := scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
+			"collect: the bottom confirmation could not verify that the list stayed at the end: %s", out.match.Evidence))
+		return waitFailure("bottom-lost", before, out), fault
+	case out.displaced:
+		fault := scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
+			"collect: the bottom confirmation moved the list, contradicting the scrollbar's bottom evidence: %s", out.match.Evidence))
+		return waitFailure("bottom-displaced", before, out), fault
+	default:
+		fault := scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
+			"collect: the bottom confirmation produced no verifiable verdict within the budget; no further drag is sent"))
+		if out.after.ID != 0 && out.after.Image != nil {
+			return waitFailure("bottom-undecided", before, out), fault
 		}
-		if err := run.observeReady(ctx); err != nil {
-			return nil, err
-		}
-		res := run.view.Dispatch(platform.InputOp{
-			Kind:     platform.InputDrag,
-			Geometry: run.geo,
-			FrameID:  run.lastFrame.ID,
-			At:       run.inv.Layout.ScrollFrom,
-			To:       run.inv.Layout.ScrollTo,
-			Steps:    10,
-			Duration: run.inv.Layout.ScrollDuration,
-		})
-		if err := run.dispatchOutcome(ctx, res); err != nil {
-			return nil, err
-		}
-		before := run.lastFrame
-		out, err := run.awaitScroll(ctx, before)
-		if err != nil {
-			return nil, err
-		}
-		log.Printf("youkai: collect: position %d: bottom confirmation attempt %d: stationary=%t displaced=%t lost=%t rows=%d %s",
-			run.position, attempt+1, out.stationary, out.displaced, out.lost, out.match.Rows,
-			scrollMarginFields(run.inv.matcher(), out.match, out.settleMatch))
-		if out.afterMatch.Page == PageWarehouse && !run.positionListVerdict(out.afterMatch) {
-			fault := scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
-				"collect: wheel position %d: the bottom confirmation left the list at another wheel position: %s",
-				run.position, out.afterMatch.Evidence))
-			if out.after.ID != 0 && out.after.Image != nil {
-				return waitFailure("bottom-wrong-position", before, out), fault
-			}
-			return nil, fault
-		}
-		switch {
-		case out.stationary:
-			run.listMatch = out.afterMatch
-			run.lastFrame = out.after
-			return nil, nil
-		case out.lost:
-			fault := scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
-				"collect: the bottom confirmation could not verify that the list stayed at the end: %s", out.match.Evidence))
-			return waitFailure("bottom-lost", before, out), fault
-		case out.displaced:
-			fault := scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
-				"collect: the bottom confirmation moved the list, contradicting the scrollbar's bottom evidence: %s", out.match.Evidence))
-			return waitFailure("bottom-displaced", before, out), fault
-		default:
-			if attempt < run.inv.maxRetries() {
-				continue
-			}
-			fault := scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
-				"collect: the bottom confirmation produced no verifiable verdict within the budget (attempt %d)", attempt+1))
-			if out.after.ID != 0 && out.after.Image != nil {
-				return waitFailure("bottom-undecided", before, out), fault
-			}
-			return nil, fault
-		}
+		return nil, fault
 	}
 }
 
@@ -2565,6 +2601,18 @@ func (run *inventoryRun) awaitDetail(ctx context.Context, baseline platform.Fram
 	}
 }
 
+// scrollAttempt retains one drag attempt's evidence until the whole scroll
+// action ends. A failed scroll writes every attempt after its timings are
+// recorded; a retry is only possible when the earlier attempt ended
+// stationary and unmoved. At most MaxRetries+1 traces are live at once, and
+// each trace keeps its own frame and byte caps.
+type scrollAttempt struct {
+	number  int
+	before  platform.Frame
+	outcome string
+	out     scrollOutcome
+}
+
 // scroll advances the list by one small drag step and verifies the
 // transition by correspondence (T5 §5): the pages before and after are
 // the same warehouse, so only the matcher's overlap correspondences
@@ -2581,8 +2629,8 @@ func (run *inventoryRun) scroll(ctx context.Context) (err error) {
 	attempts := 0
 	rows := 0
 	var afterID uint64
-	var afterFrame platform.Frame
 	var waitOut scrollOutcome
+	var attemptLog []scrollAttempt
 	outcome := "error"
 	defer func() {
 		if attempts == 0 {
@@ -2597,18 +2645,25 @@ func (run *inventoryRun) scroll(ctx context.Context) (err error) {
 			drag.Milliseconds(), settle.Milliseconds(), elapsed.Milliseconds(),
 			rows, before.ID, afterID,
 			scrollMarginFields(run.inv.matcher(), waitOut.match, waitOut.settleMatch))
-		if err != nil && afterFrame.ID != 0 && outcome != "error" {
-			run.dumpScrollTrace("scroll-"+outcome, before, afterFrame, waitOut.trace, waitOut.candidate, waitOut.hasCandidate)
+		if err != nil && outcome != "error" {
+			// Every attempt keeps its own before frame, trace and
+			// verdict; the dumps are written after scroll_ms and the
+			// position total are recorded above.
+			for _, a := range attemptLog {
+				if a.out.after.ID == 0 {
+					continue
+				}
+				run.dumpScrollTrace("scroll-"+a.outcome, a.number, a.before, a.out.after, a.out.trace, a.out.candidate, a.out.hasCandidate)
+			}
 		}
 	}()
 	for attempt := 0; ; attempt++ {
-		// A retry starts a fresh judgement: neither the previous attempt's
-		// after frame nor its outcome may label a failure that happened
-		// before this attempt produced a verdict (focus loss, geometry
-		// change, cancellation), or the defer above would write a dump for
-		// the earlier attempt.
+		// A retry starts a fresh judgement: a failure before this attempt
+		// produces a verdict (focus loss, geometry change, cancellation)
+		// leaves the action's outcome as an error, so no dump is
+		// attributed to this attempt. Earlier completed attempts keep
+		// their own evidence in attemptLog.
 		afterID = 0
-		afterFrame = platform.Frame{}
 		waitOut = scrollOutcome{}
 		outcome = "error"
 		if err := ctx.Err(); err != nil {
@@ -2643,16 +2698,21 @@ func (run *inventoryRun) scroll(ctx context.Context) (err error) {
 		}
 		waitOut = out
 		afterID = out.after.ID
-		afterFrame = out.after
+		outcome = scrollOutcomeName(out)
 		if out.afterMatch.Page == PageWarehouse && !run.positionListVerdict(out.afterMatch) {
 			outcome = "wrong-position"
+		}
+		attemptLog = append(attemptLog, scrollAttempt{number: attempts, before: before, outcome: outcome, out: out})
+		log.Printf("youkai: collect: scroll position=%d viewport_from=%d attempt=%d before_frame=%d after_frame=%d outcome=%s unmoved=%t rows=%d %s",
+			run.position, fromViewport, attempts, before.ID, out.after.ID, outcome, out.unmoved, out.match.Rows,
+			scrollMarginFields(run.inv.matcher(), out.match, out.settleMatch))
+		if outcome == "wrong-position" {
 			return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
 				"collect: wheel position %d: the scroll left the list at another wheel position: %s",
 				run.position, out.afterMatch.Evidence))
 		}
 		switch {
 		case out.lost:
-			outcome = "lost"
 			log.Printf("youkai: collect: position %d scroll %d -> %d lost: unsettled=%t after=%d rows=%d matches=%d evidence=%s",
 				run.position, before.ID, out.after.ID, out.unsettled, out.after.ID,
 				out.match.Rows, len(out.match.Matches), out.match.Evidence)
@@ -2666,7 +2726,6 @@ func (run *inventoryRun) scroll(ctx context.Context) (err error) {
 				out.after.ID, out.match.Evidence))
 		case out.displaced:
 			if len(out.match.Matches) == 0 {
-				outcome = "ambiguous"
 				log.Printf("youkai: collect: position %d scroll %d -> %d displaced without correspondences: rows=%d evidence=%s",
 					run.position, before.ID, out.after.ID, out.match.Rows, out.match.Evidence)
 				return scan.NewFault(CodePositionLost, errors.New(
@@ -2674,10 +2733,10 @@ func (run *inventoryRun) scroll(ctx context.Context) (err error) {
 			}
 			if err := run.applyTransition(before, out.after, run.listMatch, out.afterMatch, out.match); err != nil {
 				outcome = "rejected"
+				attemptLog[len(attemptLog)-1].outcome = outcome
 				log.Printf("youkai: collect: position %d scroll %d -> %d rejected: %v", run.position, before.ID, out.after.ID, err)
 				return err
 			}
-			outcome = "displaced"
 			rows = out.match.Rows
 			run.positionScrolls++
 			run.listMatch = out.afterMatch
@@ -2690,19 +2749,42 @@ func (run *inventoryRun) scroll(ctx context.Context) (err error) {
 				run.position, before.ID, out.after.ID, out.match.Rows, len(out.match.Matches))
 			return nil
 		case out.stationary:
-			outcome = "stationary"
+			if !out.unmoved {
+				// The last comparison was Stationary, but the wait also
+				// saw movement or an undecided comparison: the drag's
+				// effect is not proven, so no second drag is sent.
+				return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
+					"collect: the drag ended stationary but the wait also observed movement or an undecided comparison, so its effect is unverified (attempt %d)", attempt+1))
+			}
 			if attempt < run.inv.maxRetries() {
+				// Only a proven unmoved drag may be retried, and the
+				// retry must compare against the newest verified frame
+				// instead of the first attempt's stale baseline. A
+				// navigation mismatch on that read is a verdict failure:
+				// keep this attempt's outcome so the deferred handler
+				// writes the collected evidence. Operational errors
+				// (cancellation, focus loss, geometry change) keep the
+				// error outcome and write no dump.
+				next, err := run.currentList(ctx)
+				if err != nil {
+					var fault *scan.FaultError
+					if !errors.As(err, &fault) || fault.Code != CodeNavigationMismatch {
+						outcome = "error"
+						afterID = 0
+						waitOut = scrollOutcome{}
+					}
+					return err
+				}
+				before = next
 				continue
 			}
 			return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
 				"collect: the drag never displaced the list within the budget (attempt %d) and no end evidence held", attempt+1))
 		default:
-			outcome = "undecided"
-			if attempt < run.inv.maxRetries() {
-				continue
-			}
+			// No verifiable verdict: the drag's effect is unknown, so a
+			// second drag would stack an action on an unproven result.
 			return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
-				"collect: the scroll drag produced no verifiable verdict within the budget (attempt %d)", attempt+1))
+				"collect: the scroll drag produced no verifiable verdict within the budget (attempt %d); no further drag is sent", attempt+1))
 		}
 	}
 }
@@ -2752,6 +2834,25 @@ type scrollOutcome struct {
 	stationary bool
 	displaced  bool
 	lost       bool
+	// unmoved reports that every observation in the wait was proof the
+	// list had not moved: the same content as the pre-drag frame or a
+	// Stationary comparison, with no displacement, Lost, Undecided or
+	// unreadable page at any point. Only then may a caller treat the
+	// Stationary deadline as "the drag did nothing" and send one more
+	// drag (T5 §5).
+	unmoved bool
+	// sawFrame reports that the wait received at least one observation.
+	// lastFrameIsList reports that the most recently received observation
+	// was a verifiable warehouse list. Together they let a caller tell a
+	// list that merely did not decide from a page that left the warehouse
+	// (popup, loading) or a wait with no frames at all.
+	sawFrame        bool
+	lastFrameIsList bool
+	// lastEvidence is the page-match evidence of the most recently
+	// received observation, even when that frame is not a verifiable
+	// warehouse list. A stop message can then describe what was actually
+	// last seen instead of an older list frame or "no frame received".
+	lastEvidence string
 	// unsettled reports a displacement that never settled relative to its
 	// candidate within the budget. It is a Lost outcome, but the position
 	// was verified to have moved; only where it finally stopped is unknown.
@@ -2773,6 +2874,24 @@ type scrollOutcome struct {
 	trace *scrollTrace
 }
 
+// waitVerdict is the latest judgement one awaitScroll produced. The
+// deadline reports this state, not a union of everything the wait ever
+// saw: a later Undecided supersedes an earlier Stationary or Lost instead
+// of leaving a stale flag behind (2026-10-28 field failure: a Lost frame
+// followed by 34 Undecided frames still ended as positionLost). A frame
+// that cannot be read as the warehouse list also leaves the wait
+// undecided until a later readable frame decides it.
+type waitVerdict int
+
+const (
+	waitVerdictNone waitVerdict = iota
+	waitVerdictStationary
+	waitVerdictDisplaced
+	waitVerdictLost
+	waitVerdictAmbiguous
+	waitVerdictUndecided
+)
+
 // awaitScroll waits for the scroll's effect and its settling on fresh
 // warehouse frames. A displacement is only a candidate: the matcher may
 // still be watching an inertial or snapping animation, so a second
@@ -2785,6 +2904,11 @@ type scrollOutcome struct {
 // displacement of their own. Without a candidate, Stationary remains a
 // deadline verdict, not an early one (the drag's effect may still be in
 // flight).
+//
+// The terminal verdict is the latest one: Undecided supersedes an earlier
+// Stationary or Lost. An existing candidate still dominates — it cannot be
+// committed without a settling confirmation — and the separate unmoved
+// flag records whether the whole wait only ever proved stillness.
 func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame) (scrollOutcome, error) {
 	deadline := time.Now().Add(run.inv.scrollBudget())
 	after := run.lastArrived
@@ -2795,9 +2919,8 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 		candidateMatch  PageMatch
 		candidateScroll ScrollMatch
 		haveCandidate   bool
-		sawStationary   bool
-		sawLost         bool
-		sawAmbiguous    bool
+		verdict         = waitVerdictNone
+		stillOnly       = true
 	)
 	settle := func() (scrollOutcome, error) {
 		out.displaced = true
@@ -2806,6 +2929,10 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 		return out, nil
 	}
 	finish := func() (scrollOutcome, error) {
+		// A retry is only safe when the wait never saw anything but
+		// proof that the list stayed where it was. A Stationary final
+		// verdict after an Undecided or a displacement is not that proof.
+		out.unmoved = stillOnly && verdict == waitVerdictStationary && !haveCandidate
 		switch {
 		case haveCandidate:
 			// A displacement was seen but never settled: commit
@@ -2813,9 +2940,9 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 			out.lost, out.unsettled = true, true
 			out.after, out.afterMatch, out.match = candidate, candidateMatch, candidateScroll
 			out.candidate, out.hasCandidate = candidate, true
-		case sawLost || sawAmbiguous:
+		case verdict == waitVerdictLost || verdict == waitVerdictAmbiguous || verdict == waitVerdictDisplaced:
 			out.lost = true
-		case sawStationary:
+		case verdict == waitVerdictStationary:
 			out.stationary = true
 		}
 		return out, nil
@@ -2847,6 +2974,9 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 			return scrollOutcome{}, run.geometryChanged(f)
 		}
 		m := run.inv.matcher().Match(f)
+		out.sawFrame = true
+		out.lastFrameIsList = run.listVerdict(m)
+		out.lastEvidence = m.Evidence
 		if f.Reused {
 			// Unchanged content can prove the candidate stayed still; it
 			// cannot prove a displacement not yet seen fresh.
@@ -2865,19 +2995,27 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 					}
 				} else {
 					if sameFrameContent(before, f) {
-						sawStationary = true
+						verdict = waitVerdictStationary
 					} else {
 						sm := run.inv.matcher().MatchScroll(before, f)
 						trace.noteBefore(f, sm)
 						out.match = sm
-						if sm.Stationary {
-							sawStationary = true
-						}
-						if sm.Lost {
-							sawLost = true
+						switch {
+						case sm.Stationary:
+							verdict = waitVerdictStationary
+						case sm.Lost:
+							verdict, stillOnly = waitVerdictLost, false
+						default:
+							// A reused frame cannot prove a displacement,
+							// and any other comparison leaves the effect
+							// unproven.
+							verdict, stillOnly = waitVerdictUndecided, false
 						}
 					}
 				}
+			} else {
+				// Not a readable warehouse list: no proof of stillness.
+				verdict, stillOnly = waitVerdictUndecided, false
 			}
 			if err := sleepCtx(ctx, run.inv.recheckEvery()); err != nil {
 				return scrollOutcome{}, err
@@ -2889,7 +3027,8 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 		out.after, out.afterMatch = f, m
 		if !run.listVerdict(m) {
 			// Transition or animation frame: keep observing within the
-			// deadline.
+			// deadline, but the last observation proves nothing.
+			verdict, stillOnly = waitVerdictUndecided, false
 			continue
 		}
 		if haveCandidate {
@@ -2912,23 +3051,28 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 				candidate, candidateMatch, candidateScroll = f, m, total
 				trace.pinCandidate(f)
 				out.match = total
-				sawLost, sawAmbiguous = false, false
+				verdict = waitVerdictDisplaced
 			case total.Lost:
 				// Possibly still mid-animation; wait to the budget for a
 				// settling confirmation.
-				sawLost, sawAmbiguous = true, false
+				verdict = waitVerdictLost
 				out.match = total
 			case total.Stationary:
 				// The list returned to the pre-drag position: there is no
 				// displacement to commit.
 				haveCandidate = false
-				sawStationary, sawLost, sawAmbiguous = true, false, false
+				verdict = waitVerdictStationary
 			case total.Displaced:
 				// Moved, but without a unique correspondence: cannot keep
 				// updating the candidate; a later verified total may still
 				// produce one.
 				haveCandidate = false
-				sawAmbiguous, sawLost, sawStationary = true, false, false
+				verdict = waitVerdictAmbiguous
+				out.match = total
+			default:
+				// Undecided: the candidate stays pending and still needs
+				// its settling confirmation.
+				verdict = waitVerdictUndecided
 				out.match = total
 			}
 			continue
@@ -2939,7 +3083,7 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 			// verdict, so keep observing.
 			out.match = ScrollMatch{Stationary: true, Evidence: fmt.Sprintf(
 				"frames %d → %d: the same immutable frame content — the list did not move", before.ID, f.ID)}
-			sawStationary, sawLost, sawAmbiguous = true, false, false
+			verdict = waitVerdictStationary
 			continue
 		}
 		sm := run.inv.matcher().MatchScroll(before, f)
@@ -2950,13 +3094,18 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 			haveCandidate = true
 			candidate, candidateMatch, candidateScroll = f, m, sm
 			trace.pinCandidate(f)
-			sawStationary, sawLost, sawAmbiguous = false, false, false
+			verdict = waitVerdictDisplaced
+			stillOnly = false
 		case sm.Lost:
-			sawLost, sawStationary, sawAmbiguous = true, false, false
+			verdict, stillOnly = waitVerdictLost, false
 		case sm.Stationary:
-			sawStationary, sawLost, sawAmbiguous = true, false, false
+			verdict = waitVerdictStationary
 		case sm.Displaced:
-			sawAmbiguous, sawLost, sawStationary = true, false, false
+			verdict, stillOnly = waitVerdictAmbiguous, false
+		default:
+			// Undecided — including a matcher that set no verdict at all:
+			// it proves neither movement nor stillness.
+			verdict, stillOnly = waitVerdictUndecided, false
 		}
 	}
 }

@@ -1,10 +1,12 @@
 package collect
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"image"
+	"log"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -30,9 +32,15 @@ type scrollScriptMatcher struct {
 	// alwaysStationary makes every pair Stationary, for deadline tests
 	// whose frame source keeps producing fresh content.
 	alwaysStationary bool
+	// nonListFrames makes Match report an unknown page for these frame
+	// IDs, modelling a popup, loading page or another non-warehouse frame.
+	nonListFrames map[uint64]bool
 }
 
 func (m *scrollScriptMatcher) Match(f platform.Frame) PageMatch {
+	if m.nonListFrames[f.ID] {
+		return PageMatch{Page: PageUnknown, Evidence: "scripted non-list page"}
+	}
 	occupied := make([]bool, m.rows*m.columns)
 	for i := range occupied {
 		occupied[i] = true
@@ -62,6 +70,9 @@ func (m *scrollScriptMatcher) CompareDetail(a, b platform.Frame) DetailCompariso
 type scrollScriptView struct {
 	frames []platform.Frame
 	calls  int
+	// dispatches counts dispatched input operations, so a test can pin
+	// how many drags one scroll action sent.
+	dispatches int
 	// attempts counts every Frame entry, including the calls that block
 	// after the scripted frames are exhausted.
 	attempts int
@@ -98,6 +109,7 @@ func (v *scrollScriptView) Observe() (platform.Observation, error) {
 }
 
 func (v *scrollScriptView) Dispatch(op platform.InputOp) platform.InputResult {
+	v.dispatches++
 	return platform.InputResult{Status: platform.InputPosted}
 }
 
@@ -544,11 +556,15 @@ func TestAwaitScrollContinuousStreamRespectsBudget(t *testing.T) {
 }
 
 // failingObserveView fails the readiness check from the configured call
-// onward, leaving the scripted frame stream untouched.
+// onward, leaving the scripted frame stream untouched. blockAt makes one
+// Frame call block until its request deadline, modelling a wait that ends
+// on the deadline between two scripted frames.
 type failingObserveView struct {
 	*scrollScriptView
-	observes int
-	failAt   int
+	observes   int
+	failAt     int
+	blockAt    int
+	frameCalls int
 }
 
 func (v *failingObserveView) Observe() (platform.Observation, error) {
@@ -557,6 +573,15 @@ func (v *failingObserveView) Observe() (platform.Observation, error) {
 		return platform.Observation{}, errors.New("scripted observation failure")
 	}
 	return platform.Observation{Ready: true, Geometry: 1}, nil
+}
+
+func (v *failingObserveView) Frame(ctx context.Context, req platform.FrameRequest) (platform.Frame, error) {
+	v.frameCalls++
+	if v.frameCalls == v.blockAt {
+		<-ctx.Done()
+		return platform.Frame{}, ctx.Err()
+	}
+	return v.scrollScriptView.Frame(ctx, req)
 }
 
 // scriptedSessionController runs one scripted traversal step on the
@@ -665,17 +690,18 @@ func TestScrollVerdictFailureWritesDiagnostics(t *testing.T) {
 }
 
 // TestScrollRetryAfterVerdictDoesNotDumpPreviousAttempt pins the reset
-// between attempts: the first try ends Stationary and retries, the second
-// stops before producing a verdict, and no frame from the first try may be
-// reported as this failure's evidence.
+// between attempts: the first try ends Stationary and retries from a fresh
+// verified frame, the second stops before producing a verdict, and no frame
+// from the first try may be reported as this failure's evidence.
 func TestScrollRetryAfterVerdictDoesNotDumpPreviousAttempt(t *testing.T) {
 	l := sixRowScrollLayout()
 	frame := func(id uint64) platform.Frame {
 		return platform.Frame{ID: id, Geometry: 1, Image: image.NewRGBA(image.Rect(0, 0, 1280, 1000))}
 	}
 	view := &failingObserveView{
-		scrollScriptView: &scrollScriptView{frames: []platform.Frame{frame(1), frame(2)}, blockAfter: true},
+		scrollScriptView: &scrollScriptView{frames: []platform.Frame{frame(1), frame(2), frame(3)}},
 		failAt:           2,
+		blockAt:          3,
 	}
 	m := &scrollScriptMatcher{rows: l.Rows, columns: l.Columns, verdict: map[scrollPair]ScrollMatch{
 		{1, 2}: {Stationary: true, Evidence: "scripted stationary"},
@@ -903,6 +929,539 @@ func TestScrollDumpStaysOutsideScrollTimer(t *testing.T) {
 	}
 	if run.positionScrollMs >= 300*time.Millisecond {
 		t.Fatalf("scroll_ms = %s, want the decision cost without the 500ms diagnostic write", run.positionScrollMs)
+	}
+}
+
+// scriptedBlockView serves the scripted frames in order and blocks chosen
+// Frame calls until their request deadline. It lets a test end one wait on
+// the deadline between two frames, as a live stream without new content
+// does.
+type scriptedBlockView struct {
+	frames         []platform.Frame
+	blockAt        []int
+	calls          int
+	dispatches     int
+	dispatchFrames []uint64
+}
+
+func (v *scriptedBlockView) Observe() (platform.Observation, error) {
+	return platform.Observation{Ready: true, Geometry: 1}, nil
+}
+
+func (v *scriptedBlockView) Dispatch(op platform.InputOp) platform.InputResult {
+	v.dispatches++
+	v.dispatchFrames = append(v.dispatchFrames, op.FrameID)
+	return platform.InputResult{Status: platform.InputPosted}
+}
+
+func (v *scriptedBlockView) Frame(ctx context.Context, req platform.FrameRequest) (platform.Frame, error) {
+	v.calls++
+	for _, n := range v.blockAt {
+		if v.calls == n {
+			<-ctx.Done()
+			return platform.Frame{}, ctx.Err()
+		}
+	}
+	if len(v.frames) == 0 {
+		return platform.Frame{}, context.DeadlineExceeded
+	}
+	f := v.frames[0]
+	v.frames = v.frames[1:]
+	return f, nil
+}
+
+// TestAwaitScrollLastUndecidedSupersedesStationary pins the deadline
+// aggregation: a Stationary observation followed by an Undecided one ends
+// undecided, not stationary, and does not prove the drag was unmoved.
+func TestAwaitScrollLastUndecidedSupersedesStationary(t *testing.T) {
+	l := sixRowScrollLayout()
+	view := &scrollScriptView{frames: []platform.Frame{scrollFrame(2), scrollFrame(3)}, blockAfter: true}
+	m := &scrollScriptMatcher{rows: l.Rows, columns: l.Columns, verdict: map[scrollPair]ScrollMatch{
+		{1, 2}: {Stationary: true, Evidence: "scripted stationary"},
+		{1, 3}: {Undecided: true, Evidence: "scripted undecided"},
+	}}
+	run := newScrollRun(l, view, m, 40*time.Millisecond)
+	out, err := run.awaitScroll(context.Background(), scrollFrame(1))
+	if err != nil {
+		t.Fatalf("awaitScroll: %v", err)
+	}
+	if out.stationary || out.displaced || out.lost {
+		t.Fatalf("outcome %+v, want the last Undecided verdict", out)
+	}
+	if out.unmoved {
+		t.Fatal("an Undecided observation must not prove the drag was unmoved")
+	}
+	if !out.match.Undecided {
+		t.Fatalf("outcome match %+v, want the last comparison", out.match)
+	}
+}
+
+// TestAwaitScrollLastUndecidedSupersedesLost pins the field failure:
+// a Lost observation followed by Undecided frames must end undecided, not
+// carry the earlier Lost to the deadline.
+func TestAwaitScrollLastUndecidedSupersedesLost(t *testing.T) {
+	l := sixRowScrollLayout()
+	view := &scrollScriptView{frames: []platform.Frame{scrollFrame(2), scrollFrame(3)}, blockAfter: true}
+	m := &scrollScriptMatcher{rows: l.Rows, columns: l.Columns, verdict: map[scrollPair]ScrollMatch{
+		{1, 2}: {Lost: true, Evidence: "scripted lost"},
+		{1, 3}: {Undecided: true, Evidence: "scripted undecided"},
+	}}
+	run := newScrollRun(l, view, m, 40*time.Millisecond)
+	out, err := run.awaitScroll(context.Background(), scrollFrame(1))
+	if err != nil {
+		t.Fatalf("awaitScroll: %v", err)
+	}
+	if out.stationary || out.displaced || out.lost {
+		t.Fatalf("outcome %+v, want the last Undecided verdict", out)
+	}
+	if out.unmoved {
+		t.Fatalf("an earlier Lost must not be reported as unmoved: %+v", out)
+	}
+	if !out.match.Undecided {
+		t.Fatalf("outcome match %+v, want the last comparison", out.match)
+	}
+}
+
+// TestScrollStationaryAfterUndecidedDoesNotDragAgain pins the other
+// unknown-effect case: the last verdict is Stationary, but an earlier
+// Undecided observation means the wait never proved the drag was unmoved,
+// so no retry is sent.
+func TestScrollStationaryAfterUndecidedDoesNotDragAgain(t *testing.T) {
+	l := sixRowScrollLayout()
+	view := &scrollScriptView{frames: []platform.Frame{scrollFrame(1), scrollFrame(2), scrollFrame(3)}, blockAfter: true}
+	m := &scrollScriptMatcher{rows: l.Rows, columns: l.Columns, verdict: map[scrollPair]ScrollMatch{
+		{1, 2}: {Undecided: true, Evidence: "scripted undecided"},
+		{1, 3}: {Stationary: true, Evidence: "scripted stationary"},
+	}}
+	run := newScriptedScrollRun(l, view, m, "", 2, 40*time.Millisecond)
+	run.visited = make([]bool, len(l.Slots))
+
+	err := runScriptedScroll(t, run)
+	var fault *scan.FaultError
+	if !errors.As(err, &fault) || fault.Code != CodeNavigationMismatch {
+		t.Fatalf("scroll error %v, want navigationMismatch", err)
+	}
+	if view.dispatches != 1 {
+		t.Fatalf("the not-provably-unmoved drag was followed by %d drags, want only the first", view.dispatches)
+	}
+}
+
+// TestAwaitScrollCandidateNeedsSettleAfterUndecided pins the unchanged
+// candidate rule: a displacement candidate followed by an Undecided total
+// still ends as an unsettled Lost, because only a candidate-relative
+// Stationary confirmation may commit it.
+func TestAwaitScrollCandidateNeedsSettleAfterUndecided(t *testing.T) {
+	l := sixRowScrollLayout()
+	view := &scrollScriptView{frames: []platform.Frame{scrollFrame(2), scrollFrame(3)}, blockAfter: true}
+	m := &scrollScriptMatcher{rows: l.Rows, columns: l.Columns, verdict: map[scrollPair]ScrollMatch{
+		{1, 2}: displacedScan(l, 4),
+		{1, 3}: {Undecided: true, Evidence: "scripted undecided"},
+	}}
+	run := newScrollRun(l, view, m, 40*time.Millisecond)
+	out, err := run.awaitScroll(context.Background(), scrollFrame(1))
+	if err != nil {
+		t.Fatalf("awaitScroll: %v", err)
+	}
+	if !out.lost || !out.unsettled || out.displaced || out.stationary {
+		t.Fatalf("outcome %+v, want the unsettled candidate outcome", out)
+	}
+	if !out.hasCandidate || out.after.ID != 2 || out.match.Rows != 4 {
+		t.Fatalf("outcome %+v, want the untouched four-row candidate at frame 2", out)
+	}
+	if out.unmoved {
+		t.Fatal("a displacement candidate must not be reported as unmoved")
+	}
+}
+
+// TestScrollUnknownOutcomeDoesNotDragAgain pins the conservative stop: when
+// the drag's effect stays unknown, no further drag is sent even though the
+// retry budget is not exhausted.
+func TestScrollUnknownOutcomeDoesNotDragAgain(t *testing.T) {
+	l := sixRowScrollLayout()
+	view := &scrollScriptView{frames: []platform.Frame{scrollFrame(1), scrollFrame(2), scrollFrame(3)}, blockAfter: true}
+	m := &scrollScriptMatcher{rows: l.Rows, columns: l.Columns, verdict: map[scrollPair]ScrollMatch{
+		{1, 2}: {Undecided: true, Evidence: "scripted undecided"},
+		{1, 3}: {Undecided: true, Evidence: "scripted undecided"},
+	}}
+	run := newScriptedScrollRun(l, view, m, "", 2, 40*time.Millisecond)
+	run.visited = make([]bool, len(l.Slots))
+
+	err := runScriptedScroll(t, run)
+	var fault *scan.FaultError
+	if !errors.As(err, &fault) || fault.Code != CodeNavigationMismatch {
+		t.Fatalf("scroll error %v, want navigationMismatch", err)
+	}
+	if view.dispatches != 1 {
+		t.Fatalf("the unknown drag was followed by %d drags, want only the first", view.dispatches)
+	}
+}
+
+// TestScrollRetryUnmovedUsesFreshBase pins the retry base: after a wait
+// that only ever proved stillness, the retry must compare against the
+// newest verified frame. The second attempt only settles against frame 3,
+// so a retry that kept the first attempt's baseline could not commit.
+func TestScrollRetryUnmovedUsesFreshBase(t *testing.T) {
+	l := sixRowScrollLayout()
+	view := &scriptedBlockView{
+		frames:  []platform.Frame{scrollFrame(1), scrollFrame(2), scrollFrame(3), scrollFrame(4), scrollFrame(5)},
+		blockAt: []int{3},
+	}
+	m := &scrollScriptMatcher{rows: l.Rows, columns: l.Columns, verdict: map[scrollPair]ScrollMatch{
+		{1, 2}: {Stationary: true, Evidence: "scripted stationary"},
+		{3, 4}: displacedScan(l, 4),
+		{4, 5}: {Stationary: true, Evidence: "scripted settled"},
+	}}
+	run := newScriptedScrollRun(l, view, m, "", 1, 40*time.Millisecond)
+	run.visited = make([]bool, len(l.Slots))
+
+	if err := runScriptedScroll(t, run); err != nil {
+		t.Fatalf("the unmoved retry must commit the fresh-base scroll: %v", err)
+	}
+	if view.dispatches != 2 {
+		t.Fatalf("scroll dispatched %d drags, want the first attempt and one retry", view.dispatches)
+	}
+	if run.viewport != 4 || run.lastScrollRows != 4 {
+		t.Fatalf("retry committed viewport %d rows %d, want the fresh-base four-row scroll", run.viewport, run.lastScrollRows)
+	}
+}
+
+// TestScrollFailureKeepsEveryAttemptDiagnostics pins per-attempt evidence:
+// a scroll that exhausts its retries writes one dump per attempt, each
+// with its own before frame and attempt number, and the log distinguishes
+// the attempts.
+func TestScrollFailureKeepsEveryAttemptDiagnostics(t *testing.T) {
+	l := sixRowScrollLayout()
+	view := &scriptedBlockView{
+		frames:  []platform.Frame{scrollFrame(1), scrollFrame(2), scrollFrame(3), scrollFrame(4)},
+		blockAt: []int{3, 6},
+	}
+	m := &scrollScriptMatcher{rows: l.Rows, columns: l.Columns, verdict: map[scrollPair]ScrollMatch{
+		{1, 2}: {Stationary: true, Evidence: "scripted stationary"},
+		{3, 4}: {Stationary: true, Evidence: "scripted stationary"},
+	}}
+	dir := t.TempDir()
+	run := newScriptedScrollRun(l, view, m, dir, 1, 40*time.Millisecond)
+	run.visited = make([]bool, len(l.Slots))
+
+	logs := &bytes.Buffer{}
+	previous := log.Writer()
+	log.SetOutput(logs)
+	t.Cleanup(func() { log.SetOutput(previous) })
+
+	err := runScriptedScroll(t, run)
+	if err == nil || !strings.Contains(err.Error(), "never displaced") {
+		t.Fatalf("scroll error %v, want the exhausted-stationary stop", err)
+	}
+	if view.dispatches != 2 {
+		t.Fatalf("scroll dispatched %d drags, want two attempts", view.dispatches)
+	}
+	dumps := diagnosticDumpDirs(t, dir)
+	if len(dumps) != 2 {
+		t.Fatalf("the failed scroll wrote %d dumps, want one per attempt: %v", len(dumps), dumps)
+	}
+	byAttempt := make(map[int]diagnosticManifest, len(dumps))
+	for _, dump := range dumps {
+		manifest := readDumpManifest(t, dump)
+		byAttempt[manifest.Attempt] = manifest
+		if !strings.Contains(filepath.Base(dump), fmt.Sprintf("-attempt%d", manifest.Attempt)) {
+			t.Fatalf("dump %q does not name its attempt %d", dump, manifest.Attempt)
+		}
+	}
+	for _, want := range []struct {
+		attempt       int
+		before, after uint64
+	}{
+		{1, 1, 2},
+		{2, 3, 4},
+	} {
+		manifest, ok := byAttempt[want.attempt]
+		if !ok {
+			t.Fatalf("no dump for attempt %d: %v", want.attempt, dumps)
+		}
+		if manifest.BeforeFrame != want.before || manifest.AfterFrame != want.after {
+			t.Fatalf("attempt %d frames before=%d after=%d, want %d/%d",
+				want.attempt, manifest.BeforeFrame, manifest.AfterFrame, want.before, want.after)
+		}
+	}
+	for _, want := range []string{"attempt=1", "attempt=2", "attempts=2"} {
+		if !strings.Contains(logs.String(), want) {
+			t.Fatalf("scroll log lacks %q: %s", want, logs.String())
+		}
+	}
+}
+
+// TestConfirmBottomUnknownOutcomeDoesNotDragAgain pins the same rule for
+// the bottom confirmation: an undecided wait stops instead of retrying.
+func TestConfirmBottomUnknownOutcomeDoesNotDragAgain(t *testing.T) {
+	l := sixRowScrollLayout()
+	view := &scrollScriptView{frames: []platform.Frame{scrollFrame(2), scrollFrame(3)}, blockAfter: true}
+	m := &scrollScriptMatcher{rows: l.Rows, columns: l.Columns, verdict: map[scrollPair]ScrollMatch{
+		{1, 2}: {Undecided: true, Evidence: "scripted undecided"},
+		{1, 3}: {Undecided: true, Evidence: "scripted undecided"},
+	}}
+	run := newScriptedScrollRun(l, view, m, "", 2, 40*time.Millisecond)
+	run.lastFrame = scrollFrame(1)
+
+	err := runScriptedSession(t, run, func(ctx context.Context, run *inventoryRun) error {
+		_, err := run.confirmBottom(ctx)
+		return err
+	})
+	var fault *scan.FaultError
+	if !errors.As(err, &fault) || fault.Code != CodeNavigationMismatch {
+		t.Fatalf("bottom confirmation error %v, want navigationMismatch", err)
+	}
+	if view.dispatches != 1 {
+		t.Fatalf("the undecided bottom confirmation sent %d drags, want one", view.dispatches)
+	}
+}
+
+// TestScrollToTopUndecidedNonListStops pins the precondition of the
+// top-fling exception: an undecided fling only continues while its latest
+// observation is still the verifiable warehouse list. A popup or loading
+// page after the list is a page-level failure, as in the Lost branch.
+func TestScrollToTopUndecidedNonListStops(t *testing.T) {
+	l := sixRowScrollLayout()
+	view := &scrollScriptView{frames: []platform.Frame{scrollFrame(2), scrollFrame(3)}, blockAfter: true}
+	m := &scrollScriptMatcher{rows: l.Rows, columns: l.Columns,
+		verdict: map[scrollPair]ScrollMatch{
+			{1, 2}: {Undecided: true, Evidence: "scripted undecided"},
+		},
+		nonListFrames: map[uint64]bool{3: true},
+	}
+	run := newScriptedScrollRun(l, view, m, "", 0, 40*time.Millisecond)
+	run.lastFrame = scrollFrame(1)
+	run.listMatch = m.Match(scrollFrame(1))
+
+	err := runScriptedSession(t, run, func(ctx context.Context, run *inventoryRun) error {
+		_, err := run.scrollToTop(ctx)
+		return err
+	})
+	var fault *scan.FaultError
+	if !errors.As(err, &fault) || fault.Code != CodeNavigationMismatch {
+		t.Fatalf("top fling error %v, want navigationMismatch", err)
+	}
+	if !strings.Contains(err.Error(), "without a verifiable warehouse list") {
+		t.Fatalf("top fling error %v, want the page-level stop", err)
+	}
+	if view.dispatches != 1 {
+		t.Fatalf("the non-list fling sent %d drags, want only the first", view.dispatches)
+	}
+}
+
+// TestScrollToTopUndecidedWithoutFramesStops pins the other precondition:
+// an undecided wait that received no frame at all cannot support another
+// fling.
+func TestScrollToTopUndecidedWithoutFramesStops(t *testing.T) {
+	l := sixRowScrollLayout()
+	view := &scrollScriptView{}
+	m := &scrollScriptMatcher{rows: l.Rows, columns: l.Columns}
+	run := newScriptedScrollRun(l, view, m, "", 0, 40*time.Millisecond)
+	run.lastFrame = scrollFrame(1)
+	run.listMatch = m.Match(scrollFrame(1))
+
+	err := runScriptedSession(t, run, func(ctx context.Context, run *inventoryRun) error {
+		_, err := run.scrollToTop(ctx)
+		return err
+	})
+	var fault *scan.FaultError
+	if !errors.As(err, &fault) || fault.Code != CodeNavigationMismatch {
+		t.Fatalf("top fling error %v, want navigationMismatch", err)
+	}
+	if !strings.Contains(err.Error(), "without a verifiable warehouse list") {
+		t.Fatalf("top fling error %v, want the page-level stop", err)
+	}
+	if view.dispatches != 1 {
+		t.Fatalf("the frameless fling sent %d drags, want only the first", view.dispatches)
+	}
+}
+
+// TestScrollRetryBaseNavigationMismatchKeepsAttemptDiagnostics pins the
+// retry-base classification: an unreadable current list is a verdict
+// failure, so the previous attempt's evidence is still dumped. Operational
+// errors at the same point write no dump.
+func TestScrollRetryBaseNavigationMismatchKeepsAttemptDiagnostics(t *testing.T) {
+	l := sixRowScrollLayout()
+	view := &scriptedBlockView{
+		frames:  []platform.Frame{scrollFrame(1), scrollFrame(2), scrollFrame(3)},
+		blockAt: []int{3},
+	}
+	m := &scrollScriptMatcher{rows: l.Rows, columns: l.Columns,
+		verdict: map[scrollPair]ScrollMatch{
+			{1, 2}: {Stationary: true, Evidence: "scripted stationary"},
+		},
+		nonListFrames: map[uint64]bool{3: true},
+	}
+	dir := t.TempDir()
+	run := newScriptedScrollRun(l, view, m, dir, 1, 40*time.Millisecond)
+	run.visited = make([]bool, len(l.Slots))
+
+	err := runScriptedScroll(t, run)
+	var fault *scan.FaultError
+	if !errors.As(err, &fault) || fault.Code != CodeNavigationMismatch {
+		t.Fatalf("scroll error %v, want navigationMismatch", err)
+	}
+	if view.dispatches != 1 {
+		t.Fatalf("scroll dispatched %d drags, want only the first attempt", view.dispatches)
+	}
+	dumps := diagnosticDumpDirs(t, dir)
+	if len(dumps) != 1 {
+		t.Fatalf("the retry-base navigation mismatch wrote %v, want the first attempt's dump", dumps)
+	}
+	manifest := readDumpManifest(t, dumps[0])
+	if manifest.Attempt != 1 || manifest.BeforeFrame != 1 || manifest.AfterFrame != 2 {
+		t.Fatalf("dump attempt=%d before=%d after=%d, want attempt 1 frames 1/2",
+			manifest.Attempt, manifest.BeforeFrame, manifest.AfterFrame)
+	}
+}
+
+// TestScrollToTopUndecidedReusedNonListEvidence pins the stop message: a
+// reused non-list frame still counts as a received frame and its evidence
+// is reported, not "no frame received" or an older list frame's evidence.
+func TestScrollToTopUndecidedReusedNonListEvidence(t *testing.T) {
+	l := sixRowScrollLayout()
+	reused := func(id uint64) platform.Frame {
+		return platform.Frame{ID: id, Geometry: 1, Reused: true}
+	}
+	cases := []struct {
+		name    string
+		frames  []platform.Frame
+		verdict map[scrollPair]ScrollMatch
+		nonList map[uint64]bool
+	}{
+		{
+			name:    "only the reused non-list frame",
+			frames:  []platform.Frame{reused(2)},
+			nonList: map[uint64]bool{2: true},
+		},
+		{
+			name:   "a list frame then the reused non-list frame",
+			frames: []platform.Frame{scrollFrame(2), reused(3)},
+			verdict: map[scrollPair]ScrollMatch{
+				{1, 2}: {Undecided: true, Evidence: "scripted undecided"},
+			},
+			nonList: map[uint64]bool{3: true},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			view := &scrollScriptView{frames: tc.frames}
+			m := &scrollScriptMatcher{rows: l.Rows, columns: l.Columns, verdict: tc.verdict, nonListFrames: tc.nonList}
+			run := newScriptedScrollRun(l, view, m, "", 0, 40*time.Millisecond)
+			run.lastFrame = scrollFrame(1)
+			run.listMatch = m.Match(scrollFrame(1))
+
+			err := runScriptedSession(t, run, func(ctx context.Context, run *inventoryRun) error {
+				_, err := run.scrollToTop(ctx)
+				return err
+			})
+			var fault *scan.FaultError
+			if !errors.As(err, &fault) || fault.Code != CodeNavigationMismatch {
+				t.Fatalf("top fling error %v, want navigationMismatch", err)
+			}
+			if !strings.Contains(err.Error(), "scripted non-list page") {
+				t.Fatalf("top fling error %v, want the last frame's evidence", err)
+			}
+			if strings.Contains(err.Error(), "no frame received") {
+				t.Fatalf("top fling error %v, but frames were received", err)
+			}
+			if view.dispatches != 1 {
+				t.Fatalf("the non-list fling sent %d drags, want only the first", view.dispatches)
+			}
+		})
+	}
+}
+
+// TestScrollRetryBaseOperationalErrorWritesNoDiagnostics pins the other
+// side of the retry-base classification: a geometry change while reading
+// the new base is an operational error, so no dump is written.
+func TestScrollRetryBaseOperationalErrorWritesNoDiagnostics(t *testing.T) {
+	l := sixRowScrollLayout()
+	view := &scriptedBlockView{
+		frames: []platform.Frame{
+			scrollFrame(1),
+			scrollFrame(2),
+			{ID: 3, Geometry: 2},
+		},
+		blockAt: []int{3},
+	}
+	m := &scrollScriptMatcher{rows: l.Rows, columns: l.Columns, verdict: map[scrollPair]ScrollMatch{
+		{1, 2}: {Stationary: true, Evidence: "scripted stationary"},
+	}}
+	dir := t.TempDir()
+	run := newScriptedScrollRun(l, view, m, dir, 1, 40*time.Millisecond)
+	run.visited = make([]bool, len(l.Slots))
+
+	err := runScriptedScroll(t, run)
+	var fault *scan.FaultError
+	if !errors.As(err, &fault) || fault.Code != platform.CodeGeometryChanged {
+		t.Fatalf("scroll error %v, want geometryChanged", err)
+	}
+	if view.dispatches != 1 {
+		t.Fatalf("scroll dispatched %d drags, want only the first attempt", view.dispatches)
+	}
+	if dumps := diagnosticDumpDirs(t, dir); len(dumps) != 0 {
+		t.Fatalf("an operational retry-base error wrote %v, want no diagnostics", dumps)
+	}
+}
+
+// TestScrollToTopUndecidedContinuesFromLatestFrame pins the top-fling
+// exception: an undecided fling is an exploratory action toward a hard
+// boundary, so the loop sends the next fling from the newest verified
+// frame, still stops after two consecutive flings without progress, and
+// never exceeds the existing bounds.
+func TestScrollToTopUndecidedContinuesFromLatestFrame(t *testing.T) {
+	l := sixRowScrollLayout()
+	view := &scriptedBlockView{frames: []platform.Frame{scrollFrame(2), scrollFrame(3)}, blockAt: []int{2, 4}}
+	m := &scrollScriptMatcher{rows: l.Rows, columns: l.Columns, verdict: map[scrollPair]ScrollMatch{
+		{1, 2}: {Undecided: true, Evidence: "scripted undecided"},
+	}}
+	run := newScriptedScrollRun(l, view, m, "", 0, 40*time.Millisecond)
+	run.lastFrame = scrollFrame(1)
+	run.listMatch = m.Match(scrollFrame(1))
+
+	err := runScriptedSession(t, run, func(ctx context.Context, run *inventoryRun) error {
+		_, err := run.scrollToTop(ctx)
+		return err
+	})
+	var fault *scan.FaultError
+	if !errors.As(err, &fault) || fault.Code != CodeNavigationMismatch {
+		t.Fatalf("top fling error %v, want navigationMismatch", err)
+	}
+	if !strings.Contains(err.Error(), "no progress toward the top") {
+		t.Fatalf("top fling error %v, want the no-progress bound", err)
+	}
+	if view.dispatches != 2 {
+		t.Fatalf("the undecided fling sent %d drags, want one continuation and the no-progress stop", view.dispatches)
+	}
+	if got := fmt.Sprint(view.dispatchFrames); got != "[1 2]" {
+		t.Fatalf("top flings used before frames %s, want the first frame then the newest verified frame", got)
+	}
+}
+
+// TestConfirmTopUndecidedDoesNotDragAgain pins the stricter top
+// confirmation rule: once the scrollbar claims the top, a wait without a
+// verdict stops instead of re-dragging.
+func TestConfirmTopUndecidedDoesNotDragAgain(t *testing.T) {
+	l := sixRowScrollLayout()
+	view := &scrollScriptView{frames: []platform.Frame{scrollFrame(2)}, blockAfter: true}
+	m := &scrollScriptMatcher{rows: l.Rows, columns: l.Columns, verdict: map[scrollPair]ScrollMatch{
+		{1, 2}: {Undecided: true, Evidence: "scripted undecided"},
+	}}
+	run := newScriptedScrollRun(l, view, m, "", 0, 40*time.Millisecond)
+	run.inv.ActionBudget = 20 * time.Millisecond
+	run.lastFrame = scrollFrame(1)
+	run.listMatch = m.Match(scrollFrame(1))
+
+	err := runScriptedSession(t, run, func(ctx context.Context, run *inventoryRun) error {
+		_, err := run.confirmTop(ctx)
+		return err
+	})
+	var fault *scan.FaultError
+	if !errors.As(err, &fault) || fault.Code != CodeNavigationMismatch {
+		t.Fatalf("top confirmation error %v, want navigationMismatch", err)
+	}
+	if view.dispatches != 1 {
+		t.Fatalf("the undecided top confirmation sent %d drags, want one", view.dispatches)
 	}
 }
 

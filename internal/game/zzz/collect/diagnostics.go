@@ -56,6 +56,7 @@ type diagnosticManifest struct {
 	Kind           string            `json:"kind"`
 	Position       int               `json:"position"`
 	Viewport       int               `json:"viewport"`
+	Attempt        int               `json:"attempt,omitempty"`
 	BeforeFrame    uint64            `json:"before_frame"`
 	AfterFrame     uint64            `json:"after_frame"`
 	CandidateFrame uint64            `json:"candidate_frame,omitempty"`
@@ -106,9 +107,12 @@ const diagnosticMatchNote = "comparisons are the MatchScroll results the wait pr
 
 // dumpScrollTrace writes one failed wait's retained frame sequence, its
 // manifest and the pre-drag/after frames as PNG crops to a subdirectory of
-// the diagnostic directory. Every failure here is logged and swallowed:
-// diagnostics must never change the walk.
-func (run *inventoryRun) dumpScrollTrace(kind string, before, after platform.Frame, trace *scrollTrace, candidate platform.Frame, hasCandidate bool) {
+// the diagnostic directory. attempt numbers a scroll action's drag attempt
+// (0 when the wait belongs to a top or bottom confirmation); every attempt
+// gets its own subdirectory so a retried scroll keeps all of them. Every
+// failure here is logged and swallowed: diagnostics must never change the
+// walk.
+func (run *inventoryRun) dumpScrollTrace(kind string, attempt int, before, after platform.Frame, trace *scrollTrace, candidate platform.Frame, hasCandidate bool) {
 	dir := run.inv.DiagnosticDir
 	if dir == "" || run.diagnosticDumps >= maxDiagnosticDumpsPerRun {
 		return
@@ -122,6 +126,9 @@ func (run *inventoryRun) dumpScrollTrace(kind string, before, after platform.Fra
 
 	stamp := diagnosticNow().Format("20060102-150405.000")
 	name := fmt.Sprintf("%s-pos%d-vp%d-%s", strings.ReplaceAll(stamp, ".", ""), run.position, run.viewport, kind)
+	if attempt > 0 {
+		name = fmt.Sprintf("%s-attempt%d", name, attempt)
+	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		log.Printf("youkai: collect: diagnostics: create %s: %v", dir, err)
 		return
@@ -136,6 +143,7 @@ func (run *inventoryRun) dumpScrollTrace(kind string, before, after platform.Fra
 		Kind:           kind,
 		Position:       run.position,
 		Viewport:       run.viewport,
+		Attempt:        attempt,
 		BeforeFrame:    before.ID,
 		AfterFrame:     after.ID,
 		CandidateFrame: candidate.ID,
