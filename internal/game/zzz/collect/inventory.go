@@ -1274,12 +1274,21 @@ func (run *inventoryRun) scrollToTop(ctx context.Context) (*failureFrames, error
 			// boundary, so like Lost it keeps moving toward the top
 			// instead of stacking a verification action. It still counts
 			// as no progress and stays inside the fling and no-progress
-			// bounds; the next fling starts from the newest verified
-			// frame. confirmTop below stays strict.
-			if run.listVerdict(out.afterMatch) {
-				run.listMatch = out.afterMatch
-				run.lastFrame = out.after
+			// bounds. Continuing requires the latest observation to be
+			// the verifiable warehouse list; a page that left the
+			// warehouse or a wait with no frame at all is a page-level
+			// failure, as in the Lost branch above.
+			if !out.sawFrame || !out.lastFrameIsList {
+				evidence := out.afterMatch.Evidence
+				if evidence == "" {
+					evidence = "no frame received"
+				}
+				return waitFailure(waitKind("top", out), before, out), scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
+					"collect: wheel position %d: the top fling ended without a verifiable warehouse list: %s",
+					run.position, evidence))
 			}
+			run.listMatch = out.afterMatch
+			run.lastFrame = out.after
 		}
 		if progressed {
 			noProgress = 0
@@ -2747,12 +2756,20 @@ func (run *inventoryRun) scroll(ctx context.Context) (err error) {
 			if attempt < run.inv.maxRetries() {
 				// Only a proven unmoved drag may be retried, and the
 				// retry must compare against the newest verified frame
-				// instead of the first attempt's stale baseline.
-				outcome = "error"
-				afterID = 0
-				waitOut = scrollOutcome{}
+				// instead of the first attempt's stale baseline. A
+				// navigation mismatch on that read is a verdict failure:
+				// keep this attempt's outcome so the deferred handler
+				// writes the collected evidence. Operational errors
+				// (cancellation, focus loss, geometry change) keep the
+				// error outcome and write no dump.
 				next, err := run.currentList(ctx)
 				if err != nil {
+					var fault *scan.FaultError
+					if !errors.As(err, &fault) || fault.Code != CodeNavigationMismatch {
+						outcome = "error"
+						afterID = 0
+						waitOut = scrollOutcome{}
+					}
 					return err
 				}
 				before = next
@@ -2821,6 +2838,13 @@ type scrollOutcome struct {
 	// Stationary deadline as "the drag did nothing" and send one more
 	// drag (T5 §5).
 	unmoved bool
+	// sawFrame reports that the wait received at least one observation.
+	// lastFrameIsList reports that the most recently received observation
+	// was a verifiable warehouse list. Together they let a caller tell a
+	// list that merely did not decide from a page that left the warehouse
+	// (popup, loading) or a wait with no frames at all.
+	sawFrame        bool
+	lastFrameIsList bool
 	// unsettled reports a displacement that never settled relative to its
 	// candidate within the budget. It is a Lost outcome, but the position
 	// was verified to have moved; only where it finally stopped is unknown.
@@ -2942,6 +2966,8 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 			return scrollOutcome{}, run.geometryChanged(f)
 		}
 		m := run.inv.matcher().Match(f)
+		out.sawFrame = true
+		out.lastFrameIsList = run.listVerdict(m)
 		if f.Reused {
 			// Unchanged content can prove the candidate stayed still; it
 			// cannot prove a displacement not yet seen fresh.

@@ -32,9 +32,15 @@ type scrollScriptMatcher struct {
 	// alwaysStationary makes every pair Stationary, for deadline tests
 	// whose frame source keeps producing fresh content.
 	alwaysStationary bool
+	// nonListFrames makes Match report an unknown page for these frame
+	// IDs, modelling a popup, loading page or another non-warehouse frame.
+	nonListFrames map[uint64]bool
 }
 
 func (m *scrollScriptMatcher) Match(f platform.Frame) PageMatch {
+	if m.nonListFrames[f.ID] {
+		return PageMatch{Page: PageUnknown, Evidence: "scripted non-list page"}
+	}
 	occupied := make([]bool, m.rows*m.columns)
 	for i := range occupied {
 		occupied[i] = true
@@ -1209,6 +1215,105 @@ func TestConfirmBottomUnknownOutcomeDoesNotDragAgain(t *testing.T) {
 	}
 }
 
+// TestScrollToTopUndecidedNonListStops pins the precondition of the
+// top-fling exception: an undecided fling only continues while its latest
+// observation is still the verifiable warehouse list. A popup or loading
+// page after the list is a page-level failure, as in the Lost branch.
+func TestScrollToTopUndecidedNonListStops(t *testing.T) {
+	l := sixRowScrollLayout()
+	view := &scrollScriptView{frames: []platform.Frame{scrollFrame(2), scrollFrame(3)}, blockAfter: true}
+	m := &scrollScriptMatcher{rows: l.Rows, columns: l.Columns,
+		verdict: map[scrollPair]ScrollMatch{
+			{1, 2}: {Undecided: true, Evidence: "scripted undecided"},
+		},
+		nonListFrames: map[uint64]bool{3: true},
+	}
+	run := newScriptedScrollRun(l, view, m, "", 0, 40*time.Millisecond)
+	run.lastFrame = scrollFrame(1)
+	run.listMatch = m.Match(scrollFrame(1))
+
+	err := runScriptedSession(t, run, func(ctx context.Context, run *inventoryRun) error {
+		_, err := run.scrollToTop(ctx)
+		return err
+	})
+	var fault *scan.FaultError
+	if !errors.As(err, &fault) || fault.Code != CodeNavigationMismatch {
+		t.Fatalf("top fling error %v, want navigationMismatch", err)
+	}
+	if !strings.Contains(err.Error(), "without a verifiable warehouse list") {
+		t.Fatalf("top fling error %v, want the page-level stop", err)
+	}
+	if view.dispatches != 1 {
+		t.Fatalf("the non-list fling sent %d drags, want only the first", view.dispatches)
+	}
+}
+
+// TestScrollToTopUndecidedWithoutFramesStops pins the other precondition:
+// an undecided wait that received no frame at all cannot support another
+// fling.
+func TestScrollToTopUndecidedWithoutFramesStops(t *testing.T) {
+	l := sixRowScrollLayout()
+	view := &scrollScriptView{}
+	m := &scrollScriptMatcher{rows: l.Rows, columns: l.Columns}
+	run := newScriptedScrollRun(l, view, m, "", 0, 40*time.Millisecond)
+	run.lastFrame = scrollFrame(1)
+	run.listMatch = m.Match(scrollFrame(1))
+
+	err := runScriptedSession(t, run, func(ctx context.Context, run *inventoryRun) error {
+		_, err := run.scrollToTop(ctx)
+		return err
+	})
+	var fault *scan.FaultError
+	if !errors.As(err, &fault) || fault.Code != CodeNavigationMismatch {
+		t.Fatalf("top fling error %v, want navigationMismatch", err)
+	}
+	if !strings.Contains(err.Error(), "without a verifiable warehouse list") {
+		t.Fatalf("top fling error %v, want the page-level stop", err)
+	}
+	if view.dispatches != 1 {
+		t.Fatalf("the frameless fling sent %d drags, want only the first", view.dispatches)
+	}
+}
+
+// TestScrollRetryBaseNavigationMismatchKeepsAttemptDiagnostics pins the
+// retry-base classification: an unreadable current list is a verdict
+// failure, so the previous attempt's evidence is still dumped. Operational
+// errors at the same point write no dump.
+func TestScrollRetryBaseNavigationMismatchKeepsAttemptDiagnostics(t *testing.T) {
+	l := sixRowScrollLayout()
+	view := &scriptedBlockView{
+		frames:  []platform.Frame{scrollFrame(1), scrollFrame(2), scrollFrame(3)},
+		blockAt: []int{3},
+	}
+	m := &scrollScriptMatcher{rows: l.Rows, columns: l.Columns,
+		verdict: map[scrollPair]ScrollMatch{
+			{1, 2}: {Stationary: true, Evidence: "scripted stationary"},
+		},
+		nonListFrames: map[uint64]bool{3: true},
+	}
+	dir := t.TempDir()
+	run := newScriptedScrollRun(l, view, m, dir, 1, 40*time.Millisecond)
+	run.visited = make([]bool, len(l.Slots))
+
+	err := runScriptedScroll(t, run)
+	var fault *scan.FaultError
+	if !errors.As(err, &fault) || fault.Code != CodeNavigationMismatch {
+		t.Fatalf("scroll error %v, want navigationMismatch", err)
+	}
+	if view.dispatches != 1 {
+		t.Fatalf("scroll dispatched %d drags, want only the first attempt", view.dispatches)
+	}
+	dumps := diagnosticDumpDirs(t, dir)
+	if len(dumps) != 1 {
+		t.Fatalf("the retry-base navigation mismatch wrote %v, want the first attempt's dump", dumps)
+	}
+	manifest := readDumpManifest(t, dumps[0])
+	if manifest.Attempt != 1 || manifest.BeforeFrame != 1 || manifest.AfterFrame != 2 {
+		t.Fatalf("dump attempt=%d before=%d after=%d, want attempt 1 frames 1/2",
+			manifest.Attempt, manifest.BeforeFrame, manifest.AfterFrame)
+	}
+}
+
 // TestScrollToTopUndecidedContinuesFromLatestFrame pins the top-fling
 // exception: an undecided fling is an exploratory action toward a hard
 // boundary, so the loop sends the next fling from the newest verified
@@ -1216,7 +1321,7 @@ func TestConfirmBottomUnknownOutcomeDoesNotDragAgain(t *testing.T) {
 // never exceeds the existing bounds.
 func TestScrollToTopUndecidedContinuesFromLatestFrame(t *testing.T) {
 	l := sixRowScrollLayout()
-	view := &scriptedBlockView{frames: []platform.Frame{scrollFrame(2)}, blockAt: []int{2}}
+	view := &scriptedBlockView{frames: []platform.Frame{scrollFrame(2), scrollFrame(3)}, blockAt: []int{2, 4}}
 	m := &scrollScriptMatcher{rows: l.Rows, columns: l.Columns, verdict: map[scrollPair]ScrollMatch{
 		{1, 2}: {Undecided: true, Evidence: "scripted undecided"},
 	}}
