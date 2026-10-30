@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -526,13 +527,22 @@ func gameScanSourceFrom(mode, goos string, getenv func(string) string, host func
 		return src, "游戏窗口（仅观测演练，不发送输入）", nil
 	}
 	// The calibrated traverse: one immutable layout shared by the session
-	// traversals; each session gets its own matcher and Inventory.
+	// traversals; each session gets its own matcher and Inventory. The
+	// scroll judgment defaults to the stage 2 evidence model (selection-box
+	// displacement as the primary evidence, normalized correlation and the
+	// scrollbar as auxiliary checks); YOUKAI_SCROLL_MATCHER=legacy keeps
+	// the pre-stage-2 grayscale-MAD judgment as a field fallback.
 	layout := collect.MacCloudLayout()
 	src.Mode = "traverse"
 	src.Traversal = func() collect.Traversal {
+		pixel := collect.NewPixelMatcher(layout, collect.MacCloudCalibration())
+		matcher := collect.Matcher(pixel)
+		if strings.ToLower(getenv("YOUKAI_SCROLL_MATCHER")) != "legacy" {
+			matcher = collect.NewScrollEvidenceMatcher(pixel)
+		}
 		return &collect.Inventory{
 			Layout:  layout,
-			Matcher: collect.NewPixelMatcher(layout, collect.MacCloudCalibration()),
+			Matcher: matcher,
 			Project: app.ProjectDiscObservation,
 		}
 	}

@@ -347,7 +347,7 @@ func TestMacCloudScrollDisplacements(t *testing.T) {
 	}
 }
 
-func assertScrollCase(t *testing.T, m *collect.PixelMatcher, before, after platform.Frame, tc scrollCase) {
+func assertScrollCase(t *testing.T, m collect.Matcher, before, after platform.Frame, tc scrollCase) {
 	t.Helper()
 	sm := m.MatchScroll(before, after)
 	switch tc.kind {

@@ -21,10 +21,15 @@ import (
 // Bounds of the scroll failure dumps: a walk stops on its first failed
 // scroll, so a handful per walk covers retries, the top confirmation and
 // the bottom confirmation; the directory keeps the newest dumps across
-// walks so repeated field runs never grow it without bound.
+// walks so repeated field runs never grow it without bound. A committed
+// scroll also writes a frame-time dump (decision §4.3: stage 2 records
+// precise frame times through the application diagnostics); those carry
+// only the key frames' PNGs, so their caps are separate and larger.
 const (
 	maxDiagnosticDumpsPerRun = 6
 	maxDiagnosticDumps       = 12
+	maxScrollOKDumpsPerRun   = 8
+	maxScrollOKDumps         = 24
 )
 
 // diagnosticNow supplies the diagnostic file timestamps and the bottom
@@ -49,25 +54,33 @@ var writeDiagnosticFile = func(path string, data []byte) error {
 	return file.Close()
 }
 
-// diagnosticManifest is the failure dump's index: the wait it belongs to,
-// the retention limits, and one entry per retained frame with the matcher
+// diagnosticManifest is the dump's index: the wait it belongs to, the
+// retention limits, and one entry per retained frame with the matcher
 // numbers the wait itself produced.
 type diagnosticManifest struct {
-	Kind           string            `json:"kind"`
-	Position       int               `json:"position"`
-	Viewport       int               `json:"viewport"`
-	Attempt        int               `json:"attempt,omitempty"`
-	BeforeFrame    uint64            `json:"before_frame"`
-	AfterFrame     uint64            `json:"after_frame"`
-	CandidateFrame uint64            `json:"candidate_frame,omitempty"`
-	Region         diagnosticRegion  `json:"region"`
-	FrameLimit     int               `json:"frame_limit"`
-	ByteLimit      int               `json:"byte_limit"`
-	Retention      string            `json:"retention"`
-	DroppedFrames  int               `json:"dropped_frames"`
-	DroppedBytes   int               `json:"dropped_bytes"`
-	MatchNote      string            `json:"match_note"`
-	Frames         []diagnosticFrame `json:"frames"`
+	Kind           string `json:"kind"`
+	Position       int    `json:"position"`
+	Viewport       int    `json:"viewport"`
+	Attempt        int    `json:"attempt,omitempty"`
+	BeforeFrame    uint64 `json:"before_frame"`
+	AfterFrame     uint64 `json:"after_frame"`
+	CandidateFrame uint64 `json:"candidate_frame,omitempty"`
+	// MotionFrame is the first frame whose content measurably changed after
+	// the drag (F7's late-start window ends there); SettledFrame is the
+	// observation that completed the settle streak. Both are 0 when the
+	// wait observed no motion or did not settle. They calibrate the stage 5
+	// timing budgets from the arrival times below.
+	MotionFrame   uint64            `json:"motion_frame,omitempty"`
+	SettledFrame  uint64            `json:"settled_frame,omitempty"`
+	SettleNeeded  int               `json:"settle_observations,omitempty"`
+	Region        diagnosticRegion  `json:"region"`
+	FrameLimit    int               `json:"frame_limit"`
+	ByteLimit     int               `json:"byte_limit"`
+	Retention     string            `json:"retention"`
+	DroppedFrames int               `json:"dropped_frames"`
+	DroppedBytes  int               `json:"dropped_bytes"`
+	MatchNote     string            `json:"match_note"`
+	Frames        []diagnosticFrame `json:"frames"`
 }
 
 // diagnosticRegion is the cropped region in full-frame pixels.
@@ -97,7 +110,16 @@ type diagnosticMatch struct {
 	BestDy         *int               `json:"best_dy"`
 	BestErr        *float64           `json:"best_err"`
 	RowErrors      map[string]float64 `json:"row_errors"`
-	Evidence       string             `json:"evidence,omitempty"`
+	// Normalized-feature evidence (stage 2): the zero-shift correlation,
+	// the strongest non-zero candidate and every whole-row candidate's
+	// correlation, plus the selection-box slot readings the verdict used.
+	NCC0            *float64           `json:"ncc0,omitempty"`
+	BestNCCRow      *int               `json:"best_ncc_row,omitempty"`
+	BestNCC         *float64           `json:"best_ncc,omitempty"`
+	RowNCC          map[string]float64 `json:"row_ncc,omitempty"`
+	SelectionBefore *int               `json:"selection_before,omitempty"`
+	SelectionAfter  *int               `json:"selection_after,omitempty"`
+	Evidence        string             `json:"evidence,omitempty"`
 }
 
 // diagnosticMatchNote states why some entries carry no comparison: the
@@ -105,19 +127,36 @@ type diagnosticMatch struct {
 // manifest must not imply numbers that were never measured.
 const diagnosticMatchNote = "comparisons are the MatchScroll results the wait produced; null means the wait did not evaluate that pair"
 
-// dumpScrollTrace writes one failed wait's retained frame sequence, its
-// manifest and the pre-drag/after frames as PNG crops to a subdirectory of
-// the diagnostic directory. attempt numbers a scroll action's drag attempt
-// (0 when the wait belongs to a top or bottom confirmation); every attempt
-// gets its own subdirectory so a retried scroll keeps all of them. Every
-// failure here is logged and swallowed: diagnostics must never change the
-// walk.
-func (run *inventoryRun) dumpScrollTrace(kind string, attempt int, before, after platform.Frame, trace *scrollTrace, candidate platform.Frame, hasCandidate bool) {
+// dumpScrollTrace writes one wait's retained frame sequence, its manifest
+// and the pre-drag/after frames as PNG crops to a subdirectory of the
+// diagnostic directory. attempt numbers a scroll action's drag attempt (0
+// when the wait belongs to a top or bottom confirmation); every attempt
+// gets its own subdirectory so a retried scroll keeps all of them. wait is
+// the awaitScroll result the dump describes; its motion and settle records
+// land in the manifest for the stage 5 timing calibration. A failure dump
+// (keyFramesOnly=false) writes every retained frame's crop; a committed
+// scroll's dump (keyFramesOnly=true, kind "scroll-ok") writes the manifest
+// in full but only the key frames' crops — the baseline, the first moved
+// frame, the candidate and the newest frame — so the whole successful wait
+// stays replayable without the failure dumps' image volume. Every failure
+// here is logged and swallowed: diagnostics must never change the walk.
+func (run *inventoryRun) dumpScrollTrace(kind string, attempt int, wait scrollOutcome, before, after platform.Frame, trace *scrollTrace, candidate platform.Frame, hasCandidate bool, keyFramesOnly bool) {
 	dir := run.inv.DiagnosticDir
-	if dir == "" || run.diagnosticDumps >= maxDiagnosticDumpsPerRun {
+	if dir == "" {
 		return
 	}
-	run.diagnosticDumps++
+	okDump := keyFramesOnly || strings.Contains(kind, "scroll-ok")
+	if okDump {
+		if run.diagnosticOKDumps >= maxScrollOKDumpsPerRun {
+			return
+		}
+		run.diagnosticOKDumps++
+	} else {
+		if run.diagnosticDumps >= maxDiagnosticDumpsPerRun {
+			return
+		}
+		run.diagnosticDumps++
+	}
 	if trace == nil {
 		trace = newScrollTrace(run.inv.Layout, before)
 	}
@@ -161,7 +200,29 @@ func (run *inventoryRun) dumpScrollTrace(kind string, attempt int, before, after
 	if !hasCandidate {
 		manifest.CandidateFrame = 0
 	}
+	if wait.motionFrameID != 0 {
+		manifest.MotionFrame = wait.motionFrameID
+	}
+	if wait.settled {
+		manifest.SettledFrame = wait.settleFrameID
+		manifest.SettleNeeded = run.inv.scrollTiming().SettleObservations
+	}
 	written := 0
+	keyFrames := map[uint64]bool{}
+	if okDump {
+		// The baseline (always first), the pinned first-moved and candidate
+		// frames and the newest frame make the successful wait replayable;
+		// everything else stays in the manifest as timings and verdicts.
+		if len(trace.frames) > 0 {
+			keyFrames[trace.frames[0].id] = true
+			keyFrames[trace.frames[len(trace.frames)-1].id] = true
+		}
+		for i := range trace.frames {
+			if trace.frames[i].seq == trace.firstMovedSeq || trace.frames[i].seq == trace.candidateSeq {
+				keyFrames[trace.frames[i].id] = true
+			}
+		}
+	}
 	for i := range trace.frames {
 		frame := &trace.frames[i]
 		entry := diagnosticFrame{
@@ -174,7 +235,7 @@ func (run *inventoryRun) dumpScrollTrace(kind string, attempt int, before, after
 		if frame.vsCandidate != nil {
 			entry.VsCandidate = diagnosticComparison(frame.vsCandidate, frame.candidateID)
 		}
-		if frame.image != nil {
+		if frame.image != nil && (!okDump || keyFrames[frame.id]) {
 			// The crop is already exactly the region; writeDiagnosticPNG
 			// keeps its nil guard and failure handling.
 			entry.File = fmt.Sprintf("%04d-f%d.png", i, frame.id)
@@ -200,7 +261,7 @@ func (run *inventoryRun) dumpScrollTrace(kind string, attempt int, before, after
 	}
 	log.Printf("youkai: collect: diagnostics: %s: %d frames, %d dropped (%d bytes) -> %s",
 		name, written, trace.dropped, trace.droppedBytes, subdir)
-	pruneDiagnostics(dir, maxDiagnosticDumps)
+	pruneDiagnostics(dir, maxDiagnosticDumps, maxScrollOKDumps)
 }
 
 // createDumpDir creates the dump directory exclusively. A second failure
@@ -249,6 +310,24 @@ func diagnosticComparison(sm *ScrollMatch, reference uint64) *diagnosticMatch {
 				}
 			}
 		}
+		if m.NCCMeasured {
+			if ncc0, ok := m.RowNCC[0]; ok {
+				value := ncc0
+				out.NCC0 = &value
+			}
+			if m.BestNCCRow != 0 {
+				row, best := m.BestNCCRow, m.BestNCC
+				out.BestNCCRow, out.BestNCC = &row, &best
+			}
+			if len(m.RowNCC) > 0 {
+				out.RowNCC = make(map[string]float64, len(m.RowNCC))
+				for row, ncc := range m.RowNCC {
+					out.RowNCC[fmt.Sprintf("%+d", row)] = ncc
+				}
+			}
+			selB, selA := m.SelectionBefore, m.SelectionAfter
+			out.SelectionBefore, out.SelectionAfter = &selB, &selA
+		}
 	}
 	return out
 }
@@ -294,13 +373,21 @@ type scrollThresholdReporter interface {
 	ScrollThresholds() (stationaryMax, displacedMax float64)
 }
 
+// scrollFeatureReporter is the stage 2 matcher's optional capability
+// reporting its normalized-feature thresholds, for the same reason as
+// scrollThresholdReporter.
+type scrollFeatureReporter interface {
+	ScrollFeatureThresholds() (stationaryNCC, selectionNCC, displacedNCC, nccMargin float64)
+}
+
 // scrollMarginFields renders one wait's decision margins for the success
 // logs: the zero-shift error and its distance below
 // ScrollStationaryMax, the best displacement error and its distance below
-// ScrollDisplacedMax, the gap to the next whole-row candidate, and the
-// candidate-relative zero-shift error of the settling confirmation. A
-// positive margin means the value is inside its threshold. "none" marks a
-// number the matcher did not measure.
+// ScrollDisplacedMax, the gap to the next whole-row candidate, the
+// candidate-relative zero-shift error of the settling confirmation, and the
+// normalized-feature margins of the stage 2 judgment. A positive margin
+// means the value is inside its threshold. "none" marks a number the
+// matcher did not measure.
 func scrollMarginFields(matcher Matcher, total, settle ScrollMatch) string {
 	err0, stationary, bestErr, displaced, rival, settleErr := "none", "none", "none", "none", "none", "none"
 	stationaryMax, displacedMax, haveThresholds := 0.0, 0.0, false
@@ -326,8 +413,59 @@ func scrollMarginFields(matcher Matcher, total, settle ScrollMatch) string {
 	if m := settle.Metrics; m != nil {
 		settleErr = fmt.Sprintf("%.2f", m.Err0)
 	}
-	return fmt.Sprintf("err0=%s stationary_margin=%s best_err=%s displaced_margin=%s rival_gap=%s settle_err0=%s",
+	out := fmt.Sprintf("err0=%s stationary_margin=%s best_err=%s displaced_margin=%s rival_gap=%s settle_err0=%s",
 		err0, stationary, bestErr, displaced, rival, settleErr)
+	if features, ok := matcher.(scrollFeatureReporter); ok {
+		stationaryNCC, _, _, _ := features.ScrollFeatureThresholds()
+		if m := total.Metrics; m != nil && m.NCCMeasured {
+			if ncc0, ok := m.RowNCC[0]; ok {
+				out += fmt.Sprintf(" ncc0=%.3f stationary_ncc_margin=%.3f", ncc0, ncc0-stationaryNCC)
+			}
+			if m.BestNCCRow != 0 {
+				if _, gap, ok := nccVerdict(metricsRowNCC(m), m.BestNCCRow); ok {
+					out += fmt.Sprintf(" best_ncc=%+d:%.3f ncc_gap=%.3f", m.BestNCCRow, m.BestNCC, gap)
+				} else {
+					out += fmt.Sprintf(" best_ncc=%+d:%.3f", m.BestNCCRow, m.BestNCC)
+				}
+			}
+			if m := settle.Metrics; m != nil && m.NCCMeasured {
+				if ncc0, ok := m.RowNCC[0]; ok {
+					out += fmt.Sprintf(" settle_ncc0=%.3f", ncc0)
+				}
+			}
+		}
+	}
+	return out
+}
+
+// metricsRowNCC returns the metrics' whole-row normalized candidates, for
+// the log margins' competition gap.
+func metricsRowNCC(m *ScrollMetrics) map[int]nccCandidate {
+	out := make(map[int]nccCandidate, len(m.RowNCC))
+	for row, ncc := range m.RowNCC {
+		out[row] = nccCandidate{ncc: ncc}
+	}
+	return out
+}
+
+// scrollTimingFields renders one wait's stage 2 timing facts for the scroll
+// logs: the offset of the first observed motion from the wait's start, and
+// the frame that completed the settle streak. "none" marks a wait that
+// observed no motion; a zero settle frame marks an unsettled wait. They are
+// observations for the timing calibration, never a decision input.
+func scrollTimingFields(out scrollOutcome) string {
+	motion, settle := "none", "none"
+	if out.motionStarted {
+		if out.motionAt.IsZero() || out.waitStart.IsZero() {
+			motion = "seen"
+		} else {
+			motion = fmt.Sprintf("%dms", out.motionAt.Sub(out.waitStart).Milliseconds())
+		}
+	}
+	if out.settled {
+		settle = fmt.Sprintf("f%d", out.settleFrameID)
+	}
+	return fmt.Sprintf("motion_ms=%s settle_confirm=%s", motion, settle)
 }
 
 // rivalGap is the distance between the best and second-best whole-row
@@ -361,36 +499,48 @@ func writeDiagnosticPNG(path string, img *image.RGBA) error {
 }
 
 // pruneDiagnostics keeps the newest keep dumps of dir by name (the names
-// start with a sortable timestamp) and removes the rest. Regular PNG files
-// are the pre-sequence dumps of older builds; they share the bound so an
-// upgraded install does not keep them forever. Read and removal failures
-// are logged and swallowed: diagnostics must never change the walk.
-func pruneDiagnostics(dir string, keep int) {
-	pruneDiagnosticsWith(dir, keep, os.ReadDir, os.RemoveAll)
+// start with a sortable timestamp) and removes the rest, separately for the
+// failure dumps and the committed scrolls' "scroll-ok" frame-time dumps:
+// both kinds are diagnostics, but their volume profiles differ, so neither
+// kind may evict the other. Regular PNG files are the pre-sequence dumps of
+// older builds; they share the failure bound so an upgraded install does
+// not keep them forever. Read and removal failures are logged and
+// swallowed: diagnostics must never change the walk.
+func pruneDiagnostics(dir string, keepFailures, keepOK int) {
+	pruneDiagnosticsWith(dir, keepFailures, keepOK, os.ReadDir, os.RemoveAll)
 }
 
 // pruneDiagnosticsWith is pruneDiagnostics with its filesystem calls
 // injected, so the failure paths are testable on every platform.
-func pruneDiagnosticsWith(dir string, keep int, readDir func(string) ([]os.DirEntry, error), remove func(string) error) {
+func pruneDiagnosticsWith(dir string, keepFailures, keepOK int, readDir func(string) ([]os.DirEntry, error), remove func(string) error) {
 	entries, err := readDir(dir)
 	if err != nil {
 		log.Printf("youkai: collect: diagnostics: read %s: %v", dir, err)
 		return
 	}
-	var names []string
+	var failures, oks []string
 	for _, e := range entries {
-		if e.IsDir() || (e.Type().IsRegular() && strings.HasSuffix(e.Name(), ".png")) {
-			names = append(names, e.Name())
+		if !e.IsDir() && !(e.Type().IsRegular() && strings.HasSuffix(e.Name(), ".png")) {
+			continue
+		}
+		if strings.Contains(e.Name(), "scroll-ok") {
+			oks = append(oks, e.Name())
+		} else {
+			failures = append(failures, e.Name())
 		}
 	}
-	if len(names) <= keep {
-		return
-	}
-	sort.Strings(names)
-	for _, name := range names[:len(names)-keep] {
-		path := filepath.Join(dir, name)
-		if err := remove(path); err != nil {
-			log.Printf("youkai: collect: diagnostics: remove %s: %v", path, err)
+	prune := func(names []string, keep int) {
+		if len(names) <= keep {
+			return
+		}
+		sort.Strings(names)
+		for _, name := range names[:len(names)-keep] {
+			path := filepath.Join(dir, name)
+			if err := remove(path); err != nil {
+				log.Printf("youkai: collect: diagnostics: remove %s: %v", path, err)
+			}
 		}
 	}
+	prune(failures, keepFailures)
+	prune(oks, keepOK)
 }
