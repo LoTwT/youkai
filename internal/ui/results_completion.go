@@ -93,6 +93,9 @@ func (m *Model) completionCard(c *ui.Context, t *ui.Theme) {
 					}
 					ui.Text(c, completionExclusionText(counts)).TextColor(t.TextMuted)
 					ui.Text(c, m.completionCoverageText()).TextColor(t.TextMuted)
+					if note := m.incompletePositionsNote(); note != "" && !m.sessionTerminationShown() {
+						ui.Text(c, note).TextColor(t.Warning)
+					}
 					if !m.exportAvailable() {
 						return
 					}

@@ -1018,6 +1018,37 @@ func TestCompletionCardShowsPartialCoverage(t *testing.T) {
 	}
 }
 
+// TestCompletionCardNamesIncompletePositions checks that a degraded
+// position's stage, cause code and reason reach the results page beside the
+// partial coverage conclusion.
+func TestCompletionCardNamesIncompletePositions(t *testing.T) {
+	rec := recovery(confirmedReviewItem(t, 1, 12))
+	rec.Checkpoint.Session.Coverage = record.Coverage{Status: record.CoveragePartial}
+	rec.Checkpoint.Session.ObservedScope = []byte(`{"kind":"zzzInventory","sort":"verified","coverage":"partial","positions":[{"position":1,"complete":true,"topVerified":true,"bottomVerified":true},{"position":2,"complete":false,"stage":"filter","reasonCode":"navigationMismatch","reason":"the filter panel never closed"}]}`)
+	_, _, tt := openResponsiveResults(t, rec, 1024, 700)
+	if !tt.HasText("不完整位置：位置 2 筛选准备失败") ||
+		!tt.HasText("navigationMismatch") ||
+		!tt.HasText("the filter panel never closed") {
+		t.Fatalf("the degraded position is not explained: %q", tt.Texts())
+	}
+}
+
+// TestSessionTerminationNoticeNamesIncompletePositions checks the failed
+// session surface: the termination code and the degraded positions appear
+// together, because a limit stop is diagnosed by both.
+func TestSessionTerminationNoticeNamesIncompletePositions(t *testing.T) {
+	rec := recovery(confirmedReviewItem(t, 1, 12))
+	rec.Checkpoint.Session.Coverage = record.Coverage{Status: record.CoveragePartial}
+	rec.Checkpoint.Session.Termination = &record.Termination{
+		Kind: record.TerminationFailed, Code: "positionFailureLimit", Phase: record.PhaseCapturing,
+	}
+	rec.Checkpoint.Session.ObservedScope = []byte(`{"positions":[{"position":1,"complete":false,"stage":"filter","reasonCode":"navigationMismatch","reason":"three preparations failed"}]}`)
+	_, _, tt := openResponsiveResults(t, rec, 1024, 700)
+	if !tt.HasText("扫描失败：positionFailureLimit") || !tt.HasText("不完整位置：位置 1 筛选准备失败") {
+		t.Fatalf("the failed-session surface omits the degraded positions: %q", tt.Texts())
+	}
+}
+
 // TestCompletionCardOnlyInPendingSegment checks the confirmed switch
 // rule: "全部" shows the full table, and returning to "待校对 0" restores
 // the completion card.
