@@ -3023,16 +3023,20 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 	}
 	// observeMotion records the first movement evidence on a fresh frame:
 	// a verified displacement, a lost overlap, or a zero-shift normalized
-	// correlation clearly below the stationary threshold. The MAD error
-	// alone never counts (see the motionStarted comment).
+	// correlation clearly below the stationary threshold on a support rich
+	// enough for that correlation to mean anything. The MAD error alone
+	// never counts (see the motionStarted comment), and neither does a low
+	// ncc0 over a low-information support: codec noise on near-uniform
+	// content decorrelates to an ncc0 near zero without any list movement.
 	observeMotion := func(f platform.Frame, sm ScrollMatch) {
 		if motionStarted {
 			return
 		}
 		moved := sm.Displaced || sm.Lost
-		if threshold := run.stationaryNCC(); threshold > 0 &&
+		if threshold, infoMin := run.stationaryNCC(); threshold > 0 &&
 			sm.Metrics != nil && sm.Metrics.NCCMeasured {
-			if ncc0, ok := sm.Metrics.RowNCC[0]; ok && ncc0 < threshold {
+			if ncc0, ok := sm.Metrics.RowNCC[0]; ok && ncc0 < threshold &&
+				sm.Metrics.InfoStd >= infoMin {
 				moved = true
 			}
 		}
@@ -3261,17 +3265,20 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 }
 
 // stationaryNCC reports the matcher's zero-shift normalized-correlation
-// stationary threshold when the implementation exposes it. awaitScroll's
-// motion detection uses it: a zero-shift correlation clearly below the
-// threshold is movement evidence even when the displacement itself is not
-// yet verifiable, while the MAD error alone never is (cloud codec noise
-// keeps a static list above the MAD threshold).
-func (run *inventoryRun) stationaryNCC() float64 {
+// stationary threshold and information floor when the implementation
+// exposes them. awaitScroll's motion detection uses them: a zero-shift
+// correlation clearly below the stationary threshold on an information-rich
+// support is movement evidence even when the displacement itself is not yet
+// verifiable, while the MAD error alone never is (cloud codec noise keeps a
+// static list above the MAD threshold) and a low-information support
+// proves nothing either way (noise on near-uniform content decorrelates to
+// an ncc0 near zero).
+func (run *inventoryRun) stationaryNCC() (stationary, infoStdMin float64) {
 	if reporter, ok := run.inv.matcher().(scrollFeatureReporter); ok {
-		stationary, _, _, _ := reporter.ScrollFeatureThresholds()
-		return stationary
+		stationary, _, _, _, infoStdMin = reporter.ScrollFeatureThresholds()
+		return stationary, infoStdMin
 	}
-	return 0
+	return 0, 0
 }
 
 // applyTransition validates one scroll correspondence (T5 §5) and carries

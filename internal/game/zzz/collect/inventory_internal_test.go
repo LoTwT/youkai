@@ -695,6 +695,133 @@ func TestAwaitScrollMotionStartBudgetFloorsDeadline(t *testing.T) {
 	}
 }
 
+// paintUniformMotionFrame paints a near-uniform viewport under an
+// independent codec-like dither (the phase differs per frame), the exact
+// shape the review measured on a static cloud list: err0 above the MAD
+// threshold, an ncc0 near zero and an information std far below the gate.
+func paintUniformMotionFrame(l Layout, id uint64, value, phase, thumbStart, thumbEnd int) platform.Frame {
+	f := paintMotionFrame(l, id, 0, -1, thumbStart, thumbEnd, false)
+	for y := l.ListViewport.Min.Y; y < l.ListViewport.Max.Y; y++ {
+		for x := l.ListViewport.Min.X; x < l.ListViewport.Max.X; x++ {
+			v := value + ((x*7 + y*13 + phase) % 21) - 10
+			if v < 0 {
+				v = 0
+			}
+			if v > 255 {
+				v = 255
+			}
+			f.Image.SetRGBA(x, y, color.RGBA{R: uint8(v), G: uint8(v), B: uint8(v), A: 255})
+		}
+	}
+	return f
+}
+
+// TestAwaitScrollMotionIgnoresLowInformationNoise pins the information gate
+// on the NCC-based movement evidence: a near-uniform list under codec noise
+// decorrelates to an ncc0 near zero, and that must not read as movement —
+// only a correlation measured on a support rich enough to mean something
+// counts.
+func TestAwaitScrollMotionIgnoresLowInformationNoise(t *testing.T) {
+	l := MacCloudLayout()
+	m := motionPageMatcher{NewScrollEvidenceMatcher(NewPixelMatcher(l, MacCloudCalibration()))}
+	before := paintUniformMotionFrame(l, 1, 100, 0, 300, 430)
+	first := m.MatchScroll(before, paintUniformMotionFrame(l, 2, 100, 7, 300, 430))
+	if first.Stationary || first.Displaced || first.Lost || !first.Undecided {
+		t.Fatalf("uniform noisy pair = %+v, want undecided (%s)", first, first.Evidence)
+	}
+	if first.Metrics == nil || !first.Metrics.NCCMeasured {
+		t.Fatalf("uniform noisy pair carries no normalized metrics: %+v", first.Metrics)
+	}
+	ncc0, ok := first.Metrics.RowNCC[0]
+	if !ok {
+		t.Fatalf("uniform noisy pair carries no zero-shift correlation: %+v", first.Metrics)
+	}
+	if ncc0 >= m.C.ScrollStationaryNCC {
+		t.Fatalf("uniform noisy pair ncc0 %.3f is not the low-correlation shape this test needs", ncc0)
+	}
+	if first.Metrics.InfoStd >= m.C.ScrollInfoStdMin {
+		t.Fatalf("uniform noisy pair info std %.1f is not below the %.0f gate this test needs",
+			first.Metrics.InfoStd, m.C.ScrollInfoStdMin)
+	}
+	view := &scrollScriptView{frames: []platform.Frame{
+		paintUniformMotionFrame(l, 2, 100, 7, 300, 430),
+		paintUniformMotionFrame(l, 3, 100, 3, 300, 430),
+	}, blockAfter: true}
+	run := newScrollRun(l, view, m, 5*time.Second)
+	out, err := run.awaitScroll(context.Background(), before)
+	if err != nil {
+		t.Fatalf("awaitScroll: %v", err)
+	}
+	if out.motionStarted || out.motionFrameID != 0 {
+		t.Fatalf("motion recorded on frame %d of a low-information noisy wait: a near-zero ncc0 over a uniform support is noise, not movement (outcome %+v)",
+			out.motionFrameID, out)
+	}
+}
+
+// TestAwaitScrollMotionRecordsRichUndecidedFrame is the positive
+// counterpart: a genuinely moving list whose displacement verdict is still
+// undecided (the only surviving overlap row is uniform, so no candidate
+// corroborates) must record motion — the zero-shift correlation is low on
+// an information-rich support.
+func TestAwaitScrollMotionRecordsRichUndecidedFrame(t *testing.T) {
+	l := MacCloudLayout()
+	m := motionPageMatcher{NewScrollEvidenceMatcher(NewPixelMatcher(l, MacCloudCalibration()))}
+	// Rich content, four rows advanced, and the single surviving overlap
+	// row (global row 4) painted uniform in both frames so no displacement
+	// candidate can corroborate: the verdict stays undecided while the
+	// zero-shift comparison sees four misaligned rich rows.
+	before := paintMotionFrame(l, 1, 0, -1, 300, 430, false)
+	after := paintMotionFrame(l, 2, 4, -1, 400, 530, true)
+	uniformRow := func(f platform.Frame, y0, y1 int) {
+		for y := y0; y < y1; y++ {
+			for x := l.ListViewport.Min.X; x < l.ListViewport.Max.X; x++ {
+				f.Image.SetRGBA(x, y, color.RGBA{R: 90, G: 90, B: 90, A: 255})
+			}
+		}
+	}
+	uniformRow(before, l.ListViewport.Max.Y-l.RowPitch, l.ListViewport.Max.Y)
+	uniformRow(after, l.ListViewport.Min.Y, l.ListViewport.Min.Y+l.RowPitch)
+	sm := m.MatchScroll(before, after)
+	if sm.Stationary || sm.Displaced || sm.Lost || !sm.Undecided {
+		t.Fatalf("verdict %+v, want the undecided displacement this test needs (%s)", sm, sm.Evidence)
+	}
+	if sm.Metrics == nil || !sm.Metrics.NCCMeasured {
+		t.Fatal("the undecided verdict lacks normalized metrics")
+	}
+	if ncc0 := sm.Metrics.RowNCC[0]; ncc0 >= m.C.ScrollStationaryNCC {
+		t.Fatalf("ncc0 %.3f is not the low-correlation shape this test needs", ncc0)
+	}
+	if sm.Metrics.InfoStd < m.C.ScrollInfoStdMin {
+		t.Fatalf("info std %.1f below the %.0f gate: the support must be rich for the positive case",
+			sm.Metrics.InfoStd, m.C.ScrollInfoStdMin)
+	}
+	view := &scrollScriptView{frames: []platform.Frame{after}, blockAfter: true}
+	run := newScrollRun(l, view, m, 5*time.Second)
+	out, err := run.awaitScroll(context.Background(), before)
+	if err != nil {
+		t.Fatalf("awaitScroll: %v", err)
+	}
+	if !out.motionStarted || out.motionFrameID != after.ID {
+		t.Fatalf("outcome %+v: the rich undecided frame must record motion", out)
+	}
+}
+
+// TestScrollTimingRejectsSingleObservationSettle pins the configuration
+// rule: a settle profile requiring only one observation contradicts the
+// consecutive-stability settle, so it is refused and the default profile
+// applies instead of being silently honored.
+func TestScrollTimingRejectsSingleObservationSettle(t *testing.T) {
+	want := MacCloudScrollTiming()
+	single := &ScrollTiming{MotionStartBudget: time.Second, SettleBudget: 2 * time.Second, SettleObservations: 1}
+	if got := (&Inventory{ScrollTiming: single}).scrollTiming(); got != want {
+		t.Fatalf("single-observation override = %+v, want the fallback to the default profile (one observation is not a settle)",
+			got)
+	}
+	if got := (&Inventory{ScrollTiming: single}).scrollTiming(); got.SettleObservations < 2 {
+		t.Fatalf("resolved profile requires %d observations; the settle must never commit on one", got.SettleObservations)
+	}
+}
+
 // TestAwaitScrollSingleStableObservationDoesNotSettle pins the consecutive
 // settle streak: one candidate-relative Stationary observation followed by
 // a stalled stream is not a settle — the cloud can deliver one still frame

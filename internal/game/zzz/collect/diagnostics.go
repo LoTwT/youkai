@@ -377,7 +377,7 @@ type scrollThresholdReporter interface {
 // reporting its normalized-feature thresholds, for the same reason as
 // scrollThresholdReporter.
 type scrollFeatureReporter interface {
-	ScrollFeatureThresholds() (stationaryNCC, selectionNCC, displacedNCC, nccMargin float64)
+	ScrollFeatureThresholds() (stationaryNCC, selectionNCC, displacedNCC, nccMargin, infoStdMin float64)
 }
 
 // scrollMarginFields renders one wait's decision margins for the success
@@ -416,7 +416,7 @@ func scrollMarginFields(matcher Matcher, total, settle ScrollMatch) string {
 	out := fmt.Sprintf("err0=%s stationary_margin=%s best_err=%s displaced_margin=%s rival_gap=%s settle_err0=%s",
 		err0, stationary, bestErr, displaced, rival, settleErr)
 	if features, ok := matcher.(scrollFeatureReporter); ok {
-		stationaryNCC, _, _, _ := features.ScrollFeatureThresholds()
+		stationaryNCC, _, _, _, _ := features.ScrollFeatureThresholds()
 		if m := total.Metrics; m != nil && m.NCCMeasured {
 			if ncc0, ok := m.RowNCC[0]; ok {
 				out += fmt.Sprintf(" ncc0=%.3f stationary_ncc_margin=%.3f", ncc0, ncc0-stationaryNCC)

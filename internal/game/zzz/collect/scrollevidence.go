@@ -309,12 +309,15 @@ func (m *ScrollEvidenceMatcher) MatchScroll(before, after platform.Frame) Scroll
 	if selectionMoved {
 		if absInt(selRows) >= 1 && absInt(selRows) <= m.C.ScrollMaxRows {
 			best, gap, ok := nccVerdict(cands, selRows)
-			if cand, have := cands[selRows]; have {
+			if _, have := cands[selRows]; have {
 				metrics.BestNCCRow, metrics.BestNCC = selRows, best
-				metrics.InfoStd = cand.std
 			}
 			if ok && best >= m.C.ScrollSelectionNCC && gap >= m.C.ScrollNCCMargin &&
 				cands[selRows].std >= m.C.ScrollInfoStdMin {
+				// InfoStd names the support the verdict rests on; a
+				// non-accepting verdict keeps the zero-shift std, which the
+				// wait's motion detection gates on.
+				metrics.InfoStd = cands[selRows].std
 				return m.displaced(before.ID, after.ID, selRows, metrics,
 					fmt.Sprintf("the selection box moved %s by %d row(s) (slot %d → %d) and the normalized feature at that row agrees (ncc %.3f ≥ %.2f, runner-up gap %.3f ≥ %.2f, info std %.1f; zero-shift error %.2f, best MAD alignment not a gate); %s",
 						directionName(selRows), absInt(selRows), selB, selA, best, m.C.ScrollSelectionNCC,
@@ -419,6 +422,14 @@ func (m *ScrollEvidenceMatcher) displaced(beforeID, afterID uint64, rows int, me
 	}
 }
 
+// thumbFullSlack is how far a thumb may fall short of the track's full
+// length and still count as filling it. A genuinely full thumb spans the
+// whole track (a list with nothing below the viewport); the slack only
+// absorbs the segment measurement's couple of pixels of jitter. The
+// smallest real non-full thumb — a list with exactly one row below the
+// viewport, ~571px of the 685px macOS cloud track — is far outside it.
+const thumbFullSlack = 8
+
 // thumbCorroborates checks the scrollbar's independent agreement with a
 // feature-only displacement claim, in direction and magnitude. The expected
 // travel is the claimed rows times the per-row thumb travel derived from the
@@ -428,10 +439,19 @@ func (m *ScrollEvidenceMatcher) displaced(beforeID, afterID uint64, rows int, me
 // 24-row list moves the thumb ~28px per row, a much longer list a few
 // pixels), and the derived estimate keeps the check self-contained per
 // frame pair. A thumb that fills the track names a list with nothing below
-// the viewport, where no displacement claim can be corroborated.
+// the viewport, where no displacement claim can be corroborated; fullness is
+// judged by the thumb's own geometry, not by the derived step count — a
+// six-row list's thumb leaves the step count at ~1.0 despite measurement
+// jitter, and its genuine one-row scroll must still corroborate.
 func (m *ScrollEvidenceMatcher) thumbCorroborates(beforeStart, beforeEnd int, beforeOK bool, afterStart, afterEnd int, afterOK bool, rows int) (bool, string) {
 	if !beforeOK || !afterOK {
 		return false, "thumb unreadable"
+	}
+	trackLen := m.L.ScrollTrack.Dy()
+	thumbLen := float64(beforeEnd-beforeStart+1+afterEnd-afterStart+1) / 2
+	if thumbLen >= float64(trackLen)-thumbFullSlack {
+		return false, fmt.Sprintf("thumb %d–%d → %d–%d fills the track: no scrollable content below the viewport",
+			beforeStart, beforeEnd, afterStart, afterEnd)
 	}
 	// Sign-corrected travel: positive rows mean the content moved up and
 	// the thumb moved down (its start increased); negative rows the reverse.
@@ -439,14 +459,8 @@ func (m *ScrollEvidenceMatcher) thumbCorroborates(beforeStart, beforeEnd int, be
 	if rows < 0 {
 		travel = -travel
 	}
-	trackLen := m.L.ScrollTrack.Dy()
-	thumbLen := float64(beforeEnd-beforeStart+1+afterEnd-afterStart+1) / 2
 	totalRows := float64(m.L.Rows) * float64(trackLen) / thumbLen
 	steps := totalRows - float64(m.L.Rows)
-	if steps < 1 {
-		return false, fmt.Sprintf("thumb %d–%d → %d–%d fills the track: no scrollable content below the viewport",
-			beforeStart, beforeEnd, afterStart, afterEnd)
-	}
 	perRow := (float64(trackLen) - thumbLen) / steps
 	expected := perRow * float64(absInt(rows))
 	if float64(travel) < float64(m.C.ScrollbarMoveMin) ||
@@ -490,10 +504,13 @@ func formatRowNCC(rowNCC map[int]float64) string {
 }
 
 // ScrollFeatureThresholds reports the normalized-feature thresholds
-// MatchScroll applies, for the diagnostic logs' decision margins.
-func (m *ScrollEvidenceMatcher) ScrollFeatureThresholds() (stationaryNCC, selectionNCC, displacedNCC, nccMargin float64) {
+// MatchScroll applies, for the diagnostic logs' decision margins and the
+// wait's motion detection: the stationary, selection-corroborated and
+// feature-only correlation floors, the competition margin, and the
+// information floor below which a normalized verdict proves nothing.
+func (m *ScrollEvidenceMatcher) ScrollFeatureThresholds() (stationaryNCC, selectionNCC, displacedNCC, nccMargin, infoStdMin float64) {
 	if m == nil {
-		return 0, 0, 0, 0
+		return 0, 0, 0, 0, 0
 	}
-	return m.C.ScrollStationaryNCC, m.C.ScrollSelectionNCC, m.C.ScrollDisplacedNCC, m.C.ScrollNCCMargin
+	return m.C.ScrollStationaryNCC, m.C.ScrollSelectionNCC, m.C.ScrollDisplacedNCC, m.C.ScrollNCCMargin, m.C.ScrollInfoStdMin
 }

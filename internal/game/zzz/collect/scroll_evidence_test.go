@@ -434,15 +434,52 @@ func TestScrollEvidenceRejectsOffByRowThumbTravel(t *testing.T) {
 	}
 }
 
+// TestScrollEvidenceCorroboratesSixRowListScroll pins the thumb-geometry
+// boundary: a list with exactly one row below the viewport (six total,
+// five visible) leaves the derived scrollable-step count at ~1.0, and its
+// genuine one-row scroll — the thumb travelling the whole remaining range
+// — must still corroborate. Fullness is judged by the thumb's own geometry,
+// not by the step count crossing 1.
+func TestScrollEvidenceCorroboratesSixRowListScroll(t *testing.T) {
+	l := collect.MacCloudLayout()
+	m := newScrollEvidenceMatcher()
+	// Thumb ~571px of the 685px track ≈ 5/6 of the list: one scrollable
+	// row, moving the thumb from the track's top to its bottom.
+	before := paintScrollFrame(l, 1, 0, -1, l.ScrollTrack.Min.Y, l.ScrollTrack.Min.Y+570, false)
+	after := paintScrollFrame(l, 2, 1, -1, l.ScrollTrack.Min.Y+114, l.ScrollTrack.Max.Y-1, true)
+	sm := m.MatchScroll(before, after)
+	if !sm.Displaced || sm.Rows != 1 || sm.Stationary || sm.Lost {
+		t.Fatalf("verdict %+v, want the one-row displacement corroborated (%s)", sm, sm.Evidence)
+	}
+}
+
+// TestScrollEvidenceRejectsFullTrackThumb pins the other side of the same
+// boundary: a thumb that genuinely fills the track names a list with
+// nothing below the viewport, and no displacement claim can be corroborated
+// against it.
+func TestScrollEvidenceRejectsFullTrackThumb(t *testing.T) {
+	l := collect.MacCloudLayout()
+	m := newScrollEvidenceMatcher()
+	before := paintScrollFrame(l, 1, 0, -1, l.ScrollTrack.Min.Y, l.ScrollTrack.Max.Y-1, false)
+	after := paintScrollFrame(l, 2, 1, -1, l.ScrollTrack.Min.Y, l.ScrollTrack.Max.Y-1, true)
+	sm := m.MatchScroll(before, after)
+	if sm.Displaced || sm.Stationary || sm.Lost || !sm.Undecided {
+		t.Fatalf("verdict %+v, want undecided against a full-track thumb (%s)", sm, sm.Evidence)
+	}
+	if !strings.Contains(sm.Evidence, "fills the track") {
+		t.Fatalf("evidence %q should name the full-track rejection", sm.Evidence)
+	}
+}
+
 // TestScrollEvidenceThresholdReporter pins the optional capability the
-// diagnostic margins read.
+// diagnostic margins and the motion detection read.
 func TestScrollEvidenceThresholdReporter(t *testing.T) {
 	m := newScrollEvidenceMatcher()
-	stationary, selection, displaced, margin := m.ScrollFeatureThresholds()
+	stationary, selection, displaced, margin, infoMin := m.ScrollFeatureThresholds()
 	c := collect.MacCloudCalibration()
 	if stationary != c.ScrollStationaryNCC || selection != c.ScrollSelectionNCC ||
-		displaced != c.ScrollDisplacedNCC || margin != c.ScrollNCCMargin {
-		t.Fatalf("thresholds (%.2f, %.2f, %.2f, %.2f), want the calibration's", stationary, selection, displaced, margin)
+		displaced != c.ScrollDisplacedNCC || margin != c.ScrollNCCMargin || infoMin != c.ScrollInfoStdMin {
+		t.Fatalf("thresholds (%.2f, %.2f, %.2f, %.2f, %.1f), want the calibration's", stationary, selection, displaced, margin, infoMin)
 	}
 	if s, d := m.ScrollThresholds(); s != c.ScrollStationaryMax || d != c.ScrollDisplacedMax {
 		t.Fatalf("wrapped thresholds (%.1f, %.1f), want the calibration's", s, d)

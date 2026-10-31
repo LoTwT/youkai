@@ -405,7 +405,11 @@ func MacCloudScrollTiming() ScrollTiming {
 }
 
 func (t ScrollTiming) validate() error {
-	if t.MotionStartBudget <= 0 || t.SettleBudget <= 0 || t.SettleObservations < 1 {
+	// SettleObservations must be at least 2: one observation is not a
+	// consecutive stability proof (decision §4.3's multi-frame settle), so
+	// a single-observation profile is a configuration error rather than a
+	// value to silently honor.
+	if t.MotionStartBudget <= 0 || t.SettleBudget <= 0 || t.SettleObservations < 2 {
 		return errCalibration("scroll timing")
 	}
 	return nil
