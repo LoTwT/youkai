@@ -486,6 +486,58 @@ func TestCoverageNeverClaimsCompleteWithoutVerifiedSort(t *testing.T) {
 	}
 }
 
+// TestIncompletePositionKeepsAdmittedItemsExportable pins decision
+// §4.6/§9.4(a): a position marked incomplete by position-level degradation
+// keeps its already admitted items in the usable result. The public v2
+// document stays unchanged — coverage is partial, excludedCount is still
+// capturedCount minus items.length, and the position reasons stay in the
+// internal observed scope.
+func TestIncompletePositionKeepsAdmittedItemsExportable(t *testing.T) {
+	none := zzz.CaptureState{ManagementState: zzz.ManagementNone, EquippedState: zzz.EquippedStateUnequipped}
+	rec := exportTestRecovery(
+		exportStructuredItem(t, 1, record.QualityAutoAccepted,
+			testDisc(31100, 4, "critRate", "24", zzz.UnitPercent), none),
+		exportStructuredItem(t, 2, record.QualityAutoAccepted,
+			testDisc(31000, 6, "impact", "18", zzz.UnitPercent), none),
+	)
+	rec.Checkpoint.Session.Coverage.Status = record.CoveragePartial
+	rec.Checkpoint.Session.ObservedScope = []byte(`{"kind":"zzzInventory","sort":"verified","coverage":"partial","positions":[{"position":1,"viewports":1,"visits":1,"topVerified":true,"bottomVerified":true,"complete":true},{"position":2,"stage":"scroll","reasonCode":"positionLost","reason":"the list displaced but no unique correspondence verified where it went","complete":false}]}`)
+
+	export, err := BuildUsableExport(rec)
+	if err != nil {
+		t.Fatalf("BuildUsableExport: %v", err)
+	}
+	if export.Summary.Included != 2 || export.Summary.Excluded != 0 {
+		t.Fatalf("summary = %+v, want the incomplete position's two items included and none excluded", export.Summary)
+	}
+	if export.Summary.Coverage != record.CoveragePartial {
+		t.Fatalf("coverage = %q, want partial", export.Summary.Coverage)
+	}
+
+	raw, err := export.JSON(exportTestTime(), "test")
+	if err != nil {
+		t.Fatalf("JSON: %v", err)
+	}
+	var doc struct {
+		ExcludedCount int               `json:"excludedCount"`
+		Items         []json.RawMessage `json:"items"`
+		Session       struct {
+			Coverage struct {
+				Status record.CoverageStatus `json:"status"`
+			} `json:"coverage"`
+		} `json:"session"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("export JSON: %v", err)
+	}
+	if doc.ExcludedCount != 0 || len(doc.Items) != 2 {
+		t.Fatalf("excludedCount %d with %d items, want 0 and 2", doc.ExcludedCount, len(doc.Items))
+	}
+	if doc.Session.Coverage.Status != record.CoveragePartial {
+		t.Fatalf("persisted coverage = %q, want partial", doc.Session.Coverage.Status)
+	}
+}
+
 func TestInterruptedSessionTerminationIsExplicit(t *testing.T) {
 	rec := exportTestRecovery(exportStructuredItem(t, 1, record.QualityNeedsReview,
 		testDisc(31100, 1, "health", "2200", zzz.UnitFlat),

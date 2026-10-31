@@ -54,9 +54,9 @@
 
 **重访口径（[决策 §9.4(a)](../decisions/2026-10-28-scanner-rearchitecture.md#94-scan-json-formatmd已同步选定-a)，2026-10-29）：** 只有尚未确认采集的失败（如详情归属未确认）才稍后重访；重访在接纳前截住，不分配 `sequence`，不产生第二条观测。已采集但 OCR/字段有问题的件交给现有逐件校对流程，不重访。旧尝试只留内部诊断，不计入任何件数、不进 `excludedCount`。因此 `capturedCount` 仍只计已接纳观测，`capturedCount = items.length + excludedCount` 与 v2 格式不变；`expectedCount` 仍只在有可信同范围证据时填写，且不是完整覆盖的必要条件（[决策 §4.5](../decisions/2026-10-28-scanner-rearchitecture.md#45-k4完整性)）。
 
-**位置范围未证明（[决策 §4.6](../decisions/2026-10-28-scanner-rearchitecture.md#46-k5故障分级)）：** 该位置此前已接纳物品仍在 `items` 中、不计入 `excludedCount`，`coverage.status` 只报 `partial`；完整可用性与标注口径见 [T5 §3](t5-zzz-inventory-traversal.md#3-开始前必须核对的页面条件)。v2 不新增位置级范围标注字段。
+**位置范围未证明（[决策 §4.6](../decisions/2026-10-28-scanner-rearchitecture.md#46-k5故障分级)）：** 该位置此前已接纳物品仍在 `items` 中、不计入 `excludedCount`，`coverage.status` 只报 `partial`；完整可用性与标注口径见 [T5 §3](t5-zzz-inventory-traversal.md#3-开始前必须核对的页面条件)。v2 不新增位置级范围标注字段。位置准备失败或位置证明失败（T5 §5 的位置级降级，2026-10-31 已实现）同样只令 `coverage.status=partial`；位置级原因留在会话内部 `observedScope`、诊断与结果界面，不进入 v2。
 
-`termination.code` 为非空诊断代码，建议使用 `verifiedEnd`、`userCancelled`、`focusLost`、`geometryChanged`、`permissionRevoked`、`navigationMismatch`、`evidenceFailed`、`runtimeFailure`、`storageFailure` 或 `interrupted`。`evidenceFailed` 表示已接纳截图的投影或入队失败，保留原始错误；它只用于解释，不授权额外动作；读取端可展示不认识的代码，不能因此把 `kind` 改为正常完成。后续故障不会覆盖首个触发。
+`termination.code` 为非空诊断代码，建议使用 `verifiedEnd`、`userCancelled`、`focusLost`、`geometryChanged`、`permissionRevoked`、`navigationMismatch`、`positionFailureLimit`、`evidenceFailed`、`runtimeFailure`、`storageFailure` 或 `interrupted`。`evidenceFailed` 表示已接纳截图的投影或入队失败，保留原始错误；`positionFailureLimit` 表示不完整位置累计达到 3 个而主动停止整次扫描（T5 §5）；它们只用于解释，不授权额外动作；读取端可展示不认识的代码，不能因此把 `kind` 改为正常完成。后续故障不会覆盖首个触发。
 
 `termination.phase` 是首个结束触发所在的阶段，不是文件导出时的状态。正常遍历到末尾通常为 `completed + capturing`；准备阶段已验证空库存可为 `completed + preparing`，不统一改写成 `finalizing`。
 

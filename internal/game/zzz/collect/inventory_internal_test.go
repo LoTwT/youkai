@@ -1488,7 +1488,8 @@ func TestAwaitScrollCandidateNeedsSettleAfterUndecided(t *testing.T) {
 
 // TestScrollUnknownOutcomeDoesNotDragAgain pins the conservative stop: when
 // the drag's effect stays unknown, no further drag is sent even though the
-// retry budget is not exhausted.
+// retry budget is not exhausted. The last frame is still a warehouse list,
+// so the position is marked incomplete rather than stopping the session.
 func TestScrollUnknownOutcomeDoesNotDragAgain(t *testing.T) {
 	l := sixRowScrollLayout()
 	view := &scrollScriptView{frames: []platform.Frame{scrollFrame(1), scrollFrame(2), scrollFrame(3)}, blockAfter: true}
@@ -1504,8 +1505,39 @@ func TestScrollUnknownOutcomeDoesNotDragAgain(t *testing.T) {
 	if !errors.As(err, &fault) || fault.Code != CodeNavigationMismatch {
 		t.Fatalf("scroll error %v, want navigationMismatch", err)
 	}
+	var incomplete *positionIncompleteError
+	if !errors.As(err, &incomplete) || incomplete.stage != "scroll" {
+		t.Fatalf("scroll error %v, want a position-level scroll failure", err)
+	}
 	if view.dispatches != 1 {
 		t.Fatalf("the unknown drag was followed by %d drags, want only the first", view.dispatches)
+	}
+}
+
+// TestScrollUnknownOutcomeNonListStopsSession is the counterexample: when the
+// wait's last frame is no longer a warehouse list, the unknown outcome is a
+// page-level failure and stops the session.
+func TestScrollUnknownOutcomeNonListStopsSession(t *testing.T) {
+	l := sixRowScrollLayout()
+	view := &scrollScriptView{frames: []platform.Frame{scrollFrame(1), scrollFrame(2), scrollFrame(3)}, blockAfter: true}
+	m := &scrollScriptMatcher{rows: l.Rows, columns: l.Columns, verdict: map[scrollPair]ScrollMatch{
+		{1, 2}: {Undecided: true, Evidence: "scripted undecided"},
+		{1, 3}: {Undecided: true, Evidence: "scripted undecided"},
+	}, nonListFrames: map[uint64]bool{2: true, 3: true}}
+	run := newScriptedScrollRun(l, view, m, "", 2, 40*time.Millisecond)
+	run.visited = make([]bool, len(l.Slots))
+
+	err := runScriptedScroll(t, run)
+	var fault *scan.FaultError
+	if !errors.As(err, &fault) || fault.Code != CodeNavigationMismatch {
+		t.Fatalf("scroll error %v, want navigationMismatch", err)
+	}
+	var incomplete *positionIncompleteError
+	if errors.As(err, &incomplete) {
+		t.Fatalf("a non-list scroll outcome was degraded: %v", err)
+	}
+	if view.dispatches != 1 {
+		t.Fatalf("the non-list drag was followed by %d drags, want only the first", view.dispatches)
 	}
 }
 
@@ -1606,7 +1638,8 @@ func TestScrollFailureKeepsEveryAttemptDiagnostics(t *testing.T) {
 }
 
 // TestConfirmBottomUnknownOutcomeDoesNotDragAgain pins the same rule for
-// the bottom confirmation: an undecided wait stops instead of retrying.
+// the bottom confirmation: an undecided wait over a warehouse list ends the
+// position instead of retrying.
 func TestConfirmBottomUnknownOutcomeDoesNotDragAgain(t *testing.T) {
 	l := sixRowScrollLayout()
 	view := &scrollScriptView{frames: []platform.Frame{scrollFrame(2), scrollFrame(3)}, blockAfter: true}
@@ -1625,8 +1658,42 @@ func TestConfirmBottomUnknownOutcomeDoesNotDragAgain(t *testing.T) {
 	if !errors.As(err, &fault) || fault.Code != CodeNavigationMismatch {
 		t.Fatalf("bottom confirmation error %v, want navigationMismatch", err)
 	}
+	var incomplete *positionIncompleteError
+	if !errors.As(err, &incomplete) || incomplete.stage != "bottom" {
+		t.Fatalf("bottom confirmation error %v, want a position-level bottom failure", err)
+	}
 	if view.dispatches != 1 {
 		t.Fatalf("the undecided bottom confirmation sent %d drags, want one", view.dispatches)
+	}
+}
+
+// TestConfirmBottomUnknownOutcomeNonListStopsSession is the counterexample:
+// an undecided bottom confirmation whose last frame left the warehouse is
+// session-fatal.
+func TestConfirmBottomUnknownOutcomeNonListStopsSession(t *testing.T) {
+	l := sixRowScrollLayout()
+	view := &scrollScriptView{frames: []platform.Frame{scrollFrame(2), scrollFrame(3)}, blockAfter: true}
+	m := &scrollScriptMatcher{rows: l.Rows, columns: l.Columns, verdict: map[scrollPair]ScrollMatch{
+		{1, 2}: {Undecided: true, Evidence: "scripted undecided"},
+		{1, 3}: {Undecided: true, Evidence: "scripted undecided"},
+	}, nonListFrames: map[uint64]bool{2: true, 3: true}}
+	run := newScriptedScrollRun(l, view, m, "", 2, 40*time.Millisecond)
+	run.lastFrame = scrollFrame(1)
+
+	err := runScriptedSession(t, run, func(ctx context.Context, run *inventoryRun) error {
+		_, err := run.confirmBottom(ctx)
+		return err
+	})
+	var fault *scan.FaultError
+	if !errors.As(err, &fault) || fault.Code != CodeNavigationMismatch {
+		t.Fatalf("bottom confirmation error %v, want navigationMismatch", err)
+	}
+	var incomplete *positionIncompleteError
+	if errors.As(err, &incomplete) {
+		t.Fatalf("a non-list bottom outcome was degraded: %v", err)
+	}
+	if view.dispatches != 1 {
+		t.Fatalf("the non-list bottom confirmation sent %d drags, want one", view.dispatches)
 	}
 }
 
@@ -1855,12 +1922,13 @@ func TestScrollToTopUndecidedContinuesFromLatestFrame(t *testing.T) {
 
 // TestConfirmTopUndecidedDoesNotDragAgain pins the stricter top
 // confirmation rule: once the scrollbar claims the top, a wait without a
-// verdict stops instead of re-dragging.
+// verdict ends the position over a warehouse list instead of re-dragging.
 func TestConfirmTopUndecidedDoesNotDragAgain(t *testing.T) {
 	l := sixRowScrollLayout()
-	view := &scrollScriptView{frames: []platform.Frame{scrollFrame(2)}, blockAfter: true}
+	view := &scrollScriptView{frames: []platform.Frame{scrollFrame(2), scrollFrame(3)}, blockAfter: true}
 	m := &scrollScriptMatcher{rows: l.Rows, columns: l.Columns, verdict: map[scrollPair]ScrollMatch{
-		{1, 2}: {Undecided: true, Evidence: "scripted undecided"},
+		{1, 2}: {Stationary: true, Evidence: "scripted top base still"},
+		{2, 3}: {Undecided: true, Evidence: "scripted undecided"},
 	}}
 	run := newScriptedScrollRun(l, view, m, "", 0, 40*time.Millisecond)
 	run.inv.ActionBudget = 20 * time.Millisecond
@@ -1875,8 +1943,44 @@ func TestConfirmTopUndecidedDoesNotDragAgain(t *testing.T) {
 	if !errors.As(err, &fault) || fault.Code != CodeNavigationMismatch {
 		t.Fatalf("top confirmation error %v, want navigationMismatch", err)
 	}
+	var incomplete *positionIncompleteError
+	if !errors.As(err, &incomplete) || incomplete.stage != "top" {
+		t.Fatalf("top confirmation error %v, want a position-level top failure", err)
+	}
 	if view.dispatches != 1 {
 		t.Fatalf("the undecided top confirmation sent %d drags, want one", view.dispatches)
+	}
+}
+
+// TestConfirmTopUndecidedNonListStopsSession is the counterexample: an
+// undecided top confirmation whose last frame left the warehouse stops the
+// session.
+func TestConfirmTopUndecidedNonListStopsSession(t *testing.T) {
+	l := sixRowScrollLayout()
+	view := &scrollScriptView{frames: []platform.Frame{scrollFrame(2), scrollFrame(3)}, blockAfter: true}
+	m := &scrollScriptMatcher{rows: l.Rows, columns: l.Columns, verdict: map[scrollPair]ScrollMatch{
+		{1, 2}: {Stationary: true, Evidence: "scripted top base still"},
+		{2, 3}: {Undecided: true, Evidence: "scripted undecided"},
+	}, nonListFrames: map[uint64]bool{3: true}}
+	run := newScriptedScrollRun(l, view, m, "", 0, 40*time.Millisecond)
+	run.inv.ActionBudget = 20 * time.Millisecond
+	run.lastFrame = scrollFrame(1)
+	run.listMatch = m.Match(scrollFrame(1))
+
+	err := runScriptedSession(t, run, func(ctx context.Context, run *inventoryRun) error {
+		_, err := run.confirmTop(ctx)
+		return err
+	})
+	var fault *scan.FaultError
+	if !errors.As(err, &fault) || fault.Code != CodeNavigationMismatch {
+		t.Fatalf("top confirmation error %v, want navigationMismatch", err)
+	}
+	var incomplete *positionIncompleteError
+	if errors.As(err, &incomplete) {
+		t.Fatalf("a non-list top confirmation was degraded: %v", err)
+	}
+	if view.dispatches != 1 {
+		t.Fatalf("the non-list top confirmation sent %d drags, want one", view.dispatches)
 	}
 }
 

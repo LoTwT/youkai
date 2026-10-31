@@ -12,10 +12,10 @@ import (
 
 // TestConfirmBottomLostStopsInsteadOfCommittingIt pins the bottom
 // confirmation's Lost branch: a drag that loses the overlap proves neither
-// the end nor stillness, so the traversal must stop with navigationMismatch
-// and keep the last verified frame. Accepting it as the stationary bottom
-// confirmation would declare a mid-list position complete and drop the rest
-// of the position's items.
+// the end nor stillness, so the position ends as incomplete with a
+// navigationMismatch and keeps the last verified frame. Accepting it as the
+// stationary bottom confirmation would declare a mid-list position complete
+// and drop the rest of the position's items.
 func TestConfirmBottomLostStopsInsteadOfCommittingIt(t *testing.T) {
 	l := MacCloudLayout()
 	view := &scrollScriptView{
@@ -38,6 +38,10 @@ func TestConfirmBottomLostStopsInsteadOfCommittingIt(t *testing.T) {
 	var fault *scan.FaultError
 	if !errors.As(err, &fault) || fault.Code != CodeNavigationMismatch {
 		t.Fatalf("bottom confirmation error %v, want navigationMismatch", err)
+	}
+	var incomplete *positionIncompleteError
+	if !errors.As(err, &incomplete) || incomplete.stage != "bottom" {
+		t.Fatalf("bottom confirmation error %v, want a position-level bottom failure", err)
 	}
 	if run.lastFrame.ID != 1 {
 		t.Fatalf("the lost confirmation committed frame %d, want the last verified frame 1", run.lastFrame.ID)

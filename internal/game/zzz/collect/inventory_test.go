@@ -2,6 +2,7 @@ package collect_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"image"
 	"image/color"
@@ -81,6 +82,46 @@ type scriptedGame struct {
 	// then stays clear after the panel closes.
 	sClickDoesNothing   bool
 	sClickDoesNothingAt int
+	// ignoreWheelClicksAt silently ignores every wheel click targeting that
+	// position (0 = never), modelling one position that cannot be switched
+	// to while the rest stay healthy.
+	ignoreWheelClicksAt int
+	// failCloseAtOpen makes the close control of the Nth panel open (1-based)
+	// refuse for the retry bound, leaving that position's verified panel
+	// open. Later panels and a recovery close work normally.
+	failCloseAtOpen int
+	failCloseLeft   int
+	panelOpens      int
+	// filterButtonDoesNothingAt makes the funnel click a no-op at that
+	// wheel position, so the panel never opens there.
+	filterButtonDoesNothingAt int
+	// filterClickMakesUnknownAt turns the page undecidable when the funnel
+	// is clicked at that wheel position.
+	filterClickMakesUnknownAt int
+	// resetClosesPanelAt closes the panel when reset is clicked at that
+	// wheel position, modelling a panel that unexpectedly disappears.
+	resetClosesPanelAt int
+	// sClosesPanelAt closes the panel when S is clicked at that wheel
+	// position.
+	sClosesPanelAt int
+	// sClickMakesUnknownAt turns the page undecidable when S is clicked at
+	// that wheel position.
+	sClickMakesUnknownAt int
+	// wheelAfterAdvance changes the wheel to this position when the next
+	// advance drag is dispatched (0 = never), modelling someone operating
+	// the game during the scan.
+	wheelAfterAdvance int
+	// wheelAfterPanelClose changes the wheel to this position when the next
+	// panel close takes effect (0 = never), modelling someone switching the
+	// wheel while the panel covered it.
+	wheelAfterPanelClose int
+	// wheelAfterTopDrag changes the wheel to this position when the next top
+	// drag is dispatched (0 = never), modelling someone switching the wheel
+	// during the return to top. wheelAfterTopDragViewport is the target
+	// position's viewport after the change (mid-list keeps the top
+	// confirmation from succeeding).
+	wheelAfterTopDrag         int
+	wheelAfterTopDragViewport int
 	// resetMakesUnknown makes the panel page undecidable after the reset.
 	resetMakesUnknown bool
 	// sSelected is the panel's S rarity selection. It is test state only:
@@ -505,6 +546,14 @@ func (g *scriptedGame) dispatch(op platform.InputOp) platform.InputResult {
 		if g.page == pagePanel {
 			switch {
 			case op.At.Eq(g.layout.PanelReset):
+				if g.wheel == g.resetClosesPanelAt {
+					g.pending = append(g.pending, pendingEffect{dueAt: lag, apply: func(g *scriptedGame) {
+						g.page = pageWarehouse
+						g.filter = "clear"
+						g.sSelected = false
+					}})
+					return posted(now)
+				}
 				g.pending = append(g.pending, pendingEffect{dueAt: lag, apply: func(g *scriptedGame) {
 					if g.resetMakesUnknown {
 						g.page = pageUnknown
@@ -516,6 +565,20 @@ func (g *scriptedGame) dispatch(op platform.InputOp) platform.InputResult {
 					g.sSelected = false
 				}})
 			case op.At.Eq(g.layout.PanelS):
+				if g.wheel == g.sClickMakesUnknownAt {
+					g.pending = append(g.pending, pendingEffect{dueAt: lag, apply: func(g *scriptedGame) {
+						g.page = pageUnknown
+						g.filter = "unknown"
+						g.sSelected = false
+					}})
+					return posted(now)
+				}
+				if g.wheel == g.sClosesPanelAt {
+					g.pending = append(g.pending, pendingEffect{dueAt: lag, apply: func(g *scriptedGame) {
+						g.page = pageWarehouse
+					}})
+					return posted(now)
+				}
 				if !g.sClickDoesNothing && g.wheel != g.sClickDoesNothingAt {
 					g.pending = append(g.pending, pendingEffect{dueAt: lag, apply: func(g *scriptedGame) {
 						g.filter = "active"
@@ -523,8 +586,27 @@ func (g *scriptedGame) dispatch(op platform.InputOp) platform.InputResult {
 					}})
 				}
 			case op.At.Eq(g.layout.PanelClose):
+				if g.failCloseLeft > 0 {
+					g.failCloseLeft--
+					return posted(now)
+				}
+				next := g.wheelAfterPanelClose
+				from := g.wheel
+				g.wheelAfterPanelClose = 0
 				g.pending = append(g.pending, pendingEffect{dueAt: lag, apply: func(g *scriptedGame) {
 					g.page = pageWarehouse
+					if next != 0 {
+						g.selectedByPos[from-1] = g.selected
+						g.viewportByPos[from-1] = g.viewport
+						g.wheel = next
+						g.selected = g.selectedByPos[next-1]
+						g.viewport = g.viewportByPos[next-1]
+						if g.selected >= 0 {
+							g.detailGlobal = g.selected
+						} else {
+							g.detailGlobal = -1
+						}
+					}
 				}})
 			}
 			return posted(now)
@@ -533,8 +615,10 @@ func (g *scriptedGame) dispatch(op platform.InputOp) platform.InputResult {
 			return posted(now)
 		}
 		if pos := g.wheelAt(op.At); pos != 0 {
-			if g.ignoreWheelClicks > 0 {
-				g.ignoreWheelClicks--
+			if g.ignoreWheelClicks > 0 || pos == g.ignoreWheelClicksAt {
+				if g.ignoreWheelClicks > 0 {
+					g.ignoreWheelClicks--
+				}
 				return posted(now)
 			}
 			from := g.wheel
@@ -553,6 +637,19 @@ func (g *scriptedGame) dispatch(op platform.InputOp) platform.InputResult {
 			return posted(now)
 		}
 		if op.At.Eq(g.layout.FilterButton) {
+			if g.wheel == g.filterClickMakesUnknownAt {
+				g.pending = append(g.pending, pendingEffect{dueAt: lag, apply: func(g *scriptedGame) {
+					g.page = pageUnknown
+				}})
+				return posted(now)
+			}
+			if g.wheel == g.filterButtonDoesNothingAt {
+				return posted(now)
+			}
+			g.panelOpens++
+			if g.panelOpens == g.failCloseAtOpen {
+				g.failCloseLeft = 3 // one attempt plus two retries
+			}
 			g.pending = append(g.pending, pendingEffect{dueAt: lag, apply: func(g *scriptedGame) {
 				g.page = pagePanel
 			}})
@@ -643,7 +740,43 @@ func (g *scriptedGame) dispatch(op platform.InputOp) platform.InputResult {
 					}})
 				}
 			}
+			if g.wheelAfterAdvance != 0 {
+				next := g.wheelAfterAdvance
+				g.wheelAfterAdvance = 0
+				from := g.wheel
+				g.pending = append(g.pending, pendingEffect{dueAt: lag, apply: func(g *scriptedGame) {
+					g.selectedByPos[from-1] = g.selected
+					g.viewportByPos[from-1] = g.viewport
+					g.wheel = next
+					g.selected = g.selectedByPos[next-1]
+					g.viewport = g.viewportByPos[next-1]
+					if g.selected >= 0 {
+						g.detailGlobal = g.selected
+					} else {
+						g.detailGlobal = -1
+					}
+				}})
+			}
 		case op.At.Eq(g.layout.TopFrom) && op.To.Eq(g.layout.TopTo):
+			if g.wheelAfterTopDrag != 0 {
+				next := g.wheelAfterTopDrag
+				nextViewport := g.wheelAfterTopDragViewport
+				g.wheelAfterTopDrag = 0
+				from := g.wheel
+				g.pending = append(g.pending, pendingEffect{dueAt: lag, apply: func(g *scriptedGame) {
+					g.selectedByPos[from-1] = g.selected
+					g.viewportByPos[from-1] = g.viewport
+					g.wheel = next
+					g.selected = g.selectedByPos[next-1]
+					g.viewport = nextViewport
+					g.viewportByPos[next-1] = nextViewport
+					if g.selected >= 0 {
+						g.detailGlobal = g.selected
+					} else {
+						g.detailGlobal = -1
+					}
+				}})
+			}
 			if g.topStuck || g.viewport == 0 {
 				return posted(now)
 			}
@@ -874,6 +1007,129 @@ func positions(obs []collect.Observation) [][3]int {
 		out = append(out, [3]int{o.Viewport, o.Row, o.Column})
 	}
 	return out
+}
+
+// observedPosition mirrors the traversal's per-position ledger entry as it
+// appears in the observed scope. The collect package's payload type is
+// unexported, so the external tests decode the JSON document the record
+// actually persists.
+type observedPosition struct {
+	Position   int    `json:"position"`
+	Viewports  int    `json:"viewports"`
+	Visits     int    `json:"visits"`
+	Top        bool   `json:"topVerified"`
+	Bottom     bool   `json:"bottomVerified"`
+	Complete   bool   `json:"complete"`
+	Stage      string `json:"stage"`
+	ReasonCode string `json:"reasonCode"`
+	Reason     string `json:"reason"`
+}
+
+type observedScopeDoc struct {
+	Sort      string             `json:"sort"`
+	Coverage  string             `json:"coverage"`
+	Positions []observedPosition `json:"positions"`
+}
+
+func (h *traversalHarness) scope() observedScopeDoc {
+	h.t.Helper()
+	var scope observedScopeDoc
+	if err := json.Unmarshal(h.inv.ObservedScope(), &scope); err != nil {
+		h.t.Fatalf("observed scope is not JSON: %v", err)
+	}
+	return scope
+}
+
+// requireIncompletePosition asserts one degraded position's ledger entry:
+// incomplete, with the expected preparation/proof stage, cause code and a
+// recorded reason.
+func (h *traversalHarness) requireIncompletePosition(pos int, stage, code string) observedPosition {
+	h.t.Helper()
+	scope := h.scope()
+	if len(scope.Positions) < pos {
+		h.t.Fatalf("observed scope has %d positions, want position %d: %+v", len(scope.Positions), pos, scope)
+	}
+	entry := scope.Positions[pos-1]
+	if entry.Position != pos || entry.Complete || entry.Stage != stage ||
+		entry.ReasonCode != code || entry.Reason == "" {
+		h.t.Fatalf("position %d ledger = %+v, want incomplete stage %q code %q with a reason", pos, entry, stage, code)
+	}
+	if scope.Coverage != "partial" {
+		h.t.Fatalf("coverage = %q with an incomplete position, want partial", scope.Coverage)
+	}
+	return entry
+}
+
+// requireCompletePosition asserts one position's ledger entry completed.
+func (h *traversalHarness) requireCompletePosition(pos int) observedPosition {
+	h.t.Helper()
+	scope := h.scope()
+	if len(scope.Positions) < pos {
+		h.t.Fatalf("observed scope has %d positions, want position %d: %+v", len(scope.Positions), pos, scope)
+	}
+	entry := scope.Positions[pos-1]
+	if entry.Position != pos || !entry.Complete || !entry.Top || !entry.Bottom {
+		h.t.Fatalf("position %d ledger = %+v, want a verified complete entry", pos, entry)
+	}
+	return entry
+}
+
+// requireFatallyStoppedPosition asserts that a session-fatal fault cut the
+// walk at pos: the ledger ends there and the entry carries no position-level
+// stage or reason, so the session termination is the only diagnosis.
+func (h *traversalHarness) requireFatallyStoppedPosition(pos int) observedPosition {
+	h.t.Helper()
+	scope := h.scope()
+	if len(scope.Positions) != pos {
+		h.t.Fatalf("observed scope has %d positions, want the walk to stop at %d: %+v", len(scope.Positions), pos, scope)
+	}
+	entry := scope.Positions[pos-1]
+	if entry.Position != pos || entry.Complete || entry.Stage != "" || entry.ReasonCode != "" || entry.Reason != "" {
+		h.t.Fatalf("position %d ledger = %+v, want a fatal stop without a position-level reason", pos, entry)
+	}
+	return entry
+}
+
+// sortVerifiedMatcher marks every filter-panel verdict's sort label
+// verified. The scripted fake does not render the calibrated label, so the
+// real matcher leaves the session's sort unverified; this wrapper lets the
+// all-positions-complete case reach coverage=complete end to end without
+// weakening any navigation evidence.
+type sortVerifiedMatcher struct {
+	collect.Matcher
+}
+
+func (m sortVerifiedMatcher) Match(f platform.Frame) collect.PageMatch {
+	match := m.Matcher.Match(f)
+	if match.Page == collect.PageFilterPanel && match.Panel != nil {
+		match.Panel.SortVerified = true
+		match.Panel.SortLabel = "稀有度"
+	}
+	return match
+}
+
+// unknownAfterCandidateMatcher makes the page verdict become PageUnknown
+// after the first verified displacement, modelling a popup, loading page or
+// lost cloud stream arriving while the list was already seen moving. The
+// retained displacement candidate must not hide that page-level failure.
+type unknownAfterCandidateMatcher struct {
+	collect.Matcher
+	armed bool
+}
+
+func (m *unknownAfterCandidateMatcher) Match(f platform.Frame) collect.PageMatch {
+	if m.armed {
+		return collect.PageMatch{Page: collect.PageUnknown, Evidence: "scripted non-list page after the displacement candidate"}
+	}
+	return m.Matcher.Match(f)
+}
+
+func (m *unknownAfterCandidateMatcher) MatchScroll(before, after platform.Frame) collect.ScrollMatch {
+	sm := m.Matcher.MatchScroll(before, after)
+	if sm.Displaced && len(sm.Matches) > 0 {
+		m.armed = true
+	}
+	return sm
 }
 
 func slotCenter(l collect.Layout, i int) image.Point {
@@ -1757,7 +2013,9 @@ func TestSinglePageGeometryChangeStops(t *testing.T) {
 }
 
 // T22: a false bottom claim is caught by the stationary confirmation
-// drag; the machine does not complete on the scrollbar alone.
+// drag; the machine does not complete on the scrollbar alone. The failed
+// position keeps its admitted viewport and the walk continues with the
+// later positions.
 func TestSinglePageBottomConfirmationMustBeStationary(t *testing.T) {
 	items := make([]bool, 36)
 	for i := range items {
@@ -1768,18 +2026,22 @@ func TestSinglePageBottomConfirmationMustBeStationary(t *testing.T) {
 	h := newTraversalHarness(t, game)
 	h.inv.ScrollBudget = 800 * time.Millisecond
 	h.start()
-	snap := h.endFailed(collect.CodeNavigationMismatch)
+	snap := h.endCompleted()
 	if snap.Counts.Captured != 20 {
 		t.Fatalf("the first viewport's admissions must stand: %+v", snap.Counts)
 	}
-	if drags := countOps(game.opsSnapshot(), platform.InputDrag, game.layout.ScrollFrom, game.layout.ScrollTo); drags != 1 {
-		t.Fatalf("%d advance drags, want the failed bottom confirmation", drags)
+	h.requireIncompletePosition(1, "bottom", collect.CodeNavigationMismatch)
+	// Position 1's failed confirmation plus one stationary confirmation for
+	// each of the five empty later positions.
+	if drags := countOps(game.opsSnapshot(), platform.InputDrag, game.layout.ScrollFrom, game.layout.ScrollTo); drags != 6 {
+		t.Fatalf("%d advance drags, want the failed bottom confirmation and five later confirmations", drags)
 	}
 }
 
 // T23: a list that jumps by ten rows has no verifiable overlap within the
-// search radius; the position is lost, not guessed.
-func TestSinglePageScrollLostStops(t *testing.T) {
+// search radius; the position is lost, not guessed. Its admitted viewport
+// stays and the remaining positions are still walked.
+func TestSinglePageScrollLostDegradesPosition(t *testing.T) {
 	items := make([]bool, 120) // thirty rows
 	for i := range items {
 		items[i] = true
@@ -1789,9 +2051,13 @@ func TestSinglePageScrollLostStops(t *testing.T) {
 	h := newTraversalHarness(t, game)
 	h.inv.ScrollBudget = 800 * time.Millisecond
 	h.start()
-	snap := h.endFailed(collect.CodePositionLost)
+	snap := h.endCompleted()
 	if snap.Counts.Captured != 20 {
 		t.Fatalf("the first viewport's admissions must stand: %+v", snap.Counts)
+	}
+	h.requireIncompletePosition(1, "scroll", collect.CodePositionLost)
+	for pos := 2; pos <= 6; pos++ {
+		h.requireCompletePosition(pos)
 	}
 }
 
@@ -1821,7 +2087,7 @@ func (m raggedMatcher) MatchScroll(before, after platform.Frame) collect.ScrollM
 	return sm
 }
 
-func TestSinglePageScrollAmbiguityStopsPositionLost(t *testing.T) {
+func TestSinglePageScrollAmbiguityDegradesPosition(t *testing.T) {
 	items := make([]bool, 36)
 	for i := range items {
 		items[i] = true
@@ -1830,10 +2096,12 @@ func TestSinglePageScrollAmbiguityStopsPositionLost(t *testing.T) {
 	h := newTraversalHarness(t, game)
 	h.inv.Matcher = ambiguousMatcher{Matcher: h.inv.Matcher}
 	h.start()
-	h.endFailed(collect.CodePositionLost)
+	h.endCompleted()
+	h.requireIncompletePosition(1, "scroll", collect.CodePositionLost)
+	h.requireCompletePosition(2)
 }
 
-func TestSinglePageRaggedCorrespondenceStops(t *testing.T) {
+func TestSinglePageRaggedCorrespondenceDegradesPosition(t *testing.T) {
 	items := make([]bool, 36)
 	for i := range items {
 		items[i] = true
@@ -1842,11 +2110,13 @@ func TestSinglePageRaggedCorrespondenceStops(t *testing.T) {
 	h := newTraversalHarness(t, game)
 	h.inv.Matcher = raggedMatcher{Matcher: h.inv.Matcher}
 	h.start()
-	h.endFailed(collect.CodePositionLost)
+	h.endCompleted()
+	h.requireIncompletePosition(1, "scroll", collect.CodePositionLost)
+	h.requireCompletePosition(2)
 }
 
 // T24: a stuck advance drag is not an end; it is retried to the bound and
-// stops with navigationMismatch.
+// the position ends incomplete instead of claiming the list's end.
 func TestSinglePageStuckScrollIsNotAnEnd(t *testing.T) {
 	items := make([]bool, 36)
 	for i := range items {
@@ -1856,12 +2126,15 @@ func TestSinglePageStuckScrollIsNotAnEnd(t *testing.T) {
 	game.scrollStuck = true
 	h := newTraversalHarness(t, game)
 	h.start()
-	snap := h.endFailed(collect.CodeNavigationMismatch)
+	snap := h.endCompleted()
 	if snap.Counts.Captured != 20 {
 		t.Fatalf("the first viewport's admissions must stand: %+v", snap.Counts)
 	}
-	if drags := countOps(game.opsSnapshot(), platform.InputDrag, game.layout.ScrollFrom, game.layout.ScrollTo); drags != 3 {
-		t.Fatalf("%d advance drags, want 3 (1 + 2 retries)", drags)
+	h.requireIncompletePosition(1, "scroll", collect.CodeNavigationMismatch)
+	// Three attempts at position 1 plus one stationary confirmation for each
+	// of the five empty later positions.
+	if drags := countOps(game.opsSnapshot(), platform.InputDrag, game.layout.ScrollFrom, game.layout.ScrollTo); drags != 8 {
+		t.Fatalf("%d advance drags, want 3 attempts and five later confirmations", drags)
 	}
 }
 
@@ -2054,6 +2327,9 @@ func TestTraverseWalksSixPositions(t *testing.T) {
 	if drags := countOps(ops, platform.InputDrag, game.layout.ScrollFrom, game.layout.ScrollTo); drags != 6 {
 		t.Fatalf("%d advance drags, want one per position (position 2's partial scroll is its end evidence)", drags)
 	}
+	for pos := 1; pos <= 6; pos++ {
+		h.requireCompletePosition(pos)
+	}
 }
 
 // T29b: a verified scroll at the end of position 1 whose new viewport holds
@@ -2106,34 +2382,40 @@ func TestTraverseWheelSwitchRetriesThenSucceeds(t *testing.T) {
 	}
 }
 
-// T31: a wheel click that never takes effect stops with
-// navigationMismatch after the retry bound.
-func TestTraverseWheelSwitchRetriesExhausted(t *testing.T) {
-	game := newScriptedGame()
-	game.wheel = 2
-	game.ignoreWheelClicks = 99
+// T31: a wheel click that never takes effect ends only that position after
+// the retry bound; the remaining positions are still prepared and walked,
+// and the session reports partial coverage.
+func TestTraverseWheelSwitchRetriesExhaustedDegradesPosition(t *testing.T) {
+	game := newScriptedGame(make([]bool, 20)...)
+	game.ignoreWheelClicksAt = 2
 	h := newTraversalHarness(t, game)
 	h.start()
-	snap := h.endFailed(collect.CodeNavigationMismatch)
+	snap := h.endCompleted()
 	if snap.Counts.Captured != 0 {
 		t.Fatalf("a failed switch admits nothing: %+v", snap.Counts)
 	}
-	if clicks := countOps(game.opsSnapshot(), platform.InputClick, game.layout.Wheel[0], image.Point{}); clicks != 3 {
-		t.Fatalf("%d clicks on wheel position 1, want 3 (1 + 2 retries)", clicks)
+	h.requireCompletePosition(1)
+	h.requireIncompletePosition(2, "wheel", collect.CodeNavigationMismatch)
+	for pos := 3; pos <= 6; pos++ {
+		h.requireCompletePosition(pos)
+	}
+	if clicks := countOps(game.opsSnapshot(), platform.InputClick, game.layout.Wheel[1], image.Point{}); clicks != 3 {
+		t.Fatalf("%d clicks on wheel position 2, want 3 (1 + 2 retries)", clicks)
 	}
 }
 
-// T32: an S rarity click whose effect never appears leaves the funnel
-// clear after the panel closes; the walk stops before any list visit. The
-// precheck accepted the active filter that was present at the start, and
-// the observed scope still reports that pre-preparation state.
-func TestTraverseSFilterNotActiveStops(t *testing.T) {
-	game := newScriptedGame(true)
+// T32: an S rarity click whose effect never appears leaves the funnel clear
+// after the panel closes; that position ends incomplete before any list
+// visit and the later positions are still prepared. The precheck accepted
+// the active filter that was present at the start, and the observed scope
+// still reports that pre-preparation state.
+func TestTraverseSFilterNotActiveDegradesPosition(t *testing.T) {
+	game := newScriptedGame(make([]bool, 20)...)
 	game.filter = "active"
-	game.sClickDoesNothing = true
+	game.sClickDoesNothingAt = 1
 	h := newTraversalHarness(t, game)
 	h.start()
-	snap := h.endFailed(collect.CodeNavigationMismatch)
+	snap := h.endCompleted()
 	if snap.Counts.Captured != 0 {
 		t.Fatalf("a failed S selection admits nothing: %+v", snap.Counts)
 	}
@@ -2141,14 +2423,52 @@ func TestTraverseSFilterNotActiveStops(t *testing.T) {
 	if clicks := countSlotClicks(ops, game.layout); clicks != 0 {
 		t.Fatalf("%d slot clicks before the funnel check", clicks)
 	}
-	if clicks := countFilterClicks(ops, game.layout); clicks != 4 {
-		t.Fatalf("%d filter-control clicks, want open/reset/S/close", clicks)
+	if clicks := countFilterClicks(ops, game.layout); clicks != 6*4 {
+		t.Fatalf("%d filter-control clicks, want open/reset/S/close for every position", clicks)
 	}
-	if drags := countOps(ops, platform.InputDrag, game.layout.TopFrom, game.layout.TopTo); drags != 0 {
-		t.Fatalf("%d top drags, want none before the funnel check", drags)
+	if drags := countOps(ops, platform.InputDrag, game.layout.TopFrom, game.layout.TopTo); drags != 5 {
+		t.Fatalf("%d top drags, want one for each healthy position after the failed one", drags)
+	}
+	h.requireIncompletePosition(1, "filter", collect.CodeNavigationMismatch)
+	for pos := 2; pos <= 6; pos++ {
+		h.requireCompletePosition(pos)
 	}
 	if scope := string(h.inv.ObservedScope()); !strings.Contains(scope, `"filterAtStart":"active"`) {
 		t.Fatalf("observed scope %s lacks the active filter at start", scope)
+	}
+}
+
+// T32f: when preparation keeps failing across positions, the third
+// incomplete position stops the whole scan instead of letting a systemic
+// failure look like a plausible partial result.
+func TestTraverseIncompletePositionLimitStops(t *testing.T) {
+	game := newScriptedGame(make([]bool, 20)...)
+	game.sClickDoesNothing = true
+	h := newTraversalHarness(t, game)
+	h.start()
+	snap := h.endFailed(collect.CodePositionFailureLimit)
+	if snap.Counts.Captured != 0 {
+		t.Fatalf("failed preparations admit nothing: %+v", snap.Counts)
+	}
+	if snap.Trigger == nil || !strings.Contains(snap.Trigger.Message, "3 wheel positions are incomplete") {
+		t.Fatalf("the limit trigger does not name the count: %+v", snap.Trigger)
+	}
+	scope := h.scope()
+	if len(scope.Positions) != 3 || scope.Coverage != "partial" {
+		t.Fatalf("scope = %+v, want three recorded positions and partial coverage", scope)
+	}
+	for i, entry := range scope.Positions {
+		if entry.Complete || entry.Stage != "filter" || entry.ReasonCode != collect.CodeNavigationMismatch || entry.Reason == "" {
+			t.Fatalf("position %d ledger = %+v, want an incomplete filter failure with a reason", i+1, entry)
+		}
+	}
+	// Three positions each opened, reset, selected S and closed the panel;
+	// no position reached the top.
+	if clicks := countFilterClicks(game.opsSnapshot(), game.layout); clicks != 3*4 {
+		t.Fatalf("%d filter-control clicks, want three full panel visits before the limit", clicks)
+	}
+	if drags := countOps(game.opsSnapshot(), platform.InputDrag, game.layout.TopFrom, game.layout.TopTo); drags != 0 {
+		t.Fatalf("%d top drags after three failed preparations", drags)
 	}
 }
 
@@ -2248,24 +2568,78 @@ func TestTraverseFilterResetStopsOnUndecidablePanel(t *testing.T) {
 	}
 }
 
-// T33: two return-to-top flings without progress stop with
-// navigationMismatch; mid-list starts are accepted by the precheck.
-func TestTraverseTopWithoutProgressStops(t *testing.T) {
+// T33: two return-to-top flings without progress end only that position;
+// mid-list starts are accepted by the precheck and the later positions are
+// still walked.
+func TestTraverseTopWithoutProgressDegradesPosition(t *testing.T) {
 	game := newScriptedGame(listOf(36)...) // nine rows
 	game.viewport = 3
 	game.topStuck = true
 	h := newTraversalHarness(t, game)
 	h.start()
-	snap := h.endFailed(collect.CodeNavigationMismatch)
+	snap := h.endCompleted()
 	if snap.Counts.Captured != 0 {
 		t.Fatalf("a failed return to top admits nothing: %+v", snap.Counts)
 	}
-	if drags := countOps(game.opsSnapshot(), platform.InputDrag, game.layout.TopFrom, game.layout.TopTo); drags != 2 {
-		t.Fatalf("%d top drags, want 2 before stopping on no progress", drags)
+	// Two failed flings at position 1 plus one confirmation for each of the
+	// five empty later positions.
+	if drags := countOps(game.opsSnapshot(), platform.InputDrag, game.layout.TopFrom, game.layout.TopTo); drags != 7 {
+		t.Fatalf("%d top drags, want two before the position ends and five later confirmations", drags)
 	}
 	if clicks := countSlotClicks(game.opsSnapshot(), game.layout); clicks != 0 {
 		t.Fatalf("%d slot clicks before the top was reached", clicks)
 	}
+	h.requireIncompletePosition(1, "top", collect.CodeNavigationMismatch)
+	for pos := 2; pos <= 6; pos++ {
+		h.requireCompletePosition(pos)
+	}
+}
+
+// T33b: a wheel change during a return-to-top fling plus a later top
+// failure is session-fatal, not a position-level top failure. The scanner
+// never touches the wheel, so the position-level explanation would hide
+// someone operating the game.
+func TestTopFlingWheelChangeStopsSession(t *testing.T) {
+	game := newScriptedGame(listOf(36)...) // position 1: nine rows, mid-list start
+	game.setList(2, listOf(60))            // position 2: twelve rows, mid-list target
+	game.viewport = 3
+	game.topStuck = true
+	game.wheelAfterTopDrag = 2
+	game.wheelAfterTopDragViewport = 5
+	h := newTraversalHarness(t, game)
+	h.inv.ScrollBudget = 100 * time.Millisecond
+	h.start()
+	snap := h.endFailed(collect.CodeNavigationMismatch)
+	if snap.Counts.Captured != 0 {
+		t.Fatalf("a failed return to top admits nothing: %+v", snap.Counts)
+	}
+	if snap.Trigger == nil || !strings.Contains(snap.Trigger.Message, "changed the wheel position to 2") {
+		t.Fatalf("the trigger does not name the wheel change: %+v", snap.Trigger)
+	}
+	h.requireFatallyStoppedPosition(1)
+}
+
+// T33c: the same rule for the top confirmation. The wheel changes on the
+// first confirmation drag; the confirmation then fails at the new wheel and
+// the session stops instead of marking position 1 incomplete.
+func TestTopConfirmWheelChangeStopsSession(t *testing.T) {
+	game := newScriptedGame(listOf(20)...) // position 1: top, one viewport
+	game.setList(2, listOf(60))            // position 2: twelve rows, mid-list target
+	game.viewport = 0
+	game.topStuck = true
+	game.wheelAfterTopDrag = 2
+	game.wheelAfterTopDragViewport = 5
+	h := newTraversalHarness(t, game)
+	h.inv.ScrollBudget = 80 * time.Millisecond
+	h.start()
+	snap := h.endFailed(collect.CodeNavigationMismatch)
+	if snap.Counts.Captured != 0 {
+		t.Fatalf("a failed top confirmation admits nothing: %+v", snap.Counts)
+	}
+	if snap.Trigger == nil || !strings.Contains(snap.Trigger.Message, "changed the wheel position to 2") {
+		t.Fatalf("the trigger does not name the wheel change: %+v", snap.Trigger)
+	}
+	h.requireFatallyStoppedPosition(1)
 }
 
 // T34: a Lost verdict during the return-to-top flings is allowed and the
@@ -2351,21 +2725,259 @@ func TestTraversePreparationAnimationLag(t *testing.T) {
 	}
 }
 
-// T37: a later position's failed preparation keeps the earlier position's
-// admissions.
-func TestTraverseRetainsAdmittedOnLaterPositionFailure(t *testing.T) {
+// T37: a degraded later position keeps the earlier position's admissions
+// in the usable result and reports its own reason; the walk continues.
+func TestTraverseRetainsAdmittedOnDegradedPosition(t *testing.T) {
 	game := newScriptedGame(listOf(2)...)
 	game.setList(2, listOf(1))
 	game.sClickDoesNothingAt = 2
 	h := newTraversalHarness(t, game)
 	h.start()
-	snap := h.endFailed(collect.CodeNavigationMismatch)
+	snap := h.endCompleted()
 	if snap.Counts.Captured != 2 {
 		t.Fatalf("captured = %+v, want the first position's two admissions", snap.Counts)
 	}
 	obs := h.observations()
 	if len(obs) != 2 || obs[0].Position != 1 || obs[1].Position != 1 {
 		t.Fatalf("observations = %v, want two at position 1", positions(obs))
+	}
+	h.requireCompletePosition(1)
+	h.requireIncompletePosition(2, "filter", collect.CodeNavigationMismatch)
+	h.requireCompletePosition(3)
+}
+
+// T37b: a failure that leaves the verified filter panel open must not leak
+// into the next position. Its preparation closes the panel through the
+// normal verified click and then runs its own wheel/filter/top sequence.
+func TestTraverseFilterFailureDoesNotPolluteNextPosition(t *testing.T) {
+	game := newScriptedGame(make([]bool, 20)...)
+	game.failCloseAtOpen = 2 // position 2's close never takes effect
+	h := newTraversalHarness(t, game)
+	h.start()
+	h.endCompleted()
+	h.requireIncompletePosition(2, "filter", collect.CodeNavigationMismatch)
+	h.requireCompletePosition(3)
+	ops := game.opsSnapshot()
+	if opens := countOps(ops, platform.InputClick, game.layout.FilterButton, image.Point{}); opens != 6 {
+		t.Fatalf("%d panel opens, want one per position", opens)
+	}
+	// One close per clean position, three refused close clicks at position
+	// 2, and the recovery close of the panel it left open during position
+	// 3's preparation.
+	if closes := countOps(ops, platform.InputClick, game.layout.PanelClose, image.Point{}); closes != 9 {
+		t.Fatalf("%d panel closes, want 3 refused attempts plus six successful closes", closes)
+	}
+	if got := game.filterState(); got != "active" {
+		t.Fatalf("funnel %q after recovery, want active", got)
+	}
+}
+
+// T37e: a funnel click that never opens the panel is a position
+// preparation failure; the later positions still prepare and walk.
+func TestTraverseFilterPanelOpenFailureDegradesPosition(t *testing.T) {
+	game := newScriptedGame(make([]bool, 20)...)
+	game.filterButtonDoesNothingAt = 1
+	h := newTraversalHarness(t, game)
+	h.start()
+	h.endCompleted()
+	h.requireIncompletePosition(1, "filter", collect.CodeNavigationMismatch)
+	for pos := 2; pos <= 6; pos++ {
+		h.requireCompletePosition(pos)
+	}
+	// Three refused open clicks at position 1 plus one open per later
+	// position.
+	if opens := countOps(game.opsSnapshot(), platform.InputClick, game.layout.FilterButton, image.Point{}); opens != 8 {
+		t.Fatalf("%d panel opens, want 3 refused attempts and five successful opens", opens)
+	}
+}
+
+// T37f: a funnel click that makes the page undecidable is not a position
+// preparation failure: the page itself is no longer verifiable, so the
+// session stops before any later position.
+func TestTraverseFilterPanelOpenUnknownStops(t *testing.T) {
+	game := newScriptedGame(make([]bool, 20)...)
+	game.filterClickMakesUnknownAt = 1
+	h := newTraversalHarness(t, game)
+	h.start()
+	snap := h.endFailed(collect.CodeNavigationMismatch)
+	if snap.Trigger == nil || !strings.Contains(snap.Trigger.Message, "became undecidable") {
+		t.Fatalf("the trigger does not preserve the page-level cause: %+v", snap.Trigger)
+	}
+	h.requireFatallyStoppedPosition(1)
+}
+
+// T37g: a reset that closes the panel back to the verified warehouse list
+// is a filter-preparation failure for that position; the next position
+// starts cleanly.
+func TestTraverseResetPanelCloseDegradesPosition(t *testing.T) {
+	game := newScriptedGame(make([]bool, 20)...)
+	game.resetClosesPanelAt = 1
+	h := newTraversalHarness(t, game)
+	h.start()
+	h.endCompleted()
+	h.requireIncompletePosition(1, "filter", collect.CodeNavigationMismatch)
+	h.requireCompletePosition(2)
+}
+
+// T37h: the same unexpected close while selecting S is also confined to
+// the position.
+func TestTraverseSelectSPanelCloseDegradesPosition(t *testing.T) {
+	game := newScriptedGame(make([]bool, 20)...)
+	game.sClosesPanelAt = 1
+	h := newTraversalHarness(t, game)
+	h.start()
+	h.endCompleted()
+	h.requireIncompletePosition(1, "filter", collect.CodeNavigationMismatch)
+	h.requireCompletePosition(2)
+}
+
+// T37i: an S click that makes the page undecidable stops the session
+// instead of degrading the position.
+func TestTraverseSelectSPanelUnknownStops(t *testing.T) {
+	game := newScriptedGame(make([]bool, 20)...)
+	game.sClickMakesUnknownAt = 1
+	h := newTraversalHarness(t, game)
+	h.start()
+	h.endFailed(collect.CodeNavigationMismatch)
+	h.requireFatallyStoppedPosition(1)
+}
+
+// T37j: a displacement candidate followed by a non-warehouse page is a
+// page-level failure, not positionLost. The retained candidate must not
+// hide the popup, loading page or lost stream that ended the wait.
+func TestScrollPageDepartureAfterCandidateStopsSession(t *testing.T) {
+	items := make([]bool, 120)
+	for i := range items {
+		items[i] = true
+	}
+	game := newScriptedGame(items...)
+	h := newTraversalHarness(t, game)
+	h.inv.ScrollBudget = 800 * time.Millisecond
+	h.inv.Matcher = &unknownAfterCandidateMatcher{Matcher: h.inv.Matcher}
+	h.start()
+	snap := h.endFailed(collect.CodePositionLost)
+	if snap.Counts.Captured != 20 {
+		t.Fatalf("the first viewport's admissions must stand: %+v", snap.Counts)
+	}
+	if snap.Trigger == nil || !strings.Contains(snap.Trigger.Message, "did not settle") {
+		t.Fatalf("the trigger does not preserve the unverified scroll cause: %+v", snap.Trigger)
+	}
+	h.requireFatallyStoppedPosition(1)
+}
+
+// T37k: the bottom confirmation's retained candidate has the same rule: a
+// non-warehouse page after the candidate stops the session.
+func TestBottomPageDepartureAfterCandidateStopsSession(t *testing.T) {
+	items := make([]bool, 36)
+	for i := range items {
+		items[i] = true
+	}
+	game := newScriptedGame(items...)
+	game.forceBottom = true
+	h := newTraversalHarness(t, game)
+	h.inv.ScrollBudget = 800 * time.Millisecond
+	h.inv.Matcher = &unknownAfterCandidateMatcher{Matcher: h.inv.Matcher}
+	h.start()
+	snap := h.endFailed(collect.CodeNavigationMismatch)
+	if snap.Counts.Captured != 20 {
+		t.Fatalf("the first viewport's admissions must stand: %+v", snap.Counts)
+	}
+	if snap.Trigger == nil || !strings.Contains(snap.Trigger.Message, "could not verify that the list stayed at the end") {
+		t.Fatalf("the trigger does not preserve the bottom-confirmation cause: %+v", snap.Trigger)
+	}
+	h.requireFatallyStoppedPosition(1)
+}
+
+// T37l: the scanner never touches the wheel, so a wheel change during an
+// advance scroll is a session-fatal page-level change, not positionLost.
+func TestScrollWheelChangeStopsSession(t *testing.T) {
+	items := make([]bool, 120)
+	for i := range items {
+		items[i] = true
+	}
+	game := newScriptedGame(items...)
+	game.wheelAfterAdvance = 2
+	h := newTraversalHarness(t, game)
+	h.inv.ScrollBudget = 800 * time.Millisecond
+	h.start()
+	snap := h.endFailed(collect.CodeNavigationMismatch)
+	if snap.Trigger == nil || !strings.Contains(snap.Trigger.Message, "changed the wheel position to 2") {
+		t.Fatalf("the trigger does not name the wheel change: %+v", snap.Trigger)
+	}
+	h.requireFatallyStoppedPosition(1)
+}
+
+// T37m: a wheel change during the bottom confirmation is session-fatal in
+// the same way.
+func TestBottomWheelChangeStopsSession(t *testing.T) {
+	game := newScriptedGame(listOf(20)...)
+	game.wheelAfterAdvance = 2
+	h := newTraversalHarness(t, game)
+	h.start()
+	snap := h.endFailed(collect.CodeNavigationMismatch)
+	if snap.Trigger == nil || !strings.Contains(snap.Trigger.Message, "changed the wheel position to 2") {
+		t.Fatalf("the trigger does not name the wheel change: %+v", snap.Trigger)
+	}
+	h.requireFatallyStoppedPosition(1)
+}
+
+// T37n: the panel visit only clicks panel controls, so a wheel change
+// observed after closing the panel means someone operated the game. It is
+// session-fatal and is not degraded to a filter-preparation failure.
+func TestWheelChangeAfterPanelCloseStopsSession(t *testing.T) {
+	game := newScriptedGame(make([]bool, 20)...)
+	game.wheelAfterPanelClose = 2
+	h := newTraversalHarness(t, game)
+	h.start()
+	snap := h.endFailed(collect.CodeNavigationMismatch)
+	if snap.Trigger == nil || !strings.Contains(snap.Trigger.Message, "changed the wheel position to 2") {
+		t.Fatalf("the trigger does not name the wheel change: %+v", snap.Trigger)
+	}
+	h.requireFatallyStoppedPosition(1)
+}
+
+// T37c: a session-fatal premise failure while preparing a position is not
+// degraded. The walk stops immediately and no later position starts.
+func TestTraverseSessionFatalDuringPreparationStops(t *testing.T) {
+	game := newScriptedGame(make([]bool, 20)...)
+	h := newTraversalHarness(t, game)
+	orig := h.session.DispatchFn
+	h.session.DispatchFn = func(op platform.InputOp) platform.InputResult {
+		if op.Kind == platform.InputClick && op.At.Eq(game.layout.Wheel[1]) {
+			return platform.InputResult{Status: platform.InputNotDispatched,
+				Denial: platform.NewFault(platform.CodeFocusLost, "focus lost in the script")}
+		}
+		return orig(op)
+	}
+	h.start()
+	h.endFailed(platform.CodeFocusLost)
+	scope := h.scope()
+	if len(scope.Positions) != 2 {
+		t.Fatalf("recorded %d positions before the fatal stop, want position 1 and the stopped position 2: %+v",
+			len(scope.Positions), scope.Positions)
+	}
+	if !scope.Positions[0].Complete {
+		t.Fatalf("position 1 ledger = %+v, want complete", scope.Positions[0])
+	}
+	if stopped := scope.Positions[1]; stopped.Complete || stopped.Stage != "" || stopped.Reason != "" {
+		t.Fatalf("the fatally stopped position 2 = %+v, want an uncredited entry without a position-level reason", stopped)
+	}
+}
+
+// T37d: six complete positions with a verified sort still conclude
+// coverage=complete end to end.
+func TestTraverseAllPositionsCompleteCoverage(t *testing.T) {
+	game := newScriptedGame(make([]bool, 20)...)
+	h := newTraversalHarness(t, game)
+	h.inv.Matcher = sortVerifiedMatcher{Matcher: h.inv.Matcher}
+	h.start()
+	h.endCompleted()
+	scope := h.scope()
+	if scope.Sort != "verified" || scope.Coverage != "complete" {
+		t.Fatalf("scope = sort %q coverage %q, want verified/complete", scope.Sort, scope.Coverage)
+	}
+	for pos := 1; pos <= 6; pos++ {
+		h.requireCompletePosition(pos)
 	}
 }
 

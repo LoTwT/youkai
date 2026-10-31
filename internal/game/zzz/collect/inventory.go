@@ -325,14 +325,24 @@ type scopePayload struct {
 // positionScope is one wheel position's ledger entry: how many viewports
 // it traversed, how many occupied slots were visited, and whether the top
 // and bottom evidence completed. Complete is true only when both ends
-// verified; a stopped position keeps its partial counts.
+// verified; a stopped position keeps its partial counts. Stage, ReasonCode
+// and Reason are set only for a position the walk marked incomplete
+// because its preparation or position proof failed (decision §4.6 K5;
+// T5 §1): the failed step ("wheel", "filter", "top", "scroll", "bottom"),
+// the underlying diagnostic code and the explanation. They stay empty for
+// a complete position and for a position cut by a session-fatal fault
+// (whose cause is the session termination), so the result UI can name
+// exactly the degraded positions.
 type positionScope struct {
-	Position  int  `json:"position"`
-	Viewports int  `json:"viewports"`
-	Visits    int  `json:"visits"`
-	Top       bool `json:"topVerified"`
-	Bottom    bool `json:"bottomVerified"`
-	Complete  bool `json:"complete"`
+	Position   int    `json:"position"`
+	Viewports  int    `json:"viewports"`
+	Visits     int    `json:"visits"`
+	Top        bool   `json:"topVerified"`
+	Bottom     bool   `json:"bottomVerified"`
+	Complete   bool   `json:"complete"`
+	Stage      string `json:"stage,omitempty"`
+	ReasonCode string `json:"reasonCode,omitempty"`
+	Reason     string `json:"reason,omitempty"`
 }
 
 // Precheck implements Traversal: verify, without dispatching any input,
@@ -594,10 +604,23 @@ type inventoryRun struct {
 	// groups, and diagnosticOKImages the subset that also kept key-frame
 	// PNGs. Every committed scroll gets a manifest; only the first
 	// maxScrollOKImageDumpsPerRun of a walk pay for the images, so a walk
-	// commits many scrolls but only stops on its first failure. Neither
-	// counter feeds a navigation decision.
+	// commits many scrolls while the image budget still bounds one walk.
+	// Position-level degradation may also continue past several failed
+	// positions. Neither counter feeds a navigation decision.
 	diagnosticOKManifests int
 	diagnosticOKImages    int
+	// incompletePositions counts the wheel positions this walk degraded
+	// (decision §4.6 K5). incompleteReasons names each one for the limit
+	// fault's message; both are diagnostic bookkeeping only and never feed
+	// a navigation decision beyond the limit check.
+	incompletePositions int
+	incompleteReasons   []string
+	// pendingPanelClose permits the next position's establishList to close
+	// one verified filter panel left open by a degraded previous position.
+	// Only a failure that leaves the panel open sets it; a panel observed
+	// without this marker remains session-fatal, because the scanner itself
+	// never opens one except during an approved preparation.
+	pendingPanelClose bool
 }
 
 // positionTiming is one wheel position's preparation stage durations for
@@ -639,29 +662,62 @@ const maxTopFlings = 16
 // prepare the position automatically — switch the wheel, reset the
 // filters, select S and verify the funnel is active, then reach and
 // confirm the top —
-// and walk its list with the single-page state machine. The next position
-// starts only after the current one completed; any preparation or
-// traversal failure stops the walk and keeps what was already admitted
-// (the user's "execute automatically, stop on failure" decision).
+// and walk its list with the single-page state machine. A failure confined
+// to one position's preparation or position proof marks that position
+// incomplete with its reason and continues with the next one (decision
+// §4.6 K5); every position re-runs its own wheel switch, filter
+// preparation and return to top, so one position's failure does not leak
+// into the next. Session-fatal faults still stop the walk and keep what was
+// already admitted, and too many incomplete positions stop it as well so a
+// systemic failure cannot hide behind a partial result.
 func (run *inventoryRun) run(ctx context.Context) error {
-	for pos := 1; pos <= 6; pos++ {
+	for pos := 1; pos <= scopePositionCount; pos++ {
 		positionStart := time.Now()
 		var timing positionTiming
 		if err := run.preparePosition(ctx, pos, &timing); err != nil {
-			positionMs := time.Since(positionStart)
-			run.inv.recordPosition(run.positionScope(false))
-			run.logPositionSummary(timing, 0, positionMs, false)
-			return err
+			if err := run.finishPosition(err, timing, 0, time.Since(positionStart)); err != nil {
+				return err
+			}
+			continue
 		}
 		collectStart := time.Now()
 		err := run.collectPosition(ctx)
 		collectMs := time.Since(collectStart)
-		positionMs := time.Since(positionStart)
-		run.inv.recordPosition(run.positionScope(err == nil))
-		run.logPositionSummary(timing, collectMs, positionMs, err == nil)
-		if err != nil {
+		if err := run.finishPosition(err, timing, collectMs, time.Since(positionStart)); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// finishPosition closes one wheel position: it records the ledger entry and
+// the position summary, then decides whether the walk continues. A
+// position-scoped failure (positionIncompleteError) marks this position
+// incomplete with its stage, cause code and reason, and lets the next
+// position start unless the incomplete count reached the limit. Every other
+// error — a session-fatal fault, cancellation, a storage failure — is
+// returned unchanged after the same accounting, so the walk stops exactly
+// as before. A nil error records a complete position.
+func (run *inventoryRun) finishPosition(err error, timing positionTiming, collect, total time.Duration) error {
+	incomplete, degraded := asPositionIncomplete(err)
+	if !degraded {
+		run.inv.recordPosition(run.positionScope(err == nil))
+		run.logPositionSummary(timing, collect, total, err == nil)
+		return err
+	}
+	entry := run.positionScope(false)
+	entry.Stage = incomplete.stage
+	entry.ReasonCode = faultDiagnosticCode(incomplete.err)
+	entry.Reason = incomplete.err.Error()
+	run.inv.recordPosition(entry)
+	run.logPositionSummary(timing, collect, total, false)
+	run.incompletePositions++
+	run.incompleteReasons = append(run.incompleteReasons,
+		fmt.Sprintf("position %d %s: %s", entry.Position, entry.Stage, entry.Reason))
+	log.Printf("youkai: collect: position=%d incomplete stage=%s code=%s reason=%q",
+		entry.Position, entry.Stage, entry.ReasonCode, entry.Reason)
+	if run.incompletePositions >= maxIncompletePositions {
+		return positionLimitError(run.incompleteReasons)
 	}
 	return nil
 }
@@ -826,8 +882,9 @@ func (run *inventoryRun) collectPosition(ctx context.Context) error {
 }
 
 // switchWheel selects the target wheel position. A click whose effect
-// never appears is retried within the bound; a page that becomes
-// undecidable is not re-clicked blindly.
+// never appears is retried within the bound; a wheel that never switches is
+// a position preparation failure, while a page that becomes undecidable is
+// not re-clicked blindly and stops the session.
 func (run *inventoryRun) switchWheel(ctx context.Context, pos int) error {
 	if run.listMatch.Wheel == nil {
 		return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
@@ -872,13 +929,20 @@ func (run *inventoryRun) switchWheel(ctx context.Context, pos int) error {
 				if attempt < run.inv.maxRetries() {
 					continue
 				}
-				return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
+				return positionFault("wheel", CodeNavigationMismatch,
 					"collect: the wheel click never switched to position %d within the budget (still %d, attempt %d): %s",
-					pos, out.match.Wheel.Position, attempt+1, out.match.Evidence))
+					pos, out.match.Wheel.Position, attempt+1, out.match.Evidence)
 			}
-			return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
+			fault := scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
 				"collect: the page became undecidable while switching to wheel position %d (last verdict %s): %s",
 				pos, out.match.Page, out.match.Evidence))
+			// A verifiable warehouse list whose wheel did not settle on the
+			// target is this position's preparation failure; a page that is no
+			// longer decidable is session-fatal.
+			if run.listVerdict(out.match) {
+				return positionIncomplete("wheel", fault)
+			}
+			return fault
 		}
 	}
 }
@@ -889,7 +953,9 @@ func (run *inventoryRun) switchWheel(ctx context.Context, pos int) error {
 // decided on 2026-10-25 to keep one visit in every mode. The Active reading
 // after closing proves the S filter is in effect, while a reset that failed
 // to remove an older filter remains a documented residual risk (T5 §3).
-// An unconfirmed S selection stops the walk instead of guessing.
+// A preparation failure inside a verifiable warehouse or panel page ends
+// this position as incomplete instead of guessing; a page that is no longer
+// decidable still stops the session.
 func (run *inventoryRun) resetFilters(ctx context.Context) error {
 	if err := run.openFilterPanel(ctx); err != nil {
 		return err
@@ -923,9 +989,9 @@ func (run *inventoryRun) requireFilterState(want FilterState, what string) error
 	if state == want {
 		return nil
 	}
-	return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
+	return positionFault("filter", CodeNavigationMismatch,
 		"collect: wheel position %d: %s; the funnel is %q, not %q — refusing to continue so filters cannot be assumed",
-		run.position, what, state, want))
+		run.position, what, state, want)
 }
 
 // observedRarityFilter names the rarity filter the current warehouse frame
@@ -940,14 +1006,16 @@ func (run *inventoryRun) observedRarityFilter() string {
 }
 
 // requireWheelPosition keeps every close of the filter panel tied to the
-// wheel position the position's preparation started on.
+// wheel position the position's preparation started on. The panel visit
+// only clicks panel controls, so a wheel change afterwards means someone
+// operated the game; it is session-fatal, not a position-level preparation
+// failure. advanceStateFault names a changed or unreadable wheel and a
+// warehouse page whose grid cannot be read.
 func (run *inventoryRun) requireWheelPosition(step string) error {
 	if run.listMatch.Wheel != nil && run.listMatch.Wheel.Position == run.position {
 		return nil
 	}
-	return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
-		"collect: wheel position %d: the wheel moved during the %s: %s",
-		run.position, step, run.listMatch.Evidence))
+	return run.advanceStateFault("closing the panel for the "+step, run.listMatch)
 }
 
 // openFilterPanel clicks the funnel and waits for the panel page to settle.
@@ -998,12 +1066,20 @@ func (run *inventoryRun) resetFilterPanel(ctx context.Context) error {
 				if attempt < run.inv.maxRetries() {
 					continue
 				}
-				return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
-					"collect: wheel position %d: the filter panel never settled after the reset (attempt %d)", run.position, attempt+1))
+				run.pendingPanelClose = true
+				return positionFault("filter", CodeNavigationMismatch,
+					"collect: wheel position %d: the filter panel never settled after the reset (attempt %d)", run.position, attempt+1)
 			}
-			return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
+			fault := scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
 				"collect: wheel position %d: the filter panel did not stay open while resetting (last verdict %s): %s",
 				run.position, out.match.Page, out.match.Evidence))
+			// Returning to a verifiable warehouse list means the panel closed
+			// unexpectedly: a filter-preparation failure for this position. Any
+			// other page is no longer decidable and stays session-fatal.
+			if run.listVerdict(out.match) {
+				return positionIncomplete("filter", fault)
+			}
+			return fault
 		}
 	}
 }
@@ -1048,12 +1124,17 @@ func (run *inventoryRun) selectRarityS(ctx context.Context) error {
 				if attempt < run.inv.maxRetries() {
 					continue
 				}
-				return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
-					"collect: wheel position %d: the filter panel never settled after selecting S (attempt %d)", run.position, attempt+1))
+				run.pendingPanelClose = true
+				return positionFault("filter", CodeNavigationMismatch,
+					"collect: wheel position %d: the filter panel never settled after selecting S (attempt %d)", run.position, attempt+1)
 			}
-			return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
+			fault := scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
 				"collect: wheel position %d: the filter panel did not stay open while selecting S (last verdict %s): %s",
 				run.position, out.match.Page, out.match.Evidence))
+			if run.listVerdict(out.match) {
+				return positionIncomplete("filter", fault)
+			}
+			return fault
 		}
 	}
 }
@@ -1077,21 +1158,43 @@ func (run *inventoryRun) nextSlot() int {
 }
 
 // establishList waits for the warehouse list to show stably — the state
-// every click builds its pre-click evidence on. The top evidence is
-// established per position by scrollToTop after the filter reset. A first
-// wait that ends at its deadline is retried once: activating the cloud
-// client can restart the video stream, and the first stream frames after
-// activation may not yield a decidable page at all. The retry only delays
-// a real page fault by one action budget; it never accepts a page that was
-// not seen as the warehouse for StableFrames consecutive observations.
+// every click builds its pre-click evidence on. A verified filter panel is
+// accepted only when a degraded previous position left it open
+// (pendingPanelClose); that one panel is closed through the normal
+// click-and-verify path, so a position-level failure does not poison the
+// next position. Any other panel is an unexpected page change and stays
+// session-fatal. The top evidence is established per position by
+// scrollToTop after the filter reset. A first wait that ends at its
+// deadline is retried once: activating the cloud client can restart the
+// video stream, and the first stream frames after activation may not yield
+// a decidable page at all. The retry only delays a real page fault by one
+// action budget; it never accepts a page that was not seen as the warehouse
+// for StableFrames consecutive observations.
 func (run *inventoryRun) establishList(ctx context.Context) error {
+	allowPanelClose := run.pendingPanelClose
+	run.pendingPanelClose = false
+	accept := run.listVerdict
+	if allowPanelClose {
+		accept = func(m PageMatch) bool {
+			return run.listVerdict(m) || run.panelVerdict(m)
+		}
+	}
 	for attempt := 0; ; attempt++ {
-		out := run.awaitSettled(ctx, run.listVerdict)
+		out := run.awaitSettled(ctx, accept)
 		switch out.class {
 		case awaitStable:
+			if run.listVerdict(out.match) {
+				run.listMatch = out.match
+				run.lastFrame = out.frame
+				return nil
+			}
+			// Only a degraded previous position can leave a panel that this
+			// position is allowed to close; the wait predicate admits a panel
+			// only under that marker.
 			run.listMatch = out.match
 			run.lastFrame = out.frame
-			return nil
+			log.Printf("youkai: collect: position %d: the filter panel is still open from the degraded previous position; closing it before preparation", run.position)
+			return run.closeFilterPanel(ctx)
 		case awaitCanceled, awaitFrameErr:
 			return out.err
 		case awaitGeometry:
@@ -1156,9 +1259,16 @@ func (run *inventoryRun) clickUntilPage(ctx context.Context, at image.Point, wan
 				if attempt < run.inv.maxRetries() {
 					continue
 				}
-				return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
+				// A close that verifiably did nothing leaves the verified
+				// panel open. Permit only the next position's establishList
+				// to close it; the scanner never opens a panel on its own
+				// outside preparation.
+				if want == PageWarehouse && run.panelVerdict(out.match) {
+					run.pendingPanelClose = true
+				}
+				return positionFault("filter", CodeNavigationMismatch,
 					"collect: wheel position %d: %s within the budget (attempt %d): %s",
-					run.position, what, attempt+1, out.match.Evidence))
+					run.position, what, attempt+1, out.match.Evidence)
 			}
 			return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
 				"collect: wheel position %d: the page became undecidable while waiting for %s (last verdict %s): %s",
@@ -1205,8 +1315,10 @@ func (run *inventoryRun) panelVerdict(m PageMatch) bool {
 // position has no visit records yet, but neither proves the destination
 // or that the top was reached, so the next fling re-establishes the base
 // from the newest verified frame. After a settled top claim, confirmTop
-// must prove the list can move no farther; there an Undecided wait stops
-// instead of re-dragging.
+// must prove the list can move no farther; there an Undecided wait ends the
+// position instead of re-dragging. A top that cannot be proven within these
+// bounds is a position preparation failure; a page that left the verifiable
+// warehouse still stops the session.
 func (run *inventoryRun) scrollToTop(ctx context.Context) (*failureFrames, error) {
 	flings := 0
 	noProgress := 0
@@ -1219,14 +1331,16 @@ func (run *inventoryRun) scrollToTop(ctx context.Context) (*failureFrames, error
 			break
 		}
 		if noProgress >= 2 {
-			return topWaitFailure("top", lastBefore, lastOut, haveWait), scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
+			fault := scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
 				"collect: wheel position %d: two consecutive flings produced no progress toward the top: %s",
 				run.position, run.listMatch.Evidence))
+			return topWaitFailure("top", lastBefore, lastOut, haveWait), run.topProofFault(lastOut, fault)
 		}
 		if flings >= maxTopFlings {
-			return topWaitFailure("top", lastBefore, lastOut, haveWait), scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
+			fault := scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
 				"collect: wheel position %d: the top was not reached after %d flings: %s",
 				run.position, flings, run.listMatch.Evidence))
+			return topWaitFailure("top", lastBefore, lastOut, haveWait), run.topProofFault(lastOut, fault)
 		}
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -1451,9 +1565,10 @@ func (run *inventoryRun) awaitTopBase(ctx context.Context) error {
 // must leave the list stationary (T5 §5). Lost or moving outcomes are not
 // top evidence: they mean the earlier claim was premature or the list was
 // still settling, so the loop keeps flinging toward the beginning. An
-// undecided wait proves neither movement nor stillness and stops instead
-// of stacking another drag. The bounded attempt count stops the walk
-// rather than admitting items from an unverified position.
+// undecided wait proves neither movement nor stillness and ends the
+// position instead of stacking another drag. The bounded attempt count
+// marks the position incomplete rather than admitting items from an
+// unverified position.
 func (run *inventoryRun) confirmTop(ctx context.Context) (*failureFrames, error) {
 	// The return-to-top fling can still be settling when the top claim
 	// first holds. Confirming immediately then compares the first drag
@@ -1536,13 +1651,22 @@ func (run *inventoryRun) confirmTop(ctx context.Context) (*failureFrames, error)
 		// proves neither movement nor stillness: another drag would stack
 		// an action on an unknown effect (T5 §4).
 		if !out.lost && !out.displaced && !out.stationary {
-			return waitFailure(waitKind("top", out), before, out), scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
+			fault := scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
 				"collect: wheel position %d: the top confirmation produced no verifiable verdict within the budget (attempt %d); no further drag is sent",
 				run.position, attempt+1))
+			// An undecided confirmation over a still-verifiable list is this
+			// position's top-proof failure; no frame or a page that left the
+			// warehouse is session-fatal. topProofFault also rejects a wheel
+			// change observed in the latest frame.
+			if out.sawFrame && out.lastFrameIsList {
+				return waitFailure(waitKind("top", out), before, out), run.topProofFault(out, fault)
+			}
+			return waitFailure(waitKind("top", out), before, out), fault
 		}
 	}
-	return topWaitFailure("top", before, lastOut, haveWait), scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
+	fault := scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
 		"collect: wheel position %d: the top confirmation did not settle after %d attempts", run.position, maxTopFlings))
+	return topWaitFailure("top", before, lastOut, haveWait), run.topProofFault(lastOut, fault)
 }
 
 // topConfirmed accepts a warehouse frame at the scrollbar's top. A settled
@@ -1623,8 +1747,9 @@ func (run *inventoryRun) confirmBottomStep(ctx context.Context) error {
 // in the advance direction that must leave the list stationary: at the
 // list's end the content cannot move further (T5 §5's "再拖一次，前后帧
 // 列表区误差 < 4"). The complete walk needs both kinds of evidence. A
-// terminal Undecided means the drag's effect is unknown, so it stops the
-// walk instead of stacking another drag on an unproven result (T5 §4).
+// terminal Undecided means the drag's effect is unknown, so it ends the
+// position instead of stacking another drag on an unproven result (T5 §4);
+// the position keeps its admitted items and is marked incomplete.
 func (run *inventoryRun) confirmBottom(ctx context.Context) (*failureFrames, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -1656,9 +1781,7 @@ func (run *inventoryRun) confirmBottom(ctx context.Context) (*failureFrames, err
 		run.position, out.stationary, out.displaced, out.lost, out.match.Rows,
 		scrollMarginFields(run.inv.matcher(), out.match, out.settleMatch))
 	if out.afterMatch.Page == PageWarehouse && !run.positionListVerdict(out.afterMatch) {
-		fault := scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
-			"collect: wheel position %d: the bottom confirmation left the list at another wheel position: %s",
-			run.position, out.afterMatch.Evidence))
+		fault := run.advanceStateFault("the bottom confirmation", out.afterMatch)
 		if out.after.ID != 0 && out.after.Image != nil {
 			return waitFailure("bottom-wrong-position", before, out), fault
 		}
@@ -1670,16 +1793,16 @@ func (run *inventoryRun) confirmBottom(ctx context.Context) (*failureFrames, err
 		run.lastFrame = out.after
 		return nil, nil
 	case out.lost:
-		fault := scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
-			"collect: the bottom confirmation could not verify that the list stayed at the end: %s", out.match.Evidence))
+		fault := positionProofFailure("bottom", CodeNavigationMismatch, out,
+			"collect: the bottom confirmation could not verify that the list stayed at the end: %s", out.match.Evidence)
 		return waitFailure("bottom-lost", before, out), fault
 	case out.displaced:
-		fault := scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
-			"collect: the bottom confirmation moved the list, contradicting the scrollbar's bottom evidence: %s", out.match.Evidence))
+		fault := positionProofFailure("bottom", CodeNavigationMismatch, out,
+			"collect: the bottom confirmation moved the list, contradicting the scrollbar's bottom evidence: %s", out.match.Evidence)
 		return waitFailure("bottom-displaced", before, out), fault
 	default:
-		fault := scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
-			"collect: the bottom confirmation produced no verifiable verdict within the budget; no further drag is sent"))
+		fault := positionProofFailure("bottom", CodeNavigationMismatch, out,
+			"collect: the bottom confirmation produced no verifiable verdict within the budget; no further drag is sent")
 		if out.after.ID != 0 && out.after.Image != nil {
 			return waitFailure("bottom-undecided", before, out), fault
 		}
@@ -2649,7 +2772,10 @@ type scrollAttempt struct {
 // transition by correspondence (T5 §5): the pages before and after are
 // the same warehouse, so only the matcher's overlap correspondences
 // prove where the list went — a stable warehouse verdict alone proves
-// nothing.
+// nothing. A scroll whose final position cannot be verified is a position
+// proof failure: the position is marked incomplete with its already
+// admitted items kept, and the walk moves on. A page that left the
+// verifiable warehouse still stops the session.
 func (run *inventoryRun) scroll(ctx context.Context) (err error) {
 	before, err := run.currentList(ctx)
 	if err != nil {
@@ -2754,9 +2880,7 @@ func (run *inventoryRun) scroll(ctx context.Context) (err error) {
 			run.position, fromViewport, attempts, before.ID, out.after.ID, outcome, out.unmoved, out.match.Rows,
 			scrollMarginFields(run.inv.matcher(), out.match, out.settleMatch))
 		if outcome == "wrong-position" {
-			return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
-				"collect: wheel position %d: the scroll left the list at another wheel position: %s",
-				run.position, out.afterMatch.Evidence))
+			return run.advanceStateFault("the scroll", out.afterMatch)
 		}
 		switch {
 		case out.lost:
@@ -2764,25 +2888,25 @@ func (run *inventoryRun) scroll(ctx context.Context) (err error) {
 				run.position, before.ID, out.after.ID, out.unsettled, out.after.ID,
 				out.match.Rows, len(out.match.Matches), out.match.Evidence)
 			if out.unsettled {
-				return scan.NewFault(CodePositionLost, fmt.Errorf(
+				return positionProofFailure("scroll", CodePositionLost, out,
 					"collect: the list displaced but did not settle within the scroll budget, so its final position is unverified (last candidate frame %d): %s",
-					out.after.ID, out.match.Evidence))
+					out.after.ID, out.match.Evidence)
 			}
-			return scan.NewFault(CodePositionLost, fmt.Errorf(
+			return positionProofFailure("scroll", CodePositionLost, out,
 				"collect: the list displaced but no unique correspondence verified where it went (frame %d): %s",
-				out.after.ID, out.match.Evidence))
+				out.after.ID, out.match.Evidence)
 		case out.displaced:
 			if len(out.match.Matches) == 0 {
 				log.Printf("youkai: collect: position %d scroll %d -> %d displaced without correspondences: rows=%d evidence=%s",
 					run.position, before.ID, out.after.ID, out.match.Rows, out.match.Evidence)
-				return scan.NewFault(CodePositionLost, errors.New(
-					"collect: the list displaced but the matcher reported no correspondences"))
+				return positionProofFailure("scroll", CodePositionLost, out,
+					"collect: the list displaced but the matcher reported no correspondences")
 			}
 			if err := run.applyTransition(before, out.after, run.listMatch, out.afterMatch, out.match); err != nil {
 				outcome = "rejected"
 				attemptLog[len(attemptLog)-1].outcome = outcome
 				log.Printf("youkai: collect: position %d scroll %d -> %d rejected: %v", run.position, before.ID, out.after.ID, err)
-				return err
+				return positionIncomplete("scroll", err)
 			}
 			rows = out.match.Rows
 			run.positionScrolls++
@@ -2800,8 +2924,8 @@ func (run *inventoryRun) scroll(ctx context.Context) (err error) {
 				// The last comparison was Stationary, but the wait also
 				// saw movement or an undecided comparison: the drag's
 				// effect is not proven, so no second drag is sent.
-				return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
-					"collect: the drag ended stationary but the wait also observed movement or an undecided comparison, so its effect is unverified (attempt %d)", attempt+1))
+				return positionProofFailure("scroll", CodeNavigationMismatch, out,
+					"collect: the drag ended stationary but the wait also observed movement or an undecided comparison, so its effect is unverified (attempt %d)", attempt+1)
 			}
 			if attempt < run.inv.maxRetries() {
 				// Only a proven unmoved drag may be retried, and the
@@ -2825,13 +2949,15 @@ func (run *inventoryRun) scroll(ctx context.Context) (err error) {
 				before = next
 				continue
 			}
-			return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
-				"collect: the drag never displaced the list within the budget (attempt %d) and no end evidence held", attempt+1))
+			return positionProofFailure("scroll", CodeNavigationMismatch, out,
+				"collect: the drag never displaced the list within the budget (attempt %d) and no end evidence held", attempt+1)
 		default:
 			// No verifiable verdict: the drag's effect is unknown, so a
-			// second drag would stack an action on an unproven result.
-			return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
-				"collect: the scroll drag produced no verifiable verdict within the budget (attempt %d); no further drag is sent", attempt+1))
+			// second drag would stack an action on an unproven result. The
+			// helper keeps a still-verifiable list position-scoped but lets
+			// a page that left the warehouse stop the session.
+			return positionProofFailure("scroll", CodeNavigationMismatch, out,
+				"collect: the scroll drag produced no verifiable verdict within the budget (attempt %d); no further drag is sent", attempt+1)
 		}
 	}
 }
@@ -2900,6 +3026,12 @@ type scrollOutcome struct {
 	// warehouse list. A stop message can then describe what was actually
 	// last seen instead of an older list frame or "no frame received".
 	lastEvidence string
+	// lastMatch is the page verdict of the most recently received
+	// observation. Unlike afterMatch (which an unsettled Lost may reset to
+	// an older candidate), it always describes the newest frame, so a top
+	// failure can tell an unresolved position from a wheel change or page
+	// departure that happened after the candidate.
+	lastMatch PageMatch
 	// unsettled reports a displacement that never settled relative to its
 	// candidate within the budget. It is a Lost outcome, but the position
 	// was verified to have moved; only where it finally stopped is unknown.
@@ -3118,6 +3250,7 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 		out.sawFrame = true
 		out.lastFrameIsList = run.listVerdict(m)
 		out.lastEvidence = m.Evidence
+		out.lastMatch = m
 		if f.Reused {
 			// Unchanged content can prove the candidate stayed still; it
 			// cannot prove a displacement not yet seen fresh. It also never

@@ -76,8 +76,11 @@ const (
 	// CodeNavigationMismatch: a dispatched action's effect could not be
 	// verified within its retry budget — the click or drag never moved the
 	// page where the navigation expected it, or the page became
-	// undecidable. Stopping semantics: keep what was admitted, keep the
-	// navigation-failure evidence, invent nothing.
+	// undecidable. Stopping semantics follow the failure's scope: a page
+	// that cannot be verified stops the session, while a failure confined
+	// to one position's preparation or proof marks only that position
+	// incomplete and continues (see positionIncompleteError). Keep what was
+	// admitted, keep the navigation-failure evidence, invent nothing.
 	CodeNavigationMismatch = "navigationMismatch"
 	// CodeDetailUnattributed: the detail could not be attributed to the
 	// clicked target within the bounded observation (T5 §4) — the
@@ -99,7 +102,15 @@ const (
 	CodeEvidenceFailed = "evidenceFailed"
 	// CodePositionLost: a scroll's position correspondence could not be
 	// established (T5 §5) — the list moved but no unique overlap
-	// correspondence verifies where it moved to. The machine stops rather
-	// than guessing how many positions were skipped.
+	// correspondence verifies where it moved to. The machine never guesses
+	// how many positions were skipped: a scroll or bottom confirmation
+	// marks the position incomplete and continues, while a lost selection
+	// mapping still stops the session because the next click would target a
+	// different grid cell.
 	CodePositionLost = "positionLost"
+	// CodePositionFailureLimit: too many wheel positions ended incomplete,
+	// so the walk stops instead of continuing past a likely systemic
+	// perception failure (decision §4.6 K5's escalation guard). The
+	// incomplete positions stay in the observed scope with their reasons.
+	CodePositionFailureLimit = "positionFailureLimit"
 )
