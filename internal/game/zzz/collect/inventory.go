@@ -590,10 +590,14 @@ type inventoryRun struct {
 	// diagnosticDumps counts this walk's scan-failure diagnostic groups
 	// (see dumpScrollTrace); it never feeds a navigation decision.
 	diagnosticDumps int
-	// diagnosticOKDumps counts this walk's committed-scroll frame-time
-	// dumps, under its own (larger) cap: a walk commits many scrolls but
-	// only stops on its first failure.
-	diagnosticOKDumps int
+	// diagnosticOKManifests counts this walk's committed-scroll diagnostic
+	// groups, and diagnosticOKImages the subset that also kept key-frame
+	// PNGs. Every committed scroll gets a manifest; only the first
+	// maxScrollOKImageDumpsPerRun of a walk pay for the images, so a walk
+	// commits many scrolls but only stops on its first failure. Neither
+	// counter feeds a navigation decision.
+	diagnosticOKManifests int
+	diagnosticOKImages    int
 }
 
 // positionTiming is one wheel position's preparation stage durations for

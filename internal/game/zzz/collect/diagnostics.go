@@ -23,13 +23,27 @@ import (
 // the bottom confirmation; the directory keeps the newest dumps across
 // walks so repeated field runs never grow it without bound. A committed
 // scroll also writes a frame-time dump (decision §4.3: stage 2 records
-// precise frame times through the application diagnostics); those carry
-// only the key frames' PNGs, so their caps are separate and larger.
+// precise frame times through the application diagnostics). Those carry
+// only the key frames' PNGs, so their image caps are separate and larger.
+//
+// Every committed scroll must leave a manifest: the first eight successful
+// waits of a walk also keep their key frames' PNGs, while the rest write the
+// manifest alone. The PNG volume therefore stays at its historical bound,
+// but the stage 5 timing calibration can read the timing and verdict record
+// of every successful scroll instead of only the first eight. The directory
+// keeps the newest image-bearing successes (24, the historical cap) and the
+// newest manifest-only successes (256, roughly three full six-position
+// walks); the two are pruned as separate buckets so more manifests never
+// evict the failure dumps' or the key-frame PNGs' budget.
 const (
 	maxDiagnosticDumpsPerRun = 6
 	maxDiagnosticDumps       = 12
-	maxScrollOKDumpsPerRun   = 8
-	maxScrollOKDumps         = 24
+
+	maxScrollOKImageDumpsPerRun = 8
+	maxScrollOKImageDumps       = 24
+
+	maxScrollOKManifestDumpsPerRun = 256
+	maxScrollOKManifestOnlyDumps   = 256
 )
 
 // diagnosticNow supplies the diagnostic file timestamps and the bottom
@@ -104,12 +118,16 @@ type diagnosticFrame struct {
 
 // diagnosticMatch is one comparison's verdict and numbers.
 type diagnosticMatch struct {
-	ReferenceFrame uint64             `json:"reference_frame"`
-	Verdict        string             `json:"verdict"`
-	Err0           *float64           `json:"err0"`
-	BestDy         *int               `json:"best_dy"`
-	BestErr        *float64           `json:"best_err"`
-	RowErrors      map[string]float64 `json:"row_errors"`
+	ReferenceFrame uint64 `json:"reference_frame"`
+	Verdict        string `json:"verdict"`
+	// Basis names the evidence combination behind a Displaced verdict
+	// (selection+feature, selection+feature+scrollbar, or
+	// feature+scrollbar); it is empty for every other verdict.
+	Basis     string             `json:"basis,omitempty"`
+	Err0      *float64           `json:"err0"`
+	BestDy    *int               `json:"best_dy"`
+	BestErr   *float64           `json:"best_err"`
+	RowErrors map[string]float64 `json:"row_errors"`
 	// Normalized-feature evidence (stage 2): the zero-shift correlation,
 	// the strongest non-zero candidate and every whole-row candidate's
 	// correlation, plus the selection-box slot readings the verdict used.
@@ -134,11 +152,14 @@ const diagnosticMatchNote = "comparisons are the MatchScroll results the wait pr
 // gets its own subdirectory so a retried scroll keeps all of them. wait is
 // the awaitScroll result the dump describes; its motion and settle records
 // land in the manifest for the stage 5 timing calibration. A failure dump
-// (keyFramesOnly=false) writes every retained frame's crop; a committed
-// scroll's dump (keyFramesOnly=true, kind "scroll-ok") writes the manifest
-// in full but only the key frames' crops — the baseline, the first moved
-// frame, the candidate and the newest frame — so the whole successful wait
-// stays replayable without the failure dumps' image volume. Every failure
+// (keyFramesOnly=false) writes every retained frame's crop. A committed
+// scroll's dump (keyFramesOnly=true, kind "scroll-ok") always writes the
+// manifest in full; the first maxScrollOKImageDumpsPerRun successes of a
+// walk also write the key frames' crops — the baseline, the first moved
+// frame, the candidate and the newest frame — while later successes write
+// the manifest alone under a "-scroll-ok-manifest" directory name. That
+// keeps the PNG volume at its historical bound while every successful
+// wait leaves its timing and verdict record for calibration. Every failure
 // here is logged and swallowed: diagnostics must never change the walk.
 func (run *inventoryRun) dumpScrollTrace(kind string, attempt int, wait scrollOutcome, before, after platform.Frame, trace *scrollTrace, candidate platform.Frame, hasCandidate bool, keyFramesOnly bool) {
 	dir := run.inv.DiagnosticDir
@@ -146,11 +167,19 @@ func (run *inventoryRun) dumpScrollTrace(kind string, attempt int, wait scrollOu
 		return
 	}
 	okDump := keyFramesOnly || strings.Contains(kind, "scroll-ok")
+	nameKind := kind
+	withImages := false
 	if okDump {
-		if run.diagnosticOKDumps >= maxScrollOKDumpsPerRun {
+		if run.diagnosticOKManifests >= maxScrollOKManifestDumpsPerRun {
 			return
 		}
-		run.diagnosticOKDumps++
+		run.diagnosticOKManifests++
+		if keyFramesOnly && run.diagnosticOKImages < maxScrollOKImageDumpsPerRun {
+			run.diagnosticOKImages++
+			withImages = true
+		} else {
+			nameKind = kind + "-manifest"
+		}
 	} else {
 		if run.diagnosticDumps >= maxDiagnosticDumpsPerRun {
 			return
@@ -164,7 +193,7 @@ func (run *inventoryRun) dumpScrollTrace(kind string, attempt int, wait scrollOu
 	trace.ensure(after)
 
 	stamp := diagnosticNow().Format("20060102-150405.000")
-	name := fmt.Sprintf("%s-pos%d-vp%d-%s", strings.ReplaceAll(stamp, ".", ""), run.position, run.viewport, kind)
+	name := fmt.Sprintf("%s-pos%d-vp%d-%s", strings.ReplaceAll(stamp, ".", ""), run.position, run.viewport, nameKind)
 	if attempt > 0 {
 		name = fmt.Sprintf("%s-attempt%d", name, attempt)
 	}
@@ -209,7 +238,7 @@ func (run *inventoryRun) dumpScrollTrace(kind string, attempt int, wait scrollOu
 	}
 	written := 0
 	keyFrames := map[uint64]bool{}
-	if okDump {
+	if okDump && withImages {
 		// The baseline (always first), the pinned first-moved and candidate
 		// frames and the newest frame make the successful wait replayable;
 		// everything else stays in the manifest as timings and verdicts.
@@ -235,7 +264,7 @@ func (run *inventoryRun) dumpScrollTrace(kind string, attempt int, wait scrollOu
 		if frame.vsCandidate != nil {
 			entry.VsCandidate = diagnosticComparison(frame.vsCandidate, frame.candidateID)
 		}
-		if frame.image != nil && (!okDump || keyFrames[frame.id]) {
+		if frame.image != nil && (!okDump || (withImages && keyFrames[frame.id])) {
 			// The crop is already exactly the region; writeDiagnosticPNG
 			// keeps its nil guard and failure handling.
 			entry.File = fmt.Sprintf("%04d-f%d.png", i, frame.id)
@@ -259,9 +288,9 @@ func (run *inventoryRun) dumpScrollTrace(kind string, attempt int, wait scrollOu
 	} else {
 		log.Printf("youkai: collect: diagnostics: marshal manifest: %v", err)
 	}
-	log.Printf("youkai: collect: diagnostics: %s: %d frames, %d dropped (%d bytes) -> %s",
-		name, written, trace.dropped, trace.droppedBytes, subdir)
-	pruneDiagnostics(dir, maxDiagnosticDumps, maxScrollOKDumps)
+	log.Printf("youkai: collect: diagnostics: %s: %d manifest frames, %d png crops, %d dropped (%d bytes) -> %s",
+		name, len(manifest.Frames), written, trace.dropped, trace.droppedBytes, subdir)
+	pruneDiagnostics(dir, maxDiagnosticDumps, maxScrollOKImageDumps, maxScrollOKManifestOnlyDumps)
 }
 
 // createDumpDir creates the dump directory exclusively. A second failure
@@ -295,6 +324,7 @@ func diagnosticComparison(sm *ScrollMatch, reference uint64) *diagnosticMatch {
 	out := &diagnosticMatch{
 		ReferenceFrame: reference,
 		Verdict:        scrollVerdict(*sm),
+		Basis:          sm.Basis,
 		Evidence:       sm.Evidence,
 	}
 	if m := sm.Metrics; m != nil {
@@ -415,6 +445,11 @@ func scrollMarginFields(matcher Matcher, total, settle ScrollMatch) string {
 	}
 	out := fmt.Sprintf("err0=%s stationary_margin=%s best_err=%s displaced_margin=%s rival_gap=%s settle_err0=%s",
 		err0, stationary, bestErr, displaced, rival, settleErr)
+	basis := total.Basis
+	if basis == "" {
+		basis = "none"
+	}
+	out += " basis=" + basis
 	if features, ok := matcher.(scrollFeatureReporter); ok {
 		stationaryNCC, _, _, _, _ := features.ScrollFeatureThresholds()
 		if m := total.Metrics; m != nil && m.NCCMeasured {
@@ -500,32 +535,35 @@ func writeDiagnosticPNG(path string, img *image.RGBA) error {
 
 // pruneDiagnostics keeps the newest keep dumps of dir by name (the names
 // start with a sortable timestamp) and removes the rest, separately for the
-// failure dumps and the committed scrolls' "scroll-ok" frame-time dumps:
-// both kinds are diagnostics, but their volume profiles differ, so neither
-// kind may evict the other. Regular PNG files are the pre-sequence dumps of
-// older builds; they share the failure bound so an upgraded install does
-// not keep them forever. Read and removal failures are logged and
-// swallowed: diagnostics must never change the walk.
-func pruneDiagnostics(dir string, keepFailures, keepOK int) {
-	pruneDiagnosticsWith(dir, keepFailures, keepOK, os.ReadDir, os.RemoveAll)
+// failure dumps, the committed scrolls' key-frame "scroll-ok" dumps and
+// their manifest-only "-scroll-ok-manifest" dumps: the volume profiles
+// differ, so neither kind may evict another. Regular PNG files are the
+// pre-sequence dumps of older builds; they share the failure bound so an
+// upgraded install does not keep them forever. Read and removal failures
+// are logged and swallowed: diagnostics must never change the walk.
+func pruneDiagnostics(dir string, keepFailures, keepOKImages, keepOKManifests int) {
+	pruneDiagnosticsWith(dir, keepFailures, keepOKImages, keepOKManifests, os.ReadDir, os.RemoveAll)
 }
 
 // pruneDiagnosticsWith is pruneDiagnostics with its filesystem calls
 // injected, so the failure paths are testable on every platform.
-func pruneDiagnosticsWith(dir string, keepFailures, keepOK int, readDir func(string) ([]os.DirEntry, error), remove func(string) error) {
+func pruneDiagnosticsWith(dir string, keepFailures, keepOKImages, keepOKManifests int, readDir func(string) ([]os.DirEntry, error), remove func(string) error) {
 	entries, err := readDir(dir)
 	if err != nil {
 		log.Printf("youkai: collect: diagnostics: read %s: %v", dir, err)
 		return
 	}
-	var failures, oks []string
+	var failures, okImages, okManifests []string
 	for _, e := range entries {
 		if !e.IsDir() && !(e.Type().IsRegular() && strings.HasSuffix(e.Name(), ".png")) {
 			continue
 		}
-		if strings.Contains(e.Name(), "scroll-ok") {
-			oks = append(oks, e.Name())
-		} else {
+		switch {
+		case strings.Contains(e.Name(), "scroll-ok-manifest"):
+			okManifests = append(okManifests, e.Name())
+		case strings.Contains(e.Name(), "scroll-ok"):
+			okImages = append(okImages, e.Name())
+		default:
 			failures = append(failures, e.Name())
 		}
 	}
@@ -542,5 +580,6 @@ func pruneDiagnosticsWith(dir string, keepFailures, keepOK int, readDir func(str
 		}
 	}
 	prune(failures, keepFailures)
-	prune(oks, keepOK)
+	prune(okImages, keepOKImages)
+	prune(okManifests, keepOKManifests)
 }
