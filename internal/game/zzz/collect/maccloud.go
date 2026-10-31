@@ -270,6 +270,33 @@ type Calibration struct {
 	ScrollMaxRows            int     // k = 1..Rows-1
 	ScrollLostMin            float64 // err0 ≥ this with no alignment → Lost (13.3)
 
+	// Normalized scroll features (stage 2, decision §4.3 K2). The
+	// grayscale MAD above stays a quality gate and the stationary proof for
+	// pixel-identical frames; the displacement verdict itself rests on the
+	// selection box (primary) and the normalized correlation of comparable
+	// support regions (auxiliary), never on an absolute error threshold
+	// alone. Measured on 2026-10-28/30 field frames and the M2 samples:
+	// same-content NCC 0.948–0.998, moving zero-shift NCC 0.68–0.88,
+	// correct whole-row alignment 0.918–0.986, wrong candidates 0.72–0.90,
+	// the off-pitch negative sample's best candidate 0.893 with a 0.016
+	// runner-up gap (vs 0.06–0.17 for the true alignments).
+	ScrollStationaryNCC float64 // ≥: stationary by normalized correlation at zero shift
+	ScrollSelectionNCC  float64 // ≥: feature corroboration of a selection-box displacement
+	ScrollDisplacedNCC  float64 // ≥: displaced by features alone (no selection anchor)
+	ScrollNCCMargin     float64 // the winning candidate must beat the runner-up by this
+	ScrollInfoStdMin    float64 // support-region grayscale std floor for NCC verdicts
+	// ScrollbarMoveMin is the thumb travel floor for corroborating a
+	// feature-only displacement; below it the thumb did not measurably
+	// move. ScrollbarTravelTolerance is the relative tolerance around the
+	// expected travel (claimed rows × the per-row travel derived from the
+	// observed thumb geometry); it must stay below 1/ScrollMaxRows so an
+	// off-by-one row claim — at least one row's travel off — cannot pass.
+	// Measured on the M2 fixtures: a 24-row list moves the thumb ~28px per
+	// row (4 rows ≈ 112px, 3 rows ≈ 84px), thumb length ≈ 141px of the
+	// 685px track.
+	ScrollbarMoveMin         int
+	ScrollbarTravelTolerance float64
+
 	// Scrollbar thumb detection on ScrollTrack.
 	ScrollbarBrightMin    int // grayscale >: thumb pixels (measured 110+)
 	ScrollbarTopStartMax  int // segment start ≤: top (measured 226–227)
@@ -324,10 +351,68 @@ func MacCloudCalibration() Calibration {
 		ScrollRowTolerance:    3,
 		ScrollMaxRows:         4,
 		ScrollLostMin:         10.0,
+
+		ScrollStationaryNCC: 0.92,
+		ScrollSelectionNCC:  0.90,
+		ScrollDisplacedNCC:  0.93,
+		ScrollNCCMargin:     0.05,
+		ScrollInfoStdMin:    12.0,
+
+		ScrollbarMoveMin:         2,
+		ScrollbarTravelTolerance: 0.20,
+
 		ScrollbarBrightMin:    110,
 		ScrollbarTopStartMax:  229,
 		ScrollbarBottomEndMin: 898,
 	}
+}
+
+// ScrollTiming is one client's scroll timing profile (decision §4.3 K2,
+// F7): a drag's motion becomes observable late (measured 0–500ms still,
+// ~1s before the first movement, 2s still moving), so the wait first
+// observes that movement started and only then judges the settle. The
+// budgets exist so stage 5 can calibrate retry and recovery windows from
+// the stage-2 diagnostics; the values below are the macOS cloud profile
+// measured on 2026-10-28/30 field runs.
+type ScrollTiming struct {
+	// MotionStartBudget is the floor on the wait for the first observable
+	// movement: within it, stillness is not evidence the drag failed
+	// (F7: no movement in 2s does not mean the action was ineffective).
+	MotionStartBudget time.Duration
+	// SettleBudget bounds the settle confirmation measured from the first
+	// observed movement, so a late start still gets its own settle window.
+	SettleBudget time.Duration
+	// SettleObservations is the consecutive candidate-relative stillness
+	// confirmations required before a displacement commits, each one an
+	// independent fresh-frame observation; platform idle confirmations
+	// (reused frames) repeat the newest fresh frame's already-judged
+	// content and are neutral, so one still frame plus its idle echoes is
+	// one observation, not a streak.
+	SettleObservations int
+}
+
+// MacCloudScrollTiming returns the macOS cloud client's scroll timing
+// profile. MotionStartBudget covers F7's observed late starts with margin;
+// SettleBudget extends the settle window for a motion observed near the
+// scroll budget's end (the effective deadline never shrinks below the
+// plain ScrollBudget).
+func MacCloudScrollTiming() ScrollTiming {
+	return ScrollTiming{
+		MotionStartBudget:  2500 * time.Millisecond,
+		SettleBudget:       4 * time.Second,
+		SettleObservations: 2,
+	}
+}
+
+func (t ScrollTiming) validate() error {
+	// SettleObservations must be at least 2: one observation is not a
+	// consecutive stability proof (decision §4.3's multi-frame settle), so
+	// a single-observation profile is a configuration error rather than a
+	// value to silently honor.
+	if t.MotionStartBudget <= 0 || t.SettleBudget <= 0 || t.SettleObservations < 2 {
+		return errCalibration("scroll timing")
+	}
+	return nil
 }
 
 // validate refuses a threshold set the matcher could only use by guessing.
@@ -367,6 +452,12 @@ func (c Calibration) validate() error {
 		return errCalibration("scroll shift uniqueness")
 	case c.ScrollRowTolerance < 0 || c.ScrollMaxRows < 1 || c.ScrollLostMin < c.ScrollDisplacedMax:
 		return errCalibration("scroll rows")
+	case c.ScrollStationaryNCC <= 0 || c.ScrollStationaryNCC > 1 ||
+		c.ScrollSelectionNCC <= 0 || c.ScrollDisplacedNCC < c.ScrollSelectionNCC ||
+		c.ScrollDisplacedNCC > 1 || c.ScrollNCCMargin < 0 || c.ScrollNCCMargin >= 1 ||
+		c.ScrollInfoStdMin <= 0 || c.ScrollbarMoveMin < 0 ||
+		c.ScrollbarTravelTolerance <= 0 || c.ScrollbarTravelTolerance >= 1.0/float64(c.ScrollMaxRows):
+		return errCalibration("scroll normalized features")
 	case c.ScrollbarBrightMin < 0 || c.ScrollbarTopStartMax < 0 || c.ScrollbarBottomEndMin < 0:
 		return errCalibration("scrollbar")
 	}

@@ -296,6 +296,27 @@ type ScrollMetrics struct {
 	BestDy    int
 	BestErr   float64
 	RowErrors map[int]float64
+	// NCCMeasured reports that the normalized-feature search ran; when
+	// false the fields below are unset (the verdict decided before it, for
+	// example pixel-identical frames proving stillness).
+	NCCMeasured bool
+	// RowNCC is the windowed zero-mean normalized correlation of every
+	// whole-row candidate, keyed by signed rows including +0. Each non-zero
+	// value is the best correlation within the row-tolerance window, so
+	// sub-row jitter does not deflate a true alignment; the +0 value is the
+	// correlation at exactly zero displacement (stillness admits no
+	// window).
+	RowNCC map[int]float64
+	// BestNCCRow and BestNCC name the strongest non-zero candidate.
+	BestNCCRow int
+	BestNCC    float64
+	// InfoStd is the winning comparison's support-region grayscale std, the
+	// information gate behind the normalized verdicts.
+	InfoStd float64
+	// SelectionBefore and SelectionAfter are the selection-box slot
+	// readings the comparison used (-1 none, -2 unreadable or ambiguous).
+	SelectionBefore int
+	SelectionAfter  int
 }
 
 // Matcher is the traversal's evidence engine: it turns frames into the

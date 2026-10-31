@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"image"
+	"image/color"
 	"log"
 	"path/filepath"
 	"strings"
@@ -302,12 +303,25 @@ func displacedScan(l Layout, rows int) ScrollMatch {
 	}
 }
 
+// scriptedScrollTiming is the scaled-down scroll timing the scripted runs
+// use: the waits exercise the streak and verdict logic with millisecond
+// budgets, so the profile's floors shrink with them (the production profile
+// and its enforcement have their own dedicated tests).
+func scriptedScrollTiming() *ScrollTiming {
+	return &ScrollTiming{
+		MotionStartBudget:  20 * time.Millisecond,
+		SettleBudget:       50 * time.Millisecond,
+		SettleObservations: 2,
+	}
+}
+
 func newScrollRun(l Layout, view SessionView, m Matcher, budget time.Duration) *inventoryRun {
 	return &inventoryRun{
 		inv: &Inventory{
 			Layout:       l,
 			Matcher:      m,
 			ScrollBudget: budget,
+			ScrollTiming: scriptedScrollTiming(),
 		},
 		view: view,
 		geo:  1,
@@ -380,17 +394,23 @@ func TestAwaitScrollDoesNotCommitRepeatedTotalWhileMoving(t *testing.T) {
 	}
 }
 
-// TestAwaitScrollSettlesIdleReuseWithSameFrameID covers production idle
-// confirmations: the platform copies the latest complete frame into a new
-// RGBA buffer, so the image pointer changes while Frame.ID and content stay
-// the same. That must settle the candidate rather than wait out the budget.
-func TestAwaitScrollSettlesIdleReuseWithSameFrameID(t *testing.T) {
+// TestAwaitScrollIdleReuseWithSameFrameIDDoesNotSettle pins the
+// independent-observation rule: the platform re-serves the same idle frame
+// on every recheck interval, so reused confirmations — however many — are
+// one observation of one idle state and must not complete the settle
+// streak. The wait ends as the unsettled Lost at the budget instead of
+// committing on echoed stillness.
+func TestAwaitScrollIdleReuseWithSameFrameIDDoesNotSettle(t *testing.T) {
 	l := sixRowScrollLayout()
 	content := image.Rect(0, 0, 100, 100)
 	before := platform.Frame{ID: 1, Geometry: 1, Image: image.NewRGBA(content), Content: content}
 	candidate := platform.Frame{ID: 2, Geometry: 1, Image: image.NewRGBA(content), Content: content}
-	idle := platform.Frame{ID: 2, Geometry: 1, Image: image.NewRGBA(content), Content: content, Reused: true}
-	view := &scrollScriptView{frames: []platform.Frame{candidate, idle}, blockAfter: true}
+	idle := func() platform.Frame {
+		return platform.Frame{ID: 2, Geometry: 1, Image: image.NewRGBA(content), Content: content, Reused: true}
+	}
+	view := &scrollScriptView{frames: []platform.Frame{
+		candidate, idle(), idle(), idle(), idle(),
+	}, blockAfter: true}
 	m := &scrollScriptMatcher{rows: l.Rows, columns: l.Columns, verdict: map[scrollPair]ScrollMatch{
 		{1, 2}: displacedScan(l, 4),
 	}}
@@ -399,15 +419,54 @@ func TestAwaitScrollSettlesIdleReuseWithSameFrameID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("awaitScroll: %v", err)
 	}
+	if out.displaced || out.stationary || !out.lost || !out.unsettled {
+		t.Fatalf("outcome %+v, want the unsettled Lost: idle echoes are not settle confirmations", out)
+	}
+	if out.settled {
+		t.Fatalf("outcome %+v: the reused confirmations must not settle the candidate", out)
+	}
+}
+
+// TestAwaitScrollSettlesOnIndependentObservations is the positive
+// counterpart: two independent fresh confirmations — with a neutral idle
+// echo between them — complete the streak and commit the candidate on the
+// second fresh frame.
+func TestAwaitScrollSettlesOnIndependentObservations(t *testing.T) {
+	l := sixRowScrollLayout()
+	content := image.Rect(0, 0, 100, 100)
+	before := platform.Frame{ID: 1, Geometry: 1, Image: image.NewRGBA(content), Content: content}
+	candidate := platform.Frame{ID: 2, Geometry: 1, Image: image.NewRGBA(content), Content: content}
+	idle := func() platform.Frame {
+		return platform.Frame{ID: 2, Geometry: 1, Image: image.NewRGBA(content), Content: content, Reused: true}
+	}
+	still := func(id uint64) platform.Frame {
+		return platform.Frame{ID: id, Geometry: 1, Image: image.NewRGBA(content), Content: content}
+	}
+	view := &scrollScriptView{frames: []platform.Frame{
+		candidate, still(3), idle(), still(4),
+	}, blockAfter: true}
+	m := &scrollScriptMatcher{rows: l.Rows, columns: l.Columns, verdict: map[scrollPair]ScrollMatch{
+		{1, 2}: displacedScan(l, 4),
+		{2, 3}: {Stationary: true, Evidence: "scripted settled"},
+		{2, 4}: {Stationary: true, Evidence: "scripted settled"},
+	}}
+	run := newScrollRun(l, view, m, 80*time.Millisecond)
+	out, err := run.awaitScroll(context.Background(), before)
+	if err != nil {
+		t.Fatalf("awaitScroll: %v", err)
+	}
 	if !out.displaced || out.lost || out.after.ID != 2 {
-		t.Fatalf("outcome %+v, want the idle reuse to settle frame 2", out)
+		t.Fatalf("outcome %+v, want the candidate committed on the second fresh confirmation", out)
+	}
+	if !out.settled || out.settleFrameID != 4 {
+		t.Fatalf("outcome %+v: the settle must close on the second fresh frame 4, not an idle echo", out)
 	}
 }
 
 // TestAwaitScrollCommitsLatestSettledCandidate pins the two-stage rule:
 // four rows is only a candidate, a later frame shows five rows total, and
-// the commit waits until a frame relative to the five-row candidate is
-// Stationary.
+// the commit waits until the candidate stayed stable for the profile's
+// consecutive settle observations.
 func TestAwaitScrollCommitsLatestSettledCandidate(t *testing.T) {
 	l := sixRowScrollLayout()
 	before := scrollFrame(1)
@@ -415,11 +474,13 @@ func TestAwaitScrollCommitsLatestSettledCandidate(t *testing.T) {
 		scrollFrame(2), // four rows
 		scrollFrame(3), // five rows total
 		scrollFrame(4), // still five rows
+		scrollFrame(5), // still five rows
 	}}
 	m := &scrollScriptMatcher{rows: l.Rows, columns: l.Columns, verdict: map[scrollPair]ScrollMatch{
 		{1, 2}: displacedScan(l, 4),
 		{1, 3}: displacedScan(l, 5),
 		{3, 4}: {Stationary: true, Evidence: "scripted settled"},
+		{3, 5}: {Stationary: true, Evidence: "scripted settled"},
 	}}
 	run := newScrollRun(l, view, m, time.Second)
 	out, err := run.awaitScroll(context.Background(), before)
@@ -444,17 +505,20 @@ func TestAwaitScrollCommitsLatestSettledCandidate(t *testing.T) {
 }
 
 // TestAwaitScrollCommitsStableFourRows pins the ordinary case: one
-// displacement followed by a stationary observation commits immediately.
+// displacement followed by the profile's consecutive stationary observations
+// commits the candidate.
 func TestAwaitScrollCommitsStableFourRows(t *testing.T) {
 	l := sixRowScrollLayout()
 	before := scrollFrame(1)
 	view := &scrollScriptView{frames: []platform.Frame{
 		scrollFrame(2),
 		scrollFrame(3),
+		scrollFrame(4),
 	}}
 	m := &scrollScriptMatcher{rows: l.Rows, columns: l.Columns, verdict: map[scrollPair]ScrollMatch{
 		{1, 2}: displacedScan(l, 4),
 		{2, 3}: {Stationary: true, Evidence: "scripted settled"},
+		{2, 4}: {Stationary: true, Evidence: "scripted settled"},
 	}}
 	run := newScrollRun(l, view, m, time.Second)
 	out, err := run.awaitScroll(context.Background(), before)
@@ -463,6 +527,324 @@ func TestAwaitScrollCommitsStableFourRows(t *testing.T) {
 	}
 	if !out.displaced || out.after.ID != 2 || out.match.Rows != 4 {
 		t.Fatalf("outcome %+v, want frame 2 with four rows", out)
+	}
+}
+
+// paintMotionFrame paints one frame with exactly the regions MatchScroll
+// reads — the list viewport pattern, one selection border and a scrollbar
+// thumb — for the internal tests that run awaitScroll's motion bookkeeping
+// against the real pixel matcher. The pattern mirrors scroll_evidence_test's
+// paintScrollFrame (per-row base, per-(row, x) identity hash, fine
+// y-texture); the page verdicts come from motionPageMatcher instead of
+// painted page probes.
+func paintMotionFrame(l Layout, id uint64, offset, selection, thumbStart, thumbEnd int, noise bool) platform.Frame {
+	img := image.NewRGBA(image.Rectangle{Max: l.Image})
+	for y := l.ListViewport.Min.Y; y < l.ListViewport.Max.Y; y++ {
+		g := offset + (y-l.ListViewport.Min.Y)/l.RowPitch
+		for x := l.ListViewport.Min.X; x < l.ListViewport.Max.X; x++ {
+			v := 60 + (137*g*g+29*g)%120
+			h := uint32(g)*1000003 + uint32(x)*97
+			h ^= h >> 16
+			h *= 0x45d9f3b
+			h ^= h >> 16
+			v += int(h % 120)
+			if (y-l.ListViewport.Min.Y)%49 >= 24 {
+				v += 12
+			}
+			if (y-l.ListViewport.Min.Y)%4 == 0 {
+				v += 45
+			}
+			if noise {
+				v += ((x*7 + y*13) % 21) - 10
+			}
+			if v < 0 {
+				v = 0
+			}
+			if v > 255 {
+				v = 255
+			}
+			img.SetRGBA(x, y, color.RGBA{R: uint8(v), G: uint8(v), B: uint8(v), A: 255})
+		}
+	}
+	if selection >= 0 {
+		r := l.BorderRect(selection).Intersect(img.Bounds())
+		for y := r.Min.Y; y < r.Max.Y; y++ {
+			for x := r.Min.X; x < r.Max.X; x++ {
+				img.SetRGBA(x, y, color.RGBA{R: 224, G: 208, B: 67, A: 255})
+			}
+		}
+	}
+	for y := thumbStart; y <= thumbEnd; y++ {
+		if y >= l.ScrollTrack.Min.Y && y < l.ScrollTrack.Max.Y {
+			img.SetRGBA(l.ScrollTrack.Min.X, y, color.RGBA{R: 200, G: 200, B: 200, A: 255})
+		}
+	}
+	return platform.Frame{ID: id, Geometry: 1, Image: img, Content: l.Content}
+}
+
+// motionPageMatcher runs the real stage 2 MatchScroll and its threshold
+// reporters behind a scripted warehouse page verdict, so awaitScroll's
+// motion bookkeeping exercises real pixel comparisons without painting the
+// page probes.
+type motionPageMatcher struct {
+	*ScrollEvidenceMatcher
+}
+
+func (m motionPageMatcher) Match(f platform.Frame) PageMatch {
+	l := m.L
+	return PageMatch{
+		Page:   PageWarehouse,
+		List:   &ListEvidence{Occupied: make([]bool, len(l.Slots)), Selected: 0},
+		Wheel:  &WheelEvidence{Position: 1},
+		Filter: &FilterEvidence{State: FilterActive},
+	}
+}
+
+// TestAwaitScrollMotionIgnoresCloudNoise pins the movement-evidence rule:
+// a static list behind codec noise fails the zero-shift MAD (5–10 against
+// the 4.0 threshold) but proves stillness by normalized correlation, and
+// the late-start window must not record motion on it. With nothing but
+// noisy-but-static frames, no motion is recorded at all.
+func TestAwaitScrollMotionIgnoresCloudNoise(t *testing.T) {
+	l := MacCloudLayout()
+	m := motionPageMatcher{NewScrollEvidenceMatcher(NewPixelMatcher(l, MacCloudCalibration()))}
+	before := paintMotionFrame(l, 1, 0, l.Rows*l.Columns-1, 300, 430, false)
+	view := &scrollScriptView{frames: []platform.Frame{
+		paintMotionFrame(l, 2, 0, l.Rows*l.Columns-1, 300, 430, true),
+		paintMotionFrame(l, 3, 0, l.Rows*l.Columns-1, 300, 430, true),
+		paintMotionFrame(l, 4, 0, l.Rows*l.Columns-1, 300, 430, true),
+	}, blockAfter: true}
+	// The real matcher's searches are slow under the race detector; the
+	// budget only bounds the failure path, and the wait returns as soon as
+	// it settles, so a production-sized budget keeps the test robust.
+	run := newScrollRun(l, view, m, 5*time.Second)
+	out, err := run.awaitScroll(context.Background(), before)
+	if err != nil {
+		t.Fatalf("awaitScroll: %v", err)
+	}
+	if out.motionStarted || out.motionFrameID != 0 {
+		t.Fatalf("motion recorded on frame %d of a noisy-but-static wait: codec noise above the MAD threshold is not movement (outcome %+v)",
+			out.motionFrameID, out)
+	}
+	if !out.stationary {
+		t.Fatalf("outcome %+v, want the stationary deadline verdict on the static noisy list", out)
+	}
+}
+
+// TestAwaitScrollMotionRecordsRealDisplacement is the positive side of the
+// movement-evidence rule: after the noisy late-start window, the frame that
+// verifiably displaced records the motion.
+func TestAwaitScrollMotionRecordsRealDisplacement(t *testing.T) {
+	l := MacCloudLayout()
+	m := motionPageMatcher{NewScrollEvidenceMatcher(NewPixelMatcher(l, MacCloudCalibration()))}
+	before := paintMotionFrame(l, 1, 0, l.Rows*l.Columns-1, 300, 430, false)
+	view := &scrollScriptView{frames: []platform.Frame{
+		paintMotionFrame(l, 2, 0, l.Rows*l.Columns-1, 300, 430, true),
+		paintMotionFrame(l, 3, 4, l.Columns-1, 400, 530, true),
+		paintMotionFrame(l, 4, 4, l.Columns-1, 400, 530, true),
+		paintMotionFrame(l, 5, 4, l.Columns-1, 400, 530, true),
+	}, blockAfter: true}
+	// See the noise test: a production-sized budget keeps the real
+	// matcher's race-detector slowness out of the assertion path.
+	run := newScrollRun(l, view, m, 5*time.Second)
+	out, err := run.awaitScroll(context.Background(), before)
+	if err != nil {
+		t.Fatalf("awaitScroll: %v", err)
+	}
+	if !out.motionStarted || out.motionFrameID != 3 {
+		t.Fatalf("outcome %+v: motion must be recorded at the displaced frame 3, not the noisy frame 2", out)
+	}
+	if !out.displaced || !out.settled {
+		t.Fatalf("outcome %+v: the four-row advance must verify and settle", out)
+	}
+}
+
+// TestAwaitScrollMotionStartBudgetFloorsDeadline pins the enforced
+// motion-start floor: with no observed movement, the wait's deadline is at
+// least MotionStartBudget after it began, whatever the configured scroll
+// budget — stillness inside F7's late-start window is not evidence the drag
+// failed, and a stationary verdict there must not become terminal.
+func TestAwaitScrollMotionStartBudgetFloorsDeadline(t *testing.T) {
+	l := sixRowScrollLayout()
+	m := &scrollScriptMatcher{rows: l.Rows, columns: l.Columns, alwaysStationary: true}
+	run := &inventoryRun{
+		inv: &Inventory{
+			Layout:       l,
+			Matcher:      m,
+			ScrollBudget: 40 * time.Millisecond,
+			ScrollTiming: &ScrollTiming{
+				MotionStartBudget:  250 * time.Millisecond,
+				SettleBudget:       50 * time.Millisecond,
+				SettleObservations: 2,
+			},
+		},
+		view: &endlessFrameView{},
+		geo:  1,
+	}
+	started := time.Now()
+	out, err := run.awaitScroll(context.Background(), scrollFrame(1))
+	if err != nil {
+		t.Fatalf("awaitScroll: %v", err)
+	}
+	if !out.stationary {
+		t.Fatalf("outcome %+v, want the stationary deadline verdict", out)
+	}
+	if elapsed := time.Since(started); elapsed < 200*time.Millisecond {
+		t.Fatalf("the wait ended after %s with a 250ms motion-start floor; a stationary verdict inside the late-start window must not be terminal",
+			elapsed)
+	}
+}
+
+// paintUniformMotionFrame paints a near-uniform viewport under an
+// independent codec-like dither (the phase differs per frame), the exact
+// shape the review measured on a static cloud list: err0 above the MAD
+// threshold, an ncc0 near zero and an information std far below the gate.
+func paintUniformMotionFrame(l Layout, id uint64, value, phase, thumbStart, thumbEnd int) platform.Frame {
+	f := paintMotionFrame(l, id, 0, -1, thumbStart, thumbEnd, false)
+	for y := l.ListViewport.Min.Y; y < l.ListViewport.Max.Y; y++ {
+		for x := l.ListViewport.Min.X; x < l.ListViewport.Max.X; x++ {
+			v := value + ((x*7 + y*13 + phase) % 21) - 10
+			if v < 0 {
+				v = 0
+			}
+			if v > 255 {
+				v = 255
+			}
+			f.Image.SetRGBA(x, y, color.RGBA{R: uint8(v), G: uint8(v), B: uint8(v), A: 255})
+		}
+	}
+	return f
+}
+
+// TestAwaitScrollMotionIgnoresLowInformationNoise pins the information gate
+// on the NCC-based movement evidence: a near-uniform list under codec noise
+// decorrelates to an ncc0 near zero, and that must not read as movement —
+// only a correlation measured on a support rich enough to mean something
+// counts.
+func TestAwaitScrollMotionIgnoresLowInformationNoise(t *testing.T) {
+	l := MacCloudLayout()
+	m := motionPageMatcher{NewScrollEvidenceMatcher(NewPixelMatcher(l, MacCloudCalibration()))}
+	before := paintUniformMotionFrame(l, 1, 100, 0, 300, 430)
+	first := m.MatchScroll(before, paintUniformMotionFrame(l, 2, 100, 7, 300, 430))
+	if first.Stationary || first.Displaced || first.Lost || !first.Undecided {
+		t.Fatalf("uniform noisy pair = %+v, want undecided (%s)", first, first.Evidence)
+	}
+	if first.Metrics == nil || !first.Metrics.NCCMeasured {
+		t.Fatalf("uniform noisy pair carries no normalized metrics: %+v", first.Metrics)
+	}
+	ncc0, ok := first.Metrics.RowNCC[0]
+	if !ok {
+		t.Fatalf("uniform noisy pair carries no zero-shift correlation: %+v", first.Metrics)
+	}
+	if ncc0 >= m.C.ScrollStationaryNCC {
+		t.Fatalf("uniform noisy pair ncc0 %.3f is not the low-correlation shape this test needs", ncc0)
+	}
+	if first.Metrics.InfoStd >= m.C.ScrollInfoStdMin {
+		t.Fatalf("uniform noisy pair info std %.1f is not below the %.0f gate this test needs",
+			first.Metrics.InfoStd, m.C.ScrollInfoStdMin)
+	}
+	view := &scrollScriptView{frames: []platform.Frame{
+		paintUniformMotionFrame(l, 2, 100, 7, 300, 430),
+		paintUniformMotionFrame(l, 3, 100, 3, 300, 430),
+	}, blockAfter: true}
+	run := newScrollRun(l, view, m, 5*time.Second)
+	out, err := run.awaitScroll(context.Background(), before)
+	if err != nil {
+		t.Fatalf("awaitScroll: %v", err)
+	}
+	if out.motionStarted || out.motionFrameID != 0 {
+		t.Fatalf("motion recorded on frame %d of a low-information noisy wait: a near-zero ncc0 over a uniform support is noise, not movement (outcome %+v)",
+			out.motionFrameID, out)
+	}
+}
+
+// TestAwaitScrollMotionRecordsRichUndecidedFrame is the positive
+// counterpart: a genuinely moving list whose displacement verdict is still
+// undecided (the only surviving overlap row is uniform, so no candidate
+// corroborates) must record motion — the zero-shift correlation is low on
+// an information-rich support.
+func TestAwaitScrollMotionRecordsRichUndecidedFrame(t *testing.T) {
+	l := MacCloudLayout()
+	m := motionPageMatcher{NewScrollEvidenceMatcher(NewPixelMatcher(l, MacCloudCalibration()))}
+	// Rich content, four rows advanced, and the single surviving overlap
+	// row (global row 4) painted uniform in both frames so no displacement
+	// candidate can corroborate: the verdict stays undecided while the
+	// zero-shift comparison sees four misaligned rich rows.
+	before := paintMotionFrame(l, 1, 0, -1, 300, 430, false)
+	after := paintMotionFrame(l, 2, 4, -1, 400, 530, true)
+	uniformRow := func(f platform.Frame, y0, y1 int) {
+		for y := y0; y < y1; y++ {
+			for x := l.ListViewport.Min.X; x < l.ListViewport.Max.X; x++ {
+				f.Image.SetRGBA(x, y, color.RGBA{R: 90, G: 90, B: 90, A: 255})
+			}
+		}
+	}
+	uniformRow(before, l.ListViewport.Max.Y-l.RowPitch, l.ListViewport.Max.Y)
+	uniformRow(after, l.ListViewport.Min.Y, l.ListViewport.Min.Y+l.RowPitch)
+	sm := m.MatchScroll(before, after)
+	if sm.Stationary || sm.Displaced || sm.Lost || !sm.Undecided {
+		t.Fatalf("verdict %+v, want the undecided displacement this test needs (%s)", sm, sm.Evidence)
+	}
+	if sm.Metrics == nil || !sm.Metrics.NCCMeasured {
+		t.Fatal("the undecided verdict lacks normalized metrics")
+	}
+	if ncc0 := sm.Metrics.RowNCC[0]; ncc0 >= m.C.ScrollStationaryNCC {
+		t.Fatalf("ncc0 %.3f is not the low-correlation shape this test needs", ncc0)
+	}
+	if sm.Metrics.InfoStd < m.C.ScrollInfoStdMin {
+		t.Fatalf("info std %.1f below the %.0f gate: the support must be rich for the positive case",
+			sm.Metrics.InfoStd, m.C.ScrollInfoStdMin)
+	}
+	view := &scrollScriptView{frames: []platform.Frame{after}, blockAfter: true}
+	run := newScrollRun(l, view, m, 5*time.Second)
+	out, err := run.awaitScroll(context.Background(), before)
+	if err != nil {
+		t.Fatalf("awaitScroll: %v", err)
+	}
+	if !out.motionStarted || out.motionFrameID != after.ID {
+		t.Fatalf("outcome %+v: the rich undecided frame must record motion", out)
+	}
+}
+
+// TestScrollTimingRejectsSingleObservationSettle pins the configuration
+// rule: a settle profile requiring only one observation contradicts the
+// consecutive-stability settle, so it is refused and the default profile
+// applies instead of being silently honored.
+func TestScrollTimingRejectsSingleObservationSettle(t *testing.T) {
+	want := MacCloudScrollTiming()
+	single := &ScrollTiming{MotionStartBudget: time.Second, SettleBudget: 2 * time.Second, SettleObservations: 1}
+	if got := (&Inventory{ScrollTiming: single}).scrollTiming(); got != want {
+		t.Fatalf("single-observation override = %+v, want the fallback to the default profile (one observation is not a settle)",
+			got)
+	}
+	if got := (&Inventory{ScrollTiming: single}).scrollTiming(); got.SettleObservations < 2 {
+		t.Fatalf("resolved profile requires %d observations; the settle must never commit on one", got.SettleObservations)
+	}
+}
+
+// TestAwaitScrollSingleStableObservationDoesNotSettle pins the consecutive
+// settle streak: one candidate-relative Stationary observation followed by
+// a stalled stream is not a settle — the cloud can deliver one still frame
+// inside an ongoing animation, so the commit waits for the profile's second
+// confirmation and ends as the unsettled Lost at the budget.
+func TestAwaitScrollSingleStableObservationDoesNotSettle(t *testing.T) {
+	l := sixRowScrollLayout()
+	before := scrollFrame(1)
+	view := &scrollScriptView{frames: []platform.Frame{
+		scrollFrame(2), // four rows
+		scrollFrame(3), // one still observation
+	}, blockAfter: true}
+	m := &scrollScriptMatcher{rows: l.Rows, columns: l.Columns, verdict: map[scrollPair]ScrollMatch{
+		{1, 2}: displacedScan(l, 4),
+		{2, 3}: {Stationary: true, Evidence: "scripted one still observation"},
+	}}
+	run := newScrollRun(l, view, m, 40*time.Millisecond)
+	out, err := run.awaitScroll(context.Background(), before)
+	if err != nil {
+		t.Fatalf("awaitScroll: %v", err)
+	}
+	if out.displaced || out.stationary || !out.lost || !out.unsettled {
+		t.Fatalf("outcome %+v, want the unsettled Lost: one observation is not a settle", out)
 	}
 }
 
@@ -605,6 +987,13 @@ func (c *scriptedSessionController) Collect(ctx context.Context, h *scan.Control
 }
 
 func runScriptedSession(t *testing.T, run *inventoryRun, action func(context.Context, *inventoryRun) error) error {
+	return runScriptedSessionTimeout(t, run, action, 5*time.Second)
+}
+
+// runScriptedSessionTimeout is runScriptedSession with a configurable
+// outer bound, for scripted steps that legitimately run a full scroll
+// budget (the field-failure replay's legacy ablation).
+func runScriptedSessionTimeout(t *testing.T, run *inventoryRun, action func(context.Context, *inventoryRun) error, bound time.Duration) error {
 	t.Helper()
 	ctrl := &scriptedSessionController{run: run, action: action, errCh: make(chan error, 1)}
 	sess, err := scan.Start(scan.Config{
@@ -622,11 +1011,11 @@ func runScriptedSession(t *testing.T, run *inventoryRun, action func(context.Con
 	case err := <-ctrl.errCh:
 		select {
 		case <-sess.Done():
-		case <-time.After(5 * time.Second):
+		case <-time.After(bound):
 			t.Fatal("the scripted traversal session never sealed")
 		}
 		return err
-	case <-time.After(5 * time.Second):
+	case <-time.After(bound):
 		t.Fatal("the scripted traversal step never returned")
 		return nil
 	}
@@ -647,6 +1036,7 @@ func newScriptedScrollRun(l Layout, view SessionView, m Matcher, dir string, ret
 			DiagnosticDir: dir,
 			MaxRetries:    retries,
 			ScrollBudget:  budget,
+			ScrollTiming:  scriptedScrollTiming(),
 		},
 		view:     view,
 		geo:      1,
@@ -729,10 +1119,11 @@ func TestConfirmBottomFailureWritesDiagnostics(t *testing.T) {
 	frame := func(id uint64) platform.Frame {
 		return platform.Frame{ID: id, Geometry: 1, Image: image.NewRGBA(image.Rect(0, 0, 1280, 1000))}
 	}
-	view := &scrollScriptView{frames: []platform.Frame{frame(2), frame(3)}}
+	view := &scrollScriptView{frames: []platform.Frame{frame(2), frame(3), frame(4)}}
 	m := &scrollScriptMatcher{rows: l.Rows, columns: l.Columns, verdict: map[scrollPair]ScrollMatch{
 		{1, 2}: displacedScan(l, 4),
 		{2, 3}: {Stationary: true, Evidence: "scripted settled"},
+		{2, 4}: {Stationary: true, Evidence: "scripted settled"},
 	}}
 	dir := t.TempDir()
 	run := newScriptedScrollRun(l, view, m, dir, 0, time.Second)
@@ -781,22 +1172,27 @@ func TestConfirmBottomFailureWritesDiagnostics(t *testing.T) {
 	if !strings.Contains(filepath.Base(dumps[0]), "-bottom-displaced") {
 		t.Fatalf("dump %q does not name the bottom-confirmation verdict", dumps[0])
 	}
-	if files := dumpPNGs(t, dumps[0]); len(files) != 3 {
-		t.Fatalf("the displaced bottom confirmation wrote %d crops, want the before and both received frames", len(files))
+	if files := dumpPNGs(t, dumps[0]); len(files) != 4 {
+		t.Fatalf("the displaced bottom confirmation wrote %d crops, want the before and the three received frames", len(files))
 	}
 }
 
-// TestScrollSuccessWritesNoImages pins the success side: a committed
-// scroll logs its margins but writes no dump.
-func TestScrollSuccessWritesNoImages(t *testing.T) {
+// TestScrollSuccessWritesTimingDiagnostics pins the stage 2 success side: a
+// committed scroll lands its frame time series (decision §4.3 — precise
+// frame times come from the application diagnostics), with the manifest
+// carrying every retained frame's verdicts and only the key frames' PNG
+// crops, and the settle streak's confirmation recorded for the timing
+// calibration.
+func TestScrollSuccessWritesTimingDiagnostics(t *testing.T) {
 	l := sixRowScrollLayout()
 	frame := func(id uint64) platform.Frame {
 		return platform.Frame{ID: id, Geometry: 1, Image: image.NewRGBA(image.Rect(0, 0, 1280, 1000))}
 	}
-	view := &scrollScriptView{frames: []platform.Frame{frame(1), frame(2), frame(3)}}
+	view := &scrollScriptView{frames: []platform.Frame{frame(1), frame(2), frame(3), frame(4)}}
 	m := &scrollScriptMatcher{rows: l.Rows, columns: l.Columns, verdict: map[scrollPair]ScrollMatch{
 		{1, 2}: displacedScan(l, 4),
 		{2, 3}: {Stationary: true, Evidence: "scripted settled"},
+		{2, 4}: {Stationary: true, Evidence: "scripted settled"},
 	}}
 	dir := t.TempDir()
 	run := newScriptedScrollRun(l, view, m, dir, 0, time.Second)
@@ -805,8 +1201,25 @@ func TestScrollSuccessWritesNoImages(t *testing.T) {
 	if err := runScriptedScroll(t, run); err != nil {
 		t.Fatalf("the settled scroll must succeed: %v", err)
 	}
-	if dumps := diagnosticDumpDirs(t, dir); len(dumps) != 0 {
-		t.Fatalf("a successful scroll wrote %v, want no diagnostics", dumps)
+	dumps := diagnosticDumpDirs(t, dir)
+	if len(dumps) != 1 {
+		t.Fatalf("a successful scroll wrote %v, want one scroll-ok dump", dumps)
+	}
+	if !strings.Contains(filepath.Base(dumps[0]), "-scroll-ok") {
+		t.Fatalf("dump %q does not name the committed scroll", dumps[0])
+	}
+	manifest := readDumpManifest(t, dumps[0])
+	if ids := manifestFrameIDs(manifest); fmt.Sprint(ids) != "[1 2 3 4]" {
+		t.Fatalf("manifest frames %v, want the whole received sequence", ids)
+	}
+	if manifest.SettledFrame != 4 || manifest.SettleNeeded != run.inv.scrollTiming().SettleObservations {
+		t.Fatalf("manifest settled frame %d of %d, want frame 4 closing the streak", manifest.SettledFrame, manifest.SettleNeeded)
+	}
+	// Key frames only: the baseline, the candidate and the settle
+	// confirmation (the first moved frame is the candidate here) write
+	// crops; the streak's intermediate frame stays in the manifest.
+	if files := dumpPNGs(t, dumps[0]); len(files) != 3 {
+		t.Fatalf("the committed scroll wrote %d crops, want the key frames only", len(files))
 	}
 }
 
@@ -1098,18 +1511,20 @@ func TestScrollUnknownOutcomeDoesNotDragAgain(t *testing.T) {
 
 // TestScrollRetryUnmovedUsesFreshBase pins the retry base: after a wait
 // that only ever proved stillness, the retry must compare against the
-// newest verified frame. The second attempt only settles against frame 3,
-// so a retry that kept the first attempt's baseline could not commit.
+// newest verified frame. The second attempt only settles against frames 4
+// and 5, so a retry that kept the first attempt's baseline could not
+// commit.
 func TestScrollRetryUnmovedUsesFreshBase(t *testing.T) {
 	l := sixRowScrollLayout()
 	view := &scriptedBlockView{
-		frames:  []platform.Frame{scrollFrame(1), scrollFrame(2), scrollFrame(3), scrollFrame(4), scrollFrame(5)},
+		frames:  []platform.Frame{scrollFrame(1), scrollFrame(2), scrollFrame(3), scrollFrame(4), scrollFrame(5), scrollFrame(6)},
 		blockAt: []int{3},
 	}
 	m := &scrollScriptMatcher{rows: l.Rows, columns: l.Columns, verdict: map[scrollPair]ScrollMatch{
 		{1, 2}: {Stationary: true, Evidence: "scripted stationary"},
 		{3, 4}: displacedScan(l, 4),
 		{4, 5}: {Stationary: true, Evidence: "scripted settled"},
+		{4, 6}: {Stationary: true, Evidence: "scripted settled"},
 	}}
 	run := newScriptedScrollRun(l, view, m, "", 1, 40*time.Millisecond)
 	run.visited = make([]bool, len(l.Slots))

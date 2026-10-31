@@ -54,8 +54,17 @@ type Inventory struct {
 	// longer than ActionBudget because a 1200ms drag plus inertial
 	// settling outlasts a click. Zero takes the default. The default was
 	// raised to 5s after a field scroll displaced four rows but did not
-	// settle within the former 3s budget (T5 §5).
+	// settle within the former 3s budget (T5 §5). It must cover the
+	// scroll timing profile's MotionStartBudget: F7 measured a drag's
+	// motion becoming observable only ~1s after the action, so stillness
+	// inside that window is not evidence the drag failed.
 	ScrollBudget time.Duration
+	// ScrollTiming is the client's scroll timing profile (decision §4.3
+	// K2, F7): the settle window measured from the first observed movement
+	// and the consecutive settle confirmations required. Nil takes the
+	// macOS cloud profile. It only widens the settle wait for a motion
+	// observed near the budget's end; it never shortens the ScrollBudget.
+	ScrollTiming *ScrollTiming
 	// StableFrames is the consecutive same-verdict observation count that
 	// counts as settled. Zero takes the default.
 	StableFrames int
@@ -130,6 +139,19 @@ func (inv *Inventory) scrollBudget() time.Duration {
 		return inv.ScrollBudget
 	}
 	return DefaultScrollBudget
+}
+
+// scrollTiming returns the client's scroll timing profile; nil takes the
+// macOS cloud default (decision §4.3 K2, F7). The profile governs when the
+// settle window runs and how many consecutive confirmations commit a
+// candidate; it never shortens the plain scroll budget.
+func (inv *Inventory) scrollTiming() ScrollTiming {
+	if inv.ScrollTiming != nil {
+		if err := inv.ScrollTiming.validate(); err == nil {
+			return *inv.ScrollTiming
+		}
+	}
+	return MacCloudScrollTiming()
 }
 
 func (inv *Inventory) stableFrames() int {
@@ -568,6 +590,10 @@ type inventoryRun struct {
 	// diagnosticDumps counts this walk's scan-failure diagnostic groups
 	// (see dumpScrollTrace); it never feeds a navigation decision.
 	diagnosticDumps int
+	// diagnosticOKDumps counts this walk's committed-scroll frame-time
+	// dumps, under its own (larger) cap: a walk commits many scrolls but
+	// only stops on its first failure.
+	diagnosticOKDumps int
 }
 
 // positionTiming is one wheel position's preparation stage durations for
@@ -1552,6 +1578,7 @@ type failureFrames struct {
 	trace        *scrollTrace
 	candidate    platform.Frame
 	hasCandidate bool
+	out          scrollOutcome
 }
 
 // waitFailure captures one failed wait for a dump. The wait's trace must
@@ -1564,6 +1591,7 @@ func waitFailure(kind string, before platform.Frame, out scrollOutcome) *failure
 		trace:        out.trace,
 		candidate:    out.candidate,
 		hasCandidate: out.hasCandidate,
+		out:          out,
 	}
 }
 
@@ -1573,7 +1601,7 @@ func (run *inventoryRun) dumpFailure(frames *failureFrames) {
 	if frames == nil {
 		return
 	}
-	run.dumpScrollTrace(frames.kind, 0, frames.before, frames.after, frames.trace, frames.candidate, frames.hasCandidate)
+	run.dumpScrollTrace(frames.kind, 0, frames.out, frames.before, frames.after, frames.trace, frames.candidate, frames.hasCandidate, false)
 }
 
 // confirmBottomStep runs confirmBottom, accumulates its duration, and only
@@ -2640,11 +2668,26 @@ func (run *inventoryRun) scroll(ctx context.Context) (err error) {
 		// that cost must not inflate total_ms or the position's scroll_ms.
 		elapsed := time.Since(started)
 		run.positionScrollMs += elapsed
-		log.Printf("youkai: collect: scroll position=%d viewport_from=%d viewport_to=%d outcome=%s attempts=%d drag_ms=%d settle_ms=%d total_ms=%d rows=%d before_frame=%d after_frame=%d %s",
+		log.Printf("youkai: collect: scroll position=%d viewport_from=%d viewport_to=%d outcome=%s attempts=%d drag_ms=%d settle_ms=%d total_ms=%d rows=%d before_frame=%d after_frame=%d %s %s",
 			run.position, fromViewport, run.viewport, outcome, attempts,
 			drag.Milliseconds(), settle.Milliseconds(), elapsed.Milliseconds(),
 			rows, before.ID, afterID,
-			scrollMarginFields(run.inv.matcher(), waitOut.match, waitOut.settleMatch))
+			scrollTimingFields(waitOut), scrollMarginFields(run.inv.matcher(), waitOut.match, waitOut.settleMatch))
+		if err == nil && outcome == "displaced" {
+			// A committed scroll also lands its frame time series (decision
+			// §4.3: stage 2 records precise frame times through the
+			// application diagnostics): the manifest keeps every retained
+			// frame's verdicts and arrival times, with PNG crops only for
+			// the key frames, so a successful wait stays replayable without
+			// paying the failure dumps' image volume.
+			for _, a := range attemptLog {
+				if a.out.after.ID == 0 || a.outcome != "displaced" {
+					continue
+				}
+				run.dumpScrollTrace("scroll-ok", a.number, a.out, a.before, a.out.after, a.out.trace, a.out.candidate, a.out.hasCandidate, true)
+			}
+			return
+		}
 		if err != nil && outcome != "error" {
 			// Every attempt keeps its own before frame, trace and
 			// verdict; the dumps are written after scroll_ms and the
@@ -2653,7 +2696,7 @@ func (run *inventoryRun) scroll(ctx context.Context) (err error) {
 				if a.out.after.ID == 0 {
 					continue
 				}
-				run.dumpScrollTrace("scroll-"+a.outcome, a.number, a.before, a.out.after, a.out.trace, a.out.candidate, a.out.hasCandidate)
+				run.dumpScrollTrace("scroll-"+a.outcome, a.number, a.out, a.before, a.out.after, a.out.trace, a.out.candidate, a.out.hasCandidate, false)
 			}
 		}
 	}()
@@ -2865,6 +2908,22 @@ type scrollOutcome struct {
 	// identical frame content instead of a matcher comparison, or when the
 	// wait did not settle.
 	settleMatch ScrollMatch
+	// settled reports that the wait committed a displacement whose
+	// candidate stayed stable for the timing profile's consecutive settle
+	// observations; settleFrameID is the observation that completed the
+	// streak. The diagnostics use them, never a navigation decision.
+	settled       bool
+	settleFrameID uint64
+	// motionStarted, motionAt and motionFrameID record the first
+	// observation that the list's content changed after the drag (F7's
+	// late-start window ends there). The stage 2 diagnostics calibrate the
+	// timing budgets from them; they never feed a navigation decision.
+	motionStarted bool
+	motionAt      time.Time
+	motionFrameID uint64
+	// waitStart is when the wait began (after the drag's dispatch), the
+	// origin of the manifest's frame-time axis.
+	waitStart time.Time
 	// candidate and hasCandidate describe the wait's final candidate for
 	// the failure dump; they never feed a decision.
 	candidate    platform.Frame
@@ -2893,27 +2952,102 @@ const (
 )
 
 // awaitScroll waits for the scroll's effect and its settling on fresh
-// warehouse frames. A displacement is only a candidate: the matcher may
-// still be watching an inertial or snapping animation, so a second
-// observation relative to the candidate must be Stationary before the
-// traversal commits anything. A later total displacement relative to the
-// pre-drag frame replaces the candidate; a total Lost keeps the wait alive
-// to the budget (the list may still settle) but ends as Lost when no
-// settling confirmation arrives. Reused confirmations carry unchanged
-// content, so they can prove the candidate stayed still but never create a
-// displacement of their own. Without a candidate, Stationary remains a
-// deadline verdict, not an early one (the drag's effect may still be in
-// flight).
+// warehouse frames, under the stage 2 timing model (decision §4.3 K2, F7):
+// the wait first observes that the list's movement started, and only then
+// judges the settle. A displacement is only a candidate: the matcher may
+// still be watching an inertial or snapping animation, so the candidate must
+// stay stable relative to itself for ScrollTiming.SettleObservations
+// consecutive independent observations — each one a fresh frame whose
+// comparison against the candidate is Stationary (or whose content is the
+// candidate's) — before the traversal commits anything. Platform idle
+// confirmations (Reused frames) are neutral: they repeat the newest fresh
+// frame's already-judged content, so the same idle state re-served every
+// recheck interval is one observation, not many, and must not complete the
+// streak by itself. A later total displacement relative to the pre-drag
+// frame replaces the candidate (late inertia and bottom bounces land here)
+// and restarts the stability count; a total Lost keeps the wait alive to
+// the budget (the list may still settle) but ends as Lost when no settling
+// confirmation arrives. Reused confirmations never create a displacement of
+// their own. Without a candidate, Stationary remains a deadline verdict,
+// not an early one (the drag's effect may still be in flight; F7 measured
+// motion starting ~1s after the action).
+//
+// The wait's deadline is the scroll budget, with two profile-driven
+// widenings: before any motion is observed the deadline is at least
+// MotionStartBudget after the wait began (F7: stillness inside the
+// late-start window is not evidence the drag failed, whatever the
+// configured scroll budget), and a motion observed near the budget's end
+// gets its own SettleBudget settle window instead of being cut off
+// mid-settle. Neither widening ever shortens the plain scroll budget.
 //
 // The terminal verdict is the latest one: Undecided supersedes an earlier
 // Stationary or Lost. An existing candidate still dominates — it cannot be
 // committed without a settling confirmation — and the separate unmoved
 // flag records whether the whole wait only ever proved stillness.
 func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame) (scrollOutcome, error) {
-	deadline := time.Now().Add(run.inv.scrollBudget())
+	timing := run.inv.scrollTiming()
+	waitStart := time.Now()
+	deadline := waitStart.Add(run.inv.scrollBudget())
+	// motionStarted and motionAt record the first observation that the
+	// list's content changed (a displacement, a lost overlap, or a
+	// zero-shift normalized correlation clearly below the stationary
+	// threshold); motionFrameID names the frame. Stillness before that is
+	// the F7 late-start window and proves nothing about the drag's effect.
+	// The zero-shift MAD alone is deliberately not movement evidence:
+	// codec noise keeps a static cloud list at 5–10 against the 4.0
+	// threshold, so an err0-based rule would mark motion on the first
+	// noisy frame.
+	var (
+		motionStarted bool
+		motionAt      time.Time
+		motionFrameID uint64
+		settleStreak  int
+	)
+	// effectiveDeadline is the scroll budget with the profile's widenings:
+	// the motion-start floor before any movement, and the settle window
+	// measured from the observed motion afterwards. Zero arrival times (a
+	// scripted view without frame times) never widen anything.
+	effectiveDeadline := func() time.Time {
+		if motionStarted {
+			if !motionAt.IsZero() {
+				if extended := motionAt.Add(timing.SettleBudget); extended.After(deadline) {
+					return extended
+				}
+			}
+			return deadline
+		}
+		if floor := waitStart.Add(timing.MotionStartBudget); floor.After(deadline) {
+			return floor
+		}
+		return deadline
+	}
+	// observeMotion records the first movement evidence on a fresh frame:
+	// a verified displacement, a lost overlap, or a zero-shift normalized
+	// correlation clearly below the stationary threshold on a support rich
+	// enough for that correlation to mean anything. The MAD error alone
+	// never counts (see the motionStarted comment), and neither does a low
+	// ncc0 over a low-information support: codec noise on near-uniform
+	// content decorrelates to an ncc0 near zero without any list movement.
+	observeMotion := func(f platform.Frame, sm ScrollMatch) {
+		if motionStarted {
+			return
+		}
+		moved := sm.Displaced || sm.Lost
+		if threshold, infoMin := run.stationaryNCC(); threshold > 0 &&
+			sm.Metrics != nil && sm.Metrics.NCCMeasured {
+			if ncc0, ok := sm.Metrics.RowNCC[0]; ok && ncc0 < threshold &&
+				sm.Metrics.InfoStd >= infoMin {
+				moved = true
+			}
+		}
+		if moved {
+			motionStarted = true
+			motionAt, motionFrameID = f.ArrivedAt, f.ID
+		}
+	}
 	after := run.lastArrived
 	trace := newScrollTrace(run.inv.Layout, before)
-	out := scrollOutcome{trace: trace}
+	out := scrollOutcome{trace: trace, waitStart: waitStart}
 	var (
 		candidate       platform.Frame
 		candidateMatch  PageMatch
@@ -2922,10 +3056,12 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 		verdict         = waitVerdictNone
 		stillOnly       = true
 	)
-	settle := func() (scrollOutcome, error) {
+	settle := func(confirming platform.Frame) (scrollOutcome, error) {
 		out.displaced = true
 		out.after, out.afterMatch, out.match = candidate, candidateMatch, candidateScroll
 		out.candidate, out.hasCandidate = candidate, true
+		out.settled, out.settleFrameID = true, confirming.ID
+		out.motionStarted, out.motionAt, out.motionFrameID = motionStarted, motionAt, motionFrameID
 		return out, nil
 	}
 	finish := func() (scrollOutcome, error) {
@@ -2933,6 +3069,7 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 		// proof that the list stayed where it was. A Stationary final
 		// verdict after an Undecided or a displacement is not that proof.
 		out.unmoved = stillOnly && verdict == waitVerdictStationary && !haveCandidate
+		out.motionStarted, out.motionAt, out.motionFrameID = motionStarted, motionAt, motionFrameID
 		switch {
 		case haveCandidate:
 			// A displacement was seen but never settled: commit
@@ -2953,10 +3090,10 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 		if err := ctx.Err(); err != nil {
 			return scrollOutcome{}, err
 		}
-		if !time.Now().Before(deadline) {
+		if !time.Now().Before(effectiveDeadline()) {
 			return finish()
 		}
-		fctx, cancel := context.WithDeadline(ctx, deadline)
+		fctx, cancel := context.WithDeadline(ctx, effectiveDeadline())
 		f, err := run.view.Frame(fctx, platform.FrameRequest{After: after})
 		cancel()
 		if err != nil {
@@ -2979,19 +3116,23 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 		out.lastEvidence = m.Evidence
 		if f.Reused {
 			// Unchanged content can prove the candidate stayed still; it
-			// cannot prove a displacement not yet seen fresh.
+			// cannot prove a displacement not yet seen fresh. It also never
+			// drives the settle streak: an idle confirmation repeats the
+			// newest fresh frame's content — the same idle state re-served
+			// every recheck interval is one observation, not many, and a
+			// fresh confirmation followed by its reused copy must not count
+			// as two. The streak advances only on fresh frames (below);
+			// reused frames neither count nor reset it.
 			if run.listVerdict(m) {
 				out.after, out.afterMatch = f, m
 				if haveCandidate {
-					if sameFrameContent(candidate, f) {
-						return settle()
-					}
-					rel := run.inv.matcher().MatchScroll(candidate, f)
-					trace.noteCandidate(candidate, f, rel)
-					out.match = rel
-					if rel.Stationary {
-						out.settleMatch = rel
-						return settle()
+					if !sameFrameContent(candidate, f) {
+						rel := run.inv.matcher().MatchScroll(candidate, f)
+						trace.noteCandidate(candidate, f, rel)
+						out.match = rel
+						if rel.Stationary {
+							out.settleMatch = rel
+						}
 					}
 				} else {
 					if sameFrameContent(before, f) {
@@ -3029,21 +3170,32 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 			// Transition or animation frame: keep observing within the
 			// deadline, but the last observation proves nothing.
 			verdict, stillOnly = waitVerdictUndecided, false
+			settleStreak = 0
 			continue
 		}
 		if haveCandidate {
 			if sameFrameContent(candidate, f) {
-				return settle()
+				settleStreak++
+				if settleStreak >= timing.SettleObservations {
+					return settle(f)
+				}
+				continue
 			}
 			rel := run.inv.matcher().MatchScroll(candidate, f)
 			trace.noteCandidate(candidate, f, rel)
 			out.match = rel
 			if rel.Stationary {
 				out.settleMatch = rel
-				return settle()
+				settleStreak++
+				if settleStreak >= timing.SettleObservations {
+					return settle(f)
+				}
+				continue
 			}
+			settleStreak = 0
 			total := run.inv.matcher().MatchScroll(before, f)
 			trace.noteBefore(f, total)
+			observeMotion(f, total)
 			switch {
 			case total.Displaced && len(total.Matches) > 0:
 				// The list moved further: the latest total displacement is
@@ -3088,6 +3240,7 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 		}
 		sm := run.inv.matcher().MatchScroll(before, f)
 		trace.noteBefore(f, sm)
+		observeMotion(f, sm)
 		out.match = sm
 		switch {
 		case sm.Displaced && len(sm.Matches) > 0:
@@ -3096,6 +3249,7 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 			trace.pinCandidate(f)
 			verdict = waitVerdictDisplaced
 			stillOnly = false
+			settleStreak = 0
 		case sm.Lost:
 			verdict, stillOnly = waitVerdictLost, false
 		case sm.Stationary:
@@ -3108,6 +3262,23 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 			verdict, stillOnly = waitVerdictUndecided, false
 		}
 	}
+}
+
+// stationaryNCC reports the matcher's zero-shift normalized-correlation
+// stationary threshold and information floor when the implementation
+// exposes them. awaitScroll's motion detection uses them: a zero-shift
+// correlation clearly below the stationary threshold on an information-rich
+// support is movement evidence even when the displacement itself is not yet
+// verifiable, while the MAD error alone never is (cloud codec noise keeps a
+// static list above the MAD threshold) and a low-information support
+// proves nothing either way (noise on near-uniform content decorrelates to
+// an ncc0 near zero).
+func (run *inventoryRun) stationaryNCC() (stationary, infoStdMin float64) {
+	if reporter, ok := run.inv.matcher().(scrollFeatureReporter); ok {
+		stationary, _, _, _, infoStdMin = reporter.ScrollFeatureThresholds()
+		return stationary, infoStdMin
+	}
+	return 0, 0
 }
 
 // applyTransition validates one scroll correspondence (T5 §5) and carries
