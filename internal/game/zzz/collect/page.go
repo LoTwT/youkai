@@ -334,7 +334,10 @@ type ScrollMetrics struct {
 	// correlation at exactly zero displacement (stillness admits no
 	// window).
 	RowNCC map[int]float64
-	// BestNCCRow and BestNCC name the strongest non-zero candidate.
+	// BestNCCRow and BestNCC name the strongest non-zero candidate. A verdict
+	// limited by the selection box names the selection's row instead when no
+	// candidate beats it by more than the tie epsilon, so the recorded "best"
+	// is deterministic and matches the row the verdict was weighed against.
 	BestNCCRow int
 	BestNCC    float64
 	// InfoStd is the winning comparison's support-region grayscale std, the

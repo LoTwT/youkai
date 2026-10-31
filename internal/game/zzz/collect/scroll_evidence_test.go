@@ -131,6 +131,64 @@ func paintRowSimilarFrame(l collect.Layout, id uint64, offset, selection, thumbS
 	return f
 }
 
+// ditherSpec parameterizes a frame's codec-like dither:
+// ((x*ax + y*ay) % mod) - mod/2. A nil spec paints clean pixels.
+type ditherSpec struct{ mod, ax, ay int }
+
+// paintUniformRowFrame paints a list whose every row shares one within-row
+// texture, so no whole-row alignment can be told from another on content: the
+// only difference between candidates is where the after frame's dither falls.
+// It is the degenerate end of the homogeneous top segment the 2026-10-31 field
+// frames showed, used to pin what the model may decide when the features
+// cannot choose a row at all.
+func paintUniformRowFrame(l collect.Layout, id uint64, selection, thumbStart, thumbEnd int, dither *ditherSpec) platform.Frame {
+	f := paintScrollFrame(l, id, 0, -1, thumbStart, thumbEnd, false)
+	img := f.Image
+	for y := l.ListViewport.Min.Y; y < l.ListViewport.Max.Y; y++ {
+		yy := (y - l.ListViewport.Min.Y) % l.RowPitch
+		for x := l.ListViewport.Min.X; x < l.ListViewport.Max.X; x++ {
+			i := img.PixOffset(x, y)
+			h := uint32(x*97 + yy*1000003)
+			h ^= h >> 16
+			h *= 0x45d9f3b
+			h ^= h >> 16
+			v := int(40 + h%160)
+			if yy >= 24 && yy < 36 {
+				v += 12
+			}
+			if yy%4 == 0 {
+				v += 45
+			}
+			if dither != nil {
+				v += ((x*dither.ax + y*dither.ay) % dither.mod) - dither.mod/2
+			}
+			if v < 0 {
+				v = 0
+			}
+			if v > 255 {
+				v = 255
+			}
+			img.Pix[i], img.Pix[i+1], img.Pix[i+2] = uint8(v), uint8(v), uint8(v)
+		}
+	}
+	paintSelectionBorder(img, l, selection)
+	return f
+}
+
+// strongestRival returns the strongest whole-row candidate other than chosen.
+func strongestRival(rows map[int]float64, chosen int) (row int, ncc float64) {
+	ncc = math.Inf(-1)
+	for r, v := range rows {
+		if r == chosen {
+			continue
+		}
+		if v > ncc {
+			row, ncc = r, v
+		}
+	}
+	return row, ncc
+}
+
 // TestScrollEvidenceMatcherFixtures replays every recorded M2 field scroll
 // pair through the stage 2 matcher. The table is the historical expectation
 // the pre-stage-2 matcher is pinned against (TestMacCloudScrollDisplacements):
@@ -296,6 +354,114 @@ func TestScrollEvidenceSelectionGapBelowMarginRejectsUncorroboratedScrollbar(t *
 	}
 }
 
+// TestScrollEvidenceExactTieDefersToScrollbar pins the float-tie rule: the
+// rows are content-identical, so two whole-row candidates correlate exactly
+// the same, and the exact comparison the old rule used could only report a
+// tie by coincidence. The named row must be recorded deterministically and the
+// scrollbar must decide; the same content with an uncorroborated thumb stays
+// undecided.
+func TestScrollEvidenceExactTieDefersToScrollbar(t *testing.T) {
+	l := collect.MacCloudLayout()
+	m := newScrollEvidenceMatcher()
+	before := paintUniformRowFrame(l, 1, l.Rows*l.Columns-1, 300, 430, nil)
+	after := paintUniformRowFrame(l, 2, l.Columns-1, 405, 535, &ditherSpec{mod: 21, ax: 3, ay: 13})
+	sm := m.MatchScroll(before, after)
+	if !sm.Displaced || sm.Rows != 4 || sm.Stationary || sm.Lost {
+		t.Fatalf("verdict %+v, want the exact tie decided by the scrollbar (%s)", sm, sm.Evidence)
+	}
+	if sm.Basis != collect.ScrollBasisSelectionFeatureThumb {
+		t.Fatalf("basis %q, want the scrollbar-corroborated basis", sm.Basis)
+	}
+	if sm.Metrics == nil {
+		t.Fatal("no metrics recorded")
+	}
+	rivalRow, rival := strongestRival(sm.Metrics.RowNCC, 4)
+	if rival > sm.Metrics.RowNCC[4] {
+		t.Fatalf("the fixture must not feature-prefer another row: +4 %.6f, %+d %.6f", sm.Metrics.RowNCC[4], rivalRow, rival)
+	}
+	if sm.Metrics.BestNCCRow != 4 || sm.Metrics.BestNCC != sm.Metrics.RowNCC[4] {
+		t.Fatalf("metrics name %+d:%.6f, want the tied selection row +4:%.6f",
+			sm.Metrics.BestNCCRow, sm.Metrics.BestNCC, sm.Metrics.RowNCC[4])
+	}
+	if !strings.Contains(sm.Evidence, "tie epsilon") || !strings.Contains(sm.Evidence, "scrollbar") {
+		t.Fatalf("evidence %q should state the tie band and the scrollbar adjudication", sm.Evidence)
+	}
+
+	// A three-row travel cannot break the tie.
+	uncorroborated := paintUniformRowFrame(l, 3, l.Columns-1, 380, 510, &ditherSpec{mod: 21, ax: 3, ay: 13})
+	sm = m.MatchScroll(before, uncorroborated)
+	if sm.Displaced || sm.Stationary || sm.Lost || !sm.Undecided {
+		t.Fatalf("verdict %+v, want undecided without a corroborating scrollbar (%s)", sm, sm.Evidence)
+	}
+}
+
+// TestScrollEvidenceNegligibleRivalGapUsesScrollbar pins the near-tie side of
+// the same rule: on row-identical content the after frame's dither can put the
+// mirrored -4 candidate a few 10^-5 above the selection's +4. That is below
+// the tie epsilon, so the features cannot call it a contradiction; the
+// direction of the scrollbar's travel is the independent evidence that rules
+// the mirrored row out, and the displacement is accepted. The previous exact
+// comparison rejected this same fixture because the rounding fell on the other
+// side of zero.
+func TestScrollEvidenceNegligibleRivalGapUsesScrollbar(t *testing.T) {
+	l := collect.MacCloudLayout()
+	m := newScrollEvidenceMatcher()
+	before := paintUniformRowFrame(l, 1, l.Rows*l.Columns-1, 300, 430, nil)
+	after := paintUniformRowFrame(l, 2, l.Columns-1, 405, 535, &ditherSpec{mod: 23, ax: 7, ay: 13})
+	sm := m.MatchScroll(before, after)
+	if sm.Metrics == nil {
+		t.Fatal("no metrics recorded")
+	}
+	rivalRow, rival := strongestRival(sm.Metrics.RowNCC, 4)
+	gap := sm.Metrics.RowNCC[4] - rival
+	if gap >= 0 {
+		t.Fatalf("the fixture must place a rival above the selection's row: gap %+.9f", gap)
+	}
+	if gap <= -0.005 {
+		t.Fatalf("the rival's lead %.9f is outside the tie epsilon", gap)
+	}
+	if rivalRow != -4 {
+		t.Fatalf("strongest rival %+d, want the mirrored -4 candidate", rivalRow)
+	}
+	if !sm.Displaced || sm.Rows != 4 || sm.Basis != collect.ScrollBasisSelectionFeatureThumb {
+		t.Fatalf("verdict %+v, want the near tie decided by the scrollbar (%s)", sm, sm.Evidence)
+	}
+	if sm.Metrics.BestNCCRow != 4 {
+		t.Fatalf("metrics name %+d, want the selection's +4", sm.Metrics.BestNCCRow)
+	}
+	if !strings.Contains(sm.Evidence, "tie epsilon") || !strings.Contains(sm.Evidence, "corroborated") {
+		t.Fatalf("evidence %q should state the tie band and the corroboration", sm.Evidence)
+	}
+}
+
+// TestScrollEvidenceScrollbarMustDistinguishCompetingRows pins the tightening
+// the tie rule needs: the same near-tie content with a thumb that travelled
+// 88px fits the claimed four rows (~105px) inside ±20% but also fits the
+// competing +3 row (~79px). A thumb that cannot tell the rows apart may not
+// decide between them, so the verdict stays undecided; the identical content
+// with an unambiguous four-row travel is still accepted.
+func TestScrollEvidenceScrollbarMustDistinguishCompetingRows(t *testing.T) {
+	l := collect.MacCloudLayout()
+	m := newScrollEvidenceMatcher()
+	before := paintUniformRowFrame(l, 1, l.Rows*l.Columns-1, 300, 430, nil)
+	ambiguous := paintUniformRowFrame(l, 2, l.Columns-1, 388, 518, &ditherSpec{mod: 23, ax: 7, ay: 13})
+	sm := m.MatchScroll(before, ambiguous)
+	if sm.Displaced || sm.Stationary || sm.Lost || !sm.Undecided {
+		t.Fatalf("verdict %+v, want undecided when the thumb also fits another row (%s)", sm, sm.Evidence)
+	}
+	if sm.Basis != "" {
+		t.Fatalf("basis %q, want no accepted-displacement basis", sm.Basis)
+	}
+	if !strings.Contains(sm.Evidence, "also the competing +3-row candidate") {
+		t.Fatalf("evidence %q should name the competing row the thumb also fits", sm.Evidence)
+	}
+
+	unambiguous := paintUniformRowFrame(l, 3, l.Columns-1, 405, 535, &ditherSpec{mod: 23, ax: 7, ay: 13})
+	if sm := m.MatchScroll(before, unambiguous); !sm.Displaced || sm.Rows != 4 {
+		t.Fatalf("verdict %+v, want the four-row travel that no other candidate fits to corroborate 4 rows (%s)", sm, sm.Evidence)
+	}
+}
+
 // TestScrollEvidenceSelectionContradictsFeatureRow pins the other hard
 // constraint: when the normalized feature prefers a different row than the
 // selection box, an agreeing scrollbar may not override the contradiction.
@@ -313,8 +479,13 @@ func TestScrollEvidenceSelectionContradictsFeatureRow(t *testing.T) {
 	if sm.Metrics == nil || sm.Metrics.BestNCCRow != 3 {
 		t.Fatalf("metrics %+v, want the feature's +3 row", sm.Metrics)
 	}
-	if !strings.Contains(sm.Evidence, "prefers another row") || !strings.Contains(sm.Evidence, "contradict") {
-		t.Fatalf("evidence %q should state the selection/feature contradiction", sm.Evidence)
+	lead := sm.Metrics.RowNCC[3] - sm.Metrics.RowNCC[4]
+	if lead <= 0.005 {
+		t.Fatalf("the feature's lead %.4f must exceed the 0.005 tie epsilon to count as a contradiction", lead)
+	}
+	if !strings.Contains(sm.Evidence, "prefers another row") || !strings.Contains(sm.Evidence, "contradict") ||
+		!strings.Contains(sm.Evidence, "tie epsilon") {
+		t.Fatalf("evidence %q should state the selection/feature contradiction beyond the tie epsilon", sm.Evidence)
 	}
 }
 
@@ -395,6 +566,13 @@ func TestScrollEvidenceCompetitionRejectsPeriodicContent(t *testing.T) {
 	if sm.Metrics == nil || sm.Metrics.BestNCCRow != 4 || sm.Metrics.BestNCC < 0.99 {
 		t.Fatalf("metrics %+v, want the selection's +4 row named among the perfect ties", sm.Metrics)
 	}
+	// The periodic content makes +1 and +4 correlate exactly the same: the
+	// features are tied, so the verdict must rest on the scrollbar, and the
+	// recorded best row must be the selection's own rather than whichever row
+	// the map iteration happened to visit last.
+	if got := sm.Metrics.RowNCC[1]; got != sm.Metrics.RowNCC[4] {
+		t.Fatalf("periodic fixture: +1 %.9f and +4 %.9f are not the intended exact tie", got, sm.Metrics.RowNCC[4])
+	}
 	// A thumb travelling only three rows' worth cannot break the tie; the
 	// periodic features stay undecided.
 	uncorroborated := periodic(3, 4, l.Columns-1, 380, 510)
@@ -404,6 +582,9 @@ func TestScrollEvidenceCompetitionRejectsPeriodicContent(t *testing.T) {
 	}
 	if sm.Basis != "" {
 		t.Fatalf("basis %q, want no accepted-displacement basis", sm.Basis)
+	}
+	if !strings.Contains(sm.Evidence, "scrollbar does not corroborate") {
+		t.Fatalf("evidence %q should name the failed scrollbar corroboration", sm.Evidence)
 	}
 }
 

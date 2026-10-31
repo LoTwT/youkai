@@ -68,7 +68,7 @@ M2 平台会话集成后可用另一组开关接入真实游戏窗口做仅观�
 | `go test ./...` | 运行测试；`internal/recognition` 与 `internal/app` 的集成测试在 OCR 资源缺失时自动跳过，本地需先运行 fetchdeps。 |
 | `go test -race ./internal/recognition` | 识别包的竞态检查（含取消与生命周期并发路径）。 |
 | `YOUKAI_M2_SAMPLES=/tmp/m2-samples go test ./internal/game/zzz/collect` | 像素匹配器与单页遍历在完整未掩码源帧上的回放；样本目录不入库，未设置时自动跳过。 |
-| `YOUKAI_SCROLL_REPLAY="$HOME/Library/Logs/Youkai Dev" go test ./internal/game/zzz/collect -run TestScrollReplay` | 滚动判定的现场证据回放：把 2026-10-30 阶段 1 复测的两组失败序列（各 25 帧逐帧诊断）经真实 `scroll()` 走阶段 2 判定（应验证 4 行位移并停稳、写出 `scroll-ok` 帧时间诊断），并用旧判定复现现场失败（消融）；回放 2026-10-31 阶段 2 验收的两组新位置首滚 undecided 序列（选中框 4 行与 NCC 最佳行一致但差距不足，应由滑块行程佐证接受并在两次确认后停稳；撤掉滑块证据后仍判 undecided），并验证其中一组经完整 `scroll()` 提交、`scroll-ok` 清单记录 `selection+feature+scrollbar` 依据；另回放 2026-10-28 两组 before/after 锚点对。证据目录在仓库外，未设置时自动跳过。 |
+| `YOUKAI_SCROLL_REPLAY="$HOME/Library/Logs/Youkai Dev" go test ./internal/game/zzz/collect -run TestScrollReplay` | 滚动判定的现场证据回放：把 2026-10-30 阶段 1 复测的两组失败序列（各 25 帧逐帧诊断）经真实 `scroll()` 走阶段 2 判定（应验证 4 行位移并停稳、写出 `scroll-ok` 帧时间诊断），并用旧判定复现现场失败（消融）；回放 2026-10-31 阶段 2 验收的两组新位置首滚 undecided 序列（选中框 4 行与 NCC 最佳行一致但差距不足，应由滑块行程佐证接受并在两次确认后停稳；撤掉滑块证据后仍判 undecided），并验证其中一组经完整 `scroll()` 提交、`scroll-ok` 清单记录 `selection+feature+scrollbar` 依据；另回放 2026-10-28 两组 before/after 锚点对。并列容差 ε=0.005、滑块行程与其他竞争行数可区分性由合成序列覆盖（不经本回放）。证据目录在仓库外，未设置时自动跳过。 |
 | `go tool mygo vet .` | 先运行 `go vet ./...`，再检查原生 UI 生命周期问题；参数是应用目录（项目根），不能写成 `./...`。 |
 | `go tool mygo dev` | 开发运行，编辑 Go 代码、配置或资源后自动重建重启；开发应用名为 `Youkai Dev`（标识 `com.lotwt.youkai.dev`，位于 `.mygo/dev`），与正式安装的数据和权限隔离。退出应用或 Ctrl+C 结束。 |
 | `go tool mygo build` | 打包本机平台制品到 `build/<os>-<arch>/`：macOS 生成 ad-hoc 签名的 `Youkai.app` 与 DMG。须显式 `CGO_ENABLED=1`，macOS 另设部署目标，完整命令与说明见[打包与安装包](#打包与安装包)。 |
