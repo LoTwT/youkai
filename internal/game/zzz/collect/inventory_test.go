@@ -92,6 +92,25 @@ type scriptedGame struct {
 	failCloseAtOpen int
 	failCloseLeft   int
 	panelOpens      int
+	// filterButtonDoesNothingAt makes the funnel click a no-op at that
+	// wheel position, so the panel never opens there.
+	filterButtonDoesNothingAt int
+	// filterClickMakesUnknownAt turns the page undecidable when the funnel
+	// is clicked at that wheel position.
+	filterClickMakesUnknownAt int
+	// resetClosesPanelAt closes the panel when reset is clicked at that
+	// wheel position, modelling a panel that unexpectedly disappears.
+	resetClosesPanelAt int
+	// sClosesPanelAt closes the panel when S is clicked at that wheel
+	// position.
+	sClosesPanelAt int
+	// sClickMakesUnknownAt turns the page undecidable when S is clicked at
+	// that wheel position.
+	sClickMakesUnknownAt int
+	// wheelAfterAdvance changes the wheel to this position when the next
+	// advance drag is dispatched (0 = never), modelling someone operating
+	// the game during the scan.
+	wheelAfterAdvance int
 	// resetMakesUnknown makes the panel page undecidable after the reset.
 	resetMakesUnknown bool
 	// sSelected is the panel's S rarity selection. It is test state only:
@@ -516,6 +535,14 @@ func (g *scriptedGame) dispatch(op platform.InputOp) platform.InputResult {
 		if g.page == pagePanel {
 			switch {
 			case op.At.Eq(g.layout.PanelReset):
+				if g.wheel == g.resetClosesPanelAt {
+					g.pending = append(g.pending, pendingEffect{dueAt: lag, apply: func(g *scriptedGame) {
+						g.page = pageWarehouse
+						g.filter = "clear"
+						g.sSelected = false
+					}})
+					return posted(now)
+				}
 				g.pending = append(g.pending, pendingEffect{dueAt: lag, apply: func(g *scriptedGame) {
 					if g.resetMakesUnknown {
 						g.page = pageUnknown
@@ -527,6 +554,20 @@ func (g *scriptedGame) dispatch(op platform.InputOp) platform.InputResult {
 					g.sSelected = false
 				}})
 			case op.At.Eq(g.layout.PanelS):
+				if g.wheel == g.sClickMakesUnknownAt {
+					g.pending = append(g.pending, pendingEffect{dueAt: lag, apply: func(g *scriptedGame) {
+						g.page = pageUnknown
+						g.filter = "unknown"
+						g.sSelected = false
+					}})
+					return posted(now)
+				}
+				if g.wheel == g.sClosesPanelAt {
+					g.pending = append(g.pending, pendingEffect{dueAt: lag, apply: func(g *scriptedGame) {
+						g.page = pageWarehouse
+					}})
+					return posted(now)
+				}
 				if !g.sClickDoesNothing && g.wheel != g.sClickDoesNothingAt {
 					g.pending = append(g.pending, pendingEffect{dueAt: lag, apply: func(g *scriptedGame) {
 						g.filter = "active"
@@ -570,6 +611,15 @@ func (g *scriptedGame) dispatch(op platform.InputOp) platform.InputResult {
 			return posted(now)
 		}
 		if op.At.Eq(g.layout.FilterButton) {
+			if g.wheel == g.filterClickMakesUnknownAt {
+				g.pending = append(g.pending, pendingEffect{dueAt: lag, apply: func(g *scriptedGame) {
+					g.page = pageUnknown
+				}})
+				return posted(now)
+			}
+			if g.wheel == g.filterButtonDoesNothingAt {
+				return posted(now)
+			}
 			g.panelOpens++
 			if g.panelOpens == g.failCloseAtOpen {
 				g.failCloseLeft = 3 // one attempt plus two retries
@@ -663,6 +713,23 @@ func (g *scriptedGame) dispatch(op platform.InputOp) platform.InputResult {
 						g.viewport = extraTarget
 					}})
 				}
+			}
+			if g.wheelAfterAdvance != 0 {
+				next := g.wheelAfterAdvance
+				g.wheelAfterAdvance = 0
+				from := g.wheel
+				g.pending = append(g.pending, pendingEffect{dueAt: lag, apply: func(g *scriptedGame) {
+					g.selectedByPos[from-1] = g.selected
+					g.viewportByPos[from-1] = g.viewport
+					g.wheel = next
+					g.selected = g.selectedByPos[next-1]
+					g.viewport = g.viewportByPos[next-1]
+					if g.selected >= 0 {
+						g.detailGlobal = g.selected
+					} else {
+						g.detailGlobal = -1
+					}
+				}})
 			}
 		case op.At.Eq(g.layout.TopFrom) && op.To.Eq(g.layout.TopTo):
 			if g.topStuck || g.viewport == 0 {
@@ -962,6 +1029,22 @@ func (h *traversalHarness) requireCompletePosition(pos int) observedPosition {
 	return entry
 }
 
+// requireFatallyStoppedPosition asserts that a session-fatal fault cut the
+// walk at pos: the ledger ends there and the entry carries no position-level
+// stage or reason, so the session termination is the only diagnosis.
+func (h *traversalHarness) requireFatallyStoppedPosition(pos int) observedPosition {
+	h.t.Helper()
+	scope := h.scope()
+	if len(scope.Positions) != pos {
+		h.t.Fatalf("observed scope has %d positions, want the walk to stop at %d: %+v", len(scope.Positions), pos, scope)
+	}
+	entry := scope.Positions[pos-1]
+	if entry.Position != pos || entry.Complete || entry.Stage != "" || entry.ReasonCode != "" || entry.Reason != "" {
+		h.t.Fatalf("position %d ledger = %+v, want a fatal stop without a position-level reason", pos, entry)
+	}
+	return entry
+}
+
 // sortVerifiedMatcher marks every filter-panel verdict's sort label
 // verified. The scripted fake does not render the calibrated label, so the
 // real matcher leaves the session's sort unverified; this wrapper lets the
@@ -978,6 +1061,30 @@ func (m sortVerifiedMatcher) Match(f platform.Frame) collect.PageMatch {
 		match.Panel.SortLabel = "稀有度"
 	}
 	return match
+}
+
+// unknownAfterCandidateMatcher makes the page verdict become PageUnknown
+// after the first verified displacement, modelling a popup, loading page or
+// lost cloud stream arriving while the list was already seen moving. The
+// retained displacement candidate must not hide that page-level failure.
+type unknownAfterCandidateMatcher struct {
+	collect.Matcher
+	armed bool
+}
+
+func (m *unknownAfterCandidateMatcher) Match(f platform.Frame) collect.PageMatch {
+	if m.armed {
+		return collect.PageMatch{Page: collect.PageUnknown, Evidence: "scripted non-list page after the displacement candidate"}
+	}
+	return m.Matcher.Match(f)
+}
+
+func (m *unknownAfterCandidateMatcher) MatchScroll(before, after platform.Frame) collect.ScrollMatch {
+	sm := m.Matcher.MatchScroll(before, after)
+	if sm.Displaced && len(sm.Matches) > 0 {
+		m.armed = true
+	}
+	return sm
 }
 
 func slotCenter(l collect.Layout, i int) image.Point {
@@ -2571,6 +2678,155 @@ func TestTraverseFilterFailureDoesNotPolluteNextPosition(t *testing.T) {
 	if got := game.filterState(); got != "active" {
 		t.Fatalf("funnel %q after recovery, want active", got)
 	}
+}
+
+// T37e: a funnel click that never opens the panel is a position
+// preparation failure; the later positions still prepare and walk.
+func TestTraverseFilterPanelOpenFailureDegradesPosition(t *testing.T) {
+	game := newScriptedGame(make([]bool, 20)...)
+	game.filterButtonDoesNothingAt = 1
+	h := newTraversalHarness(t, game)
+	h.start()
+	h.endCompleted()
+	h.requireIncompletePosition(1, "filter", collect.CodeNavigationMismatch)
+	for pos := 2; pos <= 6; pos++ {
+		h.requireCompletePosition(pos)
+	}
+	// Three refused open clicks at position 1 plus one open per later
+	// position.
+	if opens := countOps(game.opsSnapshot(), platform.InputClick, game.layout.FilterButton, image.Point{}); opens != 8 {
+		t.Fatalf("%d panel opens, want 3 refused attempts and five successful opens", opens)
+	}
+}
+
+// T37f: a funnel click that makes the page undecidable is not a position
+// preparation failure: the page itself is no longer verifiable, so the
+// session stops before any later position.
+func TestTraverseFilterPanelOpenUnknownStops(t *testing.T) {
+	game := newScriptedGame(make([]bool, 20)...)
+	game.filterClickMakesUnknownAt = 1
+	h := newTraversalHarness(t, game)
+	h.start()
+	snap := h.endFailed(collect.CodeNavigationMismatch)
+	if snap.Trigger == nil || !strings.Contains(snap.Trigger.Message, "became undecidable") {
+		t.Fatalf("the trigger does not preserve the page-level cause: %+v", snap.Trigger)
+	}
+	h.requireFatallyStoppedPosition(1)
+}
+
+// T37g: a reset that closes the panel back to the verified warehouse list
+// is a filter-preparation failure for that position; the next position
+// starts cleanly.
+func TestTraverseResetPanelCloseDegradesPosition(t *testing.T) {
+	game := newScriptedGame(make([]bool, 20)...)
+	game.resetClosesPanelAt = 1
+	h := newTraversalHarness(t, game)
+	h.start()
+	h.endCompleted()
+	h.requireIncompletePosition(1, "filter", collect.CodeNavigationMismatch)
+	h.requireCompletePosition(2)
+}
+
+// T37h: the same unexpected close while selecting S is also confined to
+// the position.
+func TestTraverseSelectSPanelCloseDegradesPosition(t *testing.T) {
+	game := newScriptedGame(make([]bool, 20)...)
+	game.sClosesPanelAt = 1
+	h := newTraversalHarness(t, game)
+	h.start()
+	h.endCompleted()
+	h.requireIncompletePosition(1, "filter", collect.CodeNavigationMismatch)
+	h.requireCompletePosition(2)
+}
+
+// T37i: an S click that makes the page undecidable stops the session
+// instead of degrading the position.
+func TestTraverseSelectSPanelUnknownStops(t *testing.T) {
+	game := newScriptedGame(make([]bool, 20)...)
+	game.sClickMakesUnknownAt = 1
+	h := newTraversalHarness(t, game)
+	h.start()
+	h.endFailed(collect.CodeNavigationMismatch)
+	h.requireFatallyStoppedPosition(1)
+}
+
+// T37j: a displacement candidate followed by a non-warehouse page is a
+// page-level failure, not positionLost. The retained candidate must not
+// hide the popup, loading page or lost stream that ended the wait.
+func TestScrollPageDepartureAfterCandidateStopsSession(t *testing.T) {
+	items := make([]bool, 120)
+	for i := range items {
+		items[i] = true
+	}
+	game := newScriptedGame(items...)
+	h := newTraversalHarness(t, game)
+	h.inv.ScrollBudget = 800 * time.Millisecond
+	h.inv.Matcher = &unknownAfterCandidateMatcher{Matcher: h.inv.Matcher}
+	h.start()
+	snap := h.endFailed(collect.CodePositionLost)
+	if snap.Counts.Captured != 20 {
+		t.Fatalf("the first viewport's admissions must stand: %+v", snap.Counts)
+	}
+	if snap.Trigger == nil || !strings.Contains(snap.Trigger.Message, "did not settle") {
+		t.Fatalf("the trigger does not preserve the unverified scroll cause: %+v", snap.Trigger)
+	}
+	h.requireFatallyStoppedPosition(1)
+}
+
+// T37k: the bottom confirmation's retained candidate has the same rule: a
+// non-warehouse page after the candidate stops the session.
+func TestBottomPageDepartureAfterCandidateStopsSession(t *testing.T) {
+	items := make([]bool, 36)
+	for i := range items {
+		items[i] = true
+	}
+	game := newScriptedGame(items...)
+	game.forceBottom = true
+	h := newTraversalHarness(t, game)
+	h.inv.ScrollBudget = 800 * time.Millisecond
+	h.inv.Matcher = &unknownAfterCandidateMatcher{Matcher: h.inv.Matcher}
+	h.start()
+	snap := h.endFailed(collect.CodeNavigationMismatch)
+	if snap.Counts.Captured != 20 {
+		t.Fatalf("the first viewport's admissions must stand: %+v", snap.Counts)
+	}
+	if snap.Trigger == nil || !strings.Contains(snap.Trigger.Message, "could not verify that the list stayed at the end") {
+		t.Fatalf("the trigger does not preserve the bottom-confirmation cause: %+v", snap.Trigger)
+	}
+	h.requireFatallyStoppedPosition(1)
+}
+
+// T37l: the scanner never touches the wheel, so a wheel change during an
+// advance scroll is a session-fatal page-level change, not positionLost.
+func TestScrollWheelChangeStopsSession(t *testing.T) {
+	items := make([]bool, 120)
+	for i := range items {
+		items[i] = true
+	}
+	game := newScriptedGame(items...)
+	game.wheelAfterAdvance = 2
+	h := newTraversalHarness(t, game)
+	h.inv.ScrollBudget = 800 * time.Millisecond
+	h.start()
+	snap := h.endFailed(collect.CodeNavigationMismatch)
+	if snap.Trigger == nil || !strings.Contains(snap.Trigger.Message, "changed the wheel position to 2") {
+		t.Fatalf("the trigger does not name the wheel change: %+v", snap.Trigger)
+	}
+	h.requireFatallyStoppedPosition(1)
+}
+
+// T37m: a wheel change during the bottom confirmation is session-fatal in
+// the same way.
+func TestBottomWheelChangeStopsSession(t *testing.T) {
+	game := newScriptedGame(listOf(20)...)
+	game.wheelAfterAdvance = 2
+	h := newTraversalHarness(t, game)
+	h.start()
+	snap := h.endFailed(collect.CodeNavigationMismatch)
+	if snap.Trigger == nil || !strings.Contains(snap.Trigger.Message, "changed the wheel position to 2") {
+		t.Fatalf("the trigger does not name the wheel change: %+v", snap.Trigger)
+	}
+	h.requireFatallyStoppedPosition(1)
 }
 
 // T37c: a session-fatal premise failure while preparing a position is not

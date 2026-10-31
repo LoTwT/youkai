@@ -156,10 +156,11 @@
 ```text
 go test ./...
 go tool mygo vet .
-go test -race ./internal/app ./internal/scan ./internal/record
+go test -race -timeout 30m ./internal/game/zzz/collect
+go test -race ./internal/app ./internal/scan ./internal/record ./internal/ui
 ```
 
-竞态检查覆盖有并发生命周期和持久化测试的包，不能证明原生调用安全。`mygo vet` 接收应用目录，会先运行 `go vet ./...` 再检查原生 UI，不能写成 `mygo vet ./...`。[vet_ui.go](https://github.com/egoist/mygo/blob/cf26587264f26ea68bd1b8abbf5c9723f35e0a70/cmd/mygo/vet_ui.go)
+竞态检查覆盖有并发生命周期和持久化测试的包，不能证明原生调用安全。遍历包的竞态检查实测超过 Go 默认的 10 分钟超时，必须显式 `-timeout 30m`；该失败是测试超时，不代表数据竞争。`mygo vet` 接收应用目录，会先运行 `go vet ./...` 再检查原生 UI，不能写成 `mygo vet ./...`。[vet_ui.go](https://github.com/egoist/mygo/blob/cf26587264f26ea68bd1b8abbf5c9723f35e0a70/cmd/mygo/vet_ui.go)
 
 以下两条生成两平台制品，完整命令（先 fetchdeps 下载资源、显式 `CGO_ENABLED=1`、macOS 另设部署目标）见[开发指南的打包与安装包](../development.md#打包与安装包)；本地与 Package/Release workflow 均已实际执行，须确认确实生成了安装包或 DMG，跳过打包的退出成功不算通过：
 

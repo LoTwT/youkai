@@ -81,3 +81,41 @@ func positionLimitError(reasons []string) error {
 		"collect: %d wheel positions are incomplete (limit %d); stopping instead of continuing so a systemic failure cannot be hidden: %s",
 		len(reasons), maxIncompletePositions, strings.Join(reasons, "; ")))
 }
+
+// positionProofFailure builds a scroll or bottom confirmation fault. It
+// marks the position incomplete only while the last observed frame is still
+// a verifiable warehouse list. A page that left the warehouse (popup,
+// loading page, lost stream) is session-fatal: continuing would hide the
+// real page fault and keep dispatching input into an unknown page. A
+// candidate retained from before the departure does not change that — the
+// last frame, not the candidate, decides whether the position is the
+// unresolved phenomenon or the page itself went away.
+func positionProofFailure(stage, code string, out scrollOutcome, format string, args ...any) error {
+	fault := scan.NewFault(code, fmt.Errorf(format, args...))
+	if out.sawFrame && out.lastFrameIsList {
+		return positionIncomplete(stage, fault)
+	}
+	return fault
+}
+
+// advanceStateFault describes a wheel or grid change observed after an
+// advance action. The scanner never touches the wheel and never stops
+// reading the grid on its own, so either change means someone operated the
+// game or the page stopped being verifiable: both are session-fatal, not a
+// position-level proof failure. The message distinguishes a changed wheel
+// from a warehouse page whose grid could not be read.
+func (run *inventoryRun) advanceStateFault(action string, after PageMatch) error {
+	if !run.listVerdict(after) {
+		return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
+			"collect: wheel position %d: %s left a warehouse page whose grid could not be verified (last verdict %s): %s",
+			run.position, action, after.Page, after.Evidence))
+	}
+	if after.Wheel == nil {
+		return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
+			"collect: wheel position %d: %s left the wheel position unreadable; the scanner never touches the wheel: %s",
+			run.position, action, after.Evidence))
+	}
+	return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
+		"collect: wheel position %d: %s changed the wheel position to %d; the scanner never touches the wheel: %s",
+		run.position, action, after.Wheel.Position, after.Evidence))
+}
