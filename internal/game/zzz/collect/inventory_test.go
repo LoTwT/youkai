@@ -111,6 +111,10 @@ type scriptedGame struct {
 	// advance drag is dispatched (0 = never), modelling someone operating
 	// the game during the scan.
 	wheelAfterAdvance int
+	// wheelAfterPanelClose changes the wheel to this position when the next
+	// panel close takes effect (0 = never), modelling someone switching the
+	// wheel while the panel covered it.
+	wheelAfterPanelClose int
 	// resetMakesUnknown makes the panel page undecidable after the reset.
 	resetMakesUnknown bool
 	// sSelected is the panel's S rarity selection. It is test state only:
@@ -579,8 +583,23 @@ func (g *scriptedGame) dispatch(op platform.InputOp) platform.InputResult {
 					g.failCloseLeft--
 					return posted(now)
 				}
+				next := g.wheelAfterPanelClose
+				from := g.wheel
+				g.wheelAfterPanelClose = 0
 				g.pending = append(g.pending, pendingEffect{dueAt: lag, apply: func(g *scriptedGame) {
 					g.page = pageWarehouse
+					if next != 0 {
+						g.selectedByPos[from-1] = g.selected
+						g.viewportByPos[from-1] = g.viewport
+						g.wheel = next
+						g.selected = g.selectedByPos[next-1]
+						g.viewport = g.viewportByPos[next-1]
+						if g.selected >= 0 {
+							g.detailGlobal = g.selected
+						} else {
+							g.detailGlobal = -1
+						}
+					}
 				}})
 			}
 			return posted(now)
@@ -2820,6 +2839,21 @@ func TestScrollWheelChangeStopsSession(t *testing.T) {
 func TestBottomWheelChangeStopsSession(t *testing.T) {
 	game := newScriptedGame(listOf(20)...)
 	game.wheelAfterAdvance = 2
+	h := newTraversalHarness(t, game)
+	h.start()
+	snap := h.endFailed(collect.CodeNavigationMismatch)
+	if snap.Trigger == nil || !strings.Contains(snap.Trigger.Message, "changed the wheel position to 2") {
+		t.Fatalf("the trigger does not name the wheel change: %+v", snap.Trigger)
+	}
+	h.requireFatallyStoppedPosition(1)
+}
+
+// T37n: the panel visit only clicks panel controls, so a wheel change
+// observed after closing the panel means someone operated the game. It is
+// session-fatal and is not degraded to a filter-preparation failure.
+func TestWheelChangeAfterPanelCloseStopsSession(t *testing.T) {
+	game := newScriptedGame(make([]bool, 20)...)
+	game.wheelAfterPanelClose = 2
 	h := newTraversalHarness(t, game)
 	h.start()
 	snap := h.endFailed(collect.CodeNavigationMismatch)

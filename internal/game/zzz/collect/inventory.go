@@ -1006,14 +1006,16 @@ func (run *inventoryRun) observedRarityFilter() string {
 }
 
 // requireWheelPosition keeps every close of the filter panel tied to the
-// wheel position the position's preparation started on.
+// wheel position the position's preparation started on. The panel visit
+// only clicks panel controls, so a wheel change afterwards means someone
+// operated the game; it is session-fatal, not a position-level preparation
+// failure. advanceStateFault names a changed or unreadable wheel and a
+// warehouse page whose grid cannot be read.
 func (run *inventoryRun) requireWheelPosition(step string) error {
 	if run.listMatch.Wheel != nil && run.listMatch.Wheel.Position == run.position {
 		return nil
 	}
-	return positionFault("filter", CodeNavigationMismatch,
-		"collect: wheel position %d: the wheel moved during the %s: %s",
-		run.position, step, run.listMatch.Evidence)
+	return run.advanceStateFault("closing the panel for the "+step, run.listMatch)
 }
 
 // openFilterPanel clicks the funnel and waits for the panel page to settle.
