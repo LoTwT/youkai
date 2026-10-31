@@ -273,6 +273,12 @@ type ScrollMatch struct {
 	// did not move). It is not movement evidence; callers may combine it
 	// with an independent probe such as the scrollbar thumb.
 	Undecided bool
+	// Basis names which evidence accepted a Displaced verdict, for field
+	// diagnostics and the stage 5 calibration. It is empty for every other
+	// verdict. The values distinguish the normal competition-margin pass
+	// from the gap-limited pass that only the scrollbar's independent
+	// travel can authorize.
+	Basis string
 	// Evidence describes what the verdict rests on, in prose.
 	Evidence string
 	// Metrics are the raw numbers behind the verdict. They exist for field
@@ -281,6 +287,27 @@ type ScrollMatch struct {
 	// the matcher could not measure the pair.
 	Metrics *ScrollMetrics
 }
+
+// Displaced-verdict evidence bases. The selection box is the primary
+// anchor and the normalized feature must corroborate its row; the
+// scrollbar is the independent cross-check that can break a tie only when
+// the feature's runner-up gap is below the competition margin.
+const (
+	// ScrollBasisSelectionFeature is the ordinary selection-box path: the
+	// named row clears the correlation floor and beats the runner-up by at
+	// least ScrollNCCMargin.
+	ScrollBasisSelectionFeature = "selection+feature"
+	// ScrollBasisSelectionFeatureThumb is the gap-limited selection-box
+	// path: the named row clears the correlation and information floors
+	// and no candidate beats it, but the runner-up gap is below the
+	// competition margin; the scrollbar's independently derived direction
+	// and travel accept the displacement.
+	ScrollBasisSelectionFeatureThumb = "selection+feature+scrollbar"
+	// ScrollBasisFeatureThumb is the feature-only path used when no usable
+	// selection pair exists: the stronger feature threshold, the
+	// competition margin and the scrollbar's travel all agree.
+	ScrollBasisFeatureThumb = "feature+scrollbar"
+)
 
 // ScrollMetrics is the numeric evidence behind one ScrollMatch: the
 // zero-displacement error and, when the matcher searched shifts, the best

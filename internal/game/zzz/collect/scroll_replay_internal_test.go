@@ -251,6 +251,160 @@ func TestScrollReplayFieldSequencesSettleUnderStage2(t *testing.T) {
 	}
 }
 
+// gapLimitedFieldSequenceDirs are the 2026-10-31 stage 2 acceptance
+// failures: the first scroll at a new position's viewport 0 was judged
+// undecided because the true +4 candidate matched only one row while a
+// wrong neighbouring row matched two adjacent rows just as closely. The
+// selection box agreed with +4 and the scrollbar's travel corroborated the
+// four rows; these are the real frames the gap-limited scrollbar pass
+// must settle.
+var gapLimitedFieldSequenceDirs = []string{
+	"probes/20261031-stage2-acceptance/attempt1/20261031-115127637-pos6-vp0-scroll-undecided-attempt1",
+	"probes/20261031-stage2-acceptance/attempt2/20261031-120117518-pos5-vp0-scroll-undecided-attempt1",
+}
+
+// replayScrollBudgets keeps the replay's wait bounded: the frames are
+// served on request, so only the deadline after the sequence is exhausted
+// waits on the wall clock.
+func replayScrollBudgets(run *inventoryRun) {
+	run.inv.ScrollBudget = 800 * time.Millisecond
+	run.inv.ScrollTiming = &ScrollTiming{
+		MotionStartBudget:  100 * time.Millisecond,
+		SettleBudget:       500 * time.Millisecond,
+		SettleObservations: 2,
+	}
+	run.inv.RecheckEvery = time.Millisecond
+}
+
+// TestScrollReplayGapLimitedFieldSequencesSettleOnScrollbar replays both
+// 2026-10-31 field failures through awaitScroll: the selection box and the
+// normalized feature agree on four rows, the runner-up gap is below 0.05,
+// and the scrollbar's independent travel accepts the displacement. The
+// candidate must still settle on two independent fresh confirmations.
+func TestScrollReplayGapLimitedFieldSequencesSettleOnScrollbar(t *testing.T) {
+	root := scrollReplayRoot(t)
+	for _, rel := range gapLimitedFieldSequenceDirs {
+		t.Run(filepath.Base(rel), func(t *testing.T) {
+			seq := loadReplayedSequence(t, filepath.Join(root, rel))
+			m := NewScrollEvidenceMatcher(NewPixelMatcher(MacCloudLayout(), MacCloudCalibration()))
+			run, _ := newReplayScrollRun(t, seq, m, t.TempDir())
+			replayScrollBudgets(run)
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			before, err := run.currentList(ctx)
+			if err != nil {
+				t.Fatalf("take the pre-drag list frame: %v", err)
+			}
+			out, err := run.awaitScroll(ctx, before)
+			if err != nil {
+				t.Fatalf("await the recorded scroll: %v", err)
+			}
+			if !out.displaced || !out.settled || out.lost || out.stationary {
+				t.Fatalf("outcome %+v, want a settled four-row displacement (%s)", out, out.match.Evidence)
+			}
+			if out.match.Rows != 4 || len(out.match.Matches) != (MacCloudLayout().Rows-4)*MacCloudLayout().Columns {
+				t.Fatalf("match %+v, want the recorded four-row correspondence", out.match)
+			}
+			if out.match.Basis != ScrollBasisSelectionFeatureThumb {
+				t.Fatalf("basis %q, want the gap-limited selection+feature+scrollbar basis (%s)", out.match.Basis, out.match.Evidence)
+			}
+			if !strings.Contains(out.match.Evidence, "below the") || !strings.Contains(out.match.Evidence, "scrollbar") {
+				t.Fatalf("evidence %q should name the short gap and the scrollbar corroboration", out.match.Evidence)
+			}
+			if !out.motionStarted || out.settleFrameID == 0 {
+				t.Fatalf("outcome %+v, want a motion start and a settle confirmation frame", out)
+			}
+		})
+	}
+}
+
+// TestScrollReplayGapLimitedFieldSequencesStayUndecidedWithoutScrollbar is
+// the ablation for the same sequences: removing the scrollbar evidence
+// (an unreadable thumb) leaves the gap-limited match unverified, so the
+// wait produces no candidate and never settles.
+func TestScrollReplayGapLimitedFieldSequencesStayUndecidedWithoutScrollbar(t *testing.T) {
+	root := scrollReplayRoot(t)
+	for _, rel := range gapLimitedFieldSequenceDirs {
+		t.Run(filepath.Base(rel), func(t *testing.T) {
+			seq := loadReplayedSequence(t, filepath.Join(root, rel))
+			calibration := MacCloudCalibration()
+			calibration.ScrollbarBrightMin = 256 // no pixel qualifies: the thumb is unreadable
+			m := NewScrollEvidenceMatcher(NewPixelMatcher(MacCloudLayout(), calibration))
+			run, _ := newReplayScrollRun(t, seq, m, t.TempDir())
+			replayScrollBudgets(run)
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			before, err := run.currentList(ctx)
+			if err != nil {
+				t.Fatalf("take the pre-drag list frame: %v", err)
+			}
+			out, err := run.awaitScroll(ctx, before)
+			if err != nil {
+				t.Fatalf("await the recorded scroll: %v", err)
+			}
+			if out.displaced || out.settled || out.lost || out.stationary || out.hasCandidate {
+				t.Fatalf("outcome %+v, want no candidate and no settled verdict without the scrollbar", out)
+			}
+			if !out.match.Undecided {
+				t.Fatalf("last match %+v, want Undecided (%s)", out.match, out.match.Evidence)
+			}
+			if out.match.Basis != "" {
+				t.Fatalf("basis %q, want no accepted-displacement basis", out.match.Basis)
+			}
+		})
+	}
+}
+
+// TestScrollReplayGapLimitedFieldSequenceCommitsAndRecordsBasis runs the
+// full scroll action over one 2026-10-31 failure sequence: the accepted
+// four-row correspondence must survive applyTransition, advance the
+// viewport and leave a scroll-ok manifest whose comparison names the
+// gap-limited basis. It is the manifest-level counterpart of the
+// awaitScroll replay.
+func TestScrollReplayGapLimitedFieldSequenceCommitsAndRecordsBasis(t *testing.T) {
+	root := scrollReplayRoot(t)
+	rel := gapLimitedFieldSequenceDirs[0]
+	seq := loadReplayedSequence(t, filepath.Join(root, rel))
+	dir := t.TempDir()
+	m := NewScrollEvidenceMatcher(NewPixelMatcher(MacCloudLayout(), MacCloudCalibration()))
+	run, session := newReplayScrollRun(t, seq, m, dir)
+	replayScrollBudgets(run)
+	if err := runScriptedScroll(t, run); err != nil {
+		t.Fatalf("the accepted gap-limited scroll must commit: %v", err)
+	}
+	if run.lastScrollRows != 4 {
+		t.Fatalf("committed rows %d, want the recorded four-row displacement", run.lastScrollRows)
+	}
+	if run.viewport != seq.manifest.Viewport+1 {
+		t.Fatalf("viewport %d, want the recorded viewport %d advanced by one", run.viewport, seq.manifest.Viewport)
+	}
+	if session.drags != 1 {
+		t.Fatalf("%d drags, want the single recorded drag", session.drags)
+	}
+	dumps := diagnosticDumpDirs(t, dir)
+	if len(dumps) != 1 || !strings.Contains(filepath.Base(dumps[0]), "-scroll-ok") {
+		t.Fatalf("the committed scroll wrote %v, want one scroll-ok dump", dumps)
+	}
+	manifest := readDumpManifest(t, dumps[0])
+	if manifest.SettledFrame == 0 || manifest.SettleNeeded < 2 {
+		t.Fatalf("manifest settled=%d of %d, want the two-observation settle record", manifest.SettledFrame, manifest.SettleNeeded)
+	}
+	found := false
+	for _, frame := range manifest.Frames {
+		if frame.VsBefore == nil || frame.VsBefore.Verdict != "Displaced" {
+			continue
+		}
+		if frame.VsBefore.Basis != ScrollBasisSelectionFeatureThumb {
+			t.Fatalf("committed comparison basis %q, want the gap-limited selection+feature+scrollbar basis (%s)",
+				frame.VsBefore.Basis, frame.VsBefore.Evidence)
+		}
+		found = true
+	}
+	if !found {
+		t.Fatalf("manifest %s has no Displaced comparison", dumps[0])
+	}
+}
+
 // TestScrollReplayFieldSequencesStillFailUnderLegacy is the sequence-level
 // ablation: the same frames through the pre-stage-2 matcher (the
 // YOUKAI_SCROLL_MATCHER=legacy judgment) must reproduce the recorded field

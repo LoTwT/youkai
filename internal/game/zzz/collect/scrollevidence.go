@@ -203,9 +203,15 @@ func nccVerdict(cands map[int]nccCandidate, chosen int) (best float64, gap float
 //     and the candidate competition, unless the selection box verifiably
 //     moved (a moved selection contradicts stillness).
 //  3. The selection box's displacement, corroborated by the normalized
-//     feature at the named row. A selection pair that names no displacement
-//     (same slot) blocks a feature-only displacement claim: the primary
-//     evidence contradicts it.
+//     feature at the named row. The named row must clear the correlation
+//     and information floors and no candidate may beat it. A runner-up gap
+//     at or above the competition margin accepts directly; a smaller gap
+//     is accepted only when the scrollbar's independently derived travel
+//     agrees in direction and magnitude, which keeps the 0.05 margin for
+//     the feature evidence itself while giving the homogeneous-row case a
+//     second, independent witness. A selection pair that names no
+//     displacement (same slot) blocks a feature-only displacement claim:
+//     the primary evidence contradicts it.
 //  4. A feature-only displacement, when no usable selection pair exists:
 //     it needs the stronger feature threshold, the competition margin and
 //     the scrollbar thumb's corroboration.
@@ -309,23 +315,64 @@ func (m *ScrollEvidenceMatcher) MatchScroll(before, after platform.Frame) Scroll
 	if selectionMoved {
 		if absInt(selRows) >= 1 && absInt(selRows) <= m.C.ScrollMaxRows {
 			best, gap, ok := nccVerdict(cands, selRows)
-			if _, have := cands[selRows]; have {
+			if !ok {
+				return ScrollMatch{Undecided: true, Metrics: metrics, Evidence: fmt.Sprintf(
+					"frames %d → %d: the selection box names a %d-row displacement (slot %d → %d) but no whole-row candidate could be measured at that displacement; %s",
+					before.ID, after.ID, absInt(selRows), selB, selA, thumbNote)}
+			}
+			std := cands[selRows].std
+			if best == bestNCC {
+				// A tie between the selection's row and another candidate is
+				// not a contradiction, and the scrollbar may break it. Name
+				// the selection row in the diagnostics so the recorded "best"
+				// does not depend on map iteration order.
 				metrics.BestNCCRow, metrics.BestNCC = selRows, best
 			}
-			if ok && best >= m.C.ScrollSelectionNCC && gap >= m.C.ScrollNCCMargin &&
-				cands[selRows].std >= m.C.ScrollInfoStdMin {
+			switch {
+			case best < m.C.ScrollSelectionNCC:
+				return ScrollMatch{Undecided: true, Metrics: metrics, Evidence: fmt.Sprintf(
+					"frames %d → %d: the selection box names a %d-row displacement (slot %d → %d) but the normalized feature at that row is below the selection floor (ncc %.3f < %.2f); %s",
+					before.ID, after.ID, absInt(selRows), selB, selA, best, m.C.ScrollSelectionNCC, thumbNote)}
+			case std < m.C.ScrollInfoStdMin:
+				return ScrollMatch{Undecided: true, Metrics: metrics, Evidence: fmt.Sprintf(
+					"frames %d → %d: the selection box names a %d-row displacement (slot %d → %d) but the support at that row is too uniform for a normalized verdict (info std %.1f < %.1f); %s",
+					before.ID, after.ID, absInt(selRows), selB, selA, std, m.C.ScrollInfoStdMin, thumbNote)}
+			case gap < 0:
+				// Another row correlates better than the selection's own row:
+				// the two primary feature evidence sources contradict each
+				// other, and the scrollbar may not break that tie.
+				return ScrollMatch{Undecided: true, Metrics: metrics, Evidence: fmt.Sprintf(
+					"frames %d → %d: the selection box names a %d-row displacement (slot %d → %d) but the normalized feature prefers another row (best %+d:%.3f vs the named row %.3f); the selection and features contradict each other; %s",
+					before.ID, after.ID, absInt(selRows), selB, selA, bestRow, bestNCC, best, thumbNote)}
+			case gap >= m.C.ScrollNCCMargin:
 				// InfoStd names the support the verdict rests on; a
 				// non-accepting verdict keeps the zero-shift std, which the
 				// wait's motion detection gates on.
-				metrics.InfoStd = cands[selRows].std
-				return m.displaced(before.ID, after.ID, selRows, metrics,
+				metrics.InfoStd = std
+				return m.displaced(before.ID, after.ID, selRows, ScrollBasisSelectionFeature, metrics,
 					fmt.Sprintf("the selection box moved %s by %d row(s) (slot %d → %d) and the normalized feature at that row agrees (ncc %.3f ≥ %.2f, runner-up gap %.3f ≥ %.2f, info std %.1f; zero-shift error %.2f, best MAD alignment not a gate); %s",
 						directionName(selRows), absInt(selRows), selB, selA, best, m.C.ScrollSelectionNCC,
-						gap, m.C.ScrollNCCMargin, cands[selRows].std, err0, thumbNote))
+						gap, m.C.ScrollNCCMargin, std, err0, thumbNote))
+			}
+			// The named row clears the correlation and information floors and
+			// no candidate beats it, but the competition margin is short. A
+			// four-row step leaves only one row of overlap, while a smaller
+			// shift can compare two adjacent rows; in a homogeneous list the
+			// runner-up therefore needs an independent tiebreaker. The
+			// scrollbar's travel is that witness; without it the gap-limited
+			// match stays unverified (the 0.05 margin itself is unchanged).
+			corroborated, why := m.thumbCorroborates(thumbBStart, thumbBEnd, thumbBOK, thumbAStart, thumbAEnd, thumbAOK, selRows)
+			if corroborated {
+				metrics.InfoStd = std
+				return m.displaced(before.ID, after.ID, selRows, ScrollBasisSelectionFeatureThumb, metrics,
+					fmt.Sprintf("the selection box moved %s by %d row(s) (slot %d → %d); no whole-row candidate beats the named row and it clears the correlation and information floors (ncc %.3f ≥ %.2f, info std %.1f), but the runner-up gap %.3f is below the %.2f competition margin; the scrollbar independently corroborated the displacement in direction and magnitude (%s), so the gap-limited match is accepted on that independent evidence; zero-shift error %.2f, best MAD alignment not a gate",
+						directionName(selRows), absInt(selRows), selB, selA, best, m.C.ScrollSelectionNCC, std,
+						gap, m.C.ScrollNCCMargin, why, err0))
 			}
 			return ScrollMatch{Undecided: true, Metrics: metrics, Evidence: fmt.Sprintf(
-				"frames %d → %d: the selection box names a %d-row displacement (slot %d → %d) but the normalized feature does not corroborate it (ncc %.3f vs ≥ %.2f, runner-up gap %.3f vs ≥ %.2f); %s",
-				before.ID, after.ID, absInt(selRows), selB, selA, best, m.C.ScrollSelectionNCC, gap, m.C.ScrollNCCMargin, thumbNote)}
+				"frames %d → %d: the selection box names a %d-row displacement (slot %d → %d) and the normalized feature at that row clears its floors (ncc %.3f ≥ %.2f, info std %.1f), but the runner-up gap %.3f is below the %.2f competition margin and the scrollbar does not corroborate the displacement (%s); the gap alone cannot verify the row",
+				before.ID, after.ID, absInt(selRows), selB, selA, best, m.C.ScrollSelectionNCC, std,
+				gap, m.C.ScrollNCCMargin, why)}
 		}
 		// A selection displacement outside the modelled row range cannot be
 		// committed; the features may not silently pick a different row.
@@ -364,7 +411,7 @@ func (m *ScrollEvidenceMatcher) MatchScroll(before, after platform.Frame) Scroll
 			corroborated, why := m.thumbCorroborates(thumbBStart, thumbBEnd, thumbBOK, thumbAStart, thumbAEnd, thumbAOK, bestRow)
 			if corroborated {
 				metrics.InfoStd = cands[bestRow].std
-				return m.displaced(before.ID, after.ID, bestRow, metrics,
+				return m.displaced(before.ID, after.ID, bestRow, ScrollBasisFeatureThumb, metrics,
 					fmt.Sprintf("the normalized feature alone names a %d-row displacement (ncc %.3f ≥ %.2f, runner-up gap %.3f ≥ %.2f, info std %.1f; no selection anchor: before %d, after %d) and the scrollbar travelled with it (%s); zero-shift error %.2f, best MAD alignment not a gate",
 						absInt(bestRow), bestNCC, m.C.ScrollDisplacedNCC, gap, m.C.ScrollNCCMargin, cands[bestRow].std, selB, selA, why, err0))
 			}
@@ -401,7 +448,8 @@ func (m *ScrollEvidenceMatcher) MatchScroll(before, after platform.Frame) Scroll
 // displaced builds the Displaced verdict for a verified signed row count:
 // the correspondence set is the uniform whole-row overlap, exactly as the
 // wrapped matcher reports it, so applyTransition's validation is unchanged.
-func (m *ScrollEvidenceMatcher) displaced(beforeID, afterID uint64, rows int, metrics *ScrollMetrics, why string) ScrollMatch {
+// basis names the evidence combination that accepted the displacement.
+func (m *ScrollEvidenceMatcher) displaced(beforeID, afterID uint64, rows int, basis string, metrics *ScrollMetrics, why string) ScrollMatch {
 	matches := make([]PositionPair, 0, (m.L.Rows-absInt(rows))*m.L.Columns)
 	for r := 0; r < m.L.Rows-absInt(rows); r++ {
 		for c := 0; c < m.L.Columns; c++ {
@@ -417,6 +465,7 @@ func (m *ScrollEvidenceMatcher) displaced(beforeID, afterID uint64, rows int, me
 		Displaced: true,
 		Rows:      absInt(rows),
 		Matches:   matches,
+		Basis:     basis,
 		Metrics:   metrics,
 		Evidence:  fmt.Sprintf("frames %d → %d: %s", beforeID, afterID, why),
 	}

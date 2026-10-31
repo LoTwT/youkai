@@ -10,6 +10,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -136,6 +137,105 @@ func TestScrollFailureDumpWritesBoundedSequence(t *testing.T) {
 
 	off := &inventoryRun{inv: &Inventory{Layout: layout}}
 	off.dumpScrollTrace("scroll-lost", 0, scrollOutcome{}, frame(1), frame(2), nil, platform.Frame{}, false, false)
+}
+
+// TestScrollOKDumpsWriteEveryManifestWithBoundedImages pins the stage 5
+// calibration coverage: every committed scroll of a walk writes a manifest
+// (its timing and verdict record), while only the first
+// maxScrollOKImageDumpsPerRun successes pay for the key-frame PNGs. The
+// per-run manifest cap still bounds a pathological walk.
+func TestScrollOKDumpsWriteEveryManifestWithBoundedImages(t *testing.T) {
+	layout := MacCloudLayout()
+	frame := func(id uint64) platform.Frame {
+		return platform.Frame{ID: id, Geometry: 1, Image: image.NewRGBA(image.Rect(0, 0, 1280, 1000))}
+	}
+	dir := t.TempDir()
+	run := &inventoryRun{inv: &Inventory{Layout: layout, DiagnosticDir: dir}, position: 1, viewport: 4}
+	const successes = maxScrollOKImageDumpsPerRun + 2
+	for i := 0; i < successes; i++ {
+		id := uint64(10 + 2*i)
+		trace := newScrollTrace(layout, frame(id))
+		trace.record(frame(id + 1))
+		run.dumpScrollTrace("scroll-ok", 1, scrollOutcome{}, frame(id), frame(id+1), trace, platform.Frame{}, false, true)
+	}
+	dumps := diagnosticDumpDirs(t, dir)
+	if len(dumps) != successes {
+		t.Fatalf("a walk wrote %d committed-scroll dumps, want one manifest per success (%d)", len(dumps), successes)
+	}
+	images, manifests := 0, 0
+	for _, dump := range dumps {
+		manifest := readDumpManifest(t, dump)
+		if manifest.Kind != "scroll-ok" || len(manifest.Frames) != 2 {
+			t.Fatalf("dump %q manifest %+v, want the two-frame scroll-ok record", dump, manifest)
+		}
+		if strings.Contains(filepath.Base(dump), "-scroll-ok-manifest") {
+			manifests++
+			if files := dumpPNGs(t, dump); len(files) != 0 {
+				t.Fatalf("manifest-only dump %q wrote %v, want no crops", dump, files)
+			}
+			continue
+		}
+		images++
+		if files := dumpPNGs(t, dump); len(files) == 0 {
+			t.Fatalf("image-bearing dump %q wrote no crops", dump)
+		}
+	}
+	if images != maxScrollOKImageDumpsPerRun || manifests != successes-maxScrollOKImageDumpsPerRun {
+		t.Fatalf("wrote %d image dumps and %d manifest-only dumps, want %d and %d",
+			images, manifests, maxScrollOKImageDumpsPerRun, successes-maxScrollOKImageDumpsPerRun)
+	}
+
+	// The per-run manifest cap still applies.
+	run.diagnosticOKManifests = maxScrollOKManifestDumpsPerRun
+	id := uint64(1000)
+	trace := newScrollTrace(layout, frame(id))
+	trace.record(frame(id + 1))
+	run.dumpScrollTrace("scroll-ok", 1, scrollOutcome{}, frame(id), frame(id+1), trace, platform.Frame{}, false, true)
+	if got := len(diagnosticDumpDirs(t, dir)); got != successes {
+		t.Fatalf("a walk past the manifest cap wrote %d dumps, want the cap to hold at %d", got, successes)
+	}
+}
+
+// TestPruneDiagnosticsKeepsOKBucketsSeparately pins the three independent
+// retention buckets: failure dumps, image-bearing committed scrolls and
+// manifest-only committed scrolls. A large manifest budget must not evict
+// the failure evidence or the key-frame PNGs.
+func TestPruneDiagnosticsKeepsOKBucketsSeparately(t *testing.T) {
+	dir := t.TempDir()
+	mkdir := func(name string) {
+		if err := os.Mkdir(filepath.Join(dir, name), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := 0; i < 3; i++ {
+		mkdir(fmt.Sprintf("2026102%d-000000000-scroll-lost", i))
+		mkdir(fmt.Sprintf("2026102%d-000000000-scroll-ok", i))
+	}
+	for i := 0; i < 4; i++ {
+		mkdir(fmt.Sprintf("2026102%d-000000000-scroll-ok-manifest", i))
+	}
+	pruneDiagnostics(dir, 2, 2, 3)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	sort.Strings(names)
+	want := []string{
+		"20261021-000000000-scroll-lost",
+		"20261021-000000000-scroll-ok",
+		"20261021-000000000-scroll-ok-manifest",
+		"20261022-000000000-scroll-lost",
+		"20261022-000000000-scroll-ok",
+		"20261022-000000000-scroll-ok-manifest",
+		"20261023-000000000-scroll-ok-manifest",
+	}
+	if fmt.Sprint(names) != fmt.Sprint(want) {
+		t.Fatalf("prune kept %v, want %v", names, want)
+	}
 }
 
 // TestScrollFailureDumpKeepsSameMillisecondDumps pins the exclusive dump
@@ -278,7 +378,7 @@ func TestScrollFailureManifestCarriesMatcherNumbers(t *testing.T) {
 	trace.record(moving)
 	trace.record(settled)
 
-	total := ScrollMatch{Displaced: true, Rows: 1, Evidence: "scripted total", Metrics: &ScrollMetrics{
+	total := ScrollMatch{Displaced: true, Rows: 1, Basis: ScrollBasisSelectionFeatureThumb, Evidence: "scripted total", Metrics: &ScrollMetrics{
 		Err0: 5.25, Measured: true, BestDy: 147, BestErr: 2.5,
 		RowErrors: map[int]float64{1: 2.5, 2: 6.75, -1: 9.5},
 	}}
@@ -311,6 +411,9 @@ func TestScrollFailureManifestCarriesMatcherNumbers(t *testing.T) {
 	}
 	if entry.VsBefore == nil || entry.VsBefore.Verdict != "Displaced" || entry.VsBefore.ReferenceFrame != before.ID {
 		t.Fatalf("moving vs_before %+v, want the recorded total displacement against frame %d", entry.VsBefore, before.ID)
+	}
+	if entry.VsBefore.Basis != ScrollBasisSelectionFeatureThumb {
+		t.Fatalf("moving vs_before basis %q, want the gap-limited selection basis", entry.VsBefore.Basis)
 	}
 	if entry.VsBefore.Err0 == nil || *entry.VsBefore.Err0 != 5.25 ||
 		entry.VsBefore.BestDy == nil || *entry.VsBefore.BestDy != 147 ||
@@ -373,7 +476,7 @@ func TestPruneDiagnosticsLogsFailures(t *testing.T) {
 	t.Cleanup(func() { log.SetOutput(previous) })
 
 	readErr := errors.New("scripted read failure")
-	pruneDiagnosticsWith(dir, 2, 2, func(string) ([]os.DirEntry, error) {
+	pruneDiagnosticsWith(dir, 2, 2, 2, func(string) ([]os.DirEntry, error) {
 		return nil, readErr
 	}, func(string) error {
 		t.Fatal("prune removed a file after a failed read")
@@ -391,7 +494,7 @@ func TestPruneDiagnosticsLogsFailures(t *testing.T) {
 	}
 	logs.Reset()
 	removeErr := errors.New("scripted remove failure")
-	pruneDiagnosticsWith(dir, 1, 1, os.ReadDir, func(string) error { return removeErr })
+	pruneDiagnosticsWith(dir, 1, 1, 1, os.ReadDir, func(string) error { return removeErr })
 	if got := logs.String(); strings.Count(got, removeErr.Error()) != 2 {
 		t.Fatalf("removal failure log = %q, want one line for each of the two oldest dumps", got)
 	}
@@ -416,7 +519,7 @@ func TestPruneDiagnosticsKeepsNewest(t *testing.T) {
 	if err := os.WriteFile(legacy, []byte("png"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	pruneDiagnostics(dir, 2, 2)
+	pruneDiagnostics(dir, 2, 2, 2)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		t.Fatal(err)

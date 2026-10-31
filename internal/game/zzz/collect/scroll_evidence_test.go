@@ -3,6 +3,7 @@ package collect_test
 import (
 	"image"
 	"image/color"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -95,6 +96,41 @@ func paintSelectionBorder(img *image.RGBA, l collect.Layout, selection int) {
 	}
 }
 
+// paintRowSimilarFrame paints a list whose rows share one texture and
+// differ only by a low-contrast stripe whose position follows the global
+// row. A four-row scroll therefore aligns the same row exactly, while a
+// three-row (or one-row) candidate compares adjacent rows with only a small
+// mismatch: the shape the 2026-10-31 field frames showed, where a four-row
+// step leaves one row of true overlap and a homogeneous list makes a wrong
+// neighbouring row competitive. The stripe is wide and shallow enough to
+// keep the zero-shift error above the stationary threshold while the
+// adjacent-row correlation stays within the competition margin.
+func paintRowSimilarFrame(l collect.Layout, id uint64, offset, selection, thumbStart, thumbEnd int) platform.Frame {
+	f := paintScrollFrame(l, id, offset, -1, thumbStart, thumbEnd, false)
+	img := f.Image
+	min, max := l.ListViewport.Min, l.ListViewport.Max
+	for y := min.Y; y < max.Y; y++ {
+		g := offset + (y-min.Y)/l.RowPitch
+		yy := (y - min.Y) % l.RowPitch
+		marker := 80 + (g*53)%280
+		for x := min.X; x < max.X; x++ {
+			h := uint32(x*97 + yy*1000003)
+			h ^= h >> 16
+			h *= 0x45d9f3b
+			h ^= h >> 16
+			v := int(40 + h%160)
+			if x >= marker && x < marker+77 {
+				if v += 30; v > 255 {
+					v = 255
+				}
+			}
+			img.SetRGBA(x, y, color.RGBA{R: uint8(v), G: uint8(v), B: uint8(v), A: 255})
+		}
+	}
+	paintSelectionBorder(img, l, selection)
+	return f
+}
+
 // TestScrollEvidenceMatcherFixtures replays every recorded M2 field scroll
 // pair through the stage 2 matcher. The table is the historical expectation
 // the pre-stage-2 matcher is pinned against (TestMacCloudScrollDisplacements):
@@ -182,6 +218,104 @@ func TestScrollEvidenceSelectionDisplacementIsPrimary(t *testing.T) {
 	if sm.Metrics.BestNCCRow != 4 || sm.Metrics.BestNCC < 0.9 {
 		t.Fatalf("metrics %+v do not record the corroborating +4 alignment", sm.Metrics)
 	}
+	if sm.Basis != collect.ScrollBasisSelectionFeature {
+		t.Fatalf("basis %q, want the ordinary selection+feature pass", sm.Basis)
+	}
+	if !strings.Contains(sm.Evidence, "runner-up gap") || !strings.Contains(sm.Evidence, "≥") {
+		t.Fatalf("evidence %q should state the sufficient runner-up gap", sm.Evidence)
+	}
+}
+
+// TestScrollEvidenceSelectionGapBelowMarginNeedsScrollbar pins the
+// 2026-10-31 gap-limited case: the selection box and the normalized
+// feature agree on the row and clear the correlation and information
+// floors, but a homogeneous neighbouring row keeps the runner-up gap below
+// 0.05. The scrollbar's independently derived travel is the extra witness;
+// the gap threshold itself is unchanged, and the verdict names the
+// gap-limited basis so field triage can tell it apart from the ordinary
+// pass.
+func TestScrollEvidenceSelectionGapBelowMarginNeedsScrollbar(t *testing.T) {
+	l := collect.MacCloudLayout()
+	m := newScrollEvidenceMatcher()
+	c := collect.MacCloudCalibration()
+	before := paintRowSimilarFrame(l, 1, 0, l.Rows*l.Columns-1, 300, 430)
+	after := paintRowSimilarFrame(l, 2, 4, l.Columns-1, 405, 535)
+	sm := m.MatchScroll(before, after)
+	if !sm.Displaced || sm.Rows != 4 || sm.Stationary || sm.Lost {
+		t.Fatalf("verdict %+v, want the four-row displacement accepted with the scrollbar (%s)", sm, sm.Evidence)
+	}
+	if sm.Basis != collect.ScrollBasisSelectionFeatureThumb {
+		t.Fatalf("basis %q, want the gap-limited selection+feature+scrollbar basis", sm.Basis)
+	}
+	if sm.Metrics == nil || sm.Metrics.BestNCCRow != 4 {
+		t.Fatalf("metrics %+v, want the selection's +4 row", sm.Metrics)
+	}
+	rival := math.Inf(-1)
+	for row, ncc := range sm.Metrics.RowNCC {
+		if row != sm.Metrics.BestNCCRow && ncc > rival {
+			rival = ncc
+		}
+	}
+	gap := sm.Metrics.BestNCC - rival
+	if gap < 0 || gap >= c.ScrollNCCMargin {
+		t.Fatalf("runner-up gap %.3f, want a gap-limited match (0 ≤ gap < %.2f)", gap, c.ScrollNCCMargin)
+	}
+	if !strings.Contains(sm.Evidence, "below the") || !strings.Contains(sm.Evidence, "scrollbar") ||
+		!strings.Contains(sm.Evidence, "corroborated") {
+		t.Fatalf("evidence %q should state the short gap and the scrollbar's independent corroboration", sm.Evidence)
+	}
+}
+
+// TestScrollEvidenceSelectionGapBelowMarginRejectsUncorroboratedScrollbar
+// pins the fail-closed side of the gap-limited pass: the same near-tie
+// stays undecided when the scrollbar does not corroborate the selection's
+// four-row direction or magnitude.
+func TestScrollEvidenceSelectionGapBelowMarginRejectsUncorroboratedScrollbar(t *testing.T) {
+	l := collect.MacCloudLayout()
+	m := newScrollEvidenceMatcher()
+	before := paintRowSimilarFrame(l, 1, 0, l.Rows*l.Columns-1, 300, 430)
+	for name, after := range map[string]platform.Frame{
+		// Three rows of travel: the magnitude check rejects the off-by-one
+		// claim.
+		"short travel": paintRowSimilarFrame(l, 2, 4, l.Columns-1, 380, 510),
+		// The thumb moves the wrong way for a content-up displacement.
+		"backward travel": paintRowSimilarFrame(l, 3, 4, l.Columns-1, 225, 355),
+	} {
+		t.Run(name, func(t *testing.T) {
+			sm := m.MatchScroll(before, after)
+			if sm.Displaced || sm.Stationary || sm.Lost || !sm.Undecided {
+				t.Fatalf("verdict %+v, want undecided without the scrollbar's corroboration (%s)", sm, sm.Evidence)
+			}
+			if sm.Basis != "" {
+				t.Fatalf("basis %q, want no accepted-displacement basis", sm.Basis)
+			}
+			if !strings.Contains(sm.Evidence, "scrollbar does not corroborate") {
+				t.Fatalf("evidence %q should name the failed scrollbar corroboration", sm.Evidence)
+			}
+		})
+	}
+}
+
+// TestScrollEvidenceSelectionContradictsFeatureRow pins the other hard
+// constraint: when the normalized feature prefers a different row than the
+// selection box, an agreeing scrollbar may not override the contradiction.
+// The after content is shifted three rows while the selection box claims
+// four; the thumb travels four rows' worth.
+func TestScrollEvidenceSelectionContradictsFeatureRow(t *testing.T) {
+	l := collect.MacCloudLayout()
+	m := newScrollEvidenceMatcher()
+	before := paintRowSimilarFrame(l, 1, 0, l.Rows*l.Columns-1, 300, 430)
+	after := paintRowSimilarFrame(l, 2, 3, l.Columns-1, 405, 535)
+	sm := m.MatchScroll(before, after)
+	if sm.Displaced || sm.Stationary || sm.Lost || !sm.Undecided {
+		t.Fatalf("verdict %+v, want undecided on the selection/feature contradiction (%s)", sm, sm.Evidence)
+	}
+	if sm.Metrics == nil || sm.Metrics.BestNCCRow != 3 {
+		t.Fatalf("metrics %+v, want the feature's +3 row", sm.Metrics)
+	}
+	if !strings.Contains(sm.Evidence, "prefers another row") || !strings.Contains(sm.Evidence, "contradict") {
+		t.Fatalf("evidence %q should state the selection/feature contradiction", sm.Evidence)
+	}
 }
 
 // TestScrollEvidenceSelectionScrolledOutOfViewFallsBack pins the K1
@@ -221,10 +355,13 @@ func TestScrollEvidenceFeatureNeedsScrollbarCorroboration(t *testing.T) {
 }
 
 // TestScrollEvidenceCompetitionRejectsPeriodicContent pins the
-// best-versus-runner-up rule: a three-row periodic list makes the +1 and +4
-// alignments equally perfect, so even the selection box's four-row claim
-// cannot be corroborated uniquely and the verdict stays undecided — the
-// machine does not pick between indistinguishable candidates.
+// best-versus-runner-up rule and its scrollbar tiebreak: a three-row
+// periodic list makes the +1 and +4 alignments equally perfect, so the
+// feature competition alone cannot distinguish them. The selection box's
+// four-row claim plus the scrollbar's independent four-row travel now
+// accept the displacement on the gap-limited basis; without a
+// corroborating scrollbar the same frames stay undecided — the machine
+// does not pick between indistinguishable candidates on features alone.
 func TestScrollEvidenceCompetitionRejectsPeriodicContent(t *testing.T) {
 	l := collect.MacCloudLayout()
 	m := newScrollEvidenceMatcher()
@@ -252,8 +389,21 @@ func TestScrollEvidenceCompetitionRejectsPeriodicContent(t *testing.T) {
 	before := periodic(1, 0, l.Rows*l.Columns-1, 300, 430)
 	after := periodic(2, 4, l.Columns-1, 400, 530)
 	sm := m.MatchScroll(before, after)
+	if !sm.Displaced || sm.Rows != 4 || sm.Basis != collect.ScrollBasisSelectionFeatureThumb {
+		t.Fatalf("verdict %+v, want the four-row displacement accepted on the scrollbar tiebreak (%s)", sm, sm.Evidence)
+	}
+	if sm.Metrics == nil || sm.Metrics.BestNCCRow != 4 || sm.Metrics.BestNCC < 0.99 {
+		t.Fatalf("metrics %+v, want the selection's +4 row named among the perfect ties", sm.Metrics)
+	}
+	// A thumb travelling only three rows' worth cannot break the tie; the
+	// periodic features stay undecided.
+	uncorroborated := periodic(3, 4, l.Columns-1, 380, 510)
+	sm = m.MatchScroll(before, uncorroborated)
 	if sm.Displaced || sm.Stationary || sm.Lost || !sm.Undecided {
-		t.Fatalf("verdict %+v, want the periodic candidates to stay undecided (%s)", sm, sm.Evidence)
+		t.Fatalf("verdict %+v, want undecided without a corroborating scrollbar (%s)", sm, sm.Evidence)
+	}
+	if sm.Basis != "" {
+		t.Fatalf("basis %q, want no accepted-displacement basis", sm.Basis)
 	}
 }
 
