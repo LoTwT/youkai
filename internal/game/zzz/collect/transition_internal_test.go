@@ -48,24 +48,31 @@ func transitionListVerdict(l Layout, occupied []bool) PageMatch {
 
 // rejectTransition applies a transition that must be refused and asserts
 // both halves of the fail-closed contract: the fault code is positionLost,
-// and the rejected scroll left the ledger untouched (a rejected transition
-// must not advance the viewport or carry visit state across a position it
-// could not prove).
-func rejectTransition(t *testing.T, run *inventoryRun, before, after PageMatch, sm ScrollMatch) {
+// and the rejected scroll left the ledger exactly as it was. The ledger is
+// seeded with asymmetric state first: an all-false visited slice cannot
+// tell a guard that carries the mapping before validating from one that
+// returns before it.
+func rejectTransition(t *testing.T, run *inventoryRun, before, after PageMatch, sm ScrollMatch, context string) {
 	t.Helper()
+	run.viewport = 3
+	run.visited = make([]bool, len(run.inv.Layout.Slots))
+	run.visited[0] = true
+	run.visited[run.inv.Layout.positionSlot(4, 3)] = true
+	wantVisited := slices.Clone(run.visited)
+	wantViewport := run.viewport
 	err := run.applyTransition(platform.Frame{ID: 1}, platform.Frame{ID: 2}, before, after, sm)
 	if err == nil {
-		t.Fatal("a broken correspondence was accepted as a verified scroll")
+		t.Fatalf("%s: a broken correspondence was accepted as a verified scroll", context)
 	}
 	var fault *scan.FaultError
 	if !errors.As(err, &fault) || fault.Code != CodePositionLost {
-		t.Fatalf("correspondence error %v, want the fail-closed %s", err, CodePositionLost)
+		t.Fatalf("%s: correspondence error %v, want the fail-closed %s", context, err, CodePositionLost)
 	}
-	if run.viewport != 0 {
-		t.Fatalf("the rejected transition advanced the viewport to %d", run.viewport)
+	if run.viewport != wantViewport {
+		t.Fatalf("%s: the rejected transition advanced the viewport from %d to %d", context, wantViewport, run.viewport)
 	}
-	if slices.Contains(run.visited, true) {
-		t.Fatalf("the rejected transition carried visit state: %v", run.visited)
+	if !slices.Equal(run.visited, wantVisited) {
+		t.Fatalf("%s: the rejected transition changed the visited ledger: %v, want %v", context, run.visited, wantVisited)
 	}
 }
 
@@ -250,7 +257,7 @@ func TestApplyTransitionRejectsBrokenCorrespondence(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			run := newTransitionRun(l)
 			sm := ScrollMatch{Displaced: true, Rows: tc.rows, Matches: tc.matches(), Evidence: tc.name}
-			rejectTransition(t, run, transitionListVerdict(l, tc.before()), transitionListVerdict(l, tc.after()), sm)
+			rejectTransition(t, run, transitionListVerdict(l, tc.before()), transitionListVerdict(l, tc.after()), sm, tc.name)
 		})
 	}
 }
@@ -285,9 +292,53 @@ func TestApplyTransitionRejectsUncoveredOverlap(t *testing.T) {
 			run := newTransitionRun(l)
 			sm := ScrollMatch{Displaced: true, Rows: tc.rows, Matches: kept, Evidence: tc.name}
 			occupancy := transitionListVerdict(l, gridOccupancy(l, true))
-			rejectTransition(t, run, occupancy, occupancy, sm)
+			rejectTransition(t, run, occupancy, occupancy, sm, tc.name)
 		})
 	}
+}
+
+// TestApplyTransitionRejectsUpwardCorrespondence pins the direction
+// convention: applyTransition carries a forward (downward) displacement, so
+// a correspondence that moves items up is positionLost. The mixed case keeps
+// the overlap complete, one-to-one, column-preserving and
+// occupancy-consistent, so only the signed row difference can reject it;
+// comparing that difference as an absolute value would accept it.
+func TestApplyTransitionRejectsUpwardCorrespondence(t *testing.T) {
+	l := MacCloudLayout()
+	rows := 1
+	before := gridOccupancy(l, true)
+	after := gridOccupancy(l, true)
+	beforeMatch := transitionListVerdict(l, before)
+	afterMatch := transitionListVerdict(l, after)
+
+	t.Run("whole set moves up", func(t *testing.T) {
+		pairs := make([]PositionPair, 0, (l.Rows-rows)*l.Columns)
+		for r := 0; r < l.Rows-rows; r++ {
+			for c := 0; c < l.Columns; c++ {
+				pairs = append(pairs, PositionPair{FromRow: r, FromColumn: c, ToRow: r + rows, ToColumn: c})
+			}
+		}
+		run := newTransitionRun(l)
+		rejectTransition(t, run, beforeMatch, afterMatch,
+			ScrollMatch{Displaced: true, Rows: rows, Matches: pairs, Evidence: "upward correspondence"},
+			"whole set moves up")
+	})
+
+	t.Run("one pair moves up in a complete overlap", func(t *testing.T) {
+		pairs := scriptedDisplacement(l, rows)
+		for i := range pairs {
+			if pairs[i].ToRow == 1 && pairs[i].ToColumn == 2 {
+				pairs[i] = PositionPair{FromRow: 0, FromColumn: 2, ToRow: 1, ToColumn: 2}
+			}
+		}
+		if got := transitionViolations(l, rows, pairs, before, after); !slices.Equal(got, []string{"row displacement"}) {
+			t.Fatalf("the mixed set must break only the row difference, got %v", got)
+		}
+		run := newTransitionRun(l)
+		rejectTransition(t, run, beforeMatch, afterMatch,
+			ScrollMatch{Displaced: true, Rows: rows, Matches: pairs, Evidence: "mixed direction correspondence"},
+			"one pair moves up in a complete overlap")
+	})
 }
 
 // randomConsistentOccupancy randomizes the occupancy of every matched
@@ -305,18 +356,68 @@ func randomConsistentOccupancy(l Layout, pairs []PositionPair, rng *rand.Rand) (
 }
 
 // brokenTransition is one mutated correspondence set and the occupancy
-// verdicts it is validated against.
+// verdicts it is validated against. target names the single applyTransition
+// condition the mutation must break.
 type brokenTransition struct {
 	name          string
+	target        string
 	rows          int
 	pairs         []PositionPair
 	before, after []bool
 }
 
+// transitionViolations reports which applyTransition conditions a
+// correspondence breaks, each judged on its own and independently of the
+// production guards. The property test uses it to prove a mutation breaks
+// only its intended condition; pairs are in bounds and rows is verified.
+func transitionViolations(l Layout, rows int, pairs []PositionPair, before, after []bool) []string {
+	fromSeen := make(map[int]bool, len(pairs))
+	toSeen := make(map[int]bool, len(pairs))
+	oneToOne, columns, displacement, occupancy := false, false, false, false
+	for _, p := range pairs {
+		from := l.positionSlot(p.FromRow, p.FromColumn)
+		to := l.positionSlot(p.ToRow, p.ToColumn)
+		if fromSeen[from] || toSeen[to] {
+			oneToOne = true
+		}
+		fromSeen[from], toSeen[to] = true, true
+		if p.FromColumn != p.ToColumn {
+			columns = true
+		}
+		if p.FromRow-p.ToRow != rows {
+			displacement = true
+		}
+		if before[from] != after[to] {
+			occupancy = true
+		}
+	}
+	var violations []string
+	if oneToOne {
+		violations = append(violations, "one-to-one")
+	}
+	if columns {
+		violations = append(violations, "column")
+	}
+	if displacement {
+		violations = append(violations, "row displacement")
+	}
+	if occupancy {
+		violations = append(violations, "occupancy")
+	}
+	for row := 0; row < l.Rows-rows; row++ {
+		for col := 0; col < l.Columns; col++ {
+			if !toSeen[l.positionSlot(row, col)] {
+				return append(violations, "coverage")
+			}
+		}
+	}
+	return violations
+}
+
 // mutateTransition breaks one random condition of a legal correspondence
-// while leaving the other conditions as they were. Every mutation is
-// rejected by the production guards, so a property run asserts the
-// accept/reject split without re-implementing the validation rules.
+// while leaving the other conditions intact. transitionViolations proves that
+// separation, so a property run asserts the accept/reject split without
+// re-implementing the validation rules.
 func mutateTransition(l Layout, rows int, pairs []PositionPair, before, after []bool, rng *rand.Rand) brokenTransition {
 	base := brokenTransition{rows: rows, pairs: pairs, before: before, after: after}
 	switch rng.Intn(5) {
@@ -324,48 +425,63 @@ func mutateTransition(l Layout, rows int, pairs []PositionPair, before, after []
 		// Duplicate one pair: one-to-one is broken on both sides.
 		i := rng.Intn(len(pairs))
 		base.name = "repeated correspondence"
+		base.target = "one-to-one"
 		base.pairs = append(append([]PositionPair{}, pairs...), pairs[i])
 	case 1:
-		// Swap the target columns of two pairs in the same overlap row:
-		// one-to-one, coverage and the row displacement still hold, but the
-		// items are attributed to the wrong columns.
+		// Swap the target columns of two pairs in the same overlap row and
+		// swap their target occupancy with them, so one-to-one, coverage,
+		// the row displacement and occupancy all still hold and only the
+		// column attribution is wrong.
 		row := rng.Intn(len(pairs) / l.Columns)
 		from := rng.Intn(l.Columns)
 		to := (from + 1 + rng.Intn(l.Columns-1)) % l.Columns
 		i, j := row*l.Columns+from, row*l.Columns+to
 		swapped := append([]PositionPair{}, pairs...)
 		swapped[i].ToColumn, swapped[j].ToColumn = swapped[j].ToColumn, swapped[i].ToColumn
+		swappedAfter := slices.Clone(after)
+		si := l.positionSlot(pairs[i].ToRow, pairs[i].ToColumn)
+		sj := l.positionSlot(pairs[j].ToRow, pairs[j].ToColumn)
+		swappedAfter[si], swappedAfter[sj] = swappedAfter[sj], swappedAfter[si]
 		base.name = "swapped target columns"
+		base.target = "column"
 		base.pairs = swapped
+		base.after = swappedAfter
 	case 2:
-		// Move one pair off the verified displacement. The pairs whose
-		// before-row equals the verified count form the first overlap row;
-		// stepping one of them back stays in the grid and one-to-one but
-		// disagrees with the row count.
+		// Move one pair off the verified displacement and give the new
+		// before position the occupancy its target already carries, so only
+		// the row difference is violated.
 		firstRow := make([]int, 0, l.Columns)
 		for i, p := range pairs {
 			if p.FromRow == rows {
 				firstRow = append(firstRow, i)
 			}
 		}
+		i := firstRow[rng.Intn(len(firstRow))]
 		changed := append([]PositionPair{}, pairs...)
-		changed[firstRow[rng.Intn(len(firstRow))]].FromRow--
+		changed[i].FromRow--
+		changedBefore := slices.Clone(before)
+		changedBefore[l.positionSlot(changed[i].FromRow, changed[i].FromColumn)] =
+			after[l.positionSlot(changed[i].ToRow, changed[i].ToColumn)]
 		base.name = "row displacement disagrees"
+		base.target = "row displacement"
 		base.pairs = changed
+		base.before = changedBefore
 	case 3:
 		// Flip one target's occupancy: the same item would appear or
 		// disappear across the scroll.
 		i := rng.Intn(len(pairs))
-		flipped := append([]bool{}, after...)
+		flipped := slices.Clone(after)
 		slot := l.positionSlot(pairs[i].ToRow, pairs[i].ToColumn)
 		flipped[slot] = !flipped[slot]
 		base.name = "target occupancy flipped"
+		base.target = "occupancy"
 		base.after = flipped
 	default:
 		// Drop one correspondence: its overlap position is unexplained.
 		i := rng.Intn(len(pairs))
 		kept := append(append([]PositionPair{}, pairs[:i]...), pairs[i+1:]...)
 		base.name = "overlap position uncovered"
+		base.target = "coverage"
 		base.pairs = kept
 	}
 	return base
@@ -373,14 +489,19 @@ func mutateTransition(l Layout, rows int, pairs []PositionPair, before, after []
 
 // TestApplyTransitionCorrespondenceProperty is the randomized counterpart:
 // random legal correspondences are accepted, and one random mutation of
-// each is rejected. The deterministic seed keeps failures reproducible.
+// each breaks exactly one condition and is rejected. The deterministic seed
+// keeps failures reproducible.
 func TestApplyTransitionCorrespondenceProperty(t *testing.T) {
 	l := MacCloudLayout()
 	rng := rand.New(rand.NewSource(20261031))
+	counts := make(map[string]int)
 	for i := 0; i < 100; i++ {
 		rows := 1 + rng.Intn(l.Rows-1)
 		pairs := scriptedDisplacement(l, rows)
 		before, after := randomConsistentOccupancy(l, pairs, rng)
+		if got := transitionViolations(l, rows, pairs, before, after); len(got) != 0 {
+			t.Fatalf("iteration %d: the legal %d-row base breaks %v", i, rows, got)
+		}
 		sm := ScrollMatch{Displaced: true, Rows: rows, Matches: pairs, Evidence: "property base"}
 		run := newTransitionRun(l)
 		if err := run.applyTransition(platform.Frame{ID: 1}, platform.Frame{ID: 2},
@@ -389,16 +510,17 @@ func TestApplyTransitionCorrespondenceProperty(t *testing.T) {
 		}
 
 		broken := mutateTransition(l, rows, pairs, before, after, rng)
+		if got := transitionViolations(l, broken.rows, broken.pairs, broken.before, broken.after); !slices.Equal(got, []string{broken.target}) {
+			t.Fatalf("iteration %d: the %q mutation breaks %v, want only %q", i, broken.name, got, broken.target)
+		}
 		run = newTransitionRun(l)
-		err := run.applyTransition(platform.Frame{ID: 1}, platform.Frame{ID: 2},
+		rejectTransition(t, run,
 			transitionListVerdict(l, broken.before), transitionListVerdict(l, broken.after),
-			ScrollMatch{Displaced: true, Rows: broken.rows, Matches: broken.pairs, Evidence: broken.name})
-		if err == nil {
-			t.Fatalf("iteration %d: the %q mutation was accepted as a verified scroll", i, broken.name)
-		}
-		var fault *scan.FaultError
-		if !errors.As(err, &fault) || fault.Code != CodePositionLost {
-			t.Fatalf("iteration %d: the %q mutation ended in %v, want %s", i, broken.name, err, CodePositionLost)
-		}
+			ScrollMatch{Displaced: true, Rows: broken.rows, Matches: broken.pairs, Evidence: broken.name},
+			fmt.Sprintf("iteration %d (%s)", i, broken.name))
+		counts[broken.target]++
+	}
+	for _, target := range []string{"one-to-one", "column", "row displacement", "occupancy", "coverage"} {
+		t.Logf("mutation %s: %d", target, counts[target])
 	}
 }
