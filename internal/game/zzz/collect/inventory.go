@@ -2957,21 +2957,28 @@ const (
 // judges the settle. A displacement is only a candidate: the matcher may
 // still be watching an inertial or snapping animation, so the candidate must
 // stay stable relative to itself for ScrollTiming.SettleObservations
-// consecutive observations — fresh matcher confirmations or unchanged
-// platform content — before the traversal commits anything. A later total
-// displacement relative to the pre-drag frame replaces the candidate (late
-// inertia and bottom bounces land here) and restarts the stability count; a
-// total Lost keeps the wait alive to the budget (the list may still settle)
-// but ends as Lost when no settling confirmation arrives. Reused
-// confirmations carry unchanged content, so they can prove the candidate
-// stayed still but never create a displacement of their own. Without a
-// candidate, Stationary remains a deadline verdict, not an early one (the
-// drag's effect may still be in flight; F7 measured motion starting ~1s
-// after the action).
+// consecutive independent observations — each one a fresh frame whose
+// comparison against the candidate is Stationary (or whose content is the
+// candidate's) — before the traversal commits anything. Platform idle
+// confirmations (Reused frames) are neutral: they repeat the newest fresh
+// frame's already-judged content, so the same idle state re-served every
+// recheck interval is one observation, not many, and must not complete the
+// streak by itself. A later total displacement relative to the pre-drag
+// frame replaces the candidate (late inertia and bottom bounces land here)
+// and restarts the stability count; a total Lost keeps the wait alive to
+// the budget (the list may still settle) but ends as Lost when no settling
+// confirmation arrives. Reused confirmations never create a displacement of
+// their own. Without a candidate, Stationary remains a deadline verdict,
+// not an early one (the drag's effect may still be in flight; F7 measured
+// motion starting ~1s after the action).
 //
-// The wait's deadline is the scroll budget, extended for a motion observed
-// near its end: a list that only started moving late still gets the
-// profile's full settle window instead of being cut off mid-settle.
+// The wait's deadline is the scroll budget, with two profile-driven
+// widenings: before any motion is observed the deadline is at least
+// MotionStartBudget after the wait began (F7: stillness inside the
+// late-start window is not evidence the drag failed, whatever the
+// configured scroll budget), and a motion observed near the budget's end
+// gets its own SettleBudget settle window instead of being cut off
+// mid-settle. Neither widening ever shortens the plain scroll budget.
 //
 // The terminal verdict is the latest one: Undecided supersedes an earlier
 // Stationary or Lost. An existing candidate still dominates — it cannot be
@@ -2982,38 +2989,52 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 	waitStart := time.Now()
 	deadline := waitStart.Add(run.inv.scrollBudget())
 	// motionStarted and motionAt record the first observation that the
-	// list's content changed (a displacement, a lost overlap, or a change
-	// past the stationary threshold); motionFrameID names the frame.
-	// Stillness before that is the F7 late-start window and proves nothing
-	// about the drag's effect.
+	// list's content changed (a displacement, a lost overlap, or a
+	// zero-shift normalized correlation clearly below the stationary
+	// threshold); motionFrameID names the frame. Stillness before that is
+	// the F7 late-start window and proves nothing about the drag's effect.
+	// The zero-shift MAD alone is deliberately not movement evidence:
+	// codec noise keeps a static cloud list at 5–10 against the 4.0
+	// threshold, so an err0-based rule would mark motion on the first
+	// noisy frame.
 	var (
 		motionStarted bool
 		motionAt      time.Time
 		motionFrameID uint64
 		settleStreak  int
 	)
-	// effectiveDeadline is the scroll budget, widened for a late motion's
-	// settle window. A zero arrival time (a scripted view without frame
-	// times) never widens anything.
+	// effectiveDeadline is the scroll budget with the profile's widenings:
+	// the motion-start floor before any movement, and the settle window
+	// measured from the observed motion afterwards. Zero arrival times (a
+	// scripted view without frame times) never widen anything.
 	effectiveDeadline := func() time.Time {
-		if motionStarted && !motionAt.IsZero() {
-			if extended := motionAt.Add(timing.SettleBudget); extended.After(deadline) {
-				return extended
+		if motionStarted {
+			if !motionAt.IsZero() {
+				if extended := motionAt.Add(timing.SettleBudget); extended.After(deadline) {
+					return extended
+				}
 			}
+			return deadline
+		}
+		if floor := waitStart.Add(timing.MotionStartBudget); floor.After(deadline) {
+			return floor
 		}
 		return deadline
 	}
-	// observeMotion records the first movement evidence on a fresh frame.
+	// observeMotion records the first movement evidence on a fresh frame:
+	// a verified displacement, a lost overlap, or a zero-shift normalized
+	// correlation clearly below the stationary threshold. The MAD error
+	// alone never counts (see the motionStarted comment).
 	observeMotion := func(f platform.Frame, sm ScrollMatch) {
 		if motionStarted {
 			return
 		}
 		moved := sm.Displaced || sm.Lost
-		if threshold := run.stationaryMax(); threshold > 0 &&
-			sm.Metrics != nil && sm.Metrics.Err0 >= threshold {
-			// A change past the stationary threshold is movement evidence
-			// even when the displacement itself is not yet verifiable.
-			moved = true
+		if threshold := run.stationaryNCC(); threshold > 0 &&
+			sm.Metrics != nil && sm.Metrics.NCCMeasured {
+			if ncc0, ok := sm.Metrics.RowNCC[0]; ok && ncc0 < threshold {
+				moved = true
+			}
 		}
 		if moved {
 			motionStarted = true
@@ -3091,27 +3112,22 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 		out.lastEvidence = m.Evidence
 		if f.Reused {
 			// Unchanged content can prove the candidate stayed still; it
-			// cannot prove a displacement not yet seen fresh.
+			// cannot prove a displacement not yet seen fresh. It also never
+			// drives the settle streak: an idle confirmation repeats the
+			// newest fresh frame's content — the same idle state re-served
+			// every recheck interval is one observation, not many, and a
+			// fresh confirmation followed by its reused copy must not count
+			// as two. The streak advances only on fresh frames (below);
+			// reused frames neither count nor reset it.
 			if run.listVerdict(m) {
 				out.after, out.afterMatch = f, m
 				if haveCandidate {
-					if sameFrameContent(candidate, f) {
-						settleStreak++
-						if settleStreak >= timing.SettleObservations {
-							return settle(f)
-						}
-					} else {
+					if !sameFrameContent(candidate, f) {
 						rel := run.inv.matcher().MatchScroll(candidate, f)
 						trace.noteCandidate(candidate, f, rel)
 						out.match = rel
 						if rel.Stationary {
 							out.settleMatch = rel
-							settleStreak++
-							if settleStreak >= timing.SettleObservations {
-								return settle(f)
-							}
-						} else {
-							settleStreak = 0
 						}
 					}
 				} else {
@@ -3137,7 +3153,6 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 			} else {
 				// Not a readable warehouse list: no proof of stillness.
 				verdict, stillOnly = waitVerdictUndecided, false
-				settleStreak = 0
 			}
 			if err := sleepCtx(ctx, run.inv.recheckEvery()); err != nil {
 				return scrollOutcome{}, err
@@ -3245,13 +3260,15 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 	}
 }
 
-// stationaryMax reports the matcher's zero-shift stationary threshold when
-// the implementation exposes it. awaitScroll's motion detection uses it to
-// tell a list that measurably changed from cloud noise that merely failed a
-// normalized check.
-func (run *inventoryRun) stationaryMax() float64 {
-	if reporter, ok := run.inv.matcher().(scrollThresholdReporter); ok {
-		stationary, _ := reporter.ScrollThresholds()
+// stationaryNCC reports the matcher's zero-shift normalized-correlation
+// stationary threshold when the implementation exposes it. awaitScroll's
+// motion detection uses it: a zero-shift correlation clearly below the
+// threshold is movement evidence even when the displacement itself is not
+// yet verifiable, while the MAD error alone never is (cloud codec noise
+// keeps a static list above the MAD threshold).
+func (run *inventoryRun) stationaryNCC() float64 {
+	if reporter, ok := run.inv.matcher().(scrollFeatureReporter); ok {
+		stationary, _, _, _ := reporter.ScrollFeatureThresholds()
 		return stationary
 	}
 	return 0

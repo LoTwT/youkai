@@ -285,11 +285,17 @@ type Calibration struct {
 	ScrollDisplacedNCC  float64 // ≥: displaced by features alone (no selection anchor)
 	ScrollNCCMargin     float64 // the winning candidate must beat the runner-up by this
 	ScrollInfoStdMin    float64 // support-region grayscale std floor for NCC verdicts
-	// ScrollbarMoveMin is the thumb travel (start or end) that corroborates
-	// a feature-only displacement. Below it the unchanged thumb contradicts
-	// the claimed movement. Measured: a whole-row step moves the thumb
-	// ~26px, all recorded steps ≥ 100px.
-	ScrollbarMoveMin int
+	// ScrollbarMoveMin is the thumb travel floor for corroborating a
+	// feature-only displacement; below it the thumb did not measurably
+	// move. ScrollbarTravelTolerance is the relative tolerance around the
+	// expected travel (claimed rows × the per-row travel derived from the
+	// observed thumb geometry); it must stay below 1/ScrollMaxRows so an
+	// off-by-one row claim — at least one row's travel off — cannot pass.
+	// Measured on the M2 fixtures: a 24-row list moves the thumb ~28px per
+	// row (4 rows ≈ 112px, 3 rows ≈ 84px), thumb length ≈ 141px of the
+	// 685px track.
+	ScrollbarMoveMin         int
+	ScrollbarTravelTolerance float64
 
 	// Scrollbar thumb detection on ScrollTrack.
 	ScrollbarBrightMin    int // grayscale >: thumb pixels (measured 110+)
@@ -351,7 +357,9 @@ func MacCloudCalibration() Calibration {
 		ScrollDisplacedNCC:  0.93,
 		ScrollNCCMargin:     0.05,
 		ScrollInfoStdMin:    12.0,
-		ScrollbarMoveMin:    2,
+
+		ScrollbarMoveMin:         2,
+		ScrollbarTravelTolerance: 0.20,
 
 		ScrollbarBrightMin:    110,
 		ScrollbarTopStartMax:  229,
@@ -375,9 +383,11 @@ type ScrollTiming struct {
 	// observed movement, so a late start still gets its own settle window.
 	SettleBudget time.Duration
 	// SettleObservations is the consecutive candidate-relative stillness
-	// confirmations required before a displacement commits. One fresh
-	// confirmation is not "continuously stable": cloud video repeats and
-	// inertial creep arrive one observation apart.
+	// confirmations required before a displacement commits, each one an
+	// independent fresh-frame observation; platform idle confirmations
+	// (reused frames) repeat the newest fresh frame's already-judged
+	// content and are neutral, so one still frame plus its idle echoes is
+	// one observation, not a streak.
 	SettleObservations int
 }
 
@@ -441,7 +451,8 @@ func (c Calibration) validate() error {
 	case c.ScrollStationaryNCC <= 0 || c.ScrollStationaryNCC > 1 ||
 		c.ScrollSelectionNCC <= 0 || c.ScrollDisplacedNCC < c.ScrollSelectionNCC ||
 		c.ScrollDisplacedNCC > 1 || c.ScrollNCCMargin < 0 || c.ScrollNCCMargin >= 1 ||
-		c.ScrollInfoStdMin <= 0 || c.ScrollbarMoveMin < 0:
+		c.ScrollInfoStdMin <= 0 || c.ScrollbarMoveMin < 0 ||
+		c.ScrollbarTravelTolerance <= 0 || c.ScrollbarTravelTolerance >= 1.0/float64(c.ScrollMaxRows):
 		return errCalibration("scroll normalized features")
 	case c.ScrollbarBrightMin < 0 || c.ScrollbarTopStartMax < 0 || c.ScrollbarBottomEndMin < 0:
 		return errCalibration("scrollbar")

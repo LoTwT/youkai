@@ -98,12 +98,15 @@ type nccCandidate struct {
 }
 
 // rowCorrelations computes the zero-mean normalized correlation of the two
-// frames' list viewports at every whole-row candidate (including zero),
-// sampling at the calibrated steps. The dynamic selection-border strips of
-// both frames are masked out of the comparison: the border's glow animates
-// independently of the list and must not count as content change. Each
-// candidate takes the best correlation within its tolerance window, so a
-// one-pixel snap does not deflate a true alignment.
+// frames' list viewports at every whole-row candidate, sampling at the
+// calibrated steps. The dynamic selection-border strips of both frames are
+// masked out of the comparison: the border's glow animates independently of
+// the list and must not count as content change. Each non-zero candidate
+// takes the best correlation within its tolerance window, so a one-pixel
+// snap does not deflate a true alignment; the zero candidate is evaluated
+// at exactly dy=0 without a window — stillness means zero displacement, and
+// a windowed best would let a sub-row creep (a settling animation) borrow
+// the stationary verdict of a neighbouring shift.
 func (m *ScrollEvidenceMatcher) rowCorrelations(before, after *image.RGBA, mask []image.Rectangle) map[int]nccCandidate {
 	r := m.L.ListViewport
 	out := make(map[int]nccCandidate, 2*m.C.ScrollMaxRows+1)
@@ -116,8 +119,12 @@ func (m *ScrollEvidenceMatcher) rowCorrelations(before, after *image.RGBA, mask 
 		return false
 	}
 	for row := -m.C.ScrollMaxRows; row <= m.C.ScrollMaxRows; row++ {
+		window := m.C.ScrollRowTolerance
+		if row == 0 {
+			window = 0
+		}
 		best := nccCandidate{ncc: math.Inf(-1)}
-		for dy := row*m.L.RowPitch - m.C.ScrollRowTolerance; dy <= row*m.L.RowPitch+m.C.ScrollRowTolerance; dy++ {
+		for dy := row*m.L.RowPitch - window; dy <= row*m.L.RowPitch+window; dy++ {
 			var n int
 			var sumA, sumB, sumAA, sumBB, sumAB float64
 			for y := r.Min.Y; y < r.Max.Y; y += m.C.ScrollStepY {
@@ -339,30 +346,28 @@ func (m *ScrollEvidenceMatcher) MatchScroll(before, after platform.Frame) Scroll
 		_, gap, ok := nccVerdict(cands, bestRow)
 		if ok && bestNCC >= m.C.ScrollDisplacedNCC && gap >= m.C.ScrollNCCMargin &&
 			cands[bestRow].std >= m.C.ScrollInfoStdMin {
-			// The thumb must have travelled in the claimed direction: the
-			// selection anchor is absent, so the scrollbar is the
+			// The thumb must corroborate both the direction and the
+			// magnitude: without a selection anchor the scrollbar is the
 			// independent cross-check (K1: fall back to pixels, features or
-			// the scrollbar; still insufficient is a lost position).
-			corroborated := false
-			switch {
-			case !thumbBOK || !thumbAOK:
-				corroborated = false
-			case bestRow > 0:
-				corroborated = thumbAStart-thumbBStart >= m.C.ScrollbarMoveMin ||
-					thumbAEnd-thumbBEnd >= m.C.ScrollbarMoveMin
-			default:
-				corroborated = thumbBStart-thumbAStart >= m.C.ScrollbarMoveMin ||
-					thumbBEnd-thumbAEnd >= m.C.ScrollbarMoveMin
-			}
+			// the scrollbar; still insufficient is a lost position). The
+			// expected travel is the claimed rows times the per-row thumb
+			// travel, derived from the observed thumb geometry itself —
+			// thumb length / track length ≈ visible rows / total rows, so
+			// per-row travel = (track − thumb) / (total − visible). A fixed
+			// per-row constant would be wrong across positions (a 24-row
+			// list moves the thumb ~28px per row, a 200-row list ~3px). The
+			// tolerance stays below 1/ScrollMaxRows so an off-by-one row
+			// claim (at least one row's travel off) cannot pass.
+			corroborated, why := m.thumbCorroborates(thumbBStart, thumbBEnd, thumbBOK, thumbAStart, thumbAEnd, thumbAOK, bestRow)
 			if corroborated {
 				metrics.InfoStd = cands[bestRow].std
 				return m.displaced(before.ID, after.ID, bestRow, metrics,
-					fmt.Sprintf("the normalized feature alone names a %d-row displacement (ncc %.3f ≥ %.2f, runner-up gap %.3f ≥ %.2f, info std %.1f; no selection anchor: before %d, after %d) and the scrollbar travelled with it; zero-shift error %.2f, best MAD alignment not a gate",
-						absInt(bestRow), bestNCC, m.C.ScrollDisplacedNCC, gap, m.C.ScrollNCCMargin, cands[bestRow].std, selB, selA, err0))
+					fmt.Sprintf("the normalized feature alone names a %d-row displacement (ncc %.3f ≥ %.2f, runner-up gap %.3f ≥ %.2f, info std %.1f; no selection anchor: before %d, after %d) and the scrollbar travelled with it (%s); zero-shift error %.2f, best MAD alignment not a gate",
+						absInt(bestRow), bestNCC, m.C.ScrollDisplacedNCC, gap, m.C.ScrollNCCMargin, cands[bestRow].std, selB, selA, why, err0))
 			}
 			return ScrollMatch{Undecided: true, Metrics: metrics, Evidence: fmt.Sprintf(
 				"frames %d → %d: the normalized feature names a %d-row displacement (ncc %.3f) but the scrollbar does not corroborate it (%s); without a selection anchor the displacement stays unverified",
-				before.ID, after.ID, absInt(bestRow), bestNCC, thumbNote)}
+				before.ID, after.ID, absInt(bestRow), bestNCC, why)}
 		}
 	}
 
@@ -412,6 +417,46 @@ func (m *ScrollEvidenceMatcher) displaced(beforeID, afterID uint64, rows int, me
 		Metrics:   metrics,
 		Evidence:  fmt.Sprintf("frames %d → %d: %s", beforeID, afterID, why),
 	}
+}
+
+// thumbCorroborates checks the scrollbar's independent agreement with a
+// feature-only displacement claim, in direction and magnitude. The expected
+// travel is the claimed rows times the per-row thumb travel derived from the
+// observed thumb geometry itself: thumb length / track length ≈ visible
+// rows / total rows, so per-row travel = (track − thumb) / (total −
+// visible). A fixed per-row constant would be wrong across positions (a
+// 24-row list moves the thumb ~28px per row, a much longer list a few
+// pixels), and the derived estimate keeps the check self-contained per
+// frame pair. A thumb that fills the track names a list with nothing below
+// the viewport, where no displacement claim can be corroborated.
+func (m *ScrollEvidenceMatcher) thumbCorroborates(beforeStart, beforeEnd int, beforeOK bool, afterStart, afterEnd int, afterOK bool, rows int) (bool, string) {
+	if !beforeOK || !afterOK {
+		return false, "thumb unreadable"
+	}
+	// Sign-corrected travel: positive rows mean the content moved up and
+	// the thumb moved down (its start increased); negative rows the reverse.
+	travel := afterStart - beforeStart
+	if rows < 0 {
+		travel = -travel
+	}
+	trackLen := m.L.ScrollTrack.Dy()
+	thumbLen := float64(beforeEnd-beforeStart+1+afterEnd-afterStart+1) / 2
+	totalRows := float64(m.L.Rows) * float64(trackLen) / thumbLen
+	steps := totalRows - float64(m.L.Rows)
+	if steps < 1 {
+		return false, fmt.Sprintf("thumb %d–%d → %d–%d fills the track: no scrollable content below the viewport",
+			beforeStart, beforeEnd, afterStart, afterEnd)
+	}
+	perRow := (float64(trackLen) - thumbLen) / steps
+	expected := perRow * float64(absInt(rows))
+	if float64(travel) < float64(m.C.ScrollbarMoveMin) ||
+		float64(travel) < expected*(1-m.C.ScrollbarTravelTolerance) ||
+		float64(travel) > expected*(1+m.C.ScrollbarTravelTolerance) {
+		return false, fmt.Sprintf("thumb %d → %d travelled %dpx, expected ~%.0fpx (≈%.1fpx per row × %d) within ±%.0f%%",
+			beforeStart, afterStart, travel, expected, perRow, absInt(rows), m.C.ScrollbarTravelTolerance*100)
+	}
+	return true, fmt.Sprintf("thumb %d → %d travelled %dpx ≈ %.1fpx per row × %d",
+		beforeStart, afterStart, travel, perRow, absInt(rows))
 }
 
 // directionName renders a signed row displacement's direction: positive rows

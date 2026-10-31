@@ -3,6 +3,7 @@ package collect_test
 import (
 	"image"
 	"image/color"
+	"strings"
 	"testing"
 	"time"
 
@@ -24,27 +25,35 @@ func newScrollEvidenceMatcher() *collect.ScrollEvidenceMatcher {
 
 // paintScrollFrame paints one synthetic warehouse frame for the scroll
 // evidence matcher: a per-global-row pattern inside the list viewport with
-// strong per-cell variation within each row, the selection border on one
-// slot, and a scrollbar thumb segment. The row and cell bases are nonlinear
-// hashes of the global row and column (an arithmetic base would differ by a
-// constant between rows, and normalized correlation cannot see constants),
-// so the true whole-row alignment correlates while every rival decorrelates
-// — including inside the single surviving row of a four-row overlap, where
-// only the within-row cell pattern can still identify the content.
-// Everything outside the declared probes stays black: MatchScroll only
-// reads the viewport, the border probes and the track. offset is the first
-// visible global row; selection is a slot index or -1 for none; noise adds
-// a deterministic ±10 codec-like dither so identical content still differs
-// by a mean absolute error above the stationary threshold, the cloud
-// condition the normalized path exists for.
+// strong per-row and within-row identity, the selection border on one
+// slot, and a scrollbar thumb segment. Three pattern components serve
+// three judgments: a nonlinear per-row base identifies rows across
+// multi-row overlaps (an arithmetic base would differ by a constant and
+// normalized correlation cannot see constants); a per-(row, x) hash gives
+// a one-row overlap strip its identity, so the true alignment correlates
+// while the mirrored strip at the opposite end decorrelates; and a fine
+// y-texture makes sub-row creeps visible at zero shift. Everything outside
+// the declared probes stays black: MatchScroll only reads the viewport,
+// the border probes and the track. offset is the first visible global row;
+// selection is a slot index or -1 for none; noise adds a deterministic
+// ±10 codec-like dither so identical content still differs by a mean
+// absolute error above the stationary threshold, the cloud condition the
+// normalized path exists for.
 func paintScrollFrame(l collect.Layout, id uint64, offset, selection, thumbStart, thumbEnd int, noise bool) platform.Frame {
 	img := image.NewRGBA(image.Rectangle{Max: l.Image})
 	gray := func(x, y int) int {
 		g := offset + (y-l.ListViewport.Min.Y)/l.RowPitch
-		c := (x - l.ListViewport.Min.X) / (l.ListViewport.Dx() / l.Columns)
-		v := 60 + (137*g*g+29*g)%120 + ((53*g+97*c)*(11*g+3*c+1))%90
+		v := 60 + (137*g*g+29*g)%120
+		h := uint32(g)*1000003 + uint32(x)*97
+		h ^= h >> 16
+		h *= 0x45d9f3b
+		h ^= h >> 16
+		v += int(h % 120)
 		if (y-l.ListViewport.Min.Y)%49 >= 24 {
 			v += 12
+		}
+		if (y-l.ListViewport.Min.Y)%4 == 0 {
+			v += 45
 		}
 		if noise {
 			v += ((x*7 + y*13) % 21) - 10
@@ -365,6 +374,63 @@ func TestScrollEvidenceOffPitchChangeIsLost(t *testing.T) {
 	}
 	if sm.Metrics == nil || !sm.Metrics.Measured {
 		t.Fatalf("metrics %+v lack the MAD search the lost rule rests on", sm.Metrics)
+	}
+}
+
+// TestScrollEvidenceSubRowShiftIsNotStationary pins the zero candidate's
+// exact dy=0 evaluation: a two-pixel vertical creep (a settling animation
+// mid-snap) must not borrow the stationary verdict from a neighbouring
+// shift inside a tolerance window — stillness admits no window, so the
+// verdict stays fail-closed until the creep stops.
+func TestScrollEvidenceSubRowShiftIsNotStationary(t *testing.T) {
+	l := collect.MacCloudLayout()
+	m := newScrollEvidenceMatcher()
+	before := paintScrollFrame(l, 1, 4, l.Columns-1, 400, 530, false)
+	after := paintScrollFrame(l, 2, 4, -1, 400, 530, false)
+	// Shift the viewport content down by two pixels: every row's fine
+	// texture misaligns at dy=0 and realigns only at dy=+2, which the zero
+	// candidate must not consult. The selection and thumb are re-painted at
+	// their calibrated places so only the list content moved.
+	src := before.Image
+	for y := l.ListViewport.Max.Y - 1; y >= l.ListViewport.Min.Y+2; y-- {
+		for x := l.ListViewport.Min.X; x < l.ListViewport.Max.X; x++ {
+			i := after.Image.PixOffset(x, y)
+			j := src.PixOffset(x, y-2)
+			after.Image.Pix[i], after.Image.Pix[i+1], after.Image.Pix[i+2] = src.Pix[j], src.Pix[j+1], src.Pix[j+2]
+		}
+	}
+	paintSelectionBorder(after.Image, l, l.Columns-1)
+	sm := m.MatchScroll(before, after)
+	if sm.Stationary || sm.Displaced {
+		t.Fatalf("verdict %+v, want fail-closed on the sub-row creep (%s)", sm, sm.Evidence)
+	}
+	if sm.Metrics == nil || sm.Metrics.Err0 < 4 {
+		t.Fatalf("metrics %+v: the creep must fail the zero-shift MAD too", sm.Metrics)
+	}
+}
+
+// TestScrollEvidenceRejectsOffByRowThumbTravel pins the scrollbar's
+// magnitude corroboration: without a selection anchor, a four-row feature
+// claim whose thumb travelled only three rows' worth stays unverified —
+// direction alone cannot catch an off-by-one candidate.
+func TestScrollEvidenceRejectsOffByRowThumbTravel(t *testing.T) {
+	l := collect.MacCloudLayout()
+	m := newScrollEvidenceMatcher()
+	before := paintScrollFrame(l, 1, 0, -1, 300, 430, false)
+	// The content advanced four rows, but the thumb moved only ~78px —
+	// three rows' worth at the ~26px/row this thumb geometry implies.
+	after := paintScrollFrame(l, 2, 4, -1, 378, 508, true)
+	sm := m.MatchScroll(before, after)
+	if sm.Displaced || sm.Stationary || sm.Lost || !sm.Undecided {
+		t.Fatalf("verdict %+v, want undecided on the off-by-one thumb travel (%s)", sm, sm.Evidence)
+	}
+	if !strings.Contains(sm.Evidence, "expected ~") {
+		t.Fatalf("evidence %q should name the expected travel", sm.Evidence)
+	}
+	// The same content with a consistent four-row thumb travel verifies.
+	consistent := paintScrollFrame(l, 3, 4, -1, 400, 530, true)
+	if sm := m.MatchScroll(before, consistent); !sm.Displaced || sm.Rows != 4 {
+		t.Fatalf("verdict %+v, want the consistent thumb to corroborate 4 rows (%s)", sm, sm.Evidence)
 	}
 }
 

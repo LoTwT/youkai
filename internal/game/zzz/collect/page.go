@@ -301,9 +301,11 @@ type ScrollMetrics struct {
 	// example pixel-identical frames proving stillness).
 	NCCMeasured bool
 	// RowNCC is the windowed zero-mean normalized correlation of every
-	// whole-row candidate, keyed by signed rows including +0. Each value is
-	// the best correlation within the row-tolerance window, so sub-row
-	// jitter does not deflate a true alignment.
+	// whole-row candidate, keyed by signed rows including +0. Each non-zero
+	// value is the best correlation within the row-tolerance window, so
+	// sub-row jitter does not deflate a true alignment; the +0 value is the
+	// correlation at exactly zero displacement (stillness admits no
+	// window).
 	RowNCC map[int]float64
 	// BestNCCRow and BestNCC name the strongest non-zero candidate.
 	BestNCCRow int

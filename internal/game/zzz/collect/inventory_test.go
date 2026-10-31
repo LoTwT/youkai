@@ -764,10 +764,19 @@ func newTraversalHarness(t *testing.T, game *scriptedGame) *traversalHarness {
 		game:    game,
 		session: session,
 		inv: &collect.Inventory{
-			Layout:           l,
-			Matcher:          collect.NewPixelMatcher(l, calibration),
-			ActionBudget:     300 * time.Millisecond,
-			ScrollBudget:     300 * time.Millisecond,
+			Layout:       l,
+			Matcher:      collect.NewPixelMatcher(l, calibration),
+			ActionBudget: 300 * time.Millisecond,
+			ScrollBudget: 300 * time.Millisecond,
+			// Scaled-down scroll timing: the traversal tests run
+			// millisecond budgets, so the motion-start floor and the settle
+			// window shrink with them instead of stretching every
+			// deadline-bound wait to the production profile's seconds.
+			ScrollTiming: &collect.ScrollTiming{
+				MotionStartBudget:  40 * time.Millisecond,
+				SettleBudget:       100 * time.Millisecond,
+				SettleObservations: 2,
+			},
 			StableFrames:     3,
 			DetailStableSpan: -1,
 			MaxRetries:       2,
