@@ -114,7 +114,7 @@
 
 | 分类 | 现有触发点 | 记录与结果 |
 | --- | --- | --- |
-| 位置准备失败 | 转盘点击后仍未切到目标位（`navigationMismatch`）；筛选面板打不开、关闭后漏斗非 Active、面板意外关闭（`navigationMismatch`）；回顶在连续 2 次无进展、16 次上限或确认等待未决时无法证明顶部（`navigationMismatch`），且最后一帧仍是仓库列表 | 位置 `complete=false`，`stage` 为 `wheel`/`filter`/`top`，`reasonCode` 保留底层故障码，`reason` 写明说明；此前已接纳物品保留；继续下一位置 |
+| 位置准备失败 | 转盘点击后仍未切到目标位（`navigationMismatch`）；筛选面板打不开、关闭后漏斗非 Active、面板意外关闭（`navigationMismatch`）；回顶在连续 2 次无进展、16 次上限或确认等待未决时无法证明顶部（`navigationMismatch`），且最后一次观测仍是仓库列表、转盘位置未变 | 位置 `complete=false`，`stage` 为 `wheel`/`filter`/`top`，`reasonCode` 保留底层故障码，`reason` 写明说明；此前已接纳物品保留；继续下一位置 |
 | 位置证明失败 | 滚动终局未决、位移但无唯一对应、位移后未停稳或对应关系被拒（`positionLost`/`navigationMismatch`）；底部确认 Lost、位移或未决（`navigationMismatch`）。以上只在等待的最后一次观测仍是仓库列表时降级；最后一帧不是列表（弹窗、加载页、断流）仍属会话致命，保留的位移候选不能掩盖页面级原因 | 位置 `complete=false`，`stage` 为 `scroll`/`bottom`，其余同上；不猜跳过行数，不重访已接纳物品 |
 
 每个位置重新执行转盘切换、筛选准备和回顶；只有上一位置以降级结束、且失败时已验证的筛选面板确实开着，下一位置的建列表阶段才允许通过关闭控件关闭该面板（显式标记，见 `pendingPanelClose`）。其他情况下出现筛选面板仍是会话致命；扫描器只在批准的筛选准备中自行打开面板。位置账目写入内部 `observedScope.positions[].stage/reasonCode/reason`，同时写入日志 `youkai: collect: position=N incomplete ...`；结果界面在覆盖结论旁列出不完整位置及其原因。公共 JSON/CSV v2 不新增位置级字段，仍以 `coverage=partial` 表达，物品仍在 `items` 中且不进 `excludedCount`（[决策 §9.4](../decisions/2026-10-28-scanner-rearchitecture.md#94-scan-json-formatmd已同步选定-a)）。
@@ -127,13 +127,13 @@
 | --- | --- | --- |
 | `anchorsMissing` | 会话致命 | 预检阶段布局或捕获配置不匹配。 |
 | `pageUnverified` | 会话致命 | 预检页面前提不成立。 |
-| `navigationMismatch` | 按调用点 | 位置准备/证明阶段的“目标页面未出现而源页面仍可验证”或“等待最后一帧仍是仓库列表”的证明失败降级；物品点击未生效、目标格位不可验证、页面不可判定、最后一帧不是仓库列表、转盘位置改变、仓库页网格读不出、调度契约异常仍致命。 |
+| `navigationMismatch` | 按调用点 | 位置准备/证明阶段的“目标页面未出现而源页面仍可验证”或“等待最后一次观测仍是仓库列表且转盘位置未变”的证明失败降级；物品点击未生效、目标格位不可验证、页面不可判定、最后一次观测不是仓库列表、回顶阶段最后一次观测的转盘位置改变、仓库页网格读不出、调度契约异常仍致命。 |
 | `positionLost` | 按调用点 | 滚动/底部确认的位置证明失败且最后一帧仍是仓库列表时降级；最后一帧不是仓库列表、或选中框未回到目标格位的格位映射失败仍致命（后者属物品局部，阶段 5 的重访路径才会改变）。 |
 | `detailUnattributed` | 物品局部（仍停止） | 详情无法归属；重访归阶段 5。 |
 | `detailUnresolved` | 物品局部（仍停止） | 详情可归属但品质/条数不可判定；重访归阶段 5。 |
 | `evidenceFailed` | 会话致命 | 投影、接纳或存储证据失败。 |
 | `positionFailureLimit` | 会话致命（升级） | 不完整位置达到 3 个的主动停止。 |
-| 扫描中筛选、排序标签或布局的可观察变化 | 会话致命 | 即使新值仍可读也停止并撤销完整结论；扫描器从不修改筛选、排序或布局。排序标签的持续检查为目标设计（阶段 3/5）。 |
+| 扫描中筛选、排序标签或布局的可观察变化 | 会话致命 | 即使新值仍可读也停止并撤销完整结论；扫描器从不修改筛选、排序或布局。筛选与排序标签的持续检查为目标设计（阶段 3/5）。 |
 | `focusLost`、`targetLost`、`targetHidden`、`targetAmbiguous`、`geometryChanged`、`geometryInvalid`、`permissionRevoked`、`captureStopped`、`permitClosed`、`inputFailed`、`inputBlocked`、`observationFailed`、`positionOutside`、`staleGeometry` | 会话致命 | 平台前提、权限、采集流、输入许可或几何失效。 |
 | `storageFailure`、`runtimeFailure`、`controllerFailed`、用户取消（context） | 会话致命 | 保存、识别运行库、控制器兜底或用户停止。 |
 

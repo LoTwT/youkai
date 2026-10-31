@@ -119,3 +119,32 @@ func (run *inventoryRun) advanceStateFault(action string, after PageMatch) error
 		"collect: wheel position %d: %s changed the wheel position to %d; the scanner never touches the wheel: %s",
 		run.position, action, after.Wheel.Position, after.Evidence))
 }
+
+// topWheelChange reports the latest page verdict when it no longer proves
+// the prepared wheel position. The newest observation is preferred over
+// run.listMatch because an unsettled Lost may keep an old candidate in the
+// committed state while the latest frame already shows another wheel
+// position or a page that left the warehouse. With no observation at all,
+// the committed state is the only evidence available.
+func (run *inventoryRun) topWheelChange(out scrollOutcome) (PageMatch, bool) {
+	latest := run.listMatch
+	if out.sawFrame {
+		latest = out.lastMatch
+	}
+	if run.positionListVerdict(latest) {
+		return PageMatch{}, false
+	}
+	return latest, true
+}
+
+// topProofFault wraps a top failure as position-scoped only while the latest
+// observation still proves the prepared wheel position. A changed or
+// unreadable wheel, a gridless warehouse page, or a page that left the
+// warehouse is session-fatal: the scanner never touches the wheel, so the
+// position-level explanation would hide someone operating the game.
+func (run *inventoryRun) topProofFault(out scrollOutcome, fault error) error {
+	if latest, changed := run.topWheelChange(out); changed {
+		return run.advanceStateFault("the return to top", latest)
+	}
+	return positionIncomplete("top", fault)
+}

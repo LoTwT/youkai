@@ -1331,14 +1331,16 @@ func (run *inventoryRun) scrollToTop(ctx context.Context) (*failureFrames, error
 			break
 		}
 		if noProgress >= 2 {
-			return topWaitFailure("top", lastBefore, lastOut, haveWait), positionFault("top", CodeNavigationMismatch,
+			fault := scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
 				"collect: wheel position %d: two consecutive flings produced no progress toward the top: %s",
-				run.position, run.listMatch.Evidence)
+				run.position, run.listMatch.Evidence))
+			return topWaitFailure("top", lastBefore, lastOut, haveWait), run.topProofFault(lastOut, fault)
 		}
 		if flings >= maxTopFlings {
-			return topWaitFailure("top", lastBefore, lastOut, haveWait), positionFault("top", CodeNavigationMismatch,
+			fault := scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
 				"collect: wheel position %d: the top was not reached after %d flings: %s",
-				run.position, flings, run.listMatch.Evidence)
+				run.position, flings, run.listMatch.Evidence))
+			return topWaitFailure("top", lastBefore, lastOut, haveWait), run.topProofFault(lastOut, fault)
 		}
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -1654,15 +1656,17 @@ func (run *inventoryRun) confirmTop(ctx context.Context) (*failureFrames, error)
 				run.position, attempt+1))
 			// An undecided confirmation over a still-verifiable list is this
 			// position's top-proof failure; no frame or a page that left the
-			// warehouse is session-fatal.
+			// warehouse is session-fatal. topProofFault also rejects a wheel
+			// change observed in the latest frame.
 			if out.sawFrame && out.lastFrameIsList {
-				return waitFailure(waitKind("top", out), before, out), positionIncomplete("top", fault)
+				return waitFailure(waitKind("top", out), before, out), run.topProofFault(out, fault)
 			}
 			return waitFailure(waitKind("top", out), before, out), fault
 		}
 	}
-	return topWaitFailure("top", before, lastOut, haveWait), positionFault("top", CodeNavigationMismatch,
-		"collect: wheel position %d: the top confirmation did not settle after %d attempts", run.position, maxTopFlings)
+	fault := scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
+		"collect: wheel position %d: the top confirmation did not settle after %d attempts", run.position, maxTopFlings))
+	return topWaitFailure("top", before, lastOut, haveWait), run.topProofFault(lastOut, fault)
 }
 
 // topConfirmed accepts a warehouse frame at the scrollbar's top. A settled
@@ -3022,6 +3026,12 @@ type scrollOutcome struct {
 	// warehouse list. A stop message can then describe what was actually
 	// last seen instead of an older list frame or "no frame received".
 	lastEvidence string
+	// lastMatch is the page verdict of the most recently received
+	// observation. Unlike afterMatch (which an unsettled Lost may reset to
+	// an older candidate), it always describes the newest frame, so a top
+	// failure can tell an unresolved position from a wheel change or page
+	// departure that happened after the candidate.
+	lastMatch PageMatch
 	// unsettled reports a displacement that never settled relative to its
 	// candidate within the budget. It is a Lost outcome, but the position
 	// was verified to have moved; only where it finally stopped is unknown.
@@ -3240,6 +3250,7 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 		out.sawFrame = true
 		out.lastFrameIsList = run.listVerdict(m)
 		out.lastEvidence = m.Evidence
+		out.lastMatch = m
 		if f.Reused {
 			// Unchanged content can prove the candidate stayed still; it
 			// cannot prove a displacement not yet seen fresh. It also never

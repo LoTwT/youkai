@@ -115,6 +115,13 @@ type scriptedGame struct {
 	// panel close takes effect (0 = never), modelling someone switching the
 	// wheel while the panel covered it.
 	wheelAfterPanelClose int
+	// wheelAfterTopDrag changes the wheel to this position when the next top
+	// drag is dispatched (0 = never), modelling someone switching the wheel
+	// during the return to top. wheelAfterTopDragViewport is the target
+	// position's viewport after the change (mid-list keeps the top
+	// confirmation from succeeding).
+	wheelAfterTopDrag         int
+	wheelAfterTopDragViewport int
 	// resetMakesUnknown makes the panel page undecidable after the reset.
 	resetMakesUnknown bool
 	// sSelected is the panel's S rarity selection. It is test state only:
@@ -751,6 +758,25 @@ func (g *scriptedGame) dispatch(op platform.InputOp) platform.InputResult {
 				}})
 			}
 		case op.At.Eq(g.layout.TopFrom) && op.To.Eq(g.layout.TopTo):
+			if g.wheelAfterTopDrag != 0 {
+				next := g.wheelAfterTopDrag
+				nextViewport := g.wheelAfterTopDragViewport
+				g.wheelAfterTopDrag = 0
+				from := g.wheel
+				g.pending = append(g.pending, pendingEffect{dueAt: lag, apply: func(g *scriptedGame) {
+					g.selectedByPos[from-1] = g.selected
+					g.viewportByPos[from-1] = g.viewport
+					g.wheel = next
+					g.selected = g.selectedByPos[next-1]
+					g.viewport = nextViewport
+					g.viewportByPos[next-1] = nextViewport
+					if g.selected >= 0 {
+						g.detailGlobal = g.selected
+					} else {
+						g.detailGlobal = -1
+					}
+				}})
+			}
 			if g.topStuck || g.viewport == 0 {
 				return posted(now)
 			}
@@ -2567,6 +2593,53 @@ func TestTraverseTopWithoutProgressDegradesPosition(t *testing.T) {
 	for pos := 2; pos <= 6; pos++ {
 		h.requireCompletePosition(pos)
 	}
+}
+
+// T33b: a wheel change during a return-to-top fling plus a later top
+// failure is session-fatal, not a position-level top failure. The scanner
+// never touches the wheel, so the position-level explanation would hide
+// someone operating the game.
+func TestTopFlingWheelChangeStopsSession(t *testing.T) {
+	game := newScriptedGame(listOf(36)...) // position 1: nine rows, mid-list start
+	game.setList(2, listOf(60))            // position 2: twelve rows, mid-list target
+	game.viewport = 3
+	game.topStuck = true
+	game.wheelAfterTopDrag = 2
+	game.wheelAfterTopDragViewport = 5
+	h := newTraversalHarness(t, game)
+	h.inv.ScrollBudget = 100 * time.Millisecond
+	h.start()
+	snap := h.endFailed(collect.CodeNavigationMismatch)
+	if snap.Counts.Captured != 0 {
+		t.Fatalf("a failed return to top admits nothing: %+v", snap.Counts)
+	}
+	if snap.Trigger == nil || !strings.Contains(snap.Trigger.Message, "changed the wheel position to 2") {
+		t.Fatalf("the trigger does not name the wheel change: %+v", snap.Trigger)
+	}
+	h.requireFatallyStoppedPosition(1)
+}
+
+// T33c: the same rule for the top confirmation. The wheel changes on the
+// first confirmation drag; the confirmation then fails at the new wheel and
+// the session stops instead of marking position 1 incomplete.
+func TestTopConfirmWheelChangeStopsSession(t *testing.T) {
+	game := newScriptedGame(listOf(20)...) // position 1: top, one viewport
+	game.setList(2, listOf(60))            // position 2: twelve rows, mid-list target
+	game.viewport = 0
+	game.topStuck = true
+	game.wheelAfterTopDrag = 2
+	game.wheelAfterTopDragViewport = 5
+	h := newTraversalHarness(t, game)
+	h.inv.ScrollBudget = 80 * time.Millisecond
+	h.start()
+	snap := h.endFailed(collect.CodeNavigationMismatch)
+	if snap.Counts.Captured != 0 {
+		t.Fatalf("a failed top confirmation admits nothing: %+v", snap.Counts)
+	}
+	if snap.Trigger == nil || !strings.Contains(snap.Trigger.Message, "changed the wheel position to 2") {
+		t.Fatalf("the trigger does not name the wheel change: %+v", snap.Trigger)
+	}
+	h.requireFatallyStoppedPosition(1)
 }
 
 // T34: a Lost verdict during the return-to-top flings is allowed and the
