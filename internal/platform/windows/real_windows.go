@@ -179,21 +179,49 @@ func (winGeometryAPI) MonitorRect(hwnd HWND) (PixelRect, error) {
 }
 
 func (winGeometryAPI) SelfDpiAwareness() (DpiAwareness, error) {
-	if err := procGetCurrentDpiCtx.Find(); err != nil {
-		return 0, fmt.Errorf("GetCurrentDpiAwarenessContext unavailable (needs Windows 10 1703+): %w", err)
+	for _, declaration := range []struct {
+		name string
+		proc *windows.LazyProc
+	}{
+		{"GetThreadDpiAwarenessContext", procGetThreadDpiAwarenessContext},
+		{"GetAwarenessFromDpiAwarenessContext", procGetAwarenessFromDpiAwarenessContext},
+		{"AreDpiAwarenessContextsEqual", procAreDpiAwarenessContextsEqual},
+	} {
+		if err := declaration.proc.Find(); err != nil {
+			return 0, fmt.Errorf("%s unavailable (needs Windows 10 1607+): %w", declaration.name, err)
+		}
 	}
-	ctx, _, _ := procGetCurrentDpiCtx.Call()
-	switch ctx {
-	case dpiCtxUnaware:
+
+	context, _, callFailure := procGetThreadDpiAwarenessContext.Call()
+	if context == 0 {
+		if err := callErrno(callFailure); err != nil {
+			return 0, fmt.Errorf("GetThreadDpiAwarenessContext: %w", err)
+		}
+		return 0, errors.New("GetThreadDpiAwarenessContext returned NULL")
+	}
+
+	awareness, _, _ := procGetAwarenessFromDpiAwarenessContext.Call(context)
+	switch int32(awareness) {
+	case winDpiAwarenessUnaware:
 		return DpiAwarenessUnaware, nil
-	case dpiCtxSystem:
+	case winDpiAwarenessSystem:
 		return DpiAwarenessSystem, nil
-	case dpiCtxPerMonitor:
-		return DpiAwarenessPerMonitor, nil
-	case dpiCtxPerMonitorV2:
-		return DpiAwarenessPerMonitorV2, nil
+	case winDpiAwarenessPerMonitor:
+		// GetAwarenessFromDpiAwarenessContext reports only "per monitor";
+		// v1 and v2 are told apart by comparing the context itself. The
+		// comparison must be semantic: a real context handle (for example
+		// 0x12) is not numerically equal to the -3/-4 pseudo-handles.
+		if equal, _, _ := procAreDpiAwarenessContextsEqual.Call(context, dpiCtxPerMonitorV2); equal != 0 {
+			return DpiAwarenessPerMonitorV2, nil
+		}
+		if equal, _, _ := procAreDpiAwarenessContextsEqual.Call(context, dpiCtxPerMonitor); equal != 0 {
+			return DpiAwarenessPerMonitor, nil
+		}
+		return 0, fmt.Errorf("per-monitor DPI awareness context %#x is neither per-monitor-v1 nor per-monitor-v2", context)
+	case winDpiAwarenessInvalid:
+		return 0, fmt.Errorf("GetAwarenessFromDpiAwarenessContext reported DPI_AWARENESS_INVALID for context %#x", context)
 	default:
-		return 0, fmt.Errorf("GetCurrentDpiAwarenessContext returned unknown context %#x", ctx)
+		return 0, fmt.Errorf("GetAwarenessFromDpiAwarenessContext returned %d for context %#x", int32(awareness), context)
 	}
 }
 

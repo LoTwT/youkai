@@ -18,8 +18,12 @@ type HWND uintptr
 // the process creation time.
 type ProcessID uint32
 
-// DpiAwareness mirrors the process/thread DPI awareness values of
-// GetCurrentDpiAwarenessContext.
+// DpiAwareness mirrors the DPI_AWARENESS value of the calling thread's
+// DPI_AWARENESS_CONTEXT (GetThreadDpiAwarenessContext +
+// GetAwarenessFromDpiAwarenessContext). PerMonitorV2 refines per-monitor
+// awareness by comparing the context with
+// DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 through
+// AreDpiAwarenessContextsEqual.
 type DpiAwareness int
 
 const (
@@ -172,7 +176,10 @@ func SelectTarget(probes []WindowProbe, spec TargetSpec) (WindowProbe, error) {
 				visible = append(visible, p)
 			}
 		}
-		if len(visible) == 1 {
+		// Hidden IME/helper windows must not pollute the remaining set: when
+		// any visible candidate exists, only those are real choices. A single
+		// one is selected; several remain ambiguous (still fail-closed).
+		if len(visible) > 0 {
 			candidates = visible
 		}
 	}
