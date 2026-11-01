@@ -6,7 +6,7 @@
 
 - 在 `9a151dd` 的 dev 构建上，macOS 云客户端完成一次全量扫描：1,017 件，六个位置全部 `complete`，`coverage=complete`，排序验证为“稀有度”，`capturedCount=1017`，0 件未处理。
 - 59 次滚动全部 `displaced`：56 次 `selection+feature`，3 次 `selection+feature+scrollbar`；0 undecided、0 lost、0 次滚动重试；59/59 有 manifest，每次滚动都有 2 次停稳确认。
-- 本次满足[决策 §4.3](../decisions/2026-10-28-scanner-rearchitecture.md)与[§6](../decisions/2026-10-28-scanner-rearchitecture.md#6-阶段路线)对阶段 2“另采独立完整扫描验收”的要求（macOS 云客户端）。第一次尝试在目标解析阶段因窗口几何失败，未向游戏发送任何输入；调整窗口后第二次尝试通过。
+- 本次满足[决策 §4.3](../decisions/2026-10-28-scanner-rearchitecture.md#43-k2感知)与[§6](../decisions/2026-10-28-scanner-rearchitecture.md#6-阶段路线)对阶段 2“另采独立完整扫描验收”的要求（macOS 云客户端）。本次扫描采集于 #99–#101 全部合并之后，采集前后没有据此调整任何阈值；它作为封存验收集，今后不得进入调参集。第一次尝试在目标解析阶段因窗口几何失败，未向游戏发送任何输入；调整窗口后第二次尝试通过。
 - 这不是 [T5 §6](../specs/t5-zzz-inventory-traversal.md#6-保存什么证据怎样验收)的三客户端、每客户端至少三次人工基准验收；Windows 未测，导出与截图未执行，位置级降级路径未在真机触发。
 
 ## 环境与构建
@@ -14,7 +14,8 @@
 | 项目 | 值 |
 | --- | --- |
 | 系统 | macOS 27.0.1（26A434），Apple M1 Pro |
-| 显示 | 主显示器 3024 × 1964 Retina（1512 × 982 点）；可见区 (56, 0, 1456, 949) |
+| 显示（attempt1） | 主显示器 3024 × 1964 Retina（1512 × 982 点），主屏可见区 (54, 0, 1458, 949)；另有第二块显示器 5120 × 2880，screen frame (0, 982, 2560, 1440) |
+| 显示（attempt2） | 仅主显示器 3024 × 1964 Retina（1512 × 982 点），主屏可见区 (56, 0, 1456, 949)；preflight 与 window-geometry 未再列出第二块显示器 |
 | 游戏窗口 | 《云·绝区零》macOS 云客户端，`com.miHoYo.cloudgames.Nap`；1164 × 762 @ (309, 96)，完整落在主显示器内 |
 | 游戏版本 | 3.3.0（操作者提供；证据目录未保存版本读数） |
 | 构建分支 | `field/stage2-acceptance-20261101`（基于 `main` `9a151dd`，即 #101），HEAD `9a151dd`，dirty tracked files 0 |
@@ -30,8 +31,8 @@
 
 1. 开扫前先把旧日志与 diagnostics 复制到 `pre-scan-backup/`（275 个文件，SHA-256 全部通过）；预检记录构建、git、窗口几何与日志状态。
 2. **第一次尝试（10:25）：** 10:25:45 启动，10:25:47 接受会话 `ffedad34-1889-4088-9593-25c99b2f41a8`，10:25:47.960 以 `targetNotFound` 停止；0 captured / 0 produced，检查点 generation 1 为 0 件，10:26:32 `exit wrap-up complete`。
-3. **失败原因与处理：** 游戏窗口为 1458 × 835 @ (110, 43)，右边界 1568 pt；主显示器可见区右边界 1512 pt，超出 56 pt。扫描器要求游戏窗口完整落在一块显示器内，因此在目标解析阶段拒绝；日志没有 `collect:` 行，说明未进入任何采集或输入。把窗口调整为 1164 × 762 @ (309, 96) 后，右边界 1473、下边界 858，均落在主显示器可见区内。
-4. **第二次尝试（10:48）：** 10:48:01 启动，10:48:02.721 接受会话 `76bc33aa-4e2e-4b5d-951b-021eadaa9c1a`；默认阶段 2 判定；六个位置依次准备、遍历；11:03:10.532 以 `completed / verifiedEnd / capturing` 结束；11:03:26.609 `exit wrap-up complete`。接收至结束共 14 分 08 秒。
+3. **失败原因与处理：** attempt1 的显示器配置包含主显示器和一块 5120 × 2880 的第二显示器（screen frame (0, 982, 2560, 1440)）；主屏可见区为 (54, 0, 1458, 949)。游戏窗口为 1458 × 835 @ (110, 43)，右边界 1568 pt；主屏可见区右边界 1512 pt，超出 56 pt。扫描器要求游戏窗口完整落在一块显示器内，因此在目标解析阶段拒绝；日志没有 `collect:` 行，说明未进入任何采集或输入。第二次尝试时只剩主显示器（attempt2 的 preflight 与 window-geometry 均只列出主显示器），可见区为 (56, 0, 1456, 949)。把窗口调整为 1164 × 762 @ (309, 96) 后，右边界 1473、下边界 858，均落在主显示器可见区内。证据没有记录第二块显示器何时、为何不再出现，本文不做推测。
+4. **第二次尝试（10:48）：** 10:48:01 启动，10:48:02.721 接受会话 `76bc33aa-4e2e-4b5d-951b-021eadaa9c1a`；默认阶段 2 判定；六个位置依次准备、遍历；11:03:10.532 以 `completed / verifiedEnd / capturing` 结束；11:03:26.609 `exit wrap-up complete`。接受至结束共 15 分 08 秒。
 
 ## 结果
 
@@ -45,7 +46,7 @@
 | 排序 | `verified`，`sortLabel=稀有度`；方向未读取 |
 | 位置 | 6/6 `complete`，`topVerified`/`bottomVerified` 均 true |
 | 检查点 | generation 130（1,017 件）；目录保留 129/130 |
-| 证据 | 10,937 个文件，约 74 MB |
+| 证据 | 10,937 个文件；`du` 磁盘占用约 74 MiB，文件总大小 56,412,265 字节（约 53.8 MiB） |
 | 物品状态 | 1,017 `produced`，1,017 `autoAccepted` |
 | 详情归属 | 1,002 `transitionVerified`、9 `referenceVerified`、6 `initialVerified`；0 `detailUnattributed` / `detailUnresolved` |
 | 位置级降级 | 0 个不完整位置；无 `positionFailureLimit` |
@@ -124,7 +125,7 @@
 - **预扫备份：** `pre-scan-backup/` 的 275 个文件 SHA-256 全部通过；旧轮转日志 `.1`–`.3`、`youkai.crash.log` 与备份逐字节一致；25 个旧诊断条目 `diff -r` 无差异。
 - **日志未轮转：** `logs-after/youkai.log` 共 2,544 行 = 60 行 2026-10-31 尾部 + 10 行 attempt1 + 2,474 行 attempt2；`.1`–`.3` 的大小与时间戳不变，没有 `.4`。
 - **统计切片：** 2026-10-31 尾部含 2 行 `outcome=undecided`，不属于本次；attempt2 统计从 `2026/11/01 10:48:01` 起切片。仅按 `2026/11/01` 前缀会把 attempt1 的 10 行也算入（attempt1 没有滚动或物品行，不影响本报告计数）。
-- **校验和：** `SHA256SUMS` 清单内 attempt1 17/17、attempt2 102/102、pre-scan-backup 275/275 通过；清单不覆盖全部 74 MB 证据文件。
+- **校验和：** `SHA256SUMS` 清单内 attempt1 17/17、attempt2 102/102、pre-scan-backup 275/275 通过；attempt2 的清单只有 102 项，不覆盖全部 10,937 个证据文件（磁盘占用约 74 MiB）。
 
 ## 问题与观察
 
@@ -158,14 +159,19 @@
 验收根目录:
 ~/Library/Logs/Youkai Dev/probes/20261101-full-acceptance/
 
-attempt1/:
+attempt1/（主要文件，非完整清单）:
   analysis.txt, analysis.json, checkpoint-final.json,
-  window-geometry.txt, preflight.txt, run.out, SHA256SUMS
+  pre-run.txt, preflight.txt, run.out, session.txt, app.pid,
+  start-stamp.txt, window-geometry.txt,
+  checkpoints-listing.txt, diagnostics-listing.txt,
+  logs-after/, diagnostics/, SHA256SUMS
 
-attempt2/:
+attempt2/（主要文件，非完整清单）:
   analysis.txt, analysis.json, basis-by-position.txt,
-  checkpoint-final.json, window-geometry.txt, preflight.txt, run.out,
-  logs-after/youkai.log, diagnostics/, SHA256SUMS
+  checkpoint-final.json, pre-run.txt, preflight.txt, run.out,
+  session.txt, app.pid, start-stamp.txt, monitor-stop.txt,
+  window-geometry.txt, checkpoints-listing.txt, diagnostics-listing.txt,
+  logs-after/, diagnostics/, SHA256SUMS
 
 pre-scan-backup/:
   logs/, diagnostics/, SHA256SUMS
@@ -173,7 +179,7 @@ pre-scan-backup/:
 会话与最终检查点:
 ~/Library/Application Support/Youkai Dev/sessions/76bc33aa-4e2e-4b5d-951b-021eadaa9c1a/
   checkpoints/130.json
-  evidence/（10,937 个文件，约 74 MB）
+  evidence/（10,937 个文件；`du` 磁盘占用约 74 MiB，文件总大小 56,412,265 字节 / 约 53.8 MiB）
 
 第一次尝试的检查点:
 ~/Library/Application Support/Youkai Dev/sessions/ffedad34-1889-4088-9593-25c99b2f41a8/checkpoints/1.json
@@ -264,8 +270,9 @@ grep -c 'trying one reference round trip' /tmp/youkai-1101-attempt2.log
 
 ```text
 grep 'bounds=.*"Height": 835' "$R/attempt1/window-geometry.txt"
-grep 'screen frame' "$R/attempt1/window-geometry.txt" | head -1
-# 110 + 1458 = 1568；54 + 1458 = 1512；差 56 pt
+grep 'screen frame' "$R/attempt1/window-geometry.txt"
+grep 'screen frame' "$R/attempt2/window-geometry.txt"
+# attempt1 主屏可见区：54 + 1458 = 1512；窗口右边界 110 + 1458 = 1568；差 56 pt
 ```
 
 **日志切片与证据保全**
@@ -281,4 +288,13 @@ grep -n 'outcome=undecided' "$R/attempt2/logs-after/youkai.log"
 (cd "$R/pre-scan-backup" && shasum -a 256 -c SHA256SUMS | grep -c ': OK$')
 
 for f in $(ls "$R/pre-scan-backup/diagnostics"); do diff -r -q "$R/pre-scan-backup/diagnostics/$f" "$HOME/Library/Logs/Youkai Dev/diagnostics/$f"; done
+```
+
+**证据大小**
+
+```text
+E="$HOME/Library/Application Support/Youkai Dev/sessions/76bc33aa-4e2e-4b5d-951b-021eadaa9c1a/evidence"
+du -sh "$E"
+find "$E" -type f | wc -l
+find "$E" -type f -print0 | xargs -0 stat -f%z | awk '{s+=$1} END {printf "%d\n", s}'
 ```
