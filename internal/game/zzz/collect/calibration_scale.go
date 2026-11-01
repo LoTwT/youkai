@@ -2,20 +2,31 @@ package collect
 
 import "fmt"
 
-// ScaledCalibration converts the macOS cloud client's threshold set to the
-// reference canvas's scale s. The thresholds are not all lengths, so they do
-// not all scale alike. The categories are explicit:
+// ScaledCalibration converts a reference-canvas threshold set to scale s.
+// The canonical base is ReferenceCalibration(); MacCloudCalibration() is a
+// cloud-frame set whose scrollbar end thresholds are absolute mac-frame y
+// positions, so scaling that set directly would carry the frame offset and
+// scale into the reference coordinates. ReferenceCalibration() converts and
+// re-measures the geometry first.
+//
+// The thresholds are not all lengths, so they do not all scale alike. The
+// categories are explicit:
 //
 //   - geometry lengths and positions (×s): the scroll sampling steps, the
-//     shift-search radius and the scrollbar track's resting positions;
+//     shift-search radius and the reference scrollbar track's resting
+//     positions;
 //   - pixel-count thresholds (×s², an initial estimate only): selection and
-//     wheel hit counts, ink counts, management/avatar/top-indicator counts,
-//     gold counts and the minimum scroll sample count. These depend on the
-//     number of pixels in a probe, so they are marked unverified and callers
-//     must replace them with measured per-tier values through WithOverrides;
+//     wheel hit counts, ink counts, management/avatar/top-indicator counts and
+//     gold counts. These depend on the number of pixels in a probe, so they
+//     are marked unverified and callers must replace them with measured
+//     per-tier values through WithOverrides;
 //   - pixel tolerances (×s, floor 2): ScrollRowTolerance and
 //     ScrollbarMoveMin. The floor keeps a whole-row match from collapsing at
 //     small scales;
+//   - sample-count threshold (unchanged): ScrollMinSamples. The sampling steps
+//     already scale, so the number of viewport samples stays roughly constant
+//     across tiers; ReferenceCalibration() sets it from the reference
+//     viewport's sample count instead of multiplying it by s²;
 //   - normalized or intensity thresholds (unchanged): MAD/NCC bands,
 //     grayscale floors, color-intensity tiers, sector counts, the relative
 //     scrollbar travel tolerance and the row count;
@@ -60,7 +71,10 @@ func ScaledCalibration(base Calibration, s float64) (Calibration, error) {
 	out.TopUnlockedBrightMin = count(base.TopUnlockedBrightMin)
 	out.TopUnlockedDimMax = count(base.TopUnlockedDimMax)
 	out.QualityGoldMin = count(base.QualityGoldMin)
-	out.ScrollMinSamples = count(base.ScrollMinSamples)
+
+	// ScrollMinSamples is a sample-count threshold, not an area count: the
+	// viewport area and the sampling steps both change with the tier, so the
+	// reference base's value stays unchanged. See ReferenceCalibration.
 
 	// Pixel tolerances (×s, floor 2).
 	out.ScrollRowTolerance = tolerance(base.ScrollRowTolerance)

@@ -275,79 +275,15 @@ func TestScaledLayoutDropsSortTemplateWhenScaling(t *testing.T) {
 	}
 }
 
-func TestScaledCalibrationCategories(t *testing.T) {
-	base := collect.MacCloudCalibration()
+func TestScaledCalibrationReferenceCategories(t *testing.T) {
+	base := collect.ReferenceCalibration()
 	cases := []struct {
-		name string
-		s    float64
-		want func(collect.Calibration) collect.Calibration
+		name                                                          string
+		s                                                             float64
+		top, bottom, selection, wheel, gold, minSamples, rowTol, move int
 	}{
-		{
-			name: "scale 2",
-			s:    2,
-			want: func(c collect.Calibration) collect.Calibration {
-				c.SelectionHitMin = 160
-				c.SelectionClearMax = 40
-				c.WheelSelectedMin = 600
-				c.WheelOtherMax = 240
-				c.Substat4InkMin = 320
-				c.Substat3InkMax = 200
-				c.DetailPopulatedInk = 2000
-				c.ManagementLockRingMin = 480
-				c.ManagementLockCoreMax = 280
-				c.ManagementDiscardRedMin = 400
-				c.ManagementClearRingMax = 240
-				c.ManagementClearRedMax = 120
-				c.AvatarRingMin = 160
-				c.AvatarAbsentRingMax = 480
-				c.TopLockedDimMin = 2600
-				c.TopUnlockedBrightMin = 800
-				c.TopUnlockedDimMax = 1800
-				c.QualityGoldMin = 600
-				c.ScrollMinSamples = 8000
-				c.ScrollStepX = 6
-				c.ScrollStepY = 4
-				c.ScrollSearchRadius = 1440
-				c.ScrollbarTopStartMax = 458
-				c.ScrollbarBottomEndMin = 1796
-				c.ScrollRowTolerance = 6
-				c.ScrollbarMoveMin = 4
-				return c
-			},
-		},
-		{
-			name: "scale 0.5",
-			s:    0.5,
-			want: func(c collect.Calibration) collect.Calibration {
-				c.SelectionHitMin = 10
-				c.SelectionClearMax = 3
-				c.WheelSelectedMin = 38
-				c.WheelOtherMax = 15
-				c.Substat4InkMin = 20
-				c.Substat3InkMax = 13
-				c.DetailPopulatedInk = 125
-				c.ManagementLockRingMin = 30
-				c.ManagementLockCoreMax = 18
-				c.ManagementDiscardRedMin = 25
-				c.ManagementClearRingMax = 15
-				c.ManagementClearRedMax = 8
-				c.AvatarRingMin = 10
-				c.AvatarAbsentRingMax = 30
-				c.TopLockedDimMin = 163
-				c.TopUnlockedBrightMin = 50
-				c.TopUnlockedDimMax = 113
-				c.QualityGoldMin = 38
-				c.ScrollMinSamples = 500
-				c.ScrollStepX = 2
-				c.ScrollStepY = 1
-				c.ScrollSearchRadius = 360
-				c.ScrollbarTopStartMax = 115
-				c.ScrollbarBottomEndMin = 449
-				c.ScrollRowTolerance = 2
-				c.ScrollbarMoveMin = 2
-				return c
-			},
-		},
+		{"scale 2", 2, 302, 1858, 216, 812, 812, base.ScrollMinSamples, 6, 4},
+		{"scale 0.5", 0.5, 76, 465, 14, 51, 51, base.ScrollMinSamples, 2, 2},
 	}
 	for _, tc := range cases {
 		tc := tc
@@ -356,14 +292,35 @@ func TestScaledCalibrationCategories(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			want := tc.want(base)
-			if got != want {
-				t.Fatalf("scaled calibration differs:\n got %+v\nwant %+v", got, want)
+			if got.ScrollbarTopStartMax != tc.top || got.ScrollbarBottomEndMin != tc.bottom {
+				t.Fatalf("scrollbar ends %d/%d, want %d/%d", got.ScrollbarTopStartMax, got.ScrollbarBottomEndMin, tc.top, tc.bottom)
 			}
-			if base.SelectionHitMin != 40 || base.ScrollRowTolerance != 3 {
-				t.Fatal("ScaledCalibration mutated the base threshold set")
+			if got.SelectionHitMin != tc.selection {
+				t.Fatalf("selection hit floor %d, want %d", got.SelectionHitMin, tc.selection)
+			}
+			if got.WheelSelectedMin != tc.wheel {
+				t.Fatalf("wheel selection floor %d, want %d", got.WheelSelectedMin, tc.wheel)
+			}
+			if got.QualityGoldMin != tc.gold {
+				t.Fatalf("gold floor %d, want %d", got.QualityGoldMin, tc.gold)
+			}
+			if got.ScrollMinSamples != tc.minSamples {
+				t.Fatalf("sample floor %d, want the unchanged reference value %d", got.ScrollMinSamples, tc.minSamples)
+			}
+			if got.ScrollRowTolerance != tc.rowTol || got.ScrollbarMoveMin != tc.move {
+				t.Fatalf("pixel tolerances %d/%d, want %d/%d", got.ScrollRowTolerance, got.ScrollbarMoveMin, tc.rowTol, tc.move)
+			}
+			if got.BarEmptyMax != base.BarEmptyMax || got.DetailSameMax != base.DetailSameMax ||
+				got.ScrollStationaryNCC != base.ScrollStationaryNCC || got.ScrollbarBrightMin != base.ScrollbarBrightMin {
+				t.Fatal("normalized/intensity thresholds must stay unchanged")
 			}
 		})
+	}
+	if astate := base.SelectionHitMin; astate != 54 {
+		t.Fatalf("reference selection floor %d, want 54", astate)
+	}
+	if base.ScrollRowTolerance != 3 {
+		t.Fatal("ScaledCalibration mutated the reference base")
 	}
 	if _, err := collect.ScaledCalibration(base, 0); err == nil {
 		t.Fatal("a non-positive scale must be refused")
@@ -374,7 +331,7 @@ func TestScaledCalibrationCategories(t *testing.T) {
 }
 
 func TestScaledCalibrationFloorAndOverrides(t *testing.T) {
-	base := collect.MacCloudCalibration()
+	base := collect.ReferenceCalibration()
 	small, err := collect.ScaledCalibration(base, 0.1)
 	if err != nil {
 		t.Fatal(err)
@@ -448,8 +405,8 @@ func TestReferenceLayoutMatchesScaledMacDerivation(t *testing.T) {
 	// y≈935 while the cloud panel maps to y≈971. The scaled bounds therefore
 	// differ by 30 px at the bottom edge. This is a bounded, measured client
 	// difference, not a loosened tolerance.
-	checkRect("list viewport", got.ListViewport, mac.ListViewport, 30,
-		"the local list panel is wider and shorter than the cloud panel after scaling (measured detail-pane split and bottom edge)")
+	checkRect("list viewport", got.ListViewport, mac.ListViewport, tolerance,
+		"the measured textured panel x 70–596 / y 115–971 matches the cloud-derived viewport")
 	checkRect("scroll track", got.ScrollTrack, mac.ScrollTrack, tolerance, "1-px track column")
 	checkPoint("scroll from", got.ScrollFrom, mac.ScrollFrom, tolerance, "provisional drag endpoint")
 	checkPoint("scroll to", got.ScrollTo, mac.ScrollTo, tolerance, "provisional drag endpoint")

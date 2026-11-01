@@ -129,20 +129,15 @@ func (t CanvasTransform) Validate() error {
 		if t.Offset != (image.Point{}) {
 			return fmt.Errorf("collect: canvas: a clientRect transform has offset %v; the client area starts at the frame origin", t.Offset)
 		}
-		client := image.Pt(
-			int(roundFloat(float64(ReferenceCanvasWidth)*t.Scale)),
-			int(roundFloat(float64(ReferenceCanvasHeight)*t.Scale)),
-		)
-		found := false
+		// Require the exact tier ratio, not a rounded round-trip: a scale a
+		// few ulps off could still round to a tier's pixel size and silently
+		// claim a display configuration that was never accepted.
 		for _, tier := range referenceClientTiers {
-			if tier.Client == client {
-				found = true
-				break
+			if t.Scale == float64(tier.Client.X)/float64(ReferenceCanvasWidth) {
+				return nil
 			}
 		}
-		if !found {
-			return fmt.Errorf("collect: canvas: clientRect scale %v names the %dx%d client area, which is not an accepted tier", t.Scale, client.X, client.Y)
-		}
+		return fmt.Errorf("collect: canvas: clientRect scale %v is not exactly a tier's width/%d ratio (%s)", t.Scale, ReferenceCanvasWidth, tierNames())
 	case TransformMeasuredVideoRect:
 		// The measured rectangle is supplied by a later cloud profile; only
 		// the scale's validity is checked here.
@@ -209,15 +204,17 @@ func ReferenceLayout() Layout {
 		// (pitch 170–172); the row centers are 181+171r.
 		RowPitch: 171,
 
-		// The list panel is x 60–581 (the vertical scrollbar sits at x 54–59,
-		// the first card starts at x 82 and the last card ends at x 581) and
-		// y 110–935. It is wider and shorter than the mac canvas's list panel
-		// after scaling; the local client's pane split is not a pure scale.
-		ListViewport: image.Rect(70, 110, 581, 935),
-		// The scrollbar track is a 5-pixel column at x 54–59, y 150–930. The
-		// probe keeps the mac's 1-pixel column inside it: the matcher only
-		// reads one column, and the narrower probe stays compatible with the
-		// cloud layout.
+		// The measured textured list panel spans x 70–596 and y 115–971 on the
+		// 1920×1080 capture; the black bottom bar starts at y≈976 and the detail
+		// pane starts to the right of the panel. The mac-derived viewport
+		// (x 70–596, y 115–971 after the canvas transform) matches this measured
+		// range, so the reference uses the measured panel bounds directly.
+		ListViewport: image.Rect(70, 115, 596, 971),
+		// The measured scrollbar track is a 5-pixel column at x 54–59; its
+		// main bright run is y 148–931 (a separate y 941–945 run is the bottom
+		// cap). The probe keeps the mac's 1-pixel column at x=55 inside the
+		// track; ReferenceCalibration measures its end thresholds against the
+		// track's measured bright run rather than against this probe rect.
 		ScrollTrack: image.Rect(55, 145, 56, 941),
 		// Drag endpoints are provisional canvas positions derived from the
 		// mac profile (the Windows drag/timing profile is out of scope in this
@@ -282,10 +279,12 @@ func ReferenceLayout() Layout {
 		SortTemplate: nil,
 
 		// The six wheel centers are the cloud calibration carried through the
-		// canvas transform. Position 3 (bottom-left) was checked on the
-		// Windows frame: its selection ring is centered at (1240,770) with a
-		// measured radius of 85–105 pixels, and the transform predicts the
-		// same center.
+		// canvas transform; none of the six click centers was independently
+		// measured on Windows. Position 3's selection ring was checked on the
+		// Windows frame: the ring is centered at about (1239,763) with a
+		// measured radius of 85–105 pixels, about 7 px above the mac-derived
+		// wheel center (1240,770). The arc blocks still capture the ring, but
+		// the click center remains the derived value and is unverified.
 		Wheel: [6]image.Point{
 			image.Pt(1240, 320), // 1 top-left
 			image.Pt(1139, 547), // 2 left

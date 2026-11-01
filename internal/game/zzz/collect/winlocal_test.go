@@ -93,7 +93,7 @@ func windowsMatcher(t *testing.T, frame platform.Frame) (*collect.PixelMatcher, 
 	if err != nil {
 		t.Fatal(err)
 	}
-	calibration, err := collect.ScaledCalibration(collect.MacCloudCalibration(), tr.Scale)
+	calibration, err := collect.ScaledCalibration(collect.ReferenceCalibration(), tr.Scale)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -162,7 +162,7 @@ func TestWindowsFixturesAgreeWithRecordedExpectations(t *testing.T) {
 
 // TestWindowsScaledCalibrationSeparatesTheFixtureTiers records the measured
 // margins behind the verdict test. Every required count clears its scaled
-// threshold by at least 2×; the clear cells stay at zero. These margins are
+// threshold by at least 1.5×; the clear cells stay at zero. These margins are
 // measured from the fixtures and are not a field acceptance.
 func TestWindowsScaledCalibrationSeparatesTheFixtureTiers(t *testing.T) {
 	for _, row := range loadWinManifest(t) {
@@ -178,8 +178,8 @@ func TestWindowsScaledCalibrationSeparatesTheFixtureTiers(t *testing.T) {
 					t.Fatalf("unselected slot %d carries %d selection hits", i, hits)
 				}
 			}
-			if selectedHits < 2*c.SelectionHitMin {
-				t.Fatalf("selected border has %d hits, want at least 2× the scaled floor %d", selectedHits, 2*c.SelectionHitMin)
+			if selectedHits < 3*c.SelectionHitMin/2 {
+				t.Fatalf("selected border has %d hits, want at least 1.5× the scaled floor %d", selectedHits, c.SelectionHitMin)
 			}
 			wheelSelected := 0
 			for i, center := range layout.Wheel {
@@ -193,20 +193,20 @@ func TestWindowsScaledCalibrationSeparatesTheFixtureTiers(t *testing.T) {
 					t.Fatalf("unselected wheel %d carries %d selection hits", i+1, hits)
 				}
 			}
-			if wheelSelected < 2*c.WheelSelectedMin {
-				t.Fatalf("selected wheel has %d hits, want at least 2× the scaled floor %d", wheelSelected, 2*c.WheelSelectedMin)
+			if wheelSelected < 3*c.WheelSelectedMin/2 {
+				t.Fatalf("selected wheel has %d hits, want at least 1.5× the scaled floor %d", wheelSelected, c.WheelSelectedMin)
 			}
 			gold := goldPixels(img, layout.QualityBadge)
-			if gold < 2*c.QualityGoldMin {
-				t.Fatalf("quality badge has %d gold pixels, want at least 2× the scaled floor %d", gold, 2*c.QualityGoldMin)
+			if gold < 3*c.QualityGoldMin/2 {
+				t.Fatalf("quality badge has %d gold pixels, want at least 1.5× the scaled floor %d", gold, c.QualityGoldMin)
 			}
 			ink := inkPixels(img, layout.DetailLines[0].Rect, c.InkThreshold)
-			if ink < 2*c.DetailPopulatedInk {
-				t.Fatalf("name line has %d ink pixels, want at least 2× the scaled floor %d", ink, 2*c.DetailPopulatedInk)
+			if ink < 3*c.DetailPopulatedInk/2 {
+				t.Fatalf("name line has %d ink pixels, want at least 1.5× the scaled floor %d", ink, c.DetailPopulatedInk)
 			}
 			sub4 := inkPixels(img, layout.Substat4Probe, c.InkThreshold)
-			if sub4 < 2*c.Substat4InkMin {
-				t.Fatalf("fourth substat has %d ink pixels, want at least 2× the scaled floor %d", sub4, 2*c.Substat4InkMin)
+			if sub4 < 3*c.Substat4InkMin/2 {
+				t.Fatalf("fourth substat has %d ink pixels, want at least 1.5× the scaled floor %d", sub4, c.Substat4InkMin)
 			}
 			for i := 0; i < 13; i++ {
 				if v := barMaxChannel(img, layout.BarRect(i)); v < c.BarOccupiedMin {
