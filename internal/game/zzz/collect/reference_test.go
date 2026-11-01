@@ -399,12 +399,8 @@ func TestReferenceLayoutMatchesScaledMacDerivation(t *testing.T) {
 		t.Errorf("row pitch: %d vs %d differs by %d px (limit %d; measured 171 × 0.859 = 147)",
 			got.RowPitch, mac.RowPitch, d, tolerance)
 	}
-	// The list panel is the one field whose measured local bounds are not a
-	// scale of the cloud panel: the local detail pane starts at canvas x≈582
-	// while the cloud pane starts at x≈612, and the local panel ends at
-	// y≈935 while the cloud panel maps to y≈971. The scaled bounds therefore
-	// differ by 30 px at the bottom edge. This is a bounded, measured client
-	// difference, not a loosened tolerance.
+	// The list panel's measured local textured bounds match the cloud-derived
+	// viewport within one pixel; no per-field allowance is needed.
 	checkRect("list viewport", got.ListViewport, mac.ListViewport, tolerance,
 		"the measured textured panel x 70–596 / y 115–971 matches the cloud-derived viewport")
 	checkRect("scroll track", got.ScrollTrack, mac.ScrollTrack, tolerance, "1-px track column")
