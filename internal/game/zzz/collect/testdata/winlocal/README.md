@@ -1,6 +1,6 @@
 # Windows 本地客户端掩码夹具（参考画布模型）
 
-本目录是 [W2a 参考画布模型](../../../../../docs/specs/scanner-architecture.md#参考画布模型w2a-已实现模型未接线未开放任何档位)
+本目录是 [W2a 参考画布模型](../../../../../../docs/specs/scanner-architecture.md#参考画布模型w2a-已实现模型未接线未开放任何档位)
 的回归夹具：从 2026-11-01 Windows 本地客户端（绝区零 3.3.0，窗口模式）的
 1920×1080、2560×1440 和 1280×720 原生客户区截图中裁出
 `ReferenceLayout` 经 `ScaledLayout` 缩放后声明读取的区域，其余像素涂成
