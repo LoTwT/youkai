@@ -130,9 +130,13 @@ func (e *SelectionError) Error() string {
 //  2. if several remain and hints are set, narrow by exact class name,
 //     then by title substring — hints refine identity, they never pick a
 //     window the executable does not own;
-//  3. if several remain, prefer the single window that is visible and
-//     not cloaked;
-//  4. more than one at that point is an ambiguity error — never a guess;
+//  3. if several remain, drop hidden and cloaked windows whenever at
+//     least one visible candidate exists: one visible candidate is
+//     selected, several visible candidates are an ambiguity error whose
+//     list contains only the visible ones, and with no visible candidate
+//     the set is left unchanged;
+//  4. more than one candidate at that point is an ambiguity error —
+//     never a guess;
 //  5. the single candidate fails not-ready when it is hidden or cloaked
 //     and RequireVisible is set; a minimized window is still selected
 //     (minimization is an observed state, input is refused while it
