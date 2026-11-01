@@ -125,10 +125,12 @@ type IntegrityFacts struct {
 	Error string `json:"error,omitempty"`
 }
 
-// DPIFacts records the target window's DPI awareness context, the two DPI
-// values the platform measured, and the platform's virtualization verdict.
+// DPIFacts records the target window's DPI awareness (name, DPI_AWARENESS
+// enum value and opaque context handle), the two DPI values the platform
+// measured, and the platform's virtualization verdict.
 type DPIFacts struct {
 	WindowAwareness        string `json:"windowAwareness"`
+	WindowAwarenessValue   int    `json:"windowAwarenessValue"`
 	WindowAwarenessContext string `json:"windowAwarenessContext,omitempty"`
 	WindowAwarenessError   string `json:"windowAwarenessError,omitempty"`
 	WindowDPI              uint32 `json:"windowDPI"`

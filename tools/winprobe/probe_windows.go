@@ -382,13 +382,14 @@ func collectWindowFacts(probe windows.WindowProbe, geo windows.GeometryAPI, self
 		}
 	}
 
-	awareness, context, awarenessErr := windowDpiAwareness(uintptr(probe.HWND))
+	awareness, context, awarenessValue, awarenessErr := windowDpiAwareness(uintptr(probe.HWND))
+	facts.DPI.WindowAwarenessContext = context
+	facts.DPI.WindowAwarenessValue = awarenessValue
 	if awarenessErr != nil {
 		facts.DPI.WindowAwareness = "unknown"
 		facts.DPI.WindowAwarenessError = awarenessErr.Error()
 	} else {
 		facts.DPI.WindowAwareness = awareness
-		facts.DPI.WindowAwarenessContext = context
 	}
 
 	if facts.WindowRect != nil && facts.Monitor != nil && facts.Style.Error == "" {

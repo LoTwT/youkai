@@ -321,7 +321,7 @@ func TestMarshalWindowReportJSON(t *testing.T) {
 		Style:      WindowStyleFacts{Style: wsCaption, StyleHex: "0x00C00000", Form: "windowed", FormReason: "WS_CAPTION present"},
 		WindowRect: &windowRect, ClientRect: &clientRect, Monitor: &monitor,
 		DPI: DPIFacts{
-			WindowAwareness: "perMonitorV2", WindowAwarenessContext: "0xFFFFFFFFFFFFFFFC",
+			WindowAwareness: "perMonitorV2", WindowAwarenessValue: 2, WindowAwarenessContext: "0xFFFFFFFFFFFFFFFC",
 			WindowDPI: 96, MonitorDPI: 96, Verdict: "ok",
 		},
 		Integrity: IntegrityFacts{Level: "medium", RID: 0x2000},
@@ -367,6 +367,7 @@ func TestMarshalWindowReportJSON(t *testing.T) {
 	assertField(t, targetClient, "width", float64(1920))
 	targetDPI := objectField(t, targetMap, "dpi")
 	assertField(t, targetDPI, "windowAwareness", "perMonitorV2")
+	assertField(t, targetDPI, "windowAwarenessValue", float64(2))
 	assertField(t, targetDPI, "windowDPI", float64(96))
 	assertField(t, objectField(t, targetMap, "style"), "form", "windowed")
 }

@@ -30,28 +30,34 @@ var (
 	modShcore   = windows.NewLazySystemDLL("shcore.dll")
 	modKernel32 = windows.NewLazySystemDLL("kernel32.dll")
 
-	procSetLastError                  = modKernel32.NewProc("SetLastError")
-	procSetProcessDpiAwarenessContext = modUser32.NewProc("SetProcessDpiAwarenessContext")
-	procGetWindowDpiAwarenessContext  = modUser32.NewProc("GetWindowDpiAwarenessContext")
-	procGetWindowRect                 = modUser32.NewProc("GetWindowRect")
-	procGetWindowLongPtrW             = modUser32.NewProc("GetWindowLongPtrW")
-	procIsZoomed                      = modUser32.NewProc("IsZoomed")
-	procGetForegroundWindow           = modUser32.NewProc("GetForegroundWindow")
-	procEnumDisplayMonitors           = modUser32.NewProc("EnumDisplayMonitors")
-	procGetMonitorInfoW               = modUser32.NewProc("GetMonitorInfoW")
-	procMonitorFromWindow             = modUser32.NewProc("MonitorFromWindow")
-	procGetDpiForMonitor              = modShcore.NewProc("GetDpiForMonitor")
+	procSetLastError                        = modKernel32.NewProc("SetLastError")
+	procSetProcessDpiAwarenessContext       = modUser32.NewProc("SetProcessDpiAwarenessContext")
+	procGetWindowDpiAwarenessContext        = modUser32.NewProc("GetWindowDpiAwarenessContext")
+	procGetAwarenessFromDpiAwarenessContext = modUser32.NewProc("GetAwarenessFromDpiAwarenessContext")
+	procAreDpiAwarenessContextsEqual        = modUser32.NewProc("AreDpiAwarenessContextsEqual")
+	procGetWindowRect                       = modUser32.NewProc("GetWindowRect")
+	procGetWindowLongPtrW                   = modUser32.NewProc("GetWindowLongPtrW")
+	procIsZoomed                            = modUser32.NewProc("IsZoomed")
+	procGetForegroundWindow                 = modUser32.NewProc("GetForegroundWindow")
+	procEnumDisplayMonitors                 = modUser32.NewProc("EnumDisplayMonitors")
+	procGetMonitorInfoW                     = modUser32.NewProc("GetMonitorInfoW")
+	procMonitorFromWindow                   = modUser32.NewProc("MonitorFromWindow")
+	procGetDpiForMonitor                    = modShcore.NewProc("GetDpiForMonitor")
 )
 
 const (
-	// DPI_AWARENESS_CONTEXT handles are the documented negative pseudo-handle
-	// values. They are compared by value because the probe only needs to name
-	// the context it observes.
-	dpiContextUnaware          = ^uintptr(0) // -1
-	dpiContextSystem           = ^uintptr(1) // -2
+	// DPI_AWARENESS_CONTEXT pseudo-handles. A real context handle may carry
+	// different bits while denoting the same awareness, so these are compared
+	// only through AreDpiAwarenessContextsEqual, never with ==.
 	dpiContextPerMonitor       = ^uintptr(2) // -3
 	dpiContextPerMonitorV2     = ^uintptr(3) // -4
 	dpiContextUnawareGdiScaled = ^uintptr(4) // -5
+
+	// DPI_AWARENESS values returned by GetAwarenessFromDpiAwarenessContext.
+	dpiAwarenessInvalid    = -1
+	dpiAwarenessUnaware    = 0
+	dpiAwarenessSystem     = 1
+	dpiAwarenessPerMonitor = 2
 
 	monitorDefaultToNearest = 2
 	monitorInfoPrimary      = 1
@@ -76,7 +82,7 @@ func callErr(err error) error {
 // awareness and refuses capture if it is not PMv2.
 func setProcessDpiAwarenessPMv2() error {
 	if err := procSetProcessDpiAwarenessContext.Find(); err != nil {
-		return fmt.Errorf("SetProcessDpiAwarenessContext unavailable: %w", err)
+		return fmt.Errorf("SetProcessDpiAwarenessContext unavailable (needs Windows 10 1703+): %w", err)
 	}
 	ret, _, err := procSetProcessDpiAwarenessContext.Call(dpiContextPerMonitorV2)
 	if ret == 0 {
@@ -85,31 +91,58 @@ func setProcessDpiAwarenessPMv2() error {
 	return nil
 }
 
-func windowDpiAwareness(hwnd uintptr) (name, context string, err error) {
-	if findErr := procGetWindowDpiAwarenessContext.Find(); findErr != nil {
-		return "", "", fmt.Errorf("GetWindowDpiAwarenessContext unavailable: %w", findErr)
+// windowDpiAwareness names the DPI_AWARENESS_CONTEXT associated with hwnd.
+// GetWindowDpiAwarenessContext returns an opaque handle (for example 0x12),
+// not one of the documented pseudo-handle constants; the awareness enum comes
+// from GetAwarenessFromDpiAwarenessContext and per-monitor v1/v2 are told
+// apart with AreDpiAwarenessContextsEqual.
+func windowDpiAwareness(hwnd uintptr) (name, context string, awarenessValue int, err error) {
+	for _, declaration := range []struct {
+		name string
+		proc *windows.LazyProc
+	}{
+		{"GetWindowDpiAwarenessContext", procGetWindowDpiAwarenessContext},
+		{"GetAwarenessFromDpiAwarenessContext", procGetAwarenessFromDpiAwarenessContext},
+		{"AreDpiAwarenessContextsEqual", procAreDpiAwarenessContextsEqual},
+	} {
+		if findErr := declaration.proc.Find(); findErr != nil {
+			return "", "", dpiAwarenessInvalid,
+				fmt.Errorf("%s unavailable (needs Windows 10 1607+): %w", declaration.name, findErr)
+		}
 	}
-	ctx, _, err := procGetWindowDpiAwarenessContext.Call(uintptr(hwnd))
-	if ctx == 0 {
-		return "", "", fmt.Errorf("GetWindowDpiAwarenessContext: %w", callErr(err))
-	}
-	return dpiContextName(ctx), fmt.Sprintf("0x%X", ctx), nil
-}
 
-func dpiContextName(ctx uintptr) string {
-	switch ctx {
-	case dpiContextUnaware:
-		return "unaware"
-	case dpiContextSystem:
-		return "system"
-	case dpiContextPerMonitor:
-		return "perMonitor"
-	case dpiContextPerMonitorV2:
-		return "perMonitorV2"
-	case dpiContextUnawareGdiScaled:
-		return "unawareGdiScaled"
+	handle, _, callFailure := procGetWindowDpiAwarenessContext.Call(hwnd)
+	if handle == 0 {
+		if systemErr := callErr(callFailure); systemErr != nil {
+			return "", "", dpiAwarenessInvalid, fmt.Errorf("GetWindowDpiAwarenessContext: %w", systemErr)
+		}
+		return "", "", dpiAwarenessInvalid, errors.New("GetWindowDpiAwarenessContext returned NULL")
+	}
+	context = fmt.Sprintf("0x%X", handle)
+
+	rawAwareness, _, _ := procGetAwarenessFromDpiAwarenessContext.Call(handle)
+	awareness := int32(rawAwareness)
+	awarenessValue = int(awareness)
+	switch awareness {
+	case dpiAwarenessUnaware:
+		if equal, _, _ := procAreDpiAwarenessContextsEqual.Call(handle, dpiContextUnawareGdiScaled); equal != 0 {
+			return "unawareGdiScaled", context, awarenessValue, nil
+		}
+		return "unaware", context, awarenessValue, nil
+	case dpiAwarenessSystem:
+		return "system", context, awarenessValue, nil
+	case dpiAwarenessPerMonitor:
+		if equal, _, _ := procAreDpiAwarenessContextsEqual.Call(handle, dpiContextPerMonitorV2); equal != 0 {
+			return "perMonitorV2", context, awarenessValue, nil
+		}
+		if equal, _, _ := procAreDpiAwarenessContextsEqual.Call(handle, dpiContextPerMonitor); equal != 0 {
+			return "perMonitor", context, awarenessValue, nil
+		}
+		return "", context, awarenessValue,
+			fmt.Errorf("per-monitor DPI awareness context %#x is neither per-monitor-v1 nor per-monitor-v2", handle)
 	default:
-		return fmt.Sprintf("unknown(0x%X)", ctx)
+		return "", context, awarenessValue,
+			fmt.Errorf("GetAwarenessFromDpiAwarenessContext returned %d for window context %#x", awareness, handle)
 	}
 }
 
