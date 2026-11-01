@@ -1,6 +1,6 @@
 # 开发指南
 
-更新日期：2026-10-26。本文维护环境要求与本仓库当前实际可用的开发命令；范围与里程碑安排见[实施清单](specs/scanner-implementation-plan.md)，构建与分发决策见 [T7](specs/t7-public-release-acceptance.md)。
+更新日期：2026-11-01。本文维护环境要求与本仓库当前实际可用的开发命令；范围与里程碑安排见[实施清单](specs/scanner-implementation-plan.md)，构建与分发决策见 [T7](specs/t7-public-release-acceptance.md)。
 
 ## 环境要求
 
@@ -76,6 +76,38 @@ go build -o winprobe.exe ./tools/winprobe
 - 与正式应用一致，探针启动时设置并回读 Per-Monitor V2 awareness；目标窗口若被 DPI 虚拟化，探针拒绝截图并在 `summary.txt` 说明原因。
 - 探针不会激活游戏，GDI 截取的是桌面区域。从终端启动后终端通常在前台，请先让游戏窗口在屏幕上可见且不被遮挡（例如把终端放到另一显示器或移开），再运行探针；否则截图会包含终端或其他窗口。
 - `form=fullscreen` 只表示窗口矩形覆盖显示器，不区分无边框全屏与独占全屏；独占全屏可能让 GDI 截图为黑。首版配置是窗口/无边框模式（见 [T2 §3.2](specs/t2-platform-capture-input.md#32-可验收的窄显示配置候选)），黑屏时先切换模式再测。
+
+## Windows 单击输入探针（wininput，仅探针分支）
+
+`tools/wininput` 是 Windows 真机输入可行性探针（开发工具，不参与正式构建；**只存在于 `probe/windows-local` 探针分支，不进入 main**）：每次运行最多发送一次左键单击，不拖拽、不发滚轮或键盘事件，不激活、移动、调整或聚焦窗口，不注册热键；输入只经 `internal/platform/windows` 的 `InputActor` + `RealSender` + `InputPrecheck`，不绕过 UIPI，也不提供强制开关。它在点击前核对唯一目标、前台/可见/未最小化/未被 DWM 隐藏、客户区完整在显示器内、DPI 一致性、客户区档位和 `WindowFromPoint` 命中；点击前截一帧，点击后 2 秒内每 100 ms 截一帧，按帧差判定是否生效，并按 `delivered-and-effective` / `delivered-no-effect` / `refused-by-precheck` / `error`（以及 dry-run 的 `dry-run-ready`）给出结论。前台、目标身份、几何版本或页面基本检查（尺寸、非纯黑）变化时立即中止。
+
+```powershell
+go build -o wininput.exe ./tools/wininput
+
+# 先看落点，不发点击；倒计时内手动切到游戏窗口（探针不会激活窗口）
+.\wininput.exe -target game -exe "C:\path\to\ZenlessZoneZero.exe" -slot "1,1" `
+  -out "$env:USERPROFILE\Desktop\wininput-dry" -dry-run
+
+# 记事本对照组：先手动打开记事本，倒计时内让记事本保持前台
+.\wininput.exe -target notepad -out "$env:USERPROFILE\Desktop\wininput-notepad"
+
+# 普通权限点游戏；与管理员权限结果对照
+.\wininput.exe -target game -exe "C:\path\to\ZenlessZoneZero.exe" -slot "1,1" `
+  -out "$env:USERPROFILE\Desktop\wininput-normal"
+
+# 管理员权限运行同一探针；UAC 通过后同样在倒计时内切到游戏
+Start-Process -Verb RunAs -FilePath .\wininput.exe -ArgumentList `
+  '-target','game','-exe','C:\path\to\ZenlessZoneZero.exe','-slot','1,1',`
+  '-out',"$env:USERPROFILE\Desktop\wininput-elevated"
+```
+
+- `-slot r,c` 为 1 起始：`1,1` 是可见仓库第一格，行 1–5、列 1–4；坐标由 1920×1080 参考值（首格中心 139,185、列距 130、行距 170）乘“客户区宽 ÷ 1920”得到，再加客户区原点。
+- 游戏只接受精确 16:9 档位：1280×720、1600×900、1920×1080、2400×1350、2560×1440、2880×1620、3200×1800、3840×2160；其他客户区尺寸直接拒绝，不近似缩放。参考值和详情名称行/边框区域是探针近似值，不是已标定的正式布局。
+- 记事本按可执行文件名 `notepad.exe` 唯一锁定（可用 `-notepad-title` 改为标题子串）；多个匹配（含隐藏窗口）即拒绝，不会自己启动或关闭记事本。编辑区按客户区内缩近似，点击其中心。建议先在编辑区输入几行文字并把光标放在别处，避免点击前后画面完全相同。
+- `-countdown` 默认 5 秒，用于手动把目标切到前台；探针从不调用 `SetForegroundWindow`。
+- 生效判定：记事本要求编辑区内出现插入点/焦点变化（前后帧中通道差 ≥20 且至少 8 个像素变化）；游戏要求同一帧内该格左边/下边框带发生变化（像素数或亮度），且右侧详情名称行区域的平均绝对差（MAD）明显变化。`SendInput` 的返回计数只表示事件进入系统，不单独算生效。
+- 普通权限探针点击管理员权限游戏时，UIPI 可能让 `SendInput` 返回 0 并报告访问拒绝；报告会如实记录该形状和 `GetLastError`，用管理员权限重跑做对照，不绕过。
+- `-out` 下写入 `run.json`（完整性、坐标、命中测试、预检、逐批 `SendInput` 计数与 `GetLastError`、前后帧哈希、逐帧判定、结论）、`summary.txt` 与 `before.png` / `after-NNN.png`。退出码 0 仅用于 `delivered-and-effective` 或 `dry-run-ready`，其余非零。
 
 ## 常用命令
 
