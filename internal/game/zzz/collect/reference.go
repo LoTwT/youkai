@@ -210,11 +210,15 @@ func ReferenceLayout() Layout {
 		// (x 70–596, y 115–971 after the canvas transform) matches this measured
 		// range, so the reference uses the measured panel bounds directly.
 		ListViewport: image.Rect(70, 115, 596, 971),
-		// The measured scrollbar track is a 5-pixel column at x 54–59; its
-		// main bright run is y 148–931 (a separate y 941–945 run is the bottom
-		// cap). The probe keeps the mac's 1-pixel column at x=55 inside the
-		// track; ReferenceCalibration measures its end thresholds against the
-		// track's measured bright run rather than against this probe rect.
+		// The scrollbar is a 5-pixel column at x 54–59. In the captured lists
+		// (11–13 items, shorter than one screen) the thumb filled the track, so
+		// the bright run y 148–931 is that filled thumb, not a measured empty
+		// track; the separate y 941–945 run is the bottom cap. The probe keeps
+		// the mac's 1-pixel column at x=55. ReferenceCalibration derives its
+		// end thresholds from this filled thumb; that depends on two unverified
+		// premises—a short resting thumb also reaches 148 and 931, and the
+		// groove is no brighter than ScrollbarBrightMin. Measure a long list on
+		// Windows before enabling any Windows tier.
 		ScrollTrack: image.Rect(55, 145, 56, 941),
 		// Drag endpoints are provisional canvas positions derived from the
 		// mac profile (the Windows drag/timing profile is out of scope in this

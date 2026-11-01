@@ -20,7 +20,7 @@ rawstream 帧中裁出匹配器声明读取的区域，其余像素涂成不透�
 
 `tools/zzzframemask` 先核对源帧 SHA-256 再生成，源目录漂移会直接失败，
 不会静默产出不同夹具。27 件精选详情样本的来源与状态见
-[识别样本 README](../../../../../../recognition/testdata/macos-cloud/README.md)。
+[识别样本 README](../../../../../recognition/testdata/macos-cloud/README.md)。
 
 ## 掩码与压缩口径
 
