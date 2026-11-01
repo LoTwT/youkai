@@ -99,6 +99,43 @@ func TestSelectTargetPrefersUniqueVisible(t *testing.T) {
 	}
 }
 
+func TestSelectTargetVisibleGameWithHiddenIMEHelpers(t *testing.T) {
+	// The Windows field run found three top-level windows of the game exe:
+	// the visible Unity window plus two hidden 0x0 IME helper windows. The
+	// helpers must not turn a unique visible target into ambiguity.
+	started := time.Date(2026, 11, 1, 8, 0, 0, 0, time.UTC)
+	const exe = `C:\Games\ZZZ\ZenlessZoneZero.exe`
+	probes := []WindowProbe{
+		{HWND: 0xB0ABE, PID: 4242, ImagePath: exe, ProcessStartedAt: started, Visible: true, ClassName: "UnityWndClass", Title: "绝区零"},
+		{HWND: 0xB0ABF, PID: 4242, ImagePath: exe, ProcessStartedAt: started, Visible: false, ClassName: "MSCTFIME UI", Title: "Default IME"},
+		{HWND: 0xB0AC0, PID: 4242, ImagePath: exe, ProcessStartedAt: started, Visible: false, ClassName: "Default IME", Title: "Default IME"},
+	}
+	got, err := SelectTarget(probes, TargetSpec{ExecutablePath: exe, RequireVisible: true})
+	if err != nil {
+		t.Fatalf("hidden IME helpers must not make the visible game ambiguous: %v", err)
+	}
+	if got.HWND != 0xB0ABE || got.ClassName != "UnityWndClass" {
+		t.Fatalf("selected the wrong window: %+v", got)
+	}
+}
+
+func TestSelectTargetVisibleAmbiguityWithHiddenHelpers(t *testing.T) {
+	// Fail closed: hidden helpers are ignored, but two visible candidates
+	// still stop selection.
+	started := time.Date(2026, 11, 1, 8, 0, 0, 0, time.UTC)
+	const exe = `C:\Games\ZZZ\ZenlessZoneZero.exe`
+	probes := []WindowProbe{
+		{HWND: 0xB0ABE, PID: 4242, ImagePath: exe, ProcessStartedAt: started, Visible: true, ClassName: "UnityWndClass"},
+		{HWND: 0xB0ABF, PID: 4242, ImagePath: exe, ProcessStartedAt: started, Visible: true, ClassName: "UnityWndClass"},
+		{HWND: 0xB0AC0, PID: 4242, ImagePath: exe, ProcessStartedAt: started, Visible: false, ClassName: "MSCTFIME UI"},
+	}
+	_, err := SelectTarget(probes, TargetSpec{ExecutablePath: exe, RequireVisible: true})
+	var selectionErr *SelectionError
+	if !errors.As(err, &selectionErr) || selectionErr.Kind != SelectionAmbiguous || len(selectionErr.Candidates) != 2 {
+		t.Fatalf("two visible candidates must remain ambiguous, got %v", err)
+	}
+}
+
 func TestSelectTargetNotReadyHiddenAndCloaked(t *testing.T) {
 	hidden := []WindowProbe{{HWND: 60, PID: 1, ImagePath: `C:\game.exe`, Visible: false}}
 	_, err := SelectTarget(hidden, TargetSpec{ExecutablePath: `C:\game.exe`, RequireVisible: true})
