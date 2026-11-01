@@ -95,10 +95,11 @@ go build -o wininput.exe ./tools/wininput
 .\wininput.exe -target game -exe "C:\path\to\ZenlessZoneZero.exe" -slot "1,1" `
   -out "$env:USERPROFILE\Desktop\wininput-normal"
 
-# 管理员权限运行同一探针；UAC 通过后同样在倒计时内切到游戏
-Start-Process -Verb RunAs -FilePath .\wininput.exe -ArgumentList `
-  '-target','game','-exe','C:\path\to\ZenlessZoneZero.exe','-slot','1,1',`
-  '-out',"$env:USERPROFILE\Desktop\wininput-elevated"
+# 管理员权限：先打开一个“以管理员身份运行”的 PowerShell
+# （或在普通 PowerShell 执行 Start-Process powershell -Verb RunAs），
+# 其中执行与普通权限相同的命令；UAC 通过后同样在倒计时内切到游戏
+.\wininput.exe -target game -exe "C:\path\to\ZenlessZoneZero.exe" -slot "1,1" `
+  -out "$env:USERPROFILE\Desktop\wininput-elevated"
 ```
 
 - `-slot r,c` 为 1 起始：`1,1` 是可见仓库第一格，行 1–5、列 1–4；坐标由 1920×1080 参考值（首格中心 139,185、列距 130、行距 170）乘“客户区宽 ÷ 1920”得到，再加客户区原点。
