@@ -1,24 +1,29 @@
 // Command zzzframemask regenerates the pixel matcher's masked fixtures from
-// the recorded macOS cloud sample round.
+// the recorded sample rounds.
 //
-// The sample frames are full 1920×1080 raw-stream captures that may contain
-// account information and unrelated UI; they stay in the capture session and
-// never enter the repository. This tool keeps only the pixels the matcher's
-// declared probes read (Layout.ReadRegions), paints everything else opaque
-// black, and quantizes the kept pixels so the checked-in PNGs fit the
-// testdata budget. The detail lines and the scroll viewport use a coarser
-// step than the color probes; the management/avatar/top-indicator probes
-// use an even coarser step because their verdicts rest on shape and coarse
-// color counts. The rarity badge, the fourth-substat probe and the
-// selection-colored border pixels stay exact because their thresholds are
-// tight.
+// The source frames are full captures that may contain account information and
+// unrelated UI; they stay in the capture session and never enter the
+// repository. This tool keeps only the pixels the layout's declared probes read
+// (Layout.ReadRegions), paints everything else opaque black, and quantizes the
+// kept pixels so the checked-in PNGs fit the testdata budget. The detail lines,
+// management/avatar/top-indicator probes and list viewport use coarser steps
+// than the color probes; the badge, fourth-substat probe and selection-colored
+// border pixels stay exact because their thresholds are tight.
 //
-// sources.tsv is the fixture table: one row per source frame with its
-// provenance directory, full-frame SHA-256 and the expectations the
-// regression tests assert. Each source SHA is verified before its fixture is
-// written, so a drifted sample directory fails loudly instead of silently
-// producing different fixtures. The tool writes <out>/<name>.png and <out>/manifest.tsv;
-// the manifest carries the source path and SHA for provenance.
+// Two layouts share the same mask implementation:
+//
+//   - maccloud: the macOS cloud client's measured 1920×1080 stream layout
+//     (collect.MacCloudLayout);
+//   - winlocal: the Windows local client's 1920×1080 reference canvas scaled by
+//     a clientRect transform (collect.ReferenceLayout + collect.ScaledLayout).
+//
+// sources.tsv and winlocal-sources.tsv are the fixture tables: one row per
+// source frame with its provenance directory, full-frame SHA-256, mask mode and
+// the expectations the regression tests assert. Each source SHA is verified
+// before its fixture is written, so a drifted sample directory fails loudly
+// instead of silently producing different fixtures. The tool writes
+// <out>/<name>.png and <out>/manifest.tsv; the manifest carries the source path
+// and SHA for provenance.
 package main
 
 import (
@@ -38,10 +43,10 @@ import (
 	"github.com/LoTwT/youkai/internal/game/zzz/collect"
 )
 
-//go:embed sources.tsv
+//go:embed sources.tsv winlocal-sources.tsv
 var sourcesFS embed.FS
 
-// fixture is one row of sources.tsv.
+// fixture is one row of a sources table.
 type fixture struct {
 	Name    string
 	Dir     string
@@ -52,22 +57,35 @@ type fixture struct {
 }
 
 func main() {
-	src := flag.String("src", "/tmp/m2-samples", "directory holding the recorded s2-* sample directories")
-	out := flag.String("out", filepath.Join("internal", "game", "zzz", "collect", "testdata", "maccloud"), "output fixture directory")
+	layoutName := flag.String("layout", "maccloud", "fixture layout: maccloud or winlocal")
+	src := flag.String("src", "", "source directory (default: /tmp/m2-samples for maccloud, /tmp/youkai-win-probe1 for winlocal)")
+	out := flag.String("out", "", "output fixture directory (default: internal/game/zzz/collect/testdata/<layout>)")
 	step := flag.Int("step", 16, "quantization step for kept pixels")
 	detailStep := flag.Int("detail-step", 16, "quantization step for the detail text lines")
 	viewportStep := flag.Int("viewport-step", 16, "quantization step for the list viewport of scroll fixtures")
 	stateStep := flag.Int("state-step", 32, "quantization step for per-cell management/avatar probes")
 	flag.Parse()
+	if *layoutName != "maccloud" && *layoutName != "winlocal" {
+		fatal("-layout %q, want maccloud or winlocal", *layoutName)
+	}
 	if *step < 1 || *detailStep < 1 || *viewportStep < 1 || *stateStep < 1 {
 		fatal("-step, -detail-step, -viewport-step and -state-step must be positive")
 	}
+	if *src == "" {
+		if *layoutName == "maccloud" {
+			*src = "/tmp/m2-samples"
+		} else {
+			*src = "/tmp/youkai-win-probe1"
+		}
+	}
+	if *out == "" {
+		*out = filepath.Join("internal", "game", "zzz", "collect", "testdata", *layoutName)
+	}
 
-	fixtures, err := readSources()
+	fixtures, err := readSources(*layoutName)
 	if err != nil {
 		fatal("%v", err)
 	}
-	layout := collectLayout()
 	if err := os.MkdirAll(*out, 0o755); err != nil {
 		fatal("create output directory: %v", err)
 	}
@@ -91,6 +109,10 @@ func main() {
 		if err != nil {
 			fatal("%s: decode source: %v", fx.Name, err)
 		}
+		layout, err := layoutFor(img.Bounds().Size(), *layoutName)
+		if err != nil {
+			fatal("%s: %v", fx.Name, err)
+		}
 		if img.Bounds() != (image.Rectangle{Max: layout.Image}) {
 			fatal("%s: source is %v, want %dx%d", fx.Name, img.Bounds(), layout.Image.X, layout.Image.Y)
 		}
@@ -113,8 +135,39 @@ func main() {
 	fmt.Printf("%d fixtures, %.1f KiB of PNG\n", len(fixtures), float64(total)/1024)
 }
 
-func readSources() ([]fixture, error) {
-	data, err := sourcesFS.ReadFile("sources.tsv")
+func layoutFor(client image.Point, layoutName string) (collect.Layout, error) {
+	var layout collect.Layout
+	switch layoutName {
+	case "maccloud":
+		layout = collect.MacCloudLayout()
+	case "winlocal":
+		transform, err := collect.ClientRectTransform(client)
+		if err != nil {
+			return collect.Layout{}, err
+		}
+		scaled, err := collect.ScaledLayout(collect.ReferenceLayout(), transform)
+		if err != nil {
+			return collect.Layout{}, err
+		}
+		layout = scaled
+	default:
+		return collect.Layout{}, fmt.Errorf("unknown layout %q", layoutName)
+	}
+	if err := layout.Validate(); err != nil {
+		return collect.Layout{}, err
+	}
+	if !layout.FitsContent(layout.Content) {
+		return collect.Layout{}, fmt.Errorf("a declared region falls outside the content area")
+	}
+	return layout, nil
+}
+
+func readSources(layoutName string) ([]fixture, error) {
+	name := "sources.tsv"
+	if layoutName == "winlocal" {
+		name = "winlocal-sources.tsv"
+	}
+	data, err := sourcesFS.ReadFile(name)
 	if err != nil {
 		return nil, err
 	}
@@ -125,30 +178,28 @@ func readSources() ([]fixture, error) {
 		}
 		cols := strings.Split(line, "\t")
 		if len(cols) != 6 {
-			return nil, fmt.Errorf("sources.tsv:%d: %d columns, want 6", i+1, len(cols))
+			return nil, fmt.Errorf("%s:%d: %d columns, want 6", name, i+1, len(cols))
 		}
 		fx := fixture{Name: cols[0], Dir: cols[1], Frame: cols[2], Mode: cols[3], WantSHA: cols[4], Expect: cols[5]}
 		if fx.Mode != "item" && fx.Mode != "scroll" {
-			return nil, fmt.Errorf("sources.tsv:%d: mode %q, want item or scroll", i+1, fx.Mode)
+			return nil, fmt.Errorf("%s:%d: mode %q, want item or scroll", name, i+1, fx.Mode)
 		}
 		out = append(out, fx)
 	}
 	if len(out) == 0 {
-		return nil, fmt.Errorf("sources.tsv has no fixtures")
+		return nil, fmt.Errorf("%s has no fixtures", name)
 	}
 	return out, nil
 }
 
-// mask returns the source with only the matcher's declared regions kept.
-// The list viewport is kept only for scroll fixtures, where the same region
-// is the shift matcher's input; item fixtures keep their per-cell probes
-// (which are separate regions inside the viewport) and drop the rest of the
-// grid. The color probes are quantized by step, the detail lines by
-// detailStep, and the scroll viewport by viewportStep; the management,
-// avatar and top-indicator probes use stateStep (they only need coarse
-// shape/color counts, and this keeps the fixture set near its size budget).
-// The badge, the fourth-substat probe and the selection-colored border
-// pixels stay exact because their thresholds are tight.
+// mask returns the source with only the matcher's declared regions kept. The
+// list viewport is kept only for scroll fixtures, where the same region is the
+// shift matcher's input; item fixtures keep their per-cell probes (which are
+// separate regions inside the viewport) and drop the rest of the grid. The
+// color probes are quantized by step, the detail lines by detailStep, and the
+// scroll viewport by viewportStep; the management, avatar and top-indicator
+// probes use stateStep. The badge, the fourth-substat probe, the funnel and the
+// panel probes stay exact because their thresholds are tight.
 func mask(src image.Image, layout collect.Layout, keepViewport bool, step, detailStep, viewportStep, stateStep uint8) *image.RGBA {
 	dst := image.NewRGBA(image.Rectangle{Max: layout.Image})
 	for i := 3; i < len(dst.Pix); i += 4 {
@@ -202,11 +253,9 @@ func mask(src image.Image, layout collect.Layout, keepViewport bool, step, detai
 	return dst
 }
 
-// copySelectionRegion keeps the selection-colored pixels exact and
-// quantizes the rest. The border probe's decision is a hit count with tight
-// thresholds (40 selected, 10 clear); the raw s2-s6-top-cell-r4c1 border
-// has 60 hits, and quantizing all of it dropped them to 9. The other
-// pixels are dark and quantize without affecting the count.
+// copySelectionRegion keeps the selection-colored pixels exact and quantizes
+// the rest. The border probe's decision is a hit count with tight thresholds;
+// quantizing the yellow-green line can drop it below the count floor.
 func copySelectionRegion(dst *image.RGBA, src image.Image, r image.Rectangle, step uint8) {
 	for y := r.Min.Y; y < r.Max.Y; y++ {
 		for x := r.Min.X; x < r.Max.X; x++ {
@@ -233,17 +282,6 @@ func copyRegion(dst *image.RGBA, src image.Image, r image.Rectangle, step uint8)
 			dst.SetRGBA(x, y, c)
 		}
 	}
-}
-
-func collectLayout() collect.Layout {
-	layout := collect.MacCloudLayout()
-	if err := layout.Validate(); err != nil {
-		fatal("layout: %v", err)
-	}
-	if !layout.FitsContent(layout.Content) {
-		fatal("layout: a declared region falls outside the content area")
-	}
-	return layout
 }
 
 func fatal(format string, args ...any) {

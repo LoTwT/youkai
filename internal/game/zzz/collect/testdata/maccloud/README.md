@@ -1,6 +1,6 @@
 # 像素匹配器掩码夹具（macOS 云客户端）
 
-本目录是 [PR 4b-1](../../../../../docs/specs/t5-zzz-inventory-traversal.md)
+本目录是 [PR 4b-1](../../../../../../docs/specs/t5-zzz-inventory-traversal.md)
 像素匹配器的回归夹具：从 2026-10-19 M2 样本采集轮的 1920×1080
 rawstream 帧中裁出匹配器声明读取的区域，其余像素涂成不透明黑色。
 完整帧可能含账号信息与无关界面，留在采集现场 `/tmp/m2-samples/`，
@@ -20,7 +20,7 @@ rawstream 帧中裁出匹配器声明读取的区域，其余像素涂成不透�
 
 `tools/zzzframemask` 先核对源帧 SHA-256 再生成，源目录漂移会直接失败，
 不会静默产出不同夹具。27 件精选详情样本的来源与状态见
-[识别样本 README](../../../../../recognition/testdata/macos-cloud/README.md)。
+[识别样本 README](../../../../../../recognition/testdata/macos-cloud/README.md)。
 
 ## 掩码与压缩口径
 
@@ -42,15 +42,15 @@ rawstream 帧中裁出匹配器声明读取的区域，其余像素涂成不透�
 ## 重新生成
 
 ```sh
-YOUKAI_M2_SAMPLES=/tmp/m2-samples \
-  go run ./tools/zzzframemask -src /tmp/m2-samples
+go run ./tools/zzzframemask -layout maccloud -src /tmp/m2-samples
 ```
 
-工具默认写入本目录，读取同目录的 `sources.tsv`（名称、来源目录、
-源帧 SHA-256 与期望）；`-step`、`-detail-step`、`-viewport-step`、
+工具以 `-layout maccloud` 默认写入本目录，读取工具目录内嵌的
+`sources.tsv`（6 列：名称、来源目录、源帧、模式、SHA-256、期望）；
+`manifest.tsv` 是 5 列（名称、来源、SHA-256、模式、期望），由工具带生成
+标记写出。`-layout winlocal` 使用同一套掩码逻辑和 `winlocal-sources.tsv`，
+写入 `testdata/winlocal`。`-step`、`-detail-step`、`-viewport-step`、
 `-state-step` 可调量化级别（默认 16/16/16/32），`-out` 可改输出目录。
-`sources.tsv` 与 `manifest.tsv` 的列相同，前者是输入事实，后者由工具
-带生成标记写出。
 
 ## 回归测试
 

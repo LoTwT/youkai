@@ -25,8 +25,8 @@
 物品与位置 2；2276×1280 是另一档缩放；3840×2160 的窗口超出屏幕、右侧
 9 列和底部 38 行为纯黑。三者都不适合作为本组同一内容的缩放对照。
 
-`tools/zzzwinframemask` 先核对源帧 SHA-256 再生成，源目录漂移会直接失败，
-不会静默产出不同夹具。
+`tools/zzzframemask -layout winlocal` 先核对源帧 SHA-256 再生成，源目录漂移会
+直接失败，不会静默产出不同夹具。
 
 ## 掩码与压缩口径
 
@@ -41,26 +41,28 @@
   （Windows 选中框是 `(255,222,0)` 的 3 像素竖线）；徽章、漏斗、面板
   探针与第四副词条探针保持原值。
 - 掩码没有改变判定：三档在**不添加档位覆盖**的情况下都能得出仓库页、
-  13 个占用格位加 7 个空格、选中格 0、转盘位置 3 和漏斗 Active。
+  13 个占用格位加 7 个空格、选中格 0、转盘位置 3 和漏斗 Active。阈值基准
+  是 `ReferenceCalibration()`：mac 几何换算到参考画布，计数按面积比标为
+  未验证，滑块两端按 1920 实测轨道（y 148–931）重测。
 
 ## 重新生成
 
 ```sh
-go run ./tools/zzzwinframemask -src /tmp/youkai-win-probe1
+go run ./tools/zzzframemask -layout winlocal -src /tmp/youkai-win-probe1
 ```
 
-工具默认写入本目录，读取同目录的 `sources.tsv`（名称、来源目录、
-源帧 SHA-256 与期望）；`-step`、`-detail-step`、`-viewport-step`、
-`-state-step` 可调量化级别（默认 16/16/16/32），`-out` 可改输出目录。
-`sources.tsv` 与 `manifest.tsv` 的列相同，前者是输入事实，后者由工具
-带生成标记写出。
+工具以 `-layout winlocal` 默认写入本目录，读取工具目录内嵌的
+`winlocal-sources.tsv`（6 列：名称、来源目录、源帧、模式、SHA-256、期望）；
+`manifest.tsv` 是 5 列（名称、来源、SHA-256、模式、期望），由工具带生成
+标记写出。`-step`、`-detail-step`、`-viewport-step`、`-state-step` 可调
+量化级别（默认 16/16/16/32），`-out` 可改输出目录。
 
 ## 回归测试
 
 - `TestWindowsFixturesAgreeWithRecordedExpectations`：逐件断言页面、逐格
   占用（含空格）、选中、转盘、筛选、品质与副词条数。
 - `TestWindowsScaledCalibrationSeparatesTheFixtureTiers`：记录未覆盖阈值
-  与实测计数的间距；所有必需计数至少是缩放阈值的 2 倍，空格与未选中
+  与实测计数的间距；所有必需计数至少是缩放阈值的 1.5 倍，空格与未选中
   转盘为 0。
 - `TestWindowsPixelMatcherReadsOnlyDeclaredRegions`：随机化所有声明区域
   外的像素后要求 `Match` 判定完全不变。
