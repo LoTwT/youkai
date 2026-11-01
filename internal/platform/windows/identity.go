@@ -18,8 +18,12 @@ type HWND uintptr
 // the process creation time.
 type ProcessID uint32
 
-// DpiAwareness mirrors the process/thread DPI awareness values of
-// GetCurrentDpiAwarenessContext.
+// DpiAwareness mirrors the DPI_AWARENESS value of the calling thread's
+// DPI_AWARENESS_CONTEXT (GetThreadDpiAwarenessContext +
+// GetAwarenessFromDpiAwarenessContext). PerMonitorV2 refines per-monitor
+// awareness by comparing the context with
+// DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 through
+// AreDpiAwarenessContextsEqual.
 type DpiAwareness int
 
 const (
@@ -126,9 +130,13 @@ func (e *SelectionError) Error() string {
 //  2. if several remain and hints are set, narrow by exact class name,
 //     then by title substring — hints refine identity, they never pick a
 //     window the executable does not own;
-//  3. if several remain, prefer the single window that is visible and
-//     not cloaked;
-//  4. more than one at that point is an ambiguity error — never a guess;
+//  3. if several remain, drop hidden and cloaked windows whenever at
+//     least one visible candidate exists: one visible candidate is
+//     selected, several visible candidates are an ambiguity error whose
+//     list contains only the visible ones, and with no visible candidate
+//     the set is left unchanged;
+//  4. more than one candidate at that point is an ambiguity error —
+//     never a guess;
 //  5. the single candidate fails not-ready when it is hidden or cloaked
 //     and RequireVisible is set; a minimized window is still selected
 //     (minimization is an observed state, input is refused while it
@@ -172,7 +180,10 @@ func SelectTarget(probes []WindowProbe, spec TargetSpec) (WindowProbe, error) {
 				visible = append(visible, p)
 			}
 		}
-		if len(visible) == 1 {
+		// Hidden IME/helper windows must not pollute the remaining set: when
+		// any visible candidate exists, only those are real choices. A single
+		// one is selected; several remain ambiguous (still fail-closed).
+		if len(visible) > 0 {
 			candidates = visible
 		}
 	}

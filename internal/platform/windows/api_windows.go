@@ -42,10 +42,14 @@ var (
 	procUnregisterHotKey         = modUser32.NewProc("UnregisterHotKey")
 	procGetMessageW              = modUser32.NewProc("GetMessageW")
 	procPostThreadMessageW       = modUser32.NewProc("PostThreadMessageW")
-	procGetCurrentDpiCtx         = modUser32.NewProc("GetCurrentDpiAwarenessContext")
 
-	procGetDC                  = modGdi32.NewProc("GetDC")
-	procReleaseDC              = modGdi32.NewProc("ReleaseDC")
+	procGetThreadDpiAwarenessContext        = modUser32.NewProc("GetThreadDpiAwarenessContext")
+	procGetAwarenessFromDpiAwarenessContext = modUser32.NewProc("GetAwarenessFromDpiAwarenessContext")
+	procAreDpiAwarenessContextsEqual        = modUser32.NewProc("AreDpiAwarenessContextsEqual")
+
+	// GetDC and ReleaseDC are user32 exports, not gdi32 exports.
+	procGetDC                  = modUser32.NewProc("GetDC")
+	procReleaseDC              = modUser32.NewProc("ReleaseDC")
 	procCreateCompatibleDC     = modGdi32.NewProc("CreateCompatibleDC")
 	procDeleteDC               = modGdi32.NewProc("DeleteDC")
 	procCreateCompatibleBitmap = modGdi32.NewProc("CreateCompatibleBitmap")
@@ -95,11 +99,17 @@ const (
 
 	processQueryLimitedInformation = 0x1000
 
-	// DPI awareness context handle values (negative HANDLEs as uintptr).
-	dpiCtxUnaware      = ^uintptr(0) // -1
-	dpiCtxSystem       = ^uintptr(1) // -2
+	// DPI_AWARENESS_CONTEXT pseudo-handles. Compare a context handle with
+	// these only through AreDpiAwarenessContextsEqual: a real handle may
+	// carry different bits while denoting the same awareness.
 	dpiCtxPerMonitor   = ^uintptr(2) // -3
 	dpiCtxPerMonitorV2 = ^uintptr(3) // -4
+
+	// DPI_AWARENESS values returned by GetAwarenessFromDpiAwarenessContext.
+	winDpiAwarenessInvalid    = -1
+	winDpiAwarenessUnaware    = 0
+	winDpiAwarenessSystem     = 1
+	winDpiAwarenessPerMonitor = 2
 )
 
 // point is the Win32 POINT layout.
