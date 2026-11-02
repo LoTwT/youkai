@@ -1,0 +1,11 @@
+# W3a Windows local sample crops; source paths are relative to the evidence directory.
+# name	source	sha256	region	expect
+sort-s2-0000	S2/frame-0000.png	5632e847f40597363600f74d2056fa6e79fb9ab74f3f24643d744c629f60aac6	1285,124,1467,201	sort=match
+sort-s3-0000	S3/frame-0000.png	aaae64b2e0b6c2f23bbd7ebe4dde38ac4a497a349701470dbb58f54ee8e1f5af	1285,124,1467,201	sort=mismatch
+panel-open-1	S2/frame-0000.png	5632e847f40597363600f74d2056fa6e79fb9ab74f3f24643d744c629f60aac6	1781,39,1782,40	probe=1;panel=open
+panel-closed-1	S3/frame-0000.png	aaae64b2e0b6c2f23bbd7ebe4dde38ac4a497a349701470dbb58f54ee8e1f5af	1781,39,1782,40	probe=1;panel=closed
+panel-open-2	S2/frame-0000.png	5632e847f40597363600f74d2056fa6e79fb9ab74f3f24643d744c629f60aac6	1290,65,1291,66	probe=2;panel=open
+panel-closed-2	S3/frame-0000.png	aaae64b2e0b6c2f23bbd7ebe4dde38ac4a497a349701470dbb58f54ee8e1f5af	1290,65,1291,66	probe=2;panel=closed
+thumb-top	S1/frame-0120.png	b7c240e0a62c031fb9d61171e10159c3faf629bfe94d86cdd51a77e908078719	55,145,56,941	thumb=148-711;top=true;bottom=false
+thumb-bottom	S1/frame-0899.png	cc28098886a30e85b8052d015fa988369ee07ea5833ce32ce538c7d87cba23f4	55,145,56,941	thumb=368-931;top=false;bottom=true
+thumb-mid	S1/frame-0133.png	137e65a537d0e69a55632cd440d42b5b83e660b58390d2beda07e4630469618d	55,145,56,941	thumb=361-924;top=false;bottom=false

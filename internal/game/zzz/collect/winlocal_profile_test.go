@@ -63,12 +63,13 @@ func TestWindowsLocalProfileBuildsScaledReference(t *testing.T) {
 		t.Fatalf("drag durations = %s/%s, want the uncalibrated macOS values %s/%s",
 			profile.ScrollDuration, profile.TopDuration, mac.ScrollDuration, mac.TopDuration)
 	}
-	// The profile has no sort-label template: coverage must stay partial.
-	if !profile.Layout.SortLabel.Empty() || profile.Layout.SortTemplate != nil {
-		t.Fatal("the Windows profile claims a sort template it does not have")
+	// The 1920×1080 profile is the reference canvas itself, so it carries
+	// the W3a Windows native sort template. A scaled tier would drop it.
+	if profile.Layout.SortLabel.Empty() || profile.Layout.SortTemplate == nil {
+		t.Fatal("the 1920×1080 profile does not carry the Windows sort template")
 	}
 	diag := profile.Diagnostic()
-	for _, want := range []string{"tier=1920x1080", "scale=1.0000", "profile=", "uncalibrated"} {
+	for _, want := range []string{"tier=1920x1080", "scale=1.0000", "profile=", "sort=template", "uncalibrated"} {
 		if !strings.Contains(diag, want) {
 			t.Fatalf("diagnostic %q does not contain %q", diag, want)
 		}

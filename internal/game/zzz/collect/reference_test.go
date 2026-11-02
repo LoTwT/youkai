@@ -446,9 +446,8 @@ func TestReferenceLayoutMatchesScaledMacDerivation(t *testing.T) {
 	if got.Name == mac.Name {
 		t.Fatal("a scaled layout must name its own display configuration")
 	}
-	// No Windows filter-panel sample exists, so the reference layout has no
-	// sort template; the mac layout's template is reference-canvas pixels and
-	// is never shrunk by ScaledLayout.
+	// The reference layout carries the W3a Windows template, but this is a
+	// scaled layout: templates are never shrunk, so both sort fields drop.
 	if !got.SortLabel.Empty() || got.SortTemplate != nil {
 		t.Fatalf("scaled sort fields must be dropped: %v / %v", got.SortLabel, got.SortTemplate)
 	}
