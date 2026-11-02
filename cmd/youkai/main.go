@@ -10,6 +10,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"image"
 	"log"
 	"os"
 	"path/filepath"
@@ -440,20 +441,36 @@ func scanSource(diagnosticDir string) (app.ScanSource, string) {
 // withDiagnosticDir points every traversal the source creates at dir for
 // the frame crops of a scroll that stopped the walk (field diagnostics
 // only; see collect.Inventory.DiagnosticDir). Sources without a
-// calibrated traversal are left alone.
+// calibrated traversal are left alone; a Windows local source builds its
+// traversal from the measured client area, so its factory is wrapped too.
 func withDiagnosticDir(source app.ScanSource, dir string) {
 	gs, ok := source.(*app.GameScanSource)
-	if !ok || gs.Traversal == nil || dir == "" {
+	if !ok || dir == "" {
 		return
 	}
-	next := gs.Traversal
-	gs.Traversal = func() collect.Traversal {
-		t := next()
-		if inv, ok := t.(*collect.Inventory); ok {
-			inv.DiagnosticDir = dir
-		}
-		return t
+	if gs.Traversal != nil {
+		next := gs.Traversal
+		gs.Traversal = func() collect.Traversal { return withInventoryDir(next(), dir) }
 	}
+	if gs.TraversalForClient != nil {
+		next := gs.TraversalForClient
+		gs.TraversalForClient = func(client image.Point) (collect.Traversal, error) {
+			t, err := next(client)
+			if err != nil {
+				return nil, err
+			}
+			return withInventoryDir(t, dir), nil
+		}
+	}
+}
+
+// withInventoryDir sets the failure-crop directory on a traversal that is
+// an Inventory; other traversals are returned unchanged.
+func withInventoryDir(t collect.Traversal, dir string) collect.Traversal {
+	if inv, ok := t.(*collect.Inventory); ok {
+		inv.DiagnosticDir = dir
+	}
+	return t
 }
 
 // scanSourceFrom is scanSource with its environment, platform and host
@@ -475,16 +492,18 @@ func scanSourceFrom(getenv func(string) string, goos string, host func() (platfo
 }
 
 // gameScanSourceFrom wires the game source for one mode and platform. The
-// traverse mode is refused outside darwin: only the macOS cloud client has
-// a calibrated layout, and guessing anchors would act on the wrong pixels.
+// traverse mode has a calibrated client on darwin (the macOS cloud client)
+// and windows (the local client, whose layout is derived from the measured
+// client area). Any other platform is refused: guessing anchors would act
+// on the wrong pixels.
 func gameScanSourceFrom(mode, goos string, getenv func(string) string, host func() (platform.Port, error)) (app.ScanSource, string, error) {
 	switch mode {
 	case "observe", "traverse":
 	default:
 		return nil, "", fmt.Errorf("YOUKAI_GAME_SOURCE=%q is not supported (use \"observe\" or \"traverse\")", mode)
 	}
-	if mode == "traverse" && goos != "darwin" {
-		return nil, "", fmt.Errorf("YOUKAI_GAME_SOURCE=traverse needs a calibrated layout; only the macOS cloud client has one (%s has none yet)", goos)
+	if mode == "traverse" && goos != "darwin" && goos != "windows" {
+		return nil, "", fmt.Errorf("YOUKAI_GAME_SOURCE=traverse needs a calibrated layout; only the macOS cloud and Windows local clients have one (%s has none yet)", goos)
 	}
 	port, err := host()
 	if err != nil {
@@ -506,6 +525,9 @@ func gameScanSourceFrom(mode, goos string, getenv func(string) string, host func
 		if exe == "" || (kind != "local" && kind != "cloud") {
 			return nil, "", fmt.Errorf("the Windows game target needs YOUKAI_GAME_EXE=<game exe path> and YOUKAI_GAME_CLIENT=local|cloud (the real window identity is measured in field round ②; refusing to guess), got exe=%q client=%q", exe, kind)
 		}
+		if mode == "traverse" && kind == "cloud" {
+			return nil, "", fmt.Errorf("YOUKAI_GAME_SOURCE=traverse on Windows supports only the local client (YOUKAI_GAME_CLIENT=local): the Windows cloud client's traversal is not implemented yet — its game video rectangle would need a measuredVideoRect transform, and the reference canvas model only defines that interface without measuring one. Set YOUKAI_GAME_CLIENT=local, or use YOUKAI_GAME_SOURCE=observe")
+		}
 		target = platform.TargetSpec{ExecutablePath: exe}
 		client = record.ClientWindowsCloud
 		if kind == "local" {
@@ -525,6 +547,27 @@ func gameScanSourceFrom(mode, goos string, getenv func(string) string, host func
 		src.Mode = "observeOnly"
 		log.Printf("youkai: game scan source wired (observe-only): client=%s target=%+v", client, target)
 		return src, "游戏窗口（仅观测演练，不发送输入）", nil
+	}
+	if goos == "windows" {
+		// The Windows local traverse: the layout and thresholds depend on
+		// the client area the platform precheck measured, so the profile
+		// is built in the client-area factory — after LockBaseline
+		// accepted the tier — rather than here. The macOS cloud layout is
+		// fixed and does not take this path.
+		src.Mode = "traverse"
+		src.TraversalForClient = func(clientArea image.Point) (collect.Traversal, error) {
+			profile, err := collect.WindowsLocalProfileFor(clientArea)
+			if err != nil {
+				return nil, err
+			}
+			log.Printf("youkai: game scan source: windows local traverse: %s", profile.Diagnostic())
+			inv := profile.Inventory(strings.ToLower(getenv("YOUKAI_SCROLL_MATCHER")) == "legacy")
+			inv.Project = app.ProjectDiscObservation
+			return inv, nil
+		}
+		log.Printf("youkai: game scan source wired (traverse): client=%s target=%+v tier=selected-from-measured-client-area timing=%s",
+			client, target, collect.WindowsLocalTimingProvenance)
+		return src, "游戏窗口（自动遍历）", nil
 	}
 	// The calibrated traverse: one immutable layout shared by the session
 	// traversals; each session gets its own matcher and Inventory. The

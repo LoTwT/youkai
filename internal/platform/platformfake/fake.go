@@ -115,6 +115,13 @@ type Session struct {
 	CloseSleep time.Duration
 	// CloseReport overrides the whole report when set.
 	CloseReport *platform.CloseReport
+	// ClientAreaSize, when non-zero, is the measured client area the fake
+	// reports through platform.ClientAreaReporter. It is the tier a
+	// Windows local traversal selects its display profile from.
+	ClientAreaSize image.Point
+	// ClientAreaErr overrides the capability's error even when
+	// ClientAreaSize is set.
+	ClientAreaErr error
 
 	// wiring captured from the Open config
 	OnStop  func()
@@ -134,8 +141,9 @@ type Session struct {
 }
 
 var (
-	_ platform.Session   = (*Session)(nil)
-	_ platform.Activator = (*Session)(nil)
+	_ platform.Session            = (*Session)(nil)
+	_ platform.Activator          = (*Session)(nil)
+	_ platform.ClientAreaReporter = (*Session)(nil)
 )
 
 // NewSession returns a plain ready session.
@@ -167,6 +175,22 @@ func (s *Session) Activate() error {
 		return s.ActivateFn()
 	}
 	return nil
+}
+
+// ClientArea implements platform.ClientAreaReporter: the configured
+// measured client area, or an error when no size is set. The fake does not
+// model the real "baseline must be locked first" rule; callers set the
+// size explicitly.
+func (s *Session) ClientArea() (image.Point, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.ClientAreaErr != nil {
+		return image.Point{}, s.ClientAreaErr
+	}
+	if s.ClientAreaSize == (image.Point{}) {
+		return image.Point{}, fmt.Errorf("fake session has no measured client area")
+	}
+	return s.ClientAreaSize, nil
 }
 
 // Observe implements platform.Session.

@@ -3,6 +3,7 @@ package platform
 import (
 	"context"
 	"fmt"
+	"image"
 )
 
 // InputGate is the kernel's input permission. *scan.ControllerHandle
@@ -124,4 +125,15 @@ type Session interface {
 // implement it; there the collector falls back to the readiness wait.
 type Activator interface {
 	Activate() error
+}
+
+// ClientAreaReporter is an optional Session capability: the exact
+// client-area size in physical pixels that LockBaseline froze. The
+// collector reads it after the baseline was accepted and before it builds
+// the traversal, so a Windows local display profile is selected from the
+// measured tier instead of a guess made before the precheck. A session
+// without the capability keeps its client's fixed layout (the macOS cloud
+// client's 1164×762 window).
+type ClientAreaReporter interface {
+	ClientArea() (image.Point, error)
 }

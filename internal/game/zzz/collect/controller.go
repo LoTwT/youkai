@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
 	"log"
 	"sync"
 	"time"
@@ -53,6 +54,17 @@ type Controller struct {
 	// Traversal builds the traversal of this session; PR 4a wires
 	// func() collect.Traversal { return collect.ObserveOnly{} }.
 	Traversal func() Traversal
+	// TraversalForClient, when set, builds the traversal from the
+	// session's measured client area (platform.ClientAreaReporter) instead
+	// of calling Traversal. The controller calls it after LockBaseline
+	// succeeded — the platform precheck has accepted the tier and frozen
+	// the geometry — and before the traversal's Precheck, so a Windows
+	// local display profile is selected from the measured client area and
+	// never guessed before the session opened. It takes precedence over
+	// Traversal; a session that cannot report a client area fails as a
+	// setup fault rather than falling back to a layout for another
+	// display configuration.
+	TraversalForClient func(image.Point) (Traversal, error)
 	// Stop is the application's idempotent stop entry (the service's
 	// Stop). The registered hotkey triggers it; a late trigger after
 	// Release is ignored so it cannot cut the next session.
@@ -210,9 +222,15 @@ func (c *Controller) Prepare(ctx context.Context, h *scan.ControllerHandle) erro
 			// Lock the baseline while the observation holds.
 			_, err := sess.LockBaseline()
 			if err == nil {
+				// The display profile is selected now: the baseline is
+				// locked and the platform precheck has accepted the tier,
+				// so the traversal is built from a measured client area.
+				trav, terr := c.newTraversal(sess)
+				if terr != nil {
+					return terr
+				}
 				c.mu.Lock()
-				c.trav = c.newTraversal()
-				trav := c.trav
+				c.trav = trav
 				c.mu.Unlock()
 				if err := trav.Precheck(ctx, sess); err != nil {
 					return err
@@ -262,12 +280,32 @@ func (c *Controller) Prepare(ctx context.Context, h *scan.ControllerHandle) erro
 // there, so no synchronization is needed.
 func (c *Controller) SetScopeSink(sink func(json.RawMessage)) { c.OnScopeObserved = sink }
 
-// newTraversal builds this session's traversal.
-func (c *Controller) newTraversal() Traversal {
-	if c.Traversal != nil {
-		return c.Traversal()
+// newTraversal builds this session's traversal. A client-area factory is
+// called only after the baseline was accepted; the measured size is the
+// one the platform precheck froze, so no display profile is guessed. A
+// client-area factory without a session that reports one is a wiring
+// error, not a reason to fall back to another layout.
+func (c *Controller) newTraversal(sess platform.Session) (Traversal, error) {
+	if c.TraversalForClient != nil {
+		reporter, ok := sess.(platform.ClientAreaReporter)
+		if !ok {
+			return nil, scan.NewFault(platform.CodeInvalidOperation,
+				errors.New("collect: the traversal selects its display profile from the measured client area, but the platform session does not report one"))
+		}
+		client, err := reporter.ClientArea()
+		if err != nil {
+			return nil, scan.NewFault(platform.CodeInvalidOperation, err)
+		}
+		trav, err := c.TraversalForClient(client)
+		if err != nil {
+			return nil, scan.NewFault(platform.CodeInvalidOperation, err)
+		}
+		return trav, nil
 	}
-	return ObserveOnly{}
+	if c.Traversal != nil {
+		return c.Traversal(), nil
+	}
+	return ObserveOnly{}, nil
 }
 
 // relayScope hands the traversal's observed-scope report (T5 §3) to the

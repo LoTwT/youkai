@@ -44,11 +44,22 @@ M2 平台会话集成后可用另一组开关接入真实游戏窗口做仅观�
 ## 真实遍历（macOS 云客户端，4b-2）
 
 - `YOUKAI_GAME_SOURCE=traverse` 在 **darwin** 上接入已标定的驱动盘仓库遍历：预检只要求仓库页、列表形状与唯一转盘位；点击开始后先解析并锁定游戏窗口，若游戏未运行或没有合格窗口则立即停止并报告 `targetNotFound`，已打开时自动把游戏应用切到前台一次（扫描期间失焦仍停止）。随后按转盘位置 1→6 自动切换位置，并按一次面板访问准备筛选：打开→重置→勾选 S→关闭→要求漏斗 Active（S 未生效即停止，A/B 不进入列表；重置是否生效并入同一次校验，旧筛选残留是已知残余风险）；再回顶并确认，逐件点击/初始读取、等待详情归属、截帧接纳。S 选中态尚无像素探针；用户 2026-10-19/25 决定重置与 S 只共用一次面板访问和一次 Active 校验。回顶确认遇到位移、或 Lost 但未取得“最终比较 Undecided + 滑块稳定在顶部”的例外时继续向上，未取得稳定非移动的顶部确认不开始遍历（详见 [T5 §5](specs/t5-zzz-inventory-traversal.md#5-滚动衔接重复物品与末尾) 的 4b-2 实现状态）。回顶甩动本身的终局 Undecided 仅在最后一帧仍是可验证仓库列表时继续向上（探索动作，受 16 次与连续 2 次无进展上限，并从该帧重建基准）；最后一帧不是仓库列表或未收到帧时按页面无法验证停止；顶部确认的 Undecided 则不重拖。每位置自动准备失败即停止并保留已接纳结果，不做补偿动作。滚动判定自阶段 2（2026-10-30）起以选中框位移为主要证据、归一化相关与滚动条为辅助核对（`ScrollEvidenceMatcher`，见 [T5 §5](specs/t5-zzz-inventory-traversal.md#5-滚动衔接重复物品与末尾) 的阶段 2 实现状态）：candidate 须相对自身连续 2 次独立的 fresh 帧观测稳定才提交（复用帧为中性观测）；等待截止时间至少覆盖 `MotionStartBudget`，到 `ScrollBudget` 仍不停稳按 Lost 安全停止。设置 `YOUKAI_SCROLL_MATCHER=legacy` 可回退到阶段 2 之前的灰度 MAD 判定（现场排查用；不设置即用新判定）。当前入口仍要求用户手动把游戏打开到驱动盘仓库页；从待机/主菜单自动导航到仓库页尚未实现。
-- 该模式只在 darwin 可用：Windows（及其他平台）没有已标定布局，入口直接拒绝并说明原因，不会猜测锚点或窗口身份。Windows 的 `observe` 演练仍按上一节要求提供目标身份。
+- 该模式的 macOS 云客户端路径只在 darwin 可用；其他平台（以及 Windows 云客户端）没有已标定布局，入口直接拒绝并说明原因，不会猜测锚点或窗口身份。Windows 本地客户端自 W2c 起有自己的入口，见下一节；Windows 的 `observe` 演练仍按上一节要求提供目标身份。
 - 初始观测范围写入会话记录的 `observedScope`（`kind/page/layout/geometry/slots/startPosition/filterAtStart/sort`），不声称顶部或数量；`filterAtStart` 是准备前的漏斗状态，不代表本轮的 S 筛选声明。每件接纳的 `capture` 带 `position`（1–6）、逐位置重新计数的 `viewportIndex`、`rarityFilter:"S"` 与可选的一次性 `scrollEvidence`。详情行裁剪送识别，品质徽章与选中格边框作为上下文证据落盘、不送识别。
 - 与 `YOUKAI_DEV_SOURCE` 同时设置仍会拒绝启动；未设置任何来源时保持生产默认（无扫描源）。这是开发/联调开关，不是面向用户的扫描模式选择。
 
 日志确认要点：`dev scan source wired`、`scan <id> accepted`、每件盘一行 `item N recognized: name=… level=…`、每位置准备成功一行 `youkai: collect: position N prepared: S filter active, top confirmed`、每次已提交滚动一行 `youkai: collect: position N scroll <before> -> <after>: R rows, M correspondences`、`checkpoint generation N saved (… items)` 与结束行的检查点路径（开发应用数据根 `~/Library/Application Support/Youkai Dev/sessions/<id>/checkpoints/<gen>.json`）、退出时 `exit wrap-up complete`。当前实现的退出事件（⌘Q/关窗）异步触发明确退出收尾：停止活动会话 → 等待收尾与最终保存 → 关闭识别器 → 销毁 ORT 环境 → 释放占用；M3 改为关闭默认隐藏、仅明确退出走该收尾。
+
+## 真实遍历（Windows 本地客户端，W2c 已接线，参数未标定）
+
+状态以[架构 §6 的 Windows 本地客户端遍历状态](specs/scanner-architecture.md#windows-本地客户端遍历状态w2c-已接线参数未标定未经真机验收)为唯一权威说明；这里只写开发运行方式。
+
+- **环境变量：** `YOUKAI_GAME_SOURCE=traverse`、`YOUKAI_GAME_CLIENT=local`、`YOUKAI_GAME_EXE=<游戏 exe 完整路径>`。三层都必须满足；缺 `YOUKAI_GAME_EXE` 或把客户端设为 `cloud` 都会在接线时拒绝并说明原因。`observe` 仍按上一节的方式工作。
+- **权限（D-1）：** 必须以管理员身份运行 youkai，否则开始扫描时因游戏进程完整性级别更高而拒绝；程序清单不要求提权。点击在提权后有效，但仍需 T5 的动作效果证据。
+- **显示档位：** 首批只开放 1920×1080（窗口/无边框模式）。其他已知 16:9 档位与任意非 16:9 尺寸都会被预检拒绝并提示切换；列出的档位不等于已开放。
+- **参数状态：** 滚动停稳时序与两个拖拽时长暂时沿用 macOS 云客户端的值（`WindowsLocalProfile` 集中声明，诊断标记为未标定）；W3 的样本采集与参数定稿前不要据此判断时序性能。每次构造遍历会记一行 `youkai: game scan source: windows local traverse: profile=… tier=… scale=… timing=…`。
+- **覆盖结论：** 没有 Windows 排序标签模板，排序保持 `unverified`，覆盖结论最多为 `partial`。这是 fail-closed 的已有行为，不是可绕过的开关。
+- **未覆盖：** 长列表下的滑块两端、排序标签、各档 OCR、连续输入时序与 1920×1080 全量真机扫描均属 W3；未完成前不宣称 Windows 本地客户端通过验收。
 
 持久化从扫描过程中开始：每次接纳观测（`internal/scan` 的接纳钩子）都会先写该件的证据图、再以 queued 状态把条目加入检查点文档，终结时只更新状态与载荷；崩溃后重开由 `internal/record` 把排队/运行条目标为中断未处理，已接纳的物品不会消失。
 

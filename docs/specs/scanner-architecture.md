@@ -323,9 +323,9 @@ Youkai/
 
 每个支持显示配置须记录系统与架构、客户端、窗口模式、内容区像素与逻辑尺寸、缩放、显示器布局、SDR/HDR、游戏语言与布局版本，云入口另记视频区域与画质。未知配置先拒绝；运行中的几何变化按第 5 节停止；不按比例换算宣布支持。
 
-### 参考画布模型（W2a 已实现模型，未接线，未开放任何档位）
+### 参考画布模型（W2a 模型，W2c 已接入 Windows 本地客户端）
 
-2026-11-01 以 Windows 本地客户端 1920×1080 原生截图（无视频压缩，像素 1:1）建立参考画布模型，代码在 [`internal/game/zzz/collect/reference.go`](../../internal/game/zzz/collect/reference.go)。本模型只提供布局、变换和阈值换算；尚未接入 `cmd/youkai/main.go`，未开放任何显示档位，也不改动已验收的 `MacCloudLayout()` / `MacCloudCalibration()` 常量。
+2026-11-01 以 Windows 本地客户端 1920×1080 原生截图（无视频压缩，像素 1:1）建立参考画布模型，代码在 [`internal/game/zzz/collect/reference.go`](../../internal/game/zzz/collect/reference.go)。本模型提供布局、变换和阈值换算；W2c 起由 Windows 本地客户端遍历按实测档位调用（见下一节），但仍未开放 1920×1080 以外的档位，也不改动已验收的 `MacCloudLayout()` / `MacCloudCalibration()` 常量。
 
 - **参考画布：** `ReferenceLayout()` 是 1920×1080 参考画布上的完整布局。格位、选中框、稀有度条、详情行与漏斗按 Windows 原生截图测绘；转盘中心、面板探针、管理角标、头像和顶部指示的部分值来自 mac 推导或继承，逐项标注为未验证。位置 3 的选中圈实测约 (1239,763)，但六个转盘中心本身仍是推导值。
 - **变换：** `CanvasTransform{Scale, Offset, Source}` 把参考画布映射到目标帧。`clientRect` 用于 Windows 本地客户区，客户区必须**精确等于** 3840×2160、2560×1440、2276×1280、1920×1080、1600×900 或 1280×720 之一，且 `Scale` 必须精确等于“档位宽 ÷ 1920”，不靠取整反推档位，否则拒绝；`measuredVideoRect` 只保留枚举和接口，云客户端的视频区域测量不在本模型实现。
@@ -334,6 +334,19 @@ Youkai/
 - **排序模板：** Windows 档位目前没有排序标签模板；`ScaledLayout` 在非 1:1 时清空排序声明，排序验证的约定是把实时区域重采样到参考分辨率后与模板比较。Windows profile 补上模板与重采样之前，覆盖结论只能是 `partial`（`inventory.go` 要求 Sort==verified）。
 - **证据与边界：** `testdata/winlocal` 从 1920、2560、1280 三档原生截图按现有掩码约定生成夹具，覆盖仓库页、格位占用（含空格）、选中框、转盘位置和漏斗状态；三档在不使用档位覆盖的情况下均通过。`ScaledLayout(ReferenceLayout(), macTransform)` 与 `MacCloudLayout()` 逐字段比较，所有参与比较的字段均 ≤3 px；列表视口按 1920 原图的纹理面板实测为 x 70–596、y 115–971，与 mac 推导值一致。管理状态、头像和顶部指示缺少带标签的 Windows 样本，未作为本模型结论。
 - **档位状态：** 列出档位不等于开放档位；每个档位仍需单独完成同一客户端的实机字段验收，架构“不按比例换算宣布支持”的原则继续有效。
+
+### Windows 本地客户端遍历状态（W2c 已接线，参数未标定，未经真机验收）
+
+2026-11-02 的 W2c 把 Windows 本地客户端接入了 `YOUKAI_GAME_SOURCE=traverse`。本节是接线状态的唯一权威说明；预检顺序与故障码见 [T2 §3.2](t2-platform-capture-input.md#windows-扫描前预检w2b权威说明)，开发运行方式见[开发指南](../development.md)。
+
+- **入口条件：** 仅在 Windows、`YOUKAI_GAME_CLIENT=local` 且提供了 `YOUKAI_GAME_EXE` 时构造遍历；记录标识为 `windowsLocal`。Windows 云客户端的 `traverse` 继续拒绝并说明原因：其游戏视频矩形需要 `measuredVideoRect` 变换，而参考画布模型只有该枚举与接口，尚未实现测量。`observe` 在两种 Windows 客户端上保持原状。
+- **布局选择时机：** 布局必须来自平台预检实际测得的客户区，因此选择发生在预检接受档位并锁定基线（`LockBaseline`）之后、构造 `Inventory` 之前：控制器经可选会话能力 `platform.ClientAreaReporter` 取得锁定时的客户区，再调用 `WindowsLocalProfileFor` 生成 `ClientRectTransform` → `ScaledLayout(ReferenceLayout(), t)` 与 `ScaledCalibration(ReferenceCalibration(), s)`。接线不在预检前猜测档位，也不绕过 W2b 的预检。
+- **档位门控：** 只有 D-2 白名单（`openClientTiers`，当前 1920×1080）内的档位能生成 profile；已知未开放档位与未知尺寸都由 W2b 预检拒绝，接线层再拒绝一次，避免绕过预检的调用方进入遍历。开放新档位仍需该档自己的实机字段验收。
+- **时序与拖拽：** `WindowsLocalProfile` 集中保存滚动停稳 profile、两个拖拽时长与缩放后的布局/阈值。滚动停稳与拖拽时长目前是 macOS 云客户端的值，标注为“未标定、来源为 mac、W3 定稿”（`WindowsLocalTimingProvenance`）；拖拽起止点由参考布局缩放得到。W3 负责样本采集、参数定稿与 1920×1080 全量真机验收。
+- **排序与覆盖：** Windows 档位没有排序标签模板，接线不伪造模板；排序判定保持 `unverified`，覆盖结论最多 `partial`（`inventory.go` 要求 `Sort==verified`）。
+- **诊断：** 每个 Windows 遍历会话在构造 profile 时记一行诊断，包含 profile 名称、档位、客户区、缩放比例、布局名、排序状态与“参数未标定”的来源；记录的 `observedScope.layout` 继续给出布局/档位名。
+- **未改变的部分：** macOS 云客户端的布局、阈值、时序与接线保持不变；Windows 的 `observe`、预检、云客户端拒绝与记录客户端标识沿用已有行为。
+- **证据边界：** `testdata/winlocal` 的 1920×1080 夹具冒烟只证明接线后构造出的匹配器能读出仓库页、占用、选中、转盘与漏斗；它不覆盖长列表滑块两端、排序标签、OCR 字段、连续输入时序或真机连续扫描。在 W3 完成前不得宣称 Windows 本地客户端通过或开放。
 
 ## 7. 验收
 

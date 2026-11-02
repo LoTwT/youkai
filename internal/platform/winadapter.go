@@ -332,6 +332,7 @@ type winSession struct {
 	report       *CloseReport
 	baselined    bool
 	baseline     windows.GeometryVersion
+	clientArea   image.Point
 	watchStarted bool
 	watchStop    chan struct{}
 	watchDone    chan struct{}
@@ -347,6 +348,12 @@ type winSession struct {
 // Windows has no Activator: the collector falls back to waiting for the
 // user to focus the game, which the readiness gate then verifies.
 var _ Session = (*winSession)(nil)
+
+// ClientAreaReporter implements the optional measured-client-area
+// capability (W2c): the Windows local client's display profile is selected
+// from the client area the precheck accepted, not from a value read before
+// the session opened.
+var _ ClientAreaReporter = (*winSession)(nil)
 
 func (s *winSession) Target() TargetInfo { return s.targetInfo }
 
@@ -515,10 +522,23 @@ func (s *winSession) LockBaseline() (GeometryVersion, error) {
 	s.mu.Lock()
 	s.baselined = true
 	s.baseline = windows.GeometryVersion(obs.Geometry)
+	s.clientArea = image.Pt(geo.Client.Dx(), geo.Client.Dy())
 	s.mu.Unlock()
 	s.actor.Permit()
 	s.startWatcher()
 	return obs.Geometry, nil
+}
+
+// ClientArea implements ClientAreaReporter: the exact client area the
+// accepted baseline froze. It refuses before LockBaseline succeeded, so a
+// caller cannot select a display profile from an unverified measurement.
+func (s *winSession) ClientArea() (image.Point, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.baselined || s.clientArea == (image.Point{}) {
+		return image.Point{}, errors.New("the windows session has no locked client area; the precheck must accept the geometry first")
+	}
+	return s.clientArea, nil
 }
 
 func (s *winSession) startWatcher() {

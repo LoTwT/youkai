@@ -616,6 +616,45 @@ func TestWinOpenResolution(t *testing.T) {
 	})
 }
 
+// W2-prep: the measured client area (W2c) exists only after the precheck
+// locked the baseline, and it stays the accepted tier when the window
+// later changes — the traversal is already bound to that geometry.
+func TestWinClientAreaReportedAfterBaselineOnly(t *testing.T) {
+	w := newWinWorld(t)
+	sess, err := w.adapter.Open(context.Background(), w.config())
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	reporter, ok := sess.(ClientAreaReporter)
+	if !ok {
+		t.Fatalf("session %T does not report a client area", sess)
+	}
+	if _, err := reporter.ClientArea(); err == nil {
+		t.Fatal("the client area was reported before the baseline was locked")
+	}
+	obs, err := sess.Observe()
+	if err != nil || !obs.Ready {
+		t.Fatalf("observe: err=%v obs=%+v", err, obs)
+	}
+	if _, err := sess.LockBaseline(); err != nil {
+		t.Fatalf("lock baseline: %v", err)
+	}
+	got, err := reporter.ClientArea()
+	if err != nil || got != image.Pt(1920, 1080) {
+		t.Fatalf("client area = %v, %v; want the locked 1920x1080", got, err)
+	}
+	// A later resize must not silently re-select a profile. The session
+	// reports the geometry change and keeps the accepted tier.
+	w.geo.mu.Lock()
+	w.geo.clientSize = windows.PixelPoint{X: 1280, Y: 720}
+	w.geo.mu.Unlock()
+	got, err = reporter.ClientArea()
+	if err != nil || got != image.Pt(1920, 1080) {
+		t.Fatalf("client area after the resize = %v, %v; want the locked 1920x1080", got, err)
+	}
+	sess.Close()
+}
+
 // W2: frames and dispatch refuse after a geometry change.
 func TestWinGeometryChange(t *testing.T) {
 	w := newWinWorld(t)
