@@ -112,9 +112,6 @@ const (
 	winDpiAwarenessPerMonitor = 2
 )
 
-// point is the Win32 POINT layout.
-type point struct{ X, Y int32 }
-
 // monitorInfo is the Win32 MONITORINFO layout.
 type monitorInfo struct {
 	cbSize    uint32
