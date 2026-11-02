@@ -205,12 +205,14 @@ type fakeForeground struct {
 	// their own root.
 	roots map[HWND]HWND
 	// setFgOK: RequestForeground actually moves the foreground.
-	setFgOK bool
+	setFgOK   bool
+	requested []HWND
 }
 
 func (f *fakeForeground) ForegroundWindow() HWND { return f.foreground }
 
 func (f *fakeForeground) RequestForeground(hwnd HWND) bool {
+	f.requested = append(f.requested, hwnd)
 	if f.setFgOK {
 		f.foreground = hwnd
 	}

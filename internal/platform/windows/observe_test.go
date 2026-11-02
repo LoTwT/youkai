@@ -1,6 +1,7 @@
 package windows
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -235,4 +236,32 @@ func TestObserveTargetFocusLossIsObservationNotFault(t *testing.T) {
 	if obs.GeometryChanged {
 		t.Fatal("focus loss must not touch the geometry version")
 	}
+}
+
+func TestActivateTarget(t *testing.T) {
+	t.Run("accepted request is verified through the foreground", func(t *testing.T) {
+		fg := &fakeForeground{foreground: 99, setFgOK: true}
+		if err := ActivateTarget(fg, 7); err != nil {
+			t.Fatalf("ActivateTarget: %v", err)
+		}
+		if len(fg.requested) != 1 || fg.requested[0] != 7 {
+			t.Fatalf("requested windows = %v, want [7]", fg.requested)
+		}
+		if fg.ForegroundWindow() != 7 {
+			t.Fatalf("foreground = %d, want 7", fg.ForegroundWindow())
+		}
+	})
+	t.Run("refused request keeps the previous foreground", func(t *testing.T) {
+		fg := &fakeForeground{foreground: 99}
+		err := ActivateTarget(fg, 7)
+		if err == nil || !strings.Contains(err.Error(), "hwnd 7") {
+			t.Fatalf("want a refusal naming the target, got %v", err)
+		}
+		if len(fg.requested) != 1 || fg.requested[0] != 7 {
+			t.Fatalf("requested windows = %v, want [7]", fg.requested)
+		}
+		if fg.ForegroundWindow() != 99 {
+			t.Fatalf("foreground = %d, want the previous 99", fg.ForegroundWindow())
+		}
+	})
 }

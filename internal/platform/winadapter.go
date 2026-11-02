@@ -345,9 +345,10 @@ type winSession struct {
 	fullscreenUnknownLogged bool
 }
 
-// Windows has no Activator: the collector falls back to waiting for the
-// user to focus the game, which the readiness gate then verifies.
-var _ Session = (*winSession)(nil)
+var (
+	_ Session   = (*winSession)(nil)
+	_ Activator = (*winSession)(nil)
+)
 
 // ClientAreaReporter implements the optional measured-client-area
 // capability (W2c): the Windows local client's display profile is selected
@@ -356,6 +357,25 @@ var _ Session = (*winSession)(nil)
 var _ ClientAreaReporter = (*winSession)(nil)
 
 func (s *winSession) Target() TargetInfo { return s.targetInfo }
+
+// Activate implements Activator: a user-started scan asks the system to
+// foreground the locked HWND once. SetForegroundWindow's rules depend on
+// the caller being the foreground process (true when the user clicked
+// Start in Youkai) or having recently received the foreground; an
+// autostarted process may not qualify, so a refusal is an expected result
+// and the collector falls back to the readiness wait. The preparation
+// precheck refuses a minimized target, so activation does not restore it
+// with ShowWindow(SW_RESTORE).
+func (s *winSession) Activate() error {
+	hwnd := s.locked.HWND
+	s.adapter.logf("activate: requesting foreground for target hwnd %d", hwnd)
+	if err := windows.ActivateTarget(s.adapter.natives.FG, hwnd); err != nil {
+		s.adapter.logf("activate: %v; waiting for the user to focus the game", err)
+		return err
+	}
+	s.adapter.logf("activate: target hwnd %d is the foreground window; waiting for readiness", hwnd)
+	return nil
+}
 
 // observe runs one ObserveTarget pass and maps its premises.
 func (s *winSession) observe() winObservation {
