@@ -2,6 +2,7 @@ package windows
 
 import (
 	"errors"
+	"fmt"
 	"time"
 )
 
@@ -30,6 +31,18 @@ type ForegroundAPI interface {
 	// RootOf returns the root window of hwnd (GetAncestor GA_ROOT); a
 	// hit on a child window of the target counts as the target.
 	RootOf(hwnd HWND) HWND
+}
+
+// ActivateTarget asks the system to bring hwnd to the foreground and
+// verifies the outcome through the actual foreground window. Windows can
+// refuse SetForegroundWindow even when its documented conditions appear
+// to hold, so a false answer means the caller must keep waiting for the
+// user; it never means the target is ready.
+func ActivateTarget(fg ForegroundAPI, hwnd HWND) error {
+	if fg.RequestForeground(hwnd) {
+		return nil
+	}
+	return fmt.Errorf("target hwnd %d did not become the foreground window (SetForegroundWindow refused or focus moved)", hwnd)
 }
 
 // OcclusionState is what the platform knows about occlusion of the

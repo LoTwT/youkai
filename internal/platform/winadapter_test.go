@@ -1,10 +1,13 @@
 package platform
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"image"
+	"log"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -196,6 +199,9 @@ type fakeWinFG struct {
 	hitDefault windows.HWND
 	hits       map[windows.PixelPoint]windows.HWND
 	roots      map[windows.HWND]windows.HWND
+	// requestOK: RequestForeground actually moves the foreground.
+	requestOK bool
+	requests  []windows.HWND
 }
 
 func (f *fakeWinFG) ForegroundWindow() windows.HWND {
@@ -204,7 +210,21 @@ func (f *fakeWinFG) ForegroundWindow() windows.HWND {
 	return f.foreground
 }
 
-func (f *fakeWinFG) RequestForeground(hwnd windows.HWND) bool { return false }
+func (f *fakeWinFG) RequestForeground(hwnd windows.HWND) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.requests = append(f.requests, hwnd)
+	if f.requestOK {
+		f.foreground = hwnd
+	}
+	return f.foreground == hwnd
+}
+
+func (f *fakeWinFG) requested() []windows.HWND {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]windows.HWND(nil), f.requests...)
+}
 
 func (f *fakeWinFG) HitWindow(p windows.PixelPoint) windows.HWND {
 	f.mu.Lock()
@@ -653,6 +673,90 @@ func TestWinClientAreaReportedAfterBaselineOnly(t *testing.T) {
 		t.Fatalf("client area after the resize = %v, %v; want the locked 1920x1080", got, err)
 	}
 	sess.Close()
+}
+
+// The Windows session exposes Activator: a user-started scan asks for the
+// locked HWND once and logs both the request and its observed outcome.
+func TestWinSessionActivate(t *testing.T) {
+	t.Run("granted", func(t *testing.T) {
+		w := newWinWorld(t)
+		sess := w.openReady(t)
+		defer sess.Close()
+		var logs bytes.Buffer
+		w.adapter.Log = log.New(&logs, "", 0)
+		w.fg.mu.Lock()
+		w.fg.foreground = 999 // Youkai is foreground when the user starts
+		w.fg.requestOK = true
+		w.fg.mu.Unlock()
+
+		activator, ok := sess.(Activator)
+		if !ok {
+			t.Fatalf("session %T does not implement Activator", sess)
+		}
+		if err := activator.Activate(); err != nil {
+			t.Fatalf("Activate: %v", err)
+		}
+		if calls := w.fg.requested(); len(calls) != 1 || calls[0] != gameHwnd {
+			t.Fatalf("RequestForeground calls = %v, want the locked hwnd %d", calls, gameHwnd)
+		}
+		if got := w.fg.ForegroundWindow(); got != gameHwnd {
+			t.Fatalf("foreground = %d, want the locked hwnd %d", got, gameHwnd)
+		}
+		if !strings.Contains(logs.String(), fmt.Sprintf("requesting foreground for target hwnd %d", gameHwnd)) ||
+			!strings.Contains(logs.String(), fmt.Sprintf("target hwnd %d is the foreground window", gameHwnd)) {
+			t.Fatalf("activation logs do not name the request and result:\n%s", logs.String())
+		}
+		obs, err := sess.Observe()
+		if err != nil || !obs.Ready {
+			t.Fatalf("observe after activation: err=%v obs=%+v", err, obs)
+		}
+	})
+
+	t.Run("refused", func(t *testing.T) {
+		w := newWinWorld(t)
+		sess := w.openReady(t)
+		defer sess.Close()
+		var logs bytes.Buffer
+		w.adapter.Log = log.New(&logs, "", 0)
+		w.fg.mu.Lock()
+		w.fg.foreground = 999
+		w.fg.requestOK = false
+		w.fg.mu.Unlock()
+
+		activator, ok := sess.(Activator)
+		if !ok {
+			t.Fatalf("session %T does not implement Activator", sess)
+		}
+		err := activator.Activate()
+		if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("hwnd %d", gameHwnd)) {
+			t.Fatalf("want a refusal naming the locked hwnd, got %v", err)
+		}
+		if calls := w.fg.requested(); len(calls) != 1 || calls[0] != gameHwnd {
+			t.Fatalf("RequestForeground calls = %v, want the locked hwnd %d", calls, gameHwnd)
+		}
+		if got := w.fg.ForegroundWindow(); got != 999 {
+			t.Fatalf("a refused request changed the foreground to %d", got)
+		}
+		if !strings.Contains(logs.String(), "waiting for the user to focus the game") {
+			t.Fatalf("the refusal does not explain the fallback:\n%s", logs.String())
+		}
+		obs, err := sess.Observe()
+		if err != nil {
+			t.Fatalf("observe after refusal: %v", err)
+		}
+		if obs.Ready {
+			t.Fatalf("a refused activation must not make the session ready: %+v", obs)
+		}
+		var focusLost bool
+		for _, p := range obs.Problems {
+			if p.Code == CodeFocusLost {
+				focusLost = true
+			}
+		}
+		if !focusLost {
+			t.Fatalf("the refusal should leave the focusLost premise: %+v", obs.Problems)
+		}
+	})
 }
 
 // W2: frames and dispatch refuse after a geometry change.
