@@ -1,6 +1,8 @@
 package collect_test
 
 import (
+	"context"
+	"errors"
 	"image"
 	"reflect"
 	"strings"
@@ -210,8 +212,12 @@ func TestWindowsTraversalSelectedAfterBaselineAndBeforePrecheck(t *testing.T) {
 	// The fake's 4×4 frame cannot pass the page precheck; that failure is
 	// after the profile was selected and proves Precheck ran on the
 	// Inventory rather than being skipped.
-	if end := kernel.Snapshot().End; end != scan.EndFailed {
-		t.Fatalf("session end = %s, want failed on the fake frame", end)
+	snap := kernel.Snapshot()
+	if snap.End != scan.EndFailed {
+		t.Fatalf("session end = %s, want failed on the fake frame", snap.End)
+	}
+	if snap.Trigger == nil || snap.Trigger.Code != platform.CodeFrameConfigMismatch {
+		t.Fatalf("session trigger = %+v, want frameConfigMismatch from the inventory precheck", snap.Trigger)
 	}
 }
 
@@ -285,4 +291,115 @@ func TestWindowsTraversalRefusesUnopenedTierBeforeInventory(t *testing.T) {
 	if end := kernel.Snapshot().End; end != scan.EndFailed {
 		t.Fatalf("session end = %s, want failed", end)
 	}
+}
+
+// TestWindowsTraversalRequiresClientAreaReporter: a session that does not
+// report its measured client area must fail closed with invalidOperation,
+// and the client-area factory must not run. Falling back to another
+// traversal would select a layout for a display configuration the
+// precheck never measured.
+func TestWindowsTraversalRequiresClientAreaReporter(t *testing.T) {
+	// Embedding the platform.Session interface promotes only its required
+	// methods, hiding *platformfake.Session's ClientAreaReporter
+	// capability while every required method still delegates to it.
+	sess := noClientAreaSession{Session: platformfake.NewSession()}
+	var calls int
+	ctrl := &collect.Controller{
+		Port:   fixedSessionPort{sess: sess},
+		Target: platform.TargetSpec{ExecutablePath: `C:\Games\ZenlessZoneZero.exe`},
+		Hotkey: platform.HotkeySpec{Key: platform.KeyS, Ctrl: true, Alt: true, Shift: true},
+		TraversalForClient: func(image.Point) (collect.Traversal, error) {
+			calls++
+			return collect.ObserveOnly{}, nil
+		},
+		Stop:         func() {},
+		ObserveEvery: time.Millisecond,
+	}
+	snap := runControllerSession(t, "windows-no-client-area", ctrl)
+	if calls != 0 {
+		t.Fatalf("the client-area factory ran %d times without a reporter; want none", calls)
+	}
+	requireInvalidOperationFailure(t, snap, "does not report one")
+}
+
+// TestWindowsTraversalRefusesClientAreaError: a session whose client area
+// cannot be read is a setup fault, not a reason to fall back. The factory
+// must not run and the session must end failed with invalidOperation.
+func TestWindowsTraversalRefusesClientAreaError(t *testing.T) {
+	sess := platformfake.NewSession()
+	sess.ClientAreaErr = errors.New("no measured client area available")
+	var calls int
+	ctrl := &collect.Controller{
+		Port:   &platformfake.Port{NewSession: func() *platformfake.Session { return sess }},
+		Target: platform.TargetSpec{ExecutablePath: `C:\Games\ZenlessZoneZero.exe`},
+		Hotkey: platform.HotkeySpec{Key: platform.KeyS, Ctrl: true, Alt: true, Shift: true},
+		TraversalForClient: func(image.Point) (collect.Traversal, error) {
+			calls++
+			return collect.ObserveOnly{}, nil
+		},
+		Stop:         func() {},
+		ObserveEvery: time.Millisecond,
+	}
+	snap := runControllerSession(t, "windows-client-area-error", ctrl)
+	if calls != 0 {
+		t.Fatalf("the client-area factory ran %d times after ClientArea failed; want none", calls)
+	}
+	requireInvalidOperationFailure(t, snap, "no measured client area available")
+}
+
+// runControllerSession runs one controller in a real scan kernel and
+// returns the ended session's snapshot. A configuration that does not end
+// within the budget is stopped first, so a regression fails instead of
+// hanging on an accepted observe-only traversal.
+func runControllerSession(t *testing.T, id string, ctrl *collect.Controller) scan.Snapshot {
+	t.Helper()
+	kernel, err := scan.Start(scan.Config{
+		ID:         scan.ID(id),
+		Capacity:   1,
+		Workers:    1,
+		Controller: ctrl,
+		Recognizer: waitRecognizer{},
+		Deliverer:  &recordSink{},
+	})
+	if err != nil {
+		t.Fatalf("scan.Start: %v", err)
+	}
+	select {
+	case <-kernel.Done():
+	case <-time.After(2 * time.Second):
+		kernel.Cancel()
+		<-kernel.Done()
+		t.Fatalf("the session did not end within 2s; the refused configuration was accepted")
+	}
+	return kernel.Snapshot()
+}
+
+// requireInvalidOperationFailure asserts the session failed on the
+// controller's fail-closed setup fault and quotes the expected cause.
+func requireInvalidOperationFailure(t *testing.T, snap scan.Snapshot, cause string) {
+	t.Helper()
+	if snap.End != scan.EndFailed {
+		t.Fatalf("session end = %s, want failed", snap.End)
+	}
+	if snap.Trigger == nil || snap.Trigger.Kind != scan.TriggerFault || snap.Trigger.Code != platform.CodeInvalidOperation {
+		t.Fatalf("session trigger = %+v, want a fault with code %q", snap.Trigger, platform.CodeInvalidOperation)
+	}
+	if !strings.Contains(snap.Trigger.Message, cause) {
+		t.Fatalf("trigger message = %q, want it to contain %q", snap.Trigger.Message, cause)
+	}
+}
+
+// noClientAreaSession embeds the platform.Session interface only, so the
+// fake's optional capabilities (the measured client area, activation) are
+// hidden while every required method delegates to the wrapped session.
+type noClientAreaSession struct{ platform.Session }
+
+// fixedSessionPort returns one fixed session from Open; the tests need
+// only the controller's Prepare path.
+type fixedSessionPort struct{ sess platform.Session }
+
+func (p fixedSessionPort) Preflight() platform.Preflight { return platform.Preflight{} }
+
+func (p fixedSessionPort) Open(context.Context, platform.SessionConfig) (platform.Session, error) {
+	return p.sess, nil
 }
