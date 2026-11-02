@@ -1,6 +1,6 @@
 # 开发指南
 
-更新日期：2026-10-26。本文维护环境要求与本仓库当前实际可用的开发命令；范围与里程碑安排见[实施清单](specs/scanner-implementation-plan.md)，构建与分发决策见 [T7](specs/t7-public-release-acceptance.md)。
+更新日期：2026-11-02。本文维护环境要求与本仓库当前实际可用的开发命令；范围与里程碑安排见[实施清单](specs/scanner-implementation-plan.md)，构建与分发决策见 [T7](specs/t7-public-release-acceptance.md)。
 
 ## 环境要求
 
@@ -55,6 +55,27 @@ M2 平台会话集成后可用另一组开关接入真实游戏窗口做仅观�
 应用服务层的行为（开始请求幂等与忙碌、保存失败可见可重试、重开读取中断记录等）由 `go test ./internal/app` 的服务层测试用假识别器覆盖，不依赖原生库；`internal/app` 的集成测试在 OCR 资源缺失时自动 `t.Skip`。
 
 主界面（`internal/ui`）由 `cmd/youkai` 组装：准备区持续显示前台扫描提示与停止方式，进度区显示阶段、可证实的五类计数与终止原因，结果区按采集序号列出全部条目（失败与未处理不消失）并展示证据图片、识别文本与模型分数，历史记录可重开已保存记录。界面只经订阅泵渲染服务快照（按会话与修订号丢弃旧更新），状态与视图行为由 `go test ./internal/ui` 用 `ui.NewTester` 覆盖。
+
+## Windows 只读截图探针（winprobe）
+
+`tools/winprobe` 是 Windows 本地客户端的现场探针（开发工具，不参与正式构建）：枚举并锁定游戏窗口、测量客户区与 DPI、记录显示器与进程完整性级别，并用平台层现有的 GDI 客户区路径连续截图，供 Windows 实测（窗口识别、几何/DPI、截图与后续布局测量）使用。它**只读：不发送任何输入**，不激活、移动或调整窗口，不注册热键；窗口相关调用只限于枚举、读取样式/矩形/DPI、前台观察与桌面 BitBlt。
+
+在 Windows 的仓库检出中运行（纯 Go、无 cgo；也可在 Mac 上交叉编译后把 EXE 带过去）：
+
+```powershell
+go build -o winprobe.exe ./tools/winprobe
+.\winprobe.exe -exe "C:\path\to\game.exe" -out "$env:USERPROFILE\Desktop\winprobe-evidence"
+
+# 只列出候选窗口，不截图
+.\winprobe.exe -exe "C:\path\to\game.exe" -out "$env:USERPROFILE\Desktop\winprobe-list" -list
+```
+
+- `-frames` 默认 30，`-interval` 默认 100 ms；截图从 `frame-0000.png` 起写入 `-out`。
+- `window.json` 记录候选与锁定窗口、窗口/客户区矩形、全部显示器（矩形、工作区、DPI、缩放）、目标与探针的 DPI awareness，以及两个进程的完整性级别；`frames.json` 记录逐帧时间、尺寸、像素均值/方差、内容哈希、几何版本与重复帧标记；`summary.txt` 给出识别结果、截图尺寸是否等于客户区物理尺寸、黑屏计数、实际帧率、单帧耗时分布与错误。
+- 找不到窗口、候选窗口不唯一、目标不可见或被 DWM 隐藏（cloaked）或截图失败时，原因写入 `summary.txt`，进程以非零状态退出，不猜目标窗口。
+- 与正式应用一致，探针启动时设置并回读 Per-Monitor V2 awareness；目标窗口若被 DPI 虚拟化，探针拒绝截图并在 `summary.txt` 说明原因。
+- 探针不会激活游戏，GDI 截取的是桌面区域。从终端启动后终端通常在前台，请先让游戏窗口在屏幕上可见且不被遮挡（例如把终端放到另一显示器或移开），再运行探针；否则截图会包含终端或其他窗口。
+- `form=fullscreen` 只表示窗口矩形覆盖显示器，不区分无边框全屏与独占全屏；独占全屏可能让 GDI 截图为黑。首版配置是窗口/无边框模式（见 [T2 §3.2](specs/t2-platform-capture-input.md#32-可验收的窄显示配置候选)），黑屏时先切换模式再测。
 
 ## 常用命令
 
