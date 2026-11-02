@@ -23,9 +23,10 @@ const WindowsLocalTimingProvenance = "macOS cloud profile (uncalibrated; W3 fina
 // Calibration state: W2c wires the profile, it does not calibrate it.
 // Timing, drag durations and the scaled pixel-count thresholds are
 // unverified on Windows; W3's sample collection, parameter finalization
-// and full 1920×1080 field acceptance replace them. The profile has no
-// sort-label template, so the traversal's sort fact stays unverified and
-// coverage can be at most partial.
+// and full 1920×1080 field acceptance replace them. The 2026-11-02 W3a
+// offline sample added the native sort-label template to the 1920×1080
+// reference layout, so this tier can verify the filter panel's sort order;
+// a scaled tier still drops the template and can be at most partial.
 type WindowsLocalProfile struct {
 	// Name identifies the profile in diagnostics.
 	Name string
@@ -116,12 +117,23 @@ func openClientTier(client image.Point) (DisplayTier, error) {
 }
 
 // Diagnostic renders the profile's identity and calibration state for the
-// session log. Tier, scale, profile name and the uncalibrated timing
-// provenance are the facts a later field report needs to attribute its
-// results to this wiring.
+// session log. Tier, scale, profile name, sort-template presence and the
+// uncalibrated timing provenance are the facts a later field report needs to
+// attribute its results to this wiring.
 func (p WindowsLocalProfile) Diagnostic() string {
-	return fmt.Sprintf("profile=%s tier=%s client=%dx%d scale=%.4f layout=%s sort=unverified timing=%s",
-		p.Name, p.Tier.Name, p.Tier.Client.X, p.Tier.Client.Y, p.Transform.Scale, p.Layout.Name, WindowsLocalTimingProvenance)
+	return fmt.Sprintf("profile=%s tier=%s client=%dx%d scale=%.4f layout=%s sort=%s timing=%s",
+		p.Name, p.Tier.Name, p.Tier.Client.X, p.Tier.Client.Y, p.Transform.Scale, p.Layout.Name, p.sortState(), WindowsLocalTimingProvenance)
+}
+
+// sortState names whether this profile can read the panel's sort order. The
+// 1920×1080 tier is 1:1 with the reference canvas and therefore carries the
+// Windows native template; a scaled tier drops it (see ScaledLayout) and
+// stays unverified rather than comparing a resampled template.
+func (p WindowsLocalProfile) sortState() string {
+	if !p.Layout.SortLabel.Empty() && p.Layout.SortTemplate != nil {
+		return "template"
+	}
+	return "unverified"
 }
 
 // Inventory builds one session's traversal from the profile: the scaled
@@ -129,9 +141,11 @@ func (p WindowsLocalProfile) Diagnostic() string {
 // drag durations. legacy selects the pre-stage-2 grayscale-MAD scroll
 // judgment, the same field fallback the macOS wiring keeps.
 //
-// The layout carries no sort-label template, so the traversal reports the
-// sort as unverified and coverage can be at most partial (fail-closed; a
-// template is fabricated nowhere).
+// The 1920×1080 layout carries the W3a Windows native sort template, so a
+// matching panel verdict sets SortVerified and the session's observedScope
+// can reach sort=verified; coverage then becomes complete when all six
+// positions are complete. A scaled tier drops the template (fail-closed) and
+// remains at most partial.
 func (p WindowsLocalProfile) Inventory(legacy bool) *Inventory {
 	pixel := NewPixelMatcher(p.Layout, p.Calibration)
 	var matcher Matcher = pixel

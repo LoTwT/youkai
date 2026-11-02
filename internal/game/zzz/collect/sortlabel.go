@@ -24,9 +24,26 @@ import (
 //go:embed assets/sort-label-rarity.png
 var sortLabelRarityPNG []byte
 
+// The Windows local client renders the same label at native pixels, so it
+// needs its own template. This is the crop (1285,124)-(1467,201) of the
+// 2026-11-02 W3a evidence frame S2/frame-0000.png (SHA-256
+// 5632e847f40597363600f74d2056fa6e79fb9ab74f3f24643d744c629f60aac6),
+// 182×77 pixels. The crop is the mac template's text margin converted to
+// the reference canvas (x 1/0.859, y (v-96)/0.859): the measured Windows
+// text box is (1329,154)-(1396,175). It contains the whole label and only
+// panel pixels, and stops before the dropdown arrow. Native means 1:1 on
+// the 1920×1080 reference canvas; scaled tiers drop the claim instead of
+// resampling this template (see ScaledLayout).
+//
+//go:embed assets/sort-label-rarity-winlocal.png
+var sortLabelRarityWindowsLocalPNG []byte
+
 const sortLabelRarity = "稀有度"
 
-var maccloudSortLabelTemplate = decodeSortLabelTemplate(sortLabelRarityPNG)
+var (
+	maccloudSortLabelTemplate     = decodeSortLabelTemplate(sortLabelRarityPNG)
+	windowsLocalSortLabelTemplate = decodeSortLabelTemplate(sortLabelRarityWindowsLocalPNG)
+)
 
 func decodeSortLabelTemplate(raw []byte) *image.RGBA {
 	img, err := png.Decode(bytes.NewReader(raw))

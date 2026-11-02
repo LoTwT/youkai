@@ -3,17 +3,21 @@ package collect
 import "image"
 
 // The reference canvas's scrollbar end thresholds come from the 1920×1080
-// Windows capture at the ScrollTrack probe column (x=55, grayscale >
-// ScrollbarBrightMin). The lists in all captured tiers held only 11–13 items,
-// so the thumb filled the whole track; the bright run y 148–931 is that filled
-// thumb, not a measured empty track. The thresholds 148+3 = 151 and 931−2 =
-// 929 therefore depend on two unverified premises: a short resting thumb also
-// reaches 148 and 931, and the track groove itself is no brighter than
-// ScrollbarBrightMin (110). Measure a long list on Windows before enabling any
-// Windows tier. The separate y 941–945 run is the bottom cap, not the track.
-// The mac calibration has 2–3 px of slack between the resting thumb and its
-// end thresholds (measured top 226–227 vs threshold 229; bottom 900 vs
-// threshold 898), so the reference thresholds keep the same slack.
+// Windows captures at the ScrollTrack probe column (x=55, grayscale >
+// ScrollbarBrightMin). The W3a long-list sample (2026-11-02, about 28 items
+// and 1.4 screens) verified both premises the earlier short-list captures
+// could not: a resting thumb reaches the measured ends and the track groove
+// stays dark. At the top frame the thumb is y 148–711, at the bottom frame
+// y 368–931, and mid-drag y 361–924; the thumb is 564 pixels long, its
+// darkest pixel is 116, the groove is 0, and one anti-aliased edge pixel is
+// 92–93. The thresholds 148+3 = 151 and 931−2 = 929 therefore keep the mac
+// calibration's 2–3 px resting-thumb slack. The separate y 941–945 run is the
+// bottom cap, not the track.
+//
+// Limits: the darkest thumb pixel is only 6 levels above ScrollbarBrightMin
+// (110), and the sample covers one list length (about 1.4 screens). A much
+// longer list, a different theme, or a different DPI could change the groove
+// or thumb brightness; those remain untested.
 const (
 	referenceScrollTrackTop       = 148
 	referenceScrollTrackBottom    = 931

@@ -50,16 +50,17 @@ M2 平台会话集成后可用另一组开关接入真实游戏窗口做仅观�
 
 日志确认要点：`dev scan source wired`、`scan <id> accepted`、每件盘一行 `item N recognized: name=… level=…`、每位置准备成功一行 `youkai: collect: position N prepared: S filter active, top confirmed`、每次已提交滚动一行 `youkai: collect: position N scroll <before> -> <after>: R rows, M correspondences`、`checkpoint generation N saved (… items)` 与结束行的检查点路径（开发应用数据根 `~/Library/Application Support/Youkai Dev/sessions/<id>/checkpoints/<gen>.json`）、退出时 `exit wrap-up complete`。当前实现的退出事件（⌘Q/关窗）异步触发明确退出收尾：停止活动会话 → 等待收尾与最终保存 → 关闭识别器 → 销毁 ORT 环境 → 释放占用；M3 改为关闭默认隐藏、仅明确退出走该收尾。
 
-## 真实遍历（Windows 本地客户端，W2c 已接线，参数未标定）
+## 真实遍历（Windows 本地客户端，W3a 离线结论已落地，参数未标定）
 
-状态以[架构 §6 的 Windows 本地客户端遍历状态](specs/scanner-architecture.md#windows-本地客户端遍历状态w2c-已接线参数未标定未经真机验收)为唯一权威说明；这里只写开发运行方式。
+状态以[架构 §6 的 Windows 本地客户端遍历状态](specs/scanner-architecture.md#windows-本地客户端遍历状态w3a-样本结论已落地参数未标定未经真机验收)为唯一权威说明；这里只写开发运行方式。
 
 - **环境变量：** `YOUKAI_GAME_SOURCE=traverse`、`YOUKAI_GAME_CLIENT=local`、`YOUKAI_GAME_EXE=<游戏 exe 完整路径>`。三层都必须满足；缺 `YOUKAI_GAME_EXE` 或把客户端设为 `cloud` 都会在接线时拒绝并说明原因。`observe` 仍按上一节的方式工作。
 - **权限（D-1）：** 必须以管理员身份运行 youkai，否则开始扫描时因游戏进程完整性级别更高而拒绝；程序清单不要求提权。点击在提权后有效，但仍需 T5 的动作效果证据。
 - **显示档位：** 首批只开放 1920×1080（窗口/无边框模式）。其他已知 16:9 档位与任意非 16:9 尺寸都会被预检拒绝并提示切换；列出的档位不等于已开放。
-- **参数状态：** 滚动停稳时序与两个拖拽时长暂时沿用 macOS 云客户端的值（`WindowsLocalProfile` 集中声明，诊断标记为未标定）；W3 的样本采集与参数定稿前不要据此判断时序性能。每次构造遍历会记一行 `youkai: game scan source: windows local traverse: profile=… tier=… scale=… timing=…`。
-- **覆盖结论：** 没有 Windows 排序标签模板，排序保持 `unverified`，覆盖结论最多为 `partial`。这是 fail-closed 的已有行为，不是可绕过的开关。
-- **未覆盖：** 长列表下的滑块两端、排序标签、各档 OCR、连续输入时序与 1920×1080 全量真机扫描均属 W3；未完成前不宣称 Windows 本地客户端通过验收。
+- **参数状态：** W3a 只采集 1 fps 静态样本，滚动停稳时序与两个拖拽时长仍沿用 macOS 云客户端的值（`WindowsLocalProfile` 集中声明，诊断标记为未标定）；时序定稿前不要据此判断性能。每次构造遍历会记一行 `youkai: game scan source: windows local traverse: profile=… tier=… scale=… sort=template timing=…`；1920×1080 现在携带 Windows 原生排序模板。
+- **覆盖结论：** 面板排序标签可验证；每个面板都匹配“稀有度”时 `sort=verified`，六个位置都完整时覆盖结论可为 `complete`。缩放档继续丢弃排序声明，最多 `partial`。模板只证明标签为“稀有度”，不证明排序方向；这是 fail-closed 的已有行为，不是可绕过的开关。
+- **样本状态：** W3a 已验证长列表滑块两端与排序模板；面板 S 按钮在套装筛选展开时的位置仍待测。细节见架构 §6 与 [W3a 样本报告](reports/2026-11-02-windows-local-sample-round.md)。
+- **未覆盖：** 各档 OCR、连续输入时序、像素计数阈值与 1920×1080 全量真机扫描仍未完成；未完成前不宣称 Windows 本地客户端通过验收。
 
 持久化从扫描过程中开始：每次接纳观测（`internal/scan` 的接纳钩子）都会先写该件的证据图、再以 queued 状态把条目加入检查点文档，终结时只更新状态与载荷；崩溃后重开由 `internal/record` 把排队/运行条目标为中断未处理，已接纳的物品不会消失。
 

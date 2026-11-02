@@ -175,10 +175,11 @@ func (t CanvasTransform) Validate() error {
 // 1920×1080 (native pixels, no video compression), using the macOS cloud
 // calibration transformed by x_mac = 0.859·x_ref, y_mac = 0.859·y_ref + 96
 // only as the initial hypothesis. Values that are not directly observable in
-// the recorded frame (the filter panel, the management badge, the list avatar
-// and the top indicator) are carried from the cloud calibration and marked
-// unverified in their comments; the comments name the measured evidence for
-// every other group.
+// the recorded frames (the management badge, the list avatar and the top
+// indicator) are carried from the cloud calibration and marked unverified in
+// their comments; the comments name the measured evidence for every other
+// group, including the 2026-11-02 W3a filter-panel, sort-label and long-list
+// samples.
 //
 // The layout is a model, not an enabled profile: no tier is opened by this
 // value, and a Windows profile still needs its own field acceptance.
@@ -233,15 +234,19 @@ func ReferenceLayout() Layout {
 		// (x 70–596, y 115–971 after the canvas transform) matches this measured
 		// range, so the reference uses the measured panel bounds directly.
 		ListViewport: image.Rect(70, 115, 596, 971),
-		// The scrollbar is a 5-pixel column at x 54–59. In the captured lists
-		// (11–13 items, shorter than one screen) the thumb filled the track, so
-		// the bright run y 148–931 is that filled thumb, not a measured empty
-		// track; the separate y 941–945 run is the bottom cap. The probe keeps
-		// the mac's 1-pixel column at x=55. ReferenceCalibration derives its
-		// end thresholds from this filled thumb; that depends on two unverified
-		// premises—a short resting thumb also reaches 148 and 931, and the
-		// groove is no brighter than ScrollbarBrightMin. Measure a long list on
-		// Windows before enabling any Windows tier.
+		// The scrollbar is a 5-pixel column at x 54–59. The W2a captures
+		// (11–13 items) only showed a filled thumb; the W3a long-list sample
+		// (about 28 items, 1.4 screens) shows both resting ends and a moving
+		// thumb at the probe's 1-pixel column x=55. The bright run is
+		// y 148–711 at the top, 368–931 at the bottom and 361–924 mid-drag;
+		// the thumb is 564 pixels long and its darkest pixel is 116, while
+		// the groove is 0 (one anti-aliased edge pixel is 92–93). This
+		// verifies both premises ReferenceCalibration depends on: a resting
+		// thumb reaches the measured ends, and the groove stays below
+		// ScrollbarBrightMin=110. The end thresholds keep the mac 2–3 px
+		// slack (151/929); the darkest-thumb margin is only 6 levels and the
+		// sample covers one list length, so a longer list is still untested.
+		// The separate y 941–945 run is the bottom cap, not the track.
 		ScrollTrack: image.Rect(55, 145, 56, 941),
 		// Drag endpoints are provisional canvas positions derived from the
 		// mac profile (the Windows drag/timing profile is out of scope in this
@@ -269,11 +274,14 @@ func ReferenceLayout() Layout {
 			},
 			Tol: 25,
 		},
-		// The filter panel has no Windows sample in this round. The two probe
-		// positions are the cloud calibration carried through the canvas
-		// transform; the closed-state tiers were checked on the warehouse
-		// frame (the measured list-page pixels fall inside both closed tiers),
-		// but the open state and the panel controls are unverified on Windows.
+		// The filter panel was sampled on Windows in the 2026-11-02 W3a
+		// round. The first probe's open tier is the measured S2 fill
+		// (196,41,10); the old cloud-derived (183,56,31) was only 4 levels
+		// inside the blue channel's tolerance. Its closed tier keeps the
+		// earlier measured (15,14,15); S3 reads (16,16,16), within tolerance.
+		// The second probe's open tier is (255,255,255) on S2, matching the
+		// cloud value; both probes report open on all three S2 frames and
+		// closed on all three S3 frames.
 		PanelOpen: []ColorProbe{
 			{
 				// The cloud probe's canvas position rounds onto the bright
@@ -281,7 +289,7 @@ func ReferenceLayout() Layout {
 				// closed-state sample on the measured frame.
 				At: image.Rect(1781, 39, 1782, 40),
 				Colors: map[string]color.RGBA{
-					"open":   {R: 183, G: 56, B: 31, A: 255},
+					"open":   {R: 196, G: 41, B: 10, A: 255},
 					"closed": {R: 15, G: 14, B: 15, A: 255},
 				},
 				Tol: 25,
@@ -295,15 +303,24 @@ func ReferenceLayout() Layout {
 				Tol: 25,
 			},
 		},
+		// W3a checked the reset and close click points against the S2 panel
+		// frame; both agree with these positions. PanelS is not calibrated:
+		// with two set filters selected, the S control was observed near
+		// y≈704 rather than y=604, because the set-filter rows push the
+		// controls down. Re-measure it after a reset; until then the value
+		// stays the cloud-derived placeholder.
 		PanelReset: image.Pt(1432, 1035),
 		PanelClose: image.Pt(1804, 55),
 		PanelS:     image.Pt(1426, 604),
-		// No Windows filter-panel frame was recorded, so the Windows profile
-		// does not claim a sort read. The cloud client keeps its own template;
-		// a scaled layout must resample the live region to the reference
-		// canvas before comparing it (see ScaledLayout).
-		SortLabel:    image.Rectangle{},
-		SortTemplate: nil,
+		// The Windows local client renders "稀有度" at native pixels. The
+		// W3a template is the crop (1285,124)-(1467,201) of S2/frame-0000.png
+		// (182×77); see sortlabel.go for its provenance. The template is
+		// reference-canvas pixels, so only the 1:1 1920×1080 layout declares
+		// it; ScaledLayout drops it for every other tier rather than
+		// resampling the template. The mac cloud client keeps its own
+		// template.
+		SortLabel:    image.Rect(1285, 124, 1467, 201),
+		SortTemplate: windowsLocalSortLabelTemplate,
 
 		// The six wheel centers are the cloud calibration carried through the
 		// canvas transform; none of the six click centers was independently
@@ -373,11 +390,11 @@ func ReferenceLayout() Layout {
 // content rectangle. For a clientRect transform they are exactly the client
 // area; for a measuredVideoRect transform the image includes the offset (the
 // canvas's bounding box), while the cloud profile still supplies the captured
-// frame and content (title bar, letterbox) when it wires the layout. A sort template is never
-// scaled: the convention is to resample the live sort region back to the
-// reference canvas and compare it there. A scaled layout therefore drops the
-// sort claim instead of shrinking the template; the reference layout itself
-// has no Windows template.
+// frame and content (title bar, letterbox) when it wires the layout. A sort
+// template is never scaled: the convention is to resample the live sort
+// region back to the reference canvas and compare it there. A scaled layout
+// therefore drops the sort claim instead of shrinking the template; only the
+// 1:1 1920×1080 reference layout carries the Windows native template.
 //
 // The returned layout is a structural model. Its pixel thresholds still need
 // their own per-tier acceptance; see ScaledCalibration and WithOverrides.
