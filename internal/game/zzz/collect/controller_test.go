@@ -283,6 +283,98 @@ func TestPrepareTimeoutRealKernel(t *testing.T) {
 	waitUntil(t, "session closed", sess.IsClosed)
 }
 
+// C4b: a stage-2 precheck condition that outlives the budget surfaces as
+// itself, not as a generic prepareTimeout, so the UI can name the exact
+// cause.
+func TestPrepareTimeoutKeepsStageTwoCode(t *testing.T) {
+	sess := readySession()
+	occluded := platform.NewFaultWithParams(platform.CodeWindowOccluded,
+		"occlusion probe \"bottom-button-bar\" hit another window",
+		map[string]string{"probe": "bottom-button-bar", "hitClass": "Shell_TrayWnd"})
+	sess.ObserveFn = func() (platform.Observation, error) {
+		return notReady(occluded)
+	}
+	port := &platformfake.Port{NewSession: func() *platformfake.Session { return sess }}
+	ctrl := &collect.Controller{
+		Port:          port,
+		Target:        platform.TargetSpec{BundleID: "com.example.game"},
+		Hotkey:        platform.HotkeySpec{Key: platform.KeyS},
+		PrepareBudget: 60 * time.Millisecond,
+		ObserveEvery:  5 * time.Millisecond,
+	}
+	snap := kernelSession(t, ctrl)
+	if snap.End != scan.EndFailed || snap.Trigger == nil || snap.Trigger.Code != platform.CodeWindowOccluded {
+		t.Fatalf("want failed windowOccluded, got %+v", snap)
+	}
+	if snap.Trigger.Params["hitClass"] != "Shell_TrayWnd" {
+		t.Fatalf("the stage-2 parameters must survive: %+v", snap.Trigger)
+	}
+	waitUntil(t, "session closed", sess.IsClosed)
+}
+
+// C4c: a Windows target gets the local display policy at Open; a macOS
+// target (bundle only) does not.
+func TestPreparePassesWindowsDisplayPolicy(t *testing.T) {
+	sess := readySession()
+	port := &platformfake.Port{NewSession: func() *platformfake.Session { return sess }}
+	ctrl := &collect.Controller{
+		Port:         port,
+		Target:       platform.TargetSpec{ExecutablePath: `C:\game\ZenlessZoneZero.exe`},
+		Hotkey:       platform.HotkeySpec{Key: platform.KeyS},
+		Traversal:    func() collect.Traversal { return collect.ObserveOnly{} },
+		ObserveEvery: 5 * time.Millisecond,
+	}
+	kernel, err := scan.Start(scan.Config{
+		ID: scan.ID("collect-display-policy"), Capacity: 2, Workers: 1,
+		Controller: ctrl, Recognizer: waitRecognizer{}, Deliverer: &recordSink{},
+	})
+	if err != nil {
+		t.Fatalf("scan.Start: %v", err)
+	}
+	waitUntil(t, "capturing", func() bool { return kernel.Snapshot().Phase == scan.PhaseCapturing })
+	cfg := port.LastConfig()
+	if cfg == nil || cfg.Display == nil || len(cfg.Display.OpenTiers) != 1 {
+		t.Fatalf("the Windows display policy must reach Open: %+v", cfg)
+	}
+	kernel.Cancel()
+	select {
+	case <-kernel.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out")
+	}
+}
+
+// C4d: a macOS target does not get a Windows display policy.
+func TestPrepareMacTargetHasNoWindowsDisplayPolicy(t *testing.T) {
+	sess := readySession()
+	port := &platformfake.Port{NewSession: func() *platformfake.Session { return sess }}
+	ctrl := &collect.Controller{
+		Port:         port,
+		Target:       platform.TargetSpec{BundleID: "com.example.game"},
+		Hotkey:       platform.HotkeySpec{Key: platform.KeyS},
+		Traversal:    func() collect.Traversal { return collect.ObserveOnly{} },
+		ObserveEvery: 5 * time.Millisecond,
+	}
+	kernel, err := scan.Start(scan.Config{
+		ID: scan.ID("collect-no-display-policy"), Capacity: 2, Workers: 1,
+		Controller: ctrl, Recognizer: waitRecognizer{}, Deliverer: &recordSink{},
+	})
+	if err != nil {
+		t.Fatalf("scan.Start: %v", err)
+	}
+	waitUntil(t, "capturing", func() bool { return kernel.Snapshot().Phase == scan.PhaseCapturing })
+	cfg := port.LastConfig()
+	if cfg == nil || cfg.Display != nil {
+		t.Fatalf("a macOS target must not carry a Windows display policy: %+v", cfg)
+	}
+	kernel.Cancel()
+	select {
+	case <-kernel.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out")
+	}
+}
+
 // C5: a broken problem during the wait fails immediately.
 func TestTargetLostFailsPrepare(t *testing.T) {
 	sess := readySession()

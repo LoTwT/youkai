@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"image"
 	"log"
+	"math"
 	"os"
 	"sync"
 	"time"
@@ -65,6 +66,10 @@ type MacAdapter struct {
 	FramePoll time.Duration // default 5 ms
 	// DwellAfterPost is the close dwell after the last event post.
 	DwellAfterPost time.Duration // default 50 ms
+	// RequiredWindowSize is the accepted cloud window's point size
+	// (1164×762 on the accepted configuration). Zero disables the check,
+	// which tests use for small synthetic frames; Host always sets it.
+	RequiredWindowSize image.Point
 	// Sleep backs the dispatcher's hold and drag intervals and the close
 	// dwell; tests inject a recorder.
 	Sleep func(time.Duration)
@@ -160,6 +165,17 @@ func (a *MacAdapter) Open(ctx context.Context, cfg SessionConfig) (Session, erro
 	candidates := macos.FilterTargetCandidates(cfg.Target.BundleID, windows, displays)
 	if len(candidates) == 0 {
 		unregisterHotkey()
+		if offscreen := macos.FilterBundleWindowsOutsideDisplays(cfg.Target.BundleID, windows, displays); len(offscreen) > 0 {
+			w := offscreen[0]
+			a.logf("target resolution: %d window(s) of %s lie outside or across displays; first window %d frame(%.1f,%.1f %.1fx%.1f)",
+				len(offscreen), cfg.Target.BundleID, w.WindowID, w.Frame.X, w.Frame.Y, w.Frame.W, w.Frame.H)
+			return nil, NewFaultWithParams(CodeTargetOffscreen,
+				fmt.Sprintf("windows of %q exist but none lies fully inside one display", cfg.Target.BundleID),
+				map[string]string{
+					"window": fmt.Sprintf("%.1f,%.1f %.1fx%.1f", w.Frame.X, w.Frame.Y, w.Frame.W, w.Frame.H),
+					"count":  fmt.Sprintf("%d", len(offscreen)),
+				})
+		}
 		return nil, NewFault(CodeTargetNotFound, fmt.Sprintf(
 			"the game is not running or has no eligible window (bundle %q, normal layer, on screen, fully inside one display); open the game first", cfg.Target.BundleID))
 	}
@@ -176,6 +192,19 @@ func (a *MacAdapter) Open(ctx context.Context, cfg SessionConfig) (Session, erro
 			"%d windows of %q passed the target filter; close the extra windows and retry", len(candidates), cfg.Target.BundleID))
 	}
 	target := candidates[0]
+	if required := a.RequiredWindowSize; required != (image.Point{}) {
+		if math.Abs(target.Frame.W-float64(required.X)) > 0.01 || math.Abs(target.Frame.H-float64(required.Y)) > 0.01 {
+			unregisterHotkey()
+			current := fmt.Sprintf("%.1fx%.1f", target.Frame.W, target.Frame.H)
+			return nil, NewFaultWithParams(CodeWindowSizeUnsupported,
+				fmt.Sprintf("the cloud window is %s points; this profile is calibrated for %dx%d", current, required.X, required.Y),
+				map[string]string{
+					"current":  current,
+					"expected": fmt.Sprintf("%dx%d", required.X, required.Y),
+					"window":   fmt.Sprintf("%d", target.WindowID),
+				})
+		}
+	}
 	selector := macos.WindowSelector{BundleID: cfg.Target.BundleID, PID: target.PID, WindowID: target.WindowID}
 
 	s := &macSession{

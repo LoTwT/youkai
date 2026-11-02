@@ -1951,7 +1951,7 @@ func TestSinglePagePrecheckRefusals(t *testing.T) {
 		}, collect.CodeAnchorsMissing},
 		{"wrong content region", func(g *scriptedGame, inv *collect.Inventory) {
 			g.content = image.Rect(0, 0, 1600, 1080)
-		}, collect.CodeAnchorsMissing},
+		}, platform.CodeFrameConfigMismatch},
 		{"uncalibrated matcher", func(g *scriptedGame, inv *collect.Inventory) {
 			inv.Matcher = nil
 		}, collect.CodePageUnverified},

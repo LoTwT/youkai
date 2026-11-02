@@ -452,6 +452,7 @@ func (d *recordDeliverer) finish(final scan.Snapshot) error {
 	d.shell.EndedAt = &ended
 	term := terminationFrom(final)
 	d.shell.Termination = &term
+	d.shell.FailureParams = failureParamsFrom(final)
 	if err := d.saveLocked(); err != nil {
 		d.saveErr = err
 		return err
@@ -493,6 +494,7 @@ func (d *recordDeliverer) retry() error {
 			Code:  "interrupted",
 			Phase: record.PhaseCapturing,
 		}
+		d.shell.FailureParams = nil
 	}
 	if err := d.saveLocked(); err != nil {
 		d.saveErr = err
@@ -621,6 +623,19 @@ func terminationFrom(final scan.Snapshot) record.Termination {
 		t.Code = "unknownEnd"
 	}
 	return t
+}
+
+// failureParamsFrom copies the first trigger's structured parameters; an
+// interrupted or completed session has none.
+func failureParamsFrom(final scan.Snapshot) map[string]string {
+	if final.Trigger == nil || len(final.Trigger.Params) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(final.Trigger.Params))
+	for k, v := range final.Trigger.Params {
+		out[k] = v
+	}
+	return out
 }
 
 // nowUTC is the persistence layer's clock; timestamps are UTC throughout.

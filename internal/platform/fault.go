@@ -58,13 +58,48 @@ const (
 	CodeTargetNotFound             = "targetNotFound"
 	CodeScreenRecordingUnavailable = "screenRecordingUnavailable"
 	CodeUnsupportedPlatform        = "unsupportedPlatform"
+	// CodeTargetOffscreen: macOS found windows of the target bundle, but
+	// every resolvable one straddles or lies outside the displays. It is
+	// distinct from targetNotFound so the UI can ask the user to move
+	// the cloud window fully onto one screen.
+	CodeTargetOffscreen = "targetOffscreen"
+	// CodeWindowSizeUnsupported: the resolved window's point size is not
+	// the client profile's required size. The platform refuses before
+	// capture rather than scaling an unaccepted configuration.
+	CodeWindowSizeUnsupported = "windowSizeUnsupported"
+	// CodeFrameConfigMismatch: a captured frame's image size or content
+	// region is not the calibrated layout's configuration (for example
+	// the window or stream scale changed).
+	CodeFrameConfigMismatch = "frameConfigMismatch"
+	// CodeClientTierNotOpened: the Windows client area is a known 16:9
+	// tier, but no profile for it has field acceptance.
+	CodeClientTierNotOpened = "clientTierNotOpened"
+	// CodeClientTierUnsupported: the Windows client area is not one of
+	// the known 16:9 tiers at all.
+	CodeClientTierUnsupported = "clientTierUnsupported"
+	// CodeWindowOutsideWorkArea: the client area is neither fully inside
+	// the monitor's work area nor exactly the whole monitor (borderless
+	// full screen).
+	CodeWindowOutsideWorkArea = "windowOutsideWorkArea"
+	// CodeExclusiveFullscreen: the foreground target is an exclusive
+	// Direct3D full-screen application.
+	CodeExclusiveFullscreen = "exclusiveFullscreen"
+	// CodeIntegrityMismatch: the target process runs at a higher
+	// mandatory integrity level than youkai, so UIPI will silently drop
+	// SendInput events.
+	CodeIntegrityMismatch = "integrityMismatch"
+	// CodeIntegrityUnverifiable: a mandatory integrity level could not be
+	// read. The check is fail-closed.
+	CodeIntegrityUnverifiable = "integrityUnverifiable"
 
 	// Premise.
-	CodeFocusLost       = "focusLost"
-	CodeTargetHidden    = "targetHidden"
-	CodeTargetAmbiguous = "targetAmbiguous"
-	CodePositionOutside = "positionOutside"
-	CodeStaleGeometry   = "staleGeometry"
+	CodeFocusLost         = "focusLost"
+	CodeTargetHidden      = "targetHidden"
+	CodeTargetAmbiguous   = "targetAmbiguous"
+	CodePositionOutside   = "positionOutside"
+	CodeStaleGeometry     = "staleGeometry"
+	CodeWindowOccluded    = "windowOccluded"
+	CodeFrameContentBlank = "frameContentBlank"
 
 	// Broken.
 	CodeTargetLost        = "targetLost"
@@ -91,11 +126,22 @@ var codeClasses = map[string]FaultClass{
 	CodeTargetNotFound:             ClassSetup,
 	CodeScreenRecordingUnavailable: ClassSetup,
 	CodeUnsupportedPlatform:        ClassSetup,
+	CodeTargetOffscreen:            ClassSetup,
+	CodeWindowSizeUnsupported:      ClassSetup,
+	CodeClientTierNotOpened:        ClassSetup,
+	CodeClientTierUnsupported:      ClassSetup,
+	CodeWindowOutsideWorkArea:      ClassSetup,
+	CodeExclusiveFullscreen:        ClassSetup,
+	CodeIntegrityMismatch:          ClassSetup,
+	CodeIntegrityUnverifiable:      ClassSetup,
 	CodeFocusLost:                  ClassPremise,
 	CodeTargetHidden:               ClassPremise,
 	CodeTargetAmbiguous:            ClassPremise,
 	CodePositionOutside:            ClassPremise,
 	CodeStaleGeometry:              ClassPremise,
+	CodeWindowOccluded:             ClassPremise,
+	CodeFrameContentBlank:          ClassPremise,
+	CodeFrameConfigMismatch:        ClassBroken,
 	CodeTargetLost:                 ClassBroken,
 	CodeGeometryChanged:            ClassBroken,
 	CodeGeometryInvalid:            ClassBroken,
@@ -124,12 +170,34 @@ type Fault struct {
 	Code    string
 	Class   FaultClass
 	Message string
-	At      time.Time
+	// Params are structured diagnostic facts (sizes, rectangles, window
+	// identification, integrity levels) the UI maps to a localized
+	// explanation. The platform never builds user-facing prose from
+	// them; the message stays a stable English diagnostic.
+	Params map[string]string
+	At     time.Time
 }
 
 // NewFault builds a fault with its class derived from the code table.
 func NewFault(code, message string) *Fault {
 	return &Fault{Code: code, Class: ClassOf(code), Message: message, At: time.Now()}
+}
+
+// NewFaultWithParams builds a fault carrying structured diagnostic
+// parameters. The map is copied; later mutation cannot change the fault.
+func NewFaultWithParams(code, message string, params map[string]string) *Fault {
+	return &Fault{Code: code, Class: ClassOf(code), Message: message, Params: copyParams(params), At: time.Now()}
+}
+
+func copyParams(params map[string]string) map[string]string {
+	if len(params) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(params))
+	for k, v := range params {
+		out[k] = v
+	}
+	return out
 }
 
 // Error implements error with the code first, so logs and triggers keep

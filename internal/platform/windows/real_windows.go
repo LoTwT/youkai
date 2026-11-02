@@ -162,20 +162,40 @@ func (winGeometryAPI) MonitorDPI(hwnd HWND) (uint32, error) {
 }
 
 func (winGeometryAPI) MonitorRect(hwnd HWND) (PixelRect, error) {
-	hmon, _, _ := procMonitorFromWindow.Call(uintptr(hwnd), monitorDefaultToNearest)
-	if hmon == 0 {
-		return PixelRect{}, errors.New("MonitorFromWindow: no monitor for the window")
-	}
-	var mi monitorInfo
-	mi.cbSize = uint32(unsafe.Sizeof(mi))
-	ret, _, err := procGetMonitorInfoW.Call(hmon, uintptr(unsafe.Pointer(&mi)))
-	if ret == 0 {
-		return PixelRect{}, fmt.Errorf("GetMonitorInfoW: %w", callErrno(err))
+	mi, err := monitorInfoOf(hwnd)
+	if err != nil {
+		return PixelRect{}, err
 	}
 	return PixelRect{
 		Min: PixelPoint{X: int(mi.rcMonitor.Left), Y: int(mi.rcMonitor.Top)},
 		Max: PixelPoint{X: int(mi.rcMonitor.Right), Y: int(mi.rcMonitor.Bottom)},
 	}, nil
+}
+
+func (winGeometryAPI) MonitorWorkArea(hwnd HWND) (PixelRect, error) {
+	mi, err := monitorInfoOf(hwnd)
+	if err != nil {
+		return PixelRect{}, err
+	}
+	return PixelRect{
+		Min: PixelPoint{X: int(mi.rcWork.Left), Y: int(mi.rcWork.Top)},
+		Max: PixelPoint{X: int(mi.rcWork.Right), Y: int(mi.rcWork.Bottom)},
+	}, nil
+}
+
+// monitorInfoOf reads the MONITORINFO of the monitor hwnd is on.
+func monitorInfoOf(hwnd HWND) (monitorInfo, error) {
+	hmon, _, _ := procMonitorFromWindow.Call(uintptr(hwnd), monitorDefaultToNearest)
+	if hmon == 0 {
+		return monitorInfo{}, errors.New("MonitorFromWindow: no monitor for the window")
+	}
+	var mi monitorInfo
+	mi.cbSize = uint32(unsafe.Sizeof(mi))
+	ret, _, err := procGetMonitorInfoW.Call(hmon, uintptr(unsafe.Pointer(&mi)))
+	if ret == 0 {
+		return monitorInfo{}, fmt.Errorf("GetMonitorInfoW: %w", callErrno(err))
+	}
+	return mi, nil
 }
 
 func (winGeometryAPI) SelfDpiAwareness() (DpiAwareness, error) {
@@ -480,4 +500,74 @@ func (winHotkeyAPI) UnregisterHotKey(id int) error {
 		return fmt.Errorf("UnregisterHotKey id %d: %w", id, callErrno(err))
 	}
 	return nil
+}
+
+type winIntegrityAPI struct{}
+
+// RealIntegrityAPI returns the token-based integrity reader. It never
+// opens the target for anything beyond PROCESS_QUERY_LIMITED_INFORMATION,
+// and only asks its token for TOKEN_QUERY.
+func RealIntegrityAPI() IntegrityAPI { return winIntegrityAPI{} }
+
+func (winIntegrityAPI) ProcessIntegrity(pid ProcessID) (IntegrityLevel, error) {
+	h, err := windows.OpenProcess(processQueryLimitedInformation, false, uint32(pid))
+	if err != nil {
+		return 0, fmt.Errorf("open process %d: %w", pid, err)
+	}
+	defer windows.CloseHandle(h)
+	var token windows.Token
+	if err := windows.OpenProcessToken(h, windows.TOKEN_QUERY, &token); err != nil {
+		return 0, fmt.Errorf("open process token of pid %d: %w", pid, err)
+	}
+	defer token.Close()
+	return tokenIntegrity(token)
+}
+
+func (winIntegrityAPI) SelfIntegrity() (IntegrityLevel, error) {
+	// GetCurrentProcessToken returns a pseudo-token that needs no close
+	// and no OpenProcess call, matching the read-only probe tool.
+	return tokenIntegrity(windows.GetCurrentProcessToken())
+}
+
+// tokenIntegrity reads TokenIntegrityLevel and returns the RID of the
+// mandatory-label SID (the last sub-authority).
+func tokenIntegrity(token windows.Token) (IntegrityLevel, error) {
+	var needed uint32
+	err := windows.GetTokenInformation(token, uint32(windows.TokenIntegrityLevel), nil, 0, &needed)
+	if err != nil && !errors.Is(err, windows.ERROR_INSUFFICIENT_BUFFER) {
+		return 0, fmt.Errorf("query token integrity length: %w", err)
+	}
+	if needed == 0 {
+		return 0, errors.New("query token integrity length: empty answer")
+	}
+	// uint64 words keep the buffer 8-byte aligned for the SID pointer in
+	// TOKEN_MANDATORY_LABEL; GetTokenInformation writes only `needed` bytes.
+	buffer := make([]uint64, (int(needed)+7)/8)
+	if err := windows.GetTokenInformation(token, uint32(windows.TokenIntegrityLevel),
+		(*byte)(unsafe.Pointer(&buffer[0])), needed, &needed); err != nil {
+		return 0, fmt.Errorf("query token integrity: %w", err)
+	}
+	label := (*windows.Tokenmandatorylabel)(unsafe.Pointer(&buffer[0]))
+	if label.Label.Sid == nil {
+		return 0, errors.New("token integrity label has no SID")
+	}
+	count := label.Label.Sid.SubAuthorityCount()
+	if count == 0 {
+		return 0, errors.New("token integrity SID has no sub-authority")
+	}
+	return IntegrityLevel(label.Label.Sid.SubAuthority(uint32(count - 1))), nil
+}
+
+type winFullscreenAPI struct{}
+
+// RealFullscreenAPI returns the shell-based exclusive-fullscreen probe.
+func RealFullscreenAPI() FullscreenAPI { return winFullscreenAPI{} }
+
+func (winFullscreenAPI) FullscreenState() (FullscreenState, error) {
+	var state uint32
+	hr, _, _ := procSHQueryUserNotificationState.Call(uintptr(unsafe.Pointer(&state)))
+	if int32(hr) != 0 {
+		return FullscreenUnknown, fmt.Errorf("SHQueryUserNotificationState: HRESULT 0x%08x", int32(hr))
+	}
+	return FullscreenStateFromNotification(state), nil
 }

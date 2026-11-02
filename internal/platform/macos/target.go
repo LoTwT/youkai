@@ -258,6 +258,29 @@ func FilterTargetCandidates(bundleID string, windows []NativeWindow, displays []
 	return out
 }
 
+// FilterBundleWindowsOutsideDisplays returns the bundle's otherwise
+// resolvable windows that are not fully inside any display: normal layer,
+// on screen, at least the candidate minimum size, but straddling or
+// outside the display rectangles. The adapter uses it to distinguish
+// "the game is not running" (targetNotFound) from "the window was dragged
+// off or across the screen edge" (targetOffscreen), so the Chinese prompt
+// can ask the user to move the window.
+func FilterBundleWindowsOutsideDisplays(bundleID string, windows []NativeWindow, displays []NativeDisplay) []NativeWindow {
+	var out []NativeWindow
+	for _, w := range windows {
+		if w.BundleID != bundleID || w.Layer != 0 || !w.OnScreen {
+			continue
+		}
+		if w.Frame.W < minCandidateWidth || w.Frame.H < minCandidateHeight {
+			continue
+		}
+		if !WindowFullyInsideDisplays(w.Frame, displays) {
+			out = append(out, w)
+		}
+	}
+	return out
+}
+
 // FilterAmbiguitySiblings returns the windows of the locked process that
 // pass the candidate predicate, excluding the selected window itself.
 // Only these count as ambiguity sources when re-assessing a locked

@@ -132,6 +132,7 @@ type fakeWinGeo struct {
 	clientSize windows.PixelPoint
 	origin     windows.PixelPoint
 	monitor    windows.PixelRect
+	workArea   windows.PixelRect
 	windowDPI  uint32
 	monitorDPI uint32
 	self       windows.DpiAwareness
@@ -168,6 +169,15 @@ func (f *fakeWinGeo) MonitorRect(hwnd windows.HWND) (windows.PixelRect, error) {
 	return f.monitor, nil
 }
 
+func (f *fakeWinGeo) MonitorWorkArea(hwnd windows.HWND) (windows.PixelRect, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.workArea.Empty() {
+		return f.monitor, nil
+	}
+	return f.workArea, nil
+}
+
 func (f *fakeWinGeo) SelfDpiAwareness() (windows.DpiAwareness, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -184,6 +194,8 @@ type fakeWinFG struct {
 	mu         sync.Mutex
 	foreground windows.HWND
 	hitDefault windows.HWND
+	hits       map[windows.PixelPoint]windows.HWND
+	roots      map[windows.HWND]windows.HWND
 }
 
 func (f *fakeWinFG) ForegroundWindow() windows.HWND {
@@ -197,10 +209,20 @@ func (f *fakeWinFG) RequestForeground(hwnd windows.HWND) bool { return false }
 func (f *fakeWinFG) HitWindow(p windows.PixelPoint) windows.HWND {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if h, ok := f.hits[p]; ok {
+		return h
+	}
 	return f.hitDefault
 }
 
-func (f *fakeWinFG) RootOf(hwnd windows.HWND) windows.HWND { return hwnd }
+func (f *fakeWinFG) RootOf(hwnd windows.HWND) windows.HWND {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if root, ok := f.roots[hwnd]; ok {
+		return root
+	}
+	return hwnd
+}
 
 func (f *fakeWinFG) set(foreground windows.HWND) {
 	f.mu.Lock()
@@ -211,6 +233,11 @@ func (f *fakeWinFG) set(foreground windows.HWND) {
 type fakeWinGDI struct {
 	mu       sync.Mutex
 	captures int
+	// fill paints one BGRA pixel; nil uses the position pattern below.
+	fill func(x, y int) (b, g, r, a byte)
+	// onCapture runs after one frame is filled; tests use it to move the
+	// window during the precheck capture.
+	onCapture func()
 }
 
 func (f *fakeWinGDI) GetScreenDC() (windows.DC, error) { return windows.DC(1), nil }
@@ -240,8 +267,18 @@ func (f *fakeWinGDI) GetDIBits(dc windows.DC, bmp windows.GDIObject, buf []byte,
 	for y := 0; y < h; y++ {
 		for x := 0; x < w; x++ {
 			i := (y*w + x) * 4
+			if f.fill != nil {
+				buf[i], buf[i+1], buf[i+2], buf[i+3] = f.fill(x, y)
+				continue
+			}
 			buf[i], buf[i+1], buf[i+2], buf[i+3] = byte(x), byte(y), byte((x+y)%200), 0
 		}
+	}
+	f.mu.Lock()
+	hook := f.onCapture
+	f.mu.Unlock()
+	if hook != nil {
+		hook()
 	}
 	return nil
 }
@@ -301,6 +338,36 @@ func (f *fakeWinHotkeyAPI) registered() bool {
 	return len(f.reg) > 0
 }
 
+type fakeWinIntegrity struct {
+	target    windows.IntegrityLevel
+	self      windows.IntegrityLevel
+	targetErr error
+	selfErr   error
+}
+
+func (f *fakeWinIntegrity) ProcessIntegrity(pid windows.ProcessID) (windows.IntegrityLevel, error) {
+	return f.target, f.targetErr
+}
+
+func (f *fakeWinIntegrity) SelfIntegrity() (windows.IntegrityLevel, error) {
+	return f.self, f.selfErr
+}
+
+type fakeWinFullscreen struct {
+	state windows.FullscreenState
+	err   error
+}
+
+func (f *fakeWinFullscreen) FullscreenState() (windows.FullscreenState, error) {
+	if f.err != nil {
+		return windows.FullscreenUnknown, f.err
+	}
+	if f.state == "" {
+		return windows.FullscreenNotExclusive, nil
+	}
+	return f.state, nil
+}
+
 // fakeWinLoop is the fake hotkey loop: registration happens on it, the
 // trigger is delivered by the test, Stop unregisters.
 type fakeWinLoop struct {
@@ -318,20 +385,41 @@ const (
 )
 
 type winWorld struct {
-	adapter *WinAdapter
-	win     *fakeWinWindow
-	procs   *fakeWinProcs
-	geo     *fakeWinGeo
-	fg      *fakeWinFG
-	gdi     *fakeWinGDI
-	send    *fakeWinSender
-	hotkey  *fakeWinHotkeyAPI
-	gate    *fakeGate
-	mgr     *windows.HotkeyManager
+	adapter    *WinAdapter
+	win        *fakeWinWindow
+	procs      *fakeWinProcs
+	geo        *fakeWinGeo
+	fg         *fakeWinFG
+	gdi        *fakeWinGDI
+	send       *fakeWinSender
+	integrity  *fakeWinIntegrity
+	fullscreen *fakeWinFullscreen
+	hotkey     *fakeWinHotkeyAPI
+	gate       *fakeGate
+	mgr        *windows.HotkeyManager
 
 	faultsMu sync.Mutex
 	faults   []*Fault
 	stops    int
+}
+
+// testDisplayPolicy is the adapter's local-client contract for tests: the
+// 1920×1080 tier is known and open, with samples at representative client
+// positions. The real policy comes from collect.WindowsLocalDisplayPolicy.
+func testDisplayPolicy() *WindowDisplayPolicy {
+	size := image.Pt(1920, 1080)
+	return &WindowDisplayPolicy{
+		KnownTiers: []ClientTier{{Name: "1920x1080", Client: size}},
+		OpenTiers:  []ClientTier{{Name: "1920x1080", Client: size}},
+		Probes: map[image.Point]WindowProbes{
+			size: {Occlusion: []ProbePoint{
+				{Name: "corner", At: image.Pt(10, 10)},
+				{Name: "detail", At: image.Pt(960, 540)},
+				{Name: "bottom-bar", At: image.Pt(960, 1028)},
+				{Name: "corner-bottom-right", At: image.Pt(1909, 1069)},
+			}},
+		},
+	}
 }
 
 func newWinWorld(t *testing.T) *winWorld {
@@ -346,21 +434,25 @@ func newWinWorld(t *testing.T) *winWorld {
 			gamePID: {path: gameExe, started: started},
 		}},
 		geo: &fakeWinGeo{
-			clientSize: windows.PixelPoint{X: 800, Y: 600},
+			clientSize: windows.PixelPoint{X: 1920, Y: 1080},
 			origin:     windows.PixelPoint{X: 10, Y: 20},
-			monitor:    windows.PixelRect{Min: windows.PixelPoint{X: 0, Y: 0}, Max: windows.PixelPoint{X: 1920, Y: 1080}},
+			monitor:    windows.PixelRect{Min: windows.PixelPoint{X: 0, Y: 0}, Max: windows.PixelPoint{X: 2000, Y: 1200}},
+			workArea:   windows.PixelRect{Min: windows.PixelPoint{X: 0, Y: 0}, Max: windows.PixelPoint{X: 2000, Y: 1160}},
 			windowDPI:  96, monitorDPI: 96,
 			self: windows.DpiAwarenessPerMonitorV2,
 		},
-		fg:     &fakeWinFG{foreground: gameHwnd, hitDefault: gameHwnd},
-		gdi:    &fakeWinGDI{},
-		send:   &fakeWinSender{},
-		hotkey: &fakeWinHotkeyAPI{},
-		gate:   &fakeGate{open: true},
+		fg:         &fakeWinFG{foreground: gameHwnd, hitDefault: gameHwnd},
+		gdi:        &fakeWinGDI{},
+		send:       &fakeWinSender{},
+		integrity:  &fakeWinIntegrity{target: windows.IntegrityMedium, self: windows.IntegrityMedium},
+		fullscreen: &fakeWinFullscreen{},
+		hotkey:     &fakeWinHotkeyAPI{},
+		gate:       &fakeGate{open: true},
 	}
 	adapter, err := NewWinAdapter(WinNatives{
 		Win: w.win, Procs: w.procs, Geo: w.geo, FG: w.fg, GDI: w.gdi,
-		Send: w.send, HotkeyAPI: w.hotkey,
+		Send: w.send, Integrity: w.integrity, Fullscreen: w.fullscreen,
+		HotkeyAPI: w.hotkey,
 		StartLoop: func(mgr *windows.HotkeyManager) (WinHotkeyLoop, error) {
 			if err := mgr.Register(); err != nil {
 				return nil, err
@@ -378,10 +470,11 @@ func newWinWorld(t *testing.T) *winWorld {
 
 func (w *winWorld) config() SessionConfig {
 	return SessionConfig{
-		Target: TargetSpec{ExecutablePath: gameExe, ClassNameHint: "UnityWndClass"},
-		Hotkey: HotkeySpec{Key: KeyS, Ctrl: true, Alt: true, Shift: true},
-		OnStop: func() { w.stops++ },
-		Gate:   w.gate,
+		Target:  TargetSpec{ExecutablePath: gameExe, ClassNameHint: "UnityWndClass"},
+		Hotkey:  HotkeySpec{Key: KeyS, Ctrl: true, Alt: true, Shift: true},
+		OnStop:  func() { w.stops++ },
+		Gate:    w.gate,
+		Display: testDisplayPolicy(),
 		OnFault: func(f *Fault) {
 			w.faultsMu.Lock()
 			w.faults = append(w.faults, f)
@@ -470,15 +563,16 @@ func TestWinOpenResolution(t *testing.T) {
 			t.Fatalf("want targetHidden, got %v", err)
 		}
 	})
-	t.Run("client not inside the monitor reports targetHidden", func(t *testing.T) {
+	t.Run("client outside the work area reports windowOutsideWorkArea", func(t *testing.T) {
 		w := newWinWorld(t)
 		w.geo.mu.Lock()
 		w.geo.monitor = windows.PixelRect{Min: windows.PixelPoint{X: 0, Y: 0}, Max: windows.PixelPoint{X: 100, Y: 100}}
+		w.geo.workArea = windows.PixelRect{Min: windows.PixelPoint{X: 0, Y: 0}, Max: windows.PixelPoint{X: 100, Y: 100}}
 		w.geo.mu.Unlock()
 		_, err := w.adapter.Open(context.Background(), w.config())
 		var f *Fault
-		if !errors.As(err, &f) || f.Code != CodeTargetHidden {
-			t.Fatalf("want targetHidden, got %v", err)
+		if !errors.As(err, &f) || f.Code != CodeWindowOutsideWorkArea {
+			t.Fatalf("want windowOutsideWorkArea, got %v", err)
 		}
 	})
 	t.Run("DPI-virtualized target reports geometryInvalid", func(t *testing.T) {
@@ -534,7 +628,7 @@ func TestWinGeometryChange(t *testing.T) {
 	if c := frame.Image.RGBAAt(3, 5); c.R != 8 || c.G != 5 || c.B != 3 || c.A != 255 {
 		t.Fatalf("RGBA at (3,5): %+v", c)
 	}
-	if frame.Content != image.Rect(0, 0, 800, 600) || frame.Geometry != 1 {
+	if frame.Content != image.Rect(0, 0, 1920, 1080) || frame.Geometry != 1 {
 		t.Fatalf("frame: content %v geometry %d", frame.Content, frame.Geometry)
 	}
 	if frame.Reused {

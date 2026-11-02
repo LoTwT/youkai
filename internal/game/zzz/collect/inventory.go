@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"image"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/LoTwT/youkai/internal/platform"
@@ -386,9 +387,24 @@ func (inv *Inventory) Precheck(ctx context.Context, sess platform.Session) error
 			frame.ID, frame.Geometry, geo))
 	}
 	if !inv.Layout.MatchesFrame(frame.Image.Bounds().Size(), frame.Content) {
-		return scan.NewFault(CodeAnchorsMissing, fmt.Errorf(
+		client := "windowsLocal"
+		params := map[string]string{
+			"client":          client,
+			"image":           pointString(frame.Image.Bounds().Size()),
+			"content":         rectString(frame.Content),
+			"expectedImage":   pointString(inv.Layout.Image),
+			"expectedContent": rectString(inv.Layout.Content),
+		}
+		if strings.HasPrefix(inv.Layout.Name, "maccloud") {
+			client = "macosCloud"
+			params["client"] = client
+		} else {
+			params["allowed"] = openTierNames()
+		}
+		return scan.NewFaultWithParams(platform.CodeFrameConfigMismatch, fmt.Errorf(
 			"collect: precheck: the captured configuration (image %v, content %v) is not this layout's (image %v, content %v)",
-			boundsOrNil(frame.Image), frame.Content, inv.Layout.Image, inv.Layout.Content))
+			boundsOrNil(frame.Image), frame.Content, inv.Layout.Image, inv.Layout.Content),
+			params)
 	}
 	if !inv.Layout.FitsContent(frame.Content) {
 		return scan.NewFault(CodeAnchorsMissing, fmt.Errorf(

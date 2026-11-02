@@ -148,6 +148,11 @@ func triggerText(trigger scan.Trigger) string {
 	if trigger.Kind == scan.TriggerUser {
 		kind = "用户"
 	}
+	if trigger.Kind == scan.TriggerFault {
+		if detail := failureText(trigger.Code, trigger.Params); detail != "" {
+			return fmt.Sprintf("%s停止，阶段：%s，%s", kind, phaseText(trigger.Phase), detail)
+		}
+	}
 	text := fmt.Sprintf("%s停止，阶段：%s", kind, phaseText(trigger.Phase))
 	if trigger.Message != "" {
 		text += "，" + trigger.Message

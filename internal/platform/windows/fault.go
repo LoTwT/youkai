@@ -74,6 +74,9 @@ type PlatformFault struct {
 	// LastGeometryVersion is the geometry version still known valid when
 	// the fault occurred; 0 when none was ever valid.
 	LastGeometryVersion GeometryVersion
+	// Params are structured diagnostic facts the port forwards to the
+	// UI; they never contain a localized sentence.
+	Params map[string]string
 }
 
 // NewFault builds a PlatformFault; rawErr may be nil.
@@ -96,4 +99,10 @@ func (f *PlatformFault) Error() string {
 		return fmt.Sprintf("%s: %s: %s", f.Code, f.Message, f.RawErr)
 	}
 	return fmt.Sprintf("%s: %s", f.Code, f.Message)
+}
+
+// WithParams attaches structured diagnostic facts and returns the fault.
+func (f *PlatformFault) WithParams(params map[string]string) *PlatformFault {
+	f.Params = params
+	return f
 }

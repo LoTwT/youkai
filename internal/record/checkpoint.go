@@ -17,9 +17,16 @@ const (
 	FormatName = "youkai.checkpoint"
 	// FormatVersion is the current internal checkpoint format version.
 	// Readers reject an unknown version instead of guessing at a
-	// compatible interpretation; changing the document shape bumps this.
-	// Version history: 2 added ItemRecord.Failure, the recognition
-	// failure text of failed items.
+	// compatible interpretation. Adding an optional field (omitempty,
+	// tolerated as absent by readers) does not bump the version; only a
+	// change to an existing field's shape or semantics does. Version
+	// history: 2 added ItemRecord.Failure, the recognition failure text
+	// of failed items. SessionShell.FailureParams and its fault params
+	// are such optional additions and keep version 2.
+	//
+	// Cost of keeping 2: an older binary reads a new generation with
+	// DisallowUnknownFields and fails on failureParams; that downgrade is
+	// accepted because the application does not support downgrades.
 	FormatVersion = 2
 )
 
@@ -265,7 +272,13 @@ type SessionShell struct {
 	// Termination is nil while the session is still running; a
 	// checkpoint without it is exactly what recovery marks interrupted.
 	Termination *Termination `json:"termination,omitempty"`
-	Coverage    Coverage     `json:"coverage"`
+	// FailureParams carries the first trigger's structured diagnostic
+	// facts (sizes, rectangles, window identification, integrity levels).
+	// The UI maps the code plus these values to a localized explanation;
+	// params never contain user-facing prose. It stays out of the public
+	// scan JSON, which keeps its three-field termination shape.
+	FailureParams map[string]string `json:"failureParams,omitempty"`
+	Coverage      Coverage          `json:"coverage"`
 	// CapturedCount is the number of accepted observations, including
 	// those that later failed or stayed unprocessed; it must equal the
 	// item records, which is the accounting check that makes an

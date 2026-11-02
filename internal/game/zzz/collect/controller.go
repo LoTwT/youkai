@@ -99,6 +99,21 @@ func (c *Controller) every() time.Duration {
 	return DefaultObserveEvery
 }
 
+// displayPolicy builds the Windows local client's display contract. A
+// macOS target (bundle only) has no Windows display policy; a Windows
+// target fails preparation when the reference layout cannot be expressed
+// rather than starting without the precheck.
+func (c *Controller) displayPolicy() (*platform.WindowDisplayPolicy, error) {
+	if c.Target.ExecutablePath == "" {
+		return nil, nil
+	}
+	policy, err := WindowsLocalDisplayPolicy()
+	if err != nil {
+		return nil, err
+	}
+	return &policy, nil
+}
+
 func (c *Controller) isReleased() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -122,7 +137,7 @@ func (c *Controller) onFault(h *scan.ControllerHandle, f *platform.Fault) {
 	if f == nil || c.isReleased() {
 		return
 	}
-	h.Fail(scan.NewFault(f.Code, f))
+	h.Fail(scanFault(f))
 }
 
 // Prepare implements scan.Controller: preflight, open, wait for a ready
@@ -133,7 +148,11 @@ func (c *Controller) onFault(h *scan.ControllerHandle, f *platform.Fault) {
 // back to the game. No input is dispatched anywhere in Prepare.
 func (c *Controller) Prepare(ctx context.Context, h *scan.ControllerHandle) error {
 	if f := c.Port.Preflight().Fault(); f != nil {
-		return scan.NewFault(f.Code, f)
+		return scanFault(f)
+	}
+	display, err := c.displayPolicy()
+	if err != nil {
+		return scan.NewFault(platform.CodeInvalidOperation, err)
 	}
 	sess, err := c.Port.Open(ctx, platform.SessionConfig{
 		Target:  c.Target,
@@ -141,11 +160,12 @@ func (c *Controller) Prepare(ctx context.Context, h *scan.ControllerHandle) erro
 		OnStop:  c.onHotkey,
 		Gate:    h,
 		OnFault: func(f *platform.Fault) { c.onFault(h, f) },
+		Display: display,
 	})
 	if err != nil {
 		var f *platform.Fault
 		if errors.As(err, &f) {
-			return scan.NewFault(f.Code, f)
+			return scanFault(f)
 		}
 		return err
 	}
@@ -180,7 +200,7 @@ func (c *Controller) Prepare(ctx context.Context, h *scan.ControllerHandle) erro
 			lastObsErr = err
 			lastProblems = nil
 			if fault, ok := portFault(err); ok && (fault.Class == platform.ClassSetup || fault.Class == platform.ClassBroken) {
-				return scan.NewFault(fault.Code, fault)
+				return scanFault(fault)
 			}
 			// An observation failure is waited out within the budget;
 			// the last error survives into the timeout.
@@ -203,7 +223,7 @@ func (c *Controller) Prepare(ctx context.Context, h *scan.ControllerHandle) erro
 			if fault, ok := portFault(err); ok {
 				switch fault.Class {
 				case platform.ClassSetup, platform.ClassBroken:
-					return scan.NewFault(fault.Code, fault)
+					return scanFault(fault)
 				}
 			}
 			// A premise or observation failure at the baseline: back to
@@ -212,13 +232,21 @@ func (c *Controller) Prepare(ctx context.Context, h *scan.ControllerHandle) erro
 		default:
 			for _, p := range obs.Problems {
 				if p.Class == platform.ClassSetup || p.Class == platform.ClassBroken {
-					return scan.NewFault(p.Code, p)
+					return scanFault(p)
 				}
 			}
 			lastProblems = obs.Problems
 			lastObsErr = nil
 		}
 		if time.Now().After(deadline) {
+			// A stage-2 precheck condition that stayed unresolved for the
+			// whole budget is more useful as itself than as a generic
+			// timeout: the UI maps the code and parameters to the exact
+			// Chinese prompt. Other unresolved premises keep the historical
+			// prepareTimeout code.
+			if p := terminalStageTwoFault(lastProblems); p != nil {
+				return scan.NewFaultWithParams(p.Code, p, p.Params)
+			}
 			return scan.NewFault(CodePrepareTimeout, timeoutDetail(lastProblems, lastObsErr))
 		}
 		if err := sleepCtx(ctx, every); err != nil {
@@ -346,6 +374,22 @@ func joinParts(parts []string) string {
 	return out
 }
 
+// terminalStageTwoFault reports the one stage-2 precheck fault that
+// should replace the generic preparation timeout: occlusion or the frame
+// content fallback when it is the only outstanding premise. The user can
+// act on those causes directly, and the UI maps their parameters.
+func terminalStageTwoFault(problems []*platform.Fault) *platform.Fault {
+	if len(problems) != 1 || problems[0] == nil {
+		return nil
+	}
+	switch problems[0].Code {
+	case platform.CodeWindowOccluded, platform.CodeFrameContentBlank:
+		return problems[0]
+	default:
+		return nil
+	}
+}
+
 // sleepCtx waits d or until ctx ends.
 func sleepCtx(ctx context.Context, d time.Duration) error {
 	if d <= 0 {
@@ -359,4 +403,14 @@ func sleepCtx(ctx context.Context, d time.Duration) error {
 	case <-t.C:
 		return nil
 	}
+}
+
+// scanFault carries a platform fault's code and structured parameters
+// through the kernel to the record and UI. The platform message stays a
+// diagnostic; localization happens in the UI.
+func scanFault(f *platform.Fault) error {
+	if f == nil {
+		return nil
+	}
+	return scan.NewFaultWithParams(f.Code, f, f.Params)
 }

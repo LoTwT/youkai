@@ -12,13 +12,15 @@ import (
 // stop hotkey on its own message-loop thread).
 func Host() (Port, error) {
 	adapter, err := NewWinAdapter(WinNatives{
-		Win:       windows.RealWindowAPI(),
-		Procs:     windows.RealProcessAPI(),
-		Geo:       windows.RealGeometryAPI(),
-		FG:        windows.RealForegroundAPI(),
-		GDI:       windows.RealGDI(),
-		Send:      windows.RealSender(),
-		HotkeyAPI: windows.RealHotkeyAPI(),
+		Win:        windows.RealWindowAPI(),
+		Procs:      windows.RealProcessAPI(),
+		Geo:        windows.RealGeometryAPI(),
+		FG:         windows.RealForegroundAPI(),
+		GDI:        windows.RealGDI(),
+		Send:       windows.RealSender(),
+		Integrity:  windows.RealIntegrityAPI(),
+		Fullscreen: windows.RealFullscreenAPI(),
+		HotkeyAPI:  windows.RealHotkeyAPI(),
 		StartLoop: func(mgr *windows.HotkeyManager) (WinHotkeyLoop, error) {
 			loop, err := windows.StartHotkeyLoop(mgr)
 			if err != nil {

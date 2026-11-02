@@ -256,3 +256,34 @@ func TestCandidatePredicateMatchesFieldGeometry(t *testing.T) {
 		t.Fatalf("pixel→screen %v, want %v", p, want)
 	}
 }
+
+func TestFilterBundleWindowsOutsideDisplays(t *testing.T) {
+	displays := []macos.NativeDisplay{
+		{DisplayID: 1, Width: 1920, Height: 1080, Frame: macos.PointRect{X: 0, Y: 0, W: 1920, H: 1080}},
+	}
+	offscreen := macos.NativeWindow{
+		WindowID: 101, PID: 5001, BundleID: cloudBundle,
+		Frame:    macos.PointRect{X: 1800, Y: 100, W: 1164, H: 762},
+		OnScreen: true, Layer: 0,
+	}
+	chip := macos.NativeWindow{
+		WindowID: 102, PID: 5001, BundleID: cloudBundle,
+		Frame:    macos.PointRect{X: 1900, Y: 100, W: 66, H: 20},
+		OnScreen: true, Layer: 0,
+	}
+	inside := macos.NativeWindow{
+		WindowID: 103, PID: 5001, BundleID: cloudBundle,
+		Frame:    macos.PointRect{X: 100, Y: 100, W: 1164, H: 762},
+		OnScreen: true, Layer: 0,
+	}
+	other := macos.NativeWindow{
+		WindowID: 104, PID: 6001, BundleID: "com.example.finder",
+		Frame:    macos.PointRect{X: 1800, Y: 100, W: 1164, H: 762},
+		OnScreen: true, Layer: 0,
+	}
+	got := macos.FilterBundleWindowsOutsideDisplays(cloudBundle, []macos.NativeWindow{offscreen, chip, inside, other}, displays)
+	if len(got) != 1 || got[0].WindowID != offscreen.WindowID {
+		t.Fatalf("outside-display filters = %+v, want only window %d (chips, inside windows and other bundles are excluded)",
+			got, offscreen.WindowID)
+	}
+}

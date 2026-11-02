@@ -55,6 +55,11 @@ type ClientGeometry struct {
 	// Monitor is the monitor the window currently sits on; its origin
 	// may be negative.
 	Monitor PixelRect
+	// WorkArea is the monitor's work area (the monitor rect minus the
+	// taskbar and other app bars). It is part of the geometry because a
+	// window that only overlaps it, or that is covered by the taskbar,
+	// cannot be prechecked as fully visible.
+	WorkArea PixelRect
 	// WindowDPI is GetDpiForWindow of the target. It reflects the
 	// target window's own DPI awareness — a DPI-unaware window reports
 	// 96 regardless of the monitor — so it is recorded as an
@@ -76,6 +81,7 @@ type GeometryMeasurement struct {
 	// last client pixel, the exclusive far corner.
 	ClientFarCorner PixelPoint
 	Monitor         PixelRect
+	WorkArea        PixelRect
 	WindowDPI       uint32
 	MonitorDPI      uint32
 }
@@ -98,6 +104,9 @@ type GeometryAPI interface {
 	// MonitorRect reports the monitor rectangle of hwnd in screen
 	// physical pixels.
 	MonitorRect(hwnd HWND) (PixelRect, error)
+	// MonitorWorkArea reports the work area of the monitor hwnd is on:
+	// the monitor rectangle minus the taskbar and application bars.
+	MonitorWorkArea(hwnd HWND) (PixelRect, error)
 	// SelfDpiAwareness reports the DPI awareness of the calling thread,
 	// which governs what the other measurements mean. The package never
 	// changes it.
@@ -133,6 +142,9 @@ func MeasureClient(api GeometryAPI, hwnd HWND) (GeometryMeasurement, *PlatformFa
 	m.ClientFarCorner = far
 	if m.Monitor, err = api.MonitorRect(hwnd); err != nil {
 		return m, NewFault(CodeGeometryUnavailable, "monitor rectangle unavailable", err, PhaseObserve, time.Now(), 0)
+	}
+	if m.WorkArea, err = api.MonitorWorkArea(hwnd); err != nil {
+		return m, NewFault(CodeGeometryUnavailable, "monitor work area unavailable", err, PhaseObserve, time.Now(), 0)
 	}
 	if m.WindowDPI, err = api.WindowDPI(hwnd); err != nil {
 		return m, NewFault(CodeDpiCheckUnavailable, "window DPI unavailable", err, PhaseObserve, time.Now(), 0)
@@ -174,6 +186,7 @@ func BuildGeometry(m GeometryMeasurement, version GeometryVersion, at time.Time)
 		Version:    version,
 		Client:     PixelRect{m.ClientOrigin, m.ClientFarCorner},
 		Monitor:    m.Monitor,
+		WorkArea:   m.WorkArea,
 		WindowDPI:  m.WindowDPI,
 		MonitorDPI: m.MonitorDPI,
 		ObservedAt: at,
@@ -184,7 +197,8 @@ func BuildGeometry(m GeometryMeasurement, version GeometryVersion, at time.Time)
 // input path depends on: the client rect, the monitor, or either DPI
 // value. ObservedAt is deliberately not compared.
 func GeometryChanged(a, b ClientGeometry) bool {
-	return a.Client != b.Client || a.Monitor != b.Monitor || a.WindowDPI != b.WindowDPI || a.MonitorDPI != b.MonitorDPI
+	return a.Client != b.Client || a.Monitor != b.Monitor || a.WorkArea != b.WorkArea ||
+		a.WindowDPI != b.WindowDPI || a.MonitorDPI != b.MonitorDPI
 }
 
 // GeometryTracker owns the versioned geometry of one locked target. It

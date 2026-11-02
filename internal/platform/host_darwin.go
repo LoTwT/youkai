@@ -3,6 +3,8 @@
 package platform
 
 import (
+	"image"
+
 	"github.com/LoTwT/youkai/internal/platform/macos"
 )
 
@@ -24,5 +26,9 @@ func Host() (Port, error) {
 	if err != nil {
 		return nil, err
 	}
+	// The accepted macOS configuration: a 1164×762 point cloud window
+	// (实测轮 ① / the Stage 2 field acceptance). Any other window size is
+	// a different display configuration and is refused before capture.
+	adapter.RequiredWindowSize = image.Pt(1164, 762)
 	return adapter, nil
 }

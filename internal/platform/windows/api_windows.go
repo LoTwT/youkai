@@ -21,9 +21,10 @@ import (
 // (T2 §2.1: fixed x64 structure layout); the package does not support
 // 32-bit Windows.
 var (
-	modUser32 = windows.NewLazySystemDLL("user32.dll")
-	modGdi32  = windows.NewLazySystemDLL("gdi32.dll")
-	modShcore = windows.NewLazySystemDLL("shcore.dll")
+	modUser32  = windows.NewLazySystemDLL("user32.dll")
+	modGdi32   = windows.NewLazySystemDLL("gdi32.dll")
+	modShcore  = windows.NewLazySystemDLL("shcore.dll")
+	modShell32 = windows.NewLazySystemDLL("shell32.dll")
 
 	procGetWindowThreadProcessId = modUser32.NewProc("GetWindowThreadProcessId")
 	procGetWindowTextW           = modUser32.NewProc("GetWindowTextW")
@@ -59,6 +60,8 @@ var (
 	procGetDIBits              = modGdi32.NewProc("GetDIBits")
 
 	procGetDpiForMonitor = modShcore.NewProc("GetDpiForMonitor")
+
+	procSHQueryUserNotificationState = modShell32.NewProc("SHQueryUserNotificationState")
 )
 
 // Win32 constants used by the declarations below.
