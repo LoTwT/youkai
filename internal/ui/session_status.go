@@ -76,6 +76,94 @@ func positionStageText(stage string) string {
 	}
 }
 
+// failureText maps a platform or traversal fault code plus its structured
+// parameters to the user-facing Chinese explanation. It returns "" for a
+// code without a dedicated explanation, so callers keep the diagnostic
+// code (and any English platform detail) as the fallback.
+//
+// The platform and collector never build these sentences: they return
+// stable codes and parameters (sizes, rectangles, window identification,
+// integrity levels), and this is the single place that localizes them.
+func failureText(code string, params map[string]string) string {
+	get := func(key string) string {
+		if params == nil {
+			return ""
+		}
+		return params[key]
+	}
+	size := func(key string) string {
+		return strings.ReplaceAll(get(key), "x", "×")
+	}
+	switch code {
+	case "clientTierNotOpened":
+		current := size("current")
+		if current == "" {
+			current = "当前档位"
+		}
+		return fmt.Sprintf("当前游戏分辨率 %s 属于已知但尚未开放的档位。请在游戏设置中切换到 1920×1080（窗口模式）后重新开始扫描。", current)
+	case "clientTierUnsupported":
+		current := size("current")
+		if current == "" {
+			current = "当前尺寸"
+		}
+		return fmt.Sprintf("当前分辨率 %s 不受支持。请在游戏设置中切换到 1920×1080（窗口模式）后重新开始扫描。", current)
+	case "windowOutsideWorkArea":
+		detail := ""
+		if client, work := get("client"), get("workArea"); client != "" && work != "" {
+			detail = fmt.Sprintf("（客户区 %s，显示器工作区 %s）", client, work)
+		}
+		return "游戏窗口超出屏幕或被任务栏遮挡" + detail + "。请切换到 1920×1080 窗口模式，并把窗口完整放在屏幕内后重新开始扫描。"
+	case "windowOccluded":
+		detail := "游戏窗口被其他窗口遮挡"
+		if probe := get("probe"); probe != "" {
+			detail += "（检查点 " + probe
+			if hit := get("hitClass"); hit != "" {
+				detail += "，命中窗口类 " + hit
+			}
+			if title := get("hitTitle"); title != "" {
+				detail += "，标题“" + title + "”"
+			}
+			detail += "）"
+		}
+		return detail + "。请关闭遮挡窗口后重新开始扫描。"
+	case "frameContentBlank":
+		return "游戏画面边缘为纯黑，可能处于独占全屏或窗口在屏幕外。请切换到窗口模式或无边框模式，并把窗口完整放在屏幕内后重新开始扫描。"
+	case "exclusiveFullscreen":
+		return "游戏正在以独占全屏运行。请切换到窗口模式或无边框模式后重新开始扫描。"
+	case "integrityMismatch":
+		return "游戏正在以管理员身份运行，youkai 需要同样的权限才能操作游戏。请右键 youkai，选择“以管理员身份运行”后重新打开。youkai 只向游戏发送鼠标操作，不加载驱动、不注入、不读取游戏内存。"
+	case "integrityUnverifiable":
+		detail := ""
+		if target, self := get("target"), get("self"); target != "" || self != "" {
+			detail = fmt.Sprintf("（游戏 %s，youkai %s）", orUnknown(target), orUnknown(self))
+		}
+		return "无法读取游戏进程或 youkai 自身的权限级别" + detail + "，出于安全考虑不能开始扫描。请右键 youkai，选择“以管理员身份运行”后重新打开。"
+	case "targetOffscreen":
+		return "请把云·绝区零窗口完整放在一块屏幕内后重新开始扫描。"
+	case "windowSizeUnsupported":
+		expected := size("expected")
+		if expected == "" {
+			expected = "1164×762"
+		}
+		return "请把云·绝区零窗口调整为 " + expected + " 后重新开始扫描。"
+	case "frameConfigMismatch":
+		if get("client") == "macosCloud" {
+			return "游戏画面尺寸与已标定的云客户端配置不一致。请把云·绝区零窗口调整为 1164×762 后重新开始扫描。"
+		}
+		return "游戏画面尺寸与已标定的显示配置不一致。请恢复到已开放的 1920×1080 窗口模式后重新开始扫描。"
+	case "anchorsMissing":
+		return "游戏画面与当前客户端的布局不匹配。请确认游戏分辨率与窗口尺寸后重新开始扫描。"
+	}
+	return ""
+}
+
+func orUnknown(v string) string {
+	if v == "" {
+		return "未知"
+	}
+	return v
+}
+
 // sessionTerminationShown reports whether the results page already explains
 // a non-completed session. It keeps the incomplete-position note from
 // appearing twice (the termination notice and the completion card).
@@ -83,7 +171,7 @@ func (m *Model) sessionTerminationShown() bool {
 	if m.rec == nil {
 		return false
 	}
-	_, _, ok := sessionTerminationNotice(m.rec.Shell.Termination, m.rec.Interrupted, len(m.rec.Rows))
+	_, _, ok := sessionTerminationNotice(m.rec.Shell.Termination, m.rec.Shell.FailureParams, m.rec.Interrupted, len(m.rec.Rows))
 	return ok
 }
 
@@ -101,11 +189,17 @@ func (m *Model) incompletePositionsNote() string {
 // already say what happened. A nil termination with interrupted rows is a
 // recovery from a process that never reached a terminal checkpoint, so the
 // notice still explains why the record is incomplete.
-func sessionTerminationNotice(term *record.Termination, interrupted bool, rows int) (string, record.TerminationKind, bool) {
+func sessionTerminationNotice(term *record.Termination, params map[string]string, interrupted bool, rows int) (string, record.TerminationKind, bool) {
 	if term != nil {
 		switch term.Kind {
 		case record.TerminationFailed:
-			text := "扫描失败：" + term.Code + "（" + terminationPhaseText(term.Phase) + "）"
+			text := "扫描失败："
+			if detail := failureText(term.Code, params); detail != "" {
+				text += detail
+			} else {
+				text += term.Code
+			}
+			text += "（" + terminationPhaseText(term.Phase) + "）"
 			if rows == 0 {
 				text += "，未保留任何条目"
 			}
@@ -165,7 +259,7 @@ func (m *Model) sessionTerminationArea(c *ui.Context, t *ui.Theme) {
 	if m.rec == nil {
 		return
 	}
-	text, kind, ok := sessionTerminationNotice(m.rec.Shell.Termination, m.rec.Interrupted, len(m.rec.Rows))
+	text, kind, ok := sessionTerminationNotice(m.rec.Shell.Termination, m.rec.Shell.FailureParams, m.rec.Interrupted, len(m.rec.Rows))
 	if !ok {
 		return
 	}
