@@ -280,6 +280,9 @@ jq -r '[.session.termination.kind, .session.termination.code, .session.terminati
         .session.observedScope.coverage, .session.observedScope.startPosition,
         .session.observedScope.filterAtStart] | @tsv' "$R/run3/checkpoint-130.json"
 
+jq -r '[.session.capturedCount,(.items|length)] | @tsv' "$R/run3/checkpoint-129.json" "$R/run3/checkpoint-130.json"
+grep -c '^checkpoints/' "$R/run3/session-files.tsv"
+
 python3 -c 'from datetime import datetime; a=datetime.fromisoformat("2026-11-02T23:10:31.277117"); b=datetime.fromisoformat("2026-11-02T23:24:06.167105"); print(round((b-a).total_seconds(),1))'
 ```
 
@@ -296,6 +299,15 @@ grep 'collect: scroll position=.*attempts=' "$L" | sed -E 's/.*basis=([a-z+]+).*
 grep 'collect: scroll position=.*attempts=' "$L" | sed -E 's/.*position=([0-9]+) viewport_from=.*/\1/' | sort -n | uniq -c
 grep 'collect: scroll position=.*attempts=' "$L" | grep -o 'rows=[0-9]*' | cut -d= -f2 | sort -n | uniq -c
 grep 'collect: item ' "$L" | grep -o 'retries=[0-9]*' | sort | uniq -c
+
+grep 'collect: position=.*summary' "$L" | sed -E 's/.*position=([0-9]+) summary.*top_ms=([0-9]+).*bottom_ms=([0-9]+).*/pos=\1 top_ms=\2 bottom_ms=\3/'
+for p in 1 2 3 4 5 6; do
+  grep "collect: scroll position=$p viewport_from=.*attempts=" "$L" | tail -1 | grep -o 'rows=[0-9]*'
+done
+
+grep -c 'stop trigger' "$L" || true
+grep -c 'incomplete' "$L" || true
+grep -c -E 'detailUnattributed|detailUnresolved' "$L" || true
 ```
 
 **校验与逐件对比**
@@ -303,6 +315,7 @@ grep 'collect: item ' "$L" | grep -o 'retries=[0-9]*' | sort | uniq -c
 ```text
 jq -r '.items[].data.structured.validation.status' "$R/run3/checkpoint-130.json" | sort | uniq -c
 jq -r '.items[] | select(.data.structured.validation.status=="failed") | [.sequence,.data.lines[0].text,.data.structured.issues[0].code] | @tsv' "$R/run3/checkpoint-130.json"
+jq -r '.items[].observed.capture.association' "$R/run3/checkpoint-130.json" | sort | uniq -c
 
 jq -r '.items[] | [.data.structured.data.setId, .data.structured.data.slot, .data.structured.data.level,
   .data.structured.data.mainStat.attribute, .data.structured.data.mainStat.value,
