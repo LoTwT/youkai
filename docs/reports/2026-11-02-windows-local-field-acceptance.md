@@ -1,14 +1,14 @@
 # 2026-11-02 Windows 本地客户端 1920×1080 全量真机扫描
 
-> 本报告是这次 Windows 本地客户端扫描数据的唯一权威来源；[架构 §6](../specs/scanner-architecture.md#windows-本地客户端遍历状态1920×1080-首次全量真机扫描通过时序未标定)、T2/T5、决策与索引只引用结论。验收对象是 Windows 本地完整客户端在 1920×1080 窗口模式下的首次全量真机扫描，不是 [T5 §6](../specs/t5-zzz-inventory-traversal.md#6-保存什么证据怎样验收)的三客户端三次人工基准验收，也不等于 Windows 已通过验收。
+> 本报告是这次 Windows 本地客户端扫描数据的唯一权威来源；[架构 §6](../specs/scanner-architecture.md#windows-本地客户端遍历状态1920x1080-首次全量真机扫描完成时序未标定)、T2/T5、决策与索引只引用结论。验收对象是 Windows 本地完整客户端在 1920×1080 窗口模式下的首次全量真机扫描，不是 [T5 §6](../specs/t5-zzz-inventory-traversal.md#6-保存什么证据怎样验收)的三客户端三次人工基准验收，也不等于 Windows 已通过验收。
 
 ## 结论
 
 - 在 dev 构建 `890e573` 上，Windows 本地完整客户端完成一次 1920×1080 全量扫描：1,017 件，六个位置全部 `complete`，`coverage=complete`，`sort=verified`、`sortLabel=稀有度`，`capturedCount=1017`，0 件未处理。
 - 59 次滚动全部 `displaced`、`attempts=1`；0 次 `undecided`、0 次 `lost`、0 次滚动重试；1,017 件物品的 `retries` 全部为 0。没有 stop trigger、fault、位置级降级或不完整位置。
 - 1,016 件通过字段校验，1 件进入校对（`needsReview`）：seq 273 的名称行被识别为 `山大王[3]1`，报 `nameLineUnparsed`，导致 `setId`/`slot` 为 null；它的等级、主属性和全部副词条与 mac 基线 seq 273 一致。
-- 与 [2026-11-01 macOS 云客户端全量基线](2026-11-01-macos-stage2-field-acceptance.md)按多重集合逐件比较：1,016/1,017 相同，唯一差异就是 seq 273 的 `setId`/`slot`；管理状态逐件相同；装备状态净增 7 件未判定，但逐件有 21 处状态变化，不能概括为“只差 7 件”。
-- 108 件 `equipped` 的 `agentId` 全部为 null；对应头像匹配分数为 0.220–0.857（中位 0.663），全部低于 0.90 阈值。#111 合入时架构 §6 写的“0.48–0.70”与证据不符，本报告以 0.220–0.857 为准。
+- 与 [2026-11-01 macOS 云客户端全量基线](2026-11-01-macos-stage2-field-acceptance.md)按多重集合逐件比较：1,016/1,017 相同，唯一差异就是 seq 273 的 `setId`/`slot`；按序号直接比较为 1,014/1,017 相同，因为 seq 390/391（同为 32900、4 号位、暴击率主属性）在两次扫描中顺序相反。管理状态逐件相同；装备状态净增 7 件未判定，但逐件有 21 处状态变化，按内容重新配对后仍是这 21 处，不能概括为“只差 7 件”。
+- 108 件 `equipped` 的 `agentId` 全部为 null；run3 共 108 次头像匹配，分数 0.220–0.857（中位 0.663），全部低于 0.90 阈值。#111 当时记录的是 run2 的 4 件（0.484–0.702），那时的记录是对的；run3 与 run2 不是同一批数据。
 - 时序仍是 macOS 云客户端的借用值（`timing=macOS cloud profile (uncalibrated)`），没有因时序触发停止；`drag_ms` 为 1,326–1,437 ms，均在 #111 放宽后的 1,500 ms 上限内。时序标定未完成，不能据此判断性能或其他硬件上的稳定性。
 - 这仍只是单次完整扫描。T5 §6 的三次人工基准库存验收、其他 16:9 档位、导出与截图、位置级降级、Windows 云客户端均未覆盖；不能据此宣称 Windows 已通过验收或开放其他档位。
 
@@ -38,9 +38,9 @@
 | run2 | `3d7e08a` | `YOUKAI_DEV_AUTOSTART=1` | 21:26:10.919 | 21:26:31.385 | `failed / invalidOperation / capturing` | 20 / 19 / 1 |
 | run3 | `890e573` | `YOUKAI_DEV_AUTOSTART=1` | 23:10:31.277 | 23:24:06.167 | `completed / verifiedEnd / capturing` | 1,017 / 1,017 / 0 |
 
-- **run1（20:37）：** 旧构建没有实现 Windows `Activator`，用户点开始后前台一直是 Youkai，准备阶段等满 30 秒后以 `prepareTimeout`（`focusLost`）结束。日志切片没有 `activate:` 行，说明当时没有发出 `SetForegroundWindow`；checkpoint 1 为 0 件。run1 的日志切片从接受请求开始，未包含版本行，`64bef82` 来自本轮运行序列记录；#110 随后实现 `platform.Activator`，代码差异见 `3d7e08a`。
-- **run2（21:26）：** 自动启动，激活请求被 Windows 拒绝并回落到准备等待，用户手动切回后准备成功。位置 1 采集 20 件，其中 19 件产出且校验通过；第 20 件因扫描中断为 `unprocessed / interrupted`，没有识别行。第一次滚动在发送前被输入层拒绝：`invalidOperation: drag duration 1.2s outside 0..1s`；滚动汇总为 `outcome=error attempts=1 drag_ms=0 rows=0`，扫描以 `invalidOperation` 停止。#111 把 Windows `MaxDragDuration` 从 1 s 放宽到 1,500 ms，并保持与 mac 的 1,200 ms 滚动拖拽一致。
-- **run3（23:10）：** 自动启动；`SetForegroundWindow` 仍被拒绝，日志记录 `waiting for the user to focus the game`，随后准备循环通过。完整扫描在 23:24:06 结束，checkpoint 130 为 1,017 件；checkpoint 129 也是 1,017 件，目录保留 129/130。
+- **run1（20:37）：** 旧构建没有实现 Windows `Activator`，用户点开始后准备阶段等满 30 秒后以 `prepareTimeout`（`focusLost`）结束。日志只记录 `another window is the actual foreground window`，没有保存当时前台窗口的身份；操作者记录当时前台是 Youkai。日志切片没有 `activate:` 行，说明当时没有发出 `SetForegroundWindow`；checkpoint 1 为 0 件。run1 的日志切片从接受请求开始，未包含版本行，`64bef82` 来自本轮运行序列记录；#110 随后实现 `platform.Activator`，代码差异见 `3d7e08a`。
+- **run2（21:26）：** 自动启动；激活后立即复查未见游戏在前台（拒绝与异步切换无法区分），约 0.24 s 后游戏已在前台并通过就绪检查，准备成功。位置 1 采集 20 件，其中 19 件产出且校验通过；第 20 件因扫描中断为 `unprocessed / interrupted`，没有识别行。第一次滚动在发送前被输入层拒绝：`invalidOperation: drag duration 1.2s outside 0..1s`；滚动汇总为 `outcome=error attempts=1 drag_ms=0 rows=0`，扫描以 `invalidOperation` 停止。#111 把 Windows `MaxDragDuration` 从 1 s 放宽到 1,500 ms，并保持与 mac 的 1,200 ms 滚动拖拽一致。
+- **run3（23:10）：** 自动启动；激活后立即复查仍未见游戏在前台（拒绝与异步切换无法区分），日志记录 `waiting for the user to focus the game`；约 0.24 s 后游戏已在前台并通过就绪检查。完整扫描在 23:24:06 结束，checkpoint 130 为 1,017 件；checkpoint 129 也是 1,017 件，目录保留 129/130。
 
 > 结论中的“三次运行”不表示三次人工基准验收。run1 是手动启动但构建缺少 Activator；run2 是中断的短运行；只有 run3 是完整扫描。用户点开始且 Youkai 为前台进程时的激活成功路径，在 #110 之后仍未实测。
 
@@ -123,9 +123,9 @@
 ### 6. 识别与校验
 
 - 1,017 件全部有识别行；1,016 件 `validation.status=passed`，1 件 `failed`（`quality=needsReview`）。
-- 失败件为 seq 273：名称行识别为 `山大王[3]1`（分数 0.902），报 `nameLineUnparsed`；`setId`/`slot` 为 null，等级 15、主属性防御力 184、四条副词条及其他字段与 mac 基线 seq 273 完全一致。
+- 失败件为 seq 273：名称行识别为 `山大王[3]1`（分数 0.902），报 `nameLineUnparsed`；`setId`/`slot` 为 null；等级 15、主属性防御力 184 和四条副词条与 mac 基线 seq 273 一致；装备状态不同（mac equipped、Windows null）。
 - 管理状态：1,005 `locked`、12 `discarded`；与 mac 基线逐件相同。
-- 装备状态：887 件 `unequipped`、108 件 `equipped`、22 件 `null`；mac 基线为 887 / 115 / 15。净增 7 件未判定，但逐件有 21 处变化：101 件 equipped→equipped、12 件 equipped→null、5 件 null→equipped、2 件 unequipped→equipped、2 件 equipped→unequipped、10 件 null→null、885 件 unequipped→unequipped。
+- 装备状态：887 件 `unequipped`、108 件 `equipped`、22 件 `null`；mac 基线为 887 / 115 / 15。净增 7 件未判定，但逐件有 21 处变化：101 件 equipped→equipped、12 件 equipped→null、5 件 null→equipped、2 件 unequipped→equipped、2 件 equipped→unequipped、10 件 null→null、885 件 unequipped→unequipped。按内容重新配对（含 seq 273 的 equipped→null）后仍是这 21 处。
 - 装备者身份：108 件 `equipped` 的 `agentId` 全部为 null；108 次头像匹配的 best score 为 0.220–0.857，中位 0.663，全部低于 0.90 阈值。另有 21 件 `null` 状态也带 `equippedStateUnavailable` 警告，但没有头像匹配分数（`agent avatar match not evaluated`）。装备警告不阻止自动接受；本轮只有 seq 273 因名称行错误进入校对。
 
 ## 与 mac 基线的逐件对比
@@ -139,13 +139,14 @@ setId | slot | level | mainStat.attribute | mainStat.value |
 substats（attribute=value+unit@enhancementRolls，按集合比较，顺序不计）
 ```
 
-对两次扫描各 1,017 件做多重集合比较（同一键可重复计数）。管理状态、装备状态与详情归属另行逐序号比较。
+对两次扫描各 1,017 件做多重集合比较（同一键可重复计数），另按序号直接比较。管理状态、装备状态与详情归属另行逐序号比较；装备状态再按内容重新配对核对。
 
 ### 结果
 
 - **主键：** 1,016/1,017 相同。Windows 侧多出的唯一键是 seq 273 的 `null | null | 15 | defense | 184 | ...`，mac 侧对应键是 `33200 | 3 | 15 | defense | 184 | ...`；其余字段完全相同。也就是说，唯一差异就是 seq 273 的套装/槽位未解析。
+- **按序号：** 1,014/1,017 相同；除 seq 273 外，seq 390/391（同为 32900、4 号位、暴击率主属性）在两次扫描中顺序相反。
 - **管理状态：** 1,005 locked→locked、12 discarded→discarded，逐件相同。
-- **装备状态：** 净计数为 equipped 115→108、null 15→22；逐件变化见上节 21 处，不能只按净差 7 件理解。
+- **装备状态：** 净计数为 equipped 115→108、null 15→22；逐件变化见上节 21 处，按内容重新配对后仍是这 21 处，不能只按净差 7 件理解。
 - **详情归属：** 两次扫描都是 1,002 transition / 9 reference / 6 initial；9 次参照往返均成功。
 - **位置账目：** 视口、访问数、滚动数逐项相同；末次滚动行数与顶底证据也相同。
 - **滚动：** 59 次均为 `displaced`、`attempts=1`；basis 分布为 57/2，mac 为 56/3；行数分布相同。
@@ -154,7 +155,7 @@ substats（attribute=value+unit@enhancementRolls，按集合比较，顺序不�
 
 ## 未解决问题
 
-1. **用户点开始的激活路径未实测。** run2/run3 的自动启动请求都被 `SetForegroundWindow` 拒绝并回落到等待；run1 在 #110 之前根本没有发出激活请求。因此“用户点开始、Youkai 为前台进程”时的成功激活路径仍没有真机证据。
+1. **用户点开始的激活路径未实测。** run2/run3 的日志只证明激活后立即复查未见游戏在前台（拒绝与异步切换无法区分），约 0.24 s 后就绪检查通过；run1 在 #110 之前根本没有发出激活请求。因此“用户点开始、Youkai 为前台进程”时的成功激活路径仍没有真机证据。**待跟进：** #110 在 `SetForegroundWindow` 后立即复查，可能把尚未完成的异步切换误报为失败；本 PR 不改代码。
 2. **时序未标定。** 滚动停稳与拖拽时长仍来自 macOS 云客户端；本次没有因时序出错，`drag_ms` 也在 #111 的 1,500 ms 上限内，但时序 profile 仍需 Windows 原生标定。
 3. **装备者身份未识别。** 108 件 equipped 的 `agentId` 全部为 null；头像匹配分数 0.220–0.857，全部低于 0.90。当前头像模板来自 mac，需要 Windows 侧模板或阈值标定；不能把 108/22 的装备状态计数当作可靠结论。
 4. **托盘图标缺失，无法从托盘退出。** 操作者报告：关闭主窗口后进程仍在、托盘没有图标，日志没有 `tray` 行，用户无法退出；根因未查。证据目录没有保存托盘相关日志或截图。
