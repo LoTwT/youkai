@@ -39,7 +39,7 @@ T2 负责目标窗口身份、采集、坐标、短输入、平台故障和原�
 | 前台与可见性 | `SetForegroundWindow` 受系统限制，即使满足文档条件仍可能被拒绝；`IsWindowVisible` 为真也可能完全被遮挡。[前台限制](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setforegroundwindow) · [可见性](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-iswindowvisible) | 在输入前检查实际前台窗口、最小化状态和几何；焦点移交失败保持准备/失败状态，不靠一次激活请求宣告就绪。已知遮挡、模态窗口或不确定的目标点命中均拒绝输入。 |
 | 客户区与 DPI | `GetClientRect` 不含窗口边框；`ClientToScreen` 转为设备坐标。PMv2 下应用看到显示器的原始像素。[客户区](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getclientrect) · [转换](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-clienttoscreen) · [DPI](https://learn.microsoft.com/en-us/windows/win32/hidpi/high-dpi-desktop-application-development-on-windows) | 与 MyGo 的进程/线程 DPI 配置统一，优先核对 PMv2；客户区两个角转换后形成物理像素矩形。不得在窗口创建后由截图依赖随意修改进程 DPI 模式，或把 UI 逻辑尺寸直接当屏幕像素。 |
 | 截图 | Microsoft 示例说明 DC、位图与 `BitBlt` 路径；既有参考的固定 Go 源码从桌面 DC 采集并将 BGRA 转为 RGBA。[GDI 示例](https://learn.microsoft.com/en-us/windows/win32/gdi/capturing-an-image) · [固定源码](https://github.com/kbinani/screenshot/blob/089614a940181bba6e846e21ff436ea652a5b374/windows.go) | 平台输出带尺寸、步长、颜色约定的自有图像与几何版本；正确释放 DC/位图。不照抄示例的缩放显示步骤，不把 GDI 成功、非黑图或函数返回时间当作游戏新帧的保证。 |
-| 短输入 | `SendInput` 返回插入系统输入流的事件数量；受 UIPI 限制，错误信息不一定指出 UIPI。它也不会重置已按下的键。[SendInput](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-sendinput) | 一个串行执行者派发有界的单次点击、短按或小步滚动；核对完整/部分投递，记录自身按下的键鼠并清理。权限不匹配时停止并说明，不默认提权、不反复盲发；返回成功仍需 T5 验证动作效果。 |
+| 短输入 | `SendInput` 返回插入系统输入流的事件数量；受 UIPI 限制，错误信息不一定指出 UIPI。它也不会重置已按下的键。[SendInput](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-sendinput) | 一个串行执行者派发有界的单次点击、短按或小步滚动；核对完整/部分投递，记录自身按下的键鼠并清理。权限不匹配时停止并说明，不默认提权、不反复盲发；返回成功仍需 T5 验证动作效果。2026-11-02 的 Windows 本地客户端决定补充：程序清单不要求管理员权限，游戏完整性高于扫描器时拒绝开始并中文提示提权；见[决策 §5](../decisions/2026-10-28-scanner-rearchitecture.md#2026-11-02-windows-本地客户端决定)。 |
 
 额外两个坐标陷阱必须保留：
 
@@ -122,9 +122,9 @@ AppKit 相关操作交由应用已有的主线程调度，帧回调用单独串�
 
 以下是正式实现后用来建立首批支持记录的候选，当前没有任何一行通过验收。
 
-**已知信息：** 用户已定案（2026-10-18）：Windows 首版认证配置为 1920×1080（窗口/无边框模式），2560×1440 留后续版本。Mac 首组验证设备为 14 英寸 MacBook Pro（M1 Pro），尺寸尚不能确认。机型不能推出截图尺寸、窗口点尺寸、视频分辨率或缩放倍率。单屏、SDR、100% Windows 缩放与无边框形态仍是实测核验项，不假定成立。用户拥有 Windows 与 Mac 设备并参与测试，会在测试前准备设备和客户端；具体参数在实测准备时补录到本节，不作为当前待答项。
+**已知信息：** 用户已定案（2026-10-18）：Windows 首版认证配置为 1920×1080（窗口/无边框模式），2560×1440 留后续版本。Mac 首组验证设备为 14 英寸 MacBook Pro（M1 Pro），尺寸尚不能确认。机型不能推出截图尺寸、窗口点尺寸、视频分辨率或缩放倍率。单屏、SDR、100% Windows 缩放与无边框形态仍是实测核验项，不假定成立；2026-11-01 的 Windows 本地客户端探针只在单块 4K、125% 缩放的窗口模式下取得证据，SDR/HDR、100% 缩放与无边框/独占全屏均未覆盖。用户拥有 Windows 与 Mac 设备并参与测试，会在测试前准备设备和客户端；具体参数在实测准备时补录到本节，不作为当前待答项。
 
-**显示配置策略（Windows 定案 2026-10-18；其余沿用 2026-10-16 确认）：** 首版 Windows 认证 1920×1080（窗口/无边框模式），不是与 2560×1440 两档并列达标；2560×1440 与游戏内置尺寸留后续版本逐组扩展，不承诺任意尺寸自动适配。Mac 首版合理支持一个常用尺寸。两种 Windows 客户端分别验收。第 3.2 节原有的实测核验要求保留：游戏设置项、系统缩放 100% 与客户区像素实测记录都须逐项测定填入验收记录，不以候选数值假定三者一致。
+**显示配置策略（Windows 定案 2026-10-18；其余沿用 2026-10-16 确认）：** 首版 Windows 认证 1920×1080（窗口/无边框模式），不是与 2560×1440 两档并列达标；2560×1440 与游戏内置尺寸留后续版本逐组扩展，不承诺任意尺寸自动适配。Mac 首版合理支持一个常用尺寸。两种 Windows 客户端分别验收。第 3.2 节原有的实测核验要求保留：游戏设置项、系统缩放 100% 与客户区像素实测记录都须逐项测定填入验收记录，不以候选数值假定三者一致。2026-11-02 的 Windows 本地客户端决定把上述候选收敛为可执行前提：Windows 只支持标准 16:9 档位，客户区不符合或窗口超出屏幕时拒绝开始并提示调整，首批开放范围只到 1920×1080（该档完成接线与实机字段验收后开放）；完整措辞与理由见[决策的 2026-11-02 Windows 本地客户端决定](../decisions/2026-10-28-scanner-rearchitecture.md#2026-11-02-windows-本地客户端决定)。
 
 Mac 先在现有设备上检查客户端提供的显示或窗口选项，选取可复现、能容纳完整仓库与详情、文字可辨且便于其他用户设置的一组；没有内置选项时固定可复现的窗口几何。现有材料没有尺寸使用率数据，不宣称某个数值最常用。确定后记录设置步骤、窗口点尺寸、输出像素和视频区域；新增尺寸时逐组补齐验收，不按比例换算宣布兼容。
 
