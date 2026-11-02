@@ -464,3 +464,17 @@ func TestRetentionKeepsVerifiedGenerationAfterRestart(t *testing.T) {
 		t.Errorf("generations after verified save = %v, want [4.json 5.json]", files)
 	}
 }
+
+// M2: failureParams is an optional v2 addition. A v2 checkpoint written
+// before it existed (the field omitted) must still load under the strict
+// decoder.
+func TestLoadV2CheckpointWithoutFailureParams(t *testing.T) {
+	st, _ := newTestStore(t)
+	id := newRecord(t, st)
+	cp := Checkpoint{Session: testShell()}
+	saveCheckpoint(t, st, id, cp)
+	rec := mustLoad(t, st, id)
+	if rec.Checkpoint.Session.FailureParams != nil {
+		t.Fatalf("failureParams = %v, want nil for an old v2 record", rec.Checkpoint.Session.FailureParams)
+	}
+}

@@ -17,9 +17,16 @@ const (
 	FormatName = "youkai.checkpoint"
 	// FormatVersion is the current internal checkpoint format version.
 	// Readers reject an unknown version instead of guessing at a
-	// compatible interpretation; changing the document shape bumps this.
-	// Version history: 2 added ItemRecord.Failure, the recognition
-	// failure text of failed items.
+	// compatible interpretation. Adding an optional field (omitempty,
+	// tolerated as absent by readers) does not bump the version; only a
+	// change to an existing field's shape or semantics does. Version
+	// history: 2 added ItemRecord.Failure, the recognition failure text
+	// of failed items. SessionShell.FailureParams and its fault params
+	// are such optional additions and keep version 2.
+	//
+	// Cost of keeping 2: an older binary reads a new generation with
+	// DisallowUnknownFields and fails on failureParams; that downgrade is
+	// accepted because the application does not support downgrades.
 	FormatVersion = 2
 )
 
