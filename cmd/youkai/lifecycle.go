@@ -58,6 +58,11 @@ type windowSurface interface {
 type traySurface interface {
 	SetMenu(*mygo.Menu)
 	SetToolTip(string)
+	// Bounds reports where the platform put the icon, empty when it cannot
+	// locate it. It is diagnostic only: on Windows an icon in the
+	// notification area's overflow has no rectangle (Shell_NotifyIconGetRect
+	// fails), so an empty rectangle does not prove the entry is unusable.
+	Bounds() mygo.Rectangle
 }
 
 // preventableEvent is a native event whose default action can be cancelled;
@@ -127,6 +132,13 @@ func (l *windowLifecycle) AttachWindow(win windowSurface) {
 // A failed creation is not fatal: the close-to-tray preference would hide
 // the only way back into the app, so closing falls back to the explicit-exit
 // wrap-up and the window states why.
+//
+// The outcome is always logged. On Windows, a returned tray is not proof of
+// a visible icon: MyGo v0.6.2's NewTray only records the options and lets a
+// later posted message call Shell_NotifyIcon, whose result it discards
+// (internal/windows/tray.go:83-124). Asking where the icon is forces that
+// add and records whether the shell can locate the icon; the answer is a
+// diagnostic, not a usable/unusable decision.
 func (l *windowLifecycle) CreateTray() {
 	if l.tray != nil {
 		return
@@ -139,15 +151,43 @@ func (l *windowLifecycle) CreateTray() {
 		ToolTip:        "Youkai · " + l.model.LifecycleStatus().Text,
 		Menu:           l.trayMenu(),
 	})
+	if err == nil && tray == nil {
+		err = errors.New("the platform returned no tray")
+	}
 	if err != nil {
-		log.Printf("youkai: tray unavailable: %v; closing the window will stop the scan and quit the application", err)
-		l.model.SetWindowNotice("托盘/菜单栏入口不可用（" + err.Error() + "）。关闭窗口将停止扫描并退出应用。")
+		l.trayUnavailable(err)
 		return
 	}
 	l.tray = tray
 	l.status = l.model.LifecycleStatus()
 	l.statusKnown = true
 	l.Refresh()
+	l.logTrayBounds("created")
+}
+
+// trayUnavailable records that the close-to-tray preference has no entry to
+// return through: closing runs the explicit-exit wrap-up and the window says
+// why.
+func (l *windowLifecycle) trayUnavailable(err error) {
+	log.Printf("youkai: tray unavailable (%s): %v; closing the window will stop the scan and quit the application", runtime.GOOS, err)
+	l.model.SetWindowNotice("托盘/菜单栏入口不可用（" + err.Error() + "）。关闭窗口将停止扫描并退出应用。")
+}
+
+// logTrayBounds writes the icon's location, or why it has none, for the
+// event that needs it. It never changes the close behavior: on Windows an
+// icon in the notification area's overflow has no rectangle, and hiding must
+// still work for it.
+func (l *windowLifecycle) logTrayBounds(event string) {
+	bounds := l.tray.Bounds()
+	if bounds.Width > 0 && bounds.Height > 0 {
+		log.Printf("youkai: tray %s: icon at %d,%d %dx%d", event, bounds.X, bounds.Y, bounds.Width, bounds.Height)
+		return
+	}
+	if runtime.GOOS == "windows" {
+		log.Printf("youkai: tray %s: no icon rectangle; Windows 11 keeps new icons in the notification area's overflow, where Shell_NotifyIconGetRect fails, so this alone is not a failure", event)
+		return
+	}
+	log.Printf("youkai: tray %s: no screen rectangle reported yet", event)
 }
 
 // Restore brings the main window back for every entry point: tray, Dock,
@@ -172,6 +212,11 @@ func (l *windowLifecycle) Restore() {
 // explicit exit already in progress is never turned into a hide.
 func (l *windowLifecycle) OnWindowClose(e preventableEvent) {
 	if l.model.Exiting() || l.model.CloseBehavior() == app.CloseBehaviorExit || l.tray == nil {
+		if l.tray == nil {
+			// The log says which decision the close took: a report of a
+			// hidden window with no tray starts here.
+			log.Printf("youkai: close requested without a tray entry; running the exit wrap-up instead of hiding")
+		}
 		// AllowClose starts or joins the explicit-exit wrap-up and says no
 		// until the final save settled. A completed wrap-up allows the close.
 		if !l.model.AllowClose() {
@@ -187,6 +232,7 @@ func (l *windowLifecycle) OnWindowClose(e preventableEvent) {
 		e.PreventDefault()
 		return
 	}
+	l.logTrayBounds("at close")
 	l.window.Hide()
 	e.PreventDefault()
 }

@@ -99,6 +99,9 @@ type fakeTray struct {
 	menus    []*mygo.Menu
 	tooltips []string
 	menu     *mygo.Menu
+	bounds   mygo.Rectangle
+	// boundsCalls counts the location checks: creation and every close.
+	boundsCalls int
 }
 
 func (t *fakeTray) SetMenu(menu *mygo.Menu) {
@@ -106,6 +109,10 @@ func (t *fakeTray) SetMenu(menu *mygo.Menu) {
 	t.menus = append(t.menus, menu)
 }
 func (t *fakeTray) SetToolTip(tip string) { t.tooltips = append(t.tooltips, tip) }
+func (t *fakeTray) Bounds() mygo.Rectangle {
+	t.boundsCalls++
+	return t.bounds
+}
 
 // fakeEvent is a preventable close/quit event.
 type fakeEvent struct{ prevented bool }
@@ -204,7 +211,10 @@ func TestTrayFailureFallsBackToExitOnClose(t *testing.T) {
 	life.newTray = func(mygo.TrayOptions) (traySurface, error) {
 		return nil, errors.New("no notification area")
 	}
-	life.CreateTray()
+	out := captureLog(life.CreateTray)
+	if !strings.Contains(out, "youkai: tray unavailable") || !strings.Contains(out, "no notification area") {
+		t.Fatalf("tray failure log = %q, want the unavailable line", out)
+	}
 	if !strings.Contains(model.notice, "托盘/菜单栏入口不可用") {
 		t.Fatalf("window notice = %q, want the tray failure", model.notice)
 	}
@@ -221,6 +231,96 @@ func TestTrayFailureFallsBackToExitOnClose(t *testing.T) {
 	}
 	if win.hides != 0 {
 		t.Fatal("the fallback hid the only entry")
+	}
+}
+
+// A platform that returns neither a tray nor an error is a failure too: a
+// nil entry must not enable close-to-tray.
+func TestNilTrayFallsBackToExitOnClose(t *testing.T) {
+	model := &fakeLifecycleModel{behavior: app.CloseBehaviorHide}
+	life := newWindowLifecycle(model)
+	life.newTray = func(mygo.TrayOptions) (traySurface, error) { return nil, nil }
+	out := captureLog(life.CreateTray)
+	if !strings.Contains(out, "youkai: tray unavailable") {
+		t.Fatalf("nil tray log = %q, want the unavailable line", out)
+	}
+	if !strings.Contains(model.notice, "托盘/菜单栏入口不可用") {
+		t.Fatalf("window notice = %q, want the tray failure", model.notice)
+	}
+	win := &fakeWindow{}
+	life.AttachWindow(win)
+
+	event := &fakeEvent{}
+	life.OnWindowClose(event)
+	if !event.prevented || model.allowCalls != 1 {
+		t.Fatalf("nil tray close: prevented=%v allowCalls=%d, want the exit wrap-up", event.prevented, model.allowCalls)
+	}
+	if win.hides != 0 {
+		t.Fatal("a nil tray hid the only entry")
+	}
+}
+
+// Creating the tray logs where the icon is. The bounds are diagnostic only.
+func TestTrayCreationLogsItsIconLocation(t *testing.T) {
+	model := &fakeLifecycleModel{behavior: app.CloseBehaviorHide}
+	life := newWindowLifecycle(model)
+	life.newTray = func(mygo.TrayOptions) (traySurface, error) {
+		return &fakeTray{bounds: mygo.Rectangle{X: 100, Y: 20, Width: 20, Height: 20}}, nil
+	}
+	out := captureLog(life.CreateTray)
+	if !strings.Contains(out, "youkai: tray created: icon at 100,20 20x20") {
+		t.Fatalf("tray creation log = %q, want the icon location", out)
+	}
+}
+
+// An icon the platform cannot locate (on Windows 11, one in the notification
+// area's overflow) does not disable close-to-tray: the user can still reach
+// the overflow, and Shell_NotifyIconGetRect cannot tell the two cases apart.
+func TestTrayWithoutBoundsStillHidesOnClose(t *testing.T) {
+	model := &fakeLifecycleModel{behavior: app.CloseBehaviorHide}
+	life := newWindowLifecycle(model)
+	tray := &fakeTray{}
+	life.newTray = func(mygo.TrayOptions) (traySurface, error) {
+		return tray, nil // no rectangle
+	}
+	life.CreateTray()
+	win := &fakeWindow{}
+	life.AttachWindow(win)
+
+	event := &fakeEvent{}
+	out := captureLog(func() { life.OnWindowClose(event) })
+	if !event.prevented {
+		t.Fatal("hiding did not prevent the native window close")
+	}
+	if win.hides != 1 || model.allowCalls != 0 {
+		t.Fatalf("window hides=%d allowCalls=%d, want a hide without the exit path", win.hides, model.allowCalls)
+	}
+	if !strings.Contains(out, "youkai: tray at close:") || !strings.Contains(out, "rectangle") {
+		t.Fatalf("close log = %q, want the tray location check", out)
+	}
+	if tray.boundsCalls != 2 {
+		t.Fatalf("bounds checks = %d, want creation and close", tray.boundsCalls)
+	}
+}
+
+// A close without a tray logs the decision that produced the exit wrap-up.
+func TestCloseWithoutTrayLogsExitFallback(t *testing.T) {
+	model := &fakeLifecycleModel{behavior: app.CloseBehaviorHide, allow: false}
+	life := newWindowLifecycle(model)
+	life.newTray = func(mygo.TrayOptions) (traySurface, error) {
+		return nil, errors.New("no notification area")
+	}
+	life.CreateTray()
+	win := &fakeWindow{}
+	life.AttachWindow(win)
+
+	event := &fakeEvent{}
+	out := captureLog(func() { life.OnWindowClose(event) })
+	if !strings.Contains(out, "close requested without a tray entry; running the exit wrap-up instead of hiding") {
+		t.Fatalf("close log = %q, want the fallback decision", out)
+	}
+	if !event.prevented || win.hides != 0 || model.allowCalls != 1 {
+		t.Fatalf("close with a running wrap-up: prevented=%v hides=%d allowCalls=%d", event.prevented, win.hides, model.allowCalls)
 	}
 }
 

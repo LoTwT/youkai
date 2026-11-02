@@ -161,6 +161,8 @@ ZZZ 侧消费这些约束的遍历骨架（页面匹配契约、导航状态机�
 | 明确退出（菜单 / ⌘Q / 托盘退出） | 明确退出优先于隐藏偏好：停止输入、结束工作者、保存、释放资源后正常退出；重复退出连接同一收尾，不转成隐藏。不调用跳过退出事件的 `App.Exit`。 |
 | 保存失败或原生调用未返回 | 保持进程和恢复入口，显示未完成项并允许重试，不清空结果、不释放在用原生对象、不谎报退出完成。强制结束只恢复已落盘部分。 |
 
+**2026-11-03 托盘可用性状态。** 2026-11-02 的 Windows 现场出现“关闭主窗口后进程仍在、通知区域和溢出区都没有 Youkai 图标、日志没有任何 `tray` 行”（[报告](../reports/2026-11-02-windows-local-field-acceptance.md) 未解决问题 4）。已确认的代码路径：托盘只在就绪回调创建（`cmd/youkai/main.go` 的 `WhenReady` 调用 `CreateTray`），而 MyGo v0.6.2 的 Windows `NewTray` 只登记选项、把 `Shell_NotifyIcon(NIM_ADD)` 推迟到一条异步消息，并且丢弃该调用的返回值、无论成败都把图标标记为已添加（模块内 `internal/windows/tray.go` 的 `NewTray`/`add`）。因此 `NewTray` 返回成功只证明选项被接受，不证明图标可见；此时默认关窗会隐藏，和现场一致。具体是 shell 拒绝注册还是图标没有显示（Explorer 的 `Shell_TrayWnd` 不在同一会话或桌面、shell 卡住、提权或开发构建差异等）尚未在 Windows 真机确认。当前实现：创建成功与失败都写日志（成功记录平台与图标矩形；Windows 上矩形为空时同时写明可能是通知区域溢出，不作为不可用依据），创建失败或平台返回空托盘时关窗改走明确退出收尾；不因无法取得图标矩形而拒绝隐藏——Windows 11 的溢出图标同样没有 `Shell_NotifyIconGetRect` 矩形，用它判定不可用会让默认关窗行为对所有溢出图标用户失效。真正的“创建成功但图标不存在”检测需要 MyGo 上报 `Shell_NotifyIcon` 的结果，见[只读诊断步骤](../reports/2026-11-03-windows-tray-diagnosis.md)。
+
 `ShowInactive` 仍可能遮挡采集区域，首版不承诺边扫边交互。[DXGI AcquireNextFrame](https://learn.microsoft.com/en-us/windows/win32/api/dxgi1_2/nf-dxgi1_2-idxgioutputduplication-acquirenextframe) 的等待不可取消，若将来采用须使用有限等待；Go context 不会终止任意 Win32 或 C API。
 
 ### 完整性与身份

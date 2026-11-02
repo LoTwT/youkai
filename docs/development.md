@@ -62,7 +62,7 @@ M2 平台会话集成后可用另一组开关接入真实游戏窗口做仅观�
 - **覆盖结论：** 面板排序标签可验证；每个面板都匹配“稀有度”时 `sort=verified`，六个位置都完整时覆盖结论可为 `complete`。缩放档继续丢弃排序声明，最多 `partial`。模板只证明标签为“稀有度”，不证明排序方向；这是 fail-closed 的已有行为，不是可绕过的开关。
 - **样本状态：** W3a 已验证长列表滑块两端与排序模板；面板 S 按钮在套装筛选展开时的位置仍待测。2026-11-02 的 1920×1080 全量扫描已完成；细节、1 件名称行误读与未覆盖项见[全量真机扫描报告](reports/2026-11-02-windows-local-field-acceptance.md)，W3a 细节见[W3a 样本报告](reports/2026-11-02-windows-local-sample-round.md)。
 - **未覆盖：** 各档 OCR、时序标定、像素计数阈值、其他 16:9 档位、导出与 T5 §6 的三次人工基准验收仍未完成；未完成前不宣称 Windows 本地客户端通过验收。
-- **已知问题：** 操作者报告关闭主窗口后进程隐藏但托盘没有图标、日志没有 `tray` 行，无法从托盘退出，根因未查；dev 链接时出现 `.rsrc merge failure: multiple non-default manifests` 警告，自检与扫描正常，未进一步定位。证据与边界见[全量真机扫描报告](reports/2026-11-02-windows-local-field-acceptance.md)。
+- **已知问题：** 操作者报告关闭主窗口后进程隐藏但托盘没有图标、日志没有 `tray` 行，无法从托盘退出。2026-11-03 已确认代码路径：MyGo v0.6.2 的 Windows 托盘注册是异步的且丢弃 `Shell_NotifyIcon` 的返回值，所以创建成功不等于图标可见；现已补上创建成功/失败与图标位置的日志、空托盘防御，以及无托盘入口时关窗走退出收尾的测试，但“创建成功却没有图标”的检测需要 MyGo 上报注册结果；具体原因待 [Windows 只读诊断](reports/2026-11-03-windows-tray-diagnosis.md)确定，状态以[架构第 5 节](specs/scanner-architecture.md#隐藏恢复与退出)为准。dev 链接时出现 `.rsrc merge failure: multiple non-default manifests` 警告，自检与扫描正常，未进一步定位。证据与边界见[全量真机扫描报告](reports/2026-11-02-windows-local-field-acceptance.md)。
 
 持久化从扫描过程中开始：每次接纳观测（`internal/scan` 的接纳钩子）都会先写该件的证据图、再以 queued 状态把条目加入检查点文档，终结时只更新状态与载荷；崩溃后重开由 `internal/record` 把排队/运行条目标为中断未处理，已接纳的物品不会消失。
 
