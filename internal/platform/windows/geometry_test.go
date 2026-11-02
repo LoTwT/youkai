@@ -24,6 +24,18 @@ func TestMeasureClientHappyPath(t *testing.T) {
 	if m.WindowDPI != 96 || m.MonitorDPI != 96 {
 		t.Fatalf("dpi: %d/%d", m.WindowDPI, m.MonitorDPI)
 	}
+	if m.WorkArea != (PixelRect{PixelPoint{0, 0}, PixelPoint{1920, 1040}}) {
+		t.Fatalf("work area: %+v", m.WorkArea)
+	}
+}
+
+func TestMeasureClientWorkAreaFails(t *testing.T) {
+	geo := newFakeGeometry()
+	geo.workArea = func() (PixelRect, error) { return PixelRect{}, errors.New("GetMonitorInfoW failed") }
+	_, fault := MeasureClient(geo, 7)
+	if fault == nil || fault.Code != CodeGeometryUnavailable {
+		t.Fatalf("work-area failure must be geometryUnavailable, got %v", fault)
+	}
 }
 
 func TestMeasureClientNegativeOrigin(t *testing.T) {
@@ -182,6 +194,15 @@ func TestGeometryTrackerVersions(t *testing.T) {
 	g5, changed := tr.Update(monitorChange, at.Add(4*time.Second))
 	if g5.Version != 4 || !changed {
 		t.Fatalf("monitor update: version %d, changed %v", g5.Version, changed)
+	}
+
+	// Work-area change (a taskbar moved or the display mode changed):
+	// version bump, because containment is a premise of the precheck.
+	workChange := base
+	workChange.WorkArea = PixelRect{PixelPoint{0, 0}, PixelPoint{1920, 1000}}
+	g6, changed := tr.Update(workChange, at.Add(5*time.Second))
+	if g6.Version != 5 || !changed {
+		t.Fatalf("work-area update: version %d, changed %v", g6.Version, changed)
 	}
 }
 

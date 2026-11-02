@@ -45,6 +45,29 @@ var referenceClientTiers = [...]DisplayTier{
 	{Name: "1280x720", Client: image.Pt(1280, 720)},
 }
 
+// openClientTiers is the subset of referenceClientTiers the Windows local
+// profile may start. D-2 (2026-11-02) opens 1920×1080 only; the other
+// listed tiers are known but not opened and must be refused with a request
+// to switch to 1920×1080.
+//
+// Opening another tier requires its own field acceptance on a Windows
+// local client at that native client size: the game display setting and
+// measured client pixels (including border offsets at the user's DPI),
+// GDI capture fidelity, every ReferenceLayout anchor after the clientRect
+// transform, the filter/scroll thresholds (including a long list for the
+// scrollbar), input timing, and a complete scan acceptance. Listing a tier
+// in referenceClientTiers is not evidence; a scale factor never opens one.
+var openClientTiers = [...]DisplayTier{
+	{Name: "1920x1080", Client: image.Pt(1920, 1080)},
+}
+
+// OpenClientTiers returns a copy of the opened Windows local-client tiers.
+func OpenClientTiers() []DisplayTier {
+	out := make([]DisplayTier, len(openClientTiers))
+	copy(out, openClientTiers[:])
+	return out
+}
+
 // ReferenceClientTiers returns the closed table of client-area tiers. The
 // slice is a copy; mutating it cannot change the accepted table.
 func ReferenceClientTiers() []DisplayTier {

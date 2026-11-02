@@ -150,6 +150,7 @@ type fakeGeometry struct {
 	windowDPI   func() (uint32, error)
 	monitorDPI  func() (uint32, error)
 	monitorRect func() (PixelRect, error)
+	workArea    func() (PixelRect, error)
 	self        func() (DpiAwareness, error)
 }
 
@@ -160,6 +161,7 @@ func newFakeGeometry() *fakeGeometry {
 		windowDPI:   func() (uint32, error) { return 96, nil },
 		monitorDPI:  func() (uint32, error) { return 96, nil },
 		monitorRect: func() (PixelRect, error) { return PixelRect{PixelPoint{0, 0}, PixelPoint{1920, 1080}}, nil },
+		workArea:    func() (PixelRect, error) { return PixelRect{PixelPoint{0, 0}, PixelPoint{1920, 1040}}, nil },
 		self:        func() (DpiAwareness, error) { return DpiAwarenessPerMonitorV2, nil },
 	}
 }
@@ -182,6 +184,10 @@ func (f *fakeGeometry) MonitorDPI(hwnd HWND) (uint32, error) {
 
 func (f *fakeGeometry) MonitorRect(hwnd HWND) (PixelRect, error) {
 	return f.monitorRect()
+}
+
+func (f *fakeGeometry) MonitorWorkArea(hwnd HWND) (PixelRect, error) {
+	return f.workArea()
 }
 
 func (f *fakeGeometry) SelfDpiAwareness() (DpiAwareness, error) {

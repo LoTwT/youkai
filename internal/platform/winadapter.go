@@ -39,6 +39,10 @@ type WinNatives struct {
 	FG    windows.ForegroundAPI
 	GDI   windows.GDI
 	Send  windows.Sender
+	// Integrity reads mandatory integrity levels (D-1). Required.
+	Integrity windows.IntegrityAPI
+	// Fullscreen reports the shell's exclusive-fullscreen state. Required.
+	Fullscreen windows.FullscreenAPI
 	// HotkeyAPI backs the hotkey manager.
 	HotkeyAPI windows.HotkeyAPI
 	// StartLoop registers the stop hotkey on a thread that owns its
@@ -76,7 +80,8 @@ type WinAdapter struct {
 // NewWinAdapter validates the natives and returns the adapter.
 func NewWinAdapter(n WinNatives) (*WinAdapter, error) {
 	if n.Win == nil || n.Procs == nil || n.Geo == nil || n.FG == nil ||
-		n.GDI == nil || n.Send == nil || n.HotkeyAPI == nil || n.StartLoop == nil {
+		n.GDI == nil || n.Send == nil || n.Integrity == nil || n.Fullscreen == nil ||
+		n.HotkeyAPI == nil || n.StartLoop == nil {
 		return nil, errors.New("platform: windows adapter requires every native surface")
 	}
 	if n.HotkeyID == 0 {
@@ -138,6 +143,12 @@ func (a *WinAdapter) Open(ctx context.Context, cfg SessionConfig) (Session, erro
 	}
 	if cfg.Target.ExecutablePath == "" {
 		return nil, NewFault(CodeInvalidOperation, "the windows target requires an executable path")
+	}
+	if cfg.Display == nil {
+		return nil, NewFault(CodeInvalidOperation, "the windows session requires a display policy")
+	}
+	if err := cfg.Display.validate(); err != nil {
+		return nil, NewFault(CodeInvalidOperation, err.Error())
 	}
 	vk, err := WindowsVK(cfg.Hotkey.Key)
 	if err != nil {
@@ -226,9 +237,18 @@ func (a *WinAdapter) Open(ctx context.Context, cfg SessionConfig) (Session, erro
 		return nil, NewFault(CodeTargetLost, "the freshly locked target failed its first re-verification")
 	}
 	geo := obs.obs.Geometry
-	if !geo.Monitor.ContainsRect(geo.Client) {
+	if f := displayFault(geo, cfg.Display); f != nil {
 		stopHotkey()
-		return nil, NewFault(CodeTargetHidden, "the client area is not fully inside its monitor")
+		return nil, f
+	}
+	// D-1: the scanner must be at least as privileged as the game. UIPI
+	// silently drops SendInput events otherwise, while the call still
+	// reports success.
+	targetLevel, selfLevel, integrityFault := windows.IntegrityPair(a.natives.Integrity, locked.PID)
+	a.logf("integrity: target=%s self=%s", targetLevel, selfLevel)
+	if integrityFault != nil {
+		stopHotkey()
+		return nil, mapWinFault(integrityFault)
 	}
 	// The probe capture proves the GDI path works on this target before
 	// the session starts.
@@ -260,11 +280,22 @@ type winObservation struct {
 // inconsistencies void the geometry (geometryInvalid); the process's own
 // DPI awareness is a process capability (permissionMissing).
 func mapWinFault(f *windows.PlatformFault) *Fault {
+	withParams := func(code string, class FaultClass, message string) *Fault {
+		return &Fault{Code: code, Class: class, Message: message, Params: copyParams(f.Params), At: f.At}
+	}
 	switch f.Code {
 	case windows.CodeTargetLost:
-		return &Fault{Code: CodeTargetLost, Class: ClassBroken, Message: f.Message + ": " + f.RawErr, At: f.At}
+		return withParams(CodeTargetLost, ClassBroken, f.Message+rawSuffix(f))
 	case windows.CodeDpiAwarenessMismatch:
-		return &Fault{Code: CodePermissionMissing, Class: ClassSetup, Message: f.Message + ": " + f.RawErr, At: f.At}
+		return withParams(CodePermissionMissing, ClassSetup, f.Message+rawSuffix(f))
+	case windows.CodeIntegrityMismatch:
+		return withParams(CodeIntegrityMismatch, ClassSetup, f.Message+rawSuffix(f))
+	case windows.CodeIntegrityUnverifiable:
+		return withParams(CodeIntegrityUnverifiable, ClassSetup, f.Message+rawSuffix(f))
+	case windows.CodeExclusiveFullscreen:
+		return withParams(CodeExclusiveFullscreen, ClassSetup, f.Message+rawSuffix(f))
+	case windows.CodeFrameContentBlank:
+		return withParams(CodeFrameContentBlank, ClassPremise, f.Message+rawSuffix(f))
 	default:
 		// CodeGeometryUnavailable, CodeDpiVirtualized,
 		// CodeDpiCheckUnavailable, CodeCaptureFailed: the geometry or
@@ -273,8 +304,15 @@ func mapWinFault(f *windows.PlatformFault) *Fault {
 		if f.Code == windows.CodeCaptureFailed {
 			code = CodeCaptureStopped
 		}
-		return &Fault{Code: code, Class: ClassBroken, Message: f.Message + ": " + f.RawErr, At: f.At}
+		return withParams(code, ClassBroken, f.Message+rawSuffix(f))
 	}
+}
+
+func rawSuffix(f *windows.PlatformFault) string {
+	if f.RawErr == "" {
+		return ""
+	}
+	return ": " + f.RawErr
 }
 
 // winSession is one Windows session of the port.
@@ -301,6 +339,9 @@ type winSession struct {
 	frameSeq     uint64
 	imageW       int
 	imageH       int
+	// fullscreenUnknownLogged keeps the shell-state diagnostic from
+	// repeating on every preparation observation.
+	fullscreenUnknownLogged bool
 }
 
 // Windows has no Activator: the collector falls back to waiting for the
@@ -346,6 +387,9 @@ func (s *winSession) Observe() (Observation, error) {
 			problems = append(problems, &Fault{Code: CodeGeometryChanged, Class: ClassBroken,
 				Message: fmt.Sprintf("the client geometry changed after the baseline (version %d)", o.obs.Geometry.Version), At: now})
 		}
+		if !s.baselineLocked() {
+			problems = append(problems, s.preBaselineProblems(o.obs, now)...)
+		}
 	}
 	return Observation{
 		At:       now,
@@ -361,6 +405,70 @@ func (s *winSession) baselineLocked() bool {
 	return s.baselined
 }
 
+// checkFrameContent captures one frame after the target is foreground and
+// applies the non-black edge fallback. A blank capture is a premise the
+// preparation loop can retry (the user may still be switching focus or
+// the window may be repainting); the controller's budget bounds it.
+func (s *winSession) checkFrameContent(geo windows.ClientGeometry, probes WindowProbes) *Fault {
+	capture, fault := windows.CaptureFrame(s.adapter.natives.GDI, geo, "precheck-content")
+	if fault != nil {
+		return mapWinFault(fault)
+	}
+	return frameContentFault(capture.Image, probes)
+}
+
+// preBaselineProblems applies the precheck that stays in force until the
+// baseline is locked. Stage-1 policy facts (tier, work-area containment)
+// are re-applied because the user can resize or move the window while
+// preparing. Stage-2 facts are only checked once the target is actually
+// foreground: occlusion samples and the exclusive-fullscreen verdict.
+func (s *winSession) preBaselineProblems(obs windows.TargetObservation, now time.Time) []*Fault {
+	var problems []*Fault
+	geo := obs.Geometry
+	if geo.Client.Empty() {
+		return nil
+	}
+	if f := displayFault(geo, s.cfg.Display); f != nil {
+		problems = append(problems, f)
+		return problems
+	}
+	if !obs.Foreground || !obs.Visible || obs.Minimized {
+		return problems
+	}
+	probes, ok := s.cfg.Display.probesFor(image.Pt(geo.Client.Dx(), geo.Client.Dy()))
+	if !ok {
+		// displayFault already accepted this tier, so a missing probe
+		// table is a policy wiring fault, not a user condition.
+		problems = append(problems, NewFault(CodeInvalidOperation,
+			"the display policy accepted the client tier but has no probes for it").at(now))
+		return problems
+	}
+	if f := occlusionFault(s.adapter.natives.FG, s.adapter.natives.Win, geo, s.locked.HWND, probes); f != nil {
+		problems = append(problems, f)
+	}
+	state, err := s.adapter.natives.Fullscreen.FullscreenState()
+	if err == nil && state == windows.FullscreenUnknown {
+		s.logFullscreenUnknownOnce()
+	}
+	if err != nil {
+		s.logFullscreenUnknownOnce()
+	}
+	if f := exclusiveFullscreenFault(state, err); f != nil {
+		problems = append(problems, f)
+	}
+	return problems
+}
+
+func (s *winSession) logFullscreenUnknownOnce() {
+	s.mu.Lock()
+	already := s.fullscreenUnknownLogged
+	s.fullscreenUnknownLogged = true
+	s.mu.Unlock()
+	if !already {
+		s.adapter.logf("exclusive fullscreen unknown: SHQueryUserNotificationState did not answer; the frame-content fallback remains")
+	}
+}
+
 // LockBaseline implements Session.
 func (s *winSession) LockBaseline() (GeometryVersion, error) {
 	obs, err := s.Observe()
@@ -373,6 +481,25 @@ func (s *winSession) LockBaseline() (GeometryVersion, error) {
 	if obs.Geometry == 0 {
 		return 0, &Fault{Code: CodeGeometryInvalid, Class: ClassBroken,
 			Message: "no verified client geometry; the baseline cannot freeze", At: s.adapter.now()}
+	}
+	geo, ok := s.tracker.Current()
+	if !ok {
+		return 0, &Fault{Code: CodeGeometryInvalid, Class: ClassBroken,
+			Message: "no measured client geometry; the baseline cannot freeze", At: s.adapter.now()}
+	}
+	probes, ok := s.cfg.Display.probesFor(image.Pt(geo.Client.Dx(), geo.Client.Dy()))
+	if !ok {
+		// The observed geometry is an accepted tier (Observe checked), but
+		// the probe table is keyed by that tier's exact size.
+		return 0, &Fault{Code: CodeInvalidOperation, Class: ClassSetup,
+			Message: "the display policy has no probes for the accepted client tier", At: s.adapter.now()}
+	}
+	if f := s.checkFrameContent(geo, probes); f != nil {
+		return 0, f
+	}
+	if current, ok := s.tracker.Current(); !ok || current.Version != geo.Version {
+		return 0, &Fault{Code: CodeStaleGeometry, Class: ClassPremise,
+			Message: "the client geometry changed while the precheck frame was captured", At: s.adapter.now()}
 	}
 	s.mu.Lock()
 	s.baselined = true

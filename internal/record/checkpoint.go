@@ -265,7 +265,13 @@ type SessionShell struct {
 	// Termination is nil while the session is still running; a
 	// checkpoint without it is exactly what recovery marks interrupted.
 	Termination *Termination `json:"termination,omitempty"`
-	Coverage    Coverage     `json:"coverage"`
+	// FailureParams carries the first trigger's structured diagnostic
+	// facts (sizes, rectangles, window identification, integrity levels).
+	// The UI maps the code plus these values to a localized explanation;
+	// params never contain user-facing prose. It stays out of the public
+	// scan JSON, which keeps its three-field termination shape.
+	FailureParams map[string]string `json:"failureParams,omitempty"`
+	Coverage      Coverage          `json:"coverage"`
 	// CapturedCount is the number of accepted observations, including
 	// those that later failed or stayed unprocessed; it must equal the
 	// item records, which is the accounting check that makes an

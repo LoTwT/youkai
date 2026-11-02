@@ -137,6 +137,10 @@ const (
 type FaultError struct {
 	Code string
 	Err  error
+	// Params are structured diagnostic facts (sizes, rectangles, window
+	// identification, integrity levels) the kernel carries to the record
+	// and the UI. They are never localized prose.
+	Params map[string]string
 }
 
 // NewFault wraps err with a diagnostic code for reporting to the session.
@@ -145,6 +149,22 @@ type FaultError struct {
 func NewFault(code string, err error) *FaultError {
 	return &FaultError{Code: code, Err: err}
 }
+
+// NewFaultWithParams wraps err with a code and structured diagnostic
+// parameters. The map is copied.
+func NewFaultWithParams(code string, err error, params map[string]string) *FaultError {
+	f := &FaultError{Code: code, Err: err}
+	if len(params) > 0 {
+		f.Params = make(map[string]string, len(params))
+		for k, v := range params {
+			f.Params[k] = v
+		}
+	}
+	return f
+}
+
+// FaultParams returns the structured diagnostic facts, if any.
+func (e *FaultError) FaultParams() map[string]string { return e.Params }
 
 func (e *FaultError) Error() string {
 	if e.Err == nil {
@@ -172,8 +192,13 @@ type Trigger struct {
 	Kind    TriggerKind
 	Code    string
 	Message string
-	Phase   Phase // the phase the trigger was accepted in, not the phase at sealing
-	At      time.Time
+	// Params carries structured diagnostic facts (sizes, rectangles,
+	// window identification, integrity levels) for the UI's localized
+	// explanation. The kernel copies it from the FaultError; it is not
+	// user-facing prose.
+	Params map[string]string
+	Phase  Phase // the phase the trigger was accepted in, not the phase at sealing
+	At     time.Time
 }
 
 // Fault is a fault recorded after the session's outcome was already

@@ -49,6 +49,11 @@ type SessionConfig struct {
 	// Gate is the kernel's input permission, read live before and
 	// during every dispatch and between a drag's steps. Required.
 	Gate InputGate
+	// Display, when set, is the game adapter's display-configuration
+	// contract: the known/open Windows client tiers, their occlusion
+	// samples and the optional content probe. The Windows adapter
+	// requires it; macOS ignores it.
+	Display *WindowDisplayPolicy
 	// OnFault reports watcher and stream faults after the baseline was
 	// locked. It may be called from any goroutine and must not block.
 	// Faults before the baseline surface in Observe's Problems instead.

@@ -25,11 +25,13 @@ type entry struct {
 // must not cancel remaining recognition).
 func (s *Session) faultLocked(defaultCode string, err error, where Phase, cutsFinalizing bool) {
 	code := faultCode(err, defaultCode)
+	params := faultParams(err)
 	if !s.stopping && (s.phase != PhaseFinalizing || cutsFinalizing) {
 		s.beginStopLocked(Trigger{
 			Kind:    TriggerFault,
 			Code:    code,
 			Message: err.Error(),
+			Params:  params,
 			Phase:   where,
 			At:      time.Now(),
 		})
@@ -37,6 +39,16 @@ func (s *Session) faultLocked(defaultCode string, err error, where Phase, cutsFi
 	}
 	s.faults = append(s.faults, Fault{Code: code, Message: err.Error(), Phase: where, At: time.Now()})
 	s.notifyLocked()
+}
+
+// faultParams extracts structured diagnostic facts from an error that
+// carries them; nil when it has none.
+func faultParams(err error) map[string]string {
+	var carrier interface{ FaultParams() map[string]string }
+	if errors.As(err, &carrier) {
+		return carrier.FaultParams()
+	}
+	return nil
 }
 
 // beginStopLocked is the single stop entry: it accepts the first trigger,

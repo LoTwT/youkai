@@ -638,8 +638,8 @@ func (s *Service) wrapUp(a *activeSession) {
 // focusLost or navigationMismatch leaves no explanation of its own.
 func logSessionTrigger(id scan.ID, final scan.Snapshot) {
 	if t := final.Trigger; t != nil {
-		log.Printf("youkai: scan %s stop trigger: kind=%s code=%s phase=%s message=%q",
-			id, t.Kind, t.Code, t.Phase, t.Message)
+		log.Printf("youkai: scan %s stop trigger: kind=%s code=%s phase=%s message=%q params=%v",
+			id, t.Kind, t.Code, t.Phase, t.Message, t.Params)
 	}
 	for _, f := range final.Faults {
 		log.Printf("youkai: scan %s later fault: code=%s phase=%s message=%q", id, f.Code, f.Phase, f.Message)
