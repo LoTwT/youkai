@@ -238,30 +238,99 @@ func TestObserveTargetFocusLossIsObservationNotFault(t *testing.T) {
 	}
 }
 
+// settleClock advances only when the injected sleep is called, so the
+// activation tests never wait on a real clock.
+type settleClock struct {
+	at     time.Time
+	sleeps []time.Duration
+}
+
+func (c *settleClock) now() time.Time { return c.at }
+
+func (c *settleClock) sleep(d time.Duration) {
+	c.sleeps = append(c.sleeps, d)
+	c.at = c.at.Add(d)
+}
+
 func TestActivateTarget(t *testing.T) {
-	t.Run("accepted request is verified through the foreground", func(t *testing.T) {
+	t.Run("immediate success needs no polling", func(t *testing.T) {
+		clock := &settleClock{at: time.Unix(0, 0)}
 		fg := &fakeForeground{foreground: 99, setFgOK: true}
-		if err := ActivateTarget(fg, 7); err != nil {
+		waited, err := ActivateTarget(fg, 7, ForegroundSettle{Sleep: clock.sleep, Now: clock.now})
+		if err != nil {
 			t.Fatalf("ActivateTarget: %v", err)
 		}
+		if waited != 0 {
+			t.Fatalf("waited = %v, want 0 for an immediate observation", waited)
+		}
+		if len(clock.sleeps) != 0 || fg.polls != 0 {
+			t.Fatalf("immediate success polled: sleeps=%v foreground reads=%d", clock.sleeps, fg.polls)
+		}
 		if len(fg.requested) != 1 || fg.requested[0] != 7 {
 			t.Fatalf("requested windows = %v, want [7]", fg.requested)
 		}
-		if fg.ForegroundWindow() != 7 {
-			t.Fatalf("foreground = %d, want 7", fg.ForegroundWindow())
+		if fg.foreground != 7 {
+			t.Fatalf("foreground = %d, want 7", fg.foreground)
 		}
 	})
-	t.Run("refused request keeps the previous foreground", func(t *testing.T) {
-		fg := &fakeForeground{foreground: 99}
-		err := ActivateTarget(fg, 7)
-		if err == nil || !strings.Contains(err.Error(), "hwnd 7") {
-			t.Fatalf("want a refusal naming the target, got %v", err)
+	t.Run("delayed switch succeeds on the observation that sees it", func(t *testing.T) {
+		clock := &settleClock{at: time.Unix(0, 0)}
+		fg := &fakeForeground{foreground: 99, settleAfterPolls: 3}
+		waited, err := ActivateTarget(fg, 7, ForegroundSettle{Sleep: clock.sleep, Now: clock.now})
+		if err != nil {
+			t.Fatalf("ActivateTarget: %v", err)
+		}
+		if waited != 75*time.Millisecond {
+			t.Fatalf("waited = %v, want 75ms after three polls", waited)
+		}
+		if fg.polls != 3 {
+			t.Fatalf("foreground reads = %d, want 3", fg.polls)
+		}
+		if len(clock.sleeps) != 3 {
+			t.Fatalf("sleeps = %v, want 3 polls", clock.sleeps)
+		}
+		for _, d := range clock.sleeps {
+			if d != foregroundSettlePollEvery {
+				t.Fatalf("sleep = %v, want %v", d, foregroundSettlePollEvery)
+			}
 		}
 		if len(fg.requested) != 1 || fg.requested[0] != 7 {
-			t.Fatalf("requested windows = %v, want [7]", fg.requested)
+			t.Fatalf("requested windows = %v, want one request for [7]", fg.requested)
 		}
-		if fg.ForegroundWindow() != 99 {
-			t.Fatalf("foreground = %d, want the previous 99", fg.ForegroundWindow())
+		if fg.foreground != 7 {
+			t.Fatalf("foreground = %d, want 7", fg.foreground)
+		}
+	})
+	t.Run("refused switch fails at the bounded limit", func(t *testing.T) {
+		clock := &settleClock{at: time.Unix(0, 0)}
+		fg := &fakeForeground{foreground: 99}
+		_, err := ActivateTarget(fg, 7, ForegroundSettle{Sleep: clock.sleep, Now: clock.now})
+		if err == nil || !strings.Contains(err.Error(), "hwnd 7") ||
+			!strings.Contains(err.Error(), "not foreground after 500 ms") {
+			t.Fatalf("want a bounded refusal naming the target, got %v", err)
+		}
+		wantPolls := int(foregroundSettleLimit / foregroundSettlePollEvery)
+		if fg.polls != wantPolls {
+			t.Fatalf("foreground reads = %d, want the bounded %d", fg.polls, wantPolls)
+		}
+		if len(clock.sleeps) != wantPolls {
+			t.Fatalf("sleeps = %d, want %d", len(clock.sleeps), wantPolls)
+		}
+		var slept time.Duration
+		for _, d := range clock.sleeps {
+			slept += d
+			if d != foregroundSettlePollEvery {
+				t.Fatalf("sleep = %v, want %v", d, foregroundSettlePollEvery)
+			}
+		}
+		if slept != foregroundSettleLimit {
+			t.Fatalf("total wait = %v, want the %v limit and no extra sleep", slept, foregroundSettleLimit)
+		}
+		if len(fg.requested) != 1 || fg.requested[0] != 7 {
+			t.Fatalf("requested windows = %v, want one request for [7]", fg.requested)
+		}
+		if fg.foreground != 99 {
+			t.Fatalf("foreground = %d, want the previous 99", fg.foreground)
 		}
 	})
 }

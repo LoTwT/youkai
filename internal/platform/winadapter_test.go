@@ -675,6 +675,26 @@ func TestWinClientAreaReportedAfterBaselineOnly(t *testing.T) {
 	sess.Close()
 }
 
+// settleClock advances only when the injected sleep is called, so the
+// activation wait tests never block on a real clock. It is safe for the
+// watcher goroutine to read concurrently.
+type settleClock struct {
+	mu sync.Mutex
+	at time.Time
+}
+
+func (c *settleClock) now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.at
+}
+
+func (c *settleClock) sleep(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.at = c.at.Add(d)
+}
+
 // The Windows session exposes Activator: a user-started scan asks for the
 // locked HWND once and logs both the request and its observed outcome.
 func TestWinSessionActivate(t *testing.T) {
@@ -703,7 +723,7 @@ func TestWinSessionActivate(t *testing.T) {
 			t.Fatalf("foreground = %d, want the locked hwnd %d", got, gameHwnd)
 		}
 		if !strings.Contains(logs.String(), fmt.Sprintf("requesting foreground for target hwnd %d", gameHwnd)) ||
-			!strings.Contains(logs.String(), fmt.Sprintf("target hwnd %d is the foreground window", gameHwnd)) {
+			!strings.Contains(logs.String(), fmt.Sprintf("target hwnd %d accepted after 0 ms", gameHwnd)) {
 			t.Fatalf("activation logs do not name the request and result:\n%s", logs.String())
 		}
 		obs, err := sess.Observe()
@@ -714,6 +734,9 @@ func TestWinSessionActivate(t *testing.T) {
 
 	t.Run("refused", func(t *testing.T) {
 		w := newWinWorld(t)
+		clock := &settleClock{at: time.Unix(0, 0)}
+		w.adapter.Now = clock.now
+		w.adapter.Sleep = clock.sleep
 		sess := w.openReady(t)
 		defer sess.Close()
 		var logs bytes.Buffer
@@ -737,8 +760,9 @@ func TestWinSessionActivate(t *testing.T) {
 		if got := w.fg.ForegroundWindow(); got != 999 {
 			t.Fatalf("a refused request changed the foreground to %d", got)
 		}
-		if !strings.Contains(logs.String(), "waiting for the user to focus the game") {
-			t.Fatalf("the refusal does not explain the fallback:\n%s", logs.String())
+		if !strings.Contains(logs.String(), "not foreground after 500 ms") ||
+			!strings.Contains(logs.String(), "waiting for the user to focus the game") {
+			t.Fatalf("the refusal does not explain the bounded fallback:\n%s", logs.String())
 		}
 		obs, err := sess.Observe()
 		if err != nil {

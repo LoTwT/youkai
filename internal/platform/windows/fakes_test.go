@@ -205,14 +205,27 @@ type fakeForeground struct {
 	// their own root.
 	roots map[HWND]HWND
 	// setFgOK: RequestForeground actually moves the foreground.
-	setFgOK   bool
-	requested []HWND
+	setFgOK bool
+	// settleAfterPolls delays the requested switch: RequestForeground only
+	// records it, and the target becomes foreground on that many
+	// ForegroundWindow polls. Zero means no delayed switch.
+	settleAfterPolls int
+	polls            int
+	pending          HWND
+	requested        []HWND
 }
 
-func (f *fakeForeground) ForegroundWindow() HWND { return f.foreground }
+func (f *fakeForeground) ForegroundWindow() HWND {
+	f.polls++
+	if f.settleAfterPolls > 0 && f.polls >= f.settleAfterPolls {
+		f.foreground = f.pending
+	}
+	return f.foreground
+}
 
 func (f *fakeForeground) RequestForeground(hwnd HWND) bool {
 	f.requested = append(f.requested, hwnd)
+	f.pending = hwnd
 	if f.setFgOK {
 		f.foreground = hwnd
 	}
