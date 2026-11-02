@@ -149,27 +149,27 @@ Mac 先在现有设备上检查客户端提供的显示或窗口选项，选取�
    - **屏幕包含：**客户区完整落在其所在显示器的工作区（`MonitorWorkArea`，即显示器矩形减去任务栏和应用栏）内，**或者**客户区恰好等于整块显示器矩形（无边框全屏，任务栏会被盖住）。两者都不满足即拒绝；跨屏或被任务栏裁掉都走同一拒绝。窗口只覆盖工作区的一部分、或仅与显示器相交，都不算满足。
    - **DPI：**沿用既有 PMv2 与目标窗口/显示器 DPI 一致性检查（见 2.1）；不因新的预检放宽或改变 DPI 模式。
    - **权限（D-1 的实现）：**读取游戏进程与 youkai 自身的强制完整性级别；目标高于自身即拒绝，查询失败按 fail-closed 拒绝。读取只用 `PROCESS_QUERY_LIMITED_INFORMATION` 打开目标进程、`TOKEN_QUERY` 查询令牌。双方级别写入诊断日志，失败时也写入故障参数。UIPI 不能靠投递结果发现（见 2.1 的 A 轮证据），本检查是开始前的判据。
-2. **用户切回游戏后（准备等待内，有界）：**前台/可见/未最小化、遮挡采样、独占全屏、画面兜底。这些条件使用现有 30 秒准备预算和 200 ms 观测节奏反复检查；逐项不成立时显示“准备中”的对应中文原因，预算耗尽就以该原因结束（遮挡/纯黑保留自身故障码，不用通用 `prepareTimeout` 覆盖）。
-   - **遮挡采样：**由 `ReferenceLayout()` 推导固定点，经当前档位的 `clientRect` 变换后加客户区屏幕原点：客户区四角内缩、底部按钮栏、滑块轨道顶端与底端、详情区、6 个转盘中心、列表视口四角（共 18 点）。每点做 `WindowFromPoint` 再取 `GetAncestor(GA_ROOT)`；任一点的根窗口不是目标窗口即拒绝，诊断记录点名称、屏幕坐标、命中的根窗口句柄、类名和标题。这样任务栏 `Shell_TrayWnd`、对话框和置顶覆盖层都能被发现。窗口不在前台时不采样，避免把“用户还没切回游戏”误报为遮挡。
+2. **用户切回游戏后（准备等待内，有界）：**前台/可见/未最小化、遮挡采样、独占全屏、画面兜底。这些条件使用现有 30 秒准备预算和 200 ms 观测节奏反复检查；准备期间界面只显示“准备中”，不在每个观测点弹出原因；预算耗尽后会话以该原因结束，界面再显示对应中文提示（遮挡/纯黑保留自身故障码，不用通用 `prepareTimeout` 覆盖）。准备期间实时显示逐项原因列为后续工作。
+   - **遮挡采样：**由 `ReferenceLayout()` 推导固定点，经当前档位的 `clientRect` 变换后加客户区屏幕原点：客户区四角内缩、底部按钮栏、滑块轨道顶端与底端、详情区、6 个转盘中心、列表视口四角（共 18 点）。每点做 `WindowFromPoint` 再取 `GetAncestor(GA_ROOT)`；任一点的根窗口不是目标窗口即拒绝，诊断记录点名称、屏幕坐标、命中的根窗口句柄、类名和进程名；外部窗口标题可能含隐私，不进入参数、日志或记录。这样任务栏 `Shell_TrayWnd`、对话框和置顶覆盖层都能被发现。窗口不在前台时不采样，避免把“用户还没切回游戏”误报为遮挡。
    - **独占全屏：**用 `SHQueryUserNotificationState` 的 `QUNS_RUNNING_D3D_FULL_SCREEN` 判定独占 Direct3D 全屏；只在目标是实际前台窗口时归因于目标。`QUNS_BUSY` 也可能来自无边框全屏，不能据此宣称独占；查询失败或未知值只写明“无法判定”，不猜，仍由画面兜底和 GDI 黑边检查拒绝明显的不可采集画面。
    - **画面兜底：**在前台条件成立、锁定基线之前截一帧。每条边从边缘向内检查「已标定纯黑余量」内的所有行/列：只要其中有一行/列不是整条纯黑即通过。1920×1080 原生帧的顶部实测有约 22 px 游戏自带黑边（2026-11-01），因此开放档位配置 24 px 顶部余量（2 px 富余），左/右/底余量为 0；余量内出现全黑行/列说明屏幕外区域被 GDI 截成纯黑。可选的内容探针区域也要求至少一个非黑像素；参考夹具是掩码图，尚无未掩码的底部按钮栏实测样本，因此当前不配置这一可选探针，只有四边检查生效，开放新档位前应补测。
 3. **基线锁定后：**预检不再重复遮挡/全屏/画面兜底；采集中一旦几何变化按既有 Broken 规则停止，输入前仍逐次做落点命中检查。
 
-**故障码、参数与中文提示约定：**平台和采集层只返回稳定故障码与结构化参数（`Fault.Params` / `scan.Trigger.Params` / 记录的 `SessionShell.FailureParams`），不在底层拼接中文句子；界面在 [`internal/ui/session_status.go`](../../internal/ui/session_status.go) 的 `failureText` 统一映射。参数至少保留当前尺寸、期望档位、显示器与工作区、命中的窗口（句柄/类名/标题）以及双方完整性级别。未识别的码仍显示诊断码，不能因此改写结束类型。
+**故障码、参数与中文提示约定：**平台和采集层只返回稳定故障码与结构化参数（`Fault.Params` / `scan.Trigger.Params` / 记录的 `SessionShell.FailureParams`），不在底层拼接中文句子；界面在 [`internal/ui/session_status.go`](../../internal/ui/session_status.go) 的 `failureText` 统一映射。参数至少保留当前尺寸、期望档位、显示器与工作区、命中的窗口（句柄/类名/进程名）以及双方完整性级别；外部窗口标题不作为参数持久化。未识别的码仍显示诊断码，不能因此改写结束类型。
 
 | 故障码 | 阶段/类别 | 关键参数 | 中文提示（摘要） |
 | --- | --- | --- | --- |
-| `clientTierNotOpened` | 切换焦点前 / Setup | `current`、`tier`、`known`、`allowed` | 当前分辨率是已知但未开放的档位，请在游戏设置中切换到 1920×1080（窗口模式）后重新开始。 |
-| `clientTierUnsupported` | 切换焦点前 / Setup | `current`、`known`、`allowed` | 当前分辨率不受支持，请切换到 1920×1080（窗口模式）后重新开始。 |
-| `windowOutsideWorkArea` | 切换焦点前 / Setup | `client`、`monitor`、`workArea` | 窗口超出屏幕或被任务栏遮挡，请切换到 1920×1080 窗口模式并把窗口完整放在屏幕内。 |
+| `clientTierNotOpened` | 切换焦点前 / Setup | `current`、`tier`、`known`、`allowed` | 当前分辨率是已知但未开放的档位，请在游戏设置中切换到 `allowed` 中的档位（窗口模式，当前为 1920×1080）后重新开始。 |
+| `clientTierUnsupported` | 切换焦点前 / Setup | `current`、`known`、`allowed` | 当前分辨率不受支持，请切换到 `allowed` 中的档位（窗口模式，当前为 1920×1080）后重新开始。 |
+| `windowOutsideWorkArea` | 切换焦点前 / Setup | `client`、`monitor`、`workArea`、`allowed` | 窗口超出屏幕或被任务栏遮挡，请切换到 `allowed` 中的窗口模式并把窗口完整放在屏幕内。 |
 | `integrityMismatch` | 切换焦点前 / Setup | `target`、`self` | 游戏正在以管理员身份运行，youkai 需要同样的权限；请右键 youkai 选择“以管理员身份运行”后重新打开。另说明只发送鼠标操作、不加载驱动、不注入、不读内存。 |
-| `integrityUnverifiable` | 切换焦点前 / Setup | `target`、`self`、`detail` | 无法读取双方权限级别，出于安全考虑不能开始；请以管理员身份运行 youkai 后重试。 |
-| `windowOccluded` | 切回游戏后 / Premise | `probe`、`point`、`hit`、`hitClass`、`hitTitle`、`target` | 游戏窗口被其他窗口遮挡（写出检查点与命中的窗口），请关闭遮挡窗口后重新开始。 |
+| `integrityUnverifiable` | 切换焦点前 / Setup | `target`、`self`、`detail` | 无法读取双方权限级别，出于安全考虑不能开始；请以管理员身份运行 youkai 后重试。同样说明只发送鼠标操作、不加载驱动、不注入、不读内存；级别以中文显示。 |
+| `windowOccluded` | 切回游戏后 / Premise | `probe`、`point`、`hit`、`hitClass`、`hitProcess`、`target` | 游戏窗口被其他窗口遮挡（写出检查点、窗口类或进程名），请关闭遮挡窗口后重新开始。外部窗口标题可能含隐私，不写入参数、日志或记录。 |
 | `frameContentBlank` | 切回游戏后 / Premise | `reason`、`edge`/`line`、`client` | 游戏画面边缘为纯黑，可能处于独占全屏或窗口在屏幕外；请切换到窗口模式或无边框模式并把窗口完整放在屏幕内。 |
 | `exclusiveFullscreen` | 切回游戏后 / Setup | `state` | 游戏正在以独占全屏运行，请切换到窗口模式或无边框模式。 |
 | `targetOffscreen` | macOS 准备 / Setup | `window`、`count` | 请把云·绝区零窗口完整放在一块屏幕内。 |
 | `windowSizeUnsupported` | macOS 准备 / Setup | `current`、`expected`、`window` | 请把云·绝区零窗口调整为 1164×762。 |
-| `frameConfigMismatch` | 采集预检 / Broken | `client`、`image`、`content`、`expectedImage`、`expectedContent` | 游戏画面尺寸与已标定配置不一致；macOS 云客户端请把窗口调整为 1164×762，Windows 本地客户端请恢复到已开放的 1920×1080 窗口模式。 |
+| `frameConfigMismatch` | 采集预检 / Broken | `client`、`image`、`content`、`expectedImage`、`expectedContent`、`allowed` | 游戏画面尺寸与已标定配置不一致；macOS 云客户端请把窗口调整为 1164×762，Windows 本地客户端请恢复到 `allowed` 中的窗口模式。 |
 | `anchorsMissing` | 采集预检 / 采集层 | 布局诊断 | 游戏画面与当前客户端布局不匹配，请确认分辨率与窗口尺寸后重新开始。 |
 
 **macOS 云客户端（沿用已验收 1164×762）：**目标解析先按 bundle、layer 0、onScreen、最小尺寸和“完整落在一块显示器内”过滤。若同 bundle 存在满足其他条件、只是跨屏或超出所有显示器的正常窗口，报 `targetOffscreen`，而不是笼统的 `targetNotFound`；确实没有可解析窗口仍报 `targetNotFound`。窗口点尺寸不是 1164×762 时在启动采集流之前报 `windowSizeUnsupported`；采集流已启动但帧尺寸或内容区与 `MacCloudLayout()` 不一致时报 `frameConfigMismatch`。三者的中文提示见上表。macOS 的窗口常量、布局和阈值不变。
