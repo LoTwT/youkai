@@ -195,6 +195,7 @@ type fakeWinFG struct {
 	foreground windows.HWND
 	hitDefault windows.HWND
 	hits       map[windows.PixelPoint]windows.HWND
+	roots      map[windows.HWND]windows.HWND
 }
 
 func (f *fakeWinFG) ForegroundWindow() windows.HWND {
@@ -214,7 +215,14 @@ func (f *fakeWinFG) HitWindow(p windows.PixelPoint) windows.HWND {
 	return f.hitDefault
 }
 
-func (f *fakeWinFG) RootOf(hwnd windows.HWND) windows.HWND { return hwnd }
+func (f *fakeWinFG) RootOf(hwnd windows.HWND) windows.HWND {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if root, ok := f.roots[hwnd]; ok {
+		return root
+	}
+	return hwnd
+}
 
 func (f *fakeWinFG) set(foreground windows.HWND) {
 	f.mu.Lock()
@@ -227,6 +235,9 @@ type fakeWinGDI struct {
 	captures int
 	// fill paints one BGRA pixel; nil uses the position pattern below.
 	fill func(x, y int) (b, g, r, a byte)
+	// onCapture runs after one frame is filled; tests use it to move the
+	// window during the precheck capture.
+	onCapture func()
 }
 
 func (f *fakeWinGDI) GetScreenDC() (windows.DC, error) { return windows.DC(1), nil }
@@ -262,6 +273,12 @@ func (f *fakeWinGDI) GetDIBits(dc windows.DC, bmp windows.GDIObject, buf []byte,
 			}
 			buf[i], buf[i+1], buf[i+2], buf[i+3] = byte(x), byte(y), byte((x+y)%200), 0
 		}
+	}
+	f.mu.Lock()
+	hook := f.onCapture
+	f.mu.Unlock()
+	if hook != nil {
+		hook()
 	}
 	return nil
 }

@@ -3,6 +3,7 @@ package platform
 import (
 	"fmt"
 	"image"
+	"strings"
 	"time"
 
 	"github.com/LoTwT/youkai/internal/platform/windows"
@@ -57,6 +58,7 @@ func displayFault(geo windows.ClientGeometry, policy *WindowDisplayPolicy) *Faul
 				"client":   pixelRectString(geo.Client),
 				"monitor":  pixelRectString(geo.Monitor),
 				"workArea": pixelRectString(geo.WorkArea),
+				"allowed":  tierNames(policy.OpenTiers),
 			})
 	}
 	return nil
@@ -66,7 +68,7 @@ func displayFault(geo windows.ClientGeometry, policy *WindowDisplayPolicy) *Faul
 // open tier. Any point whose WindowFromPoint root is not the locked
 // target refuses the precheck; the fault names the point and the window
 // that won it, so a taskbar or overlay is identifiable from the record.
-func occlusionFault(fg windows.ForegroundAPI, win windows.WindowAPI, geo windows.ClientGeometry, target windows.HWND, probes WindowProbes) *Fault {
+func occlusionFault(fg windows.ForegroundAPI, win windows.WindowAPI, procs windows.ProcessAPI, geo windows.ClientGeometry, target windows.HWND, probes WindowProbes) *Fault {
 	if len(probes.Occlusion) == 0 {
 		return nil
 	}
@@ -93,29 +95,42 @@ func occlusionFault(fg windows.ForegroundAPI, win windows.WindowAPI, geo windows
 		if cover == 0 {
 			cover = hit
 		}
-		className, title := "", ""
+		className, processName := "", ""
 		if cover != 0 {
 			if c, err := win.ClassName(cover); err == nil {
 				className = c
 			}
-			if t, err := win.Title(cover); err == nil {
-				title = t
+			if pid, err := win.ThreadProcessID(cover); err == nil && pid != 0 {
+				if path, _, err := procs.Query(pid); err == nil {
+					processName = executableBase(path)
+				}
 			}
 		}
+		// The hit window is an arbitrary external program: its title is
+		// user data and never reaches params, diagnostics or the record.
 		return NewFaultWithParams(CodeWindowOccluded,
-			fmt.Sprintf("occlusion probe %q at %v hit window %d (root %d, class %q, title %q), not the target %d",
-				probe.Name, at, hit, root, className, title, target),
+			fmt.Sprintf("occlusion probe %q at %v hit window %d (root %d, class %q, process %q), not the target %d",
+				probe.Name, at, hit, root, className, processName, target),
 			map[string]string{
-				"probe":    probe.Name,
-				"point":    fmt.Sprintf("%d,%d", at.X, at.Y),
-				"hit":      fmt.Sprintf("%d", hit),
-				"hitClass": className,
-				"hitTitle": title,
-				"target":   fmt.Sprintf("%d", target),
-				"reason":   "covered",
+				"probe":      probe.Name,
+				"point":      fmt.Sprintf("%d,%d", at.X, at.Y),
+				"hit":        fmt.Sprintf("%d", hit),
+				"hitClass":   className,
+				"hitProcess": processName,
+				"target":     fmt.Sprintf("%d", target),
+				"reason":     "covered",
 			})
 	}
 	return nil
+}
+
+// executableBase returns the executable's base name from a Windows path
+// without depending on the host OS's path separator.
+func executableBase(path string) string {
+	if i := strings.LastIndexAny(path, `\/`); i >= 0 {
+		return path[i+1:]
+	}
+	return path
 }
 
 // exclusiveFullscreenFault applies the shell verdict while the target is

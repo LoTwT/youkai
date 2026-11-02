@@ -244,8 +244,8 @@ func (a *WinAdapter) Open(ctx context.Context, cfg SessionConfig) (Session, erro
 	// D-1: the scanner must be at least as privileged as the game. UIPI
 	// silently drops SendInput events otherwise, while the call still
 	// reports success.
-	targetLevel, selfLevel, integrityFault := windows.IntegrityPair(a.natives.Integrity, locked.PID)
-	a.logf("integrity: target=%s self=%s", targetLevel, selfLevel)
+	targetLevel, selfLevel, targetErr, selfErr, integrityFault := windows.IntegrityPair(a.natives.Integrity, locked.PID)
+	a.logf("integrity: target=%s self=%s", windows.IntegrityLabel(targetLevel, targetErr), windows.IntegrityLabel(selfLevel, selfErr))
 	if integrityFault != nil {
 		stopHotkey()
 		return nil, mapWinFault(integrityFault)
@@ -443,7 +443,7 @@ func (s *winSession) preBaselineProblems(obs windows.TargetObservation, now time
 			"the display policy accepted the client tier but has no probes for it").at(now))
 		return problems
 	}
-	if f := occlusionFault(s.adapter.natives.FG, s.adapter.natives.Win, geo, s.locked.HWND, probes); f != nil {
+	if f := occlusionFault(s.adapter.natives.FG, s.adapter.natives.Win, s.adapter.natives.Procs, geo, s.locked.HWND, probes); f != nil {
 		problems = append(problems, f)
 	}
 	state, err := s.adapter.natives.Fullscreen.FullscreenState()
@@ -497,7 +497,18 @@ func (s *winSession) LockBaseline() (GeometryVersion, error) {
 	if f := s.checkFrameContent(geo, probes); f != nil {
 		return 0, f
 	}
-	if current, ok := s.tracker.Current(); !ok || current.Version != geo.Version {
+	// Re-observe after the capture: CaptureFrame does not update the
+	// tracker, so comparing tracker.Current would be a no-op. A window
+	// that moved, lost focus or was covered during the capture must not
+	// freeze a baseline under the old premises.
+	after, err := s.Observe()
+	if err != nil {
+		return 0, err
+	}
+	if !after.Ready {
+		return 0, mostSevere(after.Problems)
+	}
+	if after.Geometry != GeometryVersion(geo.Version) {
 		return 0, &Fault{Code: CodeStaleGeometry, Class: ClassPremise,
 			Message: "the client geometry changed while the precheck frame was captured", At: s.adapter.now()}
 	}

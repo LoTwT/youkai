@@ -22,9 +22,9 @@ func TestVerifyIntegrity(t *testing.T) {
 		{name: "target system, self high", target: IntegritySystem, self: IntegrityHigh,
 			wantCode: CodeIntegrityMismatch, wantParam: map[string]string{"target": "system", "self": "high"}},
 		{name: "target query failed", target: 0, self: IntegrityMedium, targetErr: errors.New("OpenProcess: access denied"),
-			wantCode: CodeIntegrityUnverifiable, wantParam: map[string]string{"self": "medium"}},
+			wantCode: CodeIntegrityUnverifiable, wantParam: map[string]string{"target": "unknown", "self": "medium"}},
 		{name: "self query failed", target: IntegrityHigh, targetErr: nil, selfErr: errors.New("OpenProcessToken: access denied"),
-			wantCode: CodeIntegrityUnverifiable, wantParam: map[string]string{"target": "high"}},
+			wantCode: CodeIntegrityUnverifiable, wantParam: map[string]string{"target": "high", "self": "unknown"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -61,5 +61,14 @@ func TestIntegrityLevelString(t *testing.T) {
 		if got := level.String(); got != want {
 			t.Errorf("%#x.String() = %q, want %q", uint32(level), got, want)
 		}
+	}
+}
+
+func TestIntegrityLabelUsesUnknownOnQueryFailure(t *testing.T) {
+	if got := IntegrityLabel(IntegrityUntrusted, nil); got != "untrusted" {
+		t.Fatalf("a real zero level is untrusted, got %q", got)
+	}
+	if got := IntegrityLabel(0, errors.New("query failed")); got != "unknown" {
+		t.Fatalf("a failed query must be unknown, got %q", got)
 	}
 }

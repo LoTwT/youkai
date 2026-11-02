@@ -60,6 +60,15 @@ const CodeIntegrityMismatch = "integrityMismatch"
 // read; the premise cannot be claimed.
 const CodeIntegrityUnverifiable = "integrityUnverifiable"
 
+// IntegrityLabel names a level for diagnostics. A failed query is
+// "unknown", never the zero-value "untrusted".
+func IntegrityLabel(level IntegrityLevel, err error) string {
+	if err != nil {
+		return "unknown"
+	}
+	return level.String()
+}
+
 // VerifyIntegrity refuses a target that runs at a higher mandatory
 // integrity level than the scanner, and refuses fail-closed when either
 // level is unknown. Equal or lower target levels pass.
@@ -68,11 +77,11 @@ func VerifyIntegrity(target, self IntegrityLevel, targetErr, selfErr error) *Pla
 	case targetErr != nil:
 		return NewFault(CodeIntegrityUnverifiable,
 			"the target process integrity level is unverifiable", targetErr, PhasePrecheck, time.Now(), 0).
-			WithParams(map[string]string{"self": self.String(), "detail": targetErr.Error()})
+			WithParams(map[string]string{"target": "unknown", "self": IntegrityLabel(self, selfErr), "detail": targetErr.Error()})
 	case selfErr != nil:
 		return NewFault(CodeIntegrityUnverifiable,
 			"the scanner process integrity level is unverifiable", selfErr, PhasePrecheck, time.Now(), 0).
-			WithParams(map[string]string{"target": target.String(), "detail": selfErr.Error()})
+			WithParams(map[string]string{"target": IntegrityLabel(target, targetErr), "self": "unknown", "detail": selfErr.Error()})
 	case target > self:
 		return NewFault(CodeIntegrityMismatch,
 			fmt.Sprintf("the target process integrity level %s is higher than youkai's %s; UIPI would drop SendInput events", target, self),
@@ -83,8 +92,8 @@ func VerifyIntegrity(target, self IntegrityLevel, targetErr, selfErr error) *Pla
 }
 
 // IntegrityPair runs both queries and applies VerifyIntegrity.
-func IntegrityPair(api IntegrityAPI, pid ProcessID) (target, self IntegrityLevel, fault *PlatformFault) {
-	target, targetErr := api.ProcessIntegrity(pid)
-	self, selfErr := api.SelfIntegrity()
-	return target, self, VerifyIntegrity(target, self, targetErr, selfErr)
+func IntegrityPair(api IntegrityAPI, pid ProcessID) (target, self IntegrityLevel, targetErr, selfErr error, fault *PlatformFault) {
+	target, targetErr = api.ProcessIntegrity(pid)
+	self, selfErr = api.SelfIntegrity()
+	return target, self, targetErr, selfErr, VerifyIntegrity(target, self, targetErr, selfErr)
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"image"
+	"strings"
 	"testing"
 
 	"github.com/LoTwT/youkai/internal/platform/windows"
@@ -149,6 +150,9 @@ func TestWinScreenContainment(t *testing.T) {
 		if f.Params["workArea"] != "0,0 1920x1080" {
 			t.Fatalf("work-area params: %v", f.Params)
 		}
+		if f.Params["allowed"] != "1920x1080" {
+			t.Fatalf("allowed tiers must reach the prompt: %v", f.Params)
+		}
 	})
 	t.Run("client straddling the monitor is refused", func(t *testing.T) {
 		w := newWinWorld(t)
@@ -221,9 +225,12 @@ func TestWinOcclusionPrecheck(t *testing.T) {
 	at := windows.PixelPoint{X: 10 + 960, Y: 20 + 540}
 	w.win.mu.Lock()
 	w.win.wnds = append(w.win.wnds, &fakeWnd{
-		hwnd: 99, pid: 7, visible: true, className: "Shell_TrayWnd", title: "任务栏",
+		hwnd: 99, pid: 7, visible: true, className: "Shell_TrayWnd", title: "应该被丢弃的窗口标题",
 	})
 	w.win.mu.Unlock()
+	w.procs.mu.Lock()
+	w.procs.byPID[7] = fakeProcInfo{path: `C:\Windows\explorer.exe`}
+	w.procs.mu.Unlock()
 	w.fg.mu.Lock()
 	w.fg.hits = map[windows.PixelPoint]windows.HWND{at: 99}
 	w.fg.mu.Unlock()
@@ -244,8 +251,15 @@ func TestWinOcclusionPrecheck(t *testing.T) {
 	if f.Code != CodeWindowOccluded || f.Class != ClassPremise {
 		t.Fatalf("want windowOccluded premise, got %+v", f)
 	}
-	if f.Params["probe"] != "detail" || f.Params["hitClass"] != "Shell_TrayWnd" {
+	if f.Params["probe"] != "detail" || f.Params["hitClass"] != "Shell_TrayWnd" ||
+		f.Params["hitProcess"] != "explorer.exe" {
 		t.Fatalf("occlusion params: %v", f.Params)
+	}
+	if _, leaked := f.Params["hitTitle"]; leaked {
+		t.Fatalf("the covered window's title must not be persisted: %v", f.Params)
+	}
+	if strings.Contains(f.Message, "应该被丢弃的窗口标题") {
+		t.Fatalf("the covered window's title leaked into the diagnostic message: %q", f.Message)
 	}
 	if _, err := sess.LockBaseline(); err == nil {
 		t.Fatal("the baseline must not lock while a sample is covered")
@@ -256,6 +270,65 @@ func TestWinOcclusionPrecheck(t *testing.T) {
 	w.fg.mu.Unlock()
 	if _, err := sess.LockBaseline(); err != nil {
 		t.Fatalf("after the cover cleared: %v", err)
+	}
+}
+
+func TestWinOcclusionUnresolvableHits(t *testing.T) {
+	t.Run("hit test returns no window", func(t *testing.T) {
+		w := newWinWorld(t)
+		w.fg.mu.Lock()
+		w.fg.hitDefault = 0
+		w.fg.mu.Unlock()
+		sess, err := w.adapter.Open(context.Background(), w.config())
+		if err != nil {
+			t.Fatalf("open: %v", err)
+		}
+		defer sess.Close()
+		obs, err := sess.Observe()
+		if err != nil {
+			t.Fatalf("observe: %v", err)
+		}
+		f := problemCode(t, obs.Problems)
+		if f.Code != CodeWindowOccluded || f.Params["hit"] != "0" {
+			t.Fatalf("a zero hit must refuse with windowOccluded: %+v", f)
+		}
+	})
+	t.Run("root lookup returns no window", func(t *testing.T) {
+		w := newWinWorld(t)
+		w.fg.mu.Lock()
+		w.fg.hitDefault = 99
+		w.fg.roots = map[windows.HWND]windows.HWND{99: 0}
+		w.fg.mu.Unlock()
+		sess, err := w.adapter.Open(context.Background(), w.config())
+		if err != nil {
+			t.Fatalf("open: %v", err)
+		}
+		defer sess.Close()
+		obs, err := sess.Observe()
+		if err != nil {
+			t.Fatalf("observe: %v", err)
+		}
+		f := problemCode(t, obs.Problems)
+		if f.Code != CodeWindowOccluded || f.Params["hit"] != "99" {
+			t.Fatalf("a zero root must refuse with windowOccluded: %+v", f)
+		}
+	})
+}
+
+func TestWinGeometryMovedDuringPrecheckCapture(t *testing.T) {
+	w := newWinWorld(t)
+	sess, err := w.adapter.Open(context.Background(), w.config())
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer sess.Close()
+	w.gdi.mu.Lock()
+	w.gdi.onCapture = func() { w.geo.setOrigin(11, 20) }
+	w.gdi.mu.Unlock()
+	_, err = sess.LockBaseline()
+	var f *Fault
+	if !errors.As(err, &f) || f.Code != CodeStaleGeometry || f.Class != ClassPremise {
+		t.Fatalf("want staleGeometry after the window moved during capture, got %v", err)
 	}
 }
 

@@ -121,6 +121,17 @@ func pointString(p image.Point) string {
 	return fmt.Sprintf("%dx%d", p.X, p.Y)
 }
 
+func openTierNames() string {
+	out := ""
+	for i, tier := range openClientTiers {
+		if i > 0 {
+			out += ", "
+		}
+		out += tier.Name
+	}
+	return out
+}
+
 func rectString(r image.Rectangle) string {
 	return fmt.Sprintf("%d,%d %dx%d", r.Min.X, r.Min.Y, r.Dx(), r.Dy())
 }
