@@ -57,9 +57,12 @@ const (
 	DefaultDragSteps = 10
 	MaxDragSteps     = 32
 	// DefaultDragDuration is the press-to-release span of a drag whose
-	// Duration is zero; MaxDragDuration bounds it.
+	// Duration is zero; MaxDragDuration bounds it. The 1500ms bound matches
+	// the macOS actor and must admit the calibrated 1200ms slow drag used
+	// by inventory scrolling; a 1s bound rejected that drag before SendInput
+	// on the 2026-11-02 Windows field run.
 	DefaultDragDuration = 400 * time.Millisecond
-	MaxDragDuration     = 1 * time.Second
+	MaxDragDuration     = 1500 * time.Millisecond
 )
 
 // MaxWheelSteps bounds one scroll operation. One step is one wheel

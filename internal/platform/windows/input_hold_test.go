@@ -115,6 +115,12 @@ func TestDragDeliversBatchedInterpolation(t *testing.T) {
 	if res.State != StateDelivered || res.EventsPlanned != DefaultDragSteps+3 {
 		t.Fatalf("default drag: %+v (planned %d)", res, res.EventsPlanned)
 	}
+	// The calibrated 1200ms inventory drag from the macOS profile must fit
+	// the Windows bound; the bound only rejects runaway durations.
+	res = actor.Dispatch(dragRequest(1, PixelPoint{0, 0}, PixelPoint{0, 30}, 2, 1200*time.Millisecond))
+	if res.State != StateDelivered {
+		t.Fatalf("calibrated 1200ms drag must be delivered: %+v", res)
+	}
 	before := sender.callCount()
 	res = actor.Dispatch(dragRequest(1, PixelPoint{0, 0}, PixelPoint{0, 30}, MaxDragSteps+1, 0))
 	if res.State != StateNotDispatched || sender.callCount() != before {
