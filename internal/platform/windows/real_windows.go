@@ -243,8 +243,13 @@ func (winForegroundAPI) RequestForeground(hwnd HWND) bool {
 }
 
 func (winForegroundAPI) HitWindow(p PixelPoint) HWND {
+	// WindowFromPoint takes POINT by value, not by pointer. On x64 an
+	// 8-byte structure travels in one argument register, so the two
+	// int32 coordinates are packed into a single uintptr. Passing the
+	// address instead would make Windows read the address itself as the
+	// coordinates and return 0 for every real screen point.
 	pt := point{X: int32(p.X), Y: int32(p.Y)}
-	ret, _, _ := procWindowFromPoint.Call(uintptr(unsafe.Pointer(&pt)))
+	ret, _, _ := procWindowFromPoint.Call(packPoint(pt))
 	return HWND(ret)
 }
 
