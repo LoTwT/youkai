@@ -3,6 +3,7 @@ package app
 import (
 	"encoding/json"
 	"fmt"
+	"image"
 
 	"github.com/LoTwT/youkai/internal/game/zzz/collect"
 	"github.com/LoTwT/youkai/internal/platform"
@@ -38,6 +39,10 @@ type GameScanSource struct {
 	// Traversal builds each session's traversal; nil means the PR 4a
 	// observe-only traversal.
 	Traversal func() collect.Traversal
+	// TraversalForClient builds each session's traversal from the measured
+	// client area the platform precheck accepted (the Windows local
+	// client, W2c). It takes precedence over Traversal.
+	TraversalForClient func(image.Point) (collect.Traversal, error)
 	// Mode is the scope's mode label: "observeOnly" or "traverse". Empty
 	// keeps the historical observe-only label.
 	Mode string
@@ -68,11 +73,12 @@ func (g *GameScanSource) NewScan() (ScanSpec, error) {
 		Locale: "zh-CN",
 		Scope:  scope,
 		Controller: &collect.Controller{
-			Port:      g.Port,
-			Target:    g.Target,
-			Hotkey:    g.Hotkey,
-			Traversal: g.Traversal,
-			Stop:      g.stop,
+			Port:               g.Port,
+			Target:             g.Target,
+			Hotkey:             g.Hotkey,
+			Traversal:          g.Traversal,
+			TraversalForClient: g.TraversalForClient,
+			Stop:               g.stop,
 		},
 	}, nil
 }

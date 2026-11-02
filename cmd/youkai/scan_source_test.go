@@ -2,6 +2,8 @@ package main
 
 import (
 	"encoding/json"
+	"image"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -9,6 +11,7 @@ import (
 	"github.com/LoTwT/youkai/internal/game/zzz/collect"
 	"github.com/LoTwT/youkai/internal/platform"
 	"github.com/LoTwT/youkai/internal/platform/platformfake"
+	"github.com/LoTwT/youkai/internal/record"
 )
 
 // envOf builds a getenv function over a fixed map.
@@ -52,19 +55,18 @@ func TestScanSourceRejectsBothSwitches(t *testing.T) {
 	}
 }
 
-// T48: traverse has a calibrated layout only on darwin; every other
-// platform is refused before the host or the Windows target env is read.
-func TestScanSourceTraverseRejectedOutsideDarwin(t *testing.T) {
-	for _, goos := range []string{"windows", "linux"} {
-		source, _, err := scanSourceFrom(envOf(map[string]string{
-			"YOUKAI_GAME_SOURCE": "traverse",
-		}), goos, noHost(t))
-		if err == nil || !strings.Contains(err.Error(), "calibrated layout") {
-			t.Fatalf("%s: err = %v, want the calibrated-layout refusal", goos, err)
-		}
-		if source != nil {
-			t.Fatalf("%s: source = %T, want none", goos, source)
-		}
+// T48: traverse has a calibrated client only on darwin and Windows; every
+// other platform is refused before the host or the Windows target env is
+// read.
+func TestScanSourceTraverseRejectedOutsideDarwinAndWindows(t *testing.T) {
+	source, _, err := scanSourceFrom(envOf(map[string]string{
+		"YOUKAI_GAME_SOURCE": "traverse",
+	}), "linux", noHost(t))
+	if err == nil || !strings.Contains(err.Error(), "calibrated layout") {
+		t.Fatalf("err = %v, want the calibrated-layout refusal", err)
+	}
+	if source != nil {
+		t.Fatalf("source = %T, want none", source)
 	}
 }
 
@@ -101,6 +103,22 @@ func TestScanSourceTraverseWiresOnDarwin(t *testing.T) {
 	if inv.Matcher == nil {
 		t.Fatal("the inventory has no matcher")
 	}
+	// The macOS construction must stay exactly the pre-W2c wiring: the
+	// fixed cloud layout and calibration, the stage-2 matcher and the
+	// default (nil) scroll timing, not a Windows clientRect profile.
+	if !reflect.DeepEqual(inv.Layout, collect.MacCloudLayout()) {
+		t.Fatal("the macOS traversal no longer uses MacCloudLayout()")
+	}
+	if inv.ScrollTiming != nil {
+		t.Fatalf("the macOS traversal carries scroll timing %+v, want the default profile", *inv.ScrollTiming)
+	}
+	got, ok := inv.Matcher.(*collect.ScrollEvidenceMatcher)
+	if !ok {
+		t.Fatalf("matcher = %T, want *collect.ScrollEvidenceMatcher", inv.Matcher)
+	}
+	if !reflect.DeepEqual(got.C, collect.MacCloudCalibration()) {
+		t.Fatal("the macOS traversal no longer uses MacCloudCalibration()")
+	}
 	spec, err := game.NewScan()
 	if err != nil {
 		t.Fatalf("NewScan: %v", err)
@@ -114,6 +132,203 @@ func TestScanSourceTraverseWiresOnDarwin(t *testing.T) {
 	}
 	if scope.Kind != "zzzInventory" || scope.Mode != "traverse" {
 		t.Fatalf("scope = %+v, want zzzInventory/traverse", scope)
+	}
+	if spec.Client != record.ClientMacOSCloud {
+		t.Fatalf("client = %q, want macosCloud", spec.Client)
+	}
+}
+
+// The macOS traverse keeps the legacy grayscale-MAD matcher as a field
+// fallback; W2c must not change that choice.
+func TestScanSourceDarwinKeepsLegacyMatcher(t *testing.T) {
+	host := func() (platform.Port, error) { return &platformfake.Port{}, nil }
+	source, _, err := scanSourceFrom(envOf(map[string]string{
+		"YOUKAI_GAME_SOURCE":    "traverse",
+		"YOUKAI_SCROLL_MATCHER": "legacy",
+	}), "darwin", host)
+	if err != nil {
+		t.Fatalf("scanSourceFrom: %v", err)
+	}
+	inv := source.(*app.GameScanSource).Traversal().(*collect.Inventory)
+	if _, ok := inv.Matcher.(*collect.PixelMatcher); !ok {
+		t.Fatalf("matcher = %T, want *collect.PixelMatcher", inv.Matcher)
+	}
+}
+
+// W2c-1: Windows local + traverse wires a client-area traversal factory
+// instead of a pre-built layout: the profile is selected after the
+// platform precheck measured the client area, so the source itself must
+// not construct an Inventory.
+func TestScanSourceTraverseWiresWindowsLocal(t *testing.T) {
+	host := func() (platform.Port, error) { return &platformfake.Port{}, nil }
+	env := envOf(map[string]string{
+		"YOUKAI_GAME_SOURCE": "traverse",
+		"YOUKAI_GAME_CLIENT": "local",
+		"YOUKAI_GAME_EXE":    `C:\Games\ZenlessZoneZero.exe`,
+	})
+	source, label, err := scanSourceFrom(env, "windows", host)
+	if err != nil {
+		t.Fatalf("scanSourceFrom: %v", err)
+	}
+	game, ok := source.(*app.GameScanSource)
+	if !ok {
+		t.Fatalf("source = %T, want *app.GameScanSource", source)
+	}
+	if game.Mode != "traverse" {
+		t.Fatalf("game source mode %q, want traverse", game.Mode)
+	}
+	if game.Client != record.ClientWindowsLocal {
+		t.Fatalf("client = %q, want windowsLocal", game.Client)
+	}
+	if game.Traversal != nil {
+		t.Fatal("the Windows local source must select its layout from the measured client area, not build one eagerly")
+	}
+	if game.TraversalForClient == nil {
+		t.Fatal("the Windows local source has no client-area traversal factory")
+	}
+	if !strings.Contains(label, "自动遍历") {
+		t.Fatalf("label = %q", label)
+	}
+
+	// The measured 1920×1080 tier builds the scaled reference profile,
+	// with the reference layout's scale and the profile's timing.
+	trav, err := game.TraversalForClient(image.Pt(1920, 1080))
+	if err != nil {
+		t.Fatalf("TraversalForClient: %v", err)
+	}
+	inv, ok := trav.(*collect.Inventory)
+	if !ok {
+		t.Fatalf("traversal = %T, want *collect.Inventory", trav)
+	}
+	transform, err := collect.ClientRectTransform(image.Pt(1920, 1080))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantLayout, err := collect.ScaledLayout(collect.ReferenceLayout(), transform)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(inv.Layout, wantLayout) {
+		t.Fatal("the Windows traversal does not use ScaledLayout(ReferenceLayout(), 1920x1080)")
+	}
+	if inv.Project == nil {
+		t.Fatal("the Windows inventory has no projection")
+	}
+	if _, ok := inv.Matcher.(*collect.ScrollEvidenceMatcher); !ok {
+		t.Fatalf("matcher = %T, want *collect.ScrollEvidenceMatcher", inv.Matcher)
+	}
+	if inv.ScrollTiming == nil {
+		t.Fatal("the Windows inventory has no scroll timing profile")
+	}
+
+	// NewScan must carry the factory into the controller; dropping it
+	// there would silently fall back to the observe-only traversal.
+	spec, err := game.NewScan()
+	if err != nil {
+		t.Fatalf("NewScan: %v", err)
+	}
+	ctrl, ok := spec.Controller.(*collect.Controller)
+	if !ok {
+		t.Fatalf("controller = %T, want *collect.Controller", spec.Controller)
+	}
+	if ctrl.TraversalForClient == nil {
+		t.Fatal("NewScan dropped the Windows client-area traversal factory")
+	}
+	if spec.Client != record.ClientWindowsLocal {
+		t.Fatalf("spec client = %q, want windowsLocal", spec.Client)
+	}
+}
+
+// W2c-2: the Windows cloud client's traverse is refused with its reason:
+// its video rectangle would need the measuredVideoRect transform, which
+// exists only as an interface.
+func TestScanSourceTraverseRejectsWindowsCloud(t *testing.T) {
+	host := func() (platform.Port, error) { return &platformfake.Port{}, nil }
+	source, _, err := scanSourceFrom(envOf(map[string]string{
+		"YOUKAI_GAME_SOURCE": "traverse",
+		"YOUKAI_GAME_CLIENT": "cloud",
+		"YOUKAI_GAME_EXE":    `C:\Games\CloudZZZ.exe`,
+	}), "windows", host)
+	if err == nil {
+		t.Fatal("cloud traverse was accepted")
+	}
+	for _, want := range []string{"local client", "measuredVideoRect", "implemented"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("err = %v, want %q in the refusal", err, want)
+		}
+	}
+	if source != nil {
+		t.Fatalf("source = %T, want none", source)
+	}
+}
+
+// W2c-3: the Windows target identity stays mandatory; without the exe the
+// traverse cannot be wired.
+func TestScanSourceTraverseRequiresWindowsExe(t *testing.T) {
+	host := func() (platform.Port, error) { return &platformfake.Port{}, nil }
+	source, _, err := scanSourceFrom(envOf(map[string]string{
+		"YOUKAI_GAME_SOURCE": "traverse",
+		"YOUKAI_GAME_CLIENT": "local",
+	}), "windows", host)
+	if err == nil || !strings.Contains(err.Error(), "YOUKAI_GAME_EXE") {
+		t.Fatalf("err = %v, want the missing-exe refusal", err)
+	}
+	if source != nil {
+		t.Fatalf("source = %T, want none", source)
+	}
+}
+
+// W2c-4: observe on Windows keeps the no-input rehearsal, including the
+// cloud client, and does not gain a traversal.
+func TestScanSourceWindowsObserveStaysObserveOnly(t *testing.T) {
+	for _, kind := range []string{"local", "cloud"} {
+		host := func() (platform.Port, error) { return &platformfake.Port{}, nil }
+		source, label, err := scanSourceFrom(envOf(map[string]string{
+			"YOUKAI_GAME_SOURCE": "observe",
+			"YOUKAI_GAME_CLIENT": kind,
+			"YOUKAI_GAME_EXE":    `C:\Games\game.exe`,
+		}), "windows", host)
+		if err != nil {
+			t.Fatalf("%s: scanSourceFrom: %v", kind, err)
+		}
+		game := source.(*app.GameScanSource)
+		if game.Mode != "observeOnly" || game.Traversal != nil || game.TraversalForClient != nil {
+			t.Fatalf("%s: observe source was changed: mode=%q traversal=%v clientTraversal=%v",
+				kind, game.Mode, game.Traversal != nil, game.TraversalForClient != nil)
+		}
+		if !strings.Contains(label, "仅观测") {
+			t.Fatalf("%s: label = %q", kind, label)
+		}
+	}
+}
+
+// W2c-5: the failure-crop directory reaches a Windows traversal built
+// later from the measured client area, not only the eager macOS one.
+func TestWithDiagnosticDirWiresWindowsClientTraversals(t *testing.T) {
+	host := func() (platform.Port, error) { return &platformfake.Port{}, nil }
+	source, _, err := scanSourceFrom(envOf(map[string]string{
+		"YOUKAI_GAME_SOURCE": "traverse",
+		"YOUKAI_GAME_CLIENT": "local",
+		"YOUKAI_GAME_EXE":    `C:\Games\ZenlessZoneZero.exe`,
+	}), "windows", host)
+	if err != nil {
+		t.Fatalf("scanSourceFrom: %v", err)
+	}
+	dir := t.TempDir()
+	withDiagnosticDir(source, dir)
+	game := source.(*app.GameScanSource)
+	for i := 0; i < 2; i++ {
+		trav, err := game.TraversalForClient(image.Pt(1920, 1080))
+		if err != nil {
+			t.Fatalf("TraversalForClient %d: %v", i+1, err)
+		}
+		inv, ok := trav.(*collect.Inventory)
+		if !ok {
+			t.Fatalf("traversal %d = %T, want *collect.Inventory", i+1, trav)
+		}
+		if inv.DiagnosticDir != dir {
+			t.Fatalf("traversal %d DiagnosticDir = %q, want %q", i+1, inv.DiagnosticDir, dir)
+		}
 	}
 }
 
