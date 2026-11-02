@@ -64,6 +64,14 @@ func WindowsLocalProfileFor(client image.Point) (WindowsLocalProfile, error) {
 	if err != nil {
 		return WindowsLocalProfile{}, err
 	}
+	return windowsLocalProfileForTier(tier)
+}
+
+// windowsLocalProfileForTier builds the profile for a known tier. The public
+// entry point gates which tiers may start; this split also lets tests check
+// the duration invariant on every reference tier, including the scaled tiers
+// that D-2 has not opened yet.
+func windowsLocalProfileForTier(tier DisplayTier) (WindowsLocalProfile, error) {
 	transform, err := ClientRectTransform(tier.Client)
 	if err != nil {
 		return WindowsLocalProfile{}, fmt.Errorf("collect: windows local: %s: %w", tier.Name, err)

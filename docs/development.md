@@ -56,12 +56,12 @@ M2 平台会话集成后可用另一组开关接入真实游戏窗口做仅观�
 
 - **环境变量：** `YOUKAI_GAME_SOURCE=traverse`、`YOUKAI_GAME_CLIENT=local`、`YOUKAI_GAME_EXE=<游戏 exe 完整路径>`。三层都必须满足；缺 `YOUKAI_GAME_EXE` 或把客户端设为 `cloud` 都会在接线时拒绝并说明原因。`observe` 仍按上一节的方式工作。
 - **权限（D-1）：** 必须以管理员身份运行 youkai，否则开始扫描时因游戏进程完整性级别更高而拒绝；程序清单不要求提权。点击在提权后有效，但仍需 T5 的动作效果证据。
-- **开始前激活：** 点击开始后，Windows 会话对预检锁定的 HWND 请求一次前台（`SetForegroundWindow`，以实际前台窗口核验），日志先写 `platform windows: activate: requesting foreground...`，再写成功或拒绝结果；成功不跳过准备核验，拒绝时写 `waiting for the user to focus the game` 并照常进入 30 秒准备等待。2026-11-02 真机首次运行发现旧实现没有 `Activator`，前台一直停在 Youkai，最终以 `prepareTimeout`（`focusLost`）结束且没有激活失败日志。`YOUKAI_DEV_AUTOSTART` 自动启动时进程可能没有前台权限，拒绝是预期路径；最小化由预检拒绝，不做恢复窗口。
+- **开始前激活：** 点击开始后，Windows 会话对预检锁定的 HWND 请求一次前台（`SetForegroundWindow`，以实际前台窗口核验），日志先写 `platform windows: activate: requesting foreground...`，再写成功或拒绝结果；成功不跳过准备核验，拒绝时写 `waiting for the user to focus the game` 并照常进入 30 秒准备等待。2026-11-02 真机首次运行发现旧实现没有 `Activator`，前台一直停在 Youkai，最终以 `prepareTimeout`（`focusLost`）结束且没有激活失败日志；同日第二次运行（自动开始）出现了预期的拒绝路径：激活被 Windows 拒绝后正常回落到准备等待，用户手动切回后继续。`YOUKAI_DEV_AUTOSTART` 自动启动时进程可能没有前台权限，拒绝是预期路径；最小化由预检拒绝，不做恢复窗口。
 - **显示档位：** 首批只开放 1920×1080（窗口/无边框模式）。其他已知 16:9 档位与任意非 16:9 尺寸都会被预检拒绝并提示切换；列出的档位不等于已开放。
-- **参数状态：** W3a 只采集 1 fps 静态样本，滚动停稳时序与两个拖拽时长仍沿用 macOS 云客户端的值（`WindowsLocalProfile` 集中声明，诊断标记为未标定）；时序定稿前不要据此判断性能。每次构造遍历会记一行 `youkai: game scan source: windows local traverse: profile=… tier=… scale=… sort=template timing=…`；1920×1080 现在携带 Windows 原生排序模板。
+- **参数状态：** W3a 只采集 1 fps 静态样本，滚动停稳时序与两个拖拽时长仍沿用 macOS 云客户端的值（`WindowsLocalProfile` 集中声明，诊断标记为未标定）；时序定稿前不要据此判断性能。每次构造遍历会记一行 `youkai: game scan source: windows local traverse: profile=… tier=… scale=… sort=template timing=…`；1920×1080 现在携带 Windows 原生排序模板。Windows 输入层的 `MaxDragDuration` 已与 mac 对齐为 1500 ms，以容纳 1200 ms 滚动拖拽；它只是安全上限，不改变上述未标定值。
 - **覆盖结论：** 面板排序标签可验证；每个面板都匹配“稀有度”时 `sort=verified`，六个位置都完整时覆盖结论可为 `complete`。缩放档继续丢弃排序声明，最多 `partial`。模板只证明标签为“稀有度”，不证明排序方向；这是 fail-closed 的已有行为，不是可绕过的开关。
 - **样本状态：** W3a 已验证长列表滑块两端与排序模板；面板 S 按钮在套装筛选展开时的位置仍待测。细节见架构 §6 与 [W3a 样本报告](reports/2026-11-02-windows-local-sample-round.md)。
-- **未覆盖：** 各档 OCR、连续输入时序、像素计数阈值与 1920×1080 全量真机扫描仍未完成；未完成前不宣称 Windows 本地客户端通过验收。
+- **未覆盖：** 各档 OCR、连续输入时序（真机滚动仍未验证）、像素计数阈值与 1920×1080 全量真机扫描仍未完成；未完成前不宣称 Windows 本地客户端通过验收。
 
 持久化从扫描过程中开始：每次接纳观测（`internal/scan` 的接纳钩子）都会先写该件的证据图、再以 queued 状态把条目加入检查点文档，终结时只更新状态与载荷；崩溃后重开由 `internal/record` 把排队/运行条目标为中断未处理，已接纳的物品不会消失。
 
