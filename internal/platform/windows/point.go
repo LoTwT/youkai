@@ -9,9 +9,10 @@ type point struct{ X, Y int32 }
 // conversions keep the bit pattern of negative coordinates, which occur
 // on displays left of or above the primary monitor.
 //
-// Only 64-bit uintptr targets can represent the packed value. This
-// package pins its Win32 structures to windows/amd64 (T2 §2.1), so the
-// caller never runs on a 32-bit platform.
+// The uint64 intermediate keeps 32-bit builds type-check and vet clean;
+// the packed value itself is only meaningful where uintptr is 64 bits.
+// This package pins its Win32 structures to windows/amd64 (T2 §2.1), so
+// the caller never runs on a 32-bit platform.
 func packPoint(p point) uintptr {
-	return uintptr(uint32(p.X)) | uintptr(uint32(p.Y))<<32
+	return uintptr(uint64(uint32(p.X)) | uint64(uint32(p.Y))<<32)
 }

@@ -12,10 +12,13 @@ import (
 
 // TestHitWindowFindsOwnedWindow pins the by-value POINT argument of
 // WindowFromPoint against the real API. The test creates a visible
-// top-level window of its own, so a desktop that merely lacks other
-// application windows still has a guaranteed hit target. Passing a
-// pointer where Win32 expects the 8-byte structure makes the call return
-// zero for every point, which this test reports.
+// top-level STATIC window as a fixture, then checks a real on-screen
+// point with the platform's hit test. A STATIC control without
+// SS_NOTIFY is transparent to hit testing, so the hit is not required to
+// be the fixture window. The regression this guards is the opposite:
+// passing the POINT address where Win32 expects the 8-byte value makes
+// Windows read the address as out-of-screen coordinates and return zero
+// for every point.
 func TestHitWindowFindsOwnedWindow(t *testing.T) {
 	// The window belongs to the creating thread; destroy it on the same
 	// thread after the hit test.
@@ -65,7 +68,7 @@ func TestHitWindowFindsOwnedWindow(t *testing.T) {
 
 	hit := RealForegroundAPI().HitWindow(center)
 	if hit == 0 {
-		t.Fatalf("HitWindow(%v) returned 0; the test's own window %#x is visible at that point", center, hwnd)
+		t.Fatalf("HitWindow(%v) returned 0; a real on-screen point must hit some non-zero window (the fixture %#x is transparent to hit testing), while passing the POINT address as coordinates misses the screen", center, hwnd)
 	}
-	t.Logf("HitWindow(%v) = %#x for the test's own window %#x", center, hit, hwnd)
+	t.Logf("HitWindow(%v) = %#x; fixture window %#x", center, hit, hwnd)
 }
