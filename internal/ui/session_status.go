@@ -94,34 +94,45 @@ func failureText(code string, params map[string]string) string {
 	size := func(key string) string {
 		return strings.ReplaceAll(get(key), "x", "×")
 	}
+	allowed := func() string {
+		raw := get("allowed")
+		if raw == "" {
+			return "已开放的显示档位"
+		}
+		parts := strings.Split(raw, ",")
+		for i, part := range parts {
+			parts[i] = strings.ReplaceAll(strings.TrimSpace(part), "x", "×")
+		}
+		return strings.Join(parts, "、")
+	}
 	switch code {
 	case "clientTierNotOpened":
 		current := size("current")
 		if current == "" {
 			current = "当前档位"
 		}
-		return fmt.Sprintf("当前游戏分辨率 %s 属于已知但尚未开放的档位。请在游戏设置中切换到 1920×1080（窗口模式）后重新开始扫描。", current)
+		return fmt.Sprintf("当前游戏分辨率 %s 属于已知但尚未开放的档位。请在游戏设置中切换到 %s（窗口模式）后重新开始扫描。", current, allowed())
 	case "clientTierUnsupported":
 		current := size("current")
 		if current == "" {
 			current = "当前尺寸"
 		}
-		return fmt.Sprintf("当前分辨率 %s 不受支持。请在游戏设置中切换到 1920×1080（窗口模式）后重新开始扫描。", current)
+		return fmt.Sprintf("当前分辨率 %s 不受支持。请在游戏设置中切换到 %s（窗口模式）后重新开始扫描。", current, allowed())
 	case "windowOutsideWorkArea":
 		detail := ""
 		if client, work := get("client"), get("workArea"); client != "" && work != "" {
 			detail = fmt.Sprintf("（客户区 %s，显示器工作区 %s）", client, work)
 		}
-		return "游戏窗口超出屏幕或被任务栏遮挡" + detail + "。请切换到 1920×1080 窗口模式，并把窗口完整放在屏幕内后重新开始扫描。"
+		return "游戏窗口超出屏幕或被任务栏遮挡" + detail + "。请切换到 " + allowed() + " 窗口模式，并把窗口完整放在屏幕内后重新开始扫描。"
 	case "windowOccluded":
 		detail := "游戏窗口被其他窗口遮挡"
 		if probe := get("probe"); probe != "" {
 			detail += "（检查点 " + probe
-			if hit := get("hitClass"); hit != "" {
-				detail += "，命中窗口类 " + hit
+			if class := get("hitClass"); class != "" {
+				detail += "，命中窗口类 " + class
 			}
-			if title := get("hitTitle"); title != "" {
-				detail += "，标题“" + title + "”"
+			if process := get("hitProcess"); process != "" {
+				detail += "，进程 " + process
 			}
 			detail += "）"
 		}
@@ -135,9 +146,9 @@ func failureText(code string, params map[string]string) string {
 	case "integrityUnverifiable":
 		detail := ""
 		if target, self := get("target"), get("self"); target != "" || self != "" {
-			detail = fmt.Sprintf("（游戏 %s，youkai %s）", orUnknown(target), orUnknown(self))
+			detail = fmt.Sprintf("（游戏 %s，youkai %s）", integrityLevelText(target), integrityLevelText(self))
 		}
-		return "无法读取游戏进程或 youkai 自身的权限级别" + detail + "，出于安全考虑不能开始扫描。请右键 youkai，选择“以管理员身份运行”后重新打开。"
+		return "无法读取游戏进程或 youkai 自身的权限级别" + detail + "，出于安全考虑不能开始扫描。请右键 youkai，选择“以管理员身份运行”后重新打开。youkai 只向游戏发送鼠标操作，不加载驱动、不注入、不读取游戏内存。"
 	case "targetOffscreen":
 		return "请把云·绝区零窗口完整放在一块屏幕内后重新开始扫描。"
 	case "windowSizeUnsupported":
@@ -150,18 +161,37 @@ func failureText(code string, params map[string]string) string {
 		if get("client") == "macosCloud" {
 			return "游戏画面尺寸与已标定的云客户端配置不一致。请把云·绝区零窗口调整为 1164×762 后重新开始扫描。"
 		}
-		return "游戏画面尺寸与已标定的显示配置不一致。请恢复到已开放的 1920×1080 窗口模式后重新开始扫描。"
+		return "游戏画面尺寸与已标定的显示配置不一致。请恢复到已开放的 " + allowed() + " 窗口模式后重新开始扫描。"
 	case "anchorsMissing":
 		return "游戏画面与当前客户端的布局不匹配。请确认游戏分辨率与窗口尺寸后重新开始扫描。"
 	}
 	return ""
 }
 
-func orUnknown(v string) string {
-	if v == "" {
+// integrityLevelText names a mandatory integrity level in Chinese; an
+// unknown or unreadable level stays explicit rather than becoming
+// "untrusted" from a zero value.
+func integrityLevelText(level string) string {
+	switch level {
+	case "untrusted":
+		return "不受信任"
+	case "low":
+		return "低"
+	case "medium":
+		return "中"
+	case "mediumPlus":
+		return "中+"
+	case "high":
+		return "高"
+	case "system":
+		return "系统"
+	case "protected":
+		return "受保护"
+	case "", "unknown":
 		return "未知"
+	default:
+		return level
 	}
-	return v
 }
 
 // sessionTerminationShown reports whether the results page already explains
