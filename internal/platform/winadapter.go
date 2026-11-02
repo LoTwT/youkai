@@ -363,17 +363,22 @@ func (s *winSession) Target() TargetInfo { return s.targetInfo }
 // the caller being the foreground process (true when the user clicked
 // Start in Youkai) or having recently received the foreground; an
 // autostarted process may not qualify, so a refusal is an expected result
-// and the collector falls back to the readiness wait. The preparation
-// precheck refuses a minimized target, so activation does not restore it
-// with ShowWindow(SW_RESTORE).
+// and the collector falls back to the readiness wait. The observed
+// foreground is polled briefly because an accepted switch lands
+// asynchronously. The preparation precheck refuses a minimized target, so
+// activation does not restore it with ShowWindow(SW_RESTORE).
 func (s *winSession) Activate() error {
 	hwnd := s.locked.HWND
 	s.adapter.logf("activate: requesting foreground for target hwnd %d", hwnd)
-	if err := windows.ActivateTarget(s.adapter.natives.FG, hwnd); err != nil {
+	waited, err := windows.ActivateTarget(s.adapter.natives.FG, hwnd, windows.ForegroundSettle{
+		Sleep: s.adapter.sleep,
+		Now:   s.adapter.now,
+	})
+	if err != nil {
 		s.adapter.logf("activate: %v; waiting for the user to focus the game", err)
 		return err
 	}
-	s.adapter.logf("activate: target hwnd %d is the foreground window; waiting for readiness", hwnd)
+	s.adapter.logf("activate: target hwnd %d accepted after %d ms; waiting for readiness", hwnd, waited.Milliseconds())
 	return nil
 }
 

@@ -33,16 +33,83 @@ type ForegroundAPI interface {
 	RootOf(hwnd HWND) HWND
 }
 
+const (
+	// foregroundSettlePollEvery is the foreground observation cadence while
+	// a requested switch is in flight. GetForegroundWindow is a cheap,
+	// side-effect-free read; 25 ms keeps the success path short without
+	// producing a meaningful CPU cost for the bounded window.
+	foregroundSettlePollEvery = 25 * time.Millisecond
+	// foregroundSettleLimit bounds the settle wait at roughly twice the
+	// ~0.24 s observed on 2026-11-02 (see the Windows local field report).
+	// A longer window would delay the unchanged readiness fallback without
+	// evidence that the switch takes longer.
+	foregroundSettleLimit = 500 * time.Millisecond
+)
+
+// ForegroundSettle bounds how long ActivateTarget watches the observed
+// foreground after requesting a switch. Zero fields take the defaults;
+// tests inject Sleep and Now so no test waits on a real clock.
+type ForegroundSettle struct {
+	// PollEvery is the observation cadence; zero means 25 ms.
+	PollEvery time.Duration
+	// Limit is the total observation window; zero means 500 ms.
+	Limit time.Duration
+	// Sleep waits between observations; nil means time.Sleep.
+	Sleep func(time.Duration)
+	// Now supplies the observation clock; nil means time.Now.
+	Now func() time.Time
+}
+
+func (s ForegroundSettle) withDefaults() ForegroundSettle {
+	if s.PollEvery <= 0 {
+		s.PollEvery = foregroundSettlePollEvery
+	}
+	if s.Limit <= 0 {
+		s.Limit = foregroundSettleLimit
+	}
+	if s.Sleep == nil {
+		s.Sleep = time.Sleep
+	}
+	if s.Now == nil {
+		s.Now = time.Now
+	}
+	return s
+}
+
 // ActivateTarget asks the system to bring hwnd to the foreground and
 // verifies the outcome through the actual foreground window. Windows can
 // refuse SetForegroundWindow even when its documented conditions appear
-// to hold, so a false answer means the caller must keep waiting for the
-// user; it never means the target is ready.
-func ActivateTarget(fg ForegroundAPI, hwnd HWND) error {
+// to hold, and an accepted switch can land asynchronously, so a false
+// result right after the call is not final: the observed foreground is
+// polled for a bounded settle window. The returned duration is the time
+// from the request to the observation that found the target (zero when it
+// was already foreground); an error means the target was still not
+// foreground at the limit, and the caller must keep waiting for the user.
+func ActivateTarget(fg ForegroundAPI, hwnd HWND, settle ForegroundSettle) (time.Duration, error) {
+	settle = settle.withDefaults()
+	start := settle.Now()
 	if fg.RequestForeground(hwnd) {
-		return nil
+		return 0, nil
 	}
-	return fmt.Errorf("target hwnd %d did not become the foreground window (SetForegroundWindow refused or focus moved)", hwnd)
+	deadline := start.Add(settle.Limit)
+	// The iteration cap keeps the wait bounded even if an injected clock
+	// fails to advance.
+	maxPolls := int((settle.Limit + settle.PollEvery - 1) / settle.PollEvery)
+	for poll := 0; poll < maxPolls; poll++ {
+		remaining := deadline.Sub(settle.Now())
+		if remaining <= 0 {
+			break
+		}
+		wait := settle.PollEvery
+		if wait > remaining {
+			wait = remaining
+		}
+		settle.Sleep(wait)
+		if fg.ForegroundWindow() == hwnd {
+			return settle.Now().Sub(start), nil
+		}
+	}
+	return 0, fmt.Errorf("target hwnd %d not foreground after %d ms (SetForegroundWindow refused or focus moved)", hwnd, settle.Limit.Milliseconds())
 }
 
 // OcclusionState is what the platform knows about occlusion of the
