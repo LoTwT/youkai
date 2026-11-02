@@ -7,7 +7,7 @@
 - **第 1 段（截图可行性）：** 平台层有两个真实缺陷——调用了不存在的 `GetCurrentDpiAwarenessContext`，以及把 `GetDC`/`ReleaseDC` 声明在 gdi32。两者已由 [#103](https://github.com/LoTwT/youkai/pull/103) 修复，本轮真机复测通过。
 - **第 2 段（分辨率与布局）：** 游戏在窗口模式只提供 6 档 16:9 分辨率；前 5 档完整落在 3840×2100 工作区内，3840×2160 档的客户区向右超出显示器 9 px、向下超出 38 px（相对工作区向下超出 98 px）。各档 GDI 截图尺寸都等于客户区，1280 至 2560 档的单帧中位耗时约 15–44 ms，3840 档约 103 ms。
 - **第 3 段（输入可行性）：** 输入路径本身可用。普通权限探针点击管理员权限游戏时 `SendInput` 报告 `inserted=3`、`GetLastError=0`，但游戏无反应，与 UIPI 静默丢弃一致；UAC 提权后的探针可以选中并切换物品。单次点击没有被反作弊拦截，**不能**据此推出连续自动操作同样安全。
-- 本轮发现 `WindowFromPoint` 把 `POINT` 按地址而不是按值传递，命中测试总是返回 0；修复见另文（W1c，PR 编号待合并后补充）。探针自身还有若干误判与选择缺陷，输入探针只保留在探针分支，未随本报告修复。
+- 本轮发现 `WindowFromPoint` 把 `POINT` 按地址而不是按值传递，命中测试总是返回 0；修复已作为 [#105](https://github.com/LoTwT/youkai/pull/105)（`df38601`）合并。探针自身还有若干误判与选择缺陷，输入探针只保留在探针分支，未随本报告修复。
 
 ## 环境与构建
 
@@ -21,9 +21,9 @@
 | 权限与防护 | 游戏进程完整性为 High（已提权）；HoYoKProtect 内核驱动在运行；ACE 服务存在但已停止 |
 | Go | 1.27.3，zip 方式安装在用户目录；探针以普通用户权限运行（提权对照轮除外） |
 | 截图探针 | `tools/winprobe`，取自 `probe/windows-local` 的 `3a0e41c`；平台层等价于 `main` 上 #103 的内容 |
-| 输入探针 | `tools/wininput`（只保留在 `probe/windows-local`）；输入轮在 W1c 的 `WindowFromPoint` 修复后重跑 |
+| 输入探针 | `tools/wininput`（只保留在 `probe/windows-local`）；输入轮在 #105 的 `WindowFromPoint` 修复后重跑 |
 
-三段都在同一台机器、同一块显示器、同一个游戏进程上完成。第 1、2 段在 2026-11-01，第 3 段在 2026-11-02。除提权对照外，探针与游戏使用相同或更低的完整性级别；没有为探针开启管理员权限。
+三段都在同一台机器、同一块显示器上完成。第 1、2 段的游戏进程是 pid 9664（窗口 `0x1A06F2`），第 3 段在次日游戏重启后进行，进程是 pid 18848（窗口 `0x1001BC`）。第 1、2 段在 2026-11-01，第 3 段在 2026-11-02。除提权对照外，探针与游戏使用相同或更低的完整性级别；没有为探针开启管理员权限。
 
 ## 步骤与人工预期
 
@@ -45,7 +45,7 @@
 
 - 1920×1080 档连续 30 帧：0 黑屏、0 尺寸不符、0 重复帧；截图尺寸与客户区 1920×1080 完全一致。单帧 `captureMs` 中位数 25.4 ms，p90 28.5 ms，最大 37.0 ms；按 100 ms 间隔请求时实际帧率 8.92 Hz。
 - 游戏以管理员权限运行、HoYoKProtect 内核驱动加载时，GDI 客户区截图仍正常，没有黑屏。
-- 窗口枚举会同时看到同进程的隐藏 `MSCTFIME UI` 与 `Default IME` 窗口；平台选择规则先按可执行文件匹配，再只保留可见且未被 DWM 隐藏的候选，因此最后唯一锁定 `UnityWndClass` 主窗口。该规则已由 #103 修正：只要存在可见候选，就不让隐藏候选把选择变成“歧义”。
+- 窗口枚举会同时看到同进程的隐藏 `MSCTFIME UI` 与 `Default IME` 窗口；平台选择规则先按可执行文件匹配，再只保留可见且未被 DWM 隐藏的候选，因此最后唯一锁定 `UnityWndClass` 主窗口。该规则已由 #103 修正：选中结果不变，只是歧义错误的候选清单不再包含隐藏或 cloaked 窗口。
 
 ## 第 2 段：分辨率与布局
 
@@ -78,7 +78,7 @@
 
 ### 平台层缺陷
 
-`WindowFromPoint` 的 Win32 签名按值接收 `POINT`。原实现传入 `POINT` 的地址，x64 调用约定下 Windows 会把地址本身当作坐标，命中测试对所有真实屏幕点都返回 0。该缺陷由 W1c 修复（`fix/windows-hit-test`，`7bc0294`；另见修复 PR，PR 编号待合并后补充）。修复后 A/B/C 三轮的 `hitTest` 都命中目标或目标所属窗口。
+`WindowFromPoint` 的 Win32 签名按值接收 `POINT`。原实现传入 `POINT` 的地址，x64 调用约定下 Windows 会把地址本身当作坐标，命中测试对所有真实屏幕点都返回 0。该缺陷已由 [#105](https://github.com/LoTwT/youkai/pull/105)（`df38601`）修复并合并。修复后 A/B/C 三轮的 `hitTest` 都命中目标或目标所属窗口。
 
 ### 结果
 
@@ -129,21 +129,24 @@ Mac 侧副本:
     2276x1280/  { window.json, frames.json, frame-0000.png }
     2560x1440/  { window.json, frames.json, frame-0000.png }
     3840x2160/  { window.json, frame-0000.png }   # 无 frames.json
+  input-p3/
+    stepA/ { A2-medium-run.json, A2-medium-summary.txt,
+             A2-medium-before.png, A2-medium-after-019.png,
+             A1-dryrun-2-run.json, A1-dryrun-2-summary.txt }
+    stepB/ { B2-medium-run.json, B2-medium-summary.txt,
+             B2-medium-before.png, B2-medium-after-019.png }
+    stepC/ { C2-elevated-run.json, C2-elevated-summary.txt,
+             C2-elevated-before.png, C2-elevated-after-019.png }
 
 Windows 侧原件:
 %LOCALAPPDATA%\Youkai Dev\probes\20261101-win-local-probe1\
 %LOCALAPPDATA%\Youkai Dev\probes\20261101-win-local-probe2\<档位>\
 %LOCALAPPDATA%\Youkai Dev\probes\20261102-win-input-p3\
-  stepA/  A1-dryrun-2-run.json, A1-dryrun-2-summary.txt,
-          A2-medium-run.json, A2-medium-summary.txt,
-          A2-medium-before.png, A2-medium-after-019.png
-  stepB/  B2-medium-run.json, B2-medium-summary.txt,
-          B2-medium-before.png, B2-medium-after-019.png
-  stepC/  C2-elevated-run.json, C2-elevated-summary.txt,
-          C2-elevated-before.png, C2-elevated-after-019.png
+  stepA/, stepB/, stepC/  （与 Mac 副本同名）
 ```
 
-- Mac 副本的 `SHA256SUMS` 共 33 条：32 条证据文件校验通过；`./SHA256SUMS` 的自条目按空文件哈希 `e3b0…` 写入，与实际文件不匹配。该自条目不是证据内容，其余文件全部通过。
+- A/B/C 三个点击轮在 `input-p3/stepA|B|C/` 下共 12 个文件（每轮 `run.json`、`summary.txt`、点击前后帧）；`stepA/` 另有 A1 dry-run 的 `run.json` 与 `summary.txt`。
+- Mac 副本的 `SHA256SUMS` 共 32 条，全部通过；清单不再包含自身条目。
 - A/B/C 的 `run.json` 与 `summary.txt` 都记录探针与目标完整性、窗口身份、几何版本、DPI、命中测试、逐批 `SendInput` 计数与 `GetLastError`、前后帧哈希和逐帧判定；本报告的数字与这些字段一致。
 
 ## 复现方式
