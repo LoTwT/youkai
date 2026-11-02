@@ -1,6 +1,6 @@
 # T2：平台采集与输入评估
 
-更新日期：2026-11-01。状态：首版两平台、三种客户端范围已由用户确认，Windows 首版显示配置已定（1920×1080，见第 3.2 节）；两平台底座已实现（见 2.1、2.2 实现状态），macOS 云客户端已完成实测轮 ①——采集与输入验证通过（见[M2 macOS 实测轮 ① 报告](../reports/2026-10-18-m2-macos-field-round1.md)）。Windows 实测轮 ② 推迟；完成前不宣称 Windows M3 通过。本文只维护平台专项，公共模块与会话契约以[架构](scanner-architecture.md)为准。
+更新日期：2026-11-02。状态：首版两平台、三种客户端范围已由用户确认，Windows 首版显示配置已定（1920×1080，见第 3.2 节）；两平台底座已实现（见 2.1、2.2 实现状态），macOS 云客户端已完成实测轮 ①——采集与输入验证通过（见[M2 macOS 实测轮 ① 报告](../reports/2026-10-18-m2-macos-field-round1.md)）。Windows 实测轮 ② 推迟；完成前不宣称 Windows M3 通过。本文只维护平台专项，公共模块与会话契约以[架构](scanner-architecture.md)为准。
 
 ## 1. 已有约束与当前问题
 
@@ -54,7 +54,7 @@ T2 负责目标窗口身份、采集、坐标、短输入、平台故障和原�
 
 **实现状态（2026-10-18）：** Windows 平台底座已按本节最小方案实现为普通包 `internal/platform/windows`：不依赖 UI、内核、适配器或识别包，也不定义跨平台接口；Win32 调用全部经 `golang.org/x/sys/windows` 系统调用与少量 user32/gdi32/shcore 过程声明，无 cgo，SendInput 结构布局固定 amd64。已实现并有任意平台可运行的纯逻辑测试（API 替身）：窗口枚举与进程身份核验（窗口替换、PID 复用与进程重启均拒绝沿用旧 HWND）、客户区几何与 DPI 核对（进程 PMv2 核验、目标窗口与显示器 DPI 不一致即拒绝，不用任何 DPI 数乘整张图，几何按版本化并拒绝旧帧坐标）、GDI 客户区裁剪（BGRA→RGBA 自有图像类型、DC/位图逆序释放并逐项记账）、SendInput 串行短输入（0–65535 绝对坐标域转换含虚拟桌面映射与舍入、投递计数、自身按键记账与停止时释放、UIPI 形态的零投递后停发不盲发）、输入前重查实际前台/最小化/几何版本/落点遮挡、`RegisterHotKey` 停止热键（专用线程消息循环、注册冲突开始前报告、干净注销）。PR 4a（2026-10-19）又为端口词汇扩展了点击按住时长（两批 SendInput：[move, down]、停顿、[up]）、拖拽（按下→逐步绝对移动→抬起，步间闸门在许可关闭时立即补抬起并标 Aborted）与最后投递时间记账，并由 `internal/platform` 的 Windows 适配器接入统一端口（观测重测几何、故障分类、停止序列，见 2.1 与第 7 节的 fake 覆盖）。未采用可选的 `SetWinEventHook` 通知路径：输入前仍直接重查实际前台，通知的异步性并不能消除“核验后、投递前”的竞争。实机行为——DPI 虚拟化实际表现、前台限制、遮挡、热键真实触发、句柄生命周期与 SendInput 实际计数——按第 7 节留实测轮 ② 验证。
 
-**2026-11-01 真机探针修正：** 平台曾声明并不存在的 `GetCurrentDpiAwarenessContext`，并把 DPI 上下文句柄直接与伪句柄常量比较；自检改为 `GetThreadDpiAwarenessContext` + `GetAwarenessFromDpiAwarenessContext`，PMv1/PMv2 用 `AreDpiAwarenessContextsEqual` 作语义比较。`GetDC`/`ReleaseDC` 是 user32 导出而非 gdi32，已改归 user32。新增仅在 Windows 编译的 `TestDeclaredLazyProcsExist`：解析本包每条 `NewLazySystemDLL`/`NewProc` 声明并在运行机器上逐一解析，避免不存在的函数或错误的 DLL 只在真机首次使用时才暴露。目标选择同时在类名、标题提示缩小范围之后去掉隐藏或 cloaked 的窗口：只剩一个可见候选时选中它（包括一个可见游戏窗口加两个隐藏 IME 辅助窗口），可见候选不止一个时仍判歧义且歧义清单只列可见窗口，没有可见候选时保留原候选集；与旧实现相比选中结果不变，差别只在歧义错误的候选清单不再包含隐藏或 cloaked 窗口。Windows 实机行为仍留实测轮 ② 验证。
+**2026-11-01 真机探针修正：** 平台曾声明并不存在的 `GetCurrentDpiAwarenessContext`，并把 DPI 上下文句柄直接与伪句柄常量比较；自检改为 `GetThreadDpiAwarenessContext` + `GetAwarenessFromDpiAwarenessContext`，PMv1/PMv2 用 `AreDpiAwarenessContextsEqual` 作语义比较。`GetDC`/`ReleaseDC` 是 user32 导出而非 gdi32，已改归 user32。新增仅在 Windows 编译的 `TestDeclaredLazyProcsExist`：解析本包每条 `NewLazySystemDLL`/`NewProc` 声明并在运行机器上逐一解析，避免不存在的函数或错误的 DLL 只在真机首次使用时才暴露。目标选择同时在类名、标题提示缩小范围之后去掉隐藏或 cloaked 的窗口：只剩一个可见候选时选中它（包括一个可见游戏窗口加两个隐藏 IME 辅助窗口），可见候选不止一个时仍判歧义且歧义清单只列可见窗口，没有可见候选时保留原候选集；与旧实现相比选中结果不变，差别只在歧义错误的候选清单不再包含隐藏或 cloaked 窗口。同一轮确认 `WindowFromPoint` 按值接收 `POINT`：原实现传入结构地址，Windows x64 把 8 字节结构放在一个参数寄存器里，结果地址被当成坐标、命中测试恒为 0，输入前遮挡检查因此拒绝所有点击。现由 `packPoint` 以低 32 位 X、高 32 位 Y（负坐标保留 int32 位模式）打包后按值传入；同层 `ClientToScreen` 的 `LPPOINT` 指针写法保持正确。新增任意平台可运行的 `TestPackPoint` 覆盖正负坐标与 int32 边界，并新增仅在 Windows 编译的 `TestHitWindowFindsOwnedWindow`，用测试自建的可见顶层窗口中心点断言命中非零。Windows 实机行为仍留实测轮 ② 验证。
 
 Windows 未实现可选 `Activator`：开始扫描时不主动切换前台，控制器等待用户自行聚焦，之后的就绪核验和失焦停止规则不变。
 
