@@ -101,7 +101,6 @@ const (
 	smCYVirtualScreen = 79
 
 	processQueryLimitedInformation = 0x1000
-	tokenQuery                     = 0x0008
 
 	// DPI_AWARENESS_CONTEXT pseudo-handles. Compare a context handle with
 	// these only through AreDpiAwarenessContextsEqual: a real handle may

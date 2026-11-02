@@ -516,7 +516,7 @@ func (winIntegrityAPI) ProcessIntegrity(pid ProcessID) (IntegrityLevel, error) {
 	}
 	defer windows.CloseHandle(h)
 	var token windows.Token
-	if err := windows.OpenProcessToken(h, tokenQuery, &token); err != nil {
+	if err := windows.OpenProcessToken(h, windows.TOKEN_QUERY, &token); err != nil {
 		return 0, fmt.Errorf("open process token of pid %d: %w", pid, err)
 	}
 	defer token.Close()
@@ -524,16 +524,9 @@ func (winIntegrityAPI) ProcessIntegrity(pid ProcessID) (IntegrityLevel, error) {
 }
 
 func (winIntegrityAPI) SelfIntegrity() (IntegrityLevel, error) {
-	h, err := windows.GetCurrentProcess()
-	if err != nil {
-		return 0, fmt.Errorf("get current process: %w", err)
-	}
-	var token windows.Token
-	if err := windows.OpenProcessToken(h, tokenQuery, &token); err != nil {
-		return 0, fmt.Errorf("open current-process token: %w", err)
-	}
-	defer token.Close()
-	return tokenIntegrity(token)
+	// GetCurrentProcessToken returns a pseudo-token that needs no close
+	// and no OpenProcess call, matching the read-only probe tool.
+	return tokenIntegrity(windows.GetCurrentProcessToken())
 }
 
 // tokenIntegrity reads TokenIntegrityLevel and returns the RID of the
@@ -541,17 +534,20 @@ func (winIntegrityAPI) SelfIntegrity() (IntegrityLevel, error) {
 func tokenIntegrity(token windows.Token) (IntegrityLevel, error) {
 	var needed uint32
 	err := windows.GetTokenInformation(token, uint32(windows.TokenIntegrityLevel), nil, 0, &needed)
-	if err != nil && needed == 0 {
+	if err != nil && !errors.Is(err, windows.ERROR_INSUFFICIENT_BUFFER) {
 		return 0, fmt.Errorf("query token integrity length: %w", err)
 	}
 	if needed == 0 {
 		return 0, errors.New("query token integrity length: empty answer")
 	}
-	buf := make([]byte, needed)
-	if err := windows.GetTokenInformation(token, uint32(windows.TokenIntegrityLevel), &buf[0], needed, &needed); err != nil {
+	// uint64 words keep the buffer 8-byte aligned for the SID pointer in
+	// TOKEN_MANDATORY_LABEL; GetTokenInformation writes only `needed` bytes.
+	buffer := make([]uint64, (int(needed)+7)/8)
+	if err := windows.GetTokenInformation(token, uint32(windows.TokenIntegrityLevel),
+		(*byte)(unsafe.Pointer(&buffer[0])), needed, &needed); err != nil {
 		return 0, fmt.Errorf("query token integrity: %w", err)
 	}
-	label := (*windows.Tokenmandatorylabel)(unsafe.Pointer(&buf[0]))
+	label := (*windows.Tokenmandatorylabel)(unsafe.Pointer(&buffer[0]))
 	if label.Label.Sid == nil {
 		return 0, errors.New("token integrity label has no SID")
 	}
