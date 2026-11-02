@@ -280,8 +280,9 @@ func ReferenceLayout() Layout {
 		// inside the blue channel's tolerance. Its closed tier keeps the
 		// earlier measured (15,14,15); S3 reads (16,16,16), within tolerance.
 		// The second probe's open tier is (255,255,255) on S2, matching the
-		// cloud value; both probes report open on all three S2 frames and
-		// closed on all three S3 frames.
+		// cloud value; its closed tier keeps the cloud-derived (9,11,14),
+		// and S3 reads (0,0,0), within tolerance. Both probes report open on
+		// all three S2 frames and closed on all three S3 frames.
 		PanelOpen: []ColorProbe{
 			{
 				// The cloud probe's canvas position rounds onto the bright

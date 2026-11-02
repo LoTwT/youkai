@@ -1,8 +1,6 @@
 # W3a Windows local sample crops; source paths are relative to the evidence directory.
 # name	source	sha256	region	expect
 sort-s2-0000	S2/frame-0000.png	5632e847f40597363600f74d2056fa6e79fb9ab74f3f24643d744c629f60aac6	1285,124,1467,201	sort=match
-sort-s2-0005	S2/frame-0005.png	632473c77ffba1af501ed776abb038573d264332ddaf5e50b05653fecc98cb8c	1285,124,1467,201	sort=match
-sort-s2-0009	S2/frame-0009.png	93f6e8991ca4d87ed6caf6cc7452455d0e42488db6825e163e140e1ae75e0742	1285,124,1467,201	sort=match
 sort-s3-0000	S3/frame-0000.png	aaae64b2e0b6c2f23bbd7ebe4dde38ac4a497a349701470dbb58f54ee8e1f5af	1285,124,1467,201	sort=mismatch
 panel-open-1	S2/frame-0000.png	5632e847f40597363600f74d2056fa6e79fb9ab74f3f24643d744c629f60aac6	1781,39,1782,40	probe=1;panel=open
 panel-closed-1	S3/frame-0000.png	aaae64b2e0b6c2f23bbd7ebe4dde38ac4a497a349701470dbb58f54ee8e1f5af	1781,39,1782,40	probe=1;panel=closed

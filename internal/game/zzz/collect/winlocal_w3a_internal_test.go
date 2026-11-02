@@ -144,11 +144,21 @@ func w3aSortMAD(img, template *image.RGBA, region image.Rectangle) float64 {
 	return sum / float64(region.Dx()*region.Dy())
 }
 
-// TestWindowsLocalW3ASortSamples pins the W3a sort evidence against the
-// embedded Windows template: all three open-panel frames match within the
-// calibrated MAD, and the closed-panel frame at the same coordinates does
-// not. A mismatch stays "unverified", never a guessed order.
-func TestWindowsLocalW3ASortSamples(t *testing.T) {
+// TestWindowsLocalW3ASortFromOnePanelOpen pins the W3a sort evidence against
+// the embedded Windows template from one panel opening: frame 0000 matches
+// within the calibrated MAD, and the closed-panel frame at the same
+// coordinates does not. The three S2 sort crops are byte-identical, so only
+// frame 0000 is a fixture; stability across separate openings and after a
+// filter change is not covered here.
+//
+// The only negative sample is the closed panel. Production calls
+// sortLabelMatches only when both probes are open, so an open panel with a
+// different sort label is untested. A review-time synthetic erase of the
+// template text box (1329,154)-(1396,175) to background gray 12 gives MAD
+// 16.44, more than 3x the 5.0 limit; that suggests a false match is unlikely
+// but is not a recorded frame. The next sample round should add a real
+// mismatched-label frame.
+func TestWindowsLocalW3ASortFromOnePanelOpen(t *testing.T) {
 	m, layout := w3aWindowsMatcher(t)
 	if layout.SortTemplate == nil || layout.SortLabel.Empty() {
 		t.Fatal("the 1920×1080 layout has no Windows sort template")
@@ -284,8 +294,8 @@ func TestWindowsLocalW3AScaledTierDropsSortTemplate(t *testing.T) {
 // inside the 1920×1080 reference canvas.
 func TestWindowsLocalW3AManifestProvenance(t *testing.T) {
 	rows := loadW3AManifest(t)
-	if len(rows) != 11 {
-		t.Fatalf("%d W3a fixtures, want 11", len(rows))
+	if len(rows) != 9 {
+		t.Fatalf("%d W3a fixtures, want 9", len(rows))
 	}
 	seen := make(map[string]bool, len(rows))
 	for _, row := range rows {

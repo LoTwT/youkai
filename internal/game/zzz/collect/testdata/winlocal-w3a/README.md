@@ -11,7 +11,7 @@
 ~/Library/Logs/Youkai Dev/probes/20261102-w3a/
   SHA256SUMS
   S1/  # 长列表拖拽，约 28 件、约 1.4 屏，1 fps
-  S2/  # 筛选面板打开，排序“稀有度”，第 0/5/9 帧
+  S2/  # 筛选面板打开，排序“稀有度”，第 0/5/9 帧（面板区域三帧一致）
   S3/  # 面板关闭，鼠标停在列表 R2C3
 ```
 
@@ -30,10 +30,12 @@
 
 ## 夹具分组
 
-- `sort-s2-0000/0005/0009`：S2 第 0/5/9 帧的排序区域
-  `(1285,124)-(1467,201)`（182×77）；三帧在面板区域 x≥1230 完全一致。
-  该区域也是 `assets/sort-label-rarity-winlocal.png` 的来源。
-- `sort-s3-0000`：S3 面板关闭帧的同一区域，用于断言不匹配。
+- `sort-s2-0000`：S2 **同一次面板打开**的排序区域
+  `(1285,124)-(1467,201)`（182×77）。S2 第 0/5/9 帧的排序区域逐字节相同，
+  因此只保留 frame-0000 一件，不重复提交另外两帧。该区域也是
+  `assets/sort-label-rarity-winlocal.png` 的来源。
+- `sort-s3-0000`：S3 面板关闭帧的同一区域，用于断言不匹配。它是当前唯一的
+  排序反例；打开面板但排序标签不是“稀有度”的样本仍缺失。
 - `panel-open-1/2` 与 `panel-closed-1/2`：S2/S3 帧上面板两个 1×1 颜色探针
   `(1781,39)` 与 `(1290,65)`。
 - `thumb-top/bottom/mid`：S1 的 x=55 滚动条列 `(55,145)-(56,941)`，分别来自
@@ -43,7 +45,9 @@
 
 `winlocal_w3a_internal_test.go`：
 
-- `TestWindowsLocalW3ASortSamples`：S2 三帧匹配、S3 同区域不匹配，并记录 MAD。
+- `TestWindowsLocalW3ASortFromOnePanelOpen`：同一次面板打开的 S2 排序匹配、
+  S3 同区域不匹配，并记录 MAD。这里不覆盖跨次打开或筛选状态变化后的稳定性；
+  当前唯一反例是关闭面板，打开面板上的其他排序标签尚无样本。
 - `TestWindowsLocalW3APanelProbes`：两个面板探针在 S2 为 open、S3 为 closed。
 - `TestWindowsLocalW3AScrollbarEnds`：顶部/底部/拖动中帧的滑块起止与两端判定。
 - `TestWindowsLocalW3ASortVerifiesCoverage`：有模板时 `sort=verified`，六个完整
