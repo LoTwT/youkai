@@ -2,7 +2,9 @@
 
 更新日期：2026-11-03。本文维护 youkai 的版本规则、两条发布渠道、打标签与发布步骤、更新密钥管理与发布后验证（含升级实测清单）；日常构建命令见[开发指南](development.md)，交付门槛见 [T7](specs/t7-public-release-acceptance.md)，自动更新的范围与规则见[架构第 6 节](specs/scanner-architecture.md#6-首版功能范围)。发布由 `LoTwT/youkai` 的 GitHub Releases 承担，也是 MyGo 内置更新的下载源（MyGo v0.6.2，行为依据其 `docs/updates.md`、`docs/github-actions.md` 与 `internal/update`）。
 
-2026-11-03 用户决定首版只支持 Windows 本地客户端：发布流程只构建并发布 Windows 版，不发布 macOS DMG；macOS 仍作为开发平台使用，macOS 发布留待后续版本。
+2026-11-03 用户决定首版只支持 Windows 本地客户端：发布流程只构建并发布 Windows 版，不发布 macOS DMG；macOS 仍作为开发平台使用，macOS 发布留待后续版本。T7 的交付形式与架构 §6/§7 中的双平台表述，会由单独的范围 docs PR 同步；本文只记录发布流程的现状，交付门槛见 [T7：构建打包与交付验收](specs/t7-public-release-acceptance.md)。
+
+已知影响：下一个 `test-v` 发布后，已安装的 macOS 测试版每次检查更新都会因缺少 `update-darwin-arm64.json` 而报 404（例如 `GET …/update-darwin-arm64.json: 404 Not Found`），需要 macOS 用户自行处理；在下一个 `test-v` 发布前，最新 Release（`test-v0.0.4`）仍含 darwin 清单，不受影响。这是预期行为，应用不会崩溃，也不会安装错误的包。依据是 MyGo v0.6.2 `internal/update/github.go` 的 `latestTagged` 只按标签选择 Release、不按平台筛选资产；该结论来自评审阅读代码，未在实机复现。
 
 ## 版本号与两条渠道
 
@@ -63,7 +65,7 @@ Release 资产一览（`<版本>` 为标签版本，表列为 GitHub 上的存�
   2. 安装更新后：版本号与标签一致（诊断日志首行 `version=`），历史记录与数据根保留、可重开。（2026-10-18 实测：两平台升级后日志首行 `version=0.0.4`，`/Applications/Youkai.app` 与 `Youkai.exe` 文件版本均为 0.0.4，历史数据保留经用户确认；“可重开”未单独验证，见[M1 自动更新升级实测报告](reports/2026-10-18-m1-auto-update-test.md)。）
   3. 签名错误被拒：篡改清单或换密钥的档案使安装失败，界面如实显示错误（如 `mygo: installing the update: the update is not signed with the app's key`），应用继续运行原版本。可用一次性测试密钥对在本地演练（见[开发指南](development.md#自动更新的本地演练)，勿用正式密钥）。（安装版实机未测，见[M1 自动更新升级实测报告](reports/2026-10-18-m1-auto-update-test.md)的未覆盖项。）
   4. 扫描进行中（含收尾与待重试保存）禁止安装：更新区按钮禁用并说明原因；会话保存完成后可安装。（仅单元测试覆盖——M1 安装版无扫描源，实机待 M2 后验证，见[M1 自动更新升级实测报告](reports/2026-10-18-m1-auto-update-test.md)的未覆盖项。）
-  5. macOS 升级后 Gatekeeper 与权限表现：ad-hoc 签名替换后首次打开是否再次拦截、录屏/辅助功能权限是否保留（TCC 随 bundle identifier 记录，替换重签名后的表现以实测为准），结果写回本节与 T7。（2026-10-18 实测：Gatekeeper 侧已验证——0.0.3→0.0.4 升级并自动重启进入新版本后无再次拦截；录屏/辅助功能权限待 M2 申请权限后实测，见[M1 自动更新升级实测报告](reports/2026-10-18-m1-auto-update-test.md)。）
+  5. macOS 升级后 Gatekeeper 与权限表现：ad-hoc 签名替换后首次打开是否再次拦截、录屏/辅助功能权限是否保留（TCC 随 bundle identifier 记录，替换重签名后的表现以实测为准），结果写回本节与 T7。（2026-10-18 实测：Gatekeeper 侧已验证——0.0.3→0.0.4 升级并自动重启进入新版本后无再次拦截；录屏/辅助功能权限待 M2 申请权限后实测，见[M1 自动更新升级实测报告](reports/2026-10-18-m1-auto-update-test.md)。）（macOS 暂不发布，本项在恢复 mac 发布前不适用）
   6. 自动重启进入新版本：安装完成后应用自动重启，重启后诊断日志首行 `version=` 为新版本号、窗口更新区显示“当前版本 <新版本>”（2026-10-17 两平台升级实测曾“安装后应用退出但不再拉起”，根因是应用的关窗拦截取消了 MyGo 的首次 Relaunch；已修复为收尾完成后重新发起，并在 macOS 本机完整演练通过，见[开发指南](development.md#自动更新的本地演练)）。（2026-10-18 实机确认：两平台 0.0.3→0.0.4 同一秒内完成安装、退出收尾与重启，重启后首行 `version=0.0.4`，Windows 当前运行进程即重启实例，见[M1 自动更新升级实测报告](reports/2026-10-18-m1-auto-update-test.md)。）
   7. Windows“应用和功能”中的版本：升级后列表显示新版本号（应用启动时刷新 HKCU 卸载项 `DisplayVersion`；`Uninstall.exe` 保持安装时的版本属正常，卸载行为不受影响）。（2026-10-18 实测：0.0.2→0.0.3 升级后日志 `uninstall entry version refreshed to 0.0.3`；0.0.3→0.0.4 后注册表 `DisplayVersion` 为 0.0.4，见[M1 自动更新升级实测报告](reports/2026-10-18-m1-auto-update-test.md)。）
   8. 更新日志行：诊断日志含各阶段行，逐行核对便于定位——检查 `youkai: update check: found …` / `no version newer than …` / `update check failed: …`，安装 `update install: downloading and verifying …`、`update install: downloaded N bytes`、`update install: … installed` / `update install failed: …`，重启 `update installed, restarting the application` 与 `exit settled, relaunching into the installed update`。（2026-10-18 实测：0.0.3→0.0.4 两平台各阶段行齐全；`downloaded N bytes` 曾在完成时报两次（MyGo 进度回调在最后一块与 EOF 各报一次完成），已改为每次下载记一次、差量回退整包时两次下载各一行，见[M1 自动更新升级实测报告](reports/2026-10-18-m1-auto-update-test.md)。）
