@@ -1,6 +1,10 @@
 # 发布与自动更新
 
-更新日期：2026-10-21。本文维护 youkai 的版本规则、两条发布渠道、打标签与发布步骤、更新密钥管理与发布后验证（含升级实测清单）；日常构建命令见[开发指南](development.md)，交付门槛见 [T7](specs/t7-public-release-acceptance.md)，自动更新的范围与规则见[架构第 6 节](specs/scanner-architecture.md#6-首版功能范围)。发布由 `LoTwT/youkai` 的 GitHub Releases 承担，也是 MyGo 内置更新的下载源（MyGo v0.6.2，行为依据其 `docs/updates.md`、`docs/github-actions.md` 与 `internal/update`）。
+更新日期：2026-11-03。本文维护 youkai 的版本规则、两条发布渠道、打标签与发布步骤、更新密钥管理与发布后验证（含升级实测清单）；日常构建命令见[开发指南](development.md)，交付门槛见 [T7](specs/t7-public-release-acceptance.md)，自动更新的范围与规则见[架构第 6 节](specs/scanner-architecture.md#6-首版功能范围)。发布由 `LoTwT/youkai` 的 GitHub Releases 承担，也是 MyGo 内置更新的下载源（MyGo v0.6.2，行为依据其 `docs/updates.md`、`docs/github-actions.md` 与 `internal/update`）。
+
+2026-11-03 用户决定首版只支持 Windows 本地客户端：发布流程只构建并发布 Windows 版，不发布 macOS DMG；macOS 仍作为开发平台使用，macOS 发布留待后续版本。T7 的交付形式与架构 §6/§7 中的双平台表述，会由单独的范围 docs PR 同步；本文只记录发布流程的现状，交付门槛见 [T7：构建打包与交付验收](specs/t7-public-release-acceptance.md)。
+
+已知影响：下一个 `test-v` 发布后，已安装的 macOS 测试版每次检查更新都会因缺少 `update-darwin-arm64.json` 而报 404（例如 `GET …/update-darwin-arm64.json: 404 Not Found`），需要 macOS 用户自行处理；在下一个 `test-v` 发布前，最新 Release（`test-v0.0.4`）仍含 darwin 清单，不受影响。这是预期行为，应用不会崩溃，也不会安装错误的包。依据是 MyGo v0.6.2 `internal/update/github.go` 的 `latestTagged` 只按标签选择 Release、不按平台筛选资产；该结论来自评审阅读代码，未在实机复现。
 
 ## 版本号与两条渠道
 
@@ -34,24 +38,23 @@
    - 正式版：`git tag v0.0.2 && git push origin v0.0.2`
    - 测试版：`git tag test-v0.0.3 && git push origin test-v0.0.3`
 3. `Release` workflow（[release.yml](../.github/workflows/release.yml)）自动执行：
-   1. **草稿 job**：校验标签（`test-v`/`v` + `major.minor.patch`）、CHANGELOG 小节与 `updates` 配置，创建该标签的草稿 Release（两平台 job 上传到同一草稿）。
-   2. **macOS / Windows job**：写入版本与渠道前缀 → fetchdeps（Windows 另取 VC++ 运行库）→ `CGO_ENABLED=1 go tool mygo build -platform … -upload`（私钥经 `MYGO_UPDATER_PRIVATE_KEY`，`GH_TOKEN` 供上传与差量计算）→ 校验打包布局与更新档案（清单版本与归档 URL 必须指向本标签）→ 在打包产物上运行识别自检并断言 `updates=enabled`。
-   3. **发布 job**（两平台都成功后）：校验 Release 资产齐全（DMG、安装包、两平台的更新归档与清单；差量为可选），下载清单核对其版本与标签一致，然后把草稿发布：测试渠道 `--draft=false --prerelease=false --latest=false` 并改标题为“Youkai <版本>（测试版，勿用）”、说明前加警示；正式渠道 `--draft=false --prerelease=false --latest=true`，标题“Youkai <版本>”。
-4. 失败处理：单平台失败可用 "Re-run failed jobs" 重跑，重跑以 `--clobber` 覆盖同一草稿里的同名资产；草稿 job 幂等（Release 已存在则不重建）。标签或 CHANGELOG 问题需改标签（删远端标签重打）或补小节后重新推送标签触发。
+   1. **草稿 job**：校验标签（`test-v`/`v` + `major.minor.patch`）、CHANGELOG 小节与 `updates` 配置，创建该标签的草稿 Release（Windows job 上传到该草稿）。
+   2. **Windows job**：写入版本与渠道前缀 → fetchdeps → 取 VC++ 运行库 → `CGO_ENABLED=1 go tool mygo build -platform windows/amd64 -upload`（私钥经 `MYGO_UPDATER_PRIVATE_KEY`，`GH_TOKEN` 供上传与差量计算）→ 校验打包布局与更新档案（清单版本与归档 URL 必须指向本标签）→ 在打包产物上运行识别自检并断言 `updates=enabled`。
+   3. **发布 job**（Windows job 成功后）：校验 Release 资产齐全（安装包、Windows 的更新归档与清单；差量为可选），下载清单核对其版本与标签一致，然后把草稿发布：测试渠道 `--draft=false --prerelease=false --latest=false` 并改标题为“Youkai <版本>（测试版，勿用）”、说明前加警示；正式渠道 `--draft=false --prerelease=false --latest=true`，标题“Youkai <版本>”。
+4. 失败处理：构建失败可用 "Re-run failed jobs" 重跑，重跑以 `--clobber` 覆盖同一草稿里的同名资产；草稿 job 幂等（Release 已存在则不重建）。标签或 CHANGELOG 问题需改标签（删远端标签重打）或补小节后重新推送标签触发。
    - `test-v0.0.1` 即由此走过一遭：发布 job 的资产校验按带空格的本地名比对而失败（GitHub 存储名空格转 `.`，见下文 Release 资产一览；重跑执行的是标签提交里的同一份校验，必然再败），草稿与两平台 job 均已成功。主会话核对两份更新清单（`version` 均为 0.0.1、归档 `url` 指向 `test-v0.0.1`）后，按 workflow 原有发布步参数手动完成了发布（`--draft=false --prerelease=false --latest=false`、标题“Youkai 0.0.1（测试版，勿用）”、说明前加警示）。该校验缺陷已修正为按存储名比对（自 `0.0.2` 起的标签包含修正），后续发布不再需要此类手动补救。
-5. **首次发布需重点看**：`MYGO_UPDATER_PRIVATE_KEY` 是否就位（否则两平台在产物校验步失败，报缺更新档案）；Windows 的 NSIS 是否成功下载（缺安装包会在校验步失败）；差量计算对首版只会记 "no version is published yet"（正常，不是失败）；发布 job 的资产清单是否与下表一致；发布后 latest 是否指向正式版。
+5. **首次发布需重点看**：`MYGO_UPDATER_PRIVATE_KEY` 是否就位（否则产物校验步失败，报缺更新档案）；Windows 的 NSIS 是否成功下载（缺安装包会在校验步失败）；差量计算对首版只会记 "no version is published yet"（正常，不是失败）；发布 job 的资产清单是否与下表一致；发布后 latest 是否指向正式版。
 
 Release 资产一览（`<版本>` 为标签版本，表列为 GitHub 上的存储名）：
 
 | 文件 | 说明 |
 | --- | --- |
-| `Youkai.<版本>.arm64.dmg` | macOS 安装镜像 |
 | `Youkai.Setup.<版本>.amd64.exe` | Windows NSIS 每用户安装包 |
-| `youkai-<版本>-darwin-arm64.tar.gz` / `youkai-<版本>-windows-amd64.tar.gz` | 更新安装用的应用归档（签名） |
-| `update-darwin-arm64.json` / `update-windows-amd64.json` | 各平台更新清单（含版本、说明、签名，缓存禁用） |
+| `youkai-<版本>-windows-amd64.tar.gz` | 更新安装用的应用归档（签名） |
+| `update-windows-amd64.json` | 更新清单（含版本、说明、签名，缓存禁用） |
 | `youkai-<旧>-to-<版本>-<target>.delta` | 差量更新（可选，首版无） |
 
-安装包的本地文件名带空格（MyGo 命名为 `Youkai <版本> arm64.dmg`、`Youkai Setup <版本> amd64.exe`），但 GitHub 上传资产时会重命名含特殊字符的文件名，每个空格存为 `.`（`test-v0.0.1` 实测：`Youkai 0.0.1 arm64.dmg` 存为 `Youkai.0.0.1.arm64.dmg`），Release 页面与下载链接中即如上表。发布 job 的资产校验因此对期望名做同样的空格转 `.` 后按存储名比对；更新归档与清单的文件名不含空格，存储名与本地一致。
+安装包的本地文件名带空格（MyGo 命名为 `Youkai Setup <版本> amd64.exe`），但 GitHub 上传资产时会重命名含特殊字符的文件名，每个空格存为 `.`（`test-v0.0.1` 实测：`Youkai Setup 0.0.1 amd64.exe` 存为 `Youkai.Setup.0.0.1.amd64.exe`），Release 页面与下载链接中即如上表。发布 job 的资产校验因此对期望名做同样的空格转 `.` 后按存储名比对；更新归档与清单的文件名不含空格，存储名与本地一致。
 
 ## 发布后验证
 
@@ -62,7 +65,7 @@ Release 资产一览（`<版本>` 为标签版本，表列为 GitHub 上的存�
   2. 安装更新后：版本号与标签一致（诊断日志首行 `version=`），历史记录与数据根保留、可重开。（2026-10-18 实测：两平台升级后日志首行 `version=0.0.4`，`/Applications/Youkai.app` 与 `Youkai.exe` 文件版本均为 0.0.4，历史数据保留经用户确认；“可重开”未单独验证，见[M1 自动更新升级实测报告](reports/2026-10-18-m1-auto-update-test.md)。）
   3. 签名错误被拒：篡改清单或换密钥的档案使安装失败，界面如实显示错误（如 `mygo: installing the update: the update is not signed with the app's key`），应用继续运行原版本。可用一次性测试密钥对在本地演练（见[开发指南](development.md#自动更新的本地演练)，勿用正式密钥）。（安装版实机未测，见[M1 自动更新升级实测报告](reports/2026-10-18-m1-auto-update-test.md)的未覆盖项。）
   4. 扫描进行中（含收尾与待重试保存）禁止安装：更新区按钮禁用并说明原因；会话保存完成后可安装。（仅单元测试覆盖——M1 安装版无扫描源，实机待 M2 后验证，见[M1 自动更新升级实测报告](reports/2026-10-18-m1-auto-update-test.md)的未覆盖项。）
-  5. macOS 升级后 Gatekeeper 与权限表现：ad-hoc 签名替换后首次打开是否再次拦截、录屏/辅助功能权限是否保留（TCC 随 bundle identifier 记录，替换重签名后的表现以实测为准），结果写回本节与 T7。（2026-10-18 实测：Gatekeeper 侧已验证——0.0.3→0.0.4 升级并自动重启进入新版本后无再次拦截；录屏/辅助功能权限待 M2 申请权限后实测，见[M1 自动更新升级实测报告](reports/2026-10-18-m1-auto-update-test.md)。）
+  5. macOS 升级后 Gatekeeper 与权限表现：ad-hoc 签名替换后首次打开是否再次拦截、录屏/辅助功能权限是否保留（TCC 随 bundle identifier 记录，替换重签名后的表现以实测为准），结果写回本节与 T7。（2026-10-18 实测：Gatekeeper 侧已验证——0.0.3→0.0.4 升级并自动重启进入新版本后无再次拦截；录屏/辅助功能权限待 M2 申请权限后实测，见[M1 自动更新升级实测报告](reports/2026-10-18-m1-auto-update-test.md)。）（macOS 暂不发布，本项在恢复 mac 发布前不适用）
   6. 自动重启进入新版本：安装完成后应用自动重启，重启后诊断日志首行 `version=` 为新版本号、窗口更新区显示“当前版本 <新版本>”（2026-10-17 两平台升级实测曾“安装后应用退出但不再拉起”，根因是应用的关窗拦截取消了 MyGo 的首次 Relaunch；已修复为收尾完成后重新发起，并在 macOS 本机完整演练通过，见[开发指南](development.md#自动更新的本地演练)）。（2026-10-18 实机确认：两平台 0.0.3→0.0.4 同一秒内完成安装、退出收尾与重启，重启后首行 `version=0.0.4`，Windows 当前运行进程即重启实例，见[M1 自动更新升级实测报告](reports/2026-10-18-m1-auto-update-test.md)。）
   7. Windows“应用和功能”中的版本：升级后列表显示新版本号（应用启动时刷新 HKCU 卸载项 `DisplayVersion`；`Uninstall.exe` 保持安装时的版本属正常，卸载行为不受影响）。（2026-10-18 实测：0.0.2→0.0.3 升级后日志 `uninstall entry version refreshed to 0.0.3`；0.0.3→0.0.4 后注册表 `DisplayVersion` 为 0.0.4，见[M1 自动更新升级实测报告](reports/2026-10-18-m1-auto-update-test.md)。）
   8. 更新日志行：诊断日志含各阶段行，逐行核对便于定位——检查 `youkai: update check: found …` / `no version newer than …` / `update check failed: …`，安装 `update install: downloading and verifying …`、`update install: downloaded N bytes`、`update install: … installed` / `update install failed: …`，重启 `update installed, restarting the application` 与 `exit settled, relaunching into the installed update`。（2026-10-18 实测：0.0.3→0.0.4 两平台各阶段行齐全；`downloaded N bytes` 曾在完成时报两次（MyGo 进度回调在最后一块与 EOF 各报一次完成），已改为每次下载记一次、差量回退整包时两次下载各一行，见[M1 自动更新升级实测报告](reports/2026-10-18-m1-auto-update-test.md)。）
