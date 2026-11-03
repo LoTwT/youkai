@@ -14,6 +14,7 @@
 - [T6：用户操作、结果校对与导出](specs/t6-review-export-workflow.md)：准备到导出的操作流程、逐件校对、JSON/CSV 两种导出、历史与截图/记录清理。
 - [扫描结果 JSON/CSV v2](specs/scan-json-format.md)：自有可用数据文件契约（JSON 与同源 CSV），附[合成示例](examples/scan-usable-v2.json)；导出与自动接受已实现并合并，真机验收待完成。2026-10-29 明确重访不产生新序号、位置范围未证明位置的已接纳物品仍可用且不计入 `excludedCount`，v2 格式与计数等式不变（决策 §9.4(a)/§4.6）。
 - [T7：构建打包与交付验收](specs/t7-public-release-acceptance.md)：首版交付门槛、无付费证书的打包路线、最低系统候选。
+- [UI/UX 重设计 2026-11（第一阶段草案）](design/uiux-2026-11/README.md)：从头重设计的第一阶段——按规格整理的功能清单、关键约束、Windows 本地与 mac 云客户端两类用户的旅程、状态矩阵，以及待用户决定的功能提案和给第二阶段（布局与导航）的输入；不含布局与线框图，功能以现有规格为准。
 - [历史 UI 设计基线（已过时）](design/uiux-2026-10-21/README.md)：2026-10-21 的设计稿与评审记录，仅作历史参考；当前界面、token 与布局以 `internal/ui` 和测试为准。
 - [扫描器背景与参考实现](scanner-handoff.md)：项目起因、参考扫描器研究结论和与 fairy 的边界。
 - [开发指南](development.md)：环境要求与当前实际可用的构建、测试、MyGo 开发命令。
