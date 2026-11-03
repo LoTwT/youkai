@@ -442,7 +442,7 @@ F4b 的补充证据：
 
 负责阶段：4（三客户端 profile 与 Windows 实测）与 6（三客户端人工基准验收）。触发条件：Windows 云客户端环境可用并由用户安排时间。届时分别重复 F1–F7，核对 GDI 裁剪、帧时间、SendInput/UIPI、窗口身份与未支持配置拒绝；任一端的成功不能替代另一端。完成前 Windows 保留拖拽基线或拒绝，不宣称 Windows M3 通过。
 
-2026-11-03 首版范围决定：Windows 云客户端随该客户端移交后续版本；F8 的本地客户端证据保留，见 §12。
+2026-11-03 首版范围决定：F8 的 Windows 云客户端部分随该客户端移入后续版本；F8 的本地客户端证据保留，见 §12。
 
 ## 8. 评审记录
 
@@ -585,4 +585,4 @@ Q1–Q13 的处置：
 
 用户于 2026-11-03 决定：首版只支持 **Windows x64 本地《绝区零》完整客户端**；Windows 官方云客户端、Apple Silicon macOS 云客户端与跨平台交付中的 Mac DMG 移入后续版本。macOS 仍是开发平台，已有的 macOS 实现、标定与验收记录保留，作为后续版本基础。
 
-范围与客户端分工以[架构 §6“平台与客户端”](../specs/scanner-architecture.md#6-首版功能范围)为单一事实来源。本记录此前关于三客户端分别首发、双平台同时交付以及 §4.7、F8、§6 阶段 4/6 的表述，均作为该决定之前的历史与后续版本依据保留，不再作为首版交付门槛。规格同步见架构 §6/§7/§8、[T1](../specs/t1-mygo-ui-distribution.md)、[T2](../specs/t2-platform-capture-input.md)、[T5](../specs/t5-zzz-inventory-traversal.md)、[T7](../specs/t7-public-release-acceptance.md)、[实施清单](../specs/scanner-implementation-plan.md)与[文档索引](../index.md)。
+范围与客户端分工以[架构 §6“平台与客户端”](../specs/scanner-architecture.md#6-首版功能范围)为单一事实来源。本记录此前关于三客户端分别首发、双平台同时交付以及 §4.7、F8、§6 阶段 4/6 的表述，均作为该决定之前的历史与后续版本依据保留，不再作为首版交付门槛。规格同步见架构 §6/§7/§8、[T1](../specs/t1-mygo-ui-distribution.md)、[T2](../specs/t2-platform-capture-input.md)、[T3](../specs/t3-ocr-runtime-model-samples.md)、[T5](../specs/t5-zzz-inventory-traversal.md)、[T6](../specs/t6-review-export-workflow.md)、[T7](../specs/t7-public-release-acceptance.md)、[实施清单](../specs/scanner-implementation-plan.md)与[文档索引](../index.md)。

@@ -1,10 +1,10 @@
 # T7：构建打包与交付验收
 
-更新日期：2026-11-03。状态：交付规划；打包与发布路线已实施——双平台 Package/Release workflow、测试渠道发布与两平台升级链实机验证（mac 部分保留为后续版本基础，见[实施清单 M1](scanner-implementation-plan.md#m1正式工程资源与会话底座)），第 2 节的首版交付门槛尚未验收（M4）。2026-10-20 同步 JSON/CSV 导出、截图与记录清理、默认关窗决策。2026-11-03 用户决定首版只支持 Windows 本地客户端、只交付 Windows 安装包，macOS 与 Windows 云客户端及 Mac DMG 移入后续版本；范围以[架构第 6 节](scanner-architecture.md#6-首版功能范围)为准。本文维护首版交付门槛、无付费证书的打包路线和最低系统候选。
+更新日期：2026-11-03。状态：交付规划；打包与发布路线已实施——双平台 Package/Release workflow、测试渠道发布与两平台升级链实机验证（mac 部分保留为后续版本基础；Release workflow 自 #118 起只构建 Windows，见[实施清单 M1](scanner-implementation-plan.md#m1正式工程资源与会话底座)），第 2 节的首版交付门槛尚未验收（M4）。2026-10-20 同步 JSON/CSV 导出、截图与记录清理、默认关窗决策。2026-11-03 用户决定首版只支持 Windows 本地客户端、只交付 Windows 安装包，macOS 与 Windows 云客户端及 Mac DMG 移入后续版本；范围以[架构第 6 节](scanner-architecture.md#6-首版功能范围)为准。本文维护首版交付门槛、无付费证书的打包路线和最低系统候选。
 
 ## 1. 已确认目标与现有条件
 
-- 首版只包含 Windows x64 本地客户端（《绝区零》完整客户端），只交付 Windows 安装包（2026-11-03 用户决定，见[架构第 6 节](scanner-architecture.md#6-首版功能范围)）。Apple Silicon macOS、Windows 官方云客户端与 Mac App Store 云客户端移出首版，保留为后续版本；原三客户端范围不再作为首发门槛。
+- 首版只支持 Windows 本地客户端，范围见[架构第 6 节](scanner-architecture.md#6-首版功能范围)（2026-11-03 用户决定）。
 - 首版采用 MyGo 原生 UI，网页链接唤起桌面应用；浏览器内界面只答复了可行性，不在首版范围，见 [T1](t1-mygo-ui-distribution.md#浏览器唤起的新增需求与构建依据)。
 - 用户明确首版只要求正常构建、打包，不走官方渠道。功能、数据正确性、停止保存和实机测试仍按已有设计验收；商店上架、代码签名证书和 Apple 公证不作为首版前提。
 - 发布方式（2026-10-16 确认）：正式制品由 GitHub Actions 构建，随版本发布在 GitHub Releases（`LoTwT/youkai`）上，首个发布版为 `0.0.1`；首版包含 MyGo 内置自动更新，更新档案经 MyGo 更新密钥签名后随同一 Releases 发布，更新私钥由用户保管在密码管理器与 GitHub Actions secrets、不进仓库，范围与规则见[架构第 6 节](scanner-architecture.md#6-首版功能范围)，版本规则、发布 workflow（`test-v*` 测试渠道与 `v*` 正式渠道）与发布后验证见[发布与自动更新](../release.md)。Windows 上的测试使用 GitHub Actions 产出的安装包，用户不在 Windows 上安装开发工具；需要快速排查非 VC++ 问题时可由 Mac 交叉编译免安装包补充，见[实施清单](scanner-implementation-plan.md#开发与-windows-测试方式)。
@@ -41,7 +41,7 @@
 | Windows x64 | 生成应用 EXE 与 NSIS 安装包，不配置 youkai 的 Authenticode 发布者证书或签名服务；已有第三方文件签名不主动删除。 | 安装、卸载、资源加载、协议注册和首次启动；记录 SmartScreen、Smart App Control 或设备策略的实际表现。 |
 | macOS arm64（后续版本） | 生成 `.app` 与 DMG，采用无需开发者会员的 ad-hoc 本地签名，不配置 Developer ID 或公证凭据。 | 应用及内置原生代码的签名完整性、资源加载、首次打开、录屏/输入授权，以及重装或换版本后的权限体验。 |
 
-MyGo 当前分发文档说明 macOS 默认使用 ad-hoc 签名，Windows 的证书签名属于可配置步骤；NSIS 安装器与 DMG 制作仍需要对应打包工具。含 OCR 的 cgo 依赖还需要目标平台编译器。缺少打包工具而跳过安装包不能算完成，构建端下载工具与用户首次启动下载识别资源是两回事。依据 v0.6.2 的[分发文档](https://mygo.egoist.dev/docs/distribution)；双平台制品已由 Package 与 Release workflow 实际构建并实机安装验证（mac 部分保留为后续版本基础，见[实施清单 M1](scanner-implementation-plan.md#m1正式工程资源与会话底座)）。
+MyGo 当前分发文档说明 macOS 默认使用 ad-hoc 签名，Windows 的证书签名属于可配置步骤；NSIS 安装器与 DMG 制作仍需要对应打包工具。含 OCR 的 cgo 依赖还需要目标平台编译器。缺少打包工具而跳过安装包不能算完成，构建端下载工具与用户首次启动下载识别资源是两回事。依据 v0.6.2 的[分发文档](https://mygo.egoist.dev/docs/distribution)；双平台制品已由 Package workflow 与当时的 Release workflow 实际构建并实机安装验证（mac 部分保留为后续版本基础；Release workflow 自 #118 起只构建 Windows，见[实施清单 M1](scanner-implementation-plan.md#m1正式工程资源与会话底座)）。
 
 商店外分发仍受操作系统检查。Mac 的 ad-hoc 签名不提供 Developer ID 身份或 Apple 公证，下载后的首次打开可能被 Gatekeeper 阻止（该平台随后续版本交付）；Apple 提供的单应用确认路径取决于系统和管理策略。Windows 未签名的新制品可能出现 SmartScreen 提示，强制策略或 Smart App Control 也可能直接阻止执行。首版说明需准确记录这些限制，不能承诺无提示启动或所有拦截都有继续按钮，也不把关闭整机保护作为安装步骤。[Apple 打开应用说明](https://support.apple.com/en-us/102445) · [Microsoft SmartScreen 说明](https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/smartscreen-reputation) · [Smart App Control FAQ](https://support.microsoft.com/en-us/windows/security/threat-malware-protection/smart-app-control-frequently-asked-questions)
 
@@ -71,7 +71,7 @@ Windows 依据：[Go 最低要求](https://go.dev/wiki/MinimumRequirements)、[M
 
 最低候选必须贯穿应用元数据、Go/C/Objective-C 的部署目标及全部随包原生文件。Windows 要核对最终 EXE/DLL 的导入、架构和运行库；Mac 的系统标记、加载路径及签名随后续版本核对。静态文件检查能排除明显不配套，但不能证明系统 API 行为、游戏输入或云画面兼容。
 
-MyGo v0.6.2 的 [config.go](https://github.com/egoist/mygo/blob/cf26587264f26ea68bd1b8abbf5c9723f35e0a70/cmd/mygo/config.go)仍将 `macos.minimumSystemVersion` 默认为 `12.0`，[bundle.go](https://github.com/egoist/mygo/blob/cf26587264f26ea68bd1b8abbf5c9723f35e0a70/cmd/mygo/bundle.go)据此生成 `LSMinimumSystemVersion`。本轮候选构建已显式设为 `14.0`（`mygo.json` 与本地打包命令、Package/Release workflow 一致）；该 macOS 构建保留供后续版本使用。Go 和原生桥接的实际部署目标随最低系统实机验收核对，修改应用声明本身不会改变已经编译好的 OCR 库下限。
+MyGo v0.6.2 的 [config.go](https://github.com/egoist/mygo/blob/cf26587264f26ea68bd1b8abbf5c9723f35e0a70/cmd/mygo/config.go)仍将 `macos.minimumSystemVersion` 默认为 `12.0`，[bundle.go](https://github.com/egoist/mygo/blob/cf26587264f26ea68bd1b8abbf5c9723f35e0a70/cmd/mygo/bundle.go)据此生成 `LSMinimumSystemVersion`。本轮候选构建已显式设为 `14.0`（`mygo.json` 与本地打包命令、Package workflow 一致；Release workflow 自 [#118](https://github.com/LoTwT/youkai/pull/118) 起不构建 macOS）；该 macOS 构建保留供后续版本使用。Go 和原生桥接的实际部署目标随最低系统实机验收核对，修改应用声明本身不会改变已经编译好的 OCR 库下限。
 
 ### 尚需完成的工程证据
 
