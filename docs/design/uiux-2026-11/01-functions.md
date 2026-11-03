@@ -18,7 +18,7 @@
 
 | 编号 | 用户要做的事 | 平台 | 前提 | 结果 | 失败情况 | 出处 |
 | --- | --- | --- | --- | --- | --- | --- |
-| F-06 | 准备游戏：打开驱动盘仓库页，保持受支持的显示配置 | Win：1920×1080 窗口模式、窗口完整在工作区内；mac：窗口 1164×762、完整在一块屏内 | 游戏已登录 | 扫描器之后自动完成转盘切换、筛选重置并勾选 S、回顶；不操作排序 | 不在仓库页、页面无法验证时拒绝开始或停止；扫描器不会从任意页面自动导航到仓库 | [T5 §1 操作起点](../../specs/t5-zzz-inventory-traversal.md#1-推荐路径与范围)、[架构 §6](../../specs/scanner-architecture.md#6-首版功能范围) |
+| F-06 | 准备游戏：打开驱动盘仓库页，保持受支持的显示配置 | Win：1920×1080 窗口或无边框模式、窗口完整在工作区内（或恰好等于整块显示器）；mac：窗口 1164×762、完整在一块屏内 | 游戏已登录 | 扫描器之后自动完成转盘切换、筛选重置并勾选 S、回顶；不操作排序 | 不在仓库页、页面无法验证时拒绝开始或停止；扫描器不会从任意页面自动导航到仓库 | [T5 §1 操作起点](../../specs/t5-zzz-inventory-traversal.md#1-推荐路径与范围)、[架构 §6](../../specs/scanner-architecture.md#6-首版功能范围)；T6 §1 的不同说法见 D-12 |
 | F-07 | 了解扫描前的条件并确认目标 | 通用 | 应用已启动 | 看到已找到的客户端和窗口、S 级范围、准备提示、保存位置、停止方式；多个候选窗口时明确选择目标 | 缺项时提示具体缺项和调整方式；不因标题相同就替用户选目标；截图不可用时不显示旧预览 | [T6 §1](../../specs/t6-review-export-workflow.md#1-最小界面与完整使用流程)、[T1 §2 使用提示](../../specs/t1-mygo-ui-distribution.md#2-关窗与使用提示) |
 | F-08 | 通过扫描前检查（预检） | Win：档位、工作区、DPI、权限（完整性级别）；mac：录屏、辅助功能、窗口尺寸与位置 | 点击开始后，在切回游戏前完成 | 不依赖前台的条件全部通过后才进入等待切回 | 每项失败都有稳定故障码和中文提示，不做试探点击；权限不足时提示以管理员身份重新打开（Win）或去系统设置授权（mac） | [T2 §3.2 预检](../../specs/t2-platform-capture-input.md#windows-扫描前预检w2b权威说明)、[T2 §2.2](../../specs/t2-platform-capture-input.md#22-macosscreencapturekit-窗口流与-quartz-输入)、[决策 D-1](../../decisions/2026-10-28-scanner-rearchitecture.md#2026-11-02-windows-本地客户端决定) |
 | F-09 | 开始扫描并切回游戏 | 通用 | 预检通过；托盘/菜单栏入口可用（选择隐藏时）；停止热键已注册 | 应用请求激活游戏一次；30 秒内前台、页面、范围、几何全部核验通过才开始操作游戏 | 激活可能被系统拒绝（Win），用户需自己切回；30 秒到期仍未就绪则以准备超时收尾并显示原因，不自动开扫；同一次开始请求不会建两次扫描 | [架构 §5 隐藏恢复与退出](../../specs/scanner-architecture.md#隐藏恢复与退出)、[架构 §2](../../specs/scanner-architecture.md#2-界面选择与应用层) |
@@ -45,7 +45,7 @@
 | 编号 | 用户要做的事 | 前提 | 结果 | 失败情况 | 出处 |
 | --- | --- | --- | --- | --- | --- |
 | F-22 | 导出 JSON 或 CSV | 记录已保存；当前无未保存修改（或先解决） | 两个并列入口，无默认格式；导出前展示纳入数、排除数、覆盖结论和“不含截图”；直接写入系统下载目录，重名自动编号；两种文件来自同一已保存修订 | 可用数为零时显示原因，仍可导出空文件；取消、目录无权限或空间不足不改变内部记录；成功提示在写入并关闭之后；导出中关闭重复入口，该记录暂不可删除 | [T6 §3](../../specs/t6-review-export-workflow.md#3-保存重新查看与导出建议)、[JSON/CSV v2](../../specs/scan-json-format.md)、[架构 §5 保存校对与导出](../../specs/scanner-architecture.md#保存校对与导出) |
-| F-23 | 找到导出的文件 | 导出成功 | 能打开下载目录 | 打开目录失败时如实提示 | `cmd/youkai/main.go:213-221`、`internal/ui/export.go:255-290` |
+| F-23 | 找到导出的文件 | 导出成功 | 能打开下载目录 | 打开目录失败时如实提示 | [T6 §3 历史记录与存储管理](../../specs/t6-review-export-workflow.md#历史记录与存储管理)（“固定系统默认位置和打开目录入口”）；当前实现见 D-11 |
 
 ## E. 历史与存储
 
@@ -61,7 +61,7 @@
 | 编号 | 用户要做的事 | 前提 | 结果 | 失败情况 | 出处 |
 | --- | --- | --- | --- | --- | --- |
 | F-28 | 设置关闭窗口的行为 | — | 默认“隐藏到托盘/菜单栏”，可改为“关闭即停止并退出”；偏好持久保存 | 保存偏好失败时如实提示 | [T1 §2](../../specs/t1-mygo-ui-distribution.md#2-关窗与使用提示)、[架构 §5](../../specs/scanner-architecture.md#隐藏恢复与退出)；`cmd/youkai/main.go:234-241` |
-| F-29 | 查看快捷键 | — | 看到实际注册的快捷键，含全局停止热键（Win `Ctrl+Alt+Shift+S`，mac `⌃⌥⌘S`） | 停止热键注册失败时不能开始扫描 | [T1 §2](../../specs/t1-mygo-ui-distribution.md#2-关窗与使用提示)、[架构 §5 生命周期](../../specs/scanner-architecture.md#生命周期)；`internal/ui/settings_view.go:123-141` |
+| F-29 | 查看快捷键 | — | 看到实际注册的快捷键，含全局停止热键（Win `Ctrl+Alt+Shift+S`，mac `⌃⌥⌘S`） | 停止热键注册失败时不能开始扫描 | [T1 §2](../../specs/t1-mygo-ui-distribution.md#2-关窗与使用提示)、[架构 §5 生命周期](../../specs/scanner-architecture.md#生命周期)；具体按键见[开发指南](../../development.md)第 41 行（规格正文未写按键）；`internal/ui/settings_view.go:123-141` |
 | F-30 | 检查并安装更新 | 安装版且启用了更新（开发运行和测试打包不启用） | 启动后检查一次、运行期间每 24 小时一次，也可手动检查；显示新版本号与说明；安装后自动退出收尾并重启进入新版本，数据保留 | 扫描、收尾、待重试保存期间禁止安装并说明原因；签名错误时安装失败并继续运行原版本；保存一直失败时拒绝退出，更新在下次启动生效；mac 更新后录屏/辅助功能权限可能需要重新授予 | [架构 §6 自动更新](../../specs/scanner-architecture.md#6-首版功能范围)、[发布与自动更新](../../release.md#更新配置与密钥)；`internal/ui/update.go:46`、`:183-200` |
 | F-31 | 查看当前版本 | — | 看到当前版本号 | — | [发布与自动更新](../../release.md#发布后验证)；`cmd/youkai/main.go:229` |
 
@@ -76,17 +76,26 @@
 
 ## 规格与当前实现的差异
 
-以下是阅读代码时发现的、与上表规格不一致或尚未实现的地方。它们是第二阶段和后续实现要处理的事实，不是本草案的设计决定。
+以下是阅读代码时发现的、与上表规格不一致或尚未实现的地方。它们是第二阶段和后续实现要处理的事实，不是本草案的设计决定。原 D-05、D-06 不属于不一致，已移到下一节（L-01、L-02），编号不再复用。
 
 | 编号 | 规格要求 | 当前实现 | 影响的功能 |
 | --- | --- | --- | --- |
 | D-01 | 三种客户端都能扫描；准备阶段显示已找到的客户端和窗口，多候选时由用户选择（[T6 §1](../../specs/t6-review-export-workflow.md#1-最小界面与完整使用流程)） | 安装版没有接入扫描源，扫描页显示“当前安装版没有接入扫描源”（`cmd/youkai/main.go:204-209`）；开发构建用环境变量选择数据源和客户端（`cmd/youkai/main.go:479-530`），没有界面上的客户端选择 | F-07、F-09 |
-| D-02 | 开始区域显示“请在 30 秒内切回目标游戏”和实际注册的停止快捷键（[架构 §5](../../specs/scanner-architecture.md#隐藏恢复与退出)、[T1 §2](../../specs/t1-mygo-ui-distribution.md#2-关窗与使用提示)） | 准备区只显示前台提示和“停止方式：点击本窗口的‘停止扫描’按钮”（`internal/ui/view.go:12-17`、`:36-47`）；状态栏的停止键写死为 mac 符号 `⌃⌥⌘S`（`internal/ui/pages.go:300`），设置页才按平台显示 | F-09、F-12、F-29 |
+| D-02 | 开始区域显示“请在 30 秒内切回目标游戏”和实际注册的停止快捷键（[架构 §5](../../specs/scanner-architecture.md#隐藏恢复与退出)、[T1 §2](../../specs/t1-mygo-ui-distribution.md#2-关窗与使用提示)） | 准备区只显示前台提示和“停止方式：点击本窗口的‘停止扫描’按钮”（`internal/ui/view.go:12-17`、`:36-47`）。按键文字写死为 mac 符号：状态栏的 `⌃⌥⌘S 停止扫描`（`internal/ui/pages.go:301`）与 `⌘R 开始扫描`（`pages.go:304`）；设置页快捷键表中只有停止键按平台显示，`⌘R`、`⌘↵`、`⌘J`、`⌘S` 在 Windows 上也显示 mac 符号（`internal/ui/settings_view.go:125-131`） | F-09、F-12、F-29 |
 | D-03 | 采集中的恢复入口写作“停止扫描并打开”（[T1 §2](../../specs/t1-mygo-ui-distribution.md#2-关窗与使用提示)） | 托盘菜单始终是“打开主窗口”（`cmd/youkai/lifecycle.go:346`），Windows 左键单击也直接走恢复 → 停止（`lifecycle.go:174`、`model.go:937-942`） | F-33、F-34 |
-| D-04 | 每个故障都有中文提示（[T2 §3.2 故障码表](../../specs/t2-platform-capture-input.md#windows-扫描前预检w2b权威说明)） | `failureText` 只映射了部分故障码（`internal/ui/session_status.go:87-170`）；`focusLost`、`targetNotFound`、`hotkeyUnavailable`、`permissionMissing`、`screenRecordingUnavailable` 等常见码未映射 | F-08、F-14 |
-| D-05 | “开始并隐藏”（T6 §1 设计建议） | 开始按钮不隐藏窗口（`internal/ui/pages.go:275`、`internal/ui/shortcuts.go:28-35`） | F-10 |
-| D-06 | 准备阶段实时显示逐项原因（T2 §3.2 标为后续工作） | 准备期间只显示“准备中”，30 秒到期后才显示原因 | F-09 |
+| D-04 | 每个故障都有中文提示（[T2 §3.2 故障码表](../../specs/t2-platform-capture-input.md#windows-扫描前预检w2b权威说明)） | `failureText` 只映射了部分故障码（`internal/ui/session_status.go:87-170`）；`focusLost`、`targetNotFound`、`hotkeyUnavailable`、`permissionMissing`、`screenRecordingUnavailable` 等常见码未映射；Windows DPI 预检的 `dpiAwarenessMismatch`、`dpiVirtualized`、`dpiCheckUnavailable`（`internal/platform/windows/fault.go:36-46`）也未映射 | F-08、F-14 |
 | D-07 | 截图与字段表单同时显示（[T1 §1](../../specs/t1-mygo-ui-distribution.md#1-已确认选择与界面建议)、[T6 §2](../../specs/t6-review-export-workflow.md#2-结果浏览与逐件校对)） | 证据区默认折叠（`internal/ui/model.go:309-312`） | F-18 |
 | D-08 | 历史列表显示客户端（[T6 §3](../../specs/t6-review-export-workflow.md#历史记录与存储管理)） | 历史列表没有客户端列；日期筛选需手输 `YYYY-MM-DD`（`internal/ui/history_view.go:131-133`） | F-24 |
 | D-09 | 准备阶段显示保存位置（T6 §1） | 准备区不显示保存位置 | F-07 |
-| D-10 | 全局停止热键“仅扫描期间注册、可自定义”（[T2 §2.2 实测轮 ① 结论](../../specs/t2-platform-capture-input.md#22-macosscreencapturekit-窗口流与-quartz-输入)） | 热键按平台固定，没有自定义入口（`internal/ui/settings_view.go:135-141`） | F-29 |
+| D-10 | 规格正文没有这条要求。实测报告记录“仅扫描期间注册、可自定义”的既定方案（[M2 macOS 实测轮 ①](../../reports/2026-10-18-m2-macos-field-round1.md) 第 78 行），[开发指南](../../development.md)第 41 行写明“自定义留待 M3 设置” | 热键按平台固定，没有自定义入口（`internal/ui/settings_view.go:135-141`）；属于计划中的工作，不是违反规格 | F-29 |
+| D-11 | 首版使用固定系统默认位置和“打开目录”入口（[T6 §3 历史记录与存储管理](../../specs/t6-review-export-workflow.md#历史记录与存储管理)） | 导出成功后没有“打开目录”入口，只在下载目录出错时显示该按钮（`internal/ui/export.go:272-277`） | F-23 |
+| D-12 | 规格之间不一致：T6 §1 写“用户先打开仓库、准备筛选与排序并回顶”（[T6 §1](../../specs/t6-review-export-workflow.md#1-最小界面与完整使用流程)），而 T5 §1 写扫描器自动重置筛选、勾选 S、回顶，不操作排序（[T5 §1 操作起点](../../specs/t5-zzz-inventory-traversal.md#1-推荐路径与范围)） | 实现按 T5（扫描器自动准备筛选与回顶）。本草案按 T5 写（F-06、C-07）；T6 §1 这句需要更新，属于规格维护，不在本草案范围内修改 | F-06 |
+
+## 规格中的后续工作与设计建议
+
+以下两项实现与规格并不矛盾：规格本身把它们写成后续工作或设计建议。列在这里是因为它们影响旅程体验；是否提前纳入首版见 06 的提案。
+
+| 编号 | 规格中的状态 | 当前实现 | 影响的功能 | 相关提案 |
+| --- | --- | --- | --- | --- |
+| L-01 | “开始并隐藏”是 T6 §1 的设计建议（[T6 §1](../../specs/t6-review-export-workflow.md#1-最小界面与完整使用流程)） | 开始按钮不隐藏窗口（`internal/ui/pages.go:275`、`internal/ui/shortcuts.go:28-35`） | F-10 | P-09 |
+| L-02 | 准备期间只显示“准备中”，实时显示逐项原因列为后续工作（[T2 §3.2](../../specs/t2-platform-capture-input.md#windows-扫描前预检w2b权威说明)） | 与规格一致：准备期间只显示“准备中”，30 秒到期后才显示原因 | F-09 | P-04 |
