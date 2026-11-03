@@ -21,10 +21,12 @@
           <div class="small muted" style="margin-top:auto; padding:10px 12px; border-top:1px solid var(--line-soft)">待处理 1 / 3 · <span class="kbd">Ctrl</span>+<span class="kbd">J</span> 下一个</div>
         </section>
         <section class="grow col" style="padding:12px 14px; gap:8px; min-width:360px">
-          <div class="row small"><b>截图</b><span class="right"><span class="kbd">Ctrl</span>+<span class="kbd">=</span> 放大 · <span class="kbd">Ctrl</span>+<span class="kbd">0</span> 适合</span><span class="m">2</span></div>
-          <div class="shot" style="height:330px"><span class="lbl">游戏详情面板（上下文）</span><div class="box" style="left:40%; top:44%; width:46%; height:12%"></div></div>
-          <div class="small" style="margin-top:2px"><b>当前字段：主词条数值</b> <span class="muted">· 裁剪放大</span></div>
-          <div class="shot" style="height:76px"><span class="lbl">攻击力 7.5%</span></div>
+          <div class="row small"><b>截图（逐行）</b><span class="right"><span class="kbd">Ctrl</span>+<span class="kbd">=</span> 放大 · <span class="kbd">Ctrl</span>+<span class="kbd">0</span> 适合</span><span class="m">2</span></div>
+          <div class="crops"><div class="crop"><span>套装</span><div class="shot"><span class="lbl">河豚电音</span></div></div><div class="crop"><span>等级</span><div class="shot"><span class="lbl">等级 15/15</span></div></div><div class="crop on"><span>主词条</span><div class="shot"><span class="lbl">攻击力 7.5%</span></div></div><div class="crop"><span>副词条 1</span><div class="shot"><span class="lbl">暴击率 +2.4%</span></div></div><div class="crop"><span>副词条 2</span><div class="shot"><span class="lbl">防御力 +36</span></div></div><div class="crop"><span>副词条 3</span><div class="shot"><span class="lbl">攻击力 +19</span></div></div><div class="crop"><span>副词条 4</span><div class="shot"><span class="lbl">生命值 +112</span></div></div></div>
+          <div class="small muted" style="margin-top:4px">其他截图</div>
+          <div class="crop"><span>装备者</span><div class="shot" style="width:60px"><span class="lbl">头像</span></div></div>
+          <div class="crop"><span>稀有度</span><div class="shot" style="width:60px"><span class="lbl">S</span></div></div>
+          <div class="small muted" style="margin-top:auto">现有证据没有整块详情面板图；点选表单字段时高亮对应的那一行</div>
         </section>
         <section style="width:400px; border-left:1px solid var(--line-soft); display:flex; flex-direction:column">
           <div class="col" style="padding:12px 16px; gap:10px">
@@ -39,7 +41,7 @@
           </div>
           <div style="margin-top:auto; padding:10px 16px; border-top:1px solid var(--line-soft)" class="col">
             <div class="row small"><span>● 未保存修改</span></div>
-            <div class="row"><span class="btn">保存修改</span><span class="btn primary grow">确认并下一项 <span style="opacity:.75; margin-left:6px; font-weight:400">Ctrl+Enter</span></span><span class="m">5</span></div>
+            <div class="row"><span class="btn primary grow">确认并下一项 <span style="opacity:.75; margin-left:6px; font-weight:400">Ctrl+Enter</span></span><span class="btn">保存修改</span><span class="m">5</span></div>
           </div>
         </section>
       </div>
@@ -50,10 +52,10 @@
   <h3>标注</h3>
   <ol>
     <li>件列表约 240 DIP，筛选“待处理 / 警告 / 全部”；从“校对 n 件”进入默认“待处理”。标签用文字 + 实心 / 描边 / 虚线区分，不只靠颜色。待补录的两种原因分开写。</li>
-    <li>截图区弹性宽度（≥ 360）：上下文截图 + 当前字段裁剪；点选表单字段时框出对应区域（需要 R-07，没有对应关系时不画框）。</li>
+    <li>截图区弹性宽度（≥ 360）：现有证据没有整块详情面板图，首版截图区是<b>逐行裁剪列表</b>（套装、等级、主词条、副词条 1–4，再加装备者头像等）；点选表单字段时高亮并滚动到对应行（需要 R-07a）。缺少行角色时按采集顺序列出、不高亮。是否补采面板图见 11 Q-03。</li>
     <li>表单约 400 DIP：问题字段排最前并写原因；其余字段收起为一组；不出现 null，装备者为空写“未识别（可留空导出）”（M2）。</li>
     <li>原始文字、修订前后值按需展开（F-18）。</li>
-    <li>底部固定：保存状态 → 保存修改（次要）→ 确认并下一项（主）。保存失败时留在当前件，横条写原因与“重试”（F-20）。</li>
+    <li>底部固定：保存状态，下面是确认并下一项（主，在左、先获得焦点）和保存修改（次要）。保存失败时留在当前件，横条写原因与“重试”（F-20）。</li>
   </ol>
   <div class="state">初始焦点：第一个问题字段。<kbd class="kbd">F6</kbd> 在列表 / 截图 / 表单间跳转。确认后焦点到下一件的第一个问题字段；确认的件留在列表中直到切换筛选。<br>相关规格：08 §3；09 §2、§4.5。</div>
 </div>

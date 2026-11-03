@@ -8,15 +8,16 @@
   <div class="frame">
     <nav class="rail"><div class="it"><i></i>首页</div><div class="it on"><i></i>记录</div><div class="spacer"></div><div class="it"><i></i>设置</div></nav>
     <main class="content">
-      <div class="rhead" style="gap:10px"><span class="back">‹ 记录</span><span class="seg"><span>摘要</span><span class="on">逐件</span></span>
+      <div class="rhead" style="gap:10px"><span class="back">‹ 全部记录</span><span class="seg"><span>摘要</span><span class="on">逐件</span></span>
         <span class="status"><span>覆盖：全部</span><span>待处理 1</span><span>保存失败</span></span><span class="btn ghost">导出…</span></div>
       <div class="row" style="padding:7px 16px; border-bottom:1px solid var(--line-soft); font-size:13px">
         <span class="btn ghost" style="height:28px">‹</span><b>待处理 1 / 1</b><span class="btn ghost" style="height:28px">›</span><span class="m">1</span>
         <span class="seg" style="margin-left:12px"><span class="on">待处理</span><span>警告</span><span>全部</span></span><span class="right btn ghost" style="height:28px">全部件 ▾</span></div>
       <div class="frame" style="min-height:0">
         <section class="col" style="width:420px; padding:10px 14px; gap:8px">
-          <div class="row small"><span class="seg"><span class="on">上下文</span><span>字段裁剪</span></span><span class="m">2</span><span class="right">放大 / 适合</span></div>
-          <div class="shot" style="flex:1"><span class="lbl">游戏详情面板（上下文）</span></div>
+          <div class="row small"><b>截图（逐行）</b><span class="m">2</span><span class="right">放大 / 适合</span></div>
+          <div class="crops"><div class="crop on"><span>套装</span><div class="shot"><span class="lbl">行裁剪</span></div></div><div class="crop"><span>等级</span><div class="shot"><span class="lbl">行裁剪</span></div></div><div class="crop"><span>主词条</span><div class="shot"><span class="lbl">行裁剪</span></div></div><div class="crop"><span>副词条 1</span><div class="shot"><span class="lbl">行裁剪</span></div></div><div class="crop"><span>副词条 2</span><div class="shot"><span class="lbl">行裁剪</span></div></div><div class="crop"><span>副词条 3</span><div class="shot"><span class="lbl">行裁剪</span></div></div><div class="crop"><span>副词条 4</span><div class="shot"><span class="lbl">行裁剪</span></div></div></div>
+          <div class="small muted" style="margin-top:auto">识别失败的件仍有行裁剪，按它补录</div>
         </section>
         <section class="grow" style="border-left:1px solid var(--line-soft); display:flex; flex-direction:column; min-width:400px">
           <div class="col" style="padding:10px 16px; gap:9px">
@@ -29,7 +30,7 @@
           </div>
           <div style="margin-top:auto; border-top:1px solid var(--line-soft)">
             <div class="row small" style="padding:8px 16px; background:var(--fill); border-bottom:1px solid var(--line-soft)"><span class="tag solid">!</span><span class="grow"><b>没有保存：</b>磁盘空间不足。输入已保留，释放空间后重试。</span><span class="btn" style="height:28px">重试</span><span class="m">4</span></div>
-            <div class="row" style="padding:8px 16px"><span class="btn">保存修改</span><span class="btn primary off grow">确认并下一项</span></div>
+            <div class="row" style="padding:8px 16px"><span class="btn primary off grow">确认并下一项</span><span class="btn">保存修改</span></div>
             <div class="small muted" style="padding:0 16px 8px">还有 2 个必填字段没有填，暂时不能确认</div>
           </div>
         </section>
@@ -41,10 +42,10 @@
   <h3>标注</h3>
   <ol>
     <li>紧凑档（窗口 960–1119）：件列表收进顶部导航条“‹ 待处理 1 / 1 ›”+ 筛选 + “全部件”弹出列表（09 §2）。推翻示意图 05 的三栏等宽画法。</li>
-    <li>矮窗口（&lt; 720 高）：上下文截图与字段裁剪改为可切换的两张；<b>截图与表单始终并排</b>（P-11 第②层），截图 ≥ 360、表单 ≥ 400。</li>
+    <li>矮窗口（&lt; 720 高）：逐行裁剪列表纵向滚动，选中字段的那一行保持可见；<b>截图与表单始终并排</b>（P-11 第②层），截图 ≥ 360、表单 ≥ 400。</li>
     <li>补录在同一视图完成，不是单独页面；必填字段为空，截图照常显示（08 §3.2）。</li>
     <li>保存失败升为表单区的首要信息：原因 + 怎么做 + 重试，输入保留，不跳下一件（F-19、F-20）。确认按钮禁用并写原因。</li>
   </ol>
-  <div class="state">焦点顺序：导航轨 → 标题栏 → ‹ › → 筛选 → 全部件 → 截图工具 → 表单字段 → 重试 → 保存修改 → 确认并下一项（禁用）。<br>相关规格：08 §3.1–3.2；09 §2。</div>
+  <div class="state">焦点顺序：导航轨 → 标题栏 → ‹ › → 筛选 → 全部件 → 截图工具 → 表单字段 → 重试 → 确认并下一项（禁用）→ 保存修改。<br>相关规格：08 §3.1–3.2；09 §2。</div>
 </div>
 </div></div></body></html>

@@ -14,7 +14,7 @@
   <div class="row"><h4 style="margin:0">结束通知（两段式）</h4><span class="m">2</span></div>
   <div class="row" style="align-items:flex-start; gap:16px">
     <div class="toast"><div class="app">youkai · 第一段（输入停止时）</div><b>youkai 已停止操作游戏</b>正在识别和保存结果，完成后会再通知你。现在可以正常使用电脑。</div>
-    <div class="toast"><div class="app">youkai · 第二段（收尾结束，替换第一段）</div><b>扫描完成：1 件待校对</b>覆盖全部，其余 1,016 件可以导出。点击查看。</div>
+    <div class="toast"><div class="app">youkai · 第二段（收尾结束；先撤下第一段再发）</div><b>扫描完成：1 件待校对</b>覆盖全部，其余 1,016 件可以导出。点击查看。</div>
     <div class="toast"><div class="app">youkai · 第二段（保存失败，本次收尾只发一次）</div><b>扫描结果还没有保存</b>保存失败，需要在 youkai 里重试。点击打开。</div>
   </div>
   <div class="row"><h4 style="margin:0">首次点 ✕ 时（隐藏前）</h4><span class="m">3</span></div>
@@ -32,8 +32,8 @@
   <h3>标注</h3>
   <ol>
     <li>托盘菜单第一行是禁用的状态行；扫描中“打开”写作“停止扫描并打开”（T1 §2、D-03）。MyGo 菜单项可运行时改文字与启用状态（<code>MenuItem.SetLabel</code> / <code>SetEnabled</code>）。左键单击行为 P-02 实测前不改（#115）。</li>
-    <li>MyGo v0.6.2 在 Windows 上的通知就是托盘气泡（Windows 10+ 显示为通知横幅），标题 ≤ 63 字、正文 ≤ 255 字；同一 ID 替换。点击只打开 youkai 并进入记录摘要，不启动扫描（09 §4.7）。准备超时不发第一段。</li>
-    <li>首次隐藏提示在隐藏前以对话框出现一次（P-10，Q-03 推荐 A）；之后可在设置重看。</li>
+    <li>MyGo v0.6.2 在 Windows 上的通知就是托盘气泡（Windows 10+ 显示为通知横幅），标题 ≤ 63 字、正文 ≤ 255 字。同一 ID 替换只是 API 约定，Windows 后端没有实现，所以发第二段前先 <code>Close()</code> 第一段再 <code>Show()</code>，否则会多出一个临时托盘图标（09 §4.7）。点击只打开 youkai 并进入记录摘要，不启动扫描。准备超时不发第一段。通知中心能否找回错过的通知待实测（09 §4.9 T-01）。</li>
+    <li>首次隐藏提示在隐藏前以对话框出现一次（P-10，08 §9 直接采用）；之后可在设置重看。托盘不可用时不出现，关窗直接退出（08 §7）。</li>
   </ol>
   <div class="state">按“扫描中完全没有反馈”的假设，托盘悬停提示与菜单状态行都不作为扫描中的反馈渠道（06 §3 第 1 条）。<br>相关规格：08 §7、§8、§9；09 §4.7、§4.8；10 R-09、R-18。</div>
 </div>
