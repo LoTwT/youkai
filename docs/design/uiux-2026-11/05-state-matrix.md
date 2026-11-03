@@ -37,11 +37,12 @@
 | 预检失败：权限（Win `integrityMismatch` / `integrityUnverifiable`） | 原因、为什么需要管理员、只发送鼠标输入的说明（C-10） | 退出 youkai | 重新以管理员身份打开 → S1 | 从托盘退出后右键“以管理员身份运行”；普通权限实例仍在运行时先退出它（W1 E6） |
 | 预检失败：授权（mac 录屏 / 辅助功能） | 缺哪一项授权、去哪里授权、可能需要重启（C-16） | 去系统设置授权、重启 youkai | S1 | 授权后重启 |
 | 预检失败：档位（Win `clientTierNotOpened` / `clientTierUnsupported`） | 当前分辨率、需要的档位（1920×1080 窗口或无边框模式）（C-11） | 去游戏调整，再开始 | S2 | — |
-| 预检失败：DPI（Win `dpiAwarenessMismatch` / `dpiVirtualized` / `dpiCheckUnavailable`） | 原因与调整方式（当前没有中文映射，D-04）；只有 125% 缩放有实测证据（[T2 §3.2](../../specs/t2-platform-capture-input.md#32-可验收的窄显示配置候选)） | 按提示调整显示缩放或兼容性设置，再开始 | S2 | 无法判定时按拒绝处理，不能开始 |
+| 预检失败：DPI，youkai 自身（Win `dpiAwarenessMismatch`） | youkai 进程不是每显示器 DPI 感知 v2，属于 youkai 自身的配置问题（`internal/platform/windows/fault.go:31-35`）；当前没有中文映射（D-04） | 用户无法自行修复；可反馈问题 | — | 需要修复 youkai 本身；规格未写提示文案 |
+| 预检失败：DPI，目标窗口（Win `dpiVirtualized` / `dpiCheckUnavailable`） | 游戏窗口被 DPI 虚拟化，或无法读取 DPI 信息（`fault.go:36-46`）；当前没有中文映射（D-04）；只有 125% 缩放有实测证据（[T2 §3.2](../../specs/t2-platform-capture-input.md#32-可验收的窄显示配置候选)） | 待定：规格未写用户处理方式 | S2 | 待定；无法判定时按拒绝处理，不能开始 |
 | 预检失败：窗口位置（Win `windowOutsideWorkArea`；mac `targetOffscreen`） | 窗口超出屏幕或被任务栏遮挡（C-12、C-15） | 调整窗口，再开始 | S2 | — |
 | 预检失败：窗口尺寸（mac `windowSizeUnsupported`） | 当前尺寸与 1164×762（C-15） | 调整窗口，再开始 | S2 | — |
 | 预检失败：找不到游戏 / 多个候选（`targetNotFound` / `targetAmbiguous`） | 原因 | 启动游戏、关闭多余窗口，再开始 | S2 | — |
-| 预检失败：停止热键不可用（`hotkeyUnavailable`） | 热键被占用（C-04） | 关闭占用热键的程序，再开始 | S2 | 当前不能改键，自定义计划在 M3 支持（D-10） |
+| 预检失败：停止热键不可用（`hotkeyUnavailable`） | 热键被占用（C-04） | 关闭占用热键的程序，再开始 | S2 | 规格要求可自定义（[T2 §2.2](../../specs/t2-platform-capture-input.md#22-macosscreencapturekit-窗口流与-quartz-输入) 第 85 行），实现排在 M3，当前不能改键（D-10） |
 | 等待切回游戏 | 剩余时间（30 秒预算）、停止热键；激活结果（Win 可能被拒）（C-05） | 切回游戏、停止 | 采集 S4 / 准备超时 | — |
 | 等待中条件未满足（遮挡、独占全屏、纯黑、页面不对、失焦） | 规格当前只显示“准备中”（L-02）；逐项原因列为后续工作 | 修正条件、停止 | 采集 S4 / 准备超时 | — |
 | 准备超时（`prepareTimeout` 及遮挡 / 纯黑等自身故障码） | 具体原因（遮挡写出检查点与窗口类或进程名，不写外部窗口标题）（T2 §3.2） | 修正后重新开始 | S2 | 没有自动重试；不自动开扫（C-05） |

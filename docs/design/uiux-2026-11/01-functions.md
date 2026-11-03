@@ -61,7 +61,7 @@
 | 编号 | 用户要做的事 | 前提 | 结果 | 失败情况 | 出处 |
 | --- | --- | --- | --- | --- | --- |
 | F-28 | 设置关闭窗口的行为 | — | 默认“隐藏到托盘/菜单栏”，可改为“关闭即停止并退出”；偏好持久保存 | 保存偏好失败时如实提示 | [T1 §2](../../specs/t1-mygo-ui-distribution.md#2-关窗与使用提示)、[架构 §5](../../specs/scanner-architecture.md#隐藏恢复与退出)；`cmd/youkai/main.go:234-241` |
-| F-29 | 查看快捷键 | — | 看到实际注册的快捷键，含全局停止热键（Win `Ctrl+Alt+Shift+S`，mac `⌃⌥⌘S`） | 停止热键注册失败时不能开始扫描 | [T1 §2](../../specs/t1-mygo-ui-distribution.md#2-关窗与使用提示)、[架构 §5 生命周期](../../specs/scanner-architecture.md#生命周期)；具体按键见[开发指南](../../development.md)第 41 行（规格正文未写按键）；`internal/ui/settings_view.go:123-141` |
+| F-29 | 查看快捷键 | — | 看到实际注册的快捷键，含全局停止热键（Win `Ctrl+Alt+Shift+S`，mac `⌃⌥⌘S`） | 停止热键注册失败时不能开始扫描 | [T1 §2](../../specs/t1-mygo-ui-distribution.md#2-关窗与使用提示)、[架构 §5 生命周期](../../specs/scanner-architecture.md#生命周期)；具体按键：mac `⌃⌥⌘S` 见 [T2 §7](../../specs/t2-platform-capture-input.md#7-后续验收清单) 第 281 行的实测记录，Windows `Ctrl+Alt+Shift+S` 只见于[开发指南](../../development.md)第 41 行；`internal/ui/settings_view.go:123-141` |
 | F-30 | 检查并安装更新 | 安装版且启用了更新（开发运行和测试打包不启用） | 启动后检查一次、运行期间每 24 小时一次，也可手动检查；显示新版本号与说明；安装后自动退出收尾并重启进入新版本，数据保留 | 扫描、收尾、待重试保存期间禁止安装并说明原因；签名错误时安装失败并继续运行原版本；保存一直失败时拒绝退出，更新在下次启动生效；mac 更新后录屏/辅助功能权限可能需要重新授予 | [架构 §6 自动更新](../../specs/scanner-architecture.md#6-首版功能范围)、[发布与自动更新](../../release.md#更新配置与密钥)；`internal/ui/update.go:46`、`:183-200` |
 | F-31 | 查看当前版本 | — | 看到当前版本号 | — | [发布与自动更新](../../release.md#发布后验证)；`cmd/youkai/main.go:229` |
 
@@ -87,7 +87,7 @@
 | D-07 | 截图与字段表单同时显示（[T1 §1](../../specs/t1-mygo-ui-distribution.md#1-已确认选择与界面建议)、[T6 §2](../../specs/t6-review-export-workflow.md#2-结果浏览与逐件校对)） | 证据区默认折叠（`internal/ui/model.go:309-312`） | F-18 |
 | D-08 | 历史列表显示客户端（[T6 §3](../../specs/t6-review-export-workflow.md#历史记录与存储管理)） | 历史列表没有客户端列；日期筛选需手输 `YYYY-MM-DD`（`internal/ui/history_view.go:131-133`） | F-24 |
 | D-09 | 准备阶段显示保存位置（T6 §1） | 准备区不显示保存位置 | F-07 |
-| D-10 | 规格正文没有这条要求。实测报告记录“仅扫描期间注册、可自定义”的既定方案（[M2 macOS 实测轮 ①](../../reports/2026-10-18-m2-macos-field-round1.md) 第 78 行），[开发指南](../../development.md)第 41 行写明“自定义留待 M3 设置” | 热键按平台固定，没有自定义入口（`internal/ui/settings_view.go:135-141`）；属于计划中的工作，不是违反规格 | F-29 |
+| D-10 | 全局停止热键“仅扫描期间注册、可自定义”（[T2 §2.2](../../specs/t2-platform-capture-input.md#22-macosscreencapturekit-窗口流与-quartz-输入) 第 85 行，“macOS 实测轮 ① 结论”）；排期见[开发指南](../../development.md)第 41 行“自定义留待 M3 设置” | 热键按平台固定，没有自定义入口（`internal/ui/settings_view.go:135-141`）。规格要求可自定义，实现排在 M3，目前未做 | F-29 |
 | D-11 | 首版使用固定系统默认位置和“打开目录”入口（[T6 §3 历史记录与存储管理](../../specs/t6-review-export-workflow.md#历史记录与存储管理)） | 导出成功后没有“打开目录”入口，只在下载目录出错时显示该按钮（`internal/ui/export.go:272-277`） | F-23 |
 | D-12 | 规格之间不一致：T6 §1 写“用户先打开仓库、准备筛选与排序并回顶”（[T6 §1](../../specs/t6-review-export-workflow.md#1-最小界面与完整使用流程)），而 T5 §1 写扫描器自动重置筛选、勾选 S、回顶，不操作排序（[T5 §1 操作起点](../../specs/t5-zzz-inventory-traversal.md#1-推荐路径与范围)） | 实现按 T5（扫描器自动准备筛选与回顶）。本草案按 T5 写（F-06、C-07）；T6 §1 这句需要更新，属于规格维护，不在本草案范围内修改 | F-06 |
 
