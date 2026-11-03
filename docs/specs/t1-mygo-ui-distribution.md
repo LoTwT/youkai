@@ -1,6 +1,6 @@
 # T1：MyGo 界面与构建分发
 
-更新日期：2026-10-21。状态：界面、平台、结果处理、关窗、分发和浏览器入口均已由用户确认（见第 4 节）；2026-10-20 冻结默认关窗行为；2026-10-21 将 MyGo 从 v0.5.5 升级至 v0.6.2，macOS arm64 打包与识别自检通过；构建与安装已双平台实机验证（见[实施清单 M1](scanner-implementation-plan.md#m1正式工程资源与会话底座)），最低系统与显示配置尚未实测。
+更新日期：2026-11-03。状态：界面、平台、结果处理、关窗、分发和浏览器入口均已由用户确认（见第 4 节）；2026-10-20 冻结默认关窗行为；2026-10-21 将 MyGo 从 v0.5.5 升级至 v0.6.2，macOS arm64 打包与识别自检通过；构建与安装已双平台实机验证（mac 部分保留为后续版本基础，见[实施清单 M1](scanner-implementation-plan.md#m1正式工程资源与会话底座)），最低系统与显示配置尚未实测。2026-11-03 用户决定首版只支持 Windows 本地客户端、只交付 Windows 安装包，macOS 与 Windows 云客户端及 Mac DMG 移入后续版本；范围以[架构第 6 节](scanner-architecture.md#6-首版功能范围)为准。
 
 本文维护界面框架选择、构建与分发影响、浏览器唤起依据和界面验收。会话所有权、隐藏恢复与退出顺序由[架构第 2、5 节](scanner-architecture.md#2-界面选择与应用层)维护，校对流程由 [T6](t6-review-export-workflow.md) 维护。
 
@@ -47,8 +47,8 @@ MyGo 的 [Menus and the tray](https://mygo.egoist.dev/docs/menus#tray-icons) 提
 - `mygo dev` 与正式打包会合并目标平台资源，直接 `go run` / `go test` 使用未合并的目录（[resources.go](https://github.com/egoist/mygo/blob/cf26587264f26ea68bd1b8abbf5c9723f35e0a70/cmd/mygo/resources.go)、[分发文档](https://mygo.egoist.dev/docs/distribution)）。应用组装时确定资源根，向 OCR 传入明确路径；测试显式提供资源根。开发时能加载不代表从开始菜单启动也能加载。
 - 模型、字典和原生运行库随版本分发，结果和截图写用户数据目录；安装后的用户不需要 Go、C 编译器或前端运行时。
 - NSIS 安装为每用户安装；在 Windows 上构建时可自动下载 NSIS，其他主机缺少 `makensis` 时只警告并跳过安装包，所以编译成功不代表已生成安装包。脚本没有 VC++ Runtime 安装步骤。[nsis.go](https://github.com/egoist/mygo/blob/cf26587264f26ea68bd1b8abbf5c9723f35e0a70/cmd/mygo/nsis.go)
-- MyGo 可生成 macOS `.app` 与 DMG，本地签名和 DMG 制作在 macOS 上执行。按用户选择采用 ad-hoc 签名，Developer ID 与公证不作为首版前提；路线见 [T7 第 3 节](t7-public-release-acceptance.md#3-不依赖付费证书的打包路线)。
-- 双平台正式制品分别在对应系统构建和验收；日常开发与 Windows 测试安排见[实施清单](scanner-implementation-plan.md#开发与-windows-测试方式)。
+- MyGo 可生成 macOS `.app` 与 DMG，本地签名和 DMG 制作在 macOS 上执行。按用户选择采用 ad-hoc 签名，Developer ID 与公证不作为首版前提；macOS 制品与 DMG 已移出首版，保留为后续版本基础，路线见 [T7 第 3 节](t7-public-release-acceptance.md#3-不依赖付费证书的打包路线)。
+- 首版只交付 Windows 正式制品并在 Windows 上验收；macOS 制品随后续版本构建和验收。日常开发与 Windows 测试安排见[实施清单](scanner-implementation-plan.md#开发与-windows-测试方式)。
 
 ### 浏览器唤起的新增需求与构建依据
 
@@ -60,9 +60,9 @@ MyGo 的 [Menus and the tray](https://mygo.egoist.dev/docs/menus#tray-icons) 提
 | --- | --- |
 | [深链接文档](https://mygo.egoist.dev/docs/app#deep-links)、[deeplink.go](https://github.com/egoist/mygo/blob/cf26587264f26ea68bd1b8abbf5c9723f35e0a70/deeplink.go) | 构建配置支持 `urlSchemes`，应用通过 `OnOpenURL` 接收 URL；监听须在 `Run` 前注册才能收到启动时的链接。Windows 的后续启动经单实例转交现有实例，处理器仍须校验路由。 |
 | [nsis.go](https://github.com/egoist/mygo/blob/cf26587264f26ea68bd1b8abbf5c9723f35e0a70/cmd/mygo/nsis.go) | 按 URLSchemes 在 HKCU 写入协议注册，卸载时删除。安装、升级与卸载后的处理器归属须验证。 |
-| [bundle.go](https://github.com/egoist/mygo/blob/cf26587264f26ea68bd1b8abbf5c9723f35e0a70/cmd/mygo/bundle.go)、[Darwin 注册](https://github.com/egoist/mygo/blob/cf26587264f26ea68bd1b8abbf5c9723f35e0a70/internal/darwin/deeplink.go) | 应用包写入 `CFBundleURLTypes`（只填名称与 scheme）；运行时注册不能代替构建声明。需验证 DMG 拖拽安装后的识别、首次唤起和多副本归属。 |
+| [bundle.go](https://github.com/egoist/mygo/blob/cf26587264f26ea68bd1b8abbf5c9723f35e0a70/cmd/mygo/bundle.go)、[Darwin 注册](https://github.com/egoist/mygo/blob/cf26587264f26ea68bd1b8abbf5c9723f35e0a70/internal/darwin/deeplink.go) | 应用包写入 `CFBundleURLTypes`（只填名称与 scheme）；运行时注册不能代替构建声明。DMG 拖拽安装后的识别、首次唤起和多副本归属随后续版本验收。 |
 
-浏览器可能要求用户确认打开外部应用，不承诺静默打开；本项目不替用户修改浏览器策略（如 [Edge AutoLaunchProtocolsFromOrigins](https://learn.microsoft.com/en-us/deployedge/microsoft-edge-policies/AutoLaunchProtocolsFromOrigins)）。新增成本在安装注册、URL 分发与扫描状态衔接及双平台浏览器验收，不需要 Web UI、本地 Web 服务或浏览器扩展。
+浏览器可能要求用户确认打开外部应用，不承诺静默打开；本项目不替用户修改浏览器策略（如 [Edge AutoLaunchProtocolsFromOrigins](https://learn.microsoft.com/en-us/deployedge/microsoft-edge-policies/AutoLaunchProtocolsFromOrigins)）。新增成本在安装注册、URL 分发与扫描状态衔接及浏览器验收；首版只验收 Windows 浏览器，macOS 浏览器随后续版本验收。不需要 Web UI、本地 Web 服务或浏览器扩展。
 
 ## 4. 产品选择与正式功能验收
 
@@ -71,26 +71,28 @@ MyGo 的 [Menus and the tray](https://mygo.egoist.dev/docs/menus#tray-icons) 提
 | 已确认项 | 用户选择 | 对方案的影响 |
 | --- | --- | --- |
 | 界面 | MyGo 原生 UI（2026-10-15），跳过独立 UI 验证版。 | 界面检查随正式功能验收。 |
-| 首发平台 | Windows 与 macOS 同时首发，开发可优先 Windows。 | 两个平台都要完成真实扫描闭环。 |
+| 首发平台 | 首版只支持 Windows 本地客户端，范围见[架构第 6 节](scanner-architecture.md#6-首版功能范围)（2026-11-03 用户决定）。 | 首版只需完成 Windows 本地客户端的真实扫描闭环。 |
 | 应用语言 | 首版仅简体中文（2026-10-16）。 | 按钮、设置、错误说明和使用文档只提供简体中文，不做语言切换；游戏识别语言见架构第 6 节。 |
 | Windows 架构 | 仅 x64。 | 制品与运行库按 amd64 准备，ARM64 不纳入。 |
-| macOS 场景与架构 | App Store《云·绝区零》；仅 Apple Silicon。 | 只准备 arm64；围绕该应用窗口核对采集、输入和布局。 |
+| macOS 场景与架构（后续版本） | App Store《云·绝区零》；仅 Apple Silicon。 | 只准备 arm64；围绕该应用窗口核对采集、输入和布局。该客户端已移出首版，保留为后续版本基础。 |
 | 应用内结果处理 | 查看全部结果，对照截图修改字段。 | 首版包含完整结果浏览、图片证据和字段修订。 |
 | 扫描与校对节奏 | 扫描时游戏保持前台，完成或停止后校对，须明确告知。 | 开始前展示前台要求，扫描器可隐藏。 |
 | 扫描中关闭主窗口 | 默认隐藏到托盘或菜单栏并继续运行；设置可改为“关闭即停止并退出”，明确退出才停止、保存并退出。 | 托盘或菜单栏提供返回入口。 |
-| 分发形式 | Windows 安装包，macOS DMG 拖拽安装，不走官方渠道。 | 两种制品分别验收安装、数据路径和首次打开。 |
+| 分发形式 | 首版只交付 Windows 安装包，不走官方渠道；macOS DMG 拖拽安装移出首版、留待后续版本。 | 首版只验收 Windows 安装包的安装、数据路径和首次打开；Mac DMG 随后续版本验收。 |
 | 自动更新 | 首版包含（2026-10-16 确认）：MyGo v0.6.2 内置更新，从 GitHub Releases（`LoTwT/youkai`）获取经 MyGo 更新密钥签名的版本。 | 更新公钥自 0.0.1 内置；私钥不进仓库，扫描中不安装更新，测试版与正式版渠道分开；规则见[架构第 6 节](scanner-architecture.md#6-首版功能范围)。 |
 | 识别资源 | 完整包随附模型、字典与运行库，首次启动无需下载。 | 安装包更大，但省去首次下载与版本匹配；云游戏仍需联网。 |
 | 浏览器入口 | 网页唤起桌面 App（2026-10-16）。 | 按第 3 节实现与验收深链接。 |
 | 交付标准 | 正常构建打包，不准备 Apple Developer 会员或 Windows 证书；用户在测试前准备环境。 | 付费签名、公证和上架不作为首版前提，见 [T7](t7-public-release-acceptance.md)。 |
 
-客户端范围与显示配置策略见 [T2](t2-platform-capture-input.md#首版平台与客户端范围已确认)；最低系统按依赖与实测确定，见 [T7](t7-public-release-acceptance.md#4-依赖与最低系统的核对顺序)。
+客户端范围与显示配置策略见 [T2](t2-platform-capture-input.md#平台与客户端范围2026-11-03-调整)；最低系统按依赖与实测确定，见 [T7](t7-public-release-acceptance.md#4-依赖与最低系统的核对顺序)。
 
 ### 仍需技术核对的事项
 
+以下 macOS 事项保留为后续版本基础，首版不要求。
+
 [《云·绝区零》App Store 页面](https://apps.apple.com/cn/app/%E4%BA%91-%E7%BB%9D%E5%8C%BA%E9%9B%B6/id6503421200?platform=mac)列出 macOS 12.0+、Apple M1 或更新芯片。这是游戏的要求，不能当作 youkai 的最低系统，也不能证明截图和输入可用。
 
-MyGo 按平台和架构构建并合并资源，目标为 `windows/amd64` 与 `darwin/arm64`，不需要 macOS 通用包（[分发文档](https://mygo.egoist.dev/docs/distribution#platforms)）。
+MyGo 按平台和架构构建并合并资源，首版交付目标为 `windows/amd64`；`darwin/arm64` 构建保留为开发平台与后续版本，不需要 macOS 通用包（[分发文档](https://mygo.egoist.dev/docs/distribution#platforms)）。
 
 正式实现可复用[原生模板与项目 CLI](https://mygo.egoist.dev/docs/cli) 及 [UI 测试](https://mygo.egoist.dev/docs/ui/testing)；`ui.NewTester` 可检查选中项与编辑数据的对应关系，真实输入法、GPU 绘制和安装体验仍需在目标系统检查。最脆弱的假设是现有组件以有限定制即可完成连续校对；若需大量自制控件，先收窄交互，仍不满足时再提出路线调整。
 
@@ -103,8 +105,8 @@ MyGo 按平台和架构构建并合并资源，目标为 `windows/amd64` 与 `da
 | 原生构建与初始化 | 就绪回调不阻塞；真实模型与原生库的加载、缺失或损坏有可核查表现。 | 固定 MyGo 版本的 Go 与编译工具链，T3 的组合。 |
 | 生命周期 | 用假扫描服务覆盖双启动、慢订阅、旧消息、取消与再次开始、两种关窗模式、偏好记忆、托盘恢复与创建失败、明确退出和保存失败；退出收尾只执行一次。 | 不能据此宣布平台输入或 OCR 能及时停止。 |
 | 资源路径 | 在 `mygo dev`、直接测试和安装后，从不同工作目录、中文与空格路径加载模型和原生库；损坏资源给出可处理错误。 | T3 的真实资源，在对应平台验证。 |
-| 双平台安装前提 | 在无开发工具的干净环境安装，检查运行前提、原生库与模型路径；按 T7 检查未签名或 ad-hoc 制品的首次打开与权限体验；离线首装另测。 | 与 T2/T3/T7 配合。 |
-| 实际关窗与退出 | 三种客户端真正运行截图和 OCR 时，分别取消、隐藏、恢复、退出、再次运行，检查停止输入、识别返回、证据保存和资源释放。 | T2–T5 的实现与双平台实机。 |
+| 安装前提（首版 Windows；macOS 为后续版本） | 在无开发工具的干净环境安装 Windows 制品，检查运行前提、原生库与模型路径；按 T7 检查未签名制品的首次打开与权限体验；离线首装另测。macOS 的 ad-hoc 签名、首次打开与权限体验随后续版本验收。 | 与 T2/T3/T7 配合。 |
+| 实际关窗与退出 | 首版在 Windows 本地客户端真正运行截图和 OCR 时，分别取消、隐藏、恢复、退出、再次运行，检查停止输入、识别返回、证据保存和资源释放；macOS 云与 Windows 云客户端随后续版本按同一清单验收。 | T2–T5 的实现与首版 Windows 实机；macOS 为后续版本。 |
 
 ## 5. 原生 UI 能力与性能依据
 

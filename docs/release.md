@@ -2,7 +2,7 @@
 
 更新日期：2026-11-03。本文维护 youkai 的版本规则、两条发布渠道、打标签与发布步骤、更新密钥管理与发布后验证（含升级实测清单）；日常构建命令见[开发指南](development.md)，交付门槛见 [T7](specs/t7-public-release-acceptance.md)，自动更新的范围与规则见[架构第 6 节](specs/scanner-architecture.md#6-首版功能范围)。发布由 `LoTwT/youkai` 的 GitHub Releases 承担，也是 MyGo 内置更新的下载源（MyGo v0.6.2，行为依据其 `docs/updates.md`、`docs/github-actions.md` 与 `internal/update`）。
 
-2026-11-03 用户决定首版只支持 Windows 本地客户端：发布流程只构建并发布 Windows 版，不发布 macOS DMG；macOS 仍作为开发平台使用，macOS 发布留待后续版本。T7 的交付形式与架构 §6/§7 中的双平台表述，会由单独的范围 docs PR 同步；本文只记录发布流程的现状，交付门槛见 [T7：构建打包与交付验收](specs/t7-public-release-acceptance.md)。
+2026-11-03 用户决定首版只支持 Windows 本地客户端：发布流程只构建并发布 Windows 版，不发布 macOS DMG；macOS 仍作为开发平台使用，macOS 发布留待后续版本。T7 的交付形式与架构 §6/§7 中的双平台表述已同步（首版范围见[架构第 6 节](specs/scanner-architecture.md#6-首版功能范围)）；本文只记录发布流程的现状，交付门槛见 [T7：构建打包与交付验收](specs/t7-public-release-acceptance.md)。
 
 已知影响：下一个 `test-v` 发布后，已安装的 macOS 测试版每次检查更新都会因缺少 `update-darwin-arm64.json` 而报 404（例如 `GET …/update-darwin-arm64.json: 404 Not Found`），需要 macOS 用户自行处理；在下一个 `test-v` 发布前，最新 Release（`test-v0.0.4`）仍含 darwin 清单，不受影响。这是预期行为，应用不会崩溃，也不会安装错误的包。依据是 MyGo v0.6.2 `internal/update/github.go` 的 `latestTagged` 只按标签选择 Release、不按平台筛选资产；该结论来自评审阅读代码，未在实机复现。
 

@@ -28,7 +28,7 @@
 
 - **首版只支持 Windows 本地客户端。** Windows 云客户端和 mac 云客户端移出首版。权威范围已在[架构 §6“平台与客户端”](../../specs/scanner-architecture.md#6-首版功能范围)按此修改。
 - **mac 仍是开发平台。** [04](04-journeys-mac.md) 的 mac 旅程保留为“后续版本参考”，不进入首版优先级；P-08 随之移出首版。
-- 其他规格中与新范围冲突的地方（架构 §6/§7 其余条目、T1、T2、T5、T7、实施清单、`release.md`、`docs/index.md` 与决策记录等）不在本 PR 修改；用户已确认这些修改另开一个范围 PR 处理（2026-11-03），mac DMG 是否一起移出在该 PR 中决定。
+- 其他规格中与新范围冲突的地方已由范围 PR 同步：[架构 §6/§7/§8](../../specs/scanner-architecture.md#6-首版功能范围)、[T1](../../specs/t1-mygo-ui-distribution.md)、[T2](../../specs/t2-platform-capture-input.md)、[T3](../../specs/t3-ocr-runtime-model-samples.md)、[T5](../../specs/t5-zzz-inventory-traversal.md)、[T6](../../specs/t6-review-export-workflow.md)、[T7](../../specs/t7-public-release-acceptance.md)、[实施清单](../../specs/scanner-implementation-plan.md)、[文档索引](../../index.md)与[决策记录末节](../../decisions/2026-10-28-scanner-rearchitecture.md#12-2026-11-03-首版范围决定)。用户已于 2026-11-03 决定 **Mac DMG 不发**，作为首版范围的一部分。`release.md` 与 `.github/workflows/` 已由 [#118](https://github.com/LoTwT/youkai/pull/118) 同步。
 
 ### 1.2 其他产品决定（2026-11-03）
 
