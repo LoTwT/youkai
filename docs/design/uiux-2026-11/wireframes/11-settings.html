@@ -6,11 +6,10 @@
 <div class="win">
   <div class="titlebar"><span>youkai</span><span class="ctl"><span>—</span><span>☐</span><span>✕</span></span></div>
   <div class="frame">
-    <nav class="rail"><div class="it"><i></i>首页</div><div class="it"><i></i>记录</div><div class="spacer"></div><div class="it on"><i></i>设置<span class="dot"></span></div></nav>
+    <nav class="rail"><div class="it"><i></i>扫描</div><div class="it"><i></i>记录</div><div class="spacer"></div><div class="it on"><i></i>设置<span class="dot"></span></div></nav>
     <main class="content"><div class="row" style="align-items:flex-start; height:100%">
       <aside class="col small" style="width:150px; padding:20px 0 0 20px; gap:8px"><b>常规</b><span>快捷键</span><span>存储与清理</span><span>诊断</span><span>更新 ●</span><span>关于</span><span class="m">1</span></aside>
       <div class="pad col grow" style="gap:16px; max-width:760px">
-        <div class="well row" style="padding:10px 14px"><span class="tag solid">新</span><span class="grow">有新版本 0.5.0 可以安装</span><span class="link">查看</span><span class="m">2</span></div>
         <section class="col" style="gap:8px"><h4 style="margin:0">常规</h4>
           <div class="row"><span class="grow">点击窗口的 ✕ 时</span><span class="input sel" style="width:260px">隐藏到通知区域（默认）</span></div>
           <div class="row small"><span class="grow muted">另一个选项：停止扫描并退出</span><span class="link">再看一次托盘图标在哪里</span></div></section>
@@ -28,7 +27,7 @@
         <section class="col" style="gap:6px"><h4 style="margin:0">诊断</h4>
           <div class="row"><span class="btn ghost">复制诊断信息</span><span class="btn ghost">打开诊断目录</span><span class="small muted">复制的内容不包含窗口标题等隐私</span></div></section>
         <div class="hr" style="margin:0"></div>
-        <section class="col" style="gap:6px"><h4 style="margin:0">更新</h4>
+        <section class="col" style="gap:6px"><div class="row"><h4 style="margin:0">更新</h4><span class="tag solid">新</span><span class="m">2</span></div>
           <div class="row"><span class="grow">当前 0.4.0 → 新版本 <b>0.5.0</b> · <span class="link">更新说明</span></span><span class="btn primary">安装并重启</span><span class="m">5</span></div>
           <div class="small muted">扫描、收尾或结果未保存时不能安装，会在这里写明原因。</div></section>
       </div>
@@ -39,7 +38,7 @@
   <h3>标注</h3>
   <ol>
     <li>设置是分节单页，左侧是页内目录，不再嵌套二级导航；紧凑档隐藏目录（09 §2）。</li>
-    <li>“首要问题”是“有没有需要我处理的事”：只有新版本、空间不足时在页顶出现一条提示；导航轨“设置”上出现圆点（07 §4 更新）。</li>
+    <li>“首要问题”是“有没有需要我处理的事”。有新版本时只在导航轨“设置”和页内目录“更新”上各放一个圆点，信息只在“更新”一节出现一次；页顶不放横条（检查点 2 用户反馈后的决定，08 §6）。</li>
     <li>快捷键只显示 Windows 写法，停止热键显示实际注册结果（H1、D-02、09 §4.5）。</li>
     <li>清理是 P2 低频功能，但从准备检查“去清理”进入时，顶部会出现“完成后返回准备检查”，焦点在本节第一个按钮（W6）。危险操作用 danger 样式，均需预览确认。</li>
     <li>本页唯一的主按钮：发现新版本时“安装并重启”，否则为“检查更新”（次要样式也可，取决于状态）。</li>

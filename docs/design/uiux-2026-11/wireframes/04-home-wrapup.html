@@ -1,12 +1,12 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><title>04 首页 · 扫描中与收尾</title><link rel="stylesheet" href="wireframe.css"></head>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>04 扫描页 · 扫描中与收尾</title><link rel="stylesheet" href="wireframe.css"></head>
 <body><div class="sheet">
-<div class="sheet-head"><div><div class="kicker">YOUKAI · WINDOWS 本地客户端 · 第二阶段线框</div><h1>04 首页 · 扫描中（窗口恰好可见）/ 收尾 / 保存失败</h1><div class="sub">三个状态出现在扫描区同一位置；对应 05 S4 采集中、S5 已停止操作 / 保存中 / 保存失败</div></div><div class="stamp">低保真 · 非视觉稿</div></div>
+<div class="sheet-head"><div><div class="kicker">YOUKAI · WINDOWS 本地客户端 · 第二阶段线框</div><h1>04 扫描页 · 扫描中（窗口恰好可见）/ 收尾 / 保存失败</h1><div class="sub">三个状态出现在扫描区同一位置；对应 05 S4 采集中、S5 已停止操作 / 保存中 / 保存失败</div></div><div class="stamp">低保真 · 非视觉稿</div></div>
 <div class="stage">
 <div class="win">
   <div class="titlebar"><span>youkai</span><span class="ctl"><span>—</span><span>☐</span><span>✕</span></span></div>
   <div class="frame">
-    <nav class="rail"><div class="it on"><i></i>首页</div><div class="it"><i></i>记录</div><div class="spacer"></div><div class="it"><i></i>设置</div></nav>
+    <nav class="rail"><div class="it on"><i></i>扫描</div><div class="it"><i></i>记录</div><div class="spacer"></div><div class="it"><i></i>设置</div></nav>
     <main class="content"><div class="pad" style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:16px; height:100%">
       <section class="col">
         <div class="row"><h4 style="margin:0">A · 扫描中</h4><span class="m">1</span></div>
@@ -50,8 +50,8 @@
   <ol>
     <li>扫描中 youkai 通常被游戏盖住；这个状态只在窗口恰好可见时有意义（4K + 125% 并排，09 §1.1）。按“扫描中完全没有反馈”设计，主流程不依赖它（06 §3 第 1 条）。当前号位需要 R-11。</li>
     <li>收尾写实际状态，不把“已请求停止”说成完成（F-13）。收尾完成后自动进入新记录的摘要，但不把窗口提到前台（C-09）。</li>
-    <li>保存失败升为扫描区的首要问题（C-25）；只在这一次收尾的第一次失败时发通知（09 §4.8、Q-04）。</li>
+    <li>保存失败升为扫描区的首要问题（C-25）；只在这一次收尾的第一次失败时发通知（09 §4.8；按 11 Q-04 推荐 A 写入，待用户确认）。</li>
   </ol>
-  <div class="state">三栏只为对照；实际同一时间只显示一个状态，占据扫描区，最近记录卡仍在右侧。<br>相关规格：08 §1.2；09 §4.7。</div>
+  <div class="state">三栏只为对照；实际同一时间只显示一个状态，撑满扫描页的内容宽度（检查点 2 后扫描页没有最近记录卡）。<br>相关规格：08 §1.2；09 §4.7。</div>
 </div>
 </div></div></body></html>
