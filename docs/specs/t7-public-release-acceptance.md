@@ -1,6 +1,6 @@
 # T7：构建打包与交付验收
 
-更新日期：2026-11-03。状态：交付规划；打包与发布路线已实施——双平台 Package/Release workflow、测试渠道发布与两平台升级链实机验证（mac 部分保留为后续版本基础；Release workflow 自 #118 起只构建 Windows，见[实施清单 M1](scanner-implementation-plan.md#m1正式工程资源与会话底座)），第 2 节的首版交付门槛尚未验收（M4）。2026-10-20 同步 JSON/CSV 导出、截图与记录清理、默认关窗决策。2026-11-03 用户决定首版只支持 Windows 本地客户端、只交付 Windows 安装包，macOS 与 Windows 云客户端及 Mac DMG 移入后续版本；范围以[架构第 6 节](scanner-architecture.md#6-首版功能范围)为准。本文维护首版交付门槛、无付费证书的打包路线和最低系统候选。
+更新日期：2026-11-03。状态：交付规划；打包与发布路线已实施——双平台 Package/Release workflow、测试渠道发布与两平台升级链实机验证（mac 部分保留为后续版本基础，见[实施清单 M1](scanner-implementation-plan.md#m1正式工程资源与会话底座)；Release workflow 自 [#118](https://github.com/LoTwT/youkai/pull/118) 起只构建 Windows），第 2 节的首版交付门槛尚未验收（M4）。2026-10-20 同步 JSON/CSV 导出、截图与记录清理、默认关窗决策。2026-11-03 用户决定首版只支持 Windows 本地客户端、只交付 Windows 安装包，macOS 与 Windows 云客户端及 Mac DMG 移入后续版本；范围以[架构第 6 节](scanner-architecture.md#6-首版功能范围)为准。本文维护首版交付门槛、无付费证书的打包路线和最低系统候选。
 
 ## 1. 已确认目标与现有条件
 
@@ -41,7 +41,7 @@
 | Windows x64 | 生成应用 EXE 与 NSIS 安装包，不配置 youkai 的 Authenticode 发布者证书或签名服务；已有第三方文件签名不主动删除。 | 安装、卸载、资源加载、协议注册和首次启动；记录 SmartScreen、Smart App Control 或设备策略的实际表现。 |
 | macOS arm64（后续版本） | 生成 `.app` 与 DMG，采用无需开发者会员的 ad-hoc 本地签名，不配置 Developer ID 或公证凭据。 | 应用及内置原生代码的签名完整性、资源加载、首次打开、录屏/输入授权，以及重装或换版本后的权限体验。 |
 
-MyGo 当前分发文档说明 macOS 默认使用 ad-hoc 签名，Windows 的证书签名属于可配置步骤；NSIS 安装器与 DMG 制作仍需要对应打包工具。含 OCR 的 cgo 依赖还需要目标平台编译器。缺少打包工具而跳过安装包不能算完成，构建端下载工具与用户首次启动下载识别资源是两回事。依据 v0.6.2 的[分发文档](https://mygo.egoist.dev/docs/distribution)；双平台制品已由 Package workflow 与当时的 Release workflow 实际构建并实机安装验证（mac 部分保留为后续版本基础；Release workflow 自 #118 起只构建 Windows，见[实施清单 M1](scanner-implementation-plan.md#m1正式工程资源与会话底座)）。
+MyGo 当前分发文档说明 macOS 默认使用 ad-hoc 签名，Windows 的证书签名属于可配置步骤；NSIS 安装器与 DMG 制作仍需要对应打包工具。含 OCR 的 cgo 依赖还需要目标平台编译器。缺少打包工具而跳过安装包不能算完成，构建端下载工具与用户首次启动下载识别资源是两回事。依据 v0.6.2 的[分发文档](https://mygo.egoist.dev/docs/distribution)；双平台制品已由 Package workflow 与当时的 Release workflow 实际构建并实机安装验证（mac 部分保留为后续版本基础；Release workflow 自 [#118](https://github.com/LoTwT/youkai/pull/118) 起只构建 Windows，见[实施清单 M1](scanner-implementation-plan.md#m1正式工程资源与会话底座)）。
 
 商店外分发仍受操作系统检查。Mac 的 ad-hoc 签名不提供 Developer ID 身份或 Apple 公证，下载后的首次打开可能被 Gatekeeper 阻止（该平台随后续版本交付）；Apple 提供的单应用确认路径取决于系统和管理策略。Windows 未签名的新制品可能出现 SmartScreen 提示，强制策略或 Smart App Control 也可能直接阻止执行。首版说明需准确记录这些限制，不能承诺无提示启动或所有拦截都有继续按钮，也不把关闭整机保护作为安装步骤。[Apple 打开应用说明](https://support.apple.com/en-us/102445) · [Microsoft SmartScreen 说明](https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/smartscreen-reputation) · [Smart App Control FAQ](https://support.microsoft.com/en-us/windows/security/threat-malware-protection/smart-app-control-frequently-asked-questions)
 
