@@ -1,0 +1,133 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1060" viewBox="0 0 1600 1060">
+<defs>
+  <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M 0 0 L 10 5 L 0 10 z" fill="#777777"/>
+  </marker>
+  <style>
+    text { font-family: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif; }
+    svg { background: #ffffff; }
+  </style>
+</defs>
+<rect x="0" y="0" width="1600" height="1060" fill="#ffffff"/>
+<text x="42" y="38" font-size="17" font-weight="500" text-anchor="start" fill="#777777">YOUKAI · WINDOWS 本地客户端</text>
+<text x="42" y="82" font-size="35" font-weight="650" text-anchor="start" fill="#333333">准备检查：常驻清单的两种状态</text>
+<text x="42" y="116" font-size="20" font-weight="400" text-anchor="start" fill="#777777">每项都写“当前值 → 需要值”；不是一次性首次使用向导。</text>
+<rect x="1340" y="28" width="218" height="44" rx="8" fill="#ffffff" stroke="#777777" stroke-width="1.5" stroke-dasharray="6 4"/>
+<text x="1449" y="57" font-size="20" font-weight="500" text-anchor="middle" fill="#777777">示意，非定稿</text>
+<rect x="45" y="165" width="730" height="810" rx="12" fill="#ffffff" stroke="#777777" stroke-width="2"/>
+<text x="73" y="215" font-size="29" font-weight="650" text-anchor="start" fill="#333333">全部就绪</text>
+<text x="73" y="250" font-size="18" font-weight="400" text-anchor="start" fill="#777777">8 / 8 项已满足</text>
+<text x="235" y="287" font-size="16" font-weight="500" text-anchor="start" fill="#777777">当前值</text>
+<text x="525" y="287" font-size="16" font-weight="500" text-anchor="start" fill="#777777">需要值</text>
+<rect x="65" y="310" width="690" height="62" rx="7" fill="#f7f7f7" stroke="#cccccc" stroke-width="1"/>
+<text x="79" y="349" font-size="18" font-weight="600" text-anchor="start" fill="#333333">目标客户端</text>
+<text x="235" y="349" font-size="17" font-weight="400" text-anchor="start" fill="#333333">已找到本地客户端</text>
+<text x="485" y="349" font-size="20" font-weight="400" text-anchor="start" fill="#777777">→</text>
+<text x="525" y="349" font-size="17" font-weight="400" text-anchor="start" fill="#333333">Windows 本地客户端</text>
+<text x="720" y="349" font-size="15" font-weight="600" text-anchor="middle" fill="#777777">就绪</text>
+<rect x="65" y="380" width="690" height="62" rx="7" fill="#f7f7f7" stroke="#cccccc" stroke-width="1"/>
+<text x="79" y="419" font-size="18" font-weight="600" text-anchor="start" fill="#333333">游戏页面</text>
+<text x="235" y="419" font-size="17" font-weight="400" text-anchor="start" fill="#333333">驱动盘仓库</text>
+<text x="485" y="419" font-size="20" font-weight="400" text-anchor="start" fill="#777777">→</text>
+<text x="525" y="419" font-size="17" font-weight="400" text-anchor="start" fill="#333333">驱动盘仓库</text>
+<text x="720" y="419" font-size="15" font-weight="600" text-anchor="middle" fill="#777777">就绪</text>
+<rect x="65" y="450" width="690" height="62" rx="7" fill="#f7f7f7" stroke="#cccccc" stroke-width="1"/>
+<text x="79" y="489" font-size="18" font-weight="600" text-anchor="start" fill="#333333">扫描范围</text>
+<text x="235" y="489" font-size="17" font-weight="400" text-anchor="start" fill="#333333">S 级 · 1-6 号位</text>
+<text x="485" y="489" font-size="20" font-weight="400" text-anchor="start" fill="#777777">→</text>
+<text x="525" y="489" font-size="17" font-weight="400" text-anchor="start" fill="#333333">S 级 · 1-6 号位</text>
+<text x="720" y="489" font-size="15" font-weight="600" text-anchor="middle" fill="#777777">就绪</text>
+<rect x="65" y="520" width="690" height="62" rx="7" fill="#f7f7f7" stroke="#cccccc" stroke-width="1"/>
+<text x="79" y="559" font-size="18" font-weight="600" text-anchor="start" fill="#333333">分辨率</text>
+<text x="235" y="559" font-size="17" font-weight="400" text-anchor="start" fill="#333333">1920×1080</text>
+<text x="485" y="559" font-size="20" font-weight="400" text-anchor="start" fill="#777777">→</text>
+<text x="525" y="559" font-size="17" font-weight="400" text-anchor="start" fill="#333333">1920×1080</text>
+<text x="720" y="559" font-size="15" font-weight="600" text-anchor="middle" fill="#777777">就绪</text>
+<rect x="65" y="590" width="690" height="62" rx="7" fill="#f7f7f7" stroke="#cccccc" stroke-width="1"/>
+<text x="79" y="629" font-size="18" font-weight="600" text-anchor="start" fill="#333333">窗口位置</text>
+<text x="235" y="629" font-size="17" font-weight="400" text-anchor="start" fill="#333333">完整在屏幕内</text>
+<text x="485" y="629" font-size="20" font-weight="400" text-anchor="start" fill="#777777">→</text>
+<text x="525" y="629" font-size="17" font-weight="400" text-anchor="start" fill="#333333">完整在屏幕内</text>
+<text x="720" y="629" font-size="15" font-weight="600" text-anchor="middle" fill="#777777">就绪</text>
+<rect x="65" y="660" width="690" height="62" rx="7" fill="#f7f7f7" stroke="#cccccc" stroke-width="1"/>
+<text x="79" y="699" font-size="18" font-weight="600" text-anchor="start" fill="#333333">权限</text>
+<text x="235" y="699" font-size="17" font-weight="400" text-anchor="start" fill="#333333">权限一致</text>
+<text x="485" y="699" font-size="20" font-weight="400" text-anchor="start" fill="#777777">→</text>
+<text x="525" y="699" font-size="17" font-weight="400" text-anchor="start" fill="#333333">与游戏权限一致</text>
+<text x="720" y="699" font-size="15" font-weight="600" text-anchor="middle" fill="#777777">就绪</text>
+<rect x="65" y="730" width="690" height="62" rx="7" fill="#f7f7f7" stroke="#cccccc" stroke-width="1"/>
+<text x="79" y="769" font-size="18" font-weight="600" text-anchor="start" fill="#333333">停止热键</text>
+<text x="235" y="769" font-size="17" font-weight="400" text-anchor="start" fill="#333333">可以注册</text>
+<text x="485" y="769" font-size="20" font-weight="400" text-anchor="start" fill="#777777">→</text>
+<text x="525" y="769" font-size="17" font-weight="400" text-anchor="start" fill="#333333">Ctrl+Alt+Shift+S 可用</text>
+<text x="720" y="769" font-size="15" font-weight="600" text-anchor="middle" fill="#777777">就绪</text>
+<rect x="65" y="800" width="690" height="62" rx="7" fill="#f7f7f7" stroke="#cccccc" stroke-width="1"/>
+<text x="79" y="839" font-size="18" font-weight="600" text-anchor="start" fill="#333333">保存位置</text>
+<text x="235" y="839" font-size="17" font-weight="400" text-anchor="start" fill="#333333">目录可写</text>
+<text x="485" y="839" font-size="20" font-weight="400" text-anchor="start" fill="#777777">→</text>
+<text x="525" y="839" font-size="17" font-weight="400" text-anchor="start" fill="#333333">目录可写</text>
+<text x="720" y="839" font-size="15" font-weight="600" text-anchor="middle" fill="#777777">就绪</text>
+<text x="73" y="908" font-size="18" font-weight="500" text-anchor="start" fill="#777777">点开始后：显示 30 秒准备倒计时</text>
+<text x="73" y="938" font-size="15" font-weight="400" text-anchor="start" fill="#777777">切回游戏后仍会复核前台、页面和遮挡</text>
+<rect x="547" y="876" width="204" height="70" rx="8" fill="#555555" stroke="#555555" stroke-width="2"/>
+<text x="649.0" y="918.0" font-size="20" font-weight="600" text-anchor="middle" fill="#ffffff">开始扫描</text>
+<rect x="825" y="165" width="730" height="810" rx="12" fill="#ffffff" stroke="#777777" stroke-width="2"/>
+<text x="853" y="215" font-size="29" font-weight="650" text-anchor="start" fill="#333333">有一项不满足</text>
+<text x="853" y="250" font-size="18" font-weight="400" text-anchor="start" fill="#777777">7 / 8 项已满足，权限需处理</text>
+<text x="1015" y="287" font-size="16" font-weight="500" text-anchor="start" fill="#777777">当前值</text>
+<text x="1305" y="287" font-size="16" font-weight="500" text-anchor="start" fill="#777777">需要值</text>
+<rect x="845" y="310" width="690" height="62" rx="7" fill="#f7f7f7" stroke="#cccccc" stroke-width="1"/>
+<text x="859" y="349" font-size="18" font-weight="600" text-anchor="start" fill="#333333">目标客户端</text>
+<text x="1015" y="349" font-size="17" font-weight="400" text-anchor="start" fill="#333333">已找到本地客户端</text>
+<text x="1265" y="349" font-size="20" font-weight="400" text-anchor="start" fill="#777777">→</text>
+<text x="1305" y="349" font-size="17" font-weight="400" text-anchor="start" fill="#333333">Windows 本地客户端</text>
+<text x="1500" y="349" font-size="15" font-weight="600" text-anchor="middle" fill="#777777">就绪</text>
+<rect x="845" y="380" width="690" height="62" rx="7" fill="#f7f7f7" stroke="#cccccc" stroke-width="1"/>
+<text x="859" y="419" font-size="18" font-weight="600" text-anchor="start" fill="#333333">游戏页面</text>
+<text x="1015" y="419" font-size="17" font-weight="400" text-anchor="start" fill="#333333">驱动盘仓库</text>
+<text x="1265" y="419" font-size="20" font-weight="400" text-anchor="start" fill="#777777">→</text>
+<text x="1305" y="419" font-size="17" font-weight="400" text-anchor="start" fill="#333333">驱动盘仓库</text>
+<text x="1500" y="419" font-size="15" font-weight="600" text-anchor="middle" fill="#777777">就绪</text>
+<rect x="845" y="450" width="690" height="62" rx="7" fill="#f7f7f7" stroke="#cccccc" stroke-width="1"/>
+<text x="859" y="489" font-size="18" font-weight="600" text-anchor="start" fill="#333333">扫描范围</text>
+<text x="1015" y="489" font-size="17" font-weight="400" text-anchor="start" fill="#333333">S 级 · 1-6 号位</text>
+<text x="1265" y="489" font-size="20" font-weight="400" text-anchor="start" fill="#777777">→</text>
+<text x="1305" y="489" font-size="17" font-weight="400" text-anchor="start" fill="#333333">S 级 · 1-6 号位</text>
+<text x="1500" y="489" font-size="15" font-weight="600" text-anchor="middle" fill="#777777">就绪</text>
+<rect x="845" y="520" width="690" height="62" rx="7" fill="#f7f7f7" stroke="#cccccc" stroke-width="1"/>
+<text x="859" y="559" font-size="18" font-weight="600" text-anchor="start" fill="#333333">分辨率</text>
+<text x="1015" y="559" font-size="17" font-weight="400" text-anchor="start" fill="#333333">1920×1080</text>
+<text x="1265" y="559" font-size="20" font-weight="400" text-anchor="start" fill="#777777">→</text>
+<text x="1305" y="559" font-size="17" font-weight="400" text-anchor="start" fill="#333333">1920×1080</text>
+<text x="1500" y="559" font-size="15" font-weight="600" text-anchor="middle" fill="#777777">就绪</text>
+<rect x="845" y="590" width="690" height="62" rx="7" fill="#f7f7f7" stroke="#cccccc" stroke-width="1"/>
+<text x="859" y="629" font-size="18" font-weight="600" text-anchor="start" fill="#333333">窗口位置</text>
+<text x="1015" y="629" font-size="17" font-weight="400" text-anchor="start" fill="#333333">完整在屏幕内</text>
+<text x="1265" y="629" font-size="20" font-weight="400" text-anchor="start" fill="#777777">→</text>
+<text x="1305" y="629" font-size="17" font-weight="400" text-anchor="start" fill="#333333">完整在屏幕内</text>
+<text x="1500" y="629" font-size="15" font-weight="600" text-anchor="middle" fill="#777777">就绪</text>
+<rect x="845" y="660" width="690" height="62" rx="7" fill="#eeeeee" stroke="#333333" stroke-width="2"/>
+<text x="859" y="699" font-size="18" font-weight="600" text-anchor="start" fill="#333333">权限</text>
+<text x="1015" y="699" font-size="17" font-weight="500" text-anchor="start" fill="#333333">youkai：普通权限</text>
+<text x="1265" y="699" font-size="20" font-weight="400" text-anchor="start" fill="#777777">→</text>
+<text x="1305" y="699" font-size="17" font-weight="500" text-anchor="start" fill="#333333">与游戏同为管理员</text>
+<text x="1500" y="699" font-size="15" font-weight="600" text-anchor="middle" fill="#333333">处理</text>
+<rect x="845" y="730" width="690" height="62" rx="7" fill="#f7f7f7" stroke="#cccccc" stroke-width="1"/>
+<text x="859" y="769" font-size="18" font-weight="600" text-anchor="start" fill="#333333">停止热键</text>
+<text x="1015" y="769" font-size="17" font-weight="400" text-anchor="start" fill="#333333">可以注册</text>
+<text x="1265" y="769" font-size="20" font-weight="400" text-anchor="start" fill="#777777">→</text>
+<text x="1305" y="769" font-size="17" font-weight="400" text-anchor="start" fill="#333333">Ctrl+Alt+Shift+S 可用</text>
+<text x="1500" y="769" font-size="15" font-weight="600" text-anchor="middle" fill="#777777">就绪</text>
+<rect x="845" y="800" width="690" height="62" rx="7" fill="#f7f7f7" stroke="#cccccc" stroke-width="1"/>
+<text x="859" y="839" font-size="18" font-weight="600" text-anchor="start" fill="#333333">保存位置</text>
+<text x="1015" y="839" font-size="17" font-weight="400" text-anchor="start" fill="#333333">目录可写</text>
+<text x="1265" y="839" font-size="20" font-weight="400" text-anchor="start" fill="#777777">→</text>
+<text x="1305" y="839" font-size="17" font-weight="400" text-anchor="start" fill="#333333">目录可写</text>
+<text x="1500" y="839" font-size="15" font-weight="600" text-anchor="middle" fill="#777777">就绪</text>
+<rect x="849" y="876" width="460" height="70" rx="7" fill="#ffffff" stroke="#777777" stroke-width="1.5" stroke-dasharray="6 4"/>
+<text x="865" y="905" font-size="17" font-weight="500" text-anchor="start" fill="#333333">先从托盘退出 youkai，再以管理员身份运行</text>
+<text x="865" y="930" font-size="15" font-weight="400" text-anchor="start" fill="#777777">重新打开后回到同一份准备检查</text>
+<rect x="1327" y="876" width="204" height="70" rx="8" fill="#eeeeee" stroke="#bbbbbb" stroke-width="2"/>
+<text x="1429.0" y="918.0" font-size="20" font-weight="500" text-anchor="middle" fill="#999999">开始扫描</text>
+<text x="800" y="1020" font-size="19" font-weight="500" text-anchor="middle" fill="#777777">清单持续存在：首次使用用于解释，回访用于快速确认；开始按钮只由当前状态决定。</text>
+</svg>

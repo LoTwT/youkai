@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1000" viewBox="0 0 1600 1000">
+<defs>
+  <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M 0 0 L 10 5 L 0 10 z" fill="#777777"/>
+  </marker>
+  <style>
+    text { font-family: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif; }
+    svg { background: #ffffff; }
+  </style>
+</defs>
+<rect x="0" y="0" width="1600" height="1000" fill="#ffffff"/>
+<text x="42" y="38" font-size="17" font-weight="500" text-anchor="start" fill="#777777">YOUKAI · WINDOWS 本地客户端</text>
+<text x="42" y="82" font-size="35" font-weight="650" text-anchor="start" fill="#333333">P-13 对比：结束时是否询问截图处理</text>
+<text x="42" y="116" font-size="20" font-weight="400" text-anchor="start" fill="#777777">P-13 待用户决定；这里只比较打断发生的时机。</text>
+<rect x="1340" y="28" width="218" height="44" rx="8" fill="#ffffff" stroke="#777777" stroke-width="1.5" stroke-dasharray="6 4"/>
+<text x="1449" y="57" font-size="20" font-weight="500" text-anchor="middle" fill="#777777">示意，非定稿</text>
+<rect x="45" y="160" width="730" height="740" rx="12" fill="#ffffff" stroke="#777777" stroke-width="2"/>
+<text x="75" y="210" font-size="27" font-weight="650" text-anchor="start" fill="#333333">现在：结束时弹窗问</text>
+<text x="75" y="244" font-size="18" font-weight="400" text-anchor="start" fill="#777777">结果摘要被截图选择打断</text>
+<rect x="75" y="280" width="670" height="480" rx="8" fill="#f7f7f7" stroke="#bbbbbb" stroke-width="1.5"/>
+<text x="105" y="330" font-size="20" font-weight="500" text-anchor="start" fill="#777777">结果摘要（背景）</text>
+<text x="105" y="375" font-size="27" font-weight="600" text-anchor="start" fill="#777777">覆盖：全部</text>
+<text x="105" y="415" font-size="22" font-weight="500" text-anchor="start" fill="#777777">3 件待校对</text>
+<rect x="75" y="280" width="670" height="480" rx="8" fill="#dddddd" stroke="none" stroke-width="0" opacity="0.55"/>
+<rect x="145" y="350" width="530" height="330" rx="10" fill="#ffffff" stroke="#333333" stroke-width="2"/>
+<text x="415" y="402" font-size="26" font-weight="600" text-anchor="middle" fill="#333333">如何处理本次截图？</text>
+<text x="415" y="438" font-size="17" font-weight="400" text-anchor="middle" fill="#777777">识别数据已保存</text>
+<rect x="180" y="475" width="470" height="52" rx="8" fill="#ffffff" stroke="#777777" stroke-width="2"/>
+<text x="415.0" y="508.0" font-size="21" font-weight="500" text-anchor="middle" fill="#333333">保留截图</text>
+<rect x="180" y="540" width="470" height="52" rx="8" fill="#ffffff" stroke="#777777" stroke-width="2"/>
+<text x="415.0" y="573.0" font-size="21" font-weight="500" text-anchor="middle" fill="#333333">删除截图</text>
+<rect x="180" y="605" width="470" height="52" rx="8" fill="#ffffff" stroke="#777777" stroke-width="2"/>
+<text x="415.0" y="638.0" font-size="21" font-weight="500" text-anchor="middle" fill="#333333">稍后处理</text>
+<text x="410" y="810" font-size="19" font-weight="500" text-anchor="middle" fill="#333333">先回答截图问题，才能继续看结果</text>
+<text x="410" y="844" font-size="17" font-weight="400" text-anchor="middle" fill="#777777">发生在用户知道哪些件需要校对之前</text>
+<rect x="825" y="160" width="730" height="740" rx="12" fill="#ffffff" stroke="#777777" stroke-width="2"/>
+<text x="855" y="210" font-size="27" font-weight="650" text-anchor="start" fill="#333333">提案：默认保留，不弹窗</text>
+<text x="855" y="244" font-size="18" font-weight="400" text-anchor="start" fill="#777777">结束后直接进入结果摘要</text>
+<rect x="855" y="280" width="670" height="480" rx="8" fill="#f7f7f7" stroke="#bbbbbb" stroke-width="1.5"/>
+<text x="885" y="332" font-size="20" font-weight="500" text-anchor="start" fill="#777777">结果摘要</text>
+<text x="885" y="385" font-size="34" font-weight="650" text-anchor="start" fill="#333333">覆盖：全部</text>
+<text x="885" y="435" font-size="28" font-weight="600" text-anchor="start" fill="#333333">3 件待校对</text>
+<text x="885" y="472" font-size="17" font-weight="400" text-anchor="start" fill="#777777">已保存</text>
+<rect x="885" y="520" width="300" height="62" rx="8" fill="#555555" stroke="#555555" stroke-width="2"/>
+<text x="1035.0" y="558.0" font-size="21" font-weight="600" text-anchor="middle" fill="#ffffff">校对 3 件</text>
+<rect x="1200" y="520" width="300" height="62" rx="8" fill="#ffffff" stroke="#777777" stroke-width="2"/>
+<text x="1350.0" y="558.0" font-size="18" font-weight="500" text-anchor="middle" fill="#333333">导出 JSON / CSV</text>
+<rect x="885" y="620" width="610" height="100" rx="7" fill="#ffffff" stroke="#777777" stroke-width="1.5" stroke-dasharray="6 4"/>
+<text x="905" y="657" font-size="18" font-weight="600" text-anchor="start" fill="#333333">截图已默认保留</text>
+<text x="905" y="691" font-size="16" font-weight="400" text-anchor="start" fill="#777777">之后可在历史或存储管理中清理</text>
+<text x="1190" y="810" font-size="19" font-weight="500" text-anchor="middle" fill="#333333">先看结果、先校对</text>
+<text x="1190" y="844" font-size="17" font-weight="400" text-anchor="middle" fill="#777777">需要释放空间时再主动清理</text>
+<rect x="45" y="920" width="1510" height="52" rx="8" fill="#ffffff" stroke="#777777" stroke-width="1.5" stroke-dasharray="6 4"/>
+<text x="800" y="954" font-size="19" font-weight="500" text-anchor="middle" fill="#777777">对比重点：不是“以后不能删除”，而是“结束时不强迫用户立即决定”。</text>
+</svg>

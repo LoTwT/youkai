@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>11 设置与更新</title><link rel="stylesheet" href="wireframe.css"></head>
+<body><div class="sheet">
+<div class="sheet-head"><div><div class="kicker">YOUKAI · WINDOWS 本地客户端 · 第二阶段线框</div><h1>11 设置（发现新版本时）</h1><div class="sub">默认窗口；对应 05 S10 设置、发现新版本、安装被阻止；S9 存储管理</div></div><div class="stamp">低保真 · 非视觉稿</div></div>
+<div class="stage">
+<div class="win">
+  <div class="titlebar"><span>youkai</span><span class="ctl"><span>—</span><span>☐</span><span>✕</span></span></div>
+  <div class="frame">
+    <nav class="rail"><div class="it"><i></i>首页</div><div class="it"><i></i>记录</div><div class="spacer"></div><div class="it on"><i></i>设置<span class="dot"></span></div></nav>
+    <main class="content"><div class="row" style="align-items:flex-start; height:100%">
+      <aside class="col small" style="width:150px; padding:20px 0 0 20px; gap:8px"><b>常规</b><span>快捷键</span><span>存储与清理</span><span>诊断</span><span>更新 ●</span><span>关于</span><span class="m">1</span></aside>
+      <div class="pad col grow" style="gap:16px; max-width:760px">
+        <div class="well row" style="padding:10px 14px"><span class="tag solid">新</span><span class="grow">有新版本 0.5.0 可以安装</span><span class="link">查看</span><span class="m">2</span></div>
+        <section class="col" style="gap:8px"><h4 style="margin:0">常规</h4>
+          <div class="row"><span class="grow">点击窗口的 ✕ 时</span><span class="input sel" style="width:260px">隐藏到通知区域（默认）</span></div>
+          <div class="row small"><span class="grow muted">另一个选项：停止扫描并退出</span><span class="link">再看一次托盘图标在哪里</span></div></section>
+        <div class="hr" style="margin:0"></div>
+        <section class="col" style="gap:6px"><div class="row"><h4 style="margin:0">快捷键</h4><span class="m">3</span></div>
+          <div class="row small"><span class="grow">停止扫描（全局，只在扫描期间生效）</span><span class="kbd">Ctrl</span>+<span class="kbd">Alt</span>+<span class="kbd">Shift</span>+<span class="kbd">S</span></div>
+          <div class="row small"><span class="grow">确认并下一项</span><span class="kbd">Ctrl</span>+<span class="kbd">Enter</span></div>
+          <div class="row small"><span class="grow">下一个 / 上一个待处理件</span><span class="kbd">Ctrl</span>+<span class="kbd">J</span> / <span class="kbd">Ctrl</span>+<span class="kbd">Shift</span>+<span class="kbd">J</span></div>
+          <div class="row small muted"><span class="grow">……其余 6 项</span><span>展开 ▾</span></div></section>
+        <div class="hr" style="margin:0"></div>
+        <section class="col" style="gap:6px"><h4 style="margin:0">存储与清理</h4>
+          <div class="row small"><span class="grow">记录 1.1 GB · 截图 1.2 GB · 缓存 80 MB · 日志 20 MB</span><span class="muted">磁盘可用 41 GB</span></div>
+          <div class="row"><span class="btn ghost">打开数据目录</span><span class="btn ghost">清缓存</span><span class="btn ghost">清旧日志</span><span class="btn danger">删除全部截图…</span><span class="btn danger">删除全部记录…</span><span class="m">4</span></div></section>
+        <div class="hr" style="margin:0"></div>
+        <section class="col" style="gap:6px"><h4 style="margin:0">诊断</h4>
+          <div class="row"><span class="btn ghost">复制诊断信息</span><span class="btn ghost">打开诊断目录</span><span class="small muted">复制的内容不包含窗口标题等隐私</span></div></section>
+        <div class="hr" style="margin:0"></div>
+        <section class="col" style="gap:6px"><h4 style="margin:0">更新</h4>
+          <div class="row"><span class="grow">当前 0.4.0 → 新版本 <b>0.5.0</b> · <span class="link">更新说明</span></span><span class="btn primary">安装并重启</span><span class="m">5</span></div>
+          <div class="small muted">扫描、收尾或结果未保存时不能安装，会在这里写明原因。</div></section>
+      </div>
+    </div></main>
+  </div>
+</div>
+<div class="notes">
+  <h3>标注</h3>
+  <ol>
+    <li>设置是分节单页，左侧是页内目录，不再嵌套二级导航；紧凑档隐藏目录（09 §2）。</li>
+    <li>“首要问题”是“有没有需要我处理的事”：只有新版本、空间不足时在页顶出现一条提示；导航轨“设置”上出现圆点（07 §4 更新）。</li>
+    <li>快捷键只显示 Windows 写法，停止热键显示实际注册结果（H1、D-02、09 §4.5）。</li>
+    <li>清理是 P2 低频功能，但从准备检查“去清理”进入时，顶部会出现“完成后返回准备检查”，焦点在本节第一个按钮（W6）。危险操作用 danger 样式，均需预览确认。</li>
+    <li>本页唯一的主按钮：发现新版本时“安装并重启”，否则为“检查更新”（次要样式也可，取决于状态）。</li>
+  </ol>
+  <div class="state">不支持更新（开发运行、测试打包）时更新节写“这个版本不支持自动更新”。<br>相关规格：08 §6；10 R-13、R-18。</div>
+</div>
+</div></div></body></html>

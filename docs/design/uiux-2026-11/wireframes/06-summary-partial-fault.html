@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>06 记录 · 摘要（部分覆盖 / 故障结束）</title><link rel="stylesheet" href="wireframe.css"></head>
+<body><div class="sheet">
+<div class="sheet-head"><div><div class="kicker">YOUKAI · WINDOWS 本地客户端 · 第二阶段线框</div><h1>06 记录 · 摘要（部分覆盖 / 故障结束）</h1><div class="sub">两个结局并排对照，实际各自占满内容区；对应 05 S6 覆盖部分、故障结束</div></div><div class="stamp">低保真 · 非视觉稿</div></div>
+<div class="stage">
+<div class="win">
+  <div class="titlebar"><span>youkai</span><span class="ctl"><span>—</span><span>☐</span><span>✕</span></span></div>
+  <div class="frame">
+    <nav class="rail"><div class="it"><i></i>首页</div><div class="it on"><i></i>记录</div><div class="spacer"></div><div class="it"><i></i>设置</div></nav>
+    <main class="content">
+      <div class="rhead"><span class="back">‹ 全部记录</span><span class="title">11 月 3 日 21:40 的扫描</span><span class="seg"><span class="on">摘要</span><span>逐件</span></span>
+        <span class="status"><span>覆盖：部分</span><span>待处理 0</span><span class="muted">已保存</span></span><span class="btn ghost">导出…</span></div>
+      <div class="pad" style="display:grid; grid-template-columns:1fr 1fr; gap:20px">
+        <section class="col" style="gap:14px">
+          <div class="row"><h4 style="margin:0">A · 正常结束，覆盖部分</h4><span class="m">1</span></div>
+          <div><h2>没有扫全：3 号位、5 号位不完整</h2><div class="small">已采集 612 件，全部可以导出；导出文件会标明“部分”</div></div>
+          <div class="card">
+            <div class="check" style="grid-template-columns:22px 70px 1fr"><span class="ic bad"></span><span class="name">3 号位</span><span class="val">列表末尾无法确认，已采集部分保留</span></div>
+            <div class="check" style="grid-template-columns:22px 70px 1fr"><span class="ic bad"></span><span class="name">5 号位</span><span class="val">筛选没有生效，跳过该号位</span></div>
+            <div class="check" style="grid-template-columns:22px 70px 1fr"><span class="ic ok"></span><span class="name muted">其余 4 个</span><span class="val muted">完整</span></div>
+          </div>
+          <div class="row"><span class="btn primary">导出…</span><span class="btn">重新扫描（整仓，约 14 分钟）</span><span class="m">2</span></div>
+          <div class="well small" style="padding:8px 12px; border-style:dashed">预留：将来的“只重扫 3、5 号位”出现在这一行（P-12），首版不显示</div>
+          <div class="counts" style="grid-template-columns:repeat(2,1fr)">
+            <div class="count"><b>0</b><span>待补录 · 待校对</span></div>
+            <div class="count"><b>612</b><span>可导出（含 61 件有警告）</span></div>
+          </div>
+        </section>
+        <section class="col" style="gap:14px">
+          <div class="row"><h4 style="margin:0">B · 故障结束</h4><span class="m">3</span></div>
+          <div><h2>扫描中途停止：游戏失去了焦点</h2><div class="small">在 4 号位采集时，另一个程序切到了前台</div></div>
+          <div class="card pad small col" style="gap:4px; padding:12px 14px">
+            <div><b>怎么做：</b>扫描时不要切换应用；关掉可能弹出通知的聊天软件后重新开始。</div>
+            <div><b>已保存：</b>431 件（1–3 号位完整，4 号位部分）</div>
+          </div>
+          <div class="row"><span class="btn primary">修正后重新扫描</span><span class="btn">查看已采集的 431 件</span></div>
+          <div class="card">
+            <div class="row" style="padding:10px 14px"><b>诊断信息</b><span class="right small">展开 ▾</span><span class="m">4</span></div>
+            <div style="padding:0 14px 12px" class="small muted">focusLost · 阶段：采集 · 4 号位 · 21:52:07 · youkai 0.4.0<br><div class="row" style="margin-top:6px"><span class="btn ghost">复制诊断信息</span><span class="btn ghost">打开诊断目录</span></div></div>
+          </div>
+        </section>
+      </div>
+    </main>
+  </div>
+</div>
+<div class="notes">
+  <h3>标注</h3>
+  <ol>
+    <li>部分覆盖：标题直接写哪些号位没扫全，号位列表写原因（C-08、R-10）。</li>
+    <li>首版主按钮按待处理件决定（这里 0 件，所以是“导出…”）；“重新扫描”是次要按钮并写出耗时。推翻示意图 04 第三张把“重扫不完整位置”作为主按钮的画法：P-12 首版不实现，只预留位置（07 §5）。</li>
+    <li>故障结束：原因（中文、可行动）+ 怎么做 + 已保存部分；主按钮“修正后重新扫描”回到首页准备检查（W2d 步骤 15–16）。</li>
+    <li>故障码、阶段、版本只在折叠的诊断信息里，配“复制诊断信息 / 打开诊断目录”（P-15、09 §4.6）。示意为展开状态。</li>
+  </ol>
+  <div class="state">相关规格：08 §2、§2.1；09 §4.3、§4.6；10 R-05、R-10、R-13、R-16。</div>
+</div>
+</div></div></body></html>

@@ -1,0 +1,84 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="940" viewBox="0 0 1600 940">
+<defs>
+  <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M 0 0 L 10 5 L 0 10 z" fill="#777777"/>
+  </marker>
+  <style>
+    text { font-family: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif; }
+    svg { background: #ffffff; }
+  </style>
+</defs>
+<rect x="0" y="0" width="1600" height="940" fill="#ffffff"/>
+<text x="42" y="38" font-size="17" font-weight="500" text-anchor="start" fill="#777777">YOUKAI · WINDOWS 本地客户端</text>
+<text x="42" y="82" font-size="35" font-weight="650" text-anchor="start" fill="#333333">旅程总览：回访主干与首次使用支线</text>
+<text x="42" y="116" font-size="20" font-weight="400" text-anchor="start" fill="#777777">节点下方是用户主要在看哪里；箭头只表达任务顺序。</text>
+<rect x="1340" y="28" width="218" height="44" rx="8" fill="#ffffff" stroke="#777777" stroke-width="1.5" stroke-dasharray="6 4"/>
+<text x="1449" y="57" font-size="20" font-weight="500" text-anchor="middle" fill="#777777">示意，非定稿</text>
+<rect x="40" y="205" width="220" height="150" rx="12" fill="#ffffff" stroke="#777777" stroke-width="2"/>
+<text x="150.0" y="253" font-size="26" font-weight="600" text-anchor="middle" fill="#333333">回访</text>
+<rect x="56" y="277" width="188" height="34" rx="6" fill="#eeeeee" stroke="#bbbbbb" stroke-width="1"/>
+<text x="150.0" y="301" font-size="18" font-weight="500" text-anchor="middle" fill="#777777">youkai 窗口</text>
+<rect x="290" y="205" width="220" height="150" rx="12" fill="#ffffff" stroke="#777777" stroke-width="2"/>
+<text x="400.0" y="253" font-size="26" font-weight="600" text-anchor="middle" fill="#333333">准备检查</text>
+<rect x="306" y="277" width="188" height="34" rx="6" fill="#eeeeee" stroke="#bbbbbb" stroke-width="1"/>
+<text x="400.0" y="301" font-size="18" font-weight="500" text-anchor="middle" fill="#777777">youkai 窗口</text>
+<rect x="540" y="205" width="220" height="150" rx="12" fill="#ffffff" stroke="#777777" stroke-width="2"/>
+<text x="650.0" y="253" font-size="26" font-weight="600" text-anchor="middle" fill="#333333">扫描</text>
+<rect x="556" y="277" width="188" height="34" rx="6" fill="#eeeeee" stroke="#bbbbbb" stroke-width="1"/>
+<text x="650.0" y="301" font-size="18" font-weight="500" text-anchor="middle" fill="#777777">游戏（无反馈）</text>
+<rect x="790" y="205" width="220" height="150" rx="12" fill="#ffffff" stroke="#777777" stroke-width="2"/>
+<text x="900.0" y="253" font-size="26" font-weight="600" text-anchor="middle" fill="#333333">系统通知</text>
+<rect x="806" y="277" width="188" height="34" rx="6" fill="#eeeeee" stroke="#bbbbbb" stroke-width="1"/>
+<text x="900.0" y="301" font-size="18" font-weight="500" text-anchor="middle" fill="#777777">系统通知</text>
+<rect x="1040" y="205" width="220" height="150" rx="12" fill="#ffffff" stroke="#777777" stroke-width="2"/>
+<text x="1150.0" y="253" font-size="26" font-weight="600" text-anchor="middle" fill="#333333">结果摘要</text>
+<rect x="1056" y="277" width="188" height="34" rx="6" fill="#eeeeee" stroke="#bbbbbb" stroke-width="1"/>
+<text x="1150.0" y="301" font-size="18" font-weight="500" text-anchor="middle" fill="#777777">youkai 窗口</text>
+<rect x="1290" y="205" width="220" height="150" rx="12" fill="#ffffff" stroke="#777777" stroke-width="2"/>
+<text x="1400.0" y="253" font-size="26" font-weight="600" text-anchor="middle" fill="#333333">导出</text>
+<rect x="1306" y="277" width="188" height="34" rx="6" fill="#eeeeee" stroke="#bbbbbb" stroke-width="1"/>
+<text x="1400.0" y="301" font-size="18" font-weight="500" text-anchor="middle" fill="#777777">youkai 窗口</text>
+<line x1="260" y1="280" x2="280" y2="280" stroke="#777777" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+<line x1="510" y1="280" x2="530" y2="280" stroke="#777777" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+<line x1="760" y1="280" x2="780" y2="280" stroke="#777777" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+<line x1="1010" y1="280" x2="1030" y2="280" stroke="#777777" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+<text x="1000" y="185" font-size="17" font-weight="400" text-anchor="middle" fill="#777777">结束类型、覆盖、待校对数或失败原因</text>
+<line x1="1260" y1="280" x2="1280" y2="280" stroke="#777777" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+<text x="1280" y="185" font-size="17" font-weight="400" text-anchor="middle" fill="#777777">无待校对项时直接导出</text>
+<rect x="1040" y="455" width="220" height="140" rx="12" fill="#ffffff" stroke="#777777" stroke-width="2" stroke-dasharray="7 5"/>
+<text x="1150.0" y="503" font-size="26" font-weight="600" text-anchor="middle" fill="#333333">校对</text>
+<rect x="1056" y="527" width="188" height="34" rx="6" fill="#eeeeee" stroke="#bbbbbb" stroke-width="1"/>
+<text x="1150.0" y="551" font-size="18" font-weight="500" text-anchor="middle" fill="#777777">youkai 窗口</text>
+<text x="1150.0" y="587" font-size="17" font-weight="400" text-anchor="middle" fill="#777777">仅有待校对项时</text>
+<path d="M 1150 355 L 1150 438" stroke="#777777" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+<text x="1170" y="405" font-size="17" font-weight="400" text-anchor="start" fill="#777777">有待校对项</text>
+<path d="M 1260 525 L 1400 525 L 1400 372" stroke="#777777" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+<text x="1400" y="550" font-size="17" font-weight="400" text-anchor="middle" fill="#777777">完成后导出</text>
+<text x="42" y="455" font-size="24" font-weight="600" text-anchor="start" fill="#333333">首次使用支线</text>
+<rect x="40" y="535" width="220" height="140" rx="12" fill="#ffffff" stroke="#777777" stroke-width="2"/>
+<text x="150.0" y="583" font-size="26" font-weight="600" text-anchor="middle" fill="#333333">首次打开</text>
+<rect x="56" y="607" width="188" height="34" rx="6" fill="#eeeeee" stroke="#bbbbbb" stroke-width="1"/>
+<text x="150.0" y="631" font-size="18" font-weight="500" text-anchor="middle" fill="#777777">youkai 窗口</text>
+<rect x="290" y="535" width="220" height="140" rx="12" fill="#ffffff" stroke="#777777" stroke-width="2"/>
+<text x="400.0" y="583" font-size="26" font-weight="600" text-anchor="middle" fill="#333333">权限不满足</text>
+<rect x="306" y="607" width="188" height="34" rx="6" fill="#eeeeee" stroke="#bbbbbb" stroke-width="1"/>
+<text x="400.0" y="631" font-size="18" font-weight="500" text-anchor="middle" fill="#777777">youkai 窗口</text>
+<rect x="540" y="535" width="220" height="140" rx="12" fill="#ffffff" stroke="#777777" stroke-width="2"/>
+<text x="650.0" y="583" font-size="26" font-weight="600" text-anchor="middle" fill="#333333">先退出旧实例</text>
+<rect x="556" y="607" width="188" height="34" rx="6" fill="#eeeeee" stroke="#bbbbbb" stroke-width="1"/>
+<text x="650.0" y="631" font-size="18" font-weight="500" text-anchor="middle" fill="#777777">托盘</text>
+<rect x="790" y="535" width="220" height="140" rx="12" fill="#ffffff" stroke="#777777" stroke-width="2"/>
+<text x="900.0" y="583" font-size="26" font-weight="600" text-anchor="middle" fill="#333333">管理员身份运行</text>
+<rect x="806" y="607" width="188" height="34" rx="6" fill="#eeeeee" stroke="#bbbbbb" stroke-width="1"/>
+<text x="900.0" y="631" font-size="18" font-weight="500" text-anchor="middle" fill="#777777">系统 / UAC → youkai</text>
+<line x1="260" y1="605" x2="280" y2="605" stroke="#777777" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+<line x1="510" y1="605" x2="530" y2="605" stroke="#777777" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+<line x1="760" y1="605" x2="780" y2="605" stroke="#777777" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+<path d="M 150 535 L 150 425 L 400 425 L 400 372" stroke="#777777" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+<text x="165" y="414" font-size="17" font-weight="400" text-anchor="start" fill="#777777">条件已满足时，直接汇入准备检查</text>
+<path d="M 900 535 L 900 470 L 400 470 L 400 372" stroke="#777777" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+<text x="42" y="745" font-size="20" font-weight="500" text-anchor="start" fill="#333333">首次使用不是一次性向导，最终汇入同一份常驻“准备检查”。</text>
+<rect x="40" y="785" width="1520" height="100" rx="10" fill="#f7f7f7" stroke="#bbbbbb" stroke-width="1.5" stroke-dasharray="6 4"/>
+<text x="65" y="825" font-size="20" font-weight="400" text-anchor="start" fill="#777777">扫描中：不显示进度，不弹窗；停止仅按 Ctrl+Alt+Shift+S。</text>
+<text x="65" y="859" font-size="20" font-weight="400" text-anchor="start" fill="#777777">结果摘要后：有待校对项先校对；没有待校对项可直接导出通用 JSON / CSV。</text>
+</svg>

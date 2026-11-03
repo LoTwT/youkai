@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>12 托盘菜单与结束通知</title><link rel="stylesheet" href="wireframe.css"></head>
+<body><div class="sheet">
+<div class="sheet-head"><div><div class="kicker">YOUKAI · WINDOWS 本地客户端 · 第二阶段线框</div><h1>12 托盘菜单、结束通知与首次隐藏提示</h1><div class="sub">系统触点；对应 05 S11 托盘四行、窗口已隐藏，S6 结束通知、S5 保存失败</div></div><div class="stamp">低保真 · 非视觉稿</div></div>
+<div class="stage">
+<div class="col" style="width:1180px; gap:22px">
+  <div class="row"><h4 style="margin:0">托盘右键菜单（四种状态）</h4><span class="m">1</span></div>
+  <div class="row" style="align-items:flex-start; gap:16px">
+    <div class="menu" style="width:280px"><div class="hd">youkai · 就绪</div><div>打开 youkai</div><div class="dis">停止扫描</div><div class="sep"></div><div>退出 youkai</div></div>
+    <div class="menu" style="width:280px"><div class="hd">youkai · 正在扫描（停止：Ctrl+Alt+Shift+S）</div><div><b>停止扫描并打开</b></div><div>停止扫描</div><div class="sep"></div><div>停止扫描并退出</div></div>
+    <div class="menu" style="width:280px"><div class="hd">youkai · 正在保存结果</div><div>打开 youkai</div><div class="dis">停止扫描</div><div class="sep"></div><div>退出 youkai（等保存完成）</div></div>
+    <div class="menu" style="width:280px"><div class="hd">youkai · 结果未保存，需要重试</div><div>打开 youkai</div><div class="dis">停止扫描</div><div class="sep"></div><div>退出 youkai</div></div>
+  </div>
+  <div class="row"><h4 style="margin:0">结束通知（两段式）</h4><span class="m">2</span></div>
+  <div class="row" style="align-items:flex-start; gap:16px">
+    <div class="toast"><div class="app">youkai · 第一段（输入停止时）</div><b>youkai 已停止操作游戏</b>正在识别和保存结果，完成后会再通知你。现在可以正常使用电脑。</div>
+    <div class="toast"><div class="app">youkai · 第二段（收尾结束，替换第一段）</div><b>扫描完成：1 件待校对</b>覆盖全部，其余 1,016 件可以导出。点击查看。</div>
+    <div class="toast"><div class="app">youkai · 第二段（保存失败，本次收尾只发一次）</div><b>扫描结果还没有保存</b>保存失败，需要在 youkai 里重试。点击打开。</div>
+  </div>
+  <div class="row"><h4 style="margin:0">首次点 ✕ 时（隐藏前）</h4><span class="m">3</span></div>
+  <div class="row" style="align-items:flex-start; gap:20px">
+    <div class="dialog col" style="gap:10px; width:460px">
+      <h2 style="font-size:17px">youkai 会继续在后台运行</h2>
+      <div class="small">关闭窗口后，youkai 的图标在任务栏右侧的通知区域；Windows 11 可能把它收在 <b>^</b> 里面。点图标可以重新打开，右键图标可以退出。</div>
+      <div class="well" style="height:60px; display:flex; align-items:center; justify-content:flex-end; padding:0 14px; gap:10px"><span class="small muted">任务栏示意</span><span class="kbd">^</span><span class="kbd">youkai</span><span class="small">中 21:40</span></div>
+      <div class="row"><span class="small muted grow">之后可在 设置 › 常规 重看</span><span class="btn primary">知道了</span></div>
+    </div>
+    <div class="small muted" style="max-width:380px">任务栏按钮：第二段通知发出时同时闪烁（<code>FlashFrame</code>），直到窗口获得焦点；窗口已隐藏到托盘时没有任务栏按钮，此项不生效。</div>
+  </div>
+</div>
+<div class="notes">
+  <h3>标注</h3>
+  <ol>
+    <li>托盘菜单第一行是禁用的状态行；扫描中“打开”写作“停止扫描并打开”（T1 §2、D-03）。MyGo 菜单项可运行时改文字与启用状态（<code>MenuItem.SetLabel</code> / <code>SetEnabled</code>）。左键单击行为 P-02 实测前不改（#115）。</li>
+    <li>MyGo v0.6.2 在 Windows 上的通知就是托盘气泡（Windows 10+ 显示为通知横幅），标题 ≤ 63 字、正文 ≤ 255 字；同一 ID 替换。点击只打开 youkai 并进入记录摘要，不启动扫描（09 §4.7）。准备超时不发第一段。</li>
+    <li>首次隐藏提示在隐藏前以对话框出现一次（P-10，Q-03 推荐 A）；之后可在设置重看。</li>
+  </ol>
+  <div class="state">按“扫描中完全没有反馈”的假设，托盘悬停提示与菜单状态行都不作为扫描中的反馈渠道（06 §3 第 1 条）。<br>相关规格：08 §7、§8、§9；09 §4.7、§4.8；10 R-09、R-18。</div>
+</div>
+</div></div></body></html>

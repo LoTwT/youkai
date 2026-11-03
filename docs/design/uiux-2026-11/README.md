@@ -17,6 +17,21 @@
 
 建议阅读顺序：06 提案与决定 → 03 首版旅程 → 01 末尾的 D 表 → 其余文件。
 
+[sketches/](sketches/) 是第一阶段的低保真示意图（Kimi 绘制，用户已认可其旅程与信息层级，不是布局定稿），每张有 PNG 与 SVG 两种格式。
+
+## 第二阶段：信息架构与低保真布局（草案）
+
+2026-11-03 起草，待检查点 2 由用户确认。输入是本阶段的 06 §1 决定、06 §3、03 与 05；首版只做 Windows 本地客户端。T6、T1 的展示条款在用户确认第二阶段后再同步。
+
+| 文件 | 内容 |
+| --- | --- |
+| [07-information-architecture.md](07-information-architecture.md) | 核心对象模型、页面与视图清单、导航模型及取舍、各种情况的入口、对示意图的取舍。 |
+| [08-screens.md](08-screens.md) | 每屏规格：首页（准备检查与扫描状态）、结果摘要、校对与补录、导出、记录列表、设置与更新、托盘菜单、结束通知、通用对话框。 |
+| [09-window-and-interaction.md](09-window-and-interaction.md) | 窗口硬边界与窄宽度降级、主按钮、确认与撤销、错误与诊断、键盘与快捷键、结束通知内容、待定项建议值、术语表与内部值映射。 |
+| [10-service-requirements.md](10-service-requirements.md) | 新设计需要、但服务层快照或契约尚未提供的数据与能力，作为第三阶段的输入。 |
+| [11-phase2-open-questions.md](11-phase2-open-questions.md) | 待用户决定的问题（5 条，各附推荐选项）。 |
+| [wireframes/](wireframes/README.md) | 12 张灰阶 HTML 线框及 PNG 预览。 |
+
 ## 依据与写法
 
 - **功能以现有规格为准。** 权威来源：[T1](../../specs/t1-mygo-ui-distribution.md)、[T6](../../specs/t6-review-export-workflow.md)、[架构 §5/§6](../../specs/scanner-architecture.md#5-扫描会话与结果语义)、[T2](../../specs/t2-platform-capture-input.md) 的平台约束、[JSON/CSV v2](../../specs/scan-json-format.md)、[发布与自动更新](../../release.md)。规格没写清的地方，对照 `internal/ui`、`cmd/youkai` 和 `internal/app` 的实际能力，以 `file:line` 引用（基于 `main` 的 `f23c836`）。
