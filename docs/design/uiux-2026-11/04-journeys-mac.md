@@ -1,4 +1,6 @@
-# 04 用户旅程：mac 云客户端用户
+# 04 用户旅程：mac 云客户端用户（后续版本参考）
+
+> **不在首版范围。** 2026-11-03 用户决定首版只支持 Windows 本地客户端，mac 云客户端移出首版（[架构 §6](../../specs/scanner-architecture.md#6-首版功能范围)、[06 第 1.1 节](06-proposals-and-phase2.md#11-首版范围调整2026-11-03-用户决定)）。mac 仍是开发平台；本文保留为后续版本的参考，表中的优先级是“该平台纳入时”的建议，不进入首版优先级。本文写于检查点 1 之前，未按 03 的新主干和 2026-11-03 的决定重写；后续版本纳入 mac 时，以届时的 03 为基础补写差异。
 
 第一阶段草案（2026-11-03）。画像见 [README](README.md#用户画像与范围)。写法（触点、情绪分、优先级）同 [03](03-journeys-windows.md#写法说明)；mac 的触点“托盘”指菜单栏图标，另有 Dock。
 
@@ -12,7 +14,7 @@
 | M2 | 扫描：准备 → 进行 → 结束 / 失败 | 结构同 [W2](03-journeys-windows.md#w2-扫描)，差异见下 | P0 |
 | M3 | 校对 | 同 [W3](03-journeys-windows.md#w3-校对) | P0 |
 | M4 | 导出 | 同 [W4](03-journeys-windows.md#w4-导出) | P0 |
-| M5 | 重新打开历史 | 同 [W5](03-journeys-windows.md#w5-重新打开历史) | P1 |
+| M5 | 重新打开历史 | 同 [W5a](03-journeys-windows.md#w5a-回访打开最近一条记录)、[W5b](03-journeys-windows.md#w5b-历史列表与筛选) | P1 |
 | M6 | 清理 | 同 [W6](03-journeys-windows.md#w6-清理) | P2 |
 | M7 | 设置与更新 | 同 [W7](03-journeys-windows.md#w7-设置与更新)，更新后可能要重新授权 | P2（更新后授权失效时 P1） |
 | M8 | 菜单栏与退出 | 结构同 [W8](03-journeys-windows.md#w8-托盘与退出)，入口不同 | P1 |
@@ -62,7 +64,7 @@ journey
 | E4 窗口跨屏或超出屏幕 | `targetOffscreen`（C-15）。 | P1 |
 | E5 找不到云客户端窗口 | 未运行或没有合格窗口，`targetNotFound`；同进程多个合格窗口报 `targetAmbiguous`（[T2 §2.2](../../specs/t2-platform-capture-input.md#22-macosscreencapturekit-窗口流与-quartz-输入)）。 | P1 |
 | E6 Gatekeeper 阻止 | 系统层面，只能在说明中告知（C-19）。 | P2 |
-| E7 停止热键被占用 | 同 W1 E5。 | P1 |
+| E7 停止热键被占用 | 同 W1 E4。 | P1 |
 
 ## M2 扫描
 
