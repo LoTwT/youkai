@@ -58,6 +58,11 @@ type windowSurface interface {
 type traySurface interface {
 	SetMenu(*mygo.Menu)
 	SetToolTip(string)
+	// OnClick registers the callback for a click that the platform does not
+	// turn into a menu. Windows fires it on every left-button release, so a
+	// double click fires it twice; macOS shows the menu instead and does not
+	// fire it while a menu is installed.
+	OnClick(func()) (off func())
 	// Bounds reports where the platform put the icon, empty when it cannot
 	// locate it. It is diagnostic only: on Windows an icon in the
 	// notification area's overflow has no rectangle (Shell_NotifyIconGetRect
@@ -159,6 +164,14 @@ func (l *windowLifecycle) CreateTray() {
 		return
 	}
 	l.tray = tray
+	// Windows delivers a left-button release as a tray click even when the
+	// icon has a menu, and the platform has no separate double-click event:
+	// a double click is two clicks. Restore is safe to repeat — PrepareRestore
+	// only asks the same idempotent stop, and re-showing the visible window
+	// has no lasting effect — and every other restore route uses it unchanged.
+	// macOS shows the installed menu on a click instead of invoking the
+	// callback, so its behavior does not change.
+	tray.OnClick(l.Restore)
 	l.status = l.model.LifecycleStatus()
 	l.statusKnown = true
 	l.Refresh()

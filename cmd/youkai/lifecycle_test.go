@@ -94,11 +94,13 @@ func (w *fakeWindow) Hide()    { w.hides++; w.record("hide") }
 func (w *fakeWindow) Focus()   { w.record("focus") }
 func (w *fakeWindow) Restore() { w.record("restore") }
 
-// fakeTray records the menus and tooltips the lifecycle installs.
+// fakeTray records the menus and tooltips the lifecycle installs and the
+// click callbacks it registers.
 type fakeTray struct {
 	menus    []*mygo.Menu
 	tooltips []string
 	menu     *mygo.Menu
+	clicks   []func()
 	bounds   mygo.Rectangle
 	// boundsCalls counts the location checks: creation and every close.
 	boundsCalls int
@@ -109,6 +111,10 @@ func (t *fakeTray) SetMenu(menu *mygo.Menu) {
 	t.menus = append(t.menus, menu)
 }
 func (t *fakeTray) SetToolTip(tip string) { t.tooltips = append(t.tooltips, tip) }
+func (t *fakeTray) OnClick(fn func()) func() {
+	t.clicks = append(t.clicks, fn)
+	return func() {}
+}
 func (t *fakeTray) Bounds() mygo.Rectangle {
 	t.boundsCalls++
 	return t.bounds
@@ -175,6 +181,62 @@ func TestWindowCloseHidesByDefault(t *testing.T) {
 	}
 	if model.allowCalls != 0 || model.stopCalls != 0 {
 		t.Fatalf("hiding started the exit path: allowCalls=%d stopCalls=%d", model.allowCalls, model.stopCalls)
+	}
+}
+
+// A left click restores the window on Windows, and a double click is the
+// same callback twice: the second restore only re-shows the visible window
+// and rebuilds nothing.
+func TestTrayClickRestoresWindow(t *testing.T) {
+	model := &fakeLifecycleModel{behavior: app.CloseBehaviorHide}
+	life := newWindowLifecycle(model)
+	tray, _ := installFakeTray(t, life)
+	win := &fakeWindow{}
+	life.AttachWindow(win)
+
+	if len(tray.clicks) != 1 {
+		t.Fatalf("tray click callbacks = %d, want 1", len(tray.clicks))
+	}
+	menusAfterCreation := len(tray.menus)
+
+	tray.clicks[0]()
+	if win.shows != 1 || win.hides != 0 {
+		t.Fatalf("first click shows=%d hides=%d, want one restore", win.shows, win.hides)
+	}
+	if model.stopCalls != 0 {
+		t.Fatalf("an idle click stopped a scan: %d stops", model.stopCalls)
+	}
+
+	// The platform has no double-click event; both releases reach the same
+	// callback. Restore is idempotent for an idle window.
+	tray.clicks[0]()
+	if win.shows != 2 || win.hides != 0 {
+		t.Fatalf("double click shows=%d hides=%d, want two restores", win.shows, win.hides)
+	}
+	if model.stopCalls != 0 {
+		t.Fatalf("a double click stopped a scan: %d stops", model.stopCalls)
+	}
+	if len(tray.menus) != menusAfterCreation {
+		t.Fatalf("a repeated restore rebuilt the tray menu: %d menus, want %d", len(tray.menus), menusAfterCreation)
+	}
+}
+
+// A click during the explicit-exit wrap-up follows Restore's existing
+// contract: it shows the wrap-up progress and never turns the exit into a
+// hide or a second exit.
+func TestTrayClickDuringExitUsesRestore(t *testing.T) {
+	model := &fakeLifecycleModel{behavior: app.CloseBehaviorHide, exiting: true}
+	life := newWindowLifecycle(model)
+	tray, _ := installFakeTray(t, life)
+	win := &fakeWindow{}
+	life.AttachWindow(win)
+
+	tray.clicks[0]()
+	if win.shows != 1 || win.hides != 0 {
+		t.Fatalf("click during exit shows=%d hides=%d, want the wrap-up window", win.shows, win.hides)
+	}
+	if model.allowCalls != 0 {
+		t.Fatalf("the click asked to close %d times, want none", model.allowCalls)
 	}
 }
 
