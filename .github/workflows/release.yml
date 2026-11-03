@@ -13,17 +13,17 @@
 #     test releases never become. (Even on the API path the prefix "v"
 #     could not match a test-v… tag.)
 #
-# The draft release is created before the builds so both platform jobs
-# upload into the same draft. Each platform job verifies its own packaged
-# layout (bundled resources, signatures, the recognition self-test and the
-# updater state of the built artifact) before uploading; the publish job
-# runs only after both platforms succeeded, verifies the release's assets
-# are complete, and publishes the draft for the channel. Failed jobs can
-# be re-run: they replace their assets in the same draft (--clobber).
+# The draft release is created before the build so the Windows job uploads
+# into it. The Windows job verifies its packaged layout (bundled resources,
+# signatures, the recognition self-test and the updater state of the built
+# artifact) before uploading; the publish job runs only after the Windows
+# build succeeded, verifies the release's assets are complete, and
+# publishes the draft for the channel. Failed jobs can be re-run: they
+# replace their assets in the same draft (--clobber).
 #
 # Versions come from the tags: the source mygo.json stays at its
-# development version, and each job writes the tag's version and channel
-# prefix into its checkout's copy of mygo.json — the built app,
+# development version, and the Windows job writes the tag's version and
+# channel prefix into its checkout's copy of mygo.json — the built app,
 # mygo.App.Version() and the tag always agree, without version bumps in
 # the repository. Every released version needs a "## <version>" section in
 # CHANGELOG.md: MyGo fails the build without it (the section becomes the
@@ -82,7 +82,7 @@ jobs:
             exit 1
           fi
       - name: Create the draft release
-        # Both platform jobs upload into this one draft; without it each
+        # The Windows job uploads into this one draft; without it the
         # `mygo build -upload` would create a draft of its own.
         env:
           GH_TOKEN: ${{ github.token }}
@@ -91,135 +91,6 @@ jobs:
             gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
               --draft --verify-tag --title "$GITHUB_REF_NAME" --generate-notes
           fi
-
-  macos:
-    name: Build and upload (darwin/arm64)
-    needs: draft-release
-    runs-on: macos-latest # Apple Silicon
-    timeout-minutes: 40
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-          cache: true
-      - name: Set the release version and channel in mygo.json
-        # The checkout's copy is modified, never committed. The version and
-        # the channel come from the tag; the channel prefix decides which
-        # releases the built app treats as its own.
-        shell: bash
-        run: |
-          set -eu
-          tag="${GITHUB_REF_NAME}"
-          case "$tag" in
-            test-v*) prefix="test-v" ;;
-            v*) prefix="v" ;;
-            *) echo "ERROR: unexpected tag $tag (the workflow triggers on test-v* and v*)"; exit 1 ;;
-          esac
-          version="${tag#"$prefix"}"
-          # The rewrite below must not mark the working tree as modified:
-          # Go stamps the VCS state into the binary (debug.ReadBuildInfo's
-          # vcs.*), and the app's diagnostic log reports it — a release
-          # build then says commit=<tag sha>-modified, misreading its own
-          # release process's configuration write as a source change.
-          # skip-worktree keeps the rewrite out of `git status`, so the
-          # build carries the tag's clean commit. The source itself is
-          # exactly the tagged checkout; only this configuration write is
-          # local.
-          git update-index --skip-worktree mygo.json
-          jq --arg version "$version" --arg tagPrefix "$prefix" \
-            '.version = $version | .updates.tagPrefix = $tagPrefix' mygo.json > mygo.json.tmp
-          mv mygo.json.tmp mygo.json
-          echo "RELEASE_VERSION=$version" >> "$GITHUB_ENV"
-          echo "building Youkai $version on channel prefix $prefix"
-      - name: Download OCR resources (fetchdeps)
-        run: go run ./tools/fetchdeps -platform darwin/arm64
-      - name: Build the app bundle, the DMG and the signed update, and upload
-        # CGO_ENABLED must be explicit: MyGo forces CGO_ENABLED=0 when the
-        # environment leaves it unset, and the OCR bindings need cgo. The
-        # deployment target matches the macos.minimumSystemVersion of
-        # mygo.json (14.0). MYGO_UPDATER_PRIVATE_KEY signs the update
-        # archive and manifest — without it the build skips the update
-        # files and the verification below fails — and GH_TOKEN lets the
-        # upload reach the draft release (and the delta computation read
-        # the published releases).
-        env:
-          CGO_ENABLED: "1"
-          MACOSX_DEPLOYMENT_TARGET: "14.0"
-          GH_TOKEN: ${{ github.token }}
-          MYGO_UPDATER_PRIVATE_KEY: ${{ secrets.MYGO_UPDATER_PRIVATE_KEY }}
-        run: go tool mygo build -platform darwin/arm64 -upload
-      - name: Verify the bundle, the DMG, the signature and the update files
-        shell: bash
-        run: |
-          set -u
-          app="build/darwin-arm64/Youkai.app"
-          dmg=$(find build/darwin-arm64 -maxdepth 1 -name '*.dmg' -print -quit)
-          archive="build/darwin-arm64/youkai-${RELEASE_VERSION}-darwin-arm64.tar.gz"
-          manifest="build/darwin-arm64/update-darwin-arm64.json"
-          fail=0
-          if [ ! -d "$app" ]; then
-            echo "ERROR: missing app bundle: $app"
-            fail=1
-          fi
-          if [ -z "$dmg" ]; then
-            echo "ERROR: no DMG under build/darwin-arm64 (MyGo skips the disk image with a warning when hdiutil fails; a release must have one)"
-            fail=1
-          fi
-          for f in \
-            "Contents/Resources/onnxruntime/libonnxruntime.1.29.0.dylib" \
-            "Contents/Resources/onnxruntime/LICENSE" \
-            "Contents/Resources/onnxruntime/ThirdPartyNotices.txt" \
-            "Contents/Resources/models/PP-OCRv6_rec_small.onnx" \
-            "Contents/Resources/THIRD-PARTY-NOTICES.md"; do
-            if [ ! -e "$app/$f" ]; then
-              echo "ERROR: missing bundled resource: $app/$f"
-              fail=1
-            fi
-          done
-          for f in "$archive" "$manifest"; do
-            if [ ! -f "$f" ]; then
-              echo "ERROR: missing update file — the build must sign updates, so MYGO_UPDATER_PRIVATE_KEY is missing or does not match updates.publicKey: $f"
-              fail=1
-            fi
-          done
-          if [ "$fail" -ne 0 ]; then
-            exit 1
-          fi
-          # The manifest serves the tag's version and points its archive at
-          # this very release, so installed apps can never be fed another
-          # channel's files.
-          jq -e --arg version "$RELEASE_VERSION" --arg tag "$GITHUB_REF_NAME" \
-            '.version == $version and (.url | endswith("/" + $tag + "/youkai-" + $version + "-darwin-arm64.tar.gz"))' \
-            "$manifest" > /dev/null || {
-            echo "ERROR: $manifest does not serve version $RELEASE_VERSION from tag $GITHUB_REF_NAME"
-            cat "$manifest"
-            exit 1
-          }
-          # The ad-hoc signature must cover the whole bundle, including the
-          # bundled dylib (which keeps its own valid signature when upstream
-          # ships one; MyGo ad-hoc signs only unsigned Mach-O files).
-          codesign --verify --deep --strict --verbose=2 "$app"
-          echo "--- executable and dylib minimum system (LC_BUILD_VERSION) ---"
-          otool -l "$app/Contents/MacOS/Youkai" | grep -A3 LC_BUILD_VERSION
-          otool -l "$app/Contents/Resources/onnxruntime/libonnxruntime.1.29.0.dylib" | grep -A3 LC_BUILD_VERSION
-      - name: Recognition self-test on the packaged app
-        # The bundle is ad-hoc signed on this runner, so it runs here. The
-        # check loads the bundled dylib and model from Contents/Resources and
-        # recognizes one embedded sample; it exits non-zero on failure. Its
-        # first line also reports the updater state, asserted here: a
-        # release build must have updates on.
-        shell: bash
-        run: |
-          set -e
-          YOUKAI_SELFTEST=1 "build/darwin-arm64/Youkai.app/Contents/MacOS/Youkai" 2>selftest-stderr.txt
-          cat selftest-stderr.txt
-          grep -q 'youkai: self-test: updates=enabled' selftest-stderr.txt || {
-            echo "ERROR: a release build must have updates on — the self-test log does not say updates=enabled"
-            exit 1
-          }
 
   windows:
     name: Build and upload (windows/amd64)
@@ -235,10 +106,10 @@ jobs:
           go-version-file: go.mod
           cache: true
       - name: Set the release version and channel in mygo.json
-        # See the macOS job: the version and channel come from the tag; the
-        # checkout's copy is modified, never committed. The skip-worktree
-        # bit keeps that rewrite out of `git status`, so the build stamps
-        # the tag's clean commit (no "-modified") into the binary.
+        # The version and channel come from the tag; the checkout's copy is
+        # modified, never committed. The skip-worktree bit keeps that
+        # rewrite out of `git status`, so the build stamps the tag's clean
+        # commit (no "-modified") into the binary.
         shell: bash
         run: |
           set -eu
@@ -405,15 +276,15 @@ jobs:
 
   publish:
     name: Verify the release assets and publish
-    needs: [macos, windows]
+    needs: windows
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - name: Verify the assets and publish the release
-        # Only after both platforms built, verified and uploaded: check that
-        # the release holds every artifact of both channels' files — the
-        # installers, and each platform's update archive and manifest — then
-        # publish the draft for its channel.
+        # Only after the Windows job built, verified and uploaded: check
+        # that the release holds every artifact — the installer, and the
+        # update archive and manifest — then publish the draft for its
+        # channel.
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -427,19 +298,15 @@ jobs:
           version="${tag#"$prefix"}"
           repo="${GITHUB_REPOSITORY}"
           assets=$(gh release view "$tag" --repo "$repo" --json assets -q '.assets[].name')
-          # MyGo names the installers with spaces ("Youkai <version>
-          # arm64.dmg", "Youkai Setup <version> amd64.exe"), but GitHub
-          # renames every uploaded asset filename that contains special
-          # characters and stores each space as a dot: test-v0.0.1 holds
-          # "Youkai.0.0.1.arm64.dmg", not "Youkai 0.0.1 arm64.dmg". Apply
-          # the same space-to-dot renaming to the expected names and match
-          # the stored names; the other assets contain no spaces and pass
-          # through unchanged.
+          # MyGo names the installer with spaces ("Youkai Setup <version>
+          # amd64.exe"), but GitHub renames every uploaded asset filename
+          # that contains special characters and stores each space as a
+          # dot: test-v0.0.1 holds "Youkai.Setup.0.0.1.amd64.exe", not
+          # "Youkai Setup 0.0.1 amd64.exe". Apply the same space-to-dot
+          # renaming to the expected names and match the stored names; the
+          # other assets contain no spaces and pass through unchanged.
           need=(
-            "Youkai $version arm64.dmg"
             "Youkai Setup $version amd64.exe"
-            "youkai-$version-darwin-arm64.tar.gz"
-            "update-darwin-arm64.json"
             "youkai-$version-windows-amd64.tar.gz"
             "update-windows-amd64.json"
           )
@@ -459,7 +326,7 @@ jobs:
           # The manifests the apps download must serve the tag's version.
           dir=$(mktemp -d)
           gh release download "$tag" --repo "$repo" --pattern 'update-*.json' --dir "$dir" --clobber
-          for target in darwin-arm64 windows-amd64; do
+          for target in windows-amd64; do
             got=$(jq -r '.version' "$dir/update-$target.json")
             if [ "$got" != "$version" ]; then
               echo "ERROR: update-$target.json serves version $got, want $version (the tag)"
