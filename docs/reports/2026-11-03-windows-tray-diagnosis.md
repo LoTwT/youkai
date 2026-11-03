@@ -1,12 +1,38 @@
 # Windows 托盘图标缺失只读诊断（2026-11-03）
 
-状态：**未执行**。这是交给 Windows 真机会话执行的只读步骤，不是实测报告；结果应补写回[全量真机扫描报告](2026-11-02-windows-local-field-acceptance.md)的未解决问题 4，或另立后续报告。执行前先读[架构第 5 节的托盘可用性状态](../specs/scanner-architecture.md#隐藏恢复与退出)。
+状态：**已执行（2026-11-03）**。执行环境为 Windows 11、3840×2160 / 125%、dev 构建、以 High 完整性由提权 PowerShell 启动。下面的“执行结果”记录本次取得的事实与结论；“只读步骤”保留原样，供后续复现或补测未覆盖项。托盘行为的状态以[架构第 5 节](../specs/scanner-architecture.md#隐藏恢复与退出)为准。
+
+## 执行结果
+
+### run4（构建 `48dec0f`，手动开始）
+
+- 11:12:18.470 日志 `youkai: tray created: icon at 2728,1680 32x48`。
+- 第 2 步：youkai 与 `explorer.exe` 的 SessionId 都是 10。
+- 第 4 步：对 `MyGoApp`、uID=1 调用 `Shell_NotifyIconGetRect`，得到 hr=0，rect 3410,2100–3450,2160（物理像素）。该矩形正好是日志坐标的 1.25 倍，对应 125% 缩放。
+- 第 5 步：`HKCU\Control Panel\NotifyIconSettings` 中存在对应项，`InitialTooltip = Youkai · 就绪`。
+- 用户点击“开始扫描”：11:16:56.768 `activate: requesting foreground for target hwnd 329278`；11:16:56.794 `activate: target hwnd 329278 accepted after 26 ms; waiting for readiness`；游戏切到前台。
+- 用户按 Ctrl+Alt+Shift+S：11:16:58.853 `stop trigger: kind=user code=userCancelled phase=capturing`，扫描 `ended (cancelled)`，共 0 件，收尾正常。
+- 用户点击主窗口关闭：11:17:03.849 `tray at close: icon at 2728,1680 32x48`。窗口隐藏；`MyGoWindow` 仍是同一 HWND `0x707CE`，只是不可见；`MyGoApp` 仍在。PowerShell 的 `MainWindowHandle` 改指向 dev 构建自带的控制台窗口 `ConsoleWindowClass`，这说明 11-02 观察到的“主窗口 HWND 变化”不是窗口被重建。
+- 关闭后双击托盘图标无反应。根因是 youkai 没有注册 `Tray.OnClick`，由 #115 修复。
+- 用户从托盘右键菜单选择“退出”：11:25:03.729 `youkai: exit wrap-up complete`。
+
+### run5（构建 `da43ae3`）
+
+- 日志有 `tray created`；用户确认关闭窗口后，左键单击、双击托盘图标都能恢复主窗口。
+
+### 结论
+
+- 已解释（11-02 现象）：
+  - 托盘“找不到”：图标实际存在且已注册，问题在于左键或双击没有处理路径（#115 修复）。11-02 使用的构建早于 #114 的托盘日志，缺失 `tray` 行不能证明未注册。
+  - “主窗口 HWND 变化”：`MyGoWindow` 没有被重建；变的是 PowerShell 的 `MainWindowHandle`，它改指向 dev 构建的控制台窗口。
+- 未解释：进程在 20–40 分钟后自行消失。dev 构建关闭控制台窗口会连带结束进程，这是可能原因之一，但没有证据，只能作为推断。
+- 未覆盖：正式安装版（GUI 子系统，没有控制台窗口）的托盘行为未测。
 
 ## 背景与已知结论
 
 - 现场（2026-11-02，Windows 11，3840×2160 / 125%，dev 构建 `64bef82`，`Youkai Dev.exe` 以 High 完整性由提权 PowerShell 启动）：点击主窗口关闭后进程仍在，主窗口 HWND 从 `0x155060E` 变为 `0x2109E8`，通知区域和溢出区都没有 Youkai 图标；`youkai.log` 有 `close behavior=hide`，没有任何 `tray` 行；约 20–40 分钟后进程自行消失。
 - 已确认：托盘只在就绪回调创建（`cmd/youkai/main.go` 的 `WhenReady` 调用 `CreateTray`）；MyGo v0.6.2 的 Windows `NewTray` 只登记选项，把 `Shell_NotifyIcon(NIM_ADD)` 推迟到异步消息，并丢弃返回值、无论成败都把图标标记为已添加（模块内 `internal/windows/tray.go` 的 `NewTray` 与 `add`）。因此“创建成功”不等于图标可见，旧实现也没有成功日志。
-- 未确认：`Shell_NotifyIcon` 是否返回失败、失败原因（Explorer 的 `Shell_TrayWnd` 不在同一会话或桌面、shell 卡住、会话/桌面不匹配等），以及进程为什么在 20–40 分钟后退出。以下步骤只收集证据，**不尝试修复**。
+- 执行前未确认（本次部分回答）：`Shell_NotifyIcon` 的返回值仍被 MyGo 丢弃，无法直接取得；本次 `Shell_NotifyIconGetRect` 返回 hr=0，说明图标已注册，没有出现需要解释的注册失败。进程为什么在 20–40 分钟后退出仍未查明。以下步骤只收集证据，**不尝试修复**。
 
 ## 只读边界
 
