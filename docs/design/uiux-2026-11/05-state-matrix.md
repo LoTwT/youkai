@@ -38,7 +38,7 @@
 | 预检失败：授权（mac 录屏 / 辅助功能） | 缺哪一项授权、去哪里授权、可能需要重启（C-16） | 去系统设置授权、重启 youkai | S1 | 授权后重启 |
 | 预检失败：档位（Win `clientTierNotOpened` / `clientTierUnsupported`） | 当前分辨率、需要的档位（1920×1080 窗口或无边框模式）（C-11） | 去游戏调整，再开始 | S2 | — |
 | 预检失败：DPI，youkai 自身（Win `dpiAwarenessMismatch`） | youkai 进程不是每显示器 DPI 感知 v2，属于 youkai 自身的配置问题（`internal/platform/windows/fault.go:31-35`）；当前没有中文映射（D-04） | 用户无法自行修复；可反馈问题 | — | 需要修复 youkai 本身；规格未写提示文案 |
-| 预检失败：DPI，目标窗口（Win `dpiVirtualized` / `dpiCheckUnavailable`） | 游戏窗口被 DPI 虚拟化，或无法读取 DPI 信息（`fault.go:36-46`）；当前没有中文映射（D-04）；只有 125% 缩放有实测证据（[T2 §3.2](../../specs/t2-platform-capture-input.md#32-可验收的窄显示配置候选)） | 待定：规格未写用户处理方式 | S2 | 待定；无法判定时按拒绝处理，不能开始 |
+| 预检失败：DPI 虚拟化或无法核实（Win `dpiVirtualized` / `dpiCheckUnavailable`） | `dpiVirtualized`：游戏窗口被 DPI 虚拟化；`dpiCheckUnavailable`：DPI 事实读不到，来源包括查询 youkai 自身的 DPI 感知失败（`internal/platform/windows/observe.go:222-223`）、读不到游戏窗口或显示器的 DPI（`geometry.go:150-153`、`:173`）（码的定义见 `fault.go:37-46`）；当前没有中文映射（D-04）；只有 125% 缩放有实测证据（[T2 §3.2](../../specs/t2-platform-capture-input.md#32-可验收的窄显示配置候选)） | 待定：规格未写用户处理方式 | S2 | 待定；无法判定时按拒绝处理，不能开始 |
 | 预检失败：窗口位置（Win `windowOutsideWorkArea`；mac `targetOffscreen`） | 窗口超出屏幕或被任务栏遮挡（C-12、C-15） | 调整窗口，再开始 | S2 | — |
 | 预检失败：窗口尺寸（mac `windowSizeUnsupported`） | 当前尺寸与 1164×762（C-15） | 调整窗口，再开始 | S2 | — |
 | 预检失败：找不到游戏 / 多个候选（`targetNotFound` / `targetAmbiguous`） | 原因 | 启动游戏、关闭多余窗口，再开始 | S2 | — |
