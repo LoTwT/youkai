@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><title>12 托盘菜单与结束通知</title><link rel="stylesheet" href="wireframe.css"></head>
 <body><div class="sheet">
-<div class="sheet-head"><div><div class="kicker">YOUKAI · WINDOWS 本地客户端 · 第二阶段线框</div><h1>12 托盘菜单、结束通知与首次隐藏提示</h1><div class="sub">系统触点；对应 05 S11 托盘四行、窗口已隐藏，S6 结束通知、S5 保存失败</div></div><div class="stamp">低保真 · 非视觉稿</div></div>
+<div class="sheet-head"><div><div class="kicker">YOUKAI · WINDOWS 本地客户端 · 第二阶段线框</div><h1>12 托盘菜单、结束通知与首次隐藏提示</h1><div class="sub">系统触点；对应 05 S11 托盘各行、托盘不可用、窗口已隐藏，S6 结束通知、S5 保存失败</div></div><div class="stamp">低保真 · 非视觉稿</div></div>
 <div class="stage">
 <div class="col" style="width:1180px; gap:22px">
   <div class="row"><h4 style="margin:0">托盘右键菜单（四种状态）</h4><span class="m">1</span></div>
@@ -33,7 +33,7 @@
   <ol>
     <li>托盘菜单第一行是禁用的状态行；扫描中“打开”写作“停止扫描并打开”（T1 §2、D-03）。MyGo 菜单项可运行时改文字与启用状态（<code>MenuItem.SetLabel</code> / <code>SetEnabled</code>）。左键单击行为 P-02 实测前不改（#115）。</li>
     <li>MyGo v0.6.2 在 Windows 上的通知就是托盘气泡（Windows 10+ 显示为通知横幅），标题 ≤ 63 字、正文 ≤ 255 字。同一 ID 替换只是 API 约定，Windows 后端没有实现，所以发第二段前先 <code>Close()</code> 第一段再 <code>Show()</code>，否则会多出一个临时托盘图标（09 §4.7）。点击只打开 youkai 并进入记录摘要，不启动扫描。准备超时不发第一段。通知中心能否找回错过的通知待实测（09 §4.9 T-01）。</li>
-    <li>首次隐藏提示在隐藏前以对话框出现一次（P-10，08 §9 直接采用）；之后可在设置重看。托盘不可用时不出现，关窗直接退出（08 §7）。</li>
+    <li>首次隐藏提示在隐藏前以对话框出现一次（P-10；08 §9 按推荐写入，待 11 Q-03 确认）；之后可在设置重看。单按钮对话框不受“主按钮在左”的限制（09 §4.1）。托盘不可用时不出现，关窗直接退出（08 §7）。</li>
   </ol>
   <div class="state">按“扫描中完全没有反馈”的假设，托盘悬停提示与菜单状态行都不作为扫描中的反馈渠道（06 §3 第 1 条）。<br>相关规格：08 §7、§8、§9；09 §4.7、§4.8；10 R-09、R-18。</div>
 </div>

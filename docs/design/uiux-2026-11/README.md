@@ -29,7 +29,7 @@
 | [08-screens.md](08-screens.md) | 每屏规格：首页（准备检查与扫描状态）、结果摘要、校对与补录、导出、记录列表、设置与更新、托盘菜单、结束通知、通用对话框。 |
 | [09-window-and-interaction.md](09-window-and-interaction.md) | 窗口硬边界与窄宽度降级、主按钮、确认与撤销、错误与诊断、键盘与快捷键、结束通知内容、待定项建议值、术语表与内部值映射。 |
 | [10-service-requirements.md](10-service-requirements.md) | 新设计需要、但服务层快照或契约尚未提供的数据与能力，作为第三阶段的输入。 |
-| [11-phase2-open-questions.md](11-phase2-open-questions.md) | 待用户决定的问题（5 条，各附推荐选项）。 |
+| [11-phase2-open-questions.md](11-phase2-open-questions.md) | 待用户决定的问题（6 条，各附推荐选项）。 |
 | [wireframes/](wireframes/README.md) | 12 张灰阶 HTML 线框及 PNG 预览。 |
 
 ## 依据与写法
