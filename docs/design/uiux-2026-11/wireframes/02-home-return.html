@@ -1,17 +1,16 @@
 <!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><title>02 扫描页 · 回访</title><link rel="stylesheet" href="wireframe.css"></head>
 <body><div class="sheet">
-<div class="sheet-head"><div><div class="kicker">YOUKAI · WINDOWS 本地客户端 · 第二阶段线框</div><h1>02 扫描页 · 回访（全部就绪，检查项默认展开）</h1><div class="sub">默认窗口 1180 × 760 DIP；对应 05 S1 回访、S2 就绪；检查点 2 后：去掉最近记录卡，“开始扫描”放进准备检查卡片</div></div><div class="stamp">低保真 · 非视觉稿</div></div>
+<div class="sheet-head"><div><div class="kicker">YOUKAI · WINDOWS 本地客户端 · 第二阶段线框</div><h1>02 扫描页 · 回访（全部就绪）</h1><div class="sub">默认窗口 1180 × 760 DIP；对应 05 S1 回访、S2 就绪；按钮位置为方案 C（2026-11-04 用户选定）</div></div><div class="stamp">低保真 · 非视觉稿</div></div>
 <div class="stage">
 <div class="win">
   <div class="titlebar"><span>youkai</span><span class="ctl"><span>—</span><span>☐</span><span>✕</span></span></div>
   <div class="frame">
     <nav class="rail"><div class="it on"><i></i>扫描</div><div class="it"><i></i>记录</div><div class="spacer"></div><div class="it"><i></i>设置</div></nav>
-    <main class="content"><div class="pad col" style="gap:14px; height:100%">
-      <div class="row"><h2>准备检查</h2><span class="m">1</span><span class="right small muted">21:38 检查 · <span class="link">重新检查</span></span></div>
-      <div class="card col" style="padding:14px 20px; gap:10px">
-        <div class="row"><span class="tag solid">✓ 可以开始</span><b>8 项条件都满足</b><span class="m">2</span></div>
-        <div style="margin:0 -20px">
+    <main class="content"><div class="pad col" style="gap:12px; height:100%">
+      <div class="row"><h2>准备检查</h2><span class="tag solid">✓ 可以开始</span><span class="m">1</span><span class="right small muted">21:38 检查 · <span class="link">重新检查</span></span></div>
+      <div class="scancard">
+        <div class="list">
           <div class="check"><span class="ic ok"></span><span class="name">目标客户端</span><span class="val">《绝区零》窗口（ZenlessZoneZero.exe）</span><span class="link">更换目标</span></div>
           <div class="check"><span class="ic ok"></span><span class="name">管理员权限</span><span class="val">与游戏一致（管理员）</span><span></span></div>
           <div class="check"><span class="ic ok"></span><span class="name">游戏分辨率</span><span class="val">1920×1080 · 无边框</span><span></span></div>
@@ -20,25 +19,25 @@
           <div class="check"><span class="ic ok"></span><span class="name">停止热键</span><span class="val"><span class="kbd">Ctrl</span>+<span class="kbd">Alt</span>+<span class="kbd">Shift</span>+<span class="kbd">S</span> 可以使用</span><span></span></div>
           <div class="check"><span class="ic ok"></span><span class="name">磁盘空间</span><span class="val">可用 41 GB</span><span></span></div>
           <div class="check"><span class="ic ok"></span><span class="name">识别资源</span><span class="val">安装完整</span><span></span></div>
-          <div class="check"><span class="ic later"></span><span class="name">游戏页面等</span><span class="val muted">驱动盘仓库页、遮挡、独占全屏：点开始后检查</span><span></span></div>
+          <div class="check"><span class="ic later"></span><span class="name">游戏页面等</span><span class="val muted">请打开驱动盘仓库页；遮挡、独占全屏点开始后检查</span><span class="m">2</span></div>
+          <div class="small muted" style="padding:8px 12px">范围：S 级 · 1–6 号位 · 保存在本机</div>
         </div>
-        <div class="hr" style="margin:2px 0"></div>
-        <div class="well small" style="padding:8px 12px">开始前请记住<span class="m" style="margin:0 6px">3</span>点开始后 <b>30 秒内</b>保持游戏在前台，扫描期间不要操作游戏 · 中途停止 <span class="kbd">Ctrl</span>+<span class="kbd">Alt</span>+<span class="kbd">Shift</span>+<span class="kbd">S</span> · 预计耗时 <b>约 14 分钟</b>（依据最近 3 次扫描） · 扫描期间不显示进度，结束后发两条通知</div>
-        <div class="row"><span class="btn primary big">开始扫描</span><span class="m">4</span><span class="small muted">范围：S 级 · 1–6 号位 · 新扫描会生成一条新记录，不覆盖旧记录</span></div>
+        <div class="actbar">
+          <div class="notice"><span>中途停止 <span class="kbd">Ctrl</span>+<span class="kbd">Alt</span>+<span class="kbd">Shift</span>+<span class="kbd">S</span></span><span>点开始后 <b>30 秒内</b>保持游戏在前台，扫描期间不要操作游戏</span><span>预计 <b>约 14 分钟</b>（依据最近 3 次扫描）</span><span class="m">3</span></div>
+          <div class="go"><span class="btn primary big">开始扫描</span><span class="m">4</span></div>
+        </div>
       </div>
-      <div class="small muted" style="margin-top:auto">要看上次的结果、继续校对或再导出：左侧“记录”，最新一条在最前。<span class="m" style="margin-left:4px">5</span></div>
     </div></main>
   </div>
 </div>
 <div class="notes">
   <h3>标注</h3>
   <ol>
-    <li>导航第一项叫“扫描”，扫描页去掉“最近记录”卡，内容撑满宽度（检查点 2 用户决定，07 开头）。窄导航轨三目的地已决定（2026-11-03，用户选 A，11 Q-01）。</li>
-    <li>检查项默认全部展开（检查点 2 用户决定，2026-11-03），首次与回访相同；顶部一行结论，不满足项排在最前（07 §4 回访）。</li>
-    <li>停止热键、30 秒规则、预计耗时放在准备检查卡片内（08 §1.3）；它与开始按钮的相对位置随按钮一起待定。</li>
-    <li>“开始扫描”是扫描页唯一的主按钮（11 Q-05 已由用户反馈消解）。<b>按钮位置待定（检查点 2 反馈，方案出图中）</b>：用户认为当前画法（卡片底部、须知块下方）不合适，此处暂保留原画法。<span class="kbd">Ctrl</span>+<span class="kbd">R</span> 在就绪时同样可用。</li>
-    <li>上次结果、继续校对、再导出改走“记录”目的地（08 §5）；扫描结束时由结束通知或自动导航直接进入新记录的摘要。</li>
+    <li>结论标签与“重新检查”同在标题行；检查项默认全部展开（用户决定，2026-11-03）。界面上不写“默认展开”“n 项已满足”之类的说明（2026-11-04 用户要求去掉冗余说明，09 §5.3）。</li>
+    <li>需要游戏在前台的检查只标“点开始后检查”，同时告诉用户先打开驱动盘仓库页（C-07）。</li>
+    <li><b>方案 C（2026-11-04 用户选定）：</b>清单下方是固定在卡片底部的操作条；须知（停止热键、30 秒规则、预计耗时）在操作条左侧，与按钮属于同一底部操作区域。</li>
+    <li>“开始扫描”在操作条右侧，是扫描页唯一的主按钮。禁用时原因写在按钮左侧（见线框 01）。清单变长或窗口变矮时只滚动清单，操作条不滚（09 §2）。</li>
   </ol>
-  <div class="state">初始焦点：开始扫描。焦点顺序：导航轨 → 重新检查 → 更换目标 → 开始扫描。<br>窗口尺寸已决定（2026-11-03，用户选 A，11 Q-02）。<br>相关规格：08 §1、§1.3；09 §4.8 预计耗时。</div>
+  <div class="state">初始焦点：开始扫描。焦点顺序：导航轨 → 重新检查 → 更换目标 → 开始扫描。<br>相关规格：08 §1、§1.3；09 §2、§5.3。</div>
 </div>
 </div></div></body></html>

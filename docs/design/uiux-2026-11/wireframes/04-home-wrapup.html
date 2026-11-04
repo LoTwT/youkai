@@ -8,38 +8,39 @@
   <div class="frame">
     <nav class="rail"><div class="it on"><i></i>扫描</div><div class="it"><i></i>记录</div><div class="spacer"></div><div class="it"><i></i>设置</div></nav>
     <main class="content"><div class="pad" style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:16px; height:100%">
-      <section class="col">
+      <section class="col" style="gap:10px">
         <div class="row"><h4 style="margin:0">A · 扫描中</h4><span class="m">1</span></div>
-        <div class="card pad col" style="gap:10px; flex:1">
-          <h2 style="font-size:18px">正在扫描</h2>
-          <div class="row"><span class="grow">已采集</span><b style="font-size:22px">431</b><span>件</span></div>
-          <div class="row"><span class="grow">当前</span><b>3 号位</b><span class="small muted">（共 6 个）</span></div>
-          <div class="small muted">总数未知，不显示百分比</div>
-          <div class="hr"></div>
-          <div class="small">停止：<span class="kbd">Ctrl</span>+<span class="kbd">Alt</span>+<span class="kbd">Shift</span>+<span class="kbd">S</span></div>
-          <div style="margin-top:auto" class="col"><span class="btn">停止扫描</span><span class="small muted">点击 youkai 会让游戏失去焦点，扫描会停止</span></div>
-        </div>
-      </section>
-      <section class="col">
-        <div class="row"><h4 style="margin:0">B · 收尾中</h4><span class="m">2</span></div>
-        <div class="card pad col" style="gap:10px; flex:1">
-          <h2 style="font-size:18px">已停止操作游戏</h2>
-          <div class="small">正在识别剩余的驱动盘并保存结果，完成后会自动打开结果。</div>
-          <div class="col" style="gap:6px; margin-top:6px">
-            <div class="row small"><span class="ic"></span>✓ 已停止操作游戏</div>
-            <div class="row small">… 正在识别剩余 12 件</div>
-            <div class="row small muted">○ 保存结果</div>
+        <div class="scancard">
+          <div class="list col" style="gap:10px; padding:16px">
+            <h2 style="font-size:18px">正在扫描</h2>
+            <div class="row"><span class="grow">已采集</span><b style="font-size:22px">431</b><span>件</span></div>
+            <div class="row"><span class="grow">当前</span><b>3 号位</b><span class="small muted">（共 6 个）</span></div>
           </div>
-          <div class="small muted" style="margin-top:auto">现在可以正常使用电脑。</div>
+          <div class="actbar"><div class="notice"><span style="white-space:nowrap">停止 <span class="kbd">Ctrl</span>+<span class="kbd">Alt</span>+<span class="kbd">Shift</span>+<span class="kbd">S</span></span><span>点击 youkai 也会停止扫描</span></div><div class="go"><span class="btn">停止扫描</span></div></div>
         </div>
       </section>
-      <section class="col">
+      <section class="col" style="gap:10px">
+        <div class="row"><h4 style="margin:0">B · 收尾中</h4><span class="m">2</span></div>
+        <div class="scancard">
+          <div class="list col" style="gap:10px; padding:16px">
+            <h2 style="font-size:18px">已停止操作游戏</h2>
+            <div class="col" style="gap:6px">
+              <div class="row small">✓ 已停止操作游戏</div>
+              <div class="row small">… 正在识别剩余 12 件</div>
+              <div class="row small muted">○ 保存结果</div>
+            </div>
+          </div>
+        </div>
+      </section>
+      <section class="col" style="gap:10px">
         <div class="row"><h4 style="margin:0">C · 保存失败</h4><span class="m">3</span></div>
-        <div class="card pad col" style="gap:10px; flex:1; border:2px solid var(--strong)">
-          <span class="tag solid">! 需要处理</span>
-          <h2 style="font-size:18px">扫描结果还没有保存</h2>
-          <div class="small"><b>原因：</b>磁盘空间不足，最后 37 件没有写入。<br><b>怎么做：</b>释放空间后重试；在保存成功之前，不能开始新扫描、不能安装更新，退出也会被拒绝。</div>
-          <div class="col" style="margin-top:auto; gap:8px"><span class="btn primary">重试保存</span><span class="link">复制诊断信息</span></div>
+        <div class="scancard" style="border:2px solid var(--strong)">
+          <div class="list col" style="gap:10px; padding:16px">
+            <span class="tag solid" style="align-self:flex-start">! 需要处理</span>
+            <h2 style="font-size:18px">扫描结果还没有保存</h2>
+            <div class="small"><b>原因：</b>磁盘空间不足，最后 37 件没有写入。<br><b>怎么做：</b>释放空间后重试；在保存成功之前，不能开始新扫描、不能安装更新，退出也会被拒绝。</div>
+          </div>
+          <div class="actbar"><div class="notice"><span class="link">复制诊断信息</span></div><div class="go"><span class="btn primary">重试保存</span></div></div>
         </div>
       </section>
     </div></main>

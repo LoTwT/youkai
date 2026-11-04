@@ -1,30 +1,32 @@
 <!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><title>01 扫描页 · 首次进入</title><link rel="stylesheet" href="wireframe.css"></head>
 <body><div class="sheet">
-<div class="sheet-head"><div><div class="kicker">YOUKAI · WINDOWS 本地客户端 · 第二阶段线框</div><h1>01 扫描页 · 首次进入（权限不满足）</h1><div class="sub">默认窗口 1180 × 760 DIP；对应 05 S1 首次启动、S2 有不满足项 / 权限不一致</div></div><div class="stamp">低保真 · 非视觉稿</div></div>
+<div class="sheet-head"><div><div class="kicker">YOUKAI · WINDOWS 本地客户端 · 第二阶段线框</div><h1>01 扫描页 · 首次进入（权限不满足）</h1><div class="sub">默认窗口 1180 × 760 DIP；对应 05 S1 首次启动、S2 有不满足项 / 权限不一致；按钮位置为方案 C</div></div><div class="stamp">低保真 · 非视觉稿</div></div>
 <div class="stage">
 <div class="win">
   <div class="titlebar"><span>youkai</span><span class="ctl"><span>—</span><span>☐</span><span>✕</span></span></div>
   <div class="frame">
     <nav class="rail"><div class="it on"><i></i>扫描</div><div class="it"><i></i>记录</div><div class="spacer"></div><div class="it"><i></i>设置</div></nav>
-    <main class="content"><div class="pad col" style="gap:10px; height:100%">
-      <div class="row"><h2>准备检查</h2><span class="m">1</span><span class="right small muted">11:02 检查 · <span class="link">重新检查</span></span></div>
-      <div class="small" style="margin-top:-4px">还有 <b>1 项</b>需要处理，处理好后才能开始扫描。每一项都会说明为什么需要。第一次使用：先在游戏里打开驱动盘仓库页，扫描器会自己切换号位、设置筛选和回到顶部。</div>
-      <div class="card">
-        <div class="check"><span class="ic ok"></span><span class="name">目标客户端</span><span class="val">已找到《绝区零》窗口（ZenlessZoneZero.exe）</span><span class="small muted">请确认</span></div>
-        <div class="check bad"><span class="ic bad"></span><span class="name">管理员权限</span><span class="val">youkai：普通权限 → 需要：与游戏相同（管理员）</span><span class="m">2</span>
-          <div class="how"><b>为什么：</b>游戏以管理员身份运行，普通权限的程序发送的鼠标操作会被 Windows 丢弃。youkai 只发送鼠标输入，不加载驱动、不注入、不读取游戏内存。<br><b>怎么做：</b>先从托盘退出 youkai，再右键 youkai 图标选择“以管理员身份运行”。
-            <div class="row" style="margin-top:8px"><span class="btn">退出 youkai</span><span class="small muted">只点 ✕ 不会退出，旧程序会留在托盘里</span></div></div></div>
-        <div class="check"><span class="ic ok"></span><span class="name">游戏分辨率</span><span class="val">1920×1080 · 无边框</span><span></span></div>
-        <div class="check"><span class="ic ok"></span><span class="name">窗口位置</span><span class="val">完整在屏幕内</span><span></span></div>
-        <div class="check"><span class="ic ok"></span><span class="name">显示缩放</span><span class="val">可读取，未被虚拟化</span><span></span></div>
-        <div class="check"><span class="ic ok"></span><span class="name">停止热键</span><span class="val"><span class="kbd">Ctrl</span>+<span class="kbd">Alt</span>+<span class="kbd">Shift</span>+<span class="kbd">S</span> 可以使用</span><span></span></div>
-        <div class="check"><span class="ic ok"></span><span class="name">磁盘空间</span><span class="val">可用 41 GB</span><span></span></div>
-        <div class="check"><span class="ic ok"></span><span class="name">识别资源</span><span class="val">安装完整</span><span></span></div>
-        <div class="check"><span class="ic later"></span><span class="name">游戏页面等</span><span class="val muted">驱动盘仓库页、遮挡、独占全屏：点开始后检查</span><span class="m">3</span></div>
-        <div style="padding:10px 12px; border-top:1px solid var(--line-soft)" class="col">
-          <div class="well small" style="padding:8px 12px">开始前请记住：点开始后 <b>30 秒内</b>保持游戏在前台，扫描期间不要操作游戏 · 中途停止 <span class="kbd">Ctrl</span>+<span class="kbd">Alt</span>+<span class="kbd">Shift</span>+<span class="kbd">S</span> · 预计耗时：未知（还没有扫描记录）<span class="m" style="margin-left:6px">4</span></div>
-          <div class="row" style="margin-top:8px"><span class="btn primary off big">开始扫描</span><span class="m">5</span><span class="small muted">还有 1 项需要处理</span><span class="right small muted">范围：S 级 · 1–6 号位 · 结果自动保存在本机</span></div>
+    <main class="content"><div class="pad col" style="gap:12px; height:100%">
+      <div class="row"><h2>准备检查</h2><span class="tag">! 1 项需要处理</span><span class="m">1</span><span class="right small muted">11:02 检查 · <span class="link">重新检查</span></span></div>
+      <div class="scancard">
+        <div class="list">
+          <div class="check bad"><span class="ic bad"></span><span class="name">管理员权限</span><span class="val">youkai：普通权限 → 需要：与游戏相同（管理员）</span><span class="m">2</span>
+            <div class="how"><b>为什么：</b>游戏以管理员身份运行，普通权限的程序发送的鼠标操作会被 Windows 丢弃。youkai 只发送鼠标输入，不加载驱动、不注入、不读取游戏内存。<br><b>怎么做：</b>先从托盘退出 youkai，再右键 youkai 图标选择“以管理员身份运行”。
+              <div class="row" style="margin-top:8px"><span class="btn">退出 youkai</span><span class="small muted">只点 ✕ 不会退出，旧程序会留在托盘里</span></div></div></div>
+          <div class="check"><span class="ic ok"></span><span class="name">目标客户端</span><span class="val">《绝区零》窗口（ZenlessZoneZero.exe）</span><span class="link">更换目标</span></div>
+          <div class="check"><span class="ic ok"></span><span class="name">游戏分辨率</span><span class="val">1920×1080 · 无边框</span><span></span></div>
+          <div class="check"><span class="ic ok"></span><span class="name">窗口位置</span><span class="val">完整在屏幕内</span><span></span></div>
+          <div class="check"><span class="ic ok"></span><span class="name">显示缩放</span><span class="val">可读取，未被虚拟化</span><span></span></div>
+          <div class="check"><span class="ic ok"></span><span class="name">停止热键</span><span class="val"><span class="kbd">Ctrl</span>+<span class="kbd">Alt</span>+<span class="kbd">Shift</span>+<span class="kbd">S</span> 可以使用</span><span></span></div>
+          <div class="check"><span class="ic ok"></span><span class="name">磁盘空间</span><span class="val">可用 41 GB</span><span></span></div>
+          <div class="check"><span class="ic ok"></span><span class="name">识别资源</span><span class="val">安装完整</span><span></span></div>
+          <div class="check"><span class="ic later"></span><span class="name">游戏页面等</span><span class="val muted">请打开驱动盘仓库页；遮挡、独占全屏点开始后检查</span><span class="m">3</span></div>
+          <div class="small muted" style="padding:8px 12px">范围：S 级 · 1–6 号位 · 保存在本机</div>
+        </div>
+        <div class="actbar">
+          <div class="notice"><span>中途停止 <span class="kbd">Ctrl</span>+<span class="kbd">Alt</span>+<span class="kbd">Shift</span>+<span class="kbd">S</span></span><span>点开始后 <b>30 秒内</b>保持游戏在前台，扫描期间不要操作游戏</span><span>预计：未知</span><span class="m">4</span></div>
+          <div class="go"><span class="why">管理员权限不一致</span><span class="btn primary off big">开始扫描</span><span class="m">5</span></div>
         </div>
       </div>
     </div></main>
@@ -33,12 +35,12 @@
 <div class="notes">
   <h3>标注</h3>
   <ol>
-    <li>首次与回访使用同一份准备检查（P-03），检查项默认全部展开（检查点 2 用户决定）；首次时每个不满足项展开“为什么 + 怎么做”。结果带检查时间，窗口重新获得焦点或超过 10 秒时自动重查（09 §4.8）。</li>
-    <li>权限是首次使用主路径上的正常步骤（W1 步骤 3–4）：引导文案“先从托盘退出 youkai，再以管理员身份运行”（P-05）。一键提权实测前不提供。</li>
-    <li>需要游戏在前台的检查不给结论，只标“点开始后检查”；推翻示意图 03 中把页面作为开始前检查项的画法（07 §5）。</li>
-    <li>“开始前请记住”放在准备检查卡片内（08 §1.3）；范围、保存位置是说明，不算检查项；预计耗时没有历史时写“未知”（P-14）。</li>
-    <li>“开始扫描”是扫描页唯一的主按钮。<b>按钮位置待定（检查点 2 反馈，方案出图中）</b>，此处暂保留原画法。不可用时保留并在旁边写原因（09 §4.1）。初始焦点在第 2 项的“退出 youkai”。</li>
-      </ol>
-  <div class="state">焦点顺序：导航轨 → 重新检查 → 退出 youkai → 开始扫描（禁用）。扫描页不显示记录，也不做一次性向导（P-07 并入 P-03）。<br>窗口尺寸已决定（2026-11-03，用户选 A，11 Q-02）。<br>相关规格：08 §1、§1.1、§1.3。</div>
+    <li>首次与回访使用同一份准备检查（P-03），检查项默认全部展开；不满足项排在最前，标题行的标签写“n 项需要处理”。检查结果带检查时间，窗口重新获得焦点或超过 10 秒时自动重查（09 §4.8）。</li>
+    <li>失败项展开“为什么 + 怎么做”。权限是首次使用主路径上的正常步骤（W1 步骤 3–4），引导文案“先从托盘退出 youkai，再以管理员身份运行”（P-05）。</li>
+    <li>需要游戏在前台的检查不给结论，只标“点开始后检查”，并提示先打开驱动盘仓库页（C-07）。</li>
+    <li>须知在底部操作条左侧（方案 C）；预计耗时没有历史时写“未知”（P-14）。</li>
+    <li>按钮在操作条右侧；禁用时原因写在按钮左侧（09 §4.1）。失败项展开后清单变长，操作条仍固定可见。初始焦点在“退出 youkai”。</li>
+  </ol>
+  <div class="state">焦点顺序：导航轨 → 重新检查 → 退出 youkai → 更换目标 → 开始扫描（禁用）。<br>相关规格：08 §1、§1.1、§1.3。</div>
 </div>
 </div></div></body></html>
