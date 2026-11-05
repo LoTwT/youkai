@@ -188,14 +188,20 @@ func (c *Controller) Prepare(ctx context.Context, h *scan.ControllerHandle) erro
 	// Starting a scan is a user-intent action: bring the game forward so
 	// the user does not have to click back to it. A platform without the
 	// capability (or a failed activation) falls through to the readiness
-	// wait, where the user can still focus the target manually.
+	// wait, where the user can still focus the target manually. The
+	// outcome reaches the snapshot: the scan page tells the user whether
+	// the switch happened or they must switch themselves.
 	if activator, ok := sess.(platform.Activator); ok {
+		outcome := scan.ActivationActivated
 		if err := activator.Activate(); err != nil {
+			outcome = scan.ActivationRefused
 			log.Printf("youkai: collect: target activation failed: %v; waiting for the user to focus the game", err)
 		}
+		h.SetActivation(outcome)
 	}
 
 	deadline := time.Now().Add(c.budget())
+	h.SetPrepareDeadline(deadline)
 	every := c.every()
 	var lastProblems []*platform.Fault
 	var lastObsErr error

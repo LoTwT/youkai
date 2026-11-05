@@ -422,6 +422,114 @@ func TestSaveFailureVisibleRetryableKeepsPreviousGeneration(t *testing.T) {
 	waitNotBusy(t, svc)
 }
 
+// TestFinalSaveFailuresCountPerWrapUp pins R-09's second notification
+// edge: the same wrap-up's first failed save counts 1, its next failed
+// retry counts 2, and a successful retry stops the count without erasing
+// it.
+func TestFinalSaveFailuresCountPerWrapUp(t *testing.T) {
+	paths := newTestPaths(t)
+	// One observation keeps every batch save away: the wrap-up's final
+	// generation is the first and only save attempt.
+	source := devFixtureSource(t, 1, 0)
+	store := newFlakyStore(t, paths.Data)
+	store.failOn = func(int) bool { return true }
+	svc := newServiceWithStore(t, paths, store, source, func() (Recognizer, error) { return newFakeRecognizer(), nil })
+
+	if _, err := svc.Start(StartRequest{ID: "r1"}); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	waitFor(t, 30*time.Second, "the wrap-up's first failed save", func() bool {
+		return svc.Snapshot().FinalSaveFailures == 1
+	})
+	if snap := svc.Snapshot(); snap.SaveError == "" || !snap.SavePending {
+		t.Fatalf("snapshot after the failed final save = error %q pending %v, want both visible",
+			snap.SaveError, snap.SavePending)
+	}
+	if err := svc.RetrySave(); err == nil {
+		t.Fatal("RetrySave while every save fails = nil, want the failure")
+	}
+	if snap := svc.Snapshot(); snap.FinalSaveFailures != 2 {
+		t.Fatalf("failures after the failed retry = %d, want 2", snap.FinalSaveFailures)
+	}
+	store.heal()
+	if err := svc.RetrySave(); err != nil {
+		t.Fatalf("RetrySave after healing: %v", err)
+	}
+	snap := waitNotBusy(t, svc)
+	if snap.SaveError != "" || snap.FinalSaveFailures != 2 {
+		t.Fatalf("after the successful retry = save error %q failures %d, want no error and the history 2",
+			snap.SaveError, snap.FinalSaveFailures)
+	}
+}
+
+// TestStartBlockedNamesTheServiceBlock pins R-14's service half: an
+// occupied slot explains itself as finishing or waiting for a retry, and
+// an explicit exit reports quitting.
+func TestStartBlockedNamesTheServiceBlock(t *testing.T) {
+	paths := newTestPaths(t)
+	// The gated controller holds the session open deterministically, and
+	// a one-observation session makes the wrap-up's save its first save.
+	gate := newAdmitThenGateController()
+	store := newFlakyStore(t, paths.Data)
+	store.failOn = func(int) bool { return true }
+	svc := newServiceWithStore(t, paths, store, staticSource{spec: specOf(gate)},
+		func() (Recognizer, error) { return newFakeRecognizer(), nil })
+
+	if got := svc.Snapshot().StartBlocked; got != StartBlockedNone {
+		t.Fatalf("idle StartBlocked = %q, want none", got)
+	}
+	if _, err := svc.Start(StartRequest{ID: "r1"}); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	waitFor(t, 30*time.Second, "the admitted observation", func() bool {
+		return svc.Snapshot().Scan.Counts.Captured == 1
+	})
+	if got := svc.Snapshot().StartBlocked; got != StartBlockedFinishing {
+		t.Fatalf("StartBlocked while the session runs = %q, want %q", got, StartBlockedFinishing)
+	}
+	svc.Stop()
+	waitFor(t, 30*time.Second, "the failed final save", func() bool {
+		return svc.Snapshot().FinalSaveFailures == 1
+	})
+	if got := svc.Snapshot().StartBlocked; got != StartBlockedSaveRetry {
+		t.Fatalf("StartBlocked with a failed save = %q, want %q", got, StartBlockedSaveRetry)
+	}
+	// An explicit exit that cannot finish leaves the process quitting:
+	// every later start is refused, so that is the reason to report.
+	if err := svc.Quit(); err == nil {
+		t.Fatal("Quit after a failed save = nil, want the refusal")
+	}
+	if got := svc.Snapshot().StartBlocked; got != StartBlockedQuitting {
+		t.Fatalf("StartBlocked after the refused quit = %q, want %q", got, StartBlockedQuitting)
+	}
+}
+
+// TestUpdateInstallingBlocksStarts pins R-14's update-install reason: the
+// update flow publishes its install, the snapshot explains the block, and
+// only a change bumps the revision.
+func TestUpdateInstallingBlocksStarts(t *testing.T) {
+	paths := newTestPaths(t)
+	svc, _ := newTestService(t, paths, nil, func() (Recognizer, error) { return newFakeRecognizer(), nil })
+
+	before := svc.Snapshot().Revision
+	svc.SetUpdateInstalling(true)
+	snap := svc.Snapshot()
+	if snap.StartBlocked != StartBlockedUpdateInstall {
+		t.Fatalf("StartBlocked while installing = %q, want %q", snap.StartBlocked, StartBlockedUpdateInstall)
+	}
+	if snap.Revision == before {
+		t.Fatal("publishing the install did not bump the revision")
+	}
+	svc.SetUpdateInstalling(true)
+	if again := svc.Snapshot(); again.Revision != snap.Revision {
+		t.Fatalf("a repeated install report bumped the revision from %d to %d", snap.Revision, again.Revision)
+	}
+	svc.SetUpdateInstalling(false)
+	if got := svc.Snapshot().StartBlocked; got != StartBlockedNone {
+		t.Fatalf("StartBlocked after the install ended = %q, want none", got)
+	}
+}
+
 // TestEvidenceFailureAtAdmissionCutsScanKeepsItem injects one failing
 // evidence write at admission: the scan cuts with a storage fault, the
 // admitted observation still counts, and the record keeps the item with

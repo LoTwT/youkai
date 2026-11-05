@@ -127,6 +127,10 @@ type Service struct {
 	subs       []*Subscription
 	quitting   bool
 	recognizer Recognizer
+	// updateInstalling reports an update install in progress. The update
+	// flow owns the fact and publishes it through SetUpdateInstalling;
+	// the service only reflects it in snapshots.
+	updateInstalling bool
 
 	// quitMu serializes Quit attempts; the teardown below it runs once.
 	quitMu           sync.Mutex
@@ -456,6 +460,7 @@ func (s *Service) Snapshot() Snapshot {
 
 func (s *Service) snapshotLocked() Snapshot {
 	snap := Snapshot{Revision: s.revision}
+	var saveFailed bool
 	if a := s.active; a != nil {
 		snap.SessionID = a.id
 		snap.Busy = !a.wrapped
@@ -470,13 +475,60 @@ func (s *Service) snapshotLocked() Snapshot {
 			st := a.deliverer.status()
 			snap.SavedCount = st.saved
 			snap.SavePending = st.pending
+			snap.FinalSaveFailures = st.finalFailures
 			if st.err != nil {
 				snap.SaveError = st.err.Error()
+				saveFailed = true
 			}
 		}
 	}
+	snap.StartBlocked = s.startBlockedLocked(saveFailed)
 	return snap
 }
+
+// startBlockedLocked names the service's part of why a start would not
+// begin a new session now. saveFailed is whether an unresolved save
+// failure waits for a retry. Callers hold mu.
+func (s *Service) startBlockedLocked(saveFailed bool) StartBlockedReason {
+	switch {
+	case s.quitting:
+		return StartBlockedQuitting
+	case s.updateInstalling:
+		return StartBlockedUpdateInstall
+	case saveFailed:
+		return StartBlockedSaveRetry
+	case s.active != nil && !s.active.wrapped:
+		// The previous session has not released the slot yet: it is
+		// preparing, capturing, or wrapping up. The start surface only
+		// ever shows this while that session is wrapping up.
+		return StartBlockedFinishing
+	default:
+		return StartBlockedNone
+	}
+}
+
+// StartBlockedReason names why the service would not begin a new session
+// right now. It is the service's part of the start button's explanation;
+// the UI adds the reasons it owns — unsaved review edits, an export or a
+// review save in flight.
+type StartBlockedReason string
+
+const (
+	// StartBlockedNone: nothing service-side blocks a start.
+	StartBlockedNone StartBlockedReason = ""
+	// StartBlockedFinishing: the previous session still occupies the
+	// active slot and has not wrapped up.
+	StartBlockedFinishing StartBlockedReason = "finishing"
+	// StartBlockedSaveRetry: the previous session's save failed and waits
+	// for a retry; unsaved results forbid a new session.
+	StartBlockedSaveRetry StartBlockedReason = "saveRetry"
+	// StartBlockedUpdateInstall: an update install is in progress and the
+	// process is about to restart.
+	StartBlockedUpdateInstall StartBlockedReason = "updateInstall"
+	// StartBlockedQuitting: the explicit-exit wrap-up began; starts are
+	// refused for the rest of the process.
+	StartBlockedQuitting StartBlockedReason = "quitting"
+)
 
 // Snapshot is the service's authoritative state. Scan carries the
 // kernel's snapshot, zero when no session ever started.
@@ -500,6 +552,16 @@ type Snapshot struct {
 	// SaveError is the unresolved save failure's text, empty while
 	// clean.
 	SaveError string
+	// FinalSaveFailures counts the failed save attempts of the session's
+	// wrap-up: the final generation and every retry after it. It stays
+	// zero while no wrap-up save failed; the first failure makes it 1 and
+	// each failed retry increments it. A successful retry stops it from
+	// growing but keeps the history. Notification code uses "the first
+	// failure is 1" to notify once per wrap-up (Q-04 option A).
+	FinalSaveFailures int
+	// StartBlocked is the service's part of why a start would not begin
+	// a new session now; the UI adds the reasons it owns.
+	StartBlocked StartBlockedReason
 	// Scan is the kernel's authoritative snapshot of the session.
 	Scan scan.Snapshot
 }
@@ -672,6 +734,21 @@ func (s *Service) RetrySave() error {
 	}
 	s.notifyLocked()
 	return nil
+}
+
+// SetUpdateInstalling reports that an update install is in progress (or
+// ended). The update flow owns the fact — the service cannot observe a
+// download — and publishes it so snapshot readers can explain why a start
+// is blocked and stop offering scans that the restart would cut short.
+// Only a change bumps the revision.
+func (s *Service) SetUpdateInstalling(installing bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.updateInstalling == installing {
+		return
+	}
+	s.updateInstalling = installing
+	s.notifyLocked()
 }
 
 // ListRecords lists the saved records below the data root, newest save
