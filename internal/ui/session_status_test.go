@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"encoding/json"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -212,6 +213,24 @@ func TestIntegrityLevelText(t *testing.T) {
 		if got := integrityLevelText(level); got != want {
 			t.Errorf("%q = %q, want %q", level, got, want)
 		}
+	}
+}
+
+// TestIncompletePositionsTextNamesEveryPosition pins the note's wording:
+// a known stage carries the localized cause, an unknown stage still names
+// the position as unfinished, and the raw code never reaches the surface.
+func TestIncompletePositionsTextNamesEveryPosition(t *testing.T) {
+	scope := json.RawMessage(`{"positions":[
+		{"position":2,"stage":"filter","reasonCode":"navigationMismatch","reason":"the filter panel never closed"},
+		{"position":5,"stage":"unexpected"}
+	]}`)
+	got := incompletePositionsText(scope)
+	want := "不完整号位：2 号位 筛选准备失败：点击或拖拽后页面没有按预期变化；5 号位 未完成"
+	if got != want {
+		t.Fatalf("incomplete positions = %q, want %q", got, want)
+	}
+	if strings.Contains(got, "navigationMismatch") || strings.Contains(got, "the filter panel never closed") {
+		t.Fatalf("the note leaks English diagnostics: %q", got)
 	}
 }
 

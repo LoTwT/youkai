@@ -60,7 +60,7 @@ func incompletePositionsText(observed json.RawMessage) string {
 	if len(parts) == 0 {
 		return ""
 	}
-	return "不完整位置：" + strings.Join(parts, "；")
+	return "不完整号位：" + strings.Join(parts, "；")
 }
 
 // positionStageText names the preparation or proof step a degraded position
