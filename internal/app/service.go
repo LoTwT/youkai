@@ -399,14 +399,24 @@ func (s *Service) Start(req StartRequest) (StartOutcome, error) {
 		return discardRecord(err)
 	}
 
-	// Commit under the lock: a quit that began during the preparation
-	// refuses the session instead of racing it.
+	// Commit under the lock: a quit or an update install that began during
+	// the preparation refuses the session instead of racing it, so the
+	// refusal and the snapshot's start-blocked reason stay in agreement.
 	s.mu.Lock()
-	if s.quitting || s.active != a {
+	var refused error
+	switch {
+	case s.quitting:
+		refused = errors.New("the service began quitting while preparing")
+	case s.updateInstalling:
+		refused = errors.New("an update install began while preparing")
+	case s.active != a:
+		refused = errors.New("the active slot was taken while preparing")
+	}
+	if refused != nil {
 		s.mu.Unlock()
 		kernel.Cancel()
 		<-kernel.Done()
-		return discardRecord(errors.New("the service began quitting while preparing"))
+		return discardRecord(refused)
 	}
 	a.kernel = kernel
 	a.deliverer = deliverer

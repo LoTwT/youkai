@@ -583,6 +583,58 @@ func TestStartRefusedWhileInstallingUpdate(t *testing.T) {
 	waitNotBusy(t, svc)
 }
 
+// TestStartCommitRefusedByUpdateInstallDuringPreparation pins L-1: an
+// update install published while the accepted placeholder runs its slow
+// preparation refuses the commit, and the slot rolls back cleanly.
+func TestStartCommitRefusedByUpdateInstallDuringPreparation(t *testing.T) {
+	paths := newTestPaths(t)
+	source := devFixtureSource(t, 1, 0)
+	loaded := make(chan struct{})
+	svc, _ := newTestService(t, paths, source, func() (Recognizer, error) {
+		<-loaded // stand in for the model load
+		return newFakeRecognizer(), nil
+	})
+	type result struct {
+		out StartOutcome
+		err error
+	}
+	started := make(chan result, 1)
+	go func() {
+		out, err := svc.Start(StartRequest{ID: "r1"})
+		started <- result{out: out, err: err}
+	}()
+	waitFor(t, 10*time.Second, "the accepted placeholder", func() bool {
+		return svc.Snapshot().SessionID != ""
+	})
+	// The placeholder is still in its slow preparation; the install
+	// begins before the commit re-check runs.
+	svc.SetUpdateInstalling(true)
+	if snap := svc.Snapshot(); !snap.Busy || snap.StartBlocked != StartBlockedUpdateInstall {
+		t.Fatalf("placeholder snapshot while installing = %+v, want busy with the install reason", snap)
+	}
+	close(loaded)
+	res := <-started
+	if res.err == nil || !strings.Contains(res.err.Error(), "update install") {
+		t.Fatalf("start whose commit met the install = %+v err %v, want the update-install refusal", res.out, res.err)
+	}
+	// The refusal discarded the record and released the slot and the scan
+	// occupancy.
+	snap := svc.Snapshot()
+	if snap.SessionID != "" || snap.Busy || snap.StartBlocked != StartBlockedUpdateInstall {
+		t.Fatalf("snapshot after the refused commit = %+v, want no session and the install reason", snap)
+	}
+	if records, err := svc.ListRecords(); err != nil || len(records) != 0 {
+		t.Fatalf("records after the refused commit = %+v err %v, want none", records, err)
+	}
+	// Clearing the install frees the service again, including the scan
+	// occupancy the rolled-back start held.
+	svc.SetUpdateInstalling(false)
+	if _, err := svc.Start(StartRequest{ID: "r1"}); err != nil {
+		t.Fatalf("start after the install ended: %v", err)
+	}
+	waitNotBusy(t, svc)
+}
+
 // TestStartBlockedNamesTheServiceBlock pins R-14's service half: an
 // occupied slot explains itself as occupied or waiting for a retry, and
 // an explicit exit reports quitting.
