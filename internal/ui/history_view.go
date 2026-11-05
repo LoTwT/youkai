@@ -2,161 +2,176 @@ package ui
 
 import (
 	"fmt"
-	"math"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/LoTwT/youkai/internal/app"
-	"github.com/LoTwT/youkai/internal/record"
 	"github.com/egoist/mygo/ui"
 )
 
-// The history table's responsive rules. The wide table keeps the design's
-// eight columns; the narrow one drops storage size. Below the panel width
-// the 1020 layout needs, the fixed action column is composed outside the
-// native table, because MyGo's Table scrolls every column together (W1).
+// The records list has two width tiers (09 §2): standard from a 1120-DIP
+// window, compact from the 960-DIP minimum. Compact hides the storage
+// column and merges 待处理 and 可导出 into one. The model's content width is
+// the window's client area, so the tier compares it with the window width.
 const (
-	historyWideMinWidth     = 1440
-	historyMinPanelWidth    = 810
-	historyMinTableWidth860 = 776
-	historyRowHeight860     = 52
-	historyActionWidth860   = 84
-	historyCompositePad     = 12
-	historyCompositeGap     = 8
-	historyCompositeHeader  = 36
-	historyEmptyCell        = "—"
+	historyStandardMinWidth = 1120
+	historyTimeWidth        = 168
+	historyActionWidth      = 48
+	historyCountWidth       = 88
+	historyCompactCount     = 80
+	historyMergedWidth      = 132
 )
 
-// historyColumnsWide is the 1440 table: 时间 / 采集 / 可导出 / 待校对 /
-// 无法导出 / 覆盖 / 大小 / 操作. Its fixed widths add up to the design's
-// 994-DIP minimum; 覆盖 takes the room left.
-var historyColumnsWide = []ui.TableColumn{
-	{Title: "时间", Width: 124, Fixed: true},
-	{Title: "采集", Width: 120, Align: ui.End, Fixed: true},
-	{Title: "可导出", Width: 100, Align: ui.End, Fixed: true},
-	{Title: "待校对", Width: 100, Align: ui.End, Fixed: true},
-	{Title: "无法导出", Width: 210, Align: ui.End, Fixed: true},
-	{Title: "覆盖", MinWidth: 160, Fixed: true},
-	{Title: "大小", Width: 80, Align: ui.End, Fixed: true},
-	{Title: "操作", Width: 100, Align: ui.End, Fixed: true},
+// historyColumnsStandard is the standard tier: 时间 / 结果 / 件数 /
+// 待处理 / 可导出 / 占用 / ⋯. 结果 takes the room the fixed columns leave.
+var historyColumnsStandard = []ui.TableColumn{
+	{Title: "时间", Width: historyTimeWidth, Fixed: true},
+	{Title: "结果", MinWidth: 220, Fixed: true},
+	{Title: "件数", Width: historyCountWidth, Align: ui.End, Fixed: true},
+	{Title: "待处理", Width: historyCountWidth, Align: ui.End, Fixed: true},
+	{Title: "可导出", Width: historyCountWidth, Align: ui.End, Fixed: true},
+	{Title: "占用", Width: 96, Align: ui.End, Fixed: true},
+	{ID: "actions", Title: "", Width: historyActionWidth, Align: ui.End, Fixed: true},
 }
 
-// historyColumnsNarrow is the 1020 and 860 table. Storage size belongs to
-// the settings page at these widths; the source column is not shown at any
-// width. "无法导出" stays a first-class column.
-var historyColumnsNarrow = []ui.TableColumn{
-	{Title: "时间", Width: 120, Fixed: true},
-	{Title: "采集", Width: 90, Align: ui.End, Fixed: true},
-	{Title: "可导出", Width: 76, Align: ui.End, Fixed: true},
-	{Title: "待校对", Width: 76, Align: ui.End, Fixed: true},
-	{Title: "无法导出", Width: 160, Align: ui.End, Fixed: true},
-	{Title: "覆盖", MinWidth: 120, Fixed: true},
-	{Title: "操作", Width: 84, Align: ui.End, Fixed: true},
+// historyColumnsCompact is the compact tier: 占用 moves into the row
+// menu's delete entry and 待处理 / 可导出 share one column.
+var historyColumnsCompact = []ui.TableColumn{
+	{Title: "时间", Width: historyTimeWidth, Fixed: true},
+	{Title: "结果", MinWidth: 200, Fixed: true},
+	{Title: "件数", Width: historyCompactCount, Align: ui.End, Fixed: true},
+	{Title: "待处理 / 可导出", Width: historyMergedWidth, Align: ui.End, Fixed: true},
+	{ID: "actions", Title: "", Width: historyActionWidth, Align: ui.End, Fixed: true},
 }
 
-// historyColumns860 mirrors the 860 mockup's data columns and the fixed
-// action column. The composite lays these out itself so the action column
-// can stay at the right edge while the data columns scroll.
-var historyColumns860 = []ui.TableColumn{
-	{Title: "时间", Width: 116, Fixed: true},
-	{Title: "采集", Width: 88, Align: ui.End, Fixed: true},
-	{Title: "可导出", Width: 72, Align: ui.End, Fixed: true},
-	{Title: "待校对", Width: 72, Align: ui.End, Fixed: true},
-	{Title: "无法导出", Width: 152, Align: ui.End, Fixed: true},
-	{Title: "覆盖", Width: 120, Fixed: true},
-	{Title: "操作", Width: historyActionWidth860, Align: ui.End, Fixed: true},
+// historyCompact reports the compact tier from the window width (09 §2).
+func historyCompact(contentWidth int) bool {
+	return contentWidth < historyStandardMinWidth
 }
 
-// historyColumnsFor returns the native table columns for a content width:
-// eight at 1440 and above, seven below it.
+// historyColumnsFor returns the table columns for the current window.
 func historyColumnsFor(contentWidth int) []ui.TableColumn {
-	if contentWidth >= historyWideMinWidth {
-		return historyColumnsWide
+	if historyCompact(contentWidth) {
+		return historyColumnsCompact
 	}
-	return historyColumnsNarrow
+	return historyColumnsStandard
 }
 
-// historyPanelWidth estimates the room the page body gives the table: the
-// content width minus the rail, its divider and the page padding. It is
-// the viewport the composite pins its action column against.
-func historyPanelWidth(contentWidth int) float32 {
-	width := float32(contentWidth) - navRailWidth - 1 - 2*historyCompositePad
-	if width < 1 {
-		width = 1
-	}
-	return width
-}
-
-// historyUsesComposite reports whether the panel is too narrow for the
-// native seven-column table. The native table scrolls all columns together,
-// so the fixed action column needs the composite at 860.
-func historyUsesComposite(contentWidth int) bool {
-	return historyPanelWidth(contentWidth) < historyMinPanelWidth
-}
-
-// historyPage is the saved-records destination: the record table, its date
-// search and the per-row actions. The live session appears as the first
-// row with the 本次 badge; it opens the same record workspace as any other
-// row, so one record never has two editable copies.
+// historyPage is the records destination: the title, the date filter, the
+// record table and its row menu. The newest record is first and carries
+// its conclusion in the 结果 column, so a returning user finds last time's
+// scan without reading counts (07 §4, 08 §5). The live session appears as
+// the first row with the 本次 badge; it opens the same record workspace as
+// any other row, so one record never has two editable copies.
 func (m *Model) historyPage(c *ui.Context, t *ui.Theme) {
 	_, tok := themeWithTokens(t, c.Preferences())
-	entries := m.visibleHistory()
-	m.settleHistoryRow(len(entries))
-	m.prepareHistoryList(entries)
-
-	ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, "全部记录").FontWeight(600)
-		subtitle := fmt.Sprintf("%d 条记录", len(m.history))
-		if len(m.history) > 0 {
-			subtitle += " · 最近 " + historyTimeText(m.history[0])
-		}
-		ui.Text(c, subtitle).TextColor(tok.TextMuted).FontSize(t.FontSize * 0.9)
-		ui.Box(c).Grow(1)
-		if m.cfg.OpenDataDirectory != nil {
-			if ui.Button(c, "打开数据目录").Clicked() {
-				m.OpenDataDirectory()
-			}
-		}
-	})
-	ui.Text(c, "已保存的扫描修订；打开记录后进入记录工作区。").TextColor(tok.TextMuted).
-		FontSize(t.FontSize * 0.9)
-
-	ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, "搜索日期").TextColor(tok.TextMuted)
-		m.noteTextInputFocus(ui.TextInput(c, &m.historyFilter).Width(160).Placeholder("YYYY-MM-DD"))
-		if m.historyFilterInvalid() {
-			ui.Text(c, "格式应为 YYYY-MM-DD。").TextColor(t.Danger).FontSize(t.FontSize * 0.9)
-		}
-	})
-	m.historyNotices(c, t, tok)
+	m.historyHeader(c, t, tok)
+	m.historyNotices(c, t)
 
 	switch {
+	case m.historyLoading && len(m.history) == 0:
+		ui.Text(c, "正在读取记录……").TextColor(tok.TextMuted)
+		return
 	case m.histErr != "":
 		ui.Text(c, "历史记录读取失败："+m.histErr).TextColor(t.Danger)
 		return
 	case len(m.history) == 0:
-		ui.Text(c, "暂无已保存的记录。").TextColor(tok.TextMuted)
-		return
-	case len(entries) == 0:
-		ui.Text(c, m.historyEmptyText()).TextColor(tok.TextMuted)
+		m.historyEmptyState(c, t, tok, false)
 		return
 	}
 
-	ui.Column(c).Grow(1).Width(historyPanelWidth(m.contentWidth)).MinWidth(0).
-		Background(tok.SurfaceCard).Border(1, tok.TableBorder).
-		Radius(t.Space(1.5)).Clip().Bind(&m.historyPanel).Children(func() {
-		if historyUsesComposite(m.contentWidth) {
-			m.historyCompositeTable(c, t, tok, entries)
-		} else {
-			m.historyNativeTable(c, t, tok, entries)
+	entries := m.visibleHistory()
+	if len(entries) == 0 {
+		m.settleHistoryRow(0)
+		m.historyEmptyState(c, t, tok, true)
+		return
+	}
+	m.settleHistoryRow(len(entries))
+	m.prepareHistoryList(entries)
+
+	ui.Column(c).Grow(1).MinWidth(0).Background(tok.SurfaceCard).
+		Border(1, tok.TableBorder).Radius(t.Space(1.5)).Clip().Children(func() {
+		columns := historyColumnsFor(m.contentWidth)
+		table := ui.Table(c, &m.historyList, columns, len(entries), func(row, col int) {
+			if row < 0 || row >= len(entries) || col < 0 || col >= len(columns) {
+				return
+			}
+			m.historyCell(c, t, tok, entries[row], row, columns[col])
+		}).Fill().MinHeight(0)
+		if table.Submitted() {
+			m.openHistoryRow(m.historyRow)
 		}
-		m.historyTableFooter(c, t, tok, entries)
+		// Shift+F10 and the menu key open the chosen row's menu while the
+		// table or one of its rows holds the keyboard (08 §5).
+		if m.historyList.Shortcut(c, ui.Shift, ui.KeyF10) ||
+			m.historyList.Shortcut(c, 0, ui.KeyContextMenu) {
+			m.openSelectedHistoryMenu()
+		}
+		if m.historyFocusPending && m.historyList.Focus(c) {
+			m.historyFocusPending = false
+		}
 	})
 }
 
-// prepareHistoryList gives the table its stable identity, accessibility
-// labels and single-row choice. The key is the record ID, so a reload or a
+// historyHeader is the page title and its date filter. The filter uses
+// DateInput rather than a typed date (M6); 清除筛选 returns the range to
+// every record.
+func (m *Model) historyHeader(c *ui.Context, t *ui.Theme, tok *Tokens) {
+	m.settleHistoryFilterRange()
+	ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
+		ui.Text(c, "记录").FontWeight(600).FontSize(t.FontSize * 1.15)
+		if len(m.history) > 0 {
+			count := fmt.Sprintf("%d 条", len(m.history))
+			if m.historyLoading {
+				count += " · 正在读取"
+			}
+			ui.Text(c, count).TextColor(tok.TextMuted).FontSize(t.FontSize * 0.9)
+		}
+		ui.Box(c).Grow(1)
+		if len(m.history) == 0 {
+			return
+		}
+		ui.Text(c, "日期").TextColor(tok.TextMuted)
+		start := ui.DateInput(c, &m.historyFilterStart).Label("开始日期").Width(150)
+		if start.Changed() {
+			m.historyFilterActive = true
+			m.clampHistoryFilter(true)
+		}
+		ui.Text(c, "–").TextColor(tok.TextMuted)
+		end := ui.DateInput(c, &m.historyFilterEnd).Label("结束日期").Width(150)
+		if end.Changed() {
+			m.historyFilterActive = true
+			m.clampHistoryFilter(false)
+		}
+		if m.historyFilterActive && len(m.visibleHistory()) > 0 {
+			if ui.Button(c, "清除筛选").Clicked() {
+				m.resetHistoryFilter()
+			}
+		}
+	})
+}
+
+// historyEmptyState answers the two empty outcomes of 08 §5: no records at
+// all, and a date filter that matches none. The clear action sits in the
+// state rather than the header so it appears once.
+func (m *Model) historyEmptyState(c *ui.Context, t *ui.Theme, tok *Tokens, filtered bool) {
+	ui.Column(c).Grow(1).Justify(ui.Center).AlignItems(ui.Center).Gap(t.Space(2)).Children(func() {
+		if filtered {
+			ui.Text(c, "没有符合条件的记录").TextColor(tok.TextMuted)
+			if ui.Button(c, "清除筛选").Clicked() {
+				m.resetHistoryFilter()
+			}
+			return
+		}
+		ui.Text(c, "还没有扫描记录").TextColor(tok.TextMuted)
+		if ui.Button(c, "去扫描页开始扫描").Clicked() {
+			m.showScanDestination()
+		}
+	})
+}
+
+// prepareHistoryList gives the table its stable identity and the row's
+// assistive-technology name. The key is the record ID, so a reload or a
 // filter change keeps the scroll anchored to a record rather than a row.
 func (m *Model) prepareHistoryList(entries []HistoryEntry) {
 	m.historyList.Selected = &m.historyRow
@@ -170,12 +185,12 @@ func (m *Model) prepareHistoryList(entries []HistoryEntry) {
 		if row < 0 || row >= len(entries) {
 			return ""
 		}
-		return historyRowLabel(entries[row])
+		return historyRowLabel(m, entries[row])
 	}
 }
 
 // settleHistoryRow keeps the choice inside the visible rows: after a date
-// search narrows the list, or the first frame has no choice yet.
+// filter narrows the list, or the first frame has no choice yet.
 func (m *Model) settleHistoryRow(count int) {
 	switch {
 	case count == 0:
@@ -185,470 +200,165 @@ func (m *Model) settleHistoryRow(count int) {
 	}
 }
 
-// historyNativeTable is the 1440/1020 table. Every column, including the
-// action column, fits the panel, so the toolkit's native horizontal
-// behaviour is not exercised at these widths.
-func (m *Model) historyNativeTable(c *ui.Context, t *ui.Theme, tok *Tokens, entries []HistoryEntry) {
-	columns := historyColumnsFor(m.contentWidth)
-	probeRow, _ := m.historyList.Visible()
-	if probeRow < 0 {
-		probeRow = 0
+// historyCell builds one table cell of the records list.
+func (m *Model) historyCell(c *ui.Context, t *ui.Theme, tok *Tokens, entry HistoryEntry, row int, column ui.TableColumn) {
+	chosen := m.historyRow == row
+	latest := row == 0
+	id := column.ID
+	if id == "" {
+		id = column.Title
 	}
-	table := ui.Table(c, &m.historyList, columns, len(entries), func(row, col int) {
-		if row < 0 || row >= len(entries) {
-			return
-		}
-		entry := entries[row]
-		chosen := m.historyRow == row
-		switch columns[col].Title {
-		case "时间":
-			m.historyTimeCell(c, t, tok, entry, chosen)
-		case "采集":
-			m.historyNumberCell(c, entry.CapturedCount, entry.Unreadable, false, chosen)
-		case "可导出":
-			m.historyNumberCell(c, entry.ExportableCount, entry.Unreadable, true, chosen)
-		case "待校对":
-			m.historyPendingCell(c, t, entry, chosen)
-		case "无法导出":
-			m.historyBlockedCell(c, t, tok, entry, chosen, row == probeRow)
-		case "覆盖":
-			m.historyCoverageCell(c, t, tok, entry, chosen)
-		case "大小":
-			m.historySizeCell(c, t, tok, entry, chosen)
-		case "操作":
-			m.historyActionCell(c, t, tok, entry, row)
-		}
-	}).Fill().MinHeight(0)
-	if table.Submitted() {
-		m.openHistoryRow(m.historyRow)
-	}
-	m.fitHistoryTableHeight(c, t, table)
-}
-
-// fitHistoryTableHeight gives the native history table as many whole rows
-// as its panel leaves above the footer. Its first cell carries the row's
-// content height: 32 DIP at 1440 and 38 below it, plus MyGo's 6-DIP cell
-// padding above and below. Without the cap the panel's remainder shows a
-// clipped last row at 1440, 1024 and 1020.
-func (m *Model) fitHistoryTableHeight(c *ui.Context, t *ui.Theme, table ui.Element) {
-	panel := m.historyPanel.Bounds(c)
-	footer := m.historyFooter.Bounds(c)
-	if panel.H <= 0 || footer.H <= 0 {
-		c.Invalidate()
-		return
-	}
-	// The panel's own 1-DIP border sits outside the children's frame.
-	available := panel.H - 2 - footer.H
-	// The time cell sets the row's content height; the split blocked cell
-	// can make it taller when the platform's lines need more room. Measure
-	// that cell when the frame has one, and keep the design height as the
-	// floor.
-	content := t.Space(8)
-	if m.contentWidth < historyWideMinWidth {
-		content = t.Space(9.5)
-	}
-	if probe := m.historyRowProbe.Bounds(c); probe.H > content {
-		content = probe.H
-	}
-	row := content + 2*t.Space(1.5)
-	if height, ok := wholeRowTableHeight(available, row, t.Space(8)+1); ok {
-		table.Height(height)
+	switch id {
+	case "时间":
+		m.historyTimeCell(c, t, tok, entry, latest, chosen)
+	case "结果":
+		m.historyResultCell(c, t, tok, entry, latest, chosen)
+	case "件数":
+		m.historyNumberCell(c, t, tok, entry, entry.CapturedCount, entry.Unreadable, latest, chosen)
+	case "待处理":
+		m.historyPendingCell(c, t, tok, entry, chosen)
+	case "可导出":
+		m.historyNumberCell(c, t, tok, entry, entry.Counts.Exportable(), entry.Unreadable, latest, chosen)
+	case "占用":
+		m.historySizeCell(c, t, tok, entry, chosen)
+	case "待处理 / 可导出":
+		m.historyMergedCountsCell(c, t, tok, entry, latest, chosen)
+	case "actions":
+		m.historyActionCell(c, t, tok, entry, row)
 	}
 }
 
-// historyCompositeTable is the 860 table from W1's go report: a header and
-// row list that scroll sideways together, with the action column offset
-// back to the right edge on every row. The list keeps its own vertical
-// scrolling, so rows snap and the header stays put.
-func (m *Model) historyCompositeTable(c *ui.Context, t *ui.Theme, tok *Tokens, entries []HistoryEntry) {
-	viewport := historyPanelWidth(m.contentWidth) - 2
-	if viewport < 1 {
-		viewport = 1
-	}
-	maxX := historyMinTableWidth860 - viewport
-	if maxX < 0 {
-		maxX = 0
-	}
-	actionLeft := m.historyScroll.X - maxX
-
-	head := ui.Row(c).Height(historyCompositeHeader).Background(tok.TableHeader).BorderWidth(0, 0, 1, 0).
-		BorderColor(tok.TableBorder).Clip().Shrink(0).MinWidth(0).Padding(0, historyCompositePad).
-		Gap(historyCompositeGap).AlignItems(ui.Stretch).Bind(&m.historyHead).Children(func() {
-		for _, column := range historyColumns860[:len(historyColumns860)-1] {
-			m.historyCompositeCell(c, t, tok, HistoryEntry{}, column, true, false)
-		}
-		m.historyCompositeActionCell(c, t, tok, HistoryEntry{}, -1, actionLeft, true)
-	})
-	list := ui.List(c, &m.historyList, len(entries), func(row int) {
-		if row < 0 || row >= len(entries) {
-			return
-		}
-		entry := entries[row]
-		chosen := m.historyRow == row
-		ui.Row(c).Height(historyRowHeight860).AlignItems(ui.Stretch).
-			Padding(0, historyCompositePad).Gap(historyCompositeGap).
-			BorderWidth(0, 0, 1, 0).BorderColor(tok.TableBorder).Children(func() {
-			for _, column := range historyColumns860[:len(historyColumns860)-1] {
-				m.historyCompositeCell(c, t, tok, entry, column, false, chosen)
+// historyTimeCell is the row's first cell. Its height keeps the design's
+// comfortable rows instead of the toolkit's minimum.
+func (m *Model) historyTimeCell(c *ui.Context, t *ui.Theme, tok *Tokens, entry HistoryEntry, latest, chosen bool) {
+	ui.Row(c).Height(t.Space(8)).AlignItems(ui.Center).Children(func() {
+		ui.Row(c).Gap(t.Space(1)).AlignItems(ui.Center).Children(func() {
+			text := ui.Text(c, historyTimeText(entry)).SingleLine()
+			if latest && !entry.Unreadable {
+				text.FontWeight(600)
 			}
-			m.historyCompositeActionCell(c, t, tok, entry, row, actionLeft, false)
+			if entry.Unreadable {
+				// 线框 10 keeps a damaged row's time muted: its reason, not
+				// its date, is what the user needs from the row.
+				text.TextColor(colorWhenChosen(chosen, tok.TextMuted, t.AccentText))
+			}
+			if entry.ID != "" && entry.ID == string(m.appliedSession) {
+				ui.Text(c, "本次").FontSize(t.FontSize*0.75).TextColor(tok.AccentFG).
+					Background(tok.AccentSoft).Padding(0, t.Space(0.5)).Radius(t.Space(0.75))
+			}
 		})
-	}).MinWidth(0).RowWidth(historyMinTableWidth860).TrackScroll(&m.historyScroll)
-	m.snapHistoryScroll(c, len(entries))
-	if height, measured := m.historyCompositeListHeight(c); measured {
-		// Rows are fixed 52-DIP boxes. An exact whole-row height keeps
-		// the viewport from clipping the last row; the spacer holds the
-		// footer at the panel's bottom.
-		list.Height(height)
-		ui.Box(c).Grow(1)
-	} else {
-		// Measure the panel/header/footer once with the table filling the
-		// rest, then rebuild with the snapped viewport.
-		list.Grow(1)
-		c.Invalidate()
-	}
-	head.ScrollWith(list)
-	if list.Submitted() {
-		m.openHistoryRow(m.historyRow)
-	}
-}
-
-// historySnapDelay is how long the composite waits after the last precise
-// scroll move before snapping a small offset to the nearest row.
-const historySnapDelay = 120 * time.Millisecond
-
-// snapHistoryScroll aligns the composite's vertical offset with the
-// 52-DIP row boundary a precise scroll can leave between rows. A trackpad
-// delivers small moves, and a wheel glides through the offset over a few
-// frames; in both cases the offset belongs to the input until the motion
-// stops. Writing it mid-glide makes MyGo treat the app as taking over and
-// cancels the rest of the wheel's travel, so snapping waits for the
-// debounce and then moves to the nearest row. The header and the fixed
-// action column follow only the horizontal offset and stay put.
-func (m *Model) snapHistoryScroll(c *ui.Context, rows int) {
-	if rows == 0 {
-		return
-	}
-	wait, snap := m.historyScrollSnapStep(c.Now())
-	switch {
-	case snap:
-		m.applyHistoryScrollSnap(historyRowOffset(m.historyScroll.Y))
-	case wait > 0:
-		// MyGo keeps only the timer the last frame armed: a frame that
-		// does not ask again stops the pending one. Ask again on every
-		// frame while the rest debounce waits, so a repaint between the
-		// scroll and the deadline cannot swallow the snap.
-		c.After(wait)
-	}
-}
-
-// historyScrollSnapStep advances the rest debounce at now and reports how
-// long until the next frame it needs; snap reports that the offset has been
-// still for the whole delay and belongs on a row boundary. It keeps the
-// full travel while the offset moves and never writes the offset mid-input.
-func (m *Model) historyScrollSnapStep(now time.Time) (wait time.Duration, snap bool) {
-	y := m.historyScroll.Y
-	if y < 0 {
-		m.historyScroll.Y = 0
-		y = 0
-	}
-	if y != m.historyScrollSeen {
-		// The offset is still moving: keep the full travel and snap only
-		// after it has been still for the whole debounce.
-		m.historyScrollSeen = y
-		m.historyScrollMovedAt = now
-		if m.historyScrollSnapAt.IsZero() || !now.Before(m.historyScrollSnapAt) {
-			m.historyScrollSnapAt = now.Add(historySnapDelay)
-		}
-		return historySnapDelay, false
-	}
-	if m.historyScrollSnapAt.IsZero() {
-		return 0, false
-	}
-	if now.Before(m.historyScrollSnapAt) {
-		return m.historyScrollSnapAt.Sub(now), false
-	}
-	if wait := m.historyScrollMovedAt.Add(historySnapDelay).Sub(now); wait > 0 {
-		m.historyScrollSnapAt = now.Add(wait)
-		return wait, false
-	}
-	m.historyScrollSnapAt = time.Time{}
-	return 0, true
-}
-
-// historyRowOffset is the nearest 52-DIP boundary to y.
-func historyRowOffset(y float32) float32 {
-	return float32(math.Round(float64(y)/historyRowHeight860)) * historyRowHeight860
-}
-
-// applyHistoryScrollSnap moves the tracked offset and the list to one row
-// boundary. MaxY keeps the end of the content in reach.
-func (m *Model) applyHistoryScrollSnap(target float32) {
-	if maxY := m.historyScroll.MaxY; maxY > 0 && target > maxY {
-		target = maxY
-	}
-	if target < 0 {
-		target = 0
-	}
-	m.historyScrollSeen = target
-	if target == m.historyScroll.Y {
-		return
-	}
-	m.historyScroll.Y = target
-	m.historyList.ScrollTo(int(math.Round(float64(target)/historyRowHeight860)), ui.Start)
-}
-
-// historyCompositeListHeight returns the largest whole number of 52-DIP
-// rows the composite's panel can show, after its header and footer. The
-// measured flag is false until all three have a committed frame.
-func (m *Model) historyCompositeListHeight(c *ui.Context) (height float32, measured bool) {
-	panel := m.historyPanel.Bounds(c)
-	head := m.historyHead.Bounds(c)
-	footer := m.historyFooter.Bounds(c)
-	if panel.H <= 0 || head.H <= 0 || footer.H <= 0 {
-		return 0, false
-	}
-	// The panel's own 1-DIP border sits outside the children's frame.
-	available := panel.H - 2 - head.H - footer.H
-	if available < 0 {
-		available = 0
-	}
-	rows := int(available / historyRowHeight860)
-	return float32(rows) * historyRowHeight860, true
-}
-
-// historyCompositeCell is one fixed-width data cell of the 860 composite.
-// The header and the rows share it so their columns can never drift apart.
-func (m *Model) historyCompositeCell(c *ui.Context, t *ui.Theme, tok *Tokens, entry HistoryEntry, column ui.TableColumn, header, chosen bool) {
-	cell := ui.Row(c).Width(column.Width).Shrink(0).Padding(t.Space(1), t.Space(1.5)).
-		AlignItems(ui.Center)
-	switch column.Align {
-	case ui.End:
-		cell.Justify(ui.End)
-	case ui.Center:
-		cell.Justify(ui.Center)
-	}
-	cell.Children(func() {
-		if header {
-			ui.Text(c, column.Title).SingleLine().FontWeight(600).
-				TextColor(tok.TableHeaderText).FontSize(t.FontSize * 0.9)
-			return
-		}
-		switch column.Title {
-		case "时间":
-			m.historyTimeContent(c, t, tok, entry, chosen)
-		case "采集":
-			m.historyNumberContent(c, entry.CapturedCount, entry.Unreadable, false, chosen)
-		case "可导出":
-			m.historyNumberContent(c, entry.ExportableCount, entry.Unreadable, true, chosen)
-		case "待校对":
-			m.historyPendingContent(c, t, entry, chosen)
-		case "无法导出":
-			m.historyBlockedContent(c, t, tok, entry, chosen, false)
-		case "覆盖":
-			m.historyCoverageContent(c, t, tok, entry, chosen)
-		}
 	})
 }
 
-// historyCompositeActionCell is the 860 fixed action column. The left
-// offset cancels the list's horizontal scroll (and, at the first frame,
-// the distance the action column naturally sits past the viewport), as the
-// design's sticky right column. Its background is opaque so the data
-// columns scroll underneath it.
-func (m *Model) historyCompositeActionCell(c *ui.Context, t *ui.Theme, tok *Tokens, entry HistoryEntry, row int, left float32, header bool) {
-	bg := tok.SurfaceCard
-	divider := tok.TableBorder
-	if header {
-		bg = tok.TableHeader
-	} else if row == m.historyRow {
-		bg = t.Accent
-		divider = t.AccentText
-	}
-	cell := ui.Row(c).Width(historyActionWidth860).Shrink(0).
-		Padding(t.Space(1), t.Space(1)).AlignItems(ui.Center).Justify(ui.End).
-		Background(bg).BorderWidth(0, 0, 0, 1).BorderColor(divider).Left(left)
-	cell.Children(func() {
-		if header {
-			ui.Text(c, "操作").SingleLine().FontWeight(600).
-				TextColor(tok.TableHeaderText).FontSize(t.FontSize * 0.9)
-			return
-		}
-		m.historyActionContent(c, t, tok, entry, row)
+// historyResultFor adapts one list entry to the shared conclusion.
+// ScanNotWrapped is model state: the record data alone cannot say whether
+// the service still owns the session, including its wrap-up save.
+func (m *Model) historyResultFor(entry HistoryEntry) recordConclusion {
+	return recordConclusionFor(recordConclusionInput{
+		CapturedCount:            entry.CapturedCount,
+		Coverage:                 entry.Coverage,
+		Termination:              entry.Termination,
+		Counts:                   entry.Counts,
+		Interrupted:              entry.Interrupted,
+		IncompletePositions:      entry.IncompletePositions,
+		IncompletePositionsKnown: entry.IncompletePositionsKnown,
+		Unreadable:               entry.Unreadable,
+		ScanNotWrapped:           entry.ID != "" && entry.ID == string(m.appliedSession) && m.snap.Busy,
 	})
 }
 
-// historyTimeCell is the native table's first cell. It carries the row
-// height the design asks for: 44 DIP at 1440 and 50 DIP at 1020.
-func (m *Model) historyTimeCell(c *ui.Context, t *ui.Theme, tok *Tokens, entry HistoryEntry, chosen bool) {
-	height := t.Space(8)
-	if m.contentWidth < historyWideMinWidth {
-		height = t.Space(9.5)
-	}
-	ui.Row(c).Height(height).AlignItems(ui.Center).Children(func() {
-		m.historyTimeContent(c, t, tok, entry, chosen)
-	})
-}
-
-func (m *Model) historyTimeContent(c *ui.Context, t *ui.Theme, tok *Tokens, entry HistoryEntry, chosen bool) {
+// historyResultCell draws the tag and the conclusion.
+func (m *Model) historyResultCell(c *ui.Context, t *ui.Theme, tok *Tokens, entry HistoryEntry, latest, chosen bool) {
+	result := m.historyResultFor(entry)
 	ui.Row(c).Gap(t.Space(1)).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, historyTimeText(entry)).SingleLine()
-		if entry.ID != "" && entry.ID == string(m.appliedSession) {
-			ui.Text(c, "本次").FontSize(t.FontSize*0.75).TextColor(tok.AccentFG).
-				Background(tok.AccentSoft).Padding(0, t.Space(0.5)).Radius(t.Space(0.75))
+		if result.tag != "" {
+			bg, fg := tok.WarningSoft, tok.WarningFG
+			if result.tone == recordToneDanger {
+				bg, fg = tok.DangerSoft, tok.DangerFG
+			}
+			if chosen {
+				// The accent-filled selected row would swallow the soft
+				// badge colors; the tag keeps its text and loses the face.
+				bg, fg = ui.Color{}, t.AccentText
+			}
+			ui.Text(c, result.tag).SingleLine().FontSize(t.FontSize*0.75).FontWeight(600).
+				TextColor(fg).Background(bg).Padding(0, t.Space(0.75)).Radius(t.Space(0.75))
+		}
+		text := ui.Text(c, result.text).SingleLine()
+		if latest {
+			text.FontWeight(600)
+		}
+		switch result.tone {
+		case recordToneMuted:
+			text.TextColor(colorWhenChosen(chosen, tok.TextMuted, t.AccentText))
+		case recordToneWarning:
+			text.TextColor(colorWhenChosen(chosen, tok.WarningFG, t.AccentText))
+		case recordToneDanger:
+			text.TextColor(colorWhenChosen(chosen, t.Danger, t.AccentText))
 		}
 	})
 }
 
-func (m *Model) historyNumberCell(c *ui.Context, count int64, unreadable, strong, chosen bool) {
-	m.historyNumberContent(c, count, unreadable, strong, chosen)
-}
-
-func (m *Model) historyNumberContent(c *ui.Context, count int64, unreadable, strong, chosen bool) {
+// historyNumberCell draws one integer column. unreadable renders the dash
+// a damaged record needs; strong marks the latest row.
+func (m *Model) historyNumberCell(c *ui.Context, t *ui.Theme, tok *Tokens, entry HistoryEntry, count int64, unreadable, strong, chosen bool) {
 	if unreadable {
-		ui.Text(c, historyEmptyCell).TextColor(colorWhenChosen(chosen, c.Theme().TextMuted, c.Theme().AccentText))
+		ui.Text(c, "—").TextColor(colorWhenChosen(chosen, tok.TextMuted, t.AccentText))
 		return
 	}
 	text := ui.Text(c, formatCount(count)).SingleLine()
-	if strong {
+	if strong && count != 0 {
 		text.FontWeight(600)
 	}
 }
 
-func (m *Model) historyPendingCell(c *ui.Context, t *ui.Theme, entry HistoryEntry, chosen bool) {
-	m.historyPendingContent(c, t, entry, chosen)
+// historyPendingCell is 待处理: backfill plus review. A scan that captured
+// nothing has no pending work to count, so it shows the design's dash.
+func (m *Model) historyPendingCell(c *ui.Context, t *ui.Theme, tok *Tokens, entry HistoryEntry, chosen bool) {
+	if entry.Unreadable || entry.CapturedCount == 0 {
+		ui.Text(c, "—").TextColor(colorWhenChosen(chosen, tok.TextMuted, t.AccentText))
+		return
+	}
+	pending := entry.Counts.Pending()
+	text := ui.Text(c, formatCount(pending)).SingleLine()
+	if pending > 0 {
+		text.TextColor(colorWhenChosen(chosen, tok.WarningFG, t.AccentText)).FontWeight(600)
+	}
 }
 
-func (m *Model) historyPendingContent(c *ui.Context, t *ui.Theme, entry HistoryEntry, chosen bool) {
+// historyMergedCountsCell is the compact tier's "待处理 / 可导出".
+func (m *Model) historyMergedCountsCell(c *ui.Context, t *ui.Theme, tok *Tokens, entry HistoryEntry, latest, chosen bool) {
 	if entry.Unreadable {
-		ui.Text(c, historyEmptyCell).TextColor(colorWhenChosen(chosen, t.TextMuted, t.AccentText))
+		ui.Text(c, "—").TextColor(colorWhenChosen(chosen, tok.TextMuted, t.AccentText))
 		return
 	}
-	text := ui.Text(c, formatCount(int64(entry.PendingReview))).SingleLine()
-	if entry.PendingReview > 0 {
-		text.TextColor(colorWhenChosen(chosen, t.Warning, t.AccentText)).FontWeight(600)
+	pending := "—"
+	if entry.CapturedCount > 0 {
+		pending = formatCount(entry.Counts.Pending())
+	}
+	text := ui.Text(c, pending+" / "+formatCount(entry.Counts.Exportable())).SingleLine()
+	if latest {
+		text.FontWeight(600)
 	}
 }
 
-func (m *Model) historyBlockedCell(c *ui.Context, t *ui.Theme, tok *Tokens, entry HistoryEntry, chosen, probe bool) {
-	m.historyBlockedContent(c, t, tok, entry, chosen, probe)
-}
-
-// historyBlockedContent is "无法导出": the total and the failed,
-// unprocessed and other split, right aligned. It stays one column at every
-// width. probe binds the tallest cell so the native table can measure the
-// actual row height, which follows the platform's line metrics.
-func (m *Model) historyBlockedContent(c *ui.Context, t *ui.Theme, tok *Tokens, entry HistoryEntry, chosen, probe bool) {
-	subColor := colorWhenChosen(chosen, tok.TextMuted, t.AccentText)
-	if entry.Unreadable {
-		column := ui.Column(c).AlignItems(ui.End).Gap(t.Space(0.25))
-		if probe {
-			column.Ref(&m.historyRowProbe)
-		}
-		column.Children(func() {
-			ui.Text(c, historyEmptyCell).SingleLine()
-			ui.Text(c, "记录不可读").SingleLine().FontSize(t.FontSize * 0.8).TextColor(subColor)
-		})
-		return
-	}
-	total := entry.FailedCount + entry.UnprocessedCount + entry.OtherCount
-	column := ui.Column(c).AlignItems(ui.End).Gap(t.Space(0.25))
-	if probe {
-		column.Ref(&m.historyRowProbe)
-	}
-	column.Children(func() {
-		ui.Text(c, formatCount(total)).SingleLine()
-		ui.Textf(c, "失败 %s · 未处理 %s · 其他 %s",
-			formatCount(entry.FailedCount), formatCount(entry.UnprocessedCount), formatCount(entry.OtherCount)).
-			SingleLine().FontSize(t.FontSize * 0.8).TextColor(subColor)
-	})
-}
-
-func (m *Model) historyCoverageCell(c *ui.Context, t *ui.Theme, tok *Tokens, entry HistoryEntry, chosen bool) {
-	m.historyCoverageContent(c, t, tok, entry, chosen)
-}
-
-// historyCoverageContent is the coverage bar and its number. A percentage
-// appears only when the record knows the expected count (or states the
-// coverage is complete); otherwise the status word is shown rather than a
-// fabricated percentage.
-func (m *Model) historyCoverageContent(c *ui.Context, t *ui.Theme, tok *Tokens, entry HistoryEntry, chosen bool) {
-	if entry.Unreadable {
-		ui.Text(c, "无法确认").TextColor(colorWhenChosen(chosen, tok.TextMuted, t.AccentText))
-		return
-	}
-	termLabel := historyTerminationLabel(entry.Termination)
-	termColor := tok.WarningFG
-	if entry.Termination != nil && entry.Termination.Kind == record.TerminationFailed {
-		termColor = tok.DangerFG
-	}
-	percent, ok := historyCoveragePercent(entry)
-	if !ok {
-		if termLabel != "" {
-			ui.Text(c, termLabel).TextColor(colorWhenChosen(chosen, termColor, t.AccentText))
-			return
-		}
-		ui.Text(c, coverageText(entry.Coverage)).TextColor(colorWhenChosen(chosen, tok.TextMuted, t.AccentText))
-		return
-	}
-	partial := percent < 100
-	bar := tok.BorderStrong
-	textColor := tok.TextMuted
-	if partial {
-		bar = tok.WarningStrong
-		textColor = tok.WarningFG
-	}
-	if termLabel != "" {
-		textColor = colorWhenChosen(chosen, termColor, t.AccentText)
-	}
-	if chosen {
-		bar = t.AccentText
-		textColor = t.AccentText
-	}
-	label := fmt.Sprintf("%d%%", percent)
-	if partial {
-		label += " 部分"
-	}
-	if termLabel != "" {
-		label += " · " + termLabel
-	}
-	ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
-		ui.Box(c).Width(t.Space(12)).Height(t.Space(1.25)).Background(tok.SurfaceSunken).
-			Radius(t.Space(0.75)).Draw(func(p *ui.Painter, r ui.Rect) {
-			p.Fill(ui.Rect{X: r.X, Y: r.Y, W: r.W * float32(percent) / 100, H: r.H}, bar, t.Space(0.75))
-		})
-		ui.Text(c, label).SingleLine().TextColor(textColor)
-	})
-}
-
+// historySizeCell is 占用. A record stays measurable even when its
+// checkpoint cannot be read, which the wireframe's damaged row shows.
 func (m *Model) historySizeCell(c *ui.Context, t *ui.Theme, tok *Tokens, entry HistoryEntry, chosen bool) {
-	if entry.Unreadable {
-		ui.Text(c, historyEmptyCell).TextColor(colorWhenChosen(chosen, tok.TextMuted, t.AccentText))
-		return
-	}
 	ui.Text(c, formatBytes(entry.TotalBytes)).SingleLine().
 		TextColor(colorWhenChosen(chosen, tok.TextMuted, t.AccentText))
 }
 
+// historyActionCell is the row's ⋯ trigger. 打开 is not an inline button:
+// the row itself opens on Enter or a double click (08 §5).
 func (m *Model) historyActionCell(c *ui.Context, t *ui.Theme, tok *Tokens, entry HistoryEntry, row int) {
-	ui.Row(c).Gap(t.Space(1)).AlignItems(ui.Center).Justify(ui.End).Children(func() {
-		m.historyActionContent(c, t, tok, entry, row)
-	})
-}
-
-// historyActionContent is the per-row 打开 button and the row menu trigger.
-// Both stay clickable in the 860 fixed column whatever the horizontal
-// scroll position.
-func (m *Model) historyActionContent(c *ui.Context, t *ui.Theme, tok *Tokens, entry HistoryEntry, row int) {
-	open := ui.Button(c, "打开").Padding(t.Space(0.5), t.Space(1)).Height(t.Space(6)).
-		Label("打开 " + entry.Label)
-	if open.Clicked() || open.Shortcut(0, ui.KeyEnter) {
-		m.historyRow = row
-		m.openHistoryEntry(entry)
+	menu := ui.ButtonBase(c).Label("更多操作 "+historyTimeText(entry)).
+		Padding(t.Space(0.5), t.Space(1)).Height(t.Space(6))
+	if menu.Hovered() {
+		menu.Background(t.SurfaceHover)
 	}
-	menu := ui.Button(c, "⋯").Padding(t.Space(0.5), t.Space(1)).Height(t.Space(6)).
-		Label("更多操作 " + entry.Label)
-	if menu.Clicked() || menu.Shortcut(0, ui.KeyEnter) {
+	menu.Children(func() { ui.Text(c, "⋯").SingleLine() })
+	if menu.Clicked() {
 		m.historyRow = row
 		m.toggleHistoryMenu(entry.ID)
 	}
@@ -668,36 +378,69 @@ func (m *Model) toggleHistoryMenu(id string) {
 }
 
 // historyRowMenu is the in-window row menu. It is drawn in the app rather
-// than as a native menu so the destructive items can use the danger text
-// the design asks for and disabled items can explain why. PopoverBase
-// closes on Escape or a press outside and gives the focus back to ⋯.
+// than as a native menu so destructive items use the danger color and a
+// disabled item can explain why. PopoverBase closes on Escape or a press
+// outside and gives the focus back to ⋯.
 func (m *Model) historyRowMenu(c *ui.Context, t *ui.Theme, tok *Tokens, anchor ui.Element, entry HistoryEntry) {
 	ui.PopoverBase(c, anchor, &m.historyMenuOpen, func(panel ui.Element) {
 		panel.MinWidth(t.Space(45)).Background(tok.SurfaceOverlay).Border(1, tok.BorderDefault).
 			Radius(t.Space(1.5)).Padding(t.Space(1)).Gap(t.Space(0.5)).
 			Shadow(0, 8, 24, 0, tok.Scrim)
-		// The menu opens at the row's right edge so the fixed action
-		// column keeps it inside the 860 window.
+		// The menu opens at the row's right edge so the last column keeps
+		// it inside the window.
 		panel.AttachTo(anchor, ui.AnchorBottomEnd, ui.AnchorTopEnd)
 		panel.Children(func() {
+			if entry.Unreadable {
+				// A damaged record has no readable checkpoint to open or
+				// export: deletion is its only action (F-25).
+				ui.Text(c, "记录不可读，只能删除。").TextColor(tok.TextMuted).FontSize(t.FontSize * 0.9)
+				ui.Divider(c)
+				reason := m.historyDeleteBlockedReason(entry)
+				color := t.Danger
+				if reason != "" {
+					color = tok.TextMuted
+				}
+				m.historyMenuItem(c, t, "删除记录…", color, reason != "", true, func() {
+					m.RequestRecordCleanup(entry.ID)
+				})
+				if reason != "" {
+					ui.Text(c, reason).MaxWidth(t.Space(60)).FontSize(t.FontSize * 0.8).
+						TextColor(tok.TextMuted)
+				}
+				return
+			}
 			m.historyMenuItem(c, t, "打开", tok.TextPrimary, false, true, func() {
 				m.openHistoryEntry(entry)
 			})
-			exportBlocked := m.historyExportsBlocked()
-			m.historyMenuItem(c, t, "导出 CSV", tok.TextPrimary, exportBlocked, false, func() {
-				m.ExportHistory(entry.ID, app.ExportCSV)
-			})
-			m.historyMenuItem(c, t, "导出 JSON", tok.TextPrimary, exportBlocked, false, func() {
-				m.ExportHistory(entry.ID, app.ExportJSON)
+			exportReason := m.historyExportBlockedReason(entry)
+			exportColor := tok.TextPrimary
+			if exportReason != "" {
+				exportColor = tok.TextMuted
+			}
+			m.historyMenuItem(c, t, "导出…", exportColor, exportReason != "", false, func() {
+				m.openHistoryExport(entry)
 			})
 			ui.Divider(c)
+			screenshotLabel := "删除截图…"
+			if historyCompact(m.contentWidth) {
+				// Compact hides 占用; its number stays in the delete item.
+				screenshotLabel += "（" + formatBytes(entry.TotalBytes) + "）"
+			}
 			reason := m.historyDeleteBlockedReason(entry)
-			m.historyMenuItem(c, t, "删除截图", t.Danger, reason != "", false, func() {
+			deleteColor := t.Danger
+			if reason != "" {
+				deleteColor = tok.TextMuted
+			}
+			m.historyMenuItem(c, t, screenshotLabel, deleteColor, reason != "", false, func() {
 				m.RequestScreenshotCleanup(entry.ID)
 			})
-			m.historyMenuItem(c, t, "删除记录", t.Danger, reason != "", false, func() {
+			m.historyMenuItem(c, t, "删除记录…", deleteColor, reason != "", false, func() {
 				m.RequestRecordCleanup(entry.ID)
 			})
+			if exportReason != "" {
+				ui.Text(c, exportReason).MaxWidth(t.Space(60)).FontSize(t.FontSize * 0.8).
+					TextColor(tok.TextMuted)
+			}
 			if reason != "" {
 				ui.Text(c, reason).MaxWidth(t.Space(60)).FontSize(t.FontSize * 0.8).
 					TextColor(tok.TextMuted)
@@ -707,7 +450,7 @@ func (m *Model) historyRowMenu(c *ui.Context, t *ui.Theme, tok *Tokens, anchor u
 }
 
 // historyMenuItem is one flat menu row. first puts the keyboard focus on
-// 打开 when the menu opens, so Tab/Enter can drive the whole menu.
+// the first item when the menu opens, so Tab/Enter can drive the menu.
 func (m *Model) historyMenuItem(c *ui.Context, t *ui.Theme, label string, color ui.Color, disabled, first bool, action func()) {
 	item := ui.ButtonBase(c).Label(label).Justify(ui.Start).
 		Padding(t.Space(1.5), t.Space(2)).Radius(t.Radius).Shrink(0)
@@ -741,6 +484,16 @@ func (m *Model) closeHistoryMenu() {
 	m.historyMenuOpen = false
 }
 
+// openSelectedHistoryMenu opens the menu of the chosen row, for the
+// keyboard's Shift+F10 and menu key.
+func (m *Model) openSelectedHistoryMenu() {
+	entries := m.visibleHistory()
+	if m.historyRow < 0 || m.historyRow >= len(entries) {
+		return
+	}
+	m.openHistoryMenu(entries[m.historyRow].ID)
+}
+
 // historyDeleteBlockedReason explains why a row's deletion entries are
 // disabled. The live session's record is never deletable while it is the
 // current session, even after the scan finished: the current session owns
@@ -752,28 +505,45 @@ func (m *Model) historyDeleteBlockedReason(entry HistoryEntry) string {
 	return m.cleanupBlockedReason()
 }
 
-// historyTableFooter states the accounting and, at the scrolling width,
-// how to reach the hidden data columns.
-func (m *Model) historyTableFooter(c *ui.Context, t *ui.Theme, tok *Tokens, entries []HistoryEntry) {
-	text := fmt.Sprintf("共 %d 条 · ", len(entries))
-	if first, last := m.historyList.Visible(); last >= first {
-		text += fmt.Sprintf("显示 %d 条，向下滚动查看更多", last-first+1)
-	} else {
-		text += "向下滚动查看更多"
+// historyExportBlockedReason explains why the row's 导出… entry is
+// disabled. It mirrors historyExportsBlocked's shared guards.
+func (m *Model) historyExportBlockedReason(entry HistoryEntry) string {
+	switch {
+	case entry.Unreadable:
+		return "记录不可读，不能导出。"
+	case !m.exportAvailable():
+		return "当前构建未启用导出。"
+	case m.historyExporting != "":
+		return "正在导出历史记录，完成前不能导出。"
+	case m.exporting:
+		return "正在导出，完成前不能导出。"
+	case m.exitState == exitRunning || m.exitState == exitDone:
+		return "正在退出应用，不能导出。"
+	case m.reviewSaving:
+		return "正在保存修改，完成前不能导出。"
+	case m.editingDirty():
+		return "有未保存的修改，保存或放弃后可导出。"
+	default:
+		return ""
 	}
-	if historyUsesComposite(m.contentWidth) {
-		text += "，左右滚动查看全部列"
-	}
-	text += " · 采集 = 可导出 + 待校对 + 失败 + 未处理 + 其他"
-	ui.Text(c, text).TextColor(tok.TextMuted).FontSize(t.FontSize * 0.8).
-		Bind(&m.historyFooter)
 }
 
-// historyNotices shows the cleanup outcome, the load error and a pending
-// per-record cleanup confirmation.
-func (m *Model) historyNotices(c *ui.Context, t *ui.Theme, tok *Tokens) {
+// openHistoryExport is the existing export entry this PR calls. The export
+// dialog arrives with PR-15; until then 导出… opens the record's summary,
+// where the current export controls live.
+func (m *Model) openHistoryExport(entry HistoryEntry) {
+	if entry.Unreadable || m.historyExportBlockedReason(entry) != "" {
+		return
+	}
+	m.openHistoryEntry(entry)
+	m.revealExports()
+}
+
+// historyNotices shows the cleanup outcome and a pending per-record
+// cleanup confirmation.
+func (m *Model) historyNotices(c *ui.Context, t *ui.Theme) {
 	if m.cleanupNotice != "" {
-		ui.Text(c, m.cleanupNotice).TextColor(tok.TextMuted)
+		ui.Text(c, m.cleanupNotice)
 	}
 	if m.cleanup != nil && !m.cleanup.target.all() {
 		m.cleanupPromptArea(c, t)
@@ -791,38 +561,28 @@ func (m *Model) historyStatusText() string {
 }
 
 // historyRowLabel is the assistive-technology name of one row: the same
-// accounting the visible cells carry.
-func historyRowLabel(entry HistoryEntry) string {
+// conclusion and accounting the visible cells carry.
+func historyRowLabel(m *Model, entry HistoryEntry) string {
 	if entry.Unreadable {
 		return historyTimeText(entry) + " · 记录不可读"
 	}
-	return fmt.Sprintf("%s · 采集 %s · 可导出 %s · 待校对 %s · 无法导出 %s",
-		historyTimeText(entry), formatCount(entry.CapturedCount), formatCount(entry.ExportableCount),
-		formatCount(int64(entry.PendingReview)),
-		formatCount(entry.FailedCount+entry.UnprocessedCount+entry.OtherCount))
+	result := m.historyResultFor(entry)
+	label := historyTimeText(entry) + " · " + result.text
+	if entry.CapturedCount > 0 {
+		label += fmt.Sprintf(" · 件数 %s · 待处理 %s · 可导出 %s",
+			formatCount(entry.CapturedCount), formatCount(entry.Counts.Pending()),
+			formatCount(entry.Counts.Exportable()))
+	}
+	return label
 }
 
-// historyTimeText is the table's compact local time. The year is omitted as
-// in the design; the picker label keeps the full date.
+// historyTimeText is the table's local time in the design's wording
+// (09 §5.3): 11 月 3 日 21:40.
 func historyTimeText(entry HistoryEntry) string {
 	if entry.SavedAt.IsZero() {
 		return "日期未知"
 	}
-	return entry.SavedAt.In(time.Local).Format("01-02 15:04")
-}
-
-// historyCoveragePercent returns the percentage only when the record has a
-// denominator or explicitly says the coverage is complete.
-func historyCoveragePercent(entry HistoryEntry) (int, bool) {
-	switch {
-	case entry.CoverageExpected > 0:
-		percent := int(entry.CapturedCount * 100 / entry.CoverageExpected)
-		return min(100, max(0, percent)), true
-	case entry.Coverage == record.CoverageComplete:
-		return 100, true
-	default:
-		return 0, false
-	}
+	return entry.SavedAt.In(time.Local).Format("1 月 2 日 15:04")
 }
 
 // colorWhenChosen keeps secondary text readable on the accent-filled
@@ -862,25 +622,16 @@ func (m *Model) openHistoryRow(row int) {
 	m.openHistoryEntry(entries[row])
 }
 
-// openHistoryEntry routes the row's 打开 action. "本次" and every other
-// row open the one record workspace; a record already open keeps its
-// state.
+// openHistoryEntry routes the row's 打开 action through the merged record
+// workspace: "本次" and every other row open the same place, and a record
+// already open keeps its state. A damaged record cannot be opened; its row
+// menu only deletes it.
 func (m *Model) openHistoryEntry(entry HistoryEntry) {
 	m.closeHistoryMenu()
 	m.historyMenuID = ""
+	if entry.Unreadable {
+		return
+	}
 	m.histChoice = entry.Label
 	m.OpenHistory()
-}
-
-func (m *Model) historyEmptyText() string {
-	if m.histErr != "" {
-		return "读取失败。"
-	}
-	if m.historyFilterInvalid() {
-		return "日期格式应为 YYYY-MM-DD。"
-	}
-	if len(m.history) > 0 && len(m.visibleHistory()) == 0 {
-		return "没有匹配筛选条件的记录。"
-	}
-	return "暂无已保存的记录。"
 }
