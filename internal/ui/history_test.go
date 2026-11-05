@@ -34,6 +34,16 @@ func historyMetadata(r1, r2 time.Time) []app.HistoryRecord {
 	}
 }
 
+// openRecordsList opens the records destination's list. Startup always
+// lands on the scan page, so tests that read the list navigate to it.
+func openRecordsList(t *testing.T, m *Model, q *queueUpdater, tt *ui.Tester) {
+	t.Helper()
+	if err := tt.Click("记录"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
+}
+
 func TestViewHistoryShowsMetadataAndDateFilter(t *testing.T) {
 	svc := &fakeService{history: historyMetadata(
 		time.Date(2026, 10, 17, 9, 0, 0, 0, time.UTC),
@@ -43,6 +53,7 @@ func TestViewHistoryShowsMetadataAndDateFilter(t *testing.T) {
 	m.SetContentSize(1440, 700)
 	tt := ui.NewTester(m.View, 1440, 1000)
 	settle(t, m, q, tt)
+	openRecordsList(t, m, q, tt)
 
 	if !tt.HasText("995") || !tt.HasText("12") || !tt.HasText("1.0 KB") || !tt.HasText("部分") {
 		t.Fatalf("history metadata does not show: %q", tt.Texts())
@@ -86,6 +97,7 @@ func TestViewHistoryShowsSessionTermination(t *testing.T) {
 	m.SetContentSize(1440, 700)
 	tt := ui.NewTester(m.View, 1440, 1000)
 	settle(t, m, q, tt)
+	openRecordsList(t, m, q, tt)
 
 	labelShown := false
 	for _, text := range tt.Texts() {
@@ -230,20 +242,21 @@ func TestHistoryPageWideTable(t *testing.T) {
 	m.SetContentSize(1440, 900)
 	tt := ui.NewTester(m.View, 1440, 900)
 	settle(t, m, q, tt)
+	openRecordsList(t, m, q, tt)
 
 	for _, title := range []string{"时间", "采集", "可导出", "待校对", "无法导出", "覆盖", "大小", "操作"} {
 		rect, ok := tt.Find(title)
 		if !ok {
 			t.Fatalf("the wide table does not show %q", title)
 		}
-		if rect.X < 168 || rect.X+rect.W > 1440-12 {
+		if rect.X < navRailWidth+12 || rect.X+rect.W > 1440-12 {
 			t.Errorf("%q at %+v is outside the page", title, rect)
 		}
 	}
 	if tt.HasText("来源") {
 		t.Fatal("the history table shows a source column")
 	}
-	for _, text := range []string{"1,008", "1,005", "失败 1 · 未处理 1 · 其他 0", "99% 部分", "历史记录"} {
+	for _, text := range []string{"1,008", "1,005", "失败 1 · 未处理 1 · 其他 0", "99% 部分", "全部记录"} {
 		if !tt.HasText(text) {
 			t.Errorf("the wide table does not show %q: %q", text, tt.Texts())
 		}
@@ -265,6 +278,7 @@ func TestHistoryPageNarrowTableFits(t *testing.T) {
 	m.SetContentSize(1020, 700)
 	tt := ui.NewTester(m.View, 1020, 700)
 	settle(t, m, q, tt)
+	openRecordsList(t, m, q, tt)
 
 	if m.contentWidth != 1020 || historyUsesComposite(m.contentWidth) {
 		t.Fatalf("1020 must use the native table (width %d, composite %v)", m.contentWidth, historyUsesComposite(m.contentWidth))
@@ -274,7 +288,7 @@ func TestHistoryPageNarrowTableFits(t *testing.T) {
 		if !ok {
 			t.Fatalf("the 1020 table does not show %q", title)
 		}
-		if rect.X < 144+12 || rect.X+rect.W > 1020-12 {
+		if rect.X < navRailWidth+12 || rect.X+rect.W > 1020-12 {
 			t.Errorf("%q at %+v is outside the 1020 page", title, rect)
 		}
 	}
@@ -305,6 +319,7 @@ func TestHistoryMinFixedActionColumn(t *testing.T) {
 	m.SetContentSize(860, 560)
 	tt := ui.NewTester(m.View, 860, 560)
 	settle(t, m, q, tt)
+	openRecordsList(t, m, q, tt)
 
 	if !historyUsesComposite(860) {
 		t.Fatal("860 must use the composite table")
@@ -312,7 +327,7 @@ func TestHistoryMinFixedActionColumn(t *testing.T) {
 	if historyMinTableWidth860 != 776 {
 		t.Fatalf("860 table minimum = %v, want 776", historyMinTableWidth860)
 	}
-	panelLeft, panelRight := float32(144+12), float32(860-12)
+	panelLeft, panelRight := float32(navRailWidth+12), float32(860-12)
 	for _, title := range []string{"时间", "采集", "可导出", "待校对", "无法导出", "覆盖", "操作"} {
 		rect, ok := tt.Find(title)
 		if !ok {
@@ -358,8 +373,8 @@ func TestHistoryMinFixedActionColumn(t *testing.T) {
 		t.Fatalf("opening from the fixed column = page %v, slot %v, record %q",
 			m.displayPage(), m.activeSlot, m.historySlot.recordID)
 	}
-	if err := tt.Click("← 返回历史"); err != nil {
-		t.Fatalf("click 返回历史: %v", err)
+	if err := tt.Click("‹ 全部记录"); err != nil {
+		t.Fatalf("click the workspace back action: %v", err)
 	}
 	settle(t, m, q, tt)
 
@@ -412,6 +427,7 @@ func TestHistoryOpenAndReturn(t *testing.T) {
 	m.SetContentSize(1020, 700)
 	tt := ui.NewTester(m.View, 1020, 700)
 	settle(t, m, q, tt)
+	openRecordsList(t, m, q, tt)
 
 	if err := tt.Click("10-20 13:02"); err != nil {
 		t.Fatal(err)
@@ -425,8 +441,8 @@ func TestHistoryOpenAndReturn(t *testing.T) {
 		t.Fatalf("Enter opened page %v, slot %v, record %q", m.displayPage(), m.activeSlot, m.historySlot.recordID)
 	}
 
-	if err := tt.Click("← 返回历史"); err != nil {
-		t.Fatalf("click 返回历史: %v", err)
+	if err := tt.Click("‹ 全部记录"); err != nil {
+		t.Fatalf("click the workspace back action: %v", err)
 	}
 	settle(t, m, q, tt)
 	if m.displayPage() != pageHistory || m.historyRow != 1 {
@@ -542,6 +558,7 @@ func TestHistoryKeyboardSelectionAndMenu(t *testing.T) {
 	m.SetContentSize(1020, 700)
 	tt := ui.NewTester(m.View, 1020, 700)
 	settle(t, m, q, tt)
+	openRecordsList(t, m, q, tt)
 
 	if err := tt.Click("10-21 14:02"); err != nil {
 		t.Fatal(err)
@@ -600,6 +617,7 @@ func TestHistoryDateSearch(t *testing.T) {
 	m.SetContentSize(1020, 700)
 	tt := ui.NewTester(m.View, 1020, 700)
 	settle(t, m, q, tt)
+	openRecordsList(t, m, q, tt)
 
 	if !tt.HasText("搜索日期") {
 		t.Fatal("the history search is not labelled 搜索日期")
@@ -623,6 +641,7 @@ func TestHistoryCompositeShowsWholeRowsAt860(t *testing.T) {
 	m.SetContentSize(860, 560)
 	tt := ui.NewTester(m.View, 860, 560)
 	settle(t, m, q, tt)
+	openRecordsList(t, m, q, tt)
 	if !historyUsesComposite(860) {
 		t.Fatal("860 must use the composite table")
 	}
@@ -699,6 +718,7 @@ func TestHistoryNativeTableWholeRows(t *testing.T) {
 			m.SetContentSize(tc.width, tc.height)
 			tt := ui.NewTester(m.View, tc.width, tc.height)
 			settle(t, m, q, tt)
+			openRecordsList(t, m, q, tt)
 			if historyUsesComposite(m.contentWidth) {
 				t.Fatalf("%d must use the native history table", tc.width)
 			}
@@ -741,6 +761,7 @@ func TestHistoryCompositeSnapsPreciseScrollToRowsAt860(t *testing.T) {
 	m.SetContentSize(860, 560)
 	tt := ui.NewTester(m.View, 860, 560)
 	settle(t, m, q, tt)
+	openRecordsList(t, m, q, tt)
 	entries := m.visibleHistory()
 	header, _ := tt.Find("时间")
 	action, _ := tt.Find("操作")
@@ -878,6 +899,7 @@ func TestHistoryCompositeSnapSurvivesRepaintAt860(t *testing.T) {
 	m.SetContentSize(860, 560)
 	tt := ui.NewTester(m.View, 860, 560)
 	settle(t, m, q, tt)
+	openRecordsList(t, m, q, tt)
 
 	tt.Scroll(400, 300, 0, 26)
 	tt.Frame()
@@ -917,6 +939,7 @@ func TestHistoryCompositeWheelKeepsFullTravelAt860(t *testing.T) {
 			m.SetContentSize(860, 560)
 			tt := ui.NewTester(m.View, 860, 560)
 			settle(t, m, q, tt)
+			openRecordsList(t, m, q, tt)
 			header, _ := tt.Find("时间")
 			action, _ := tt.Find("操作")
 			if m.historyScroll.Y != 0 {

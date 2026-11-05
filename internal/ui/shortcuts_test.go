@@ -20,10 +20,10 @@ func TestScanStartShortcutStartsOnPrepare(t *testing.T) {
 	tt := ui.NewTester(m.View, 1020, 700)
 	settle(t, m, q, tt)
 
-	if got := m.statusShortcutText(); got != "⌘R 开始扫描" {
+	if got := m.statusShortcutText(); got != shortcutStartScan+" 开始扫描" {
 		t.Fatalf("the prepare status bar names %q", got)
 	}
-	if !tt.HasText("⌘R 开始扫描") {
+	if !tt.HasText(shortcutStartScan + " 开始扫描") {
 		t.Fatalf("the prepare status bar does not show ⌘R: %q", tt.Texts())
 	}
 	tt.Key(ui.Cmd, ui.KeyR)
@@ -47,10 +47,10 @@ func TestScanStartShortcutRequiresAPreparableScan(t *testing.T) {
 		m.page = pageScan
 		tt.Frame()
 
-		if got := m.statusShortcutText(); got != "⌃⌥⌘S 停止扫描" {
+		if got := m.statusShortcutText(); got != shortcutStopScan+" 停止扫描" {
 			t.Fatalf("the running status bar names %q", got)
 		}
-		if tt.HasText("⌘R 开始扫描") {
+		if tt.HasText(shortcutStartScan + " 开始扫描") {
 			t.Fatalf("the running scan still names ⌘R: %q", tt.Texts())
 		}
 		tt.Key(ui.Cmd, ui.KeyR)
@@ -94,6 +94,8 @@ func TestScanStartShortcutRequiresAPreparableScan(t *testing.T) {
 		m.histChoice = slotHistoryLabel(t, m, "rec")
 		m.OpenHistory()
 		settle(t, m, q, tt)
+		showRecordItems(m)
+		tt.Frame()
 
 		tt.Key(ui.Cmd, ui.KeyR)
 		settle(t, m, q, tt)
@@ -118,10 +120,10 @@ func TestEditConfirmShortcutSavesTheDraft(t *testing.T) {
 		settle(t, m, q, tt)
 		m.edit.draft.Level = "13"
 		tt.Frame()
-		if got := m.statusShortcutText(); got != "⌘↵ 保存并确认并下一项  ·  ⌘S 保存修改" {
+		if got := m.statusShortcutText(); got != shortcutConfirmNext+" 保存并确认并下一项  ·  "+shortcutSave+" 保存修改" {
 			t.Fatalf("the editing status bar names %q", got)
 		}
-		if !tt.HasText("⌘↵ 保存并确认并下一项") || !tt.HasText("⌘S 保存修改") {
+		if !tt.HasText(shortcutConfirmNext+" 保存并确认并下一项") || !tt.HasText(shortcutSave+" 保存修改") {
 			t.Fatalf("the editing status bar does not show its keys: %q", tt.Texts())
 		}
 
@@ -195,7 +197,7 @@ func TestScanStartShortcutPromptsForUnsavedEdit(t *testing.T) {
 
 	m.page = pageScan
 	tt.Frame()
-	if !tt.HasText("⌘R 开始扫描") {
+	if !tt.HasText(shortcutStartScan + " 开始扫描") {
 		t.Fatalf("the prepare page lost ⌘R with a dirty draft: %q", tt.Texts())
 	}
 
@@ -311,10 +313,10 @@ func TestEditSaveShortcut(t *testing.T) {
 		settle(t, m, q, tt)
 		m.edit.draft.Level = "13"
 		tt.Frame()
-		if got := m.statusShortcutText(); got != "⌘↵ 保存并确认并下一项  ·  ⌘S 保存修改" {
+		if got := m.statusShortcutText(); got != shortcutConfirmNext+" 保存并确认并下一项  ·  "+shortcutSave+" 保存修改" {
 			t.Fatalf("the editing status bar names %q", got)
 		}
-		if !tt.HasText("⌘↵ 保存并确认并下一项") || !tt.HasText("⌘S 保存修改") {
+		if !tt.HasText(shortcutConfirmNext+" 保存并确认并下一项") || !tt.HasText(shortcutSave+" 保存修改") {
 			t.Fatalf("the editing status bar does not show its keys: %q", tt.Texts())
 		}
 
@@ -329,7 +331,7 @@ func TestEditSaveShortcut(t *testing.T) {
 		if m.rec.Rows[0].LevelText() != "13 级" {
 			t.Fatalf("the saved row shows %q", m.rec.Rows[0].LevelText())
 		}
-		if got := m.statusShortcutText(); got == "⌘↵ 保存并确认并下一项  ·  ⌘S 保存修改" {
+		if got := m.statusShortcutText(); got == shortcutConfirmNext+" 保存并确认并下一项  ·  "+shortcutSave+" 保存修改" {
 			t.Fatal("the closed editor still names its keys")
 		}
 	})
@@ -394,6 +396,7 @@ func TestEscapeClosesTheRowMenu(t *testing.T) {
 	m.SetContentSize(1020, 700)
 	tt := ui.NewTester(m.View, 1020, 700)
 	settle(t, m, q, tt)
+	openRecordsList(t, m, q, tt)
 
 	m.openHistoryMenu("r01")
 	tt.Frame()
@@ -448,6 +451,8 @@ func TestEscapeCancelsTheUnsavedPrompt(t *testing.T) {
 
 	m.OpenHistory()
 	settle(t, m, q, tt)
+	showRecordItems(m)
+	tt.Frame()
 	if m.navPrompt == nil {
 		t.Fatal("the dirty switch did not prompt")
 	}
@@ -474,6 +479,7 @@ func TestEscapeReturnsTheFocusToTheTable(t *testing.T) {
 		m.SetContentSize(1020, 700)
 		tt := ui.NewTester(m.View, 1020, 700)
 		settle(t, m, q, tt)
+		openRecordsList(t, m, q, tt)
 
 		if err := tt.Click("打开数据目录"); err != nil {
 			t.Fatal(err)
@@ -511,11 +517,12 @@ func TestEscapeStaysInATextField(t *testing.T) {
 	m.SetContentSize(1020, 700)
 	tt := ui.NewTester(m.View, 1020, 700)
 	settle(t, m, q, tt)
+	openRecordsList(t, m, q, tt)
 
 	// Tab until the date input takes what is typed. Typing is the probe:
 	// every other focus stop on this page ignores text.
 	focused := false
-	for i := 0; i < 12; i++ {
+	for i := 0; i < 20; i++ {
 		tt.Key(0, ui.KeyTab)
 		tt.Frame()
 		tt.Type("2")
@@ -668,25 +675,25 @@ func TestStatusBarNamesOnlyUsableShortcuts(t *testing.T) {
 	m, q := newTestModel(t, Config{Service: &fakeService{}})
 	tt := ui.NewTester(m.View, 1020, 700)
 	settle(t, m, q, tt)
-	if got := m.statusShortcutText(); got != "⌘R 开始扫描" {
+	if got := m.statusShortcutText(); got != shortcutStartScan+" 开始扫描" {
 		t.Fatalf("the prepare status = %q", got)
 	}
 
 	m2, q2, tt2 := openResponsiveResults(t, responsiveResultRecord(t), 1024, 700)
-	if got := m2.statusShortcutText(); got != "⌘↵ 确认并下一项  ·  ⌘J 下一个待校对" {
+	if got := m2.statusShortcutText(); got != shortcutConfirmNext+" 确认并下一项  ·  "+shortcutNextPending+" 下一个待校对" {
 		t.Fatalf("the results status = %q", got)
 	}
-	if tt2.HasText("⌘S 保存修改") {
+	if tt2.HasText(shortcutSave + " 保存修改") {
 		t.Fatalf("the results list names the editor key: %q", tt2.Texts())
 	}
 	if err := tt2.Click("编辑"); err != nil {
 		t.Fatal(err)
 	}
 	settle(t, m2, q2, tt2)
-	if got := m2.statusShortcutText(); got != "⌘↵ 保存并确认并下一项  ·  ⌘S 保存修改" {
+	if got := m2.statusShortcutText(); got != shortcutConfirmNext+" 保存并确认并下一项  ·  "+shortcutSave+" 保存修改" {
 		t.Fatalf("the editing status = %q", got)
 	}
-	if tt2.HasText("⌘J 下一个待校对") || tt2.HasText("⌘↵ 确认并下一项") {
+	if tt2.HasText(shortcutNextPending+" 下一个待校对") || tt2.HasText(shortcutConfirmNext+" 确认并下一项") {
 		t.Fatalf("the editing status still names review keys: %q", tt2.Texts())
 	}
 
@@ -695,7 +702,8 @@ func TestStatusBarNamesOnlyUsableShortcuts(t *testing.T) {
 	m3.SetContentSize(1020, 700)
 	tt3 := ui.NewTester(m3.View, 1020, 700)
 	settle(t, m3, q3, tt3)
-	if got := m3.statusShortcutText(); got != "↵ 打开记录" {
+	openRecordsList(t, m3, q3, tt3)
+	if got := m3.statusShortcutText(); got != shortcutOpenRecord+" 打开记录" {
 		t.Fatalf("the history status = %q", got)
 	}
 	openSettings(t, m3, q3, tt3)

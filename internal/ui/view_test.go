@@ -279,6 +279,8 @@ func openTestRecord(t *testing.T, ev EvidenceSource, cacheLimit int) (*Model, *q
 	settle(t, m, q, tt)
 	m.OpenHistory()
 	settle(t, m, q, tt)
+	showRecordItems(m)
+	tt.Frame()
 	m.setResultFilter(resultFilterAll)
 	tt.Frame()
 	return m, q, tt
@@ -635,8 +637,10 @@ func TestViewHistoryReopen(t *testing.T) {
 		},
 	}
 	m, q := newTestModel(t, Config{Service: svc})
+	m.SetContentSize(1020, 700)
 	tt := ui.NewTester(m.View, 1020, 700)
 	settle(t, m, q, tt)
+	openRecordsList(t, m, q, tt)
 	if !tt.HasText("2026-10-17 09:00 · new") {
 		t.Fatalf("the history entries do not show: %q", tt.Texts())
 	}
@@ -646,12 +650,16 @@ func TestViewHistoryReopen(t *testing.T) {
 		t.Fatal(err)
 	}
 	settle(t, m, q, tt)
+	showRecordItems(m)
+	tt.Frame()
 	if !tt.HasText("结果：历史记录 new（4 条，中断恢复 1 条）") {
 		t.Fatalf("the reopened record does not show: %q", tt.Texts())
 	}
 	m.histChoice = "2026-10-16 09:00 · old"
 	m.OpenHistory()
 	settle(t, m, q, tt)
+	showRecordItems(m)
+	tt.Frame()
 	if !tt.HasText("啄木鸟电音") || tt.HasText("中断恢复") {
 		t.Fatalf("the older record did not open: %q", tt.Texts())
 	}
@@ -662,6 +670,8 @@ func TestViewHistoryReopen(t *testing.T) {
 		scan.Counts{Captured: 1, Produced: 1}, 1, false, ""))
 	m.OpenHistory()
 	settle(t, m, q, tt)
+	showRecordItems(m)
+	tt.Frame()
 	if !tt.HasText("啄木鸟电音") {
 		t.Fatalf("the history record did not reopen: %q", tt.Texts())
 	}
@@ -669,6 +679,8 @@ func TestViewHistoryReopen(t *testing.T) {
 		t.Fatal(err)
 	}
 	settle(t, m, q, tt)
+	showRecordItems(m)
+	tt.Frame()
 	if !tt.HasText("静听嘉音") {
 		t.Fatalf("the live record did not reopen: %q", tt.Texts())
 	}
@@ -702,6 +714,8 @@ func TestEvidenceCacheIsBounded(t *testing.T) {
 	settle(t, m, q, tt)
 	m.OpenHistory()
 	settle(t, m, q, tt)
+	showRecordItems(m)
+	tt.Frame()
 	if err := tt.Click("显示证据"); err != nil {
 		t.Fatal(err)
 	}
@@ -925,7 +939,7 @@ func TestCompletionCardShowsCountsExclusionsAndExports(t *testing.T) {
 	if !tt.HasText("已保存 · 待校对 0 · 可导出 1 件") {
 		t.Fatalf("the completion status line is missing: %q", tt.Texts())
 	}
-	if tt.HasText("⌘↵") {
+	if tt.HasText(shortcutConfirmNext) {
 		t.Fatalf("the completion state keeps a review shortcut: %q", tt.Texts())
 	}
 
@@ -1152,6 +1166,8 @@ func TestCompletionUsesHistoryRecordCounts(t *testing.T) {
 	m.histChoice = slotHistoryLabel(t, m, "old")
 	m.OpenHistory()
 	settle(t, m, q, tt)
+	showRecordItems(m)
+	tt.Frame()
 	if m.activeSlot != resultSlotHistory || !m.completionVisible() {
 		t.Fatalf("the finished history snapshot does not show completion: %q", tt.Texts())
 	}

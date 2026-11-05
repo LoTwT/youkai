@@ -54,20 +54,20 @@ func openSettings(t *testing.T, m *Model, q *queueUpdater, tt *ui.Tester) {
 	}
 }
 
-// TestSettingsPageKeepsTheWideRail checks the settings destination uses
-// the 168-DIP rail and keeps its entry pinned below the other items.
-func TestSettingsPageKeepsTheWideRail(t *testing.T) {
+// TestSettingsPageKeepsTheRail checks the settings destination keeps the
+// narrow rail and its entry pinned below the other destinations.
+func TestSettingsPageKeepsTheRail(t *testing.T) {
 	m, q, _ := settingsTestModel(t)
 	tt := ui.NewTester(m.View, 1440, 900)
 	settle(t, m, q, tt)
 	openSettings(t, m, q, tt)
 
-	if got := m.sidebarWidth(); got != sidebarWideWidth {
-		t.Fatalf("the settings page rail is %v DIP wide, want %v", got, sidebarWideWidth)
-	}
 	settings, ok := tt.Find("设置")
 	if !ok {
 		t.Fatal("the settings rail entry is missing")
+	}
+	if settings.X+settings.W > navRailWidth {
+		t.Errorf("the settings entry at %+v leaves the rail", settings)
 	}
 	if settings.Y+settings.H < 900*0.8 {
 		t.Errorf("the settings entry at %+v is not pinned to the bottom", settings)
@@ -116,23 +116,29 @@ func TestSettingsPageGroupsVersionAndShortcuts(t *testing.T) {
 
 	// Every row names a key this build registers, in the design's order.
 	rows := settingsShortcutRows()
-	if len(rows) != 7 {
-		t.Fatalf("the shortcut list has %d rows, want 7: %+v", len(rows), rows)
+	if len(rows) != 9 {
+		t.Fatalf("the shortcut list has %d rows, want 9: %+v", len(rows), rows)
 	}
 	for _, registered := range []string{
-		"开始扫描", "⌘R", "扫描准备",
-		"停止扫描", "扫描中 · 全局", "确认并下一项", "下一个待校对", "⌘↵", "⌘J",
-		"保存修改", "⌘S", "打开记录", "关闭浮层/返回表格", "Esc",
+		"开始扫描", shortcutStartScan, "扫描准备",
+		"停止扫描", "扫描中 · 全局", "确认并下一项", "下一个待校对", shortcutConfirmNext, shortcutNextPending,
+		"保存修改", shortcutSave, "打开记录", "关闭浮层/返回表格", shortcutCloseOverlay,
+		"导出…", "记录工作区", shortcutExport, "在大区域间跳转", shortcutFocusRegion,
 	} {
 		if !tt.HasText(registered) {
 			t.Errorf("the shortcut list does not show %q: %q", registered, tt.Texts())
 		}
 	}
-	if got, want := rows[0], (settingsShortcut{action: "开始扫描", context: "扫描准备", keys: "⌘R"}); got != want {
+	if got, want := rows[0], (settingsShortcut{action: "开始扫描", context: "扫描准备", keys: shortcutStartScan}); got != want {
 		t.Errorf("the first shortcut row = %+v, want %+v", got, want)
 	}
-	if got, want := rows[6], (settingsShortcut{action: "关闭浮层/返回表格", context: "任意", keys: "Esc"}); got != want {
+	if got, want := rows[8], (settingsShortcut{action: "关闭浮层/返回表格", context: "任意", keys: shortcutCloseOverlay}); got != want {
 		t.Errorf("the last shortcut row = %+v, want %+v", got, want)
+	}
+	for _, row := range rows {
+		if strings.ContainsAny(row.keys, "⌘⌃⌥⇧↵") {
+			t.Errorf("the shortcut row %+v uses macOS notation; the interface shows Windows keys", row)
+		}
 	}
 }
 
