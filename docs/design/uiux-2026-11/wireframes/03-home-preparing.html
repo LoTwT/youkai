@@ -25,13 +25,13 @@
         </div>
       </section>
       <section class="col" style="width:420px; gap:12px">
-        <div class="row"><h4 style="margin:0">对照：准备超时后（出现在左侧同一位置）</h4><span class="m">4</span></div>
+        <div class="row"><h4 style="margin:0">对照：准备超时后回到准备检查（清单顶部）</h4><span class="m">4</span></div>
         <div class="scancard" style="flex:none">
           <div class="col" style="gap:8px; padding:14px 16px">
             <b>没有开始：30 秒内游戏没有就绪</b>
             <div class="check bad" style="grid-template-columns:22px 1fr; padding:8px 0; background:none; border:0"><span class="ic bad"></span><span><b>游戏窗口被遮挡</b><br><span class="small">检查点 7 被另一个窗口挡住（窗口类：Chrome_WidgetWin_1，进程：chrome.exe）。<br>请关掉或移开挡住游戏的窗口，然后重新开始。</span></span></div>
           </div>
-          <div class="actbar"><div class="notice"><span class="link">复制诊断信息</span></div><div class="go"><span class="btn primary">重新开始</span></div></div>
+          <div class="actbar"><div class="notice"><span class="link">复制诊断信息</span></div><div class="go"><span class="btn primary">开始扫描</span></div></div>
         </div>
       </section>
     </div></main>
@@ -43,7 +43,7 @@
     <li>30 秒倒计时（P-04 已采纳）。youkai 留在原地（P-09 不采纳），游戏切到前台后通常看不到它；倒计时只在用户切回前有用（06 §3 第 15 条）。</li>
     <li>激活结果：成功时只写“已把游戏切到前台”；被系统拒绝时写“未能切换，请自己切换到游戏”（C-05，需要 R-02）。</li>
     <li>逐项实时原因先实测（P-04）；实测前只写“正在等待游戏就绪”，到期后再显示原因（L-02）。</li>
-    <li>准备超时与预检失败：原因 + 怎么做 + 下一步；遮挡写检查点与窗口类或进程名，不写外部窗口标题（T2 §3.2）。示意并排放在右侧，实际出现在左侧扫描区同一位置。</li>
+    <li>准备超时与预检失败：扫描区回到准备检查，这张卡就是清单顶部的失败结论（下面接着其余检查项，此处省略）；按钮就是方案 C 操作条里的“开始扫描”，不另设“重新开始”（08 §1.2）。原因 + 怎么做；遮挡写检查点与窗口类或进程名，不写外部窗口标题（T2 §3.2）。</li>
   </ol>
   <div class="state">“停止”按钮可用 Tab 到达；推荐用热键停止。<br>相关规格：08 §1.2；10 R-02、R-03、R-05。</div>
 </div>
