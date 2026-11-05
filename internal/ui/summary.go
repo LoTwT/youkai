@@ -242,10 +242,21 @@ func (m *Model) openSummaryClass(class app.ItemClass) {
 }
 
 // selectSummaryClass chooses the first row of one class among the rows the
-// current segment shows. It reports whether such a row exists.
+// current segment shows. It reports whether such a row exists. The class of
+// each candidate is classified from the loaded checkpoint when the user
+// clicks, so the summary does not need a second per-row copy of the
+// classification in the item browser's state.
 func (m *Model) selectSummaryClass(class app.ItemClass) bool {
+	if m.rec == nil || m.recData == nil {
+		return false
+	}
+	classes := make(map[int64]app.ItemClass, len(m.recData.Checkpoint.Items))
+	for i := range m.recData.Checkpoint.Items {
+		item := &m.recData.Checkpoint.Items[i]
+		classes[item.Sequence] = app.ClassifyItem(*item)
+	}
 	for _, index := range m.visibleResultRows() {
-		if m.rec.Rows[index].Class != class {
+		if classes[m.rec.Rows[index].Seq] != class {
 			continue
 		}
 		m.selected = index
@@ -260,11 +271,16 @@ func (m *Model) selectSummaryClass(class app.ItemClass) bool {
 }
 
 // summaryCounts is the four-class partition the count cells show. The export
-// snapshot is authoritative for the current revision; a record whose export
-// cannot be built keeps the classes computed when the view was built.
+// snapshot is authoritative for the current revision. A record whose export
+// cannot be built falls back to classifying the loaded checkpoint; the
+// summary is the only caller, so that pass runs only while the export
+// snapshot is missing.
 func (m *Model) summaryCounts() app.ItemClassCounts {
 	if m.exportData != nil {
 		return m.exportData.Summary.Counts
+	}
+	if m.recData != nil {
+		return app.ClassifyItems(m.recData.Checkpoint.Items)
 	}
 	if m.rec != nil {
 		return m.rec.Classes

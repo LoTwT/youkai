@@ -299,11 +299,27 @@ func TestViewSummaryCountsOpenFilteredItems(t *testing.T) {
 			if m.rec == nil || m.selected < 0 || m.selected >= len(m.rec.Rows) {
 				t.Fatalf("clicking %q selected no item", tc.cell)
 			}
-			if got := m.rec.Rows[m.selected].Class; got != tc.class {
+			if got := selectedSummaryClass(t, m); got != tc.class {
 				t.Fatalf("clicking %q selected class %q, want %q", tc.cell, got, tc.class)
 			}
 		})
 	}
+}
+
+// selectedSummaryClass classifies the item the item browser selected.
+func selectedSummaryClass(t *testing.T, m *Model) app.ItemClass {
+	t.Helper()
+	if m.rec == nil || m.recData == nil || m.selected < 0 || m.selected >= len(m.rec.Rows) {
+		t.Fatalf("the summary/opened record cannot name a selected item")
+	}
+	seq := m.rec.Rows[m.selected].Seq
+	for i := range m.recData.Checkpoint.Items {
+		if m.recData.Checkpoint.Items[i].Sequence == seq {
+			return app.ClassifyItem(m.recData.Checkpoint.Items[i])
+		}
+	}
+	t.Fatalf("the selected row %d has no checkpoint item", seq)
+	return ""
 }
 
 // TestViewSummarySaveFailureRetries checks the save-failure state promoted to

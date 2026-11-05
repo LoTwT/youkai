@@ -36,8 +36,9 @@ type RecordView struct {
 	// missing). The field-quality and review state stay authoritative.
 	EvidenceRemoved bool
 	// Classes is the four-class partition of Rows, computed once when the
-	// view is built. The summary's count cells and its pending/exportable
-	// totals read it instead of re-validating every payload each frame.
+	// view is built. The summary's count cells fall back to it when the
+	// export snapshot is unavailable; the snapshot remains authoritative
+	// for a readable record.
 	Classes app.ItemClassCounts
 	// Rows are the captured items in capture order; no item disappears
 	// for its status.
@@ -59,10 +60,6 @@ type Row struct {
 	Failure string
 	// Quality is the field-quality state of the current revision.
 	Quality record.Quality
-	// Class is the item's four-class display class. The summary's count
-	// cells select the first row of the clicked class, so the row carries
-	// the same decision the class count was made from.
-	Class app.ItemClass
 	// Revision is the persisted item revision the row shows. An edit is
 	// saved against it, so a stale editor can only be rejected, never
 	// overwrite a newer revision.
@@ -241,32 +238,24 @@ func BuildRecordView(id string, rec *record.Recovery, live bool) *RecordView {
 		EvidenceRemoved:  evidenceWasRemoved(cp),
 	}
 	for i := range cp.Items {
-		row := buildRow(&cp.Items[i])
-		addItemClass(&view.Classes, row.Class)
-		view.Rows = append(view.Rows, row)
+		view.Rows = append(view.Rows, buildRow(&cp.Items[i]))
+		addClassCount(&view.Classes, app.ClassifyItem(cp.Items[i]))
 	}
 	return view
 }
 
-// addItemClass adds one row to the four-class partition. It is the local
-// counterpart of app.ClassifyItems' unexported accumulator, so a record view
-// classifies each item once.
-func addItemClass(counts *app.ItemClassCounts, class app.ItemClass) {
-	adjustItemClass(counts, class, 1)
-}
-
-// adjustItemClass moves one row between classes when a saved revision
-// changes its class, without re-validating the rest of the record.
-func adjustItemClass(counts *app.ItemClassCounts, class app.ItemClass, delta int64) {
+// addClassCount adds one item to the four-class partition, so a record view
+// classifies each item once without a per-row class field.
+func addClassCount(counts *app.ItemClassCounts, class app.ItemClass) {
 	switch class {
 	case app.ItemClassPendingBackfill:
-		counts.PendingBackfill += delta
+		counts.PendingBackfill++
 	case app.ItemClassPendingReview:
-		counts.PendingReview += delta
+		counts.PendingReview++
 	case app.ItemClassWarning:
-		counts.Warning += delta
+		counts.Warning++
 	case app.ItemClassPassed:
-		counts.Passed += delta
+		counts.Passed++
 	}
 }
 
@@ -299,7 +288,6 @@ func buildRow(it *record.ItemRecord) Row {
 		Reason:   it.Reason,
 		Failure:  it.Failure,
 		Quality:  it.Quality,
-		Class:    app.ClassifyItem(*it),
 		Revision: it.Revision,
 	}
 	res := parseResult(it.Data)

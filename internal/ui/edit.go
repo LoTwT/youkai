@@ -781,10 +781,7 @@ func (m *Model) applySavedItem(item record.ItemRecord, generation int64) {
 	if index < 0 {
 		return
 	}
-	previous := m.rec.Rows[index].Class
 	m.rec.Rows[index] = buildRow(&item)
-	adjustItemClass(&m.rec.Classes, previous, -1)
-	adjustItemClass(&m.rec.Classes, m.rec.Rows[index].Class, 1)
 	if m.recData == nil || m.recData.Checkpoint.Session.SessionID != m.rec.ID {
 		return
 	}
