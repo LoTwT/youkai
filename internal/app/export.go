@@ -56,6 +56,10 @@ type ExportSummary struct {
 	// ExpectedCount is the trusted same-scope total, when the record has
 	// one; nil when unknown.
 	ExpectedCount *int64
+	// Counts is the four-class partition of Captured. Warning + Passed
+	// equals Included by construction: classification and export use the
+	// same usableItem decision.
+	Counts ItemClassCounts
 }
 
 // ExportItem is one usable drive disc in the public shape. Issues are the
@@ -230,9 +234,11 @@ func BuildUsableExport(rec *record.Recovery) (*UsableExport, error) {
 		export.session.EndedAt = &ended
 	}
 
+	counts := ItemClassCounts{}
 	for i := range cp.Items {
 		item := &cp.Items[i]
 		exported, ok := usableItem(item)
+		counts.add(classifyWithExport(item, exported, ok))
 		if !ok {
 			continue
 		}
@@ -248,9 +254,10 @@ func BuildUsableExport(rec *record.Recovery) (*UsableExport, error) {
 	export.Summary = ExportSummary{
 		Captured:      shell.CapturedCount,
 		Included:      len(export.items),
-		Excluded:      int(shell.CapturedCount) - len(export.items),
+		Excluded:      int(counts.Pending()),
 		Coverage:      export.session.Coverage.Status,
 		ExpectedCount: shell.Coverage.ExpectedCount,
+		Counts:        counts,
 	}
 	return export, nil
 }
