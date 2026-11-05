@@ -241,6 +241,90 @@ func TestWriteDirectExportContextCanceledWritesNothing(t *testing.T) {
 	}
 }
 
+// cancelAfterChecksContext reports success for the first checks and
+// cancellation on cancelAt: it tests the cleanup between reserving a name
+// and writing the file deterministically.
+type cancelAfterChecksContext struct {
+	context.Context
+	checks   int
+	cancelAt int
+}
+
+func (c *cancelAfterChecksContext) Err() error {
+	c.checks++
+	if c.checks >= c.cancelAt {
+		return context.Canceled
+	}
+	return nil
+}
+
+func TestWriteDirectExportContextCancelAfterReserveRemovesName(t *testing.T) {
+	dir := t.TempDir()
+	ctx := &cancelAfterChecksContext{Context: context.Background(), cancelAt: 2}
+	path, err := writeDirectExportContext(ctx, dir, "out.youkai.json", []byte("data"))
+	if path != "" || !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled export returned path %q err %v", path, err)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("a canceled export kept its reserved name: %v", entries)
+	}
+}
+
+func TestWriteDirectExportContextCancelDuringWriteLeavesNothing(t *testing.T) {
+	dir := t.TempDir()
+	ctx, cancel := context.WithCancel(context.Background())
+	ops := defaultExportFileOps
+	ops.createTemp = func(dir, pattern string) (exportFile, error) {
+		f, err := os.CreateTemp(dir, pattern)
+		if err != nil {
+			return nil, err
+		}
+		cancel()
+		return f, nil
+	}
+	path, err := writeDirectExportContextWith(ctx, dir, "out.youkai.json", []byte("data"), ops)
+	if path != "" || !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled export returned path %q err %v", path, err)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("a canceled export left files: %v", entries)
+	}
+}
+
+func TestWriteDirectExportContextCancelKeepsCleanupError(t *testing.T) {
+	dir := t.TempDir()
+	ctx, cancel := context.WithCancel(context.Background())
+	ops := defaultExportFileOps
+	ops.createTemp = func(dir, pattern string) (exportFile, error) {
+		f, err := os.CreateTemp(dir, pattern)
+		if err != nil {
+			return nil, err
+		}
+		cancel()
+		return f, nil
+	}
+	ops.remove = func(string) error { return errors.New("temporary file locked") }
+	path, err := writeDirectExportContextWith(ctx, dir, "out.youkai.json", []byte("data"), ops)
+	if path != "" || !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled export returned path %q err %v", path, err)
+	}
+	if !strings.Contains(err.Error(), "temporary file locked") {
+		t.Fatalf("the cleanup failure was hidden: %v", err)
+	}
+	var cleanupErr *ui.ExportCleanupError
+	if !errors.As(err, &cleanupErr) {
+		t.Fatalf("the cleanup failure is not classified: %v", err)
+	}
+}
+
 func TestWriteExportFileCancelBeforeRenameLeavesNoTarget(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "out.youkai.json")

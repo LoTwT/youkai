@@ -249,7 +249,9 @@ func (m *Model) applyLoadedRecord(id string, rec *record.Recovery, live bool) {
 	}
 	if m.exportAfterLoadID == id {
 		m.exportAfterLoadID = ""
-		m.openExportDialog()
+		if m.displayPage() == pageResults {
+			m.openExportDialog()
+		}
 	}
 }
 

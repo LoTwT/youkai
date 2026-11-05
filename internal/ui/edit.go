@@ -492,6 +492,12 @@ func (m *Model) requestNavigation(req navigationRequest) {
 // runNavigation performs a navigation whose editor, if any, is settled.
 func (m *Model) runNavigation(req navigationRequest) {
 	m.navPrompt = nil
+	if req.kind != navOpenRecord {
+		// A row export waits for only the record it asked for. Leaving the
+		// workspace (or opening the title bar's dialog) must not let that
+		// load pop the dialog over another page.
+		m.exportAfterLoadID = ""
+	}
 	switch req.kind {
 	case navSelect:
 		if m.rec == nil {

@@ -508,7 +508,7 @@ func TestWorkspaceCoverageMatchesTheConclusion(t *testing.T) {
 	if !tt.HasText("覆盖：部分覆盖（导出文件会标注“部分快照”）") {
 		t.Fatalf("the summary does not show the same coverage: %q", tt.Texts())
 	}
-	if tt.HasText("覆盖：完整") {
+	if tt.HasText("覆盖：全部") {
 		t.Fatalf("a coverage the export cannot confirm is shown as complete: %q", tt.Texts())
 	}
 }

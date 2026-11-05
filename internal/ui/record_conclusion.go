@@ -111,7 +111,7 @@ func completedRecordConclusion(in recordConclusionInput) recordConclusion {
 	if counts.Total() == 0 {
 		// A record from before the four-class counts: the ending is all it
 		// can honestly say.
-		return recordConclusion{text: "正常结束 · 覆盖：完整"}
+		return recordConclusion{text: "正常结束 · 覆盖：全部"}
 	}
 	if pending := counts.Pending(); pending > 0 {
 		switch {

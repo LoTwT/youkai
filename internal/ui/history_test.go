@@ -1006,6 +1006,37 @@ func TestHistoryCurrentRowOpensLiveRecord(t *testing.T) {
 	}
 }
 
+// TestHistoryRowExportLoadFailureDoesNotOpenDialog keeps a failed row
+// export from leaving the "open the dialog when the load lands" mark set.
+func TestHistoryRowExportLoadFailureDoesNotOpenDialog(t *testing.T) {
+	svc := &fakeService{
+		history: historyTableRecords(1),
+		loadErr: map[string]error{"r01": errors.New("checkpoint missing")},
+	}
+	m, q := newTestModel(t, Config{
+		Service:           svc,
+		DirectExportSaver: &fakeDirectExportSaver{},
+		AppVersion:        "test",
+	})
+	tt := ui.NewTester(m.View, 1180, 760)
+	settle(t, m, q, tt)
+	openRecordsList(t, m, q, tt)
+
+	m.openHistoryMenu("r01")
+	tt.Frame()
+	if err := tt.Click("导出…"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
+	if m.exportAfterLoadID != "" || m.exportDialog.open {
+		t.Fatalf("a failed row load kept its deferred dialog: id=%q open=%t",
+			m.exportAfterLoadID, m.exportDialog.open)
+	}
+	if !strings.Contains(m.recErr, "checkpoint missing") {
+		t.Fatalf("the row load failure is not shown: %q", m.recErr)
+	}
+}
+
 // TestHistoryRowExportForOpenRecordOpensTheDialog checks the branch where
 // the row's record is already loaded: no reload, just the same dialog.
 func TestHistoryRowExportForOpenRecordOpensTheDialog(t *testing.T) {

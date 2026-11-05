@@ -232,6 +232,63 @@ func TestExportDialogShowsCountsFormatDifferenceAndSuccess(t *testing.T) {
 	}
 }
 
+// TestExportDialogTabOrder checks 08 §4's forward Tab order: the two format
+// buttons, then the review link, then close. MyGo builds the close and
+// review controls last (attached to their visible places), so the layout
+// stays on the wireframe while the focus order follows the spec.
+func TestExportDialogTabOrder(t *testing.T) {
+	rec := recovery(
+		uiStructuredItem(t, 1, record.QualityAutoAccepted),
+		uiStructuredItem(t, 2, record.QualityNeedsReview),
+	)
+	f := newExportDialogFixture(t, rec, false)
+	f.open(t)
+
+	if !f.tt.Focused("导出 JSON") {
+		t.Fatalf("the dialog did not open on 导出 JSON: %q", f.tt.Texts())
+	}
+	for _, want := range []string{"导出 CSV", "去校对", "关闭导出对话框"} {
+		f.tt.Key(0, ui.KeyTab)
+		if !f.tt.Focused(want) {
+			t.Fatalf("Tab did not reach %q: %q", want, f.tt.Texts())
+		}
+	}
+	f.tt.Key(0, ui.KeyEnter)
+	f.tt.Frame()
+	if f.m.exportDialog.open {
+		t.Fatal("the attached close button did not close the dialog")
+	}
+}
+
+// TestExportDialogExcludedReasonsExpandOnDemand covers 08 §4's on-demand
+// exclusion breakdown: the reasons stay out of the way until asked for.
+func TestExportDialogExcludedReasonsExpandOnDemand(t *testing.T) {
+	rec := recovery(
+		uiStructuredItem(t, 1, record.QualityAutoAccepted),
+		uiStructuredItem(t, 2, record.QualityNeedsReview),
+	)
+	f := newExportDialogFixture(t, rec, false)
+	f.open(t)
+
+	if f.tt.HasText("待校对：1 件") {
+		t.Fatalf("the exclusion reasons start expanded: %q", f.tt.Texts())
+	}
+	if err := f.tt.Click("排除原因明细"); err != nil {
+		t.Fatal(err)
+	}
+	f.tt.Frame()
+	if !f.tt.HasText("待校对：1 件") {
+		t.Fatalf("the exclusion reasons did not expand: %q", f.tt.Texts())
+	}
+	if err := f.tt.Click("排除原因明细"); err != nil {
+		t.Fatal(err)
+	}
+	f.tt.Advance(250 * time.Millisecond)
+	if f.tt.HasText("待校对：1 件") {
+		t.Fatalf("the exclusion reasons did not collapse: %q", f.tt.Texts())
+	}
+}
+
 // TestExportDialogFitsTheNarrowWindow checks that the whole pre-export
 // content stays inside the design's minimum window, so the format choice
 // is never clipped at 960×640.
@@ -247,7 +304,8 @@ func TestExportDialogFitsTheNarrowWindow(t *testing.T) {
 	f.open(t)
 	for _, label := range []string{
 		"导出这条记录", "纳入", "排除", "覆盖", "不含截图",
-		"写入位置", "导出 JSON", "导出 CSV",
+		"写入位置", "去校对", "排除原因明细", "导出 JSON", "导出 CSV",
+		"关闭导出对话框",
 		"JSON：带来源扫描、覆盖结论、筛选方式、排除数量和目录。" +
 			"CSV：一行一件的表格，不含这些信息。两者来自同一已保存修订。",
 	} {
@@ -273,6 +331,106 @@ func TestExportDialogEscClosesWhenIdle(t *testing.T) {
 	}
 	if f.tt.HasText("导出这条记录") {
 		t.Fatalf("the closed dialog still renders: %q", f.tt.Texts())
+	}
+}
+
+// TestExportDialogCloseButtonWorks checks the attached close button is
+// clickable where the wireframe draws it.
+func TestExportDialogCloseButtonWorks(t *testing.T) {
+	f := newExportDialogFixture(t, recovery(uiStructuredItem(t, 1, record.QualityAutoAccepted)), false)
+	f.open(t)
+	if err := f.tt.Click("关闭导出对话框"); err != nil {
+		t.Fatal(err)
+	}
+	f.tt.Frame()
+	if f.m.exportDialog.open {
+		t.Fatal("the clickable close button did not close the dialog")
+	}
+}
+
+// TestRowExportDoesNotFollowAPageSwitch checks that a record load started
+// by the records list opens its dialog only while the workspace is still
+// the destination.
+func TestRowExportDoesNotFollowAPageSwitch(t *testing.T) {
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+	loads := map[string]*record.Recovery{
+		"r01": recovery(uiStructuredItem(t, 1, record.QualityAutoAccepted)),
+	}
+	svc := &fakeService{history: historyTableRecords(1), loads: loads}
+	svc.loadFn = func(id string) (*record.Recovery, error) {
+		if id == "r01" {
+			started <- struct{}{}
+			<-release
+		}
+		return loads[id], nil
+	}
+	m, q := newTestModel(t, Config{
+		Service:           svc,
+		DirectExportSaver: &fakeDirectExportSaver{},
+		AppVersion:        "test",
+	})
+	tt := ui.NewTester(m.View, 1180, 760)
+	settle(t, m, q, tt)
+	openRecordsList(t, m, q, tt)
+
+	m.openHistoryMenu("r01")
+	tt.Frame()
+	if err := tt.Click("导出…"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the row export did not start loading")
+	}
+	m.navigatePage(pageSettings)
+	if m.exportAfterLoadID != "" {
+		t.Fatalf("leaving the workspace kept the deferred export: %q", m.exportAfterLoadID)
+	}
+	close(release)
+	settle(t, m, q, tt)
+	if m.page != pageSettings || m.exportDialog.open {
+		t.Fatalf("the load opened its dialog over another page: page %v open=%t",
+			m.page, m.exportDialog.open)
+	}
+}
+
+// TestExportDialogBlocksPageShortcuts checks that the modal owns the
+// keyboard while it shows: F6 must not move focus to the page behind it.
+func TestExportDialogBlocksPageShortcuts(t *testing.T) {
+	rec := recovery(
+		uiStructuredItem(t, 1, record.QualityAutoAccepted),
+		uiStructuredItem(t, 2, record.QualityNeedsReview),
+	)
+	f := newExportDialogFixture(t, rec, false)
+	f.open(t)
+	if !f.tt.Focused("导出 JSON") {
+		t.Fatalf("the dialog did not open on 导出 JSON: %q", f.tt.Texts())
+	}
+	f.tt.Key(0, ui.KeyF6)
+	if !f.tt.Focused("导出 JSON") {
+		t.Fatalf("F6 moved the focus behind the dialog: %q", f.tt.Texts())
+	}
+	selected := f.m.selected
+	f.tt.Key(ui.Cmd, ui.KeyJ)
+	if f.m.selected != selected {
+		t.Fatalf("Ctrl+J moved the result selection behind the dialog: %d -> %d",
+			selected, f.m.selected)
+	}
+}
+
+// TestCoverageTextUsesTheDesignVocabulary keeps complete coverage called
+// 全部, never 完整 (09 §5.2).
+func TestCoverageTextUsesTheDesignVocabulary(t *testing.T) {
+	if got := coverageText(record.CoverageComplete); got != "全部" {
+		t.Fatalf("complete coverage = %q, want 全部", got)
+	}
+	if got := coverageText(record.CoveragePartial); got != "部分" {
+		t.Fatalf("partial coverage = %q, want 部分", got)
+	}
+	if got := coverageText(record.CoverageUnknown); got != "无法确认" {
+		t.Fatalf("unknown coverage = %q, want 无法确认", got)
 	}
 }
 
@@ -523,6 +681,77 @@ func TestExportDialogRunsCancelsAndReexports(t *testing.T) {
 	}
 	if !f.tt.HasText("已导出 1 件") {
 		t.Fatalf("the re-export did not succeed: %q", f.tt.Texts())
+	}
+}
+
+// TestExportDialogCancelRacingAWriteShowsSuccess covers the cancel/write
+// race: once the saver returned a path, the file exists and the dialog must
+// report success even though 取消 was pressed.
+func TestExportDialogCancelRacingAWriteShowsSuccess(t *testing.T) {
+	f := newExportDialogFixture(t, recovery(uiStructuredItem(t, 1, record.QualityAutoAccepted)), false)
+	started := make(chan struct{})
+	var once sync.Once
+	f.saver.saveCtxFn = func(ctx context.Context, _ app.ExportFormat, _ string, _ []byte) (string, error) {
+		once.Do(func() { close(started) })
+		<-ctx.Done()
+		// The write committed before the cancellation landed.
+		return "/tmp/raced.youkai.json", nil
+	}
+	f.open(t)
+	if err := f.tt.Click("导出 JSON"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the export write did not start")
+	}
+	if err := f.tt.Click("取消"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, f.m, f.q, f.tt)
+	// Canceling was requested, but the committed file owns the result.
+	if f.m.exportDialog.canceled {
+		t.Fatal("a committed write kept the canceled state")
+	}
+	if f.m.exportDialogSuccess() == nil || f.m.exportOutcome.path != "/tmp/raced.youkai.json" {
+		t.Fatalf("a committed race was not shown as success: %+v", f.m.exportOutcome)
+	}
+	if !f.tt.HasText("已导出 1 件") || f.tt.HasText("已取消，没有写入文件。") {
+		t.Fatalf("the raced result says the wrong thing: %q", f.tt.Texts())
+	}
+}
+
+// TestExportDialogCleanupFailureIsNotCancellation keeps the dialog honest
+// when a canceled write cannot remove the file it made.
+func TestExportDialogCleanupFailureIsNotCancellation(t *testing.T) {
+	f := newExportDialogFixture(t, recovery(uiStructuredItem(t, 1, record.QualityAutoAccepted)), false)
+	started := make(chan struct{})
+	var once sync.Once
+	f.saver.saveCtxFn = func(ctx context.Context, _ app.ExportFormat, _ string, _ []byte) (string, error) {
+		once.Do(func() { close(started) })
+		<-ctx.Done()
+		return "", &ExportCleanupError{Err: errors.New("临时文件未删除")}
+	}
+	f.open(t)
+	if err := f.tt.Click("导出 JSON"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the export write did not start")
+	}
+	if err := f.tt.Click("取消"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, f.m, f.q, f.tt)
+	if f.m.exportDialog.canceled || f.m.exportDialogFailure() == nil {
+		t.Fatalf("a cleanup failure was called a cancellation: %+v", f.m.exportOutcome)
+	}
+	if !f.tt.HasText("导出失败：导出文件清理失败：临时文件未删除") ||
+		f.tt.HasText("已取消，没有写入文件。") {
+		t.Fatalf("the cleanup failure is hidden: %q", f.tt.Texts())
 	}
 }
 

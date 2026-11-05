@@ -13,9 +13,9 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-// DirectExportSaver writes one usable-data file without opening a dialog.
-// The results and history pages use it to write straight into the system
-// downloads directory; the implementation picks a numbered name instead of
+// DirectExportSaver writes one usable-data file without a save dialog.
+// The export dialog uses it to write straight into the system downloads
+// directory; the implementation picks a numbered name instead of
 // overwriting an existing file. It never reads the record or changes the
 // checkpoint.
 type DirectExportSaver interface {
@@ -50,6 +50,17 @@ func (e *ExportDirectoryError) Error() string {
 
 func (e *ExportDirectoryError) Unwrap() error { return e.Err }
 
+// ExportCleanupError reports that a canceled export could not remove a file
+// it had created. The dialog shows it as a failure instead of the ordinary
+// "已取消，没有写入文件" notice, which would be false.
+type ExportCleanupError struct {
+	Err error
+}
+
+func (e *ExportCleanupError) Error() string { return "导出文件清理失败：" + e.Err.Error() }
+
+func (e *ExportCleanupError) Unwrap() error { return e.Err }
+
 // exportOutcome is the export dialog's completed or failed write. It
 // freezes the count and pending total of the revision that was written, so
 // a later reload cannot make the result describe different data.
@@ -66,11 +77,12 @@ type exportOutcome struct {
 // every opening, so a result or cancellation from an earlier visit never
 // reappears as this visit's.
 type exportDialogState struct {
-	open       bool
-	attempted  bool
-	format     app.ExportFormat
-	canceled   bool
-	openDirErr string
+	open         bool
+	attempted    bool
+	format       app.ExportFormat
+	canceled     bool
+	openDirErr   string
+	excludedOpen bool
 }
 
 // exportBusy reports whether any export is in flight. Review actions stay
@@ -245,6 +257,13 @@ func (m *Model) startExport(format app.ExportFormat) {
 			m.exporting = false
 			m.exportCancel = nil
 			if ctx.Err() != nil && path == "" {
+				var cleanupErr *ExportCleanupError
+				if errors.As(err, &cleanupErr) {
+					// The cancel stopped the write, but a file it made is
+					// still there: do not claim nothing was written.
+					m.finishExport(format, count, pending, recordID, "", err)
+					return
+				}
 				m.exportDialog.canceled = true
 				return
 			}
@@ -285,6 +304,9 @@ func (m *Model) finishExport(format app.ExportFormat, count int, pending int64, 
 	if err == nil && path == "" {
 		err = errors.New("导出未写入文件")
 	}
+	// A write that committed before the cancel landed is a success, not a
+	// cancellation, so the dialog must not keep the earlier request.
+	m.exportDialog.canceled = false
 	m.exportOutcome = &exportOutcome{
 		format:   format,
 		included: count,
@@ -401,17 +423,20 @@ func (m *Model) exportDialogPreExport(c *ui.Context, t *ui.Theme) {
 	failure := m.exportDialogFailure()
 	empty := m.exportDialogEmpty()
 
-	var titleClose ui.Element
+	// MyGo v0.6.2 has no tab-index API: Tab follows the order elements are
+	// built. The visible close and review controls are therefore built last,
+	// attached to invisible placeholders that keep their wireframe places,
+	// so Tab can follow 08 §4: 导出 JSON → 导出 CSV → 去校对 → 关闭.
+	var closeSlot ui.Element
+	closeShown := false
 	ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
 		ui.Text(c, m.exportDialogTitle()).FontWeight(600).
 			FontSize(t.FontSize * 1.3).Grow(1)
 		if exporting {
 			return
 		}
-		titleClose = ui.Button(c, "✕").Label("关闭导出对话框")
-		if titleClose.Clicked() {
-			m.closeExportDialog()
-		}
+		closeSlot = ui.Button(c, "✕").Label("关闭导出对话框").Invisible()
+		closeShown = true
 	})
 
 	if m.exportDialog.canceled && !exporting {
@@ -442,8 +467,10 @@ func (m *Model) exportDialogPreExport(c *ui.Context, t *ui.Theme) {
 		ui.Text(c, blocked).TextColor(t.TextMuted)
 	}
 
+	var reviewSlot ui.Element
+	reviewShown := false
 	if m.exportData != nil {
-		m.exportDialogSummary(c, t, empty, blocked != "", exporting)
+		reviewSlot, reviewShown = m.exportDialogSummary(c, t, empty, blocked != "", exporting)
 	}
 
 	if exporting {
@@ -452,6 +479,7 @@ func (m *Model) exportDialogPreExport(c *ui.Context, t *ui.Theme) {
 	}
 
 	ui.Row(c).Gap(t.Space(2)).Children(func() {
+		c.Key("export-dialog-json")
 		json := ui.Button(c, "导出 JSON").Grow(1).Disabled(blocked != "")
 		if !empty && blocked == "" && failure == nil {
 			json.AutoFocus()
@@ -459,6 +487,7 @@ func (m *Model) exportDialogPreExport(c *ui.Context, t *ui.Theme) {
 		if json.Clicked() {
 			m.exportDialogJSON()
 		}
+		c.Key("export-dialog-csv")
 		csv := ui.Button(c, "导出 CSV").Grow(1).Disabled(blocked != "")
 		if csv.Clicked() {
 			m.exportDialogCSV()
@@ -468,8 +497,31 @@ func (m *Model) exportDialogPreExport(c *ui.Context, t *ui.Theme) {
 		"CSV：一行一件的表格，不含这些信息。两者来自同一已保存修订。").
 		TextColor(t.TextMuted).FontSize(t.FontSize * 0.9)
 
-	if blocked != "" {
-		titleClose.AutoFocus()
+	if reviewShown {
+		c.Key("export-dialog-review")
+		review := ui.Button(c, "去校对").TextColor(t.Accent).
+			Background(ui.Color{}).Border(0, ui.Color{}).Padding(0, 0).
+			Disabled(blocked != "").
+			AttachTo(reviewSlot, ui.AnchorCenter, ui.AnchorCenter)
+		if empty && blocked == "" {
+			// The zero-exportable state starts on the useful next step,
+			// review, instead of an empty file action.
+			review.AutoFocus()
+		}
+		if review.Clicked() {
+			m.exportDialogGoToReview()
+		}
+	}
+	if closeShown {
+		c.Key("export-dialog-close")
+		close := ui.Button(c, "✕").Label("关闭导出对话框").
+			AttachTo(closeSlot, ui.AnchorCenter, ui.AnchorCenter)
+		if close.Clicked() {
+			m.closeExportDialog()
+		}
+		if blocked != "" {
+			close.AutoFocus()
+		}
 	}
 }
 
@@ -498,8 +550,10 @@ func (m *Model) exportDialogProgress(c *ui.Context, t *ui.Theme) {
 // exportDialogSummary renders the counts, coverage, no-screenshot notice
 // and write location the design requires to be visible before choosing a
 // format.
-func (m *Model) exportDialogSummary(c *ui.Context, t *ui.Theme, empty, blocked, locked bool) {
+func (m *Model) exportDialogSummary(c *ui.Context, t *ui.Theme, empty, blocked, locked bool) (ui.Element, bool) {
 	s := m.exportData.Summary
+	var reviewSlot ui.Element
+	reviewShown := false
 	ui.Column(c).Gap(t.Space(1)).Children(func() {
 		ui.Row(c).Gap(t.Space(1)).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, "纳入").Grow(1)
@@ -517,19 +571,15 @@ func (m *Model) exportDialogSummary(c *ui.Context, t *ui.Theme, empty, blocked, 
 					TextColor(t.TextMuted).FontSize(t.FontSize * 0.9)
 			}
 			if s.Excluded > 0 || empty {
-				review := ui.Button(c, "去校对").TextColor(t.Accent).
+				reviewSlot = ui.Button(c, "去校对").TextColor(t.Accent).
 					Background(ui.Color{}).Border(0, ui.Color{}).Padding(0, 0).
-					Disabled(locked)
-				if empty && !blocked && !locked {
-					// The zero-exportable state starts on the useful next
-					// step, review, instead of an empty file action.
-					review.AutoFocus()
-				}
-				if review.Clicked() {
-					m.exportDialogGoToReview()
-				}
+					Disabled(locked).Invisible()
+				reviewShown = true
 			}
 		})
+		if s.Excluded > 0 {
+			m.exportDialogExcludedReasons(c, t)
+		}
 		ui.Row(c).Children(func() {
 			ui.Text(c, "覆盖").Grow(1)
 			ui.Text(c, coverageText(m.recordCoverage()))
@@ -542,6 +592,28 @@ func (m *Model) exportDialogSummary(c *ui.Context, t *ui.Theme, empty, blocked, 
 			ui.Text(c, "写入位置").Grow(1)
 			ui.Text(c, "系统下载目录")
 		})
+	})
+	return reviewSlot, reviewShown
+}
+
+// exportDialogExcludedReasons is 08 §4's on-demand breakdown of why items
+// are outside the file. The four-class counts partition the captured total,
+// so the two pending classes are the excluded total.
+func (m *Model) exportDialogExcludedReasons(c *ui.Context, t *ui.Theme) {
+	s := m.exportData.Summary
+	ui.Collapsible(c, "排除原因明细", &m.exportDialog.excludedOpen, func() {
+		if s.Counts.PendingBackfill > 0 {
+			ui.Textf(c, "待补录：%s 件", formatCount(s.Counts.PendingBackfill)).
+				TextColor(t.TextMuted).FontSize(t.FontSize * 0.9)
+		}
+		if s.Counts.PendingReview > 0 {
+			ui.Textf(c, "待校对：%s 件", formatCount(s.Counts.PendingReview)).
+				TextColor(t.TextMuted).FontSize(t.FontSize * 0.9)
+		}
+		if s.Counts.PendingBackfill == 0 && s.Counts.PendingReview == 0 {
+			ui.Textf(c, "其他：%s 件", formatCount(int64(s.Excluded))).
+				TextColor(t.TextMuted).FontSize(t.FontSize * 0.9)
+		}
 	})
 }
 
@@ -638,7 +710,7 @@ func (m *Model) exportDialogDeleteScreenshots(recordID string) {
 func coverageText(status record.CoverageStatus) string {
 	switch status {
 	case record.CoverageComplete:
-		return "完整"
+		return "全部"
 	case record.CoveragePartial:
 		return "部分"
 	case record.CoverageUnknown:

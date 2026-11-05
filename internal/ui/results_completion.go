@@ -99,16 +99,19 @@ func (m *Model) completionCard(c *ui.Context, t *ui.Theme) {
 					if !m.exportAvailable() {
 						return
 					}
-					blocked := m.exportBlockedReason()
+					entryBlocked := m.exportEntryBlocked()
 					ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
 						// The export dialog owns the format choice; the
 						// summary's entry opens it like the title bar's.
-						if ui.Button(c, "导出…").Disabled(m.exportEntryBlocked()).Clicked() {
+						if ui.Button(c, "导出…").Disabled(entryBlocked).Clicked() {
 							m.requestExport()
 						}
 					})
-					if blocked != "" {
-						ui.Text(c, blocked).TextColor(t.TextMuted).FontSize(t.FontSize * 0.9)
+					// A dirty draft leaves the entry enabled and asks in the
+					// dialog, so it must not also claim the entry is blocked.
+					if reason := m.exportBlockedReason(); reason != "" &&
+						(entryBlocked || !m.editingDirty()) {
+						ui.Text(c, reason).TextColor(t.TextMuted).FontSize(t.FontSize * 0.9)
 					}
 				})
 		})
@@ -147,7 +150,7 @@ func (m *Model) completionCoverageText() string {
 	}
 	switch status {
 	case record.CoverageComplete:
-		return "覆盖：完整"
+		return "覆盖：全部"
 	case record.CoveragePartial:
 		text := "覆盖：部分覆盖"
 		if summary != nil && summary.ExpectedCount != nil && *summary.ExpectedCount > 0 {

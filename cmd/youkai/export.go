@@ -51,8 +51,16 @@ func writeDirectExport(dir, defaultName string, data []byte) (string, error) {
 
 // writeDirectExportContext is writeDirectExport with the export dialog's
 // cancellation. A canceled save removes its reservation and temporary
-// file, so the dialog's "已取消，没有写入文件" is true.
+// file, so the dialog's "已取消，没有写入文件" is true. If cleanup fails,
+// ExportCleanupError keeps the dialog from claiming it was not written.
 func writeDirectExportContext(ctx context.Context, dir, defaultName string, data []byte) (string, error) {
+	return writeDirectExportContextWith(ctx, dir, defaultName, data, defaultExportFileOps)
+}
+
+// writeDirectExportContextWith is writeDirectExportContext with injectable
+// file operations, so a test can cancel after the name is reserved and
+// while the temporary file is written.
+func writeDirectExportContextWith(ctx context.Context, dir, defaultName string, data []byte, ops exportFileOps) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
@@ -61,13 +69,38 @@ func writeDirectExportContext(ctx context.Context, dir, defaultName string, data
 		return "", err
 	}
 	if err := ctx.Err(); err != nil {
-		_ = os.Remove(path)
+		if removeErr := os.Remove(path); removeErr != nil {
+			return "", &ui.ExportCleanupError{Err: errors.Join(err,
+				fmt.Errorf("预留文件 %q 未删除: %w", path, removeErr))}
+		}
 		return "", err
 	}
-	if err := writeExportFileContext(ctx, path, data); err != nil {
-		_ = os.Remove(path)
+	if err := writeExportFileWithCancel(path, data, ops, ctx.Err); err != nil {
+		removeErr := os.Remove(path)
 		if ctxErr := ctx.Err(); ctxErr != nil {
-			return "", ctxErr
+			// Preserve any cleanup detail the writer added: the dialog's
+			// cancellation promise is only true if no file remains.
+			if err == ctxErr {
+				err = nil
+			} else if !errors.Is(err, ctxErr) {
+				err = errors.Join(ctxErr, err)
+			}
+			if removeErr != nil {
+				err = errors.Join(err, fmt.Errorf("预留文件 %q 未删除: %w", path, removeErr))
+			}
+			if err == nil {
+				err = ctxErr
+			}
+			var cleanupErr *ui.ExportCleanupError
+			if removeErr != nil && !errors.As(err, &cleanupErr) {
+				err = &ui.ExportCleanupError{Err: err}
+			}
+			return "", err
+		}
+		if removeErr != nil {
+			err = errors.Join(err, &ui.ExportCleanupError{
+				Err: fmt.Errorf("预留文件 %q 未删除: %w", path, removeErr),
+			})
 		}
 		if errors.Is(err, os.ErrPermission) || errors.Is(err, os.ErrNotExist) {
 			return "", &ui.ExportDirectoryError{Directory: dir, Err: err}
@@ -157,17 +190,13 @@ func writeExportFile(path string, data []byte) error {
 	return writeExportFileWith(path, data, defaultExportFileOps)
 }
 
-// writeExportFileContext is writeExportFile for a cancellable export. The
-// check before the rename is the last point where canceling can still
-// promise that no file appeared.
-func writeExportFileContext(ctx context.Context, path string, data []byte) error {
-	return writeExportFileWithCancel(path, data, defaultExportFileOps, ctx.Err)
-}
-
 func writeExportFileWith(path string, data []byte, ops exportFileOps) error {
 	return writeExportFileWithCancel(path, data, ops, nil)
 }
 
+// writeExportFileWithCancel is writeExportFile with cancellation checks.
+// The check before the rename is the last point where canceling can still
+// promise that no file appeared.
 func writeExportFileWithCancel(path string, data []byte, ops exportFileOps, canceled func() error) (err error) {
 	if canceled != nil {
 		if err := canceled(); err != nil {
@@ -185,7 +214,8 @@ func writeExportFileWithCancel(path string, data []byte, ops exportFileOps, canc
 			return
 		}
 		if rmErr := ops.remove(tmpName); rmErr != nil {
-			err = fmt.Errorf("%w; 临时文件 %q 未删除: %v", err, tmpName, rmErr)
+			err = &ui.ExportCleanupError{Err: fmt.Errorf("%w; 临时文件 %q 未删除: %v",
+				err, tmpName, rmErr)}
 		}
 	}()
 	n, err := tmp.Write(data)
