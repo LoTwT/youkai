@@ -137,28 +137,26 @@ func (m *Model) showScanDestination() {
 
 // showRecordsDestination opens the records destination. An already open
 // workspace stays where it is; from another destination, the record the
-// user was reading comes back with its view state — the opened history
-// record, or the session slot's record — and otherwise the whole list
-// opens.
+// user was reading comes back with its view state, and otherwise the whole
+// list opens.
 func (m *Model) showRecordsDestination() {
 	switch m.displayPage() {
 	case pageHistory, pageResults:
 		return
 	}
-	if m.activeSlot == resultSlotHistory && m.historySlot.recordID != "" {
-		m.requestNavigation(navigationRequest{
-			kind:     navOpenHistory,
-			recordID: m.historySlot.recordID,
-		})
-		return
-	}
-	if m.activeSlot == resultSlotSession && m.sessionSlot.recordID != "" &&
-		!m.snap.Busy && m.snap.Scan.Phase == scan.PhaseEnded &&
-		m.appliedSession != "" && m.exitState != exitRunning && m.exitState != exitDone {
-		// A finished session is a saved record; a running one belongs to
-		// the scan page, so the records destination opens the list.
-		m.ShowLive()
-		return
+	if m.rec != nil && m.rec.ID != "" {
+		if !m.rec.Live {
+			// A reopened history record returns to its workspace.
+			m.openRecord(m.rec.ID)
+			return
+		}
+		if !m.snap.Busy && m.snap.Scan.Phase == scan.PhaseEnded &&
+			m.appliedSession != "" && m.exitState != exitRunning && m.exitState != exitDone {
+			// A finished session is a saved record; a running one belongs to
+			// the scan page, so the records destination opens the list.
+			m.ShowLive()
+			return
+		}
 	}
 	m.navigatePage(pageHistory)
 }

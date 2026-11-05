@@ -91,6 +91,7 @@ func exportModel(t *testing.T, saver *fakeDirectExportSaver) (*Model, *queueUpda
 			uiStructuredItem(t, 2, record.QualityNeedsReview)),
 	}}
 	m, q := newTestModel(t, Config{Service: svc, DirectExportSaver: saver, AppVersion: "test-1"})
+	m.showRecord("rec", false)
 	m.reloadRecord("rec", false)
 	drainAll(t, m, q)
 	m.page = pageResults
@@ -168,7 +169,7 @@ func TestExportControlsShowCountsAndSaveBothFormats(t *testing.T) {
 	}
 }
 
-func TestDirectExportKeepsTheSnapshotWhenTheSlotChanges(t *testing.T) {
+func TestDirectExportKeepsTheSnapshotWhenTheRecordChanges(t *testing.T) {
 	sessionRec := recovery(
 		uiStructuredItem(t, 1, record.QualityAutoAccepted),
 		uiStructuredItem(t, 2, record.QualityAutoAccepted),
@@ -192,6 +193,7 @@ func TestDirectExportKeepsTheSnapshotWhenTheSlotChanges(t *testing.T) {
 		AppVersion:        "test-1",
 	})
 	m.SetContentSize(1024, 700)
+	m.showRecord("s1", true)
 	m.reloadRecord("s1", true)
 	drainAll(t, m, q)
 	if m.exportData == nil || m.exportData.Summary.Included != 2 {
@@ -200,11 +202,10 @@ func TestDirectExportKeepsTheSnapshotWhenTheSlotChanges(t *testing.T) {
 
 	m.ExportJSON()
 	<-started
-	m.historySlot.recordID = "old"
-	m.applyLoadedRecord(&m.historySlot, "old", historyRec, false)
-	m.activateResultSlot(resultSlotHistory)
+	m.showRecord("old", false)
+	m.applyLoadedRecord("old", historyRec, false)
 	if m.rec == nil || m.rec.ID != "old" {
-		t.Fatalf("the history slot did not become active: %+v", m.rec)
+		t.Fatalf("the history record did not replace the live one: %+v", m.rec)
 	}
 	close(release)
 	drainAll(t, m, q)
@@ -231,7 +232,7 @@ func TestDirectExportKeepsTheSnapshotWhenTheSlotChanges(t *testing.T) {
 	}
 }
 
-func TestDirectExportUsesTheHistorySlotsOwnSnapshot(t *testing.T) {
+func TestDirectExportUsesTheOpenRecordsOwnSnapshot(t *testing.T) {
 	sessionRec := recovery(
 		uiStructuredItem(t, 1, record.QualityAutoAccepted),
 		uiStructuredItem(t, 2, record.QualityAutoAccepted),
@@ -250,15 +251,15 @@ func TestDirectExportUsesTheHistorySlotsOwnSnapshot(t *testing.T) {
 		AppVersion:        "test-1",
 	})
 	m.SetContentSize(1024, 700)
+	m.showRecord("s1", true)
 	m.reloadRecord("s1", true)
 	drainAll(t, m, q)
 	if m.exportData == nil || m.exportData.Summary.Included != 3 {
 		t.Fatalf("session snapshot = %+v", m.exportData)
 	}
 
-	m.historySlot.recordID = "old"
-	m.applyLoadedRecord(&m.historySlot, "old", historyRec, false)
-	m.activateResultSlot(resultSlotHistory)
+	m.showRecord("old", false)
+	m.applyLoadedRecord("old", historyRec, false)
 	if m.exportData == nil || m.exportData.Summary.Included != 1 {
 		t.Fatalf("history snapshot = %+v", m.exportData)
 	}
@@ -284,8 +285,8 @@ func TestDirectExportUsesTheHistorySlotsOwnSnapshot(t *testing.T) {
 	if m.exportOutcome == nil || m.exportOutcome.included != 1 || m.exportOutcome.recordID != "old" {
 		t.Fatalf("history export outcome = %+v", m.exportOutcome)
 	}
-	if m.sessionSlot.state.exportData == nil || m.sessionSlot.state.exportData.Summary.Included != 3 {
-		t.Fatalf("the session slot lost its snapshot: %+v", m.sessionSlot.state.exportData)
+	if m.exportData == nil || m.exportData.Summary.Included != 1 {
+		t.Fatalf("the export changed the open record's snapshot: %+v", m.exportData)
 	}
 }
 
@@ -530,6 +531,7 @@ func directExportModel(t *testing.T, saver *fakeDirectExportSaver, rec *record.R
 		AppVersion:        "test-1",
 	})
 	m.SetContentSize(1024, 700)
+	m.showRecord(id, live)
 	m.reloadRecord(id, live)
 	drainAll(t, m, q)
 	m.page = pageResults
@@ -558,6 +560,7 @@ func TestDirectExportDirectoryFailureOffersActions(t *testing.T) {
 		},
 	})
 	m.SetContentSize(1024, 700)
+	m.showRecord("rec", false)
 	m.reloadRecord("rec", false)
 	drainAll(t, m, q)
 	m.page = pageResults

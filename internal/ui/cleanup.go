@@ -474,7 +474,6 @@ func (m *Model) finishRecordBatch(p *cleanupPrompt, batch record.RecordDeletionB
 func (m *Model) clearResultsLocked() {
 	m.recLoad++
 	m.loading = false
-	m.activeResultSlot().state.loading = false
 	m.rec = nil
 	m.recData = nil
 	m.recErr = ""

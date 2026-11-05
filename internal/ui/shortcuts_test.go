@@ -91,7 +91,7 @@ func TestScanStartShortcutRequiresAPreparableScan(t *testing.T) {
 		m.SetContentSize(1024, 700)
 		tt := ui.NewTester(m.View, 1024, 700)
 		settle(t, m, q, tt)
-		m.histChoice = slotHistoryLabel(t, m, "rec")
+		m.histChoice = historyLabel(t, m, "rec")
 		m.OpenHistory()
 		settle(t, m, q, tt)
 		showRecordItems(m)
@@ -449,7 +449,7 @@ func TestEscapeCancelsTheUnsavedPrompt(t *testing.T) {
 	m.edit.draft.Level = "13"
 	tt.Frame()
 
-	m.OpenHistory()
+	m.openRecord("r2")
 	settle(t, m, q, tt)
 	showRecordItems(m)
 	tt.Frame()

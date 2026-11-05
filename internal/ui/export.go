@@ -40,7 +40,8 @@ func (e *ExportDirectoryError) Error() string {
 func (e *ExportDirectoryError) Unwrap() error { return e.Err }
 
 // exportOutcome is the last direct export result. It is global rather than
-// slot-local so a destination switch cannot hide or move the notice.
+// part of the record workspace so a destination switch cannot hide or move
+// the notice.
 type exportOutcome struct {
 	format   app.ExportFormat
 	included int
@@ -149,8 +150,8 @@ func (m *Model) export(format app.ExportFormat) {
 	if save == nil || m.exportData == nil || m.exportBlockedReason() != "" {
 		return
 	}
-	// Capture the slot's snapshot, identity and count now. A destination
-	// switch or a later save during the write cannot change this export.
+	// Capture the workspace's snapshot, identity and count now. Switching
+	// records or a later save during the write cannot change this export.
 	export := m.exportData
 	count := export.Summary.Included
 	version := m.cfg.AppVersion

@@ -40,8 +40,8 @@ func summaryView(rows int, classes app.ItemClassCounts, shell record.SessionShel
 
 func summaryModel(view *RecordView, snap app.Snapshot) *Model {
 	m := &Model{snap: snap}
+	m.recordWorkspaceState = newRecordWorkspaceState()
 	m.rec = view
-	m.activeSlot = resultSlotSession
 	return m
 }
 
@@ -255,7 +255,7 @@ func openSummaryRecord(t *testing.T, rec *record.Recovery, cfg Config, width, he
 	m.SetContentSize(width, height)
 	tt := ui.NewTester(m.View, width, height)
 	settle(t, m, q, tt)
-	m.histChoice = slotHistoryLabel(t, m, "rec")
+	m.histChoice = historyLabel(t, m, "rec")
 	m.OpenHistory()
 	settle(t, m, q, tt)
 	return m, q, tt, svc

@@ -198,8 +198,8 @@ func (m *Model) performSummaryAction(c *ui.Context, kind summaryActionKind) {
 	case summaryActionCopyDiagnostics:
 		m.copySummaryDiagnostics(c)
 	case summaryActionDeleteRecord:
-		if id := m.activeResultSlot().recordID; id != "" {
-			m.RequestRecordCleanup(id)
+		if m.rec != nil && m.rec.ID != "" {
+			m.RequestRecordCleanup(m.rec.ID)
 		}
 	}
 }
@@ -738,8 +738,7 @@ func (m *Model) summaryUnreadable(c *ui.Context, t *ui.Theme) {
 			m.summaryNotices(c, t)
 			ui.Text(c, "记录读取失败").FontSize(t.FontSize * 1.7).FontWeight(600).TextColor(t.Danger)
 			ui.Text(c, m.recErr).TextColor(t.TextMuted)
-			id := m.activeResultSlot().recordID
-			if id == "" {
+			if m.rec == nil || m.rec.ID == "" {
 				return
 			}
 			reason := m.cleanupBlockedReason()

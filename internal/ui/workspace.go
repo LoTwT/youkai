@@ -16,9 +16,8 @@ const (
 )
 
 // recordWorkspace is an opened record: its title bar, the 摘要 / 逐件
-// switch and the chosen view. This PR builds only the frame around the
-// existing surfaces; the summary and the item browser keep their content
-// until their own PRs replace it.
+// switch and the chosen view. The summary is the designed conclusion; the
+// item browser keeps its existing content until PR-14b replaces it.
 func (m *Model) recordWorkspace(c *ui.Context, t *ui.Theme) {
 	_, tok := themeWithTokens(t, c.Preferences())
 	ui.Column(c).Grow(1).FillHeight().Children(func() {

@@ -494,7 +494,7 @@ func (m *Model) applyResultsScrollSnap(target float32) {
 // resetResultsScroll clears the composite's tracked offset before a new
 // ListState takes over, then places it on the row that list will show. A
 // stale offset would otherwise override the restored scroll of another
-// result slot.
+// record.
 func (m *Model) resetResultsScroll(row int) {
 	m.resultsScroll = ui.ScrollState{}
 	m.resultsScrollSeen = 0
