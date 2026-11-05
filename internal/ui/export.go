@@ -32,9 +32,8 @@ type CancelableDirectExportSaver interface {
 }
 
 // ExportDirectoryError reports that the direct export destination cannot
-// take the file. The page shell's status strip turns it into the "open
-// directory" and "go to settings" actions; the export dialog shows the
-// same reason with 重试.
+// take the file. The export dialog shows the reason with 重试 and leaves
+// the internal record untouched.
 type ExportDirectoryError struct {
 	// Directory is the destination the saver tried to use, when known.
 	Directory string
@@ -51,21 +50,16 @@ func (e *ExportDirectoryError) Error() string {
 
 func (e *ExportDirectoryError) Unwrap() error { return e.Err }
 
-// exportOutcome is one direct export result. It is global rather than part
-// of the record workspace so a destination switch cannot hide or move the
-// notice; fromDialog marks results the export dialog owns, so the shared
-// status strip does not repeat them.
+// exportOutcome is the export dialog's completed or failed write. It
+// freezes the count and pending total of the revision that was written, so
+// a later reload cannot make the result describe different data.
 type exportOutcome struct {
-	format     app.ExportFormat
-	included   int
-	pending    int64
-	recordID   string
-	live       bool
-	fromDialog bool
-	path       string
-	err        error
-	dirErr     *ExportDirectoryError
-	openErr    string
+	format   app.ExportFormat
+	included int
+	pending  int64
+	recordID string
+	path     string
+	err      error
 }
 
 // exportDialogState is the modal's own state. attempted starts false on
@@ -83,7 +77,7 @@ type exportDialogState struct {
 // disabled meanwhile so the file and the on-screen revision cannot part
 // ways while the snapshot is written.
 func (m *Model) exportBusy() bool {
-	return m.exporting || m.historyExporting != ""
+	return m.exporting
 }
 
 // reviewActionsBlocked reports whether review edits and confirmations must
@@ -125,8 +119,6 @@ func (m *Model) exportBlockedReason() string {
 		return ""
 	case m.exporting:
 		return "正在导出……"
-	case m.historyExporting != "":
-		return "正在导出历史记录，完成前不能导出。"
 	case m.exitState == exitRunning || m.exitState == exitDone:
 		return "正在退出应用，不能导出。"
 	case m.reviewSaving:
@@ -161,25 +153,16 @@ func (m *Model) exportBlockedReason() string {
 func (m *Model) exportEntryBlocked() bool {
 	return !m.exportAvailable() ||
 		m.exporting ||
-		m.historyExporting != "" ||
 		m.exitState == exitRunning ||
 		m.exitState == exitDone ||
 		m.rec == nil
 }
 
-// ExportJSON writes the open record's JSON file without the dialog. The
-// history list still uses this direct form until its row menu opens the
-// dialog (PR-12).
-func (m *Model) ExportJSON() { m.startExport(app.ExportJSON, false) }
-
-// ExportCSV writes the open record's CSV file without the dialog.
-func (m *Model) ExportCSV() { m.startExport(app.ExportCSV, false) }
-
 // exportDialogJSON starts the JSON export from the dialog.
-func (m *Model) exportDialogJSON() { m.startExport(app.ExportJSON, true) }
+func (m *Model) exportDialogJSON() { m.startExport(app.ExportJSON) }
 
 // exportDialogCSV starts the CSV export from the dialog.
-func (m *Model) exportDialogCSV() { m.startExport(app.ExportCSV, true) }
+func (m *Model) exportDialogCSV() { m.startExport(app.ExportCSV) }
 
 // requestExport opens the record's export dialog. A dirty review draft is
 // settled first through the ordinary save/discard prompt, so the dialog
@@ -200,9 +183,7 @@ func (m *Model) openExportDialog() {
 	if m.exportEntryBlocked() {
 		return
 	}
-	if m.exportOutcome != nil && m.exportOutcome.fromDialog {
-		m.exportOutcome = nil
-	}
+	m.exportOutcome = nil
 	m.exportDialog = exportDialogState{open: true}
 }
 
@@ -221,32 +202,27 @@ func (m *Model) closeExportDialog() {
 // from m.exportData, the snapshot built for the record revision currently
 // on screen, so a concurrent scan save or a reopened record cannot mix
 // revisions inside the file.
-func (m *Model) startExport(format app.ExportFormat, fromDialog bool) {
+func (m *Model) startExport(format app.ExportFormat) {
 	save := m.cfg.DirectExportSaver
 	if save == nil || m.exportData == nil || m.exportBlockedReason() != "" {
 		return
 	}
-	// Capture the workspace's snapshot, identity and count now. Switching
-	// records or a later save during the write cannot change this export.
+	// Capture the workspace's snapshot, identity and count now. A later
+	// save during the write cannot change this export.
 	export := m.exportData
 	count := export.Summary.Included
 	pending := export.Summary.Counts.Pending()
 	version := m.cfg.AppVersion
 	name := app.DefaultExportName(m.recData.Checkpoint.Session, format)
 	recordID := m.rec.ID
-	live := m.rec.Live
 	now := time.Now().UTC()
 
-	ctx := context.Background()
-	if fromDialog {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithCancel(context.Background())
-		m.exportCancel = cancel
-		m.exportDialog.attempted = true
-		m.exportDialog.format = format
-		m.exportDialog.canceled = false
-		m.exportDialog.openDirErr = ""
-	}
+	ctx, cancel := context.WithCancel(context.Background())
+	m.exportCancel = cancel
+	m.exportDialog.attempted = true
+	m.exportDialog.format = format
+	m.exportDialog.canceled = false
+	m.exportDialog.openDirErr = ""
 	m.exporting = true
 	m.exportOutcome = nil
 
@@ -267,16 +243,12 @@ func (m *Model) startExport(format app.ExportFormat, fromDialog bool) {
 		}
 		m.update(func() {
 			m.exporting = false
-			if fromDialog {
-				m.exportCancel = nil
-			}
+			m.exportCancel = nil
 			if ctx.Err() != nil && path == "" {
-				if fromDialog {
-					m.exportDialog.canceled = true
-				}
+				m.exportDialog.canceled = true
 				return
 			}
-			m.finishDirectExport(format, count, pending, recordID, live, fromDialog, path, err)
+			m.finishExport(format, count, pending, recordID, path, err)
 		})
 	})
 }
@@ -307,50 +279,25 @@ func (m *Model) cancelExport() {
 	m.exportDialog.canceled = true
 }
 
-// finishDirectExport records the result globally. The record and review
-// state are untouched; only the status strip or the dialog changes.
-func (m *Model) finishDirectExport(format app.ExportFormat, count int, pending int64, recordID string, live, fromDialog bool, path string, err error) {
+// finishExport records the result the dialog renders. The record and
+// review state are untouched.
+func (m *Model) finishExport(format app.ExportFormat, count int, pending int64, recordID, path string, err error) {
 	if err == nil && path == "" {
 		err = errors.New("导出未写入文件")
 	}
-	outcome := &exportOutcome{
-		format:     format,
-		included:   count,
-		pending:    pending,
-		recordID:   recordID,
-		live:       live,
-		fromDialog: fromDialog,
-		path:       path,
-		err:        err,
+	m.exportOutcome = &exportOutcome{
+		format:   format,
+		included: count,
+		pending:  pending,
+		recordID: recordID,
+		path:     path,
+		err:      err,
 	}
-	var dirErr *ExportDirectoryError
-	if errors.As(err, &dirErr) {
-		outcome.dirErr = dirErr
-	}
-	m.exportOutcome = outcome
 }
 
-// exportOutcomeText is the status strip's message: format and included
-// count on success, the path and reason on failure, and which record the
-// file belongs to when the user has already moved elsewhere.
-func (o *exportOutcome) text() string {
-	recordName := "当前结果"
-	if o.live {
-		recordName = "本次扫描"
-	} else if o.recordID != "" {
-		recordName = "历史记录 " + o.recordID
-	}
-	formatName := strings.ToUpper(string(o.format))
-	if o.err != nil {
-		return fmt.Sprintf("导出失败（%s，%s）：%v", formatName, recordName, o.err)
-	}
-	return fmt.Sprintf("已导出 %s（%s 件，%s）：%s", formatName, formatCount(int64(o.included)), recordName, o.path)
-}
-
-// exportDialogOutcome is the result this dialog visit owns; a global
-// status-strip result from a history export is not shown here.
+// exportDialogOutcome is the result this dialog visit owns.
 func (m *Model) exportDialogOutcome() *exportOutcome {
-	if !m.exportDialog.attempted || m.exportOutcome == nil || !m.exportOutcome.fromDialog {
+	if !m.exportDialog.attempted || m.exportOutcome == nil {
 		return nil
 	}
 	return m.exportOutcome
@@ -480,7 +427,7 @@ func (m *Model) exportDialogPreExport(c *ui.Context, t *ui.Theme) {
 			retry := ui.Button(c, "重试").Disabled(blocked != "")
 			retry.AutoFocus()
 			if retry.Clicked() {
-				m.startExport(failure.format, true)
+				m.startExport(failure.format)
 			}
 		})
 	}
@@ -684,59 +631,6 @@ func (m *Model) exportDialogDeleteScreenshots(recordID string) {
 	m.page = pageResults
 	m.recordTab = recordTabSummary
 	m.RequestScreenshotCleanup(recordID)
-}
-
-// exportStatusVisible reports whether the page shell must reserve a line
-// for a direct export started outside the dialog (the history row menu).
-// Dialog results live in the dialog and never repeat in the strip.
-func (m *Model) exportStatusVisible() bool {
-	if m.exportOutcome != nil && !m.exportOutcome.fromDialog {
-		return true
-	}
-	return m.exporting && !m.exportDialog.open
-}
-
-// exportStatusArea is the page shell's status strip for a direct export
-// outside the dialog: the running state, the success message with format
-// and count, or an actionable directory failure. It never replaces the
-// page or a dialog.
-func (m *Model) exportStatusArea(c *ui.Context, t *ui.Theme) {
-	if m.exporting {
-		ui.Text(c, "正在导出……").TextColor(t.TextMuted)
-		return
-	}
-	o := m.exportOutcome
-	if o == nil {
-		return
-	}
-	ui.Column(c).Gap(t.Space(1)).Children(func() {
-		ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
-			color := t.Text
-			if o.err != nil {
-				color = t.Danger
-			}
-			ui.Text(c, o.text()).TextColor(color).SingleLine()
-			ui.Box(c).Grow(1)
-			if o.dirErr == nil {
-				return
-			}
-			if m.cfg.OpenDownloadsDirectory != nil {
-				if ui.Button(c, "打开目录").Clicked() {
-					if err := m.cfg.OpenDownloadsDirectory(); err != nil {
-						o.openErr = "打开目录失败：" + err.Error()
-					} else {
-						o.openErr = ""
-					}
-				}
-			}
-			if ui.Button(c, "去设置").Clicked() {
-				m.page = pageSettings
-			}
-		})
-		if o.openErr != "" {
-			ui.Text(c, o.openErr).TextColor(t.Danger).FontSize(t.FontSize * 0.9)
-		}
-	})
 }
 
 // coverageText keeps the coverage conclusion explicit; unknown stays

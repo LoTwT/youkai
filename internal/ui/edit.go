@@ -97,6 +97,10 @@ type navigationRequest struct {
 	recordID string
 	// page is the destination of a navPage request.
 	page Page
+	// exportAfterLoad opens the export dialog once a navOpenRecord request
+	// has loaded its record: the records list's 导出… means "open this
+	// record, then export it", not "export whatever is on screen".
+	exportAfterLoad bool
 }
 
 // cloneDraft copies a draft including its substat slice.
@@ -500,7 +504,7 @@ func (m *Model) runNavigation(req navigationRequest) {
 		}
 	case navOpenRecord:
 		m.page = pageResults
-		m.performOpenRecord(req.recordID)
+		m.performOpenRecord(req.recordID, req.exportAfterLoad)
 	case navPage:
 		if m.displayPage() == pageResults {
 			// Leaving the results page stores the list's actual place, not

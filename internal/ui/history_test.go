@@ -845,8 +845,7 @@ func TestRecordConclusion(t *testing.T) {
 }
 
 // TestHistoryRowMenu checks the normal row's menu, its disabled deletion
-// reason and the existing export entry behind 导出… (PR-15 replaces it
-// with the dialog).
+// reason and the export entry that opens the record's dialog.
 func TestHistoryRowMenu(t *testing.T) {
 	svc := &fakeService{
 		history: historyTableRecords(2),
@@ -890,11 +889,11 @@ func TestHistoryRowMenu(t *testing.T) {
 	}
 	settle(t, m, q, tt)
 	if m.displayPage() != pageResults || m.rec == nil || m.rec.ID != "r01" {
-		t.Fatalf("导出… = page %v, record %+v, want the record's existing export entry",
+		t.Fatalf("导出… = page %v, record %+v, want the row's record opened",
 			m.displayPage(), m.rec)
 	}
-	if !tt.HasText("导出 JSON") || !tt.HasText("导出 CSV") {
-		t.Fatalf("the existing export controls do not show: %q", tt.Texts())
+	if !m.exportDialog.open || !tt.HasText("导出 JSON") || !tt.HasText("去校对") {
+		t.Fatalf("the row's export dialog did not open: open=%t %q", m.exportDialog.open, tt.Texts())
 	}
 }
 
@@ -935,9 +934,9 @@ func TestHistoryOpenAndReturn(t *testing.T) {
 	}
 }
 
-// TestHistoryExportFailure keeps the per-row export's failure state: the
-// in-flight marker clears and the error is reported globally.
-func TestHistoryExportFailure(t *testing.T) {
+// TestHistoryExportFailureShowsInDialog checks the row's export failure in
+// the same dialog the title bar uses.
+func TestHistoryExportFailureShowsInDialog(t *testing.T) {
 	svc := &fakeService{
 		history: historyTableRecords(1),
 		loads: map[string]*record.Recovery{
@@ -945,18 +944,33 @@ func TestHistoryExportFailure(t *testing.T) {
 		},
 	}
 	saver := &fakeDirectExportSaver{}
-	m, q := newTestModel(t, Config{Service: svc, DirectExportSaver: saver, AppVersion: "test"})
-	tt := ui.NewTester(m.View, 1180, 760)
-	settle(t, m, q, tt)
-
 	saver.saveFn = func(app.ExportFormat, string, []byte) (string, error) {
 		return "", errors.New("no space left on device")
 	}
-	m.ExportHistory("r01", app.ExportJSON)
+	m, q := newTestModel(t, Config{Service: svc, DirectExportSaver: saver, AppVersion: "test"})
+	tt := ui.NewTester(m.View, 1180, 760)
 	settle(t, m, q, tt)
-	if m.historyExporting != "" || m.exportOutcome == nil || m.exportOutcome.err == nil ||
-		!strings.Contains(m.exportOutcome.text(), "no space left on device") {
-		t.Fatalf("failure state = exporting %q, outcome %+v", m.historyExporting, m.exportOutcome)
+	openRecordsList(t, m, q, tt)
+
+	m.openHistoryMenu("r01")
+	tt.Frame()
+	if err := tt.Click("导出…"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
+	if !m.exportDialog.open {
+		t.Fatalf("the row's export dialog did not open: %q", tt.Texts())
+	}
+	if err := tt.Click("导出 JSON"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
+	if m.exportOutcome == nil || m.exportOutcome.err == nil ||
+		!strings.Contains(m.exportOutcome.err.Error(), "no space left on device") {
+		t.Fatalf("failure outcome = %+v", m.exportOutcome)
+	}
+	if !tt.HasText("导出失败：no space left on device") || !tt.HasText("重试") {
+		t.Fatalf("the dialog failure is missing: %q", tt.Texts())
 	}
 }
 
@@ -989,6 +1003,110 @@ func TestHistoryCurrentRowOpensLiveRecord(t *testing.T) {
 	}
 	if m.rec == nil || m.rec.ID != "r01" || !m.rec.Live {
 		t.Fatalf("the current row opened %+v, want the live record", m.rec)
+	}
+}
+
+// TestHistoryRowExportForOpenRecordOpensTheDialog checks the branch where
+// the row's record is already loaded: no reload, just the same dialog.
+func TestHistoryRowExportForOpenRecordOpensTheDialog(t *testing.T) {
+	svc := &fakeService{
+		history: historyTableRecords(1),
+		loads: map[string]*record.Recovery{
+			"r01": recovery(
+				uiStructuredItem(t, 1, record.QualityAutoAccepted),
+				uiStructuredItem(t, 2, record.QualityAutoAccepted),
+			),
+		},
+	}
+	m, q := newTestModel(t, Config{
+		Service:           svc,
+		DirectExportSaver: &fakeDirectExportSaver{},
+		AppVersion:        "test",
+	})
+	tt := ui.NewTester(m.View, 1180, 760)
+	settle(t, m, q, tt)
+	openRecordsList(t, m, q, tt)
+	m.histChoice = historyLabel(t, m, "r01")
+	m.OpenHistory()
+	settle(t, m, q, tt)
+
+	m.page = pageHistory
+	tt.Frame()
+	m.openHistoryMenu("r01")
+	tt.Frame()
+	if err := tt.Click("导出…"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
+	if m.page != pageResults || m.rec == nil || m.rec.ID != "r01" || !m.exportDialog.open {
+		t.Fatalf("open-record row export = page %v record %+v dialog=%t",
+			m.page, m.rec, m.exportDialog.open)
+	}
+	if !tt.Focused("导出 JSON") {
+		t.Fatalf("the export dialog did not focus 导出 JSON: %q", tt.Texts())
+	}
+	if m.exportData == nil || m.exportData.Summary.Included != 2 {
+		t.Fatalf("the dialog did not use the open record's snapshot: %+v", m.exportData)
+	}
+}
+
+// TestHistoryRowExportSettlesDirtyDraftFirst checks that a row's 导出…
+// goes through the existing save/discard prompt before opening the target
+// record and its dialog.
+func TestHistoryRowExportSettlesDirtyDraftFirst(t *testing.T) {
+	svc := &fakeService{
+		history: historyTableRecords(2),
+		loads: map[string]*record.Recovery{
+			"r01": recovery(
+				uiStructuredItem(t, 1, record.QualityAutoAccepted),
+				uiStructuredItem(t, 2, record.QualityNeedsReview),
+			),
+			"r02": recovery(uiStructuredItem(t, 1, record.QualityAutoAccepted)),
+		},
+	}
+	m, q := newTestModel(t, Config{
+		Service:           svc,
+		DirectExportSaver: &fakeDirectExportSaver{},
+		AppVersion:        "test",
+	})
+	tt := ui.NewTester(m.View, 1180, 760)
+	settle(t, m, q, tt)
+	openRecordsList(t, m, q, tt)
+	m.histChoice = historyLabel(t, m, "r01")
+	m.OpenHistory()
+	settle(t, m, q, tt)
+	showRecordItems(m)
+	m.selected = 0
+	m.startEdit()
+	if m.edit == nil {
+		t.Fatal("the editor did not open")
+	}
+	m.edit.draft.Level = "14"
+
+	m.page = pageHistory
+	tt.Frame()
+	m.openHistoryMenu("r02")
+	tt.Frame()
+	if err := tt.Click("导出…"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if m.exportDialog.open || m.navPrompt == nil {
+		t.Fatalf("dirty row export = dialog=%t prompt=%v", m.exportDialog.open, m.navPrompt)
+	}
+	if !tt.HasText("当前条目有未保存的修改。") {
+		t.Fatalf("the unsaved-changes prompt is missing: %q", tt.Texts())
+	}
+	if err := tt.Click("放弃修改"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
+	if m.rec == nil || m.rec.ID != "r02" || !m.exportDialog.open {
+		t.Fatalf("after discarding = record %+v dialog=%t, want r02's dialog",
+			m.rec, m.exportDialog.open)
+	}
+	if !tt.Focused("导出 JSON") {
+		t.Fatalf("the row export dialog did not focus 导出 JSON: %q", tt.Texts())
 	}
 }
 
@@ -1031,30 +1149,47 @@ func TestHistoryTableFitsWidths(t *testing.T) {
 	}
 }
 
-// TestHistoryPerRowExportUsesThatRecord keeps
-// the existing per-record export path working from the list.
+// TestHistoryPerRowExportUsesThatRecord checks that a row's 导出… opens
+// that record first and exports its snapshot, not the previously open one.
 func TestHistoryPerRowExportUsesThatRecord(t *testing.T) {
 	svc := &fakeService{
 		history: historyTableRecords(2),
 		loads: map[string]*record.Recovery{
 			"r01": recovery(uiStructuredItem(t, 1, record.QualityAutoAccepted)),
+			"r02": recovery(
+				uiStructuredItem(t, 1, record.QualityAutoAccepted),
+				uiStructuredItem(t, 2, record.QualityAutoAccepted),
+			),
 		},
 	}
 	saver := &fakeDirectExportSaver{}
 	m, q := newTestModel(t, Config{Service: svc, DirectExportSaver: saver, AppVersion: "test"})
 	tt := ui.NewTester(m.View, 1180, 760)
 	settle(t, m, q, tt)
+	openRecordsList(t, m, q, tt)
 
-	m.ExportHistory("r01", app.ExportJSON)
+	m.openHistoryMenu("r02")
+	tt.Frame()
+	if err := tt.Click("导出…"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
+	if m.rec == nil || m.rec.ID != "r02" || !m.exportDialog.open {
+		t.Fatalf("导出… = record %+v dialog=%t, want r02's dialog", m.rec, m.exportDialog.open)
+	}
+	if err := tt.Click("导出 JSON"); err != nil {
+		t.Fatal(err)
+	}
 	settle(t, m, q, tt)
 	calls := saver.snapshot()
 	if len(calls) != 1 || calls[0].format != app.ExportJSON {
 		t.Fatalf("export calls = %+v, want one JSON export", calls)
 	}
-	if m.historyExporting != "" || m.exportOutcome == nil || m.exportOutcome.err != nil {
-		t.Fatalf("export state = %q / %+v", m.historyExporting, m.exportOutcome)
+	if m.exportOutcome == nil || m.exportOutcome.err != nil ||
+		m.exportOutcome.recordID != "r02" || m.exportOutcome.included != 2 {
+		t.Fatalf("export outcome = %+v", m.exportOutcome)
 	}
-	if !tt.HasText("已导出 JSON（1 件，历史记录 r01）") {
-		t.Fatalf("history export result does not show: %q", tt.Texts())
+	if !tt.HasText("已导出 2 件") {
+		t.Fatalf("the dialog success is missing: %q", tt.Texts())
 	}
 }

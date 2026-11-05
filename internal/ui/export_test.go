@@ -601,9 +601,9 @@ func TestExportDialogOffersScreenshotDeletionWhenNothingIsPending(t *testing.T) 
 	}
 }
 
-// TestDirectExportKeepsTheSnapshotWhenTheRecordChanges keeps the frozen
-// revision contract of the underlying direct export.
-func TestDirectExportKeepsTheSnapshotWhenTheRecordChanges(t *testing.T) {
+// TestExportKeepsTheSnapshotWhenTheRecordChanges keeps the frozen
+// revision contract of the export snapshot.
+func TestExportKeepsTheSnapshotWhenTheRecordChanges(t *testing.T) {
 	sessionRec := recovery(
 		uiStructuredItem(t, 1, record.QualityAutoAccepted),
 		uiStructuredItem(t, 2, record.QualityAutoAccepted),
@@ -634,7 +634,7 @@ func TestDirectExportKeepsTheSnapshotWhenTheRecordChanges(t *testing.T) {
 		t.Fatalf("session snapshot = %+v", m.exportData)
 	}
 
-	m.ExportJSON()
+	m.startExport(app.ExportJSON)
 	<-started
 	m.showRecord("old", false)
 	m.applyLoadedRecord("old", historyRec, false)
@@ -646,7 +646,7 @@ func TestDirectExportKeepsTheSnapshotWhenTheRecordChanges(t *testing.T) {
 
 	calls := saver.snapshot()
 	if len(calls) != 1 {
-		t.Fatalf("direct export calls = %+v", calls)
+		t.Fatalf("export calls = %+v", calls)
 	}
 	var doc struct {
 		Items []app.ExportItem `json:"items"`
@@ -661,11 +661,8 @@ func TestDirectExportKeepsTheSnapshotWhenTheRecordChanges(t *testing.T) {
 		t.Fatalf("in-flight name = %q, want %q", calls[0].name, want)
 	}
 	if m.exportOutcome == nil || m.exportOutcome.included != 2 ||
-		m.exportOutcome.recordID != "s1" || !strings.Contains(m.exportOutcome.text(), "本次扫描") {
+		m.exportOutcome.recordID != "s1" {
 		t.Fatalf("the switched export lost its identity: %+v", m.exportOutcome)
-	}
-	if !m.exportStatusVisible() {
-		t.Fatal("a direct export outside the dialog lost its status strip")
 	}
 }
 
@@ -688,7 +685,7 @@ func TestExportBlocksWhileEditingOrScanning(t *testing.T) {
 	if reason := f.m.exportBlockedReason(); !strings.Contains(reason, "未保存的修改") {
 		t.Fatalf("dirty editor reason = %q", reason)
 	}
-	f.m.ExportJSON()
+	f.m.startExport(app.ExportJSON)
 	drainAll(t, f.m, f.q)
 	if calls := f.saver.snapshot(); len(calls) != 0 {
 		t.Fatalf("a dirty editor exported: %+v", calls)
@@ -700,7 +697,7 @@ func TestExportBlocksWhileEditingOrScanning(t *testing.T) {
 	if reason := f.m.exportBlockedReason(); !strings.Contains(reason, "扫描尚未收尾") {
 		t.Fatalf("busy scan reason = %q", reason)
 	}
-	f.m.ExportCSV()
+	f.m.startExport(app.ExportCSV)
 	drainAll(t, f.m, f.q)
 	if calls := f.saver.snapshot(); len(calls) != 0 {
 		t.Fatalf("a running scan exported: %+v", calls)
@@ -711,9 +708,9 @@ func TestExportBlocksWhileEditingOrScanning(t *testing.T) {
 	}
 }
 
-// TestDirectExportUsesTheOpenRecordsOwnSnapshot keeps the history/live
-// revision separation of the direct export path.
-func TestDirectExportUsesTheOpenRecordsOwnSnapshot(t *testing.T) {
+// TestExportUsesTheOpenRecordsOwnSnapshot keeps the history/live
+// revision separation of the export snapshot.
+func TestExportUsesTheOpenRecordsOwnSnapshot(t *testing.T) {
 	sessionRec := recovery(
 		uiStructuredItem(t, 1, record.QualityAutoAccepted),
 		uiStructuredItem(t, 2, record.QualityAutoAccepted),
@@ -744,12 +741,12 @@ func TestDirectExportUsesTheOpenRecordsOwnSnapshot(t *testing.T) {
 	if m.exportData == nil || m.exportData.Summary.Included != 1 {
 		t.Fatalf("history snapshot = %+v", m.exportData)
 	}
-	m.ExportJSON()
+	m.startExport(app.ExportJSON)
 	drainAll(t, m, q)
 
 	calls := saver.snapshot()
 	if len(calls) != 1 {
-		t.Fatalf("direct history export calls = %+v", calls)
+		t.Fatalf("export calls = %+v", calls)
 	}
 	var doc struct {
 		Items []app.ExportItem `json:"items"`
@@ -856,9 +853,9 @@ func TestExportFollowsASavedRevision(t *testing.T) {
 	}
 }
 
-// TestDirectExportIsNotLimitedByTheVisibleFilter keeps the filter-
+// TestExportIsNotLimitedByTheVisibleFilter keeps the filter-
 // independent export set.
-func TestDirectExportIsNotLimitedByTheVisibleFilter(t *testing.T) {
+func TestExportIsNotLimitedByTheVisibleFilter(t *testing.T) {
 	rec := recovery(
 		uiStructuredItem(t, 1, record.QualityAutoAccepted),
 		uiStructuredItem(t, 2, record.QualityAutoAccepted),
@@ -884,7 +881,7 @@ func TestDirectExportIsNotLimitedByTheVisibleFilter(t *testing.T) {
 	settle(t, f.m, f.q, f.tt)
 	calls := f.saver.snapshot()
 	if len(calls) != 1 {
-		t.Fatalf("direct export calls = %+v", calls)
+		t.Fatalf("export calls = %+v", calls)
 	}
 	rows, err := csv.NewReader(bytes.NewReader(calls[0].data[3:])).ReadAll()
 	if err != nil {
@@ -898,9 +895,9 @@ func TestDirectExportIsNotLimitedByTheVisibleFilter(t *testing.T) {
 	}
 }
 
-// TestDirectExportDisablesReviewActions keeps the review lock while any
-// export runs.
-func TestDirectExportDisablesReviewActions(t *testing.T) {
+// TestExportDialogDisablesReviewActions keeps the review lock while the
+// dialog writes.
+func TestExportDialogDisablesReviewActions(t *testing.T) {
 	rec := recovery(
 		uiStructuredItem(t, 1, record.QualityAutoAccepted),
 		uiStructuredItem(t, 2, record.QualityNeedsReview),
@@ -915,9 +912,16 @@ func TestDirectExportDisablesReviewActions(t *testing.T) {
 		return "/tmp/out.youkai.json", nil
 	}
 	f.m.selected = 0
+	f.open(t)
 
-	f.m.ExportJSON()
-	<-started
+	if err := f.tt.Click("导出 JSON"); err != nil {
+		t.Fatalf("click 导出 JSON: %v", err)
+	}
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the export write did not start")
+	}
 	f.m.startEdit()
 	if f.m.edit != nil {
 		t.Fatal("an export in flight allowed the editor to open")
@@ -927,8 +931,8 @@ func TestDirectExportDisablesReviewActions(t *testing.T) {
 		t.Fatalf("confirmation during export = %q", f.m.reviewErr)
 	}
 	f.tt.Frame()
-	if !f.tt.HasText("正在导出……") {
-		t.Fatalf("the direct export busy state is not shown: %q", f.tt.Texts())
+	if !f.tt.HasText("正在导出 JSON……") {
+		t.Fatalf("the export busy state is not shown: %q", f.tt.Texts())
 	}
 
 	close(release)
@@ -938,53 +942,33 @@ func TestDirectExportDisablesReviewActions(t *testing.T) {
 	}
 }
 
-// TestDirectExportDirectoryFailureOffersActions keeps the status strip's
-// actionable directory failure for exports outside the dialog.
-func TestDirectExportDirectoryFailureOffersActions(t *testing.T) {
-	saver := &fakeDirectExportSaver{}
-	saver.saveFn = func(app.ExportFormat, string, []byte) (string, error) {
+// TestExportDialogDirectoryFailureOffersRetry checks that a directory
+// failure stays inside the dialog with its reason, the untouched-record
+// note and 重试.
+func TestExportDialogDirectoryFailureOffersRetry(t *testing.T) {
+	rec := recovery(uiStructuredItem(t, 1, record.QualityAutoAccepted))
+	f := newExportDialogFixture(t, rec, false)
+	f.saver.saveFn = func(app.ExportFormat, string, []byte) (string, error) {
 		return "", &ExportDirectoryError{Directory: "/missing/Downloads", Err: errors.New("permission denied")}
 	}
-	opened := 0
-	svc := &fakeService{loads: map[string]*record.Recovery{
-		"rec": recovery(uiStructuredItem(t, 1, record.QualityAutoAccepted)),
-	}}
-	m, q := newTestModel(t, Config{
-		Service:           svc,
-		DirectExportSaver: saver,
-		OpenDownloadsDirectory: func() error {
-			opened++
-			return nil
-		},
-	})
-	m.SetContentSize(1024, 700)
-	m.showRecord("rec", false)
-	m.reloadRecord("rec", false)
-	drainAll(t, m, q)
-	m.page = pageResults
-	showRecordItems(m)
-	tt := ui.NewTester(m.View, 1024, 700)
-	settle(t, m, q, tt)
-
-	m.ExportCSV()
-	settle(t, m, q, tt)
-	if m.exportOutcome == nil || m.exportOutcome.dirErr == nil {
-		t.Fatalf("the directory failure was not classified: %+v", m.exportOutcome)
+	f.open(t)
+	if err := f.tt.Click("导出 CSV"); err != nil {
+		t.Fatalf("click 导出 CSV: %v", err)
 	}
-	if !tt.HasText("导出失败（CSV，历史记录 rec）") || !tt.HasText("打开目录") || !tt.HasText("去设置") {
-		t.Fatalf("actionable export failure missing: %q", tt.Texts())
+	settle(t, f.m, f.q, f.tt)
+	if f.m.exportOutcome == nil || f.m.exportOutcome.err == nil {
+		t.Fatalf("the directory failure was not recorded: %+v", f.m.exportOutcome)
 	}
-	if err := tt.Click("打开目录"); err != nil {
-		t.Fatalf("click 打开目录: %v", err)
+	var dirErr *ExportDirectoryError
+	if !errors.As(f.m.exportOutcome.err, &dirErr) {
+		t.Fatalf("the directory failure was not classified: %v", f.m.exportOutcome.err)
 	}
-	if opened != 1 {
-		t.Fatalf("open directory calls = %d, want 1", opened)
+	if !f.tt.HasText("导出失败：无法写入下载目录 /missing/Downloads") ||
+		!f.tt.HasText("内部记录未受影响。") || !f.tt.HasText("重试") {
+		t.Fatalf("the dialog failure is incomplete: %q", f.tt.Texts())
 	}
-	if err := tt.Click("去设置"); err != nil {
-		t.Fatalf("click 去设置: %v", err)
-	}
-	if m.page != pageSettings {
-		t.Fatalf("page after 去设置 = %v, want settings", m.page)
+	if f.m.recData == nil || len(f.m.recData.Checkpoint.Items) != 1 {
+		t.Fatal("a failed export changed the record")
 	}
 }
 

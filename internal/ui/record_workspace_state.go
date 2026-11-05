@@ -129,6 +129,9 @@ func (m *Model) captureResultPlace() {
 // caller settles any draft before opening another record. The bumped load
 // version discards responses still in flight for the previous record.
 func (m *Model) showRecord(id string, live bool) {
+	if m.exportAfterLoadID != id {
+		m.exportAfterLoadID = ""
+	}
 	version := m.recLoad + 1
 	m.recordWorkspaceState = newRecordWorkspaceState()
 	m.recLoad = version
@@ -192,6 +195,9 @@ func (m *Model) reloadRecord(id string, live bool) {
 			if err != nil {
 				m.loading = false
 				m.recErr = err.Error()
+				if m.exportAfterLoadID == id {
+					m.exportAfterLoadID = ""
+				}
 				return
 			}
 			m.applyLoadedRecord(id, rec, live)
@@ -240,6 +246,10 @@ func (m *Model) applyLoadedRecord(id string, rec *record.Recovery, live bool) {
 	m.selectedSequence = m.selectedSeq()
 	if m.scroll > 0 {
 		m.list.ScrollTo(m.scroll, ui.Start)
+	}
+	if m.exportAfterLoadID == id {
+		m.exportAfterLoadID = ""
+		m.openExportDialog()
 	}
 }
 
