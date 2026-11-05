@@ -81,11 +81,7 @@ func historyColumnsFor(contentWidth int) []ui.TableColumn {
 // content width minus the rail, its divider and the page padding. It is
 // the viewport the composite pins its action column against.
 func historyPanelWidth(contentWidth int) float32 {
-	sidebar := float32(sidebarWideWidth)
-	if contentWidth < sidebarNarrowMaxSize {
-		sidebar = sidebarNarrowWidth
-	}
-	width := float32(contentWidth) - sidebar - 1 - 2*historyCompositePad
+	width := float32(contentWidth) - navRailWidth - 1 - 2*historyCompositePad
 	if width < 1 {
 		width = 1
 	}
@@ -110,7 +106,7 @@ func (m *Model) historyPage(c *ui.Context, t *ui.Theme) {
 	m.prepareHistoryList(entries)
 
 	ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, "历史记录").FontWeight(600)
+		ui.Text(c, "全部记录").FontWeight(600)
 		subtitle := fmt.Sprintf("%d 条记录", len(m.history))
 		if len(m.history) > 0 {
 			subtitle += " · 最近 " + historyTimeText(m.history[0])
@@ -123,7 +119,7 @@ func (m *Model) historyPage(c *ui.Context, t *ui.Theme) {
 			}
 		}
 	})
-	ui.Text(c, "已保存的扫描修订；打开记录后回到结果与校对。").TextColor(tok.TextMuted).
+	ui.Text(c, "已保存的扫描修订；打开记录后进入记录工作区。").TextColor(tok.TextMuted).
 		FontSize(t.FontSize * 0.9)
 
 	ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
@@ -787,7 +783,7 @@ func (m *Model) historyNotices(c *ui.Context, t *ui.Theme, tok *Tokens) {
 // historyStatusText is the status bar's line on the history destination.
 func (m *Model) historyStatusText() string {
 	entries := m.visibleHistory()
-	text := fmt.Sprintf("%d 条历史记录", len(entries))
+	text := fmt.Sprintf("%d 条记录", len(entries))
 	if m.historyRow >= 0 && m.historyRow < len(entries) {
 		text += " · 已选中 " + historyTimeText(entries[m.historyRow])
 	}

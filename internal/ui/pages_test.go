@@ -12,66 +12,68 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-// TestPageLayoutSidebarWidths guards the design's two rail widths: 168
-// DIP on wide windows and 144 DIP from 1024 down to 860.
-func TestPageLayoutSidebarWidths(t *testing.T) {
+// TestNavRailIsFixedWidth checks the 64-DIP rail with its 52-DIP items at
+// the default and minimum window sizes: the three destinations exist, no
+// wide sidebar remains, and settings stays pinned to the bottom.
+func TestNavRailIsFixedWidth(t *testing.T) {
 	for _, tc := range []struct {
-		width int
-		want  float32
+		width, height int
 	}{
-		{1440, sidebarWideWidth},
-		{1024, sidebarNarrowWidth},
-		{1020, sidebarNarrowWidth},
-		{860, sidebarNarrowWidth},
-	} {
-		m, _ := newTestModel(t, Config{Service: &fakeService{}})
-		m.SetContentSize(tc.width, 700)
-		if got := m.sidebarWidth(); got != tc.want {
-			t.Errorf("sidebar width at %d = %v, want %v", tc.width, got, tc.want)
-		}
-	}
-}
-
-// TestPageLayoutSidebarItemsFillTheRail checks the rectangular items and
-// the bottom-anchored settings entry at both rail widths.
-func TestPageLayoutSidebarItemsFillTheRail(t *testing.T) {
-	for _, tc := range []struct {
-		width int
-		rail  float32
-	}{
-		{1440, sidebarWideWidth},
-		{1020, sidebarNarrowWidth},
-		{860, sidebarNarrowWidth},
+		{1180, 760},
+		{960, 640},
 	} {
 		m, q := newTestModel(t, Config{Service: &fakeService{}})
-		m.SetContentSize(tc.width, 700)
-		height := 700
-		if tc.width == 860 {
-			height = 560
-		}
-		tt := ui.NewTester(m.View, tc.width, height)
+		m.SetContentSize(tc.width, tc.height)
+		tt := ui.NewTester(m.View, tc.width, tc.height)
 		settle(t, m, q, tt)
 
-		for _, label := range []string{"扫描", "历史", "设置"} {
+		for _, label := range []string{"扫描", "记录", "设置"} {
 			rect, ok := tt.Find(label)
 			if !ok {
 				t.Fatalf("at %d: the %q item is missing", tc.width, label)
 			}
-			if rect.X < 0 || rect.X+rect.W > tc.rail {
-				t.Errorf("at %d: %q at %+v does not fit the %v-DIP rail", tc.width, label, rect, tc.rail)
+			if rect.X < 0 || rect.X+rect.W > navRailWidth {
+				t.Errorf("at %d: %q at %+v does not fit the %d-DIP rail", tc.width, label, rect, navRailWidth)
 			}
-			if rect.H != 38 {
-				t.Errorf("at %d: %q is %v high, want the 38-DIP rectangular item", tc.width, label, rect.H)
+			if rect.W < navRailItemWidth-1 {
+				t.Errorf("at %d: %q is %v wide, want the %d-DIP rail item", tc.width, label, rect.W, navRailItemWidth)
 			}
+		}
+		if _, ok := tt.Find("历史"); ok {
+			t.Fatal("the old wide sidebar's history destination is still rendered")
 		}
 		scan, _ := tt.Find("扫描")
+		records, _ := tt.Find("记录")
 		settings, _ := tt.Find("设置")
-		if settings.Y <= scan.Y {
-			t.Errorf("at %d: settings at %v is not below scan at %v", tc.width, settings.Y, scan.Y)
+		if !(scan.Y < records.Y && records.Y < settings.Y) {
+			t.Errorf("at %d: the rail order is scan %v, records %v, settings %v",
+				tc.width, scan.Y, records.Y, settings.Y)
 		}
-		if settings.Y+settings.H < float32(height)*0.8 {
+		if settings.Y+settings.H < float32(tc.height)*0.8 {
 			t.Errorf("at %d: settings at %+v is not pinned to the bottom", tc.width, settings)
 		}
+	}
+}
+
+// TestNavRailIsTheFirstTabGroup checks the design's focus order: Tab
+// reaches the rail before any page content, in the rail's own order
+// (design 09 §4.4).
+func TestNavRailIsTheFirstTabGroup(t *testing.T) {
+	m, q := newTestModel(t, Config{Service: &fakeService{},
+		ScanSource: ScanSourceInfo{Available: true}})
+	tt := ui.NewTester(m.View, 1180, 760)
+	settle(t, m, q, tt)
+
+	for _, label := range []string{"扫描", "记录", "设置"} {
+		tt.Key(0, ui.KeyTab)
+		if !tt.Focused(label) {
+			t.Fatalf("Tab did not focus the %q destination next", label)
+		}
+	}
+	// The rail is the first group; the scan page's action follows it.
+	tt.Key(0, ui.KeyTab)
+	if !tt.Focused("开始扫描") {
+		t.Fatalf("Tab after the rail did not reach the scan action: %q", tt.Texts())
 	}
 }
 
@@ -101,11 +103,12 @@ func countColorInRect(img *image.RGBA, c color.RGBA, r image.Rectangle) int {
 	return n
 }
 
-// TestPageLayoutSidebarActiveState checks that the current destination has
-// the design's accent-soft face and the other items do not.
-func TestPageLayoutSidebarActiveState(t *testing.T) {
+// TestNavRailActiveState checks that the current destination has the
+// design's accent-soft face and the others do not, and that an opened
+// record's workspace keeps 记录 highlighted.
+func TestNavRailActiveState(t *testing.T) {
 	m, q := newTestModel(t, Config{Service: &fakeService{}})
-	tt := ui.NewTester(m.View, 1020, 700)
+	tt := ui.NewTester(m.View, 1180, 760)
 	settle(t, m, q, tt)
 
 	soft := tokensFor(false).AccentSoft
@@ -125,19 +128,19 @@ func TestPageLayoutSidebarActiveState(t *testing.T) {
 	if m.displayPage() != pageScan {
 		t.Fatalf("the initial page is %v, want scan", m.displayPage())
 	}
-	if !faceIsActive("扫描") || faceIsActive("历史") || faceIsActive("设置") {
+	if !faceIsActive("扫描") || faceIsActive("记录") || faceIsActive("设置") {
 		t.Fatal("the scan destination alone is not active at startup")
 	}
 
-	if err := tt.Click("历史"); err != nil {
+	if err := tt.Click("记录"); err != nil {
 		t.Fatal(err)
 	}
 	tt.Frame()
 	if m.displayPage() != pageHistory {
-		t.Fatalf("the page is %v after clicking history, want history", m.displayPage())
+		t.Fatalf("the page is %v after clicking records, want the list", m.displayPage())
 	}
-	if faceIsActive("扫描") || !faceIsActive("历史") || faceIsActive("设置") {
-		t.Fatal("the history destination alone is not active")
+	if faceIsActive("扫描") || !faceIsActive("记录") || faceIsActive("设置") {
+		t.Fatal("the records destination alone is not active")
 	}
 
 	if err := tt.Click("设置"); err != nil {
@@ -147,16 +150,15 @@ func TestPageLayoutSidebarActiveState(t *testing.T) {
 	if m.displayPage() != pageSettings {
 		t.Fatalf("the page is %v after clicking settings, want settings", m.displayPage())
 	}
-	if faceIsActive("扫描") || faceIsActive("历史") || !faceIsActive("设置") {
+	if faceIsActive("扫描") || faceIsActive("记录") || !faceIsActive("设置") {
 		t.Fatal("the settings destination alone is not active")
 	}
 }
 
-// TestPageLayoutPagesRouteWithoutStageSwitch checks the shell's page
-// model: there is no in-page stage switch, a history snapshot returns to
-// the list, and the scan destination is prepare without a live session
-// while the history destination keeps the loaded record.
-func TestPageLayoutPagesRouteWithoutStageSwitch(t *testing.T) {
+// TestShellStartsOnScanWithSavedRecords checks the startup landing: a
+// history full of records does not pull the page away from scan (design
+// 07 §4).
+func TestShellStartsOnScanWithSavedRecords(t *testing.T) {
 	svc := &fakeService{
 		list: []record.RecordInfo{{
 			ID: "r1", LatestRevision: 1,
@@ -165,7 +167,34 @@ func TestPageLayoutPagesRouteWithoutStageSwitch(t *testing.T) {
 		loads: map[string]*record.Recovery{"r1": testRecord()},
 	}
 	m, q := newTestModel(t, Config{Service: svc})
-	tt := ui.NewTester(m.View, 1020, 700)
+	tt := ui.NewTester(m.View, 1180, 760)
+	settle(t, m, q, tt)
+	drainAll(t, m, q)
+	tt.Frame()
+
+	if m.displayPage() != pageScan || !tt.HasText(scanHint) {
+		t.Fatalf("startup lands on page %v, want the scan page", m.displayPage())
+	}
+	if tt.HasText("全部记录") {
+		t.Fatal("startup shows the records list instead of the scan page")
+	}
+}
+
+// TestRecordsDestinationRoutesWithoutStageSwitch checks the records
+// destination's two levels: the whole list opens a record's workspace
+// (starting on 摘要), only the workspace's own back action returns to the
+// list, the scan destination is prepare, and the rail restores the opened
+// record. There is no in-page stage switch.
+func TestRecordsDestinationRoutesWithoutStageSwitch(t *testing.T) {
+	svc := &fakeService{
+		list: []record.RecordInfo{{
+			ID: "r1", LatestRevision: 1,
+			SavedAt: time.Date(2026, 10, 17, 12, 30, 0, 0, time.UTC),
+		}},
+		loads: map[string]*record.Recovery{"r1": testRecord()},
+	}
+	m, q := newTestModel(t, Config{Service: svc})
+	tt := ui.NewTester(m.View, 1180, 760)
 	settle(t, m, q, tt)
 	m.page = pageScan
 	tt.Frame()
@@ -184,60 +213,287 @@ func TestPageLayoutPagesRouteWithoutStageSwitch(t *testing.T) {
 	if !tt.HasText("关闭窗口时停止扫描并退出应用") {
 		t.Fatal("the settings page does not show the close preference")
 	}
-	if err := tt.Click("历史"); err != nil {
+	if err := tt.Click("记录"); err != nil {
 		t.Fatal(err)
 	}
 	tt.Frame()
-	if !tt.HasText("搜索日期") {
-		t.Fatalf("the history page does not show its records: %q", tt.Texts())
+	if !tt.HasText("搜索日期") || !tt.HasText("全部记录") {
+		t.Fatalf("the records list does not show its records: %q", tt.Texts())
 	}
 	if err := tt.Click("打开"); err != nil {
 		t.Fatal(err)
 	}
 	settle(t, m, q, tt)
-	if m.displayPage() != pageResults {
-		t.Fatalf("opening a record shows page %v, want results", m.displayPage())
+	if m.displayPage() != pageResults || m.recordTab != recordTabSummary {
+		t.Fatalf("opening a record shows page %v tab %v, want the summary", m.displayPage(), m.recordTab)
 	}
-	if !tt.HasText("← 返回历史") {
-		t.Fatalf("the history snapshot header does not offer its way back: %q", tt.Texts())
+	if !tt.HasText("‹ 全部记录") {
+		t.Fatalf("the workspace header does not offer its way back: %q", tt.Texts())
+	}
+	if !tt.HasText("摘要") || !tt.HasText("逐件") || !tt.HasText("导出…") {
+		t.Fatalf("the workspace title bar is incomplete: %q", tt.Texts())
 	}
 	if tt.HasText("+ 准备新扫描") {
-		t.Fatal("the history snapshot header offers the scan destination's action")
+		t.Fatal("the workspace header still offers the scan destination's old action")
 	}
-	if err := tt.Click("← 返回历史"); err != nil {
+	if err := tt.Click("‹ 全部记录"); err != nil {
 		t.Fatal(err)
 	}
 	tt.Frame()
 	if m.displayPage() != pageHistory {
-		t.Fatalf("the history snapshot's back action shows page %v, want the list", m.displayPage())
+		t.Fatalf("the workspace's back action shows page %v, want the list", m.displayPage())
 	}
 	if err := tt.Click("扫描"); err != nil {
 		t.Fatal(err)
 	}
 	tt.Frame()
 	if m.displayPage() != pageScan || !tt.HasText(scanHint) {
-		t.Fatalf("scan without a live session shows page %v, want prepare", m.displayPage())
+		t.Fatalf("scan shows page %v, want prepare", m.displayPage())
 	}
 	if m.rec == nil {
 		t.Fatal("preparing a new scan discarded the loaded record")
 	}
-	if err := tt.Click("历史"); err != nil {
+	if err := tt.Click("记录"); err != nil {
 		t.Fatal(err)
 	}
 	settle(t, m, q, tt)
 	if m.displayPage() != pageResults || m.rec == nil || m.rec.ID != "r1" {
-		t.Fatalf("history after prepare = page %v record %+v, want the opened record",
+		t.Fatalf("records after scan = page %v record %+v, want the opened record",
 			m.displayPage(), m.rec)
+	}
+	if m.recordTab != recordTabSummary {
+		t.Fatalf("the restored record opens on tab %v, want the summary", m.recordTab)
 	}
 }
 
-// TestPageLayoutScanActions checks the scan page's bottom action bar: it
-// starts while idle, stops while a session runs, and the results header
-// offers the return-to-progress action instead of a new scan.
-func TestPageLayoutScanActions(t *testing.T) {
+// TestRecordWorkspaceSwitchesViews checks the segmented control: 逐件
+// carries the existing results surface and 摘要 the conclusion, and the
+// records destination keeps 记录 highlighted in both.
+func TestRecordWorkspaceSwitchesViews(t *testing.T) {
+	m, q, tt, _ := openReviewRecordPage(t, reviewRowItem(t, 1, 12))
+	tok := tokensFor(false)
+	active := color.RGBA{R: tok.AccentSoft.R, G: tok.AccentSoft.G, B: tok.AccentSoft.B, A: 255}
+	rect, ok := tt.Find("记录")
+	if !ok {
+		t.Fatal("the records destination is missing")
+	}
+	rectImage := image.Rect(int(rect.X), int(rect.Y), int(rect.X+rect.W), int(rect.Y+rect.H))
+	if countColorInRect(tt.Image(), active, rectImage) < int(rect.W*rect.H/2) {
+		t.Fatal("the records destination is not active in the workspace")
+	}
+
+	if err := tt.Click("逐件"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
+	if m.recordTab != recordTabItems {
+		t.Fatalf("clicking 逐件 left tab %v", m.recordTab)
+	}
+	if err := tt.Click("摘要"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
+	if m.recordTab != recordTabSummary {
+		t.Fatalf("clicking 摘要 left tab %v", m.recordTab)
+	}
+	if !tt.HasText("待校对") {
+		t.Fatalf("the summary does not state the record's conclusion: %q", tt.Texts())
+	}
+}
+
+// TestRecordWorkspaceShortcuts checks the two registered skeletons:
+// Ctrl+E brings the export controls into view, Shift+F6 returns the
+// keyboard to the rail, and F6 moves it into the workspace's first region.
+func TestRecordWorkspaceShortcuts(t *testing.T) {
+	svc := &fakeService{
+		list: []record.RecordInfo{{
+			ID: "r1", LatestRevision: 1,
+			SavedAt: time.Date(2026, 10, 20, 10, 0, 0, 0, time.UTC),
+		}},
+		loads: map[string]*record.Recovery{
+			"r1": recovery(uiStructuredItem(t, 1, record.QualityAutoAccepted)),
+		},
+	}
+	m, q := newTestModel(t, Config{
+		Service:           svc,
+		DirectExportSaver: &fakeDirectExportSaver{},
+	})
+	m.SetContentSize(1180, 760)
+	tt := ui.NewTester(m.View, 1180, 760)
+	settle(t, m, q, tt)
+	m.histChoice = slotHistoryLabel(t, m, "r1")
+	m.OpenHistory()
+	settle(t, m, q, tt)
+
+	if m.recordTab != recordTabSummary || !tt.HasText("导出 JSON") {
+		t.Fatalf("the summary does not hold the export controls: tab %v %q", m.recordTab, tt.Texts())
+	}
+	if err := tt.Click("逐件"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
+	if m.recordTab != recordTabItems {
+		t.Fatalf("clicking 逐件 left tab %v", m.recordTab)
+	}
+
+	tt.Key(ui.Cmd, ui.KeyE)
+	settle(t, m, q, tt)
+	if m.recordTab != recordTabSummary || !tt.HasText("导出 JSON") {
+		t.Fatalf("Ctrl+E did not reveal the export controls: tab %v %q", m.recordTab, tt.Texts())
+	}
+
+	tt.Key(ui.Shift, ui.KeyF6)
+	settle(t, m, q, tt)
+	if !tt.Focused("记录") {
+		t.Fatalf("Shift+F6 did not return the keyboard to the rail: %q", tt.Texts())
+	}
+	tt.Key(0, ui.KeyF6)
+	settle(t, m, q, tt)
+	if !tt.Focused("摘要") {
+		t.Fatalf("F6 did not enter the workspace's first region: %q", tt.Texts())
+	}
+
+	// A record with no exportable item blocks the export entry, so Ctrl+E
+	// is not registered: the item view stays where it is (L-2's reverse
+	// path).
+	blockedSvc := &fakeService{
+		list: []record.RecordInfo{{
+			ID: "r2", LatestRevision: 1,
+			SavedAt: time.Date(2026, 10, 21, 10, 0, 0, 0, time.UTC),
+		}},
+		loads: map[string]*record.Recovery{
+			"r2": recovery(reviewRowItem(t, 1, 12)),
+		},
+	}
+	blockedModel, blockedQueue := newTestModel(t, Config{
+		Service:           blockedSvc,
+		DirectExportSaver: &fakeDirectExportSaver{},
+	})
+	blockedModel.SetContentSize(1180, 760)
+	blockedTester := ui.NewTester(blockedModel.View, 1180, 760)
+	settle(t, blockedModel, blockedQueue, blockedTester)
+	blockedModel.histChoice = slotHistoryLabel(t, blockedModel, "r2")
+	blockedModel.OpenHistory()
+	settle(t, blockedModel, blockedQueue, blockedTester)
+	showRecordItems(blockedModel)
+	blockedTester.Frame()
+	if blockedModel.recordTab != recordTabItems {
+		t.Fatalf("the blocked record did not show 逐件: tab %v", blockedModel.recordTab)
+	}
+	blockedTester.Key(ui.Cmd, ui.KeyE)
+	settle(t, blockedModel, blockedQueue, blockedTester)
+	if blockedModel.recordTab != recordTabItems {
+		t.Fatalf("Ctrl+E moved a blocked export to tab %v", blockedModel.recordTab)
+	}
+}
+
+// TestWorkspaceShowsTheUnsavedPromptFromTheSummary checks H-1: switching
+// to 摘要 keeps the item editor's draft alive, so leaving the record or
+// quitting must still show the save/discard prompt from that view.
+func TestWorkspaceShowsTheUnsavedPromptFromTheSummary(t *testing.T) {
+	m, q, tt, _ := openReviewRecordPage(t, reviewRowItem(t, 1, 12))
+	if err := tt.Click("编辑"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
+	m.edit.draft.Level = "13"
+	if err := tt.Click("摘要"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
+	if m.recordTab != recordTabSummary || m.edit == nil {
+		t.Fatalf("the summary tab did not keep the draft: tab %v edit %+v", m.recordTab, m.edit)
+	}
+
+	// Leaving for settings pauses behind the prompt, visible on 摘要.
+	if err := tt.Click("设置"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if m.displayPage() != pageResults || m.navPrompt == nil ||
+		m.navPrompt.kind != navPage || m.navPrompt.page != pageSettings {
+		t.Fatalf("leaving the summary did not prompt: page %v prompt %+v", m.displayPage(), m.navPrompt)
+	}
+	if !tt.HasText("当前条目有未保存的修改。") || !tt.HasText("保存修改并继续") {
+		t.Fatalf("the summary does not show the unsaved prompt: %q", tt.Texts())
+	}
+	if !tt.HasText("留在当前项") {
+		t.Fatalf("the summary prompt lost its stay action: %q", tt.Texts())
+	}
+
+	// A quit requested from the tray shows the same prompt with exit
+	// wording while the summary stays on screen.
+	m.promptStay()
+	tt.Frame()
+	if m.AllowClose() {
+		t.Fatal("the dirty summary allowed the close")
+	}
+	tt.Frame()
+	if m.navPrompt == nil || m.navPrompt.kind != navExit {
+		t.Fatalf("the close did not hold behind the exit prompt: %+v", m.navPrompt)
+	}
+	if !tt.HasText("当前条目有未保存的修改，退出前请处理。") || !tt.HasText("保存修改并退出") {
+		t.Fatalf("the summary does not show the exit prompt: %q", tt.Texts())
+	}
+	m.promptStay()
+}
+
+// TestWorkspaceCoverageMatchesTheConclusion checks M-1: the title bar and
+// the summary body read one coverage conclusion. A record that claims
+// complete coverage without a verified sort is downgraded by the export
+// guard, and both places must say partial.
+func TestWorkspaceCoverageMatchesTheConclusion(t *testing.T) {
+	rec := recovery(item(1, record.StatusProduced, "", "", "一"))
+	rec.Checkpoint.Session.SessionID = "r1"
+	rec.Checkpoint.Session.Coverage.Status = record.CoverageComplete
+	svc := &fakeService{
+		list: []record.RecordInfo{{
+			ID: "r1", LatestRevision: 1,
+			SavedAt: time.Date(2026, 11, 5, 21, 40, 0, 0, time.UTC),
+		}},
+		loads: map[string]*record.Recovery{"r1": rec},
+	}
+	m, q := newTestModel(t, Config{
+		Service:           svc,
+		DirectExportSaver: &fakeDirectExportSaver{},
+	})
+	m.SetContentSize(1180, 760)
+	tt := ui.NewTester(m.View, 1180, 760)
+	settle(t, m, q, tt)
+	m.histChoice = slotHistoryLabel(t, m, "r1")
+	m.OpenHistory()
+	settle(t, m, q, tt)
+
+	if m.recordTab != recordTabSummary {
+		t.Fatalf("the record opened on tab %v, want the summary", m.recordTab)
+	}
+	// HasText is a substring match, so the body's "覆盖：部分覆盖…" would
+	// also satisfy it; the title bar's slot must be the exact status.
+	coverageHeader := 0
+	for _, text := range tt.Texts() {
+		if text == "覆盖：部分" {
+			coverageHeader++
+		}
+	}
+	if coverageHeader != 1 {
+		t.Fatalf("the title bar does not show the export guard's coverage exactly once: %d in %q",
+			coverageHeader, tt.Texts())
+	}
+	if !tt.HasText("覆盖：部分覆盖（导出文件会标注“部分快照”）") {
+		t.Fatalf("the summary does not show the same coverage: %q", tt.Texts())
+	}
+	if tt.HasText("覆盖：完整") {
+		t.Fatalf("a coverage the export cannot confirm is shown as complete: %q", tt.Texts())
+	}
+}
+
+// TestScanActionsStayOnTheScanPage checks the scan page's bottom action
+// bar and that the rail, not a workspace header action, returns to a
+// running scan.
+func TestScanActionsStayOnTheScanPage(t *testing.T) {
 	svc := &fakeService{}
 	m, q := newTestModel(t, Config{Service: svc})
-	tt := ui.NewTester(m.View, 1020, 700)
+	tt := ui.NewTester(m.View, 1180, 760)
 	settle(t, m, q, tt)
 
 	if err := tt.Click("开始扫描"); err != nil {
@@ -264,47 +520,37 @@ func TestPageLayoutScanActions(t *testing.T) {
 		t.Fatalf("the stop action issued %d stops, want 1", svc.stops)
 	}
 
-	// The results page opened during the scan returns to the progress
-	// page rather than starting another scan.
+	// The workspace opened during the scan returns to the progress page
+	// through the rail, not a header action.
 	m.page = pageResults
 	tt.Frame()
-	if !tt.HasText("返回扫描中") {
-		t.Fatalf("the results header during a scan does not offer the return action: %q", tt.Texts())
+	if tt.HasText("返回扫描中") {
+		t.Fatalf("the workspace header still offers the return-to-progress action: %q", tt.Texts())
 	}
-	if err := tt.Click("返回扫描中"); err != nil {
+	if err := tt.Click("扫描"); err != nil {
 		t.Fatal(err)
 	}
 	tt.Frame()
 	if m.displayPage() != pageScan {
-		t.Fatalf("returning to the running scan shows page %v, want scan", m.displayPage())
+		t.Fatalf("the rail shows page %v, want the running scan", m.displayPage())
 	}
 
-	// A finished session lands on the results page with the new-scan
-	// action; that action only returns to prepare.
+	// A finished session lands on the new record's summary.
 	ended := snap("s1", 2, false, scan.PhaseEnded,
 		scan.Counts{Captured: 2, Produced: 1}, 1, false, "")
 	applyAndSettle(t, m, q, tt, ended)
-	if m.displayPage() != pageResults {
-		t.Fatalf("the ended scan shows page %v, want results", m.displayPage())
-	}
-	if !tt.HasText("+ 准备新扫描") {
-		t.Fatalf("the results header does not offer a new scan: %q", tt.Texts())
-	}
-	if err := tt.Click("+ 准备新扫描"); err != nil {
-		t.Fatal(err)
-	}
-	tt.Frame()
-	if m.displayPage() != pageScan || !tt.HasText(scanHint) {
-		t.Fatalf("the new-scan action shows page %v, want prepare", m.displayPage())
+	if m.displayPage() != pageResults || m.recordTab != recordTabSummary {
+		t.Fatalf("the ended scan shows page %v tab %v, want the summary",
+			m.displayPage(), m.recordTab)
 	}
 }
 
-// TestSidebarRestoresSessionAndOpenedHistory checks the rail as a set of
+// TestNavRailRestoresOpenedRecords checks the rail as a set of
 // destinations: history from settings returns to the opened snapshot,
 // the history list is reachable from results, and scan restores the live
 // session slot without loading it again. Clicking the active destination
 // is a no-op.
-func TestSidebarRestoresSessionAndOpenedHistory(t *testing.T) {
+func TestNavRailRestoresOpenedRecords(t *testing.T) {
 	svc := &fakeService{
 		list: []record.RecordInfo{{
 			ID:      "old",
@@ -341,7 +587,7 @@ func TestSidebarRestoresSessionAndOpenedHistory(t *testing.T) {
 	if m.displayPage() != pageSettings {
 		t.Fatalf("settings shows page %v", m.displayPage())
 	}
-	if err := tt.Click("历史"); err != nil {
+	if err := tt.Click("记录"); err != nil {
 		t.Fatal(err)
 	}
 	settle(t, m, q, tt)
@@ -357,7 +603,7 @@ func TestSidebarRestoresSessionAndOpenedHistory(t *testing.T) {
 	// The history destination restores the opened snapshot; only its own
 	// back action opens the list. Clicking the active destination is a
 	// no-op.
-	if err := tt.Click("历史"); err != nil {
+	if err := tt.Click("记录"); err != nil {
 		t.Fatal(err)
 	}
 	tt.Frame()
@@ -365,47 +611,56 @@ func TestSidebarRestoresSessionAndOpenedHistory(t *testing.T) {
 		t.Fatalf("history from results = page %v slot %v, want the opened record",
 			m.displayPage(), m.activeSlot)
 	}
-	if err := tt.Click("← 返回历史"); err != nil {
+	if err := tt.Click("‹ 全部记录"); err != nil {
 		t.Fatalf("click 返回历史: %v", err)
 	}
 	tt.Frame()
 	if m.displayPage() != pageHistory {
 		t.Fatalf("returning to history shows page %v, want the list", m.displayPage())
 	}
-	if err := tt.Click("历史"); err != nil { // active destination: no-op
+	if err := tt.Click("记录"); err != nil { // active destination: no-op
 		t.Fatal(err)
 	}
 	tt.Frame()
 	if m.displayPage() != pageHistory {
-		t.Fatalf("clicking the active history destination moved to page %v", m.displayPage())
+		t.Fatalf("clicking the active records destination moved to page %v", m.displayPage())
 	}
 
+	// Scan shows the scan destination, never the live record's workspace;
+	// the session slot keeps its stored view for later.
 	if err := tt.Click("扫描"); err != nil {
 		t.Fatal(err)
 	}
 	settle(t, m, q, tt)
-	if m.displayPage() != pageResults || m.activeSlot != resultSlotSession ||
-		m.rec == nil || m.rec.ID != "s1" || !m.rec.Live {
-		t.Fatalf("scan from history = page %v slot %v record %+v",
-			m.displayPage(), m.activeSlot, m.rec)
+	if m.displayPage() != pageScan {
+		t.Fatalf("scan from records = page %v, want the scan page", m.displayPage())
 	}
-	if m.filter != resultFilterAll || m.search != "未评价" || m.selected != 1 {
+	if m.sessionSlot.recordID != "s1" || m.sessionSlot.state.rec == nil ||
+		m.sessionSlot.state.rec.ID != "s1" {
+		t.Fatalf("the session slot lost its record: %+v", m.sessionSlot)
+	}
+	if m.sessionSlot.state.filter != resultFilterAll || m.sessionSlot.state.search != "未评价" ||
+		m.sessionSlot.state.selected != 1 {
 		t.Fatalf("the session slot lost its view: filter %v search %q selected %d",
-			m.filter, m.search, m.selected)
+			m.sessionSlot.state.filter, m.sessionSlot.state.search, m.sessionSlot.state.selected)
 	}
 	if slotLoadCount(svc, "s1") != sessionLoads {
-		t.Fatal("returning to the live session reloaded it")
+		t.Fatal("leaving the live session reloaded it")
 	}
 
-	// The active scan destination and the active settings destination
-	// ignore their own clicks.
-	if err := tt.Click("扫描"); err != nil {
+	// The records destination restores the opened snapshot from the scan
+	// page.
+	if err := tt.Click("记录"); err != nil {
 		t.Fatal(err)
 	}
-	tt.Frame()
-	if m.displayPage() != pageResults || m.activeSlot != resultSlotSession {
-		t.Fatal("clicking the active scan destination moved away")
+	settle(t, m, q, tt)
+	if m.displayPage() != pageResults || m.activeSlot != resultSlotHistory ||
+		m.rec == nil || m.rec.ID != "old" {
+		t.Fatalf("records from scan = page %v slot %v record %+v",
+			m.displayPage(), m.activeSlot, m.rec)
 	}
+
+	// The active settings destination ignores its own clicks.
 	if err := tt.Click("设置"); err != nil {
 		t.Fatal(err)
 	}
@@ -419,12 +674,12 @@ func TestSidebarRestoresSessionAndOpenedHistory(t *testing.T) {
 	}
 }
 
-// TestSidebarHistoryRoundTripRestoresViewState checks the history
+// TestNavRailRecordsRoundTripRestoresViewState checks the history
 // destination's two levels: the rail restores the opened snapshot with its
 // filter, search, selection and scroll after a scan or settings visit, and
 // only the snapshot's back action opens the list. Neither round trip
 // reloads the record.
-func TestSidebarHistoryRoundTripRestoresViewState(t *testing.T) {
+func TestNavRailRecordsRoundTripRestoresViewState(t *testing.T) {
 	old := manyPendingRecord(t, 60)
 	old.Checkpoint.Session.SessionID = "old"
 	svc := &fakeService{
@@ -450,6 +705,8 @@ func TestSidebarHistoryRoundTripRestoresViewState(t *testing.T) {
 	m.histChoice = slotHistoryLabel(t, m, "old")
 	m.OpenHistory()
 	settle(t, m, q, tt)
+	showRecordItems(m)
+	tt.Frame()
 	if m.activeSlot != resultSlotHistory || m.rec == nil || m.rec.ID != "old" {
 		t.Fatalf("history did not open: slot %v record %+v", m.activeSlot, m.rec)
 	}
@@ -499,16 +756,16 @@ func TestSidebarHistoryRoundTripRestoresViewState(t *testing.T) {
 		t.Fatal(err)
 	}
 	settle(t, m, q, tt)
-	if m.displayPage() != pageResults || m.activeSlot != resultSlotSession {
-		t.Fatalf("scan from history = page %v slot %v", m.displayPage(), m.activeSlot)
+	if m.displayPage() != pageScan {
+		t.Fatalf("scan from records = page %v, want the scan page", m.displayPage())
 	}
-	if err := tt.Click("历史"); err != nil {
+	if err := tt.Click("记录"); err != nil {
 		t.Fatal(err)
 	}
 	settle(t, m, q, tt)
-	checkRestored("history after scan")
+	checkRestored("records after scan")
 
-	// History → settings → history.
+	// Records → settings → records.
 	if err := tt.Click("设置"); err != nil {
 		t.Fatal(err)
 	}
@@ -516,39 +773,39 @@ func TestSidebarHistoryRoundTripRestoresViewState(t *testing.T) {
 	if m.displayPage() != pageSettings {
 		t.Fatalf("settings shows page %v", m.displayPage())
 	}
-	if err := tt.Click("历史"); err != nil {
+	if err := tt.Click("记录"); err != nil {
 		t.Fatal(err)
 	}
 	settle(t, m, q, tt)
-	checkRestored("history after settings")
+	checkRestored("records after settings")
 
 	// The snapshot's own back action opens the list; the rail then
 	// returns to the opened record rather than the list.
-	if err := tt.Click("← 返回历史"); err != nil {
-		t.Fatalf("click 返回历史: %v", err)
+	if err := tt.Click("‹ 全部记录"); err != nil {
+		t.Fatalf("click the workspace back action: %v", err)
 	}
 	tt.Frame()
 	if m.displayPage() != pageHistory {
-		t.Fatalf("returning to history shows page %v, want the list", m.displayPage())
+		t.Fatalf("returning to the list shows page %v", m.displayPage())
 	}
 	if err := tt.Click("扫描"); err != nil {
 		t.Fatal(err)
 	}
 	settle(t, m, q, tt)
-	if m.activeSlot != resultSlotSession {
-		t.Fatalf("scan from the history list did not open the live session: slot %v", m.activeSlot)
+	if m.displayPage() != pageScan {
+		t.Fatalf("scan from the records list shows page %v", m.displayPage())
 	}
-	if err := tt.Click("历史"); err != nil {
+	if err := tt.Click("记录"); err != nil {
 		t.Fatal(err)
 	}
 	settle(t, m, q, tt)
-	checkRestored("history from the list")
+	checkRestored("records from the list")
 }
 
-// TestPageLayoutSidebarSnapshotHighlightsHistory checks that a reopened
-// record, rendered by the results area, still belongs to the history
-// destination in the rail: history is active and scan is not.
-func TestPageLayoutSidebarSnapshotHighlightsHistory(t *testing.T) {
+// TestNavRailHighlightsRecordsForAnOpenedRecord checks that a reopened
+// record, rendered by the workspace, belongs to the records destination in
+// the rail: records is active and scan is not.
+func TestNavRailHighlightsRecordsForAnOpenedRecord(t *testing.T) {
 	m, _, tt, _ := openReviewRecordPage(t, reviewRowItem(t, 1, 12))
 	if m.displayPage() != pageResults || m.activeSlot != resultSlotHistory {
 		t.Fatalf("the record is not shown by the history slot: page %v slot %v",
@@ -568,22 +825,22 @@ func TestPageLayoutSidebarSnapshotHighlightsHistory(t *testing.T) {
 		return countColorInRect(tt.Image(), active, rectImage(rect)) >= want
 	}
 	if faceIsActive("扫描") {
-		t.Fatal("the scan destination is active for a history snapshot")
+		t.Fatal("the scan destination is active for an opened record")
 	}
-	if !faceIsActive("历史") {
-		t.Fatal("the history destination is not active for its opened snapshot")
+	if !faceIsActive("记录") {
+		t.Fatal("the records destination is not active for its opened record")
 	}
 	if faceIsActive("设置") {
-		t.Fatal("the settings destination is active for a history snapshot")
+		t.Fatal("the settings destination is active for an opened record")
 	}
 }
 
-// TestSidebarHistoryRevalidatesConfirmedStaySelection checks the same-slot
+// TestNavRailRecordsRevalidatesConfirmedStaySelection checks the same-slot
 // revisit after "confirm and stay": leaving the results page drops the
 // temporary marker of the confirmed row, so returning through settings
 // must move the selection to the first row the pending segment still
 // shows instead of keeping the hidden row in the detail.
-func TestSidebarHistoryRevalidatesConfirmedStaySelection(t *testing.T) {
+func TestNavRailRecordsRevalidatesConfirmedStaySelection(t *testing.T) {
 	m, q, tt, _ := openReviewRecordPage(t,
 		reviewRowItem(t, 1, 12),
 		reviewRowItem(t, 2, 10),
@@ -603,8 +860,8 @@ func TestSidebarHistoryRevalidatesConfirmedStaySelection(t *testing.T) {
 		t.Fatalf("click 设置: %v", err)
 	}
 	settle(t, m, q, tt)
-	if err := tt.Click("历史"); err != nil {
-		t.Fatalf("click 历史: %v", err)
+	if err := tt.Click("记录"); err != nil {
+		t.Fatalf("click 记录: %v", err)
 	}
 	settle(t, m, q, tt)
 
@@ -670,6 +927,8 @@ func TestHistoryConfirmedStayListReopenRevalidatesSelection(t *testing.T) {
 				m.histChoice = slotHistoryLabel(t, m, "r1")
 				m.OpenHistory()
 				settle(t, m, q, tt)
+				showRecordItems(m)
+				tt.Frame()
 				if m.activeSlot != resultSlotHistory || m.rec == nil || m.rec.ID != "r1" {
 					t.Fatalf("the history record did not open: slot %v record %+v", m.activeSlot, m.rec)
 				}
@@ -692,7 +951,7 @@ func TestHistoryConfirmedStayListReopenRevalidatesSelection(t *testing.T) {
 						m.pendingCount(), m.selected, m.selectedSeq(), visible)
 				}
 
-				if err := tt.Click("← 返回历史"); err != nil {
+				if err := tt.Click("‹ 全部记录"); err != nil {
 					t.Fatalf("click 返回历史: %v", err)
 				}
 				settle(t, m, q, tt)
@@ -776,6 +1035,8 @@ func TestHistoryListReopenSettlesSelectionAgainstFilters(t *testing.T) {
 	m.histChoice = slotHistoryLabel(t, m, "r1")
 	m.OpenHistory()
 	settle(t, m, q, tt)
+	showRecordItems(m)
+	tt.Frame()
 	loads := slotLoadCount(svc, "r1")
 
 	m.filter = resultFilterAll
@@ -788,7 +1049,7 @@ func TestHistoryListReopenSettlesSelectionAgainstFilters(t *testing.T) {
 
 	backToRecord := func() {
 		t.Helper()
-		if err := tt.Click("← 返回历史"); err != nil {
+		if err := tt.Click("‹ 全部记录"); err != nil {
 			t.Fatalf("click 返回历史: %v", err)
 		}
 		settle(t, m, q, tt)
@@ -839,11 +1100,11 @@ func TestHistoryListReopenSettlesSelectionAgainstFilters(t *testing.T) {
 	}
 }
 
-// TestSidebarHistoryActiveDestinationIsNoOp checks that the rail's active
-// history destination ignores its own click: an unchanged editor stays
+// TestNavRailActiveRecordsDestinationIsNoOp checks that the rail's active
+// records destination ignores its own click: an unchanged editor stays
 // open, a dirty draft gets no save/discard prompt, and the record is not
 // reopened.
-func TestSidebarHistoryActiveDestinationIsNoOp(t *testing.T) {
+func TestNavRailActiveRecordsDestinationIsNoOp(t *testing.T) {
 	m, _, tt, svc := openReviewRecordPage(t, reviewRowItem(t, 1, 12), reviewRowItem(t, 2, 10))
 	loads := slotLoadCount(svc, "r1")
 
@@ -851,12 +1112,12 @@ func TestSidebarHistoryActiveDestinationIsNoOp(t *testing.T) {
 	if m.edit == nil || m.navPrompt != nil {
 		t.Fatalf("the clean editor did not open: edit %+v prompt %+v", m.edit, m.navPrompt)
 	}
-	if err := tt.Click("历史"); err != nil {
-		t.Fatalf("click 历史: %v", err)
+	if err := tt.Click("记录"); err != nil {
+		t.Fatalf("click 记录: %v", err)
 	}
 	tt.Frame()
 	if m.edit == nil || m.navPrompt != nil {
-		t.Fatalf("clicking the active history destination closed the editor: edit %+v prompt %+v",
+		t.Fatalf("clicking the active records destination closed the editor: edit %+v prompt %+v",
 			m.edit, m.navPrompt)
 	}
 	if m.displayPage() != pageResults || m.activeSlot != resultSlotHistory {
@@ -864,28 +1125,28 @@ func TestSidebarHistoryActiveDestinationIsNoOp(t *testing.T) {
 	}
 
 	m.edit.draft.Level = "13"
-	if err := tt.Click("历史"); err != nil {
-		t.Fatalf("click 历史 with a dirty draft: %v", err)
+	if err := tt.Click("记录"); err != nil {
+		t.Fatalf("click 记录 with a dirty draft: %v", err)
 	}
 	tt.Frame()
 	if m.navPrompt != nil {
-		t.Fatalf("clicking the active history destination prompted for the same record: %+v",
+		t.Fatalf("clicking the active records destination prompted for the same record: %+v",
 			m.navPrompt)
 	}
 	if m.edit == nil || m.edit.draft.Level != "13" {
-		t.Fatal("clicking the active history destination lost the dirty draft")
+		t.Fatal("clicking the active records destination lost the dirty draft")
 	}
 	if got := slotLoadCount(svc, "r1"); got != loads {
-		t.Fatalf("clicking the active history destination reloaded the record: %d loads, want %d",
+		t.Fatalf("clicking the active records destination reloaded the record: %d loads, want %d",
 			got, loads)
 	}
 }
 
-// TestSidebarDestinationsGuardDirtyDrafts checks that switching to the
+// TestNavRailDestinationsGuardDirtyDrafts checks that switching to the
 // scan, history or settings destination never drops an unsaved item: the
 // move waits behind the save/discard/stay prompt, and staying keeps the
 // draft and the current slot.
-func TestSidebarDestinationsGuardDirtyDrafts(t *testing.T) {
+func TestNavRailDestinationsGuardDirtyDrafts(t *testing.T) {
 	svc := &fakeService{
 		list: []record.RecordInfo{{
 			ID:      "old",
@@ -906,13 +1167,15 @@ func TestSidebarDestinationsGuardDirtyDrafts(t *testing.T) {
 	m.histChoice = slotHistoryLabel(t, m, "old")
 	m.OpenHistory()
 	settle(t, m, q, tt)
+	showRecordItems(m)
+	tt.Frame()
 
 	m.startEdit()
 	m.edit.draft.Level = "13"
 	if err := tt.Click("扫描"); err != nil {
 		t.Fatal(err)
 	}
-	if m.navPrompt == nil || m.navPrompt.kind != navShowLive {
+	if m.navPrompt == nil || m.navPrompt.kind != navPage || m.navPrompt.page != pageScan {
 		t.Fatalf("dirty history did not prompt before scan: %+v", m.navPrompt)
 	}
 	if m.displayPage() != pageResults || m.activeSlot != resultSlotHistory {
@@ -923,6 +1186,32 @@ func TestSidebarDestinationsGuardDirtyDrafts(t *testing.T) {
 		t.Fatal("staying lost the dirty history draft")
 	}
 
+	// Discarding the draft opens the scan page.
+	if err := tt.Click("扫描"); err != nil {
+		t.Fatal(err)
+	}
+	if m.navPrompt == nil || m.navPrompt.kind != navPage || m.navPrompt.page != pageScan {
+		t.Fatalf("the second scan click did not prompt: %+v", m.navPrompt)
+	}
+	m.promptDiscardAndContinue()
+	drainAll(t, m, q)
+	if m.displayPage() != pageScan || m.edit != nil {
+		t.Fatalf("discarding did not open the scan page: page %v edit %v", m.displayPage(), m.edit)
+	}
+
+	// The records destination restores the opened record from scan.
+	if err := tt.Click("记录"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
+	if m.activeSlot != resultSlotHistory || m.rec == nil || m.rec.ID != "old" {
+		t.Fatalf("records from scan did not restore the opened record: slot %v record %+v",
+			m.activeSlot, m.rec)
+	}
+
+	// A dirty record prompts before settings.
+	m.startEdit()
+	m.edit.draft.Level = "14"
 	if err := tt.Click("设置"); err != nil {
 		t.Fatal(err)
 	}
@@ -932,42 +1221,17 @@ func TestSidebarDestinationsGuardDirtyDrafts(t *testing.T) {
 	if m.displayPage() != pageResults {
 		t.Fatal("settings opened before the dirty prompt settled")
 	}
-	m.promptDiscardAndContinue()
-	drainAll(t, m, q)
-	if m.displayPage() != pageSettings || m.edit != nil {
-		t.Fatalf("discarding did not open settings: page %v edit %v", m.displayPage(), m.edit)
-	}
-
-	if err := tt.Click("扫描"); err != nil {
-		t.Fatal(err)
-	}
-	settle(t, m, q, tt)
-	if m.activeSlot != resultSlotSession || m.rec == nil || m.rec.ID != "s1" {
-		t.Fatalf("scan from settings did not restore the session: slot %v record %+v",
-			m.activeSlot, m.rec)
-	}
-	m.startEdit()
-	m.edit.draft.Level = "14"
-	if err := tt.Click("历史"); err != nil {
-		t.Fatal(err)
-	}
-	if m.navPrompt == nil || m.navPrompt.kind != navOpenHistory || m.navPrompt.recordID != "old" {
-		t.Fatalf("dirty session did not prompt before the opened history: %+v", m.navPrompt)
-	}
-	if m.displayPage() != pageResults || m.activeSlot != resultSlotSession {
-		t.Fatal("the dirty session switched before the prompt settled")
-	}
 	m.promptStay()
 	if m.edit == nil || m.edit.draft.Level != "14" {
-		t.Fatal("staying lost the dirty session draft")
+		t.Fatal("staying lost the dirty record draft")
 	}
 }
 
-// TestSidebarHistoryRestoresActualScroll scrolls the history table with
+// TestNavRailRecordsRestoresActualScroll scrolls the history table with
 // pointer input, leaves through settings or the prepare page, and returns
 // to the same snapshot. The destination must keep the list's real place,
 // not just the last explicitly captured one.
-func TestSidebarHistoryRestoresActualScroll(t *testing.T) {
+func TestNavRailRecordsRestoresActualScroll(t *testing.T) {
 	for _, width := range []int{1440, 1024, 1020, 860} {
 		height := 700
 		switch width {
@@ -994,6 +1258,8 @@ func TestSidebarHistoryRestoresActualScroll(t *testing.T) {
 				m.histChoice = slotHistoryLabel(t, m, "old")
 				m.OpenHistory()
 				settle(t, m, q, tt)
+				showRecordItems(m)
+				tt.Frame()
 				if m.activeSlot != resultSlotHistory || m.rec == nil || m.rec.ID != "old" {
 					t.Fatalf("history did not open: slot %v record %+v", m.activeSlot, m.rec)
 				}
@@ -1017,8 +1283,8 @@ func TestSidebarHistoryRestoresActualScroll(t *testing.T) {
 				if route == "扫描" && m.displayPage() != pageScan {
 					t.Fatalf("scan without a session shows page %v", m.displayPage())
 				}
-				if err := tt.Click("历史"); err != nil {
-					t.Fatalf("click 历史: %v", err)
+				if err := tt.Click("记录"); err != nil {
+					t.Fatalf("click 记录: %v", err)
 				}
 				settle(t, m, q, tt)
 
@@ -1045,11 +1311,11 @@ func TestSidebarHistoryRestoresActualScroll(t *testing.T) {
 	}
 }
 
-// TestSidebarSessionConfirmedStayRevisitRevalidates returns to the live
+// TestNavRailSessionConfirmedStayRevisitRevalidates returns to the live
 // session after "confirm and stay" through settings. The confirmed row has
 // left the pending segment, so the revisit must revalidate the selection
 // against the visible rows instead of keeping its hidden detail.
-func TestSidebarSessionConfirmedStayRevisitRevalidates(t *testing.T) {
+func TestNavRailSessionConfirmedStayRevisitRevalidates(t *testing.T) {
 	for _, width := range []int{1440, 1024, 1020, 860} {
 		for _, rows := range []int{2, 1} {
 			t.Run(fmt.Sprintf("%d/%drows", width, rows), func(t *testing.T) {
@@ -1076,6 +1342,7 @@ func TestSidebarSessionConfirmedStayRevisitRevalidates(t *testing.T) {
 					scan.Counts{Captured: rows, Produced: rows}, rows, false, ""))
 				settle(t, m, q, tt)
 				m.ShowLive()
+				showRecordItems(m)
 				if m.narrowResults() {
 					m.openResultDetail()
 				}
@@ -1096,8 +1363,8 @@ func TestSidebarSessionConfirmedStayRevisitRevalidates(t *testing.T) {
 					t.Fatalf("click 设置: %v", err)
 				}
 				settle(t, m, q, tt)
-				if err := tt.Click("扫描"); err != nil {
-					t.Fatalf("click 扫描: %v", err)
+				if err := tt.Click("记录"); err != nil {
+					t.Fatalf("click 记录: %v", err)
 				}
 				settle(t, m, q, tt)
 

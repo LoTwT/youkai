@@ -279,6 +279,8 @@ func openTestRecord(t *testing.T, ev EvidenceSource, cacheLimit int) (*Model, *q
 	settle(t, m, q, tt)
 	m.OpenHistory()
 	settle(t, m, q, tt)
+	showRecordItems(m)
+	tt.Frame()
 	m.setResultFilter(resultFilterAll)
 	tt.Frame()
 	return m, q, tt
@@ -635,8 +637,10 @@ func TestViewHistoryReopen(t *testing.T) {
 		},
 	}
 	m, q := newTestModel(t, Config{Service: svc})
+	m.SetContentSize(1020, 700)
 	tt := ui.NewTester(m.View, 1020, 700)
 	settle(t, m, q, tt)
+	openRecordsList(t, m, q, tt)
 	if !tt.HasText("2026-10-17 09:00 · new") {
 		t.Fatalf("the history entries do not show: %q", tt.Texts())
 	}
@@ -646,12 +650,16 @@ func TestViewHistoryReopen(t *testing.T) {
 		t.Fatal(err)
 	}
 	settle(t, m, q, tt)
+	showRecordItems(m)
+	tt.Frame()
 	if !tt.HasText("结果：历史记录 new（4 条，中断恢复 1 条）") {
 		t.Fatalf("the reopened record does not show: %q", tt.Texts())
 	}
 	m.histChoice = "2026-10-16 09:00 · old"
 	m.OpenHistory()
 	settle(t, m, q, tt)
+	showRecordItems(m)
+	tt.Frame()
 	if !tt.HasText("啄木鸟电音") || tt.HasText("中断恢复") {
 		t.Fatalf("the older record did not open: %q", tt.Texts())
 	}
@@ -662,6 +670,8 @@ func TestViewHistoryReopen(t *testing.T) {
 		scan.Counts{Captured: 1, Produced: 1}, 1, false, ""))
 	m.OpenHistory()
 	settle(t, m, q, tt)
+	showRecordItems(m)
+	tt.Frame()
 	if !tt.HasText("啄木鸟电音") {
 		t.Fatalf("the history record did not reopen: %q", tt.Texts())
 	}
@@ -669,6 +679,8 @@ func TestViewHistoryReopen(t *testing.T) {
 		t.Fatal(err)
 	}
 	settle(t, m, q, tt)
+	showRecordItems(m)
+	tt.Frame()
 	if !tt.HasText("静听嘉音") {
 		t.Fatalf("the live record did not reopen: %q", tt.Texts())
 	}
@@ -702,6 +714,8 @@ func TestEvidenceCacheIsBounded(t *testing.T) {
 	settle(t, m, q, tt)
 	m.OpenHistory()
 	settle(t, m, q, tt)
+	showRecordItems(m)
+	tt.Frame()
 	if err := tt.Click("显示证据"); err != nil {
 		t.Fatal(err)
 	}
@@ -859,7 +873,7 @@ func excludedReviewItem(t *testing.T, seq int64) record.ItemRecord {
 
 // TestFailedSessionExplainsTermination checks that a zero-item failure is
 // not summarized only as item-level "失败 0 件": the results page states
-// the session's termination code and phase, and the empty state says no
+// the session's termination cause and phase, and the empty state says no
 // item was saved.
 func TestFailedSessionExplainsTermination(t *testing.T) {
 	rec := recovery()
@@ -869,7 +883,7 @@ func TestFailedSessionExplainsTermination(t *testing.T) {
 	rec.Checkpoint.Session.Coverage = record.Coverage{Status: record.CoveragePartial}
 	m, _, tt := openResponsiveResults(t, rec, 1024, 700)
 
-	if !tt.HasText("扫描失败：navigationMismatch（采集阶段），未保留任何条目") {
+	if !tt.HasText("扫描失败：点击或拖拽后页面没有按预期变化。请重新开始扫描；反复出现时复制诊断信息。（采集阶段），未保留任何条目") {
 		t.Fatalf("the failed session does not name its termination: %q", tt.Texts())
 	}
 	if !tt.HasText("无可导出条目") {
@@ -925,7 +939,7 @@ func TestCompletionCardShowsCountsExclusionsAndExports(t *testing.T) {
 	if !tt.HasText("已保存 · 待校对 0 · 可导出 1 件") {
 		t.Fatalf("the completion status line is missing: %q", tt.Texts())
 	}
-	if tt.HasText("⌘↵") {
+	if tt.HasText(shortcutConfirmNext) {
 		t.Fatalf("the completion state keeps a review shortcut: %q", tt.Texts())
 	}
 
@@ -1019,22 +1033,23 @@ func TestCompletionCardShowsPartialCoverage(t *testing.T) {
 }
 
 // TestCompletionCardNamesIncompletePositions checks that a degraded
-// position's stage, cause code and reason reach the results page beside the
-// partial coverage conclusion.
+// position's stage and localized cause reach the results page beside the
+// partial coverage conclusion without leaking the diagnostic code.
 func TestCompletionCardNamesIncompletePositions(t *testing.T) {
 	rec := recovery(confirmedReviewItem(t, 1, 12))
 	rec.Checkpoint.Session.Coverage = record.Coverage{Status: record.CoveragePartial}
 	rec.Checkpoint.Session.ObservedScope = []byte(`{"kind":"zzzInventory","sort":"verified","coverage":"partial","positions":[{"position":1,"complete":true,"topVerified":true,"bottomVerified":true},{"position":2,"complete":false,"stage":"filter","reasonCode":"navigationMismatch","reason":"the filter panel never closed"}]}`)
 	_, _, tt := openResponsiveResults(t, rec, 1024, 700)
-	if !tt.HasText("不完整位置：位置 2 筛选准备失败") ||
-		!tt.HasText("navigationMismatch") ||
-		!tt.HasText("the filter panel never closed") {
+	if !tt.HasText("不完整号位：2 号位 筛选准备失败：点击或拖拽后页面没有按预期变化") {
 		t.Fatalf("the degraded position is not explained: %q", tt.Texts())
+	}
+	if tt.HasText("navigationMismatch") || tt.HasText("the filter panel never closed") {
+		t.Fatalf("the degraded position leaks English diagnostics: %q", tt.Texts())
 	}
 }
 
 // TestSessionTerminationNoticeNamesIncompletePositions checks the failed
-// session surface: the termination code and the degraded positions appear
+// session surface: the termination cause and the degraded positions appear
 // together, because a limit stop is diagnosed by both.
 func TestSessionTerminationNoticeNamesIncompletePositions(t *testing.T) {
 	rec := recovery(confirmedReviewItem(t, 1, 12))
@@ -1044,7 +1059,7 @@ func TestSessionTerminationNoticeNamesIncompletePositions(t *testing.T) {
 	}
 	rec.Checkpoint.Session.ObservedScope = []byte(`{"positions":[{"position":1,"complete":false,"stage":"filter","reasonCode":"navigationMismatch","reason":"three preparations failed"}]}`)
 	_, _, tt := openResponsiveResults(t, rec, 1024, 700)
-	if !tt.HasText("扫描失败：positionFailureLimit") || !tt.HasText("不完整位置：位置 1 筛选准备失败") {
+	if !tt.HasText("扫描失败：多个号位没有完成") || !tt.HasText("不完整号位：1 号位 筛选准备失败：点击或拖拽后页面没有按预期变化") {
 		t.Fatalf("the failed-session surface omits the degraded positions: %q", tt.Texts())
 	}
 }
@@ -1151,6 +1166,8 @@ func TestCompletionUsesHistoryRecordCounts(t *testing.T) {
 	m.histChoice = slotHistoryLabel(t, m, "old")
 	m.OpenHistory()
 	settle(t, m, q, tt)
+	showRecordItems(m)
+	tt.Frame()
 	if m.activeSlot != resultSlotHistory || !m.completionVisible() {
 		t.Fatalf("the finished history snapshot does not show completion: %q", tt.Texts())
 	}
