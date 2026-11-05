@@ -11,14 +11,11 @@ import (
 
 // observedPositionNote is one wheel position's ledger entry as the
 // traversal writes it into the session's observed scope (T5 §1). The UI
-// reads only the position failure facts; the rest of the scope stays
-// opaque.
+// reads the shared conclusion fields plus the diagnostic reason prose; the
+// rest of the scope stays opaque.
 type observedPositionNote struct {
-	Position   int    `json:"position"`
-	Complete   bool   `json:"complete"`
-	Stage      string `json:"stage"`
-	ReasonCode string `json:"reasonCode"`
-	Reason     string `json:"reason"`
+	record.PositionConclusion
+	Reason string `json:"reason"`
 }
 
 // incompletePositionsText names every position the traversal marked
@@ -40,7 +37,7 @@ func incompletePositionsText(observed json.RawMessage) string {
 	}
 	var parts []string
 	for _, p := range scope.Positions {
-		if p.Complete || p.Stage == "" {
+		if !p.Degraded() {
 			continue
 		}
 		detail := positionStageText(p.Stage)
