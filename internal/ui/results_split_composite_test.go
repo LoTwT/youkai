@@ -292,7 +292,7 @@ func TestSplitResultsRestoreFiltersSelectionAndScroll(t *testing.T) {
 			if m.displayPage() != pageSettings {
 				t.Fatalf("settings did not open: %v", m.displayPage())
 			}
-			if err := tt.Click("历史"); err != nil {
+			if err := tt.Click("记录"); err != nil {
 				t.Fatalf("click 历史: %v", err)
 			}
 			tt.Frame()
@@ -325,7 +325,7 @@ func TestSplitResultsRestoreFiltersSelectionAndScroll(t *testing.T) {
 				t.Fatalf("click 设置: %v", err)
 			}
 			tt.Frame()
-			if err := tt.Click("历史"); err != nil {
+			if err := tt.Click("记录"); err != nil {
 				t.Fatalf("click 历史: %v", err)
 			}
 			tt.Frame()

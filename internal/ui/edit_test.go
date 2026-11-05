@@ -43,7 +43,7 @@ func detailPaneViewport(t *testing.T, tt *ui.Tester, windowHeight float32) (top,
 	// the detail pane's visible content. The window fallback covers the same
 	// chrome while a new session loads and the shortcut is empty.
 	bottom = windowHeight - 64
-	if shortcut, ok := tt.Find("⌘↵ 保存并确认并下一项  ·  ⌘S 保存修改"); ok {
+	if shortcut, ok := tt.Find(shortcutConfirmNext + " 保存并确认并下一项  ·  " + shortcutSave + " 保存修改"); ok {
 		bottom = shortcut.Y - 48
 	}
 	x = form.X + form.W/2
@@ -260,6 +260,12 @@ func openReviewRecordPage(t *testing.T, items ...record.ItemRecord) (*Model, *qu
 	m.histChoice = slotHistoryLabel(t, m, "r1")
 	m.OpenHistory()
 	settle(t, m, q, tt)
+	showRecordItems(m)
+	tt.Frame()
+	// These tests drive the item browser; the shell's own tests cover the
+	// summary landing.
+	m.recordTab = recordTabItems
+	tt.Frame()
 	return m, q, tt, svc
 }
 
@@ -477,7 +483,7 @@ func TestConfirmAndNextThroughToEmpty(t *testing.T) {
 	if m.selected != 1 {
 		t.Fatalf("the last confirmation moved away from the last item: %d", m.selected)
 	}
-	if !tt.HasText("待校对 0 · 全部可导出") {
+	if !tt.HasText("待校对 0") {
 		t.Fatalf("the empty pending state does not show: %q", tt.Texts())
 	}
 }
@@ -512,7 +518,7 @@ func TestConfirmStayKeepsItemInPendingSegment(t *testing.T) {
 
 	// Leaving the results destination refreshes the pending segment; the
 	// same confirmed row no longer lingers there on return.
-	if err := tt.Click("← 返回历史"); err != nil {
+	if err := tt.Click("‹ 全部记录"); err != nil {
 		t.Fatalf("click 返回历史: %v", err)
 	}
 	tt.Frame()
@@ -888,6 +894,8 @@ func TestUnsavedEditSwitchPrompt(t *testing.T) {
 	loadsBefore := len(svc.loadLog)
 	m.OpenHistory()
 	settle(t, m, q, tt)
+	showRecordItems(m)
+	tt.Frame()
 	if m.navPrompt == nil {
 		t.Fatal("switching records with unsaved input did not prompt")
 	}
@@ -909,6 +917,8 @@ func TestUnsavedEditSwitchPrompt(t *testing.T) {
 	// Save-and-continue performs the save first, then the navigation.
 	m.OpenHistory()
 	settle(t, m, q, tt)
+	showRecordItems(m)
+	tt.Frame()
 	if err := tt.Click("保存修改并继续"); err != nil {
 		t.Fatal(err)
 	}
@@ -938,6 +948,8 @@ func TestDiscardUnsavedEditContinues(t *testing.T) {
 	loadsBefore := len(svc.loadLog)
 	m.OpenHistory()
 	settle(t, m, q, tt)
+	showRecordItems(m)
+	tt.Frame()
 
 	if err := tt.Click("放弃修改"); err != nil {
 		t.Fatal(err)

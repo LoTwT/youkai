@@ -282,9 +282,21 @@ type Model struct {
 	exporting     bool
 	exportOutcome *exportOutcome
 
-	// page is the four-page shell's explicit choice; pageAuto follows
-	// the loaded record/history/update state.
+	// page is the shell's current destination: scan, the records list or
+	// one record's workspace, or settings. It starts on scan and only
+	// explicit navigation (or the end of a scan, which opens the new
+	// record's summary) changes it.
 	page Page
+	// recordTab is the opened record's chosen view. Opening a record
+	// starts on 摘要; the rail and the title bar keep the workspace inside
+	// the records destination.
+	recordTab recordTab
+	// The refs F6 uses to reach the rail and the current page's content.
+	// They are bound while their controls are on screen.
+	railActiveRef    ui.Ref
+	workspaceTabsRef ui.Ref
+	scanActionRef    ui.Ref
+	settingsFirstRef ui.Ref
 
 	// contentWidth/contentHeight track the page area so the shell can
 	// switch the results split orientation at narrow widths.
@@ -393,8 +405,10 @@ func New(cfg Config) *Model {
 		cfg:              cfg,
 		source:           cfg.ScanSource,
 		split:            420,
-		contentWidth:     1020,
-		contentHeight:    700,
+		page:             pageScan,
+		recordTab:        recordTabSummary,
+		contentWidth:     1180,
+		contentHeight:    760,
 		cache:            newEvidenceCache(cfg.Evidence, limit),
 		promptedSessions: make(map[string]bool),
 		historyRow:       -1,
@@ -530,7 +544,7 @@ func (m *Model) Apply(snap app.Snapshot) {
 			m.requestSavePrompt(string(snap.SessionID))
 			if m.activeSlot == resultSlotSession &&
 				!m.editingDirty() && !m.reviewSaving {
-				m.page = pageResults
+				m.openRecordWorkspace()
 			}
 		}
 		m.loadHistory()
@@ -624,6 +638,7 @@ func (m *Model) performShowLive() {
 	m.reviewErr = ""
 	m.reviewNotice = ""
 	m.lastAction = reviewSave
+	m.recordTab = recordTabSummary
 }
 
 // HistoryEntry is one saved record of the history list, as the reopen flow
@@ -825,6 +840,7 @@ func (m *Model) performOpenHistory(id string, reload bool) {
 	m.reviewErr = ""
 	m.reviewNotice = ""
 	m.lastAction = reviewSave
+	m.recordTab = recordTabSummary
 	m.reloadResultRecord(history, id, false)
 }
 

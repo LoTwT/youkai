@@ -576,6 +576,9 @@ func TestFinalCheckpointLoadingBlocksConfirmation(t *testing.T) {
 	m.Apply(snap("s1", 1, true, scan.PhaseCapturing,
 		scan.Counts{Captured: 1, Produced: 1}, 1, true, ""))
 	drainAll(t, m, q)
+	m.page = pageResults
+	showRecordItems(m)
+	tt.Frame()
 	if m.rec == nil || len(m.rec.Rows) != 1 {
 		t.Fatalf("the initial checkpoint did not load: %+v", m.rec)
 	}
@@ -609,6 +612,7 @@ func TestFinalCheckpointLoadingBlocksConfirmation(t *testing.T) {
 
 	// The UI frame shows the stale row and names the reason review actions
 	// are unavailable.
+	showRecordItems(m)
 	tt.Frame()
 	if !tt.HasText("正在加载最新检查点") {
 		t.Fatalf("the results page does not explain the loading guard: %q", tt.Texts())
@@ -689,6 +693,9 @@ func TestFinalCheckpointLoadingBlocksEditorSave(t *testing.T) {
 	m.Apply(snap("s1", 1, true, scan.PhaseCapturing,
 		scan.Counts{Captured: 1, Produced: 1}, 1, true, ""))
 	drainAll(t, m, q)
+	m.page = pageResults
+	showRecordItems(m)
+	tt.Frame()
 	m.startEdit()
 	if m.edit == nil {
 		t.Fatal("the editor did not open on the initial checkpoint")
@@ -724,6 +731,7 @@ func TestFinalCheckpointLoadingBlocksEditorSave(t *testing.T) {
 	}
 
 	m.edit.draft.Level = "13"
+	showRecordItems(m)
 	tt.Frame()
 	if err := tt.Click("保存"); err != nil {
 		t.Fatalf("click 保存: %v", err)
@@ -770,6 +778,8 @@ func TestFailedRecordLoadBlocksReviewActions(t *testing.T) {
 	m.Apply(snap("s1", 1, true, scan.PhaseCapturing,
 		scan.Counts{Captured: 1, Produced: 1}, 1, true, ""))
 	drainAll(t, m, q)
+	m.page = pageResults
+	showRecordItems(m)
 	settle(t, m, q, tt)
 	if m.rec == nil || len(m.rec.Rows) != 1 || m.recErr != "" {
 		t.Fatalf("the record did not load: %+v err %q", m.rec, m.recErr)

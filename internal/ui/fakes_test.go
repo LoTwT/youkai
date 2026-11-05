@@ -575,3 +575,10 @@ func structuredItem(seq int64, disc zzz.DiscRecord, texts ...string) record.Item
 // intp returns a pointer to v for the structured payload's nullable
 // numeric fields.
 func intp(v int) *int { return &v }
+
+// showRecordItems puts the opened record's workspace on its item browser.
+// Tests that drive the existing review surface call it after opening a
+// record; the shell's own tests cover the summary landing.
+func showRecordItems(m *Model) {
+	m.recordTab = recordTabItems
+}
