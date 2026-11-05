@@ -103,6 +103,198 @@ func fullStructuredDisc() *zzz.StructuredDisc {
 	}
 }
 
+// evidenceRow builds one produced row of sequence 1 from the observed
+// payload, the recognized lines and the evidence ids the record kept.
+func evidenceRow(t *testing.T, observed []byte, lines []app.RecognizedLine, ids ...string) Row {
+	t.Helper()
+	it := producedItem(1, mustJSON(t, app.RecognitionResult{Lines: lines}), observed)
+	it.EvidenceIDs = ids
+	return buildView(it).Rows[0]
+}
+
+// evidenceIDs lists the row's evidence ids in display order.
+func evidenceIDs(row Row) []string {
+	ids := make([]string, len(row.Evidence))
+	for i, ev := range row.Evidence {
+		ids[i] = ev.ID
+	}
+	return ids
+}
+
+// TestEvidencePairsByIDNotPosition checks R-07a's pairing: the kind and index
+// decoded from an evidence id decide which observed line or context region an
+// image backs, never the image's position in the record. A skipped empty crop
+// and a failed write each leave their own slot without an image, and the ids
+// may be stored in any order.
+func TestEvidencePairsByIDNotPosition(t *testing.T) {
+	observed := mustJSON(t, map[string]any{
+		"lines": []map[string]string{
+			{"role": "name"}, {"role": "level"}, {"role": "main"}, {"role": "sub1"},
+		},
+		"context": []map[string]string{
+			{"role": "qualityBadge"}, {"role": "selectedCell"},
+			{"role": "detailAvatar"}, {"role": "listAvatar"},
+		},
+	})
+	// line1 (empty crop) and context0 (failed write) were never written;
+	// the remaining ids are deliberately out of order.
+	row := evidenceRow(t, observed, []app.RecognizedLine{
+		{Role: "name", Text: "河豚电音[4]", Score: 0.99},
+		{Role: "level", Text: "等级15/15", Score: 0.98},
+		{Role: "main", Text: "生命值 2200", Score: 0.97},
+		{Role: "sub1", Text: "暴击伤害 +3 19.2%", Score: 0.96},
+	},
+		"000001-line3", "000001-context2", "000001-line0",
+		"000001-context1", "000001-line2", "000001-context3")
+
+	wantIDs := []string{
+		"000001-line0", "000001-line2", "000001-line3",
+		"000001-context1", "000001-context2", "000001-context3",
+	}
+	if got := strings.Join(evidenceIDs(row), ","); got != strings.Join(wantIDs, ",") {
+		t.Fatalf("evidence order = %v, want capture order %v", evidenceIDs(row), wantIDs)
+	}
+
+	line0 := row.LineEvidence(0)
+	if line0 == nil || line0.ID != "000001-line0" || line0.Role != "name" {
+		t.Fatalf("line 0 evidence = %+v, want its own image with role name", line0)
+	}
+	if line1 := row.LineEvidence(1); line1 != nil {
+		t.Fatalf("line 1 evidence = %+v, want none after the skipped crop", line1)
+	}
+	line2 := row.LineEvidence(2)
+	if line2 == nil || line2.ID != "000001-line2" || line2.Role != "main" {
+		t.Fatalf("line 2 evidence = %+v, want its own image with role main", line2)
+	}
+	line3 := row.LineEvidence(3)
+	if line3 == nil || line3.ID != "000001-line3" || line3.Role != "sub1" {
+		t.Fatalf("line 3 evidence = %+v, want its own image with role sub1", line3)
+	}
+
+	contextRoles := map[int]string{1: "selectedCell", 2: "detailAvatar", 3: "listAvatar"}
+	for _, ev := range row.Evidence {
+		if ev.Kind != EvidenceContext {
+			continue
+		}
+		if want, ok := contextRoles[ev.Index]; !ok || ev.Role != want {
+			t.Errorf("context %d evidence = %+v, want role %q", ev.Index, ev, want)
+		}
+		delete(contextRoles, ev.Index)
+	}
+	if len(contextRoles) != 0 {
+		t.Errorf("context evidence missing for indexes %v", contextRoles)
+	}
+}
+
+// TestEvidenceWithoutRolesStillPairs checks the R-07a fallback for a record
+// whose observed metadata carries no roles: images still pair by the id index
+// and stay in capture order, and no form field can be located from them.
+func TestEvidenceWithoutRolesStillPairs(t *testing.T) {
+	row := evidenceRow(t, []byte(`{"lines":[{},{"role":""}]}`),
+		[]app.RecognizedLine{{Text: "河豚电音[4]"}, {Text: "等级15/15"}},
+		"000001-line1", "000001-line0")
+
+	for i, want := range []string{"000001-line0", "000001-line1"} {
+		ev := row.LineEvidence(i)
+		if ev == nil || ev.ID != want {
+			t.Fatalf("line %d evidence = %+v, want %q", i, ev, want)
+		}
+		if ev.Role != "" {
+			t.Errorf("line %d role = %q, want an empty role", i, ev.Role)
+		}
+		if _, ok := FormFieldForRole(ev.Role); ok {
+			t.Errorf("line %d empty role located a form field", i)
+		}
+	}
+}
+
+// TestLegacyEvidencePairsLinesOnly checks a record written before context
+// crops existed and one without any observed metadata: line ids still pair
+// with their own lines, and no context evidence is invented.
+func TestLegacyEvidencePairsLinesOnly(t *testing.T) {
+	lines := []app.RecognizedLine{
+		{Role: "name", Text: "河豚电音[4]", Score: 0.99},
+		{Role: "level", Text: "等级15/15", Score: 0.98},
+	}
+	t.Run("observed lines only", func(t *testing.T) {
+		row := evidenceRow(t, []byte(`{"lines":[{"role":"name"},{"role":"level"}]}`),
+			lines, "000001-line1", "000001-line0")
+		if got := strings.Join(evidenceIDs(row), ","); got != "000001-line0,000001-line1" {
+			t.Fatalf("evidence = %v, want only the two line crops in order", evidenceIDs(row))
+		}
+		if ev := row.LineEvidence(0); ev == nil || ev.Role != "name" {
+			t.Errorf("line 0 evidence = %+v, want role name", ev)
+		}
+		if ev := row.LineEvidence(1); ev == nil || ev.Role != "level" {
+			t.Errorf("line 1 evidence = %+v, want role level", ev)
+		}
+	})
+	t.Run("no observed payload", func(t *testing.T) {
+		row := evidenceRow(t, nil, lines, "000001-line1", "000001-line0")
+		if got := strings.Join(evidenceIDs(row), ","); got != "000001-line0,000001-line1" {
+			t.Fatalf("evidence = %v, want only the two line crops in order", evidenceIDs(row))
+		}
+		for i := range lines {
+			ev := row.LineEvidence(i)
+			if ev == nil || ev.Role != "" {
+				t.Errorf("line %d evidence = %+v, want an image without a role", i, ev)
+			}
+		}
+	})
+}
+
+// TestFormFieldEvidenceMapping locks the R-07a role table: every recognized
+// line role locates its form field, both equipped-agent avatar crops locate
+// the equipper, and the management state has no screenshot.
+func TestFormFieldEvidenceMapping(t *testing.T) {
+	roles := []struct {
+		role  string
+		field FormField
+		ok    bool
+	}{
+		{"name", FormFieldSetID, true},
+		{"level", FormFieldLevel, true},
+		{"main", FormFieldMainStat, true},
+		{"sub1", FormFieldSubstat1, true},
+		{"sub2", FormFieldSubstat2, true},
+		{"sub3", FormFieldSubstat3, true},
+		{"sub4", FormFieldSubstat4, true},
+		{"detailAvatar", FormFieldEquipped, true},
+		{"listAvatar", FormFieldEquipped, true},
+		{"qualityBadge", "", false},
+		{"selectedCell", "", false},
+		{"", "", false},
+	}
+	for _, tc := range roles {
+		field, ok := FormFieldForRole(tc.role)
+		if field != tc.field || ok != tc.ok {
+			t.Errorf("FormFieldForRole(%q) = (%q, %v), want (%q, %v)",
+				tc.role, field, ok, tc.field, tc.ok)
+		}
+	}
+
+	fields := []struct {
+		field FormField
+		roles string
+	}{
+		{FormFieldSetID, "name"},
+		{FormFieldLevel, "level"},
+		{FormFieldMainStat, "main"},
+		{FormFieldSubstat1, "sub1"},
+		{FormFieldSubstat2, "sub2"},
+		{FormFieldSubstat3, "sub3"},
+		{FormFieldSubstat4, "sub4"},
+		{FormFieldEquipped, "detailAvatar,listAvatar"},
+		{FormFieldManagementState, ""},
+	}
+	for _, tc := range fields {
+		got := strings.Join(EvidenceRolesForField(tc.field), ",")
+		if got != tc.roles {
+			t.Errorf("EvidenceRolesForField(%q) = %q, want %q", tc.field, got, tc.roles)
+		}
+	}
+}
+
 // TestBuildRecordViewParsesStructured checks a current record's persisted
 // structured payload: names resolve from the catalog, the numeric id stays
 // visible, and every field renders through the display methods.

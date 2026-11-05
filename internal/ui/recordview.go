@@ -3,6 +3,9 @@ package ui
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
+	"strconv"
+	"strings"
 
 	"github.com/LoTwT/youkai/internal/app"
 	"github.com/LoTwT/youkai/internal/game/zzz"
@@ -59,9 +62,13 @@ type Row struct {
 	Revision int64
 	// Lines are the observed text lines, in observation order.
 	Lines []Line
-	// EvidenceIDs are the evidence images backing the observation; line i
-	// pairs with EvidenceIDs[i] when it exists.
-	EvidenceIDs []string
+	// Evidence are the item's evidence images in capture order: line crops
+	// in line order, then context crops. Each image is paired with its
+	// observed role by the kind and index encoded in its id, never by its
+	// position in the record: a crop skipped as empty or lost to a failed
+	// write leaves its own slot without an image instead of shifting every
+	// later image.
+	Evidence []Evidence
 	// Structured is the drive-disc interpretation of a produced item, as
 	// persisted or backfilled in memory from its raw lines. It is nil for
 	// failed and unprocessed items and for payloads without a drive-disc
@@ -70,6 +77,107 @@ type Row struct {
 	// (for example managementState or equipped), which keep their own
 	// "not read" meaning.
 	Structured *zzz.StructuredDisc
+}
+
+// EvidenceKind tells the two crop kinds apart: a recognized text line and a
+// non-recognition context region.
+type EvidenceKind string
+
+const (
+	// EvidenceLine is a text-line crop; its index is the observed line
+	// index.
+	EvidenceLine EvidenceKind = "line"
+	// EvidenceContext is a context crop (rarity badge, selected cell border,
+	// equipped-agent avatars); its index is the observed context index.
+	EvidenceContext EvidenceKind = "context"
+)
+
+// Evidence is one evidence image of a row paired with the observation
+// metadata it backs. The record names images <sequence>-line<i> and
+// <sequence>-context<i>; the kind and index decoded from the id, not the
+// image's position in the record, decide the pairing. A record that skips an
+// empty crop or loses one to a write failure therefore keeps every later
+// image on its own line.
+type Evidence struct {
+	// ID is the image identity within the record's evidence store.
+	ID string
+	// Kind is the crop kind decoded from ID; empty when ID does not carry
+	// the deliverer's shape.
+	Kind EvidenceKind
+	// Index is the crop index within its kind.
+	Index int
+	// Role is the observed role ("name", "level", "main", "sub1"…"sub4",
+	// "qualityBadge", "selectedCell", "detailAvatar", "listAvatar"); empty
+	// when the record has no role metadata for the crop.
+	Role string
+	// Source is the crop's persisted provenance.
+	Source string
+}
+
+// FormField identifies one field of the item form for evidence location.
+// Values are the payload field paths the editor and its problem list already
+// use (reviewFieldLabel), so a located field and a reported problem name the
+// same field.
+type FormField string
+
+// The form fields an evidence crop can locate (R-07a).
+const (
+	FormFieldSetID           FormField = "setId"
+	FormFieldLevel           FormField = "level"
+	FormFieldMainStat        FormField = "mainStat"
+	FormFieldSubstat1        FormField = "substats[0]"
+	FormFieldSubstat2        FormField = "substats[1]"
+	FormFieldSubstat3        FormField = "substats[2]"
+	FormFieldSubstat4        FormField = "substats[3]"
+	FormFieldEquipped        FormField = "equipped"
+	FormFieldManagementState FormField = "managementState"
+)
+
+// formFieldEvidence is the R-07a role → form field table, written
+// field-first so a field without a crop stays explicit: the management state
+// is confirmed from list badges and a top indicator that are not saved as
+// per-field evidence, so its entry lists no role. The app layer keeps roles
+// opaque (payload.go); this table is the only place that interprets them.
+// Roles the form does not locate (qualityBadge, selectedCell) stay absent;
+// the screenshot list still shows them.
+var formFieldEvidence = []struct {
+	field FormField
+	roles []string
+}{
+	{FormFieldSetID, []string{"name"}},
+	{FormFieldLevel, []string{"level"}},
+	{FormFieldMainStat, []string{"main"}},
+	{FormFieldSubstat1, []string{"sub1"}},
+	{FormFieldSubstat2, []string{"sub2"}},
+	{FormFieldSubstat3, []string{"sub3"}},
+	{FormFieldSubstat4, []string{"sub4"}},
+	{FormFieldEquipped, []string{"detailAvatar", "listAvatar"}},
+	{FormFieldManagementState, nil},
+}
+
+// FormFieldForRole returns the form field an evidence role locates, and
+// whether the table maps the role at all. A record whose roles are missing or
+// unknown falls back to capture order without a highlight (R-07a).
+func FormFieldForRole(role string) (FormField, bool) {
+	for _, entry := range formFieldEvidence {
+		for _, candidate := range entry.roles {
+			if candidate == role {
+				return entry.field, true
+			}
+		}
+	}
+	return "", false
+}
+
+// EvidenceRolesForField returns the evidence roles that back field, in
+// screenshot order. nil means the field has no screenshot.
+func EvidenceRolesForField(field FormField) []string {
+	for _, entry := range formFieldEvidence {
+		if entry.field == field {
+			return entry.roles
+		}
+	}
+	return nil
 }
 
 // Line is one observed text line of an item: its role and provenance from
@@ -84,13 +192,19 @@ type Line struct {
 	Scored bool
 }
 
-// observedDoc is the persisted shape of an app.Observation: the line
-// metadata in observation order, the pixels living in the evidence files.
+// observedCrop is the persisted metadata of one observation region: its role
+// and provenance. The pixels live in the evidence files.
+type observedCrop struct {
+	Role   string `json:"role"`
+	Source string `json:"source,omitempty"`
+}
+
+// observedDoc is the persisted shape of an app.Observation: the line and
+// context metadata in observation order, the pixels living in the evidence
+// files. Records written before context crops existed carry only Lines.
 type observedDoc struct {
-	Lines []struct {
-		Role   string `json:"role"`
-		Source string `json:"source,omitempty"`
-	} `json:"lines"`
+	Lines   []observedCrop `json:"lines"`
+	Context []observedCrop `json:"context,omitempty"`
 }
 
 // resultDoc is the persisted shape of an app.RecognitionResult: the raw
@@ -149,13 +263,12 @@ func evidenceWasRemoved(cp *record.Checkpoint) bool {
 // the same item loaded from disk.
 func buildRow(it *record.ItemRecord) Row {
 	row := Row{
-		Seq:         it.Sequence,
-		Status:      it.Status,
-		Reason:      it.Reason,
-		Failure:     it.Failure,
-		Quality:     it.Quality,
-		Revision:    it.Revision,
-		EvidenceIDs: append([]string(nil), it.EvidenceIDs...),
+		Seq:      it.Sequence,
+		Status:   it.Status,
+		Reason:   it.Reason,
+		Failure:  it.Failure,
+		Quality:  it.Quality,
+		Revision: it.Revision,
 	}
 	res := parseResult(it.Data)
 	if it.Status == record.StatusProduced {
@@ -164,8 +277,83 @@ func buildRow(it *record.ItemRecord) Row {
 			row.Structured = backfillStructured(it.Data, it.Observed)
 		}
 	}
-	row.Lines = mergeLines(it.Observed, res)
+	obs := parseObserved(it.Observed)
+	row.Lines = mergeLines(obs, res)
+	row.Evidence = pairEvidence(it.EvidenceIDs, obs)
 	return row
+}
+
+// parseObserved reads one item's observed payload defensively: a shape that
+// fails to parse keeps the metadata it did, never blocking the item from
+// showing.
+func parseObserved(data json.RawMessage) observedDoc {
+	var obs observedDoc
+	if len(data) > 0 {
+		_ = json.Unmarshal(data, &obs) // a bad shape leaves the regions it has
+	}
+	return obs
+}
+
+// pairEvidence decodes the evidence ids and attaches each crop's observed
+// role. The result is ordered by crop kind and index (lines, then context),
+// not by the record's evidence order, so the screenshot list always follows
+// the game panel's reading order. An id the deliverer's shape does not cover
+// stays at the end without a role rather than disappearing.
+func pairEvidence(ids []string, obs observedDoc) []Evidence {
+	evidence := make([]Evidence, 0, len(ids))
+	for _, id := range ids {
+		ev := Evidence{ID: id}
+		if kind, index, ok := parseEvidenceID(id); ok {
+			ev.Kind, ev.Index = kind, index
+			regions := obs.Lines
+			if kind == EvidenceContext {
+				regions = obs.Context
+			}
+			if index < len(regions) {
+				ev.Role = regions[index].Role
+				ev.Source = regions[index].Source
+			}
+		}
+		evidence = append(evidence, ev)
+	}
+	sort.SliceStable(evidence, func(i, j int) bool {
+		a, b := evidence[i], evidence[j]
+		if (a.Kind == "") != (b.Kind == "") {
+			return a.Kind != ""
+		}
+		if a.Kind != b.Kind {
+			return a.Kind == EvidenceLine
+		}
+		return a.Index < b.Index
+	})
+	return evidence
+}
+
+// parseEvidenceID decodes the crop kind and index from an evidence id of the
+// deliverer's shape (<sequence>-line<i>, <sequence>-context<i>). ok is false
+// for any other shape: the image is still shown, but the view does not guess
+// where it belongs.
+func parseEvidenceID(id string) (kind EvidenceKind, index int, ok bool) {
+	dash := strings.LastIndexByte(id, '-')
+	if dash < 0 || dash == len(id)-1 {
+		return "", 0, false
+	}
+	suffix := id[dash+1:]
+	switch {
+	case strings.HasPrefix(suffix, string(EvidenceLine)):
+		kind = EvidenceLine
+		suffix = strings.TrimPrefix(suffix, string(EvidenceLine))
+	case strings.HasPrefix(suffix, string(EvidenceContext)):
+		kind = EvidenceContext
+		suffix = strings.TrimPrefix(suffix, string(EvidenceContext))
+	default:
+		return "", 0, false
+	}
+	n, err := strconv.Atoi(suffix)
+	if err != nil || n < 0 {
+		return "", 0, false
+	}
+	return kind, n, true
 }
 
 // parseResult reads one item's result payload defensively: a shape that
@@ -194,11 +382,7 @@ func backfillStructured(data, observed json.RawMessage) *zzz.StructuredDisc {
 
 // mergeLines zips an item's observed lines with its recognized ones by
 // observation order.
-func mergeLines(observed json.RawMessage, res resultDoc) []Line {
-	var obs observedDoc
-	if len(observed) > 0 {
-		_ = json.Unmarshal(observed, &obs) // a bad shape leaves the lines it has
-	}
+func mergeLines(obs observedDoc, res resultDoc) []Line {
 	n := len(obs.Lines)
 	if len(res.Lines) > n {
 		n = len(res.Lines)
@@ -219,6 +403,19 @@ func mergeLines(observed json.RawMessage, res resultDoc) []Line {
 		}
 	}
 	return lines
+}
+
+// LineEvidence returns the image backing observed text line i, or nil when
+// the record has no image for it (an empty crop or a failed write). The
+// pairing is decoded from the evidence id, so a missing image stays with its
+// own line.
+func (r Row) LineEvidence(i int) *Evidence {
+	for j := range r.Evidence {
+		if ev := &r.Evidence[j]; ev.Kind == EvidenceLine && ev.Index == i {
+			return ev
+		}
+	}
+	return nil
 }
 
 // RowOf returns the row of the capture sequence seq, or -1.
@@ -612,7 +809,7 @@ func unitText(unit *string) string {
 // images is marked as missing in the detail pane instead of showing an
 // empty frame.
 func (r Row) MissingEvidence() bool {
-	return len(r.EvidenceIDs) == 0
+	return len(r.Evidence) == 0
 }
 
 // PendingReview reports whether the row is a produced structured item
