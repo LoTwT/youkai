@@ -269,11 +269,141 @@ func TestServiceHistoryRecordsIncludesExportBreakdown(t *testing.T) {
 		t.Fatal("a failed session with a termination is marked interrupted")
 	}
 	if rec.IncompletePositions != 0 || rec.IncompletePositionsKnown {
-		t.Fatalf("incomplete positions = %d known %v, want 0/unknown before PR-03",
+		t.Fatalf("incomplete positions = %d known %v, want 0/unknown without position data",
 			rec.IncompletePositions, rec.IncompletePositionsKnown)
 	}
 	if rec.Termination == nil || *rec.Termination != *termination {
 		t.Fatalf("termination = %+v, want %+v", rec.Termination, termination)
+	}
+}
+
+// TestHistoryRecordsPositionConclusions checks the summary-facing
+// position conclusions across the three checkpoint shapes: the new typed
+// ledger, a legacy checkpoint whose conclusions live only in the observed
+// scope, and a record with neither (cannot list).
+func TestHistoryRecordsPositionConclusions(t *testing.T) {
+	store, paths := cleanupStore(t)
+	started := time.Date(2026, 11, 5, 9, 0, 0, 0, time.UTC)
+	scope := json.RawMessage(`{"kind":"zzzInventory","sort":"verified","coverage":"partial","positions":[
+		{"position":1,"complete":true},
+		{"position":2,"complete":true},
+		{"position":3,"complete":false,"stage":"filter","reasonCode":"navigationMismatch"},
+		{"position":4,"complete":true},
+		{"position":5,"complete":false,"stage":"top","reasonCode":"navigationMismatch"},
+		{"position":6,"complete":true}
+	]}`)
+	ledger := &record.PositionLedger{
+		SortVerified: true,
+		Positions: []record.PositionConclusion{
+			{Position: 1, Complete: true},
+			{Position: 2, Complete: true},
+			{Position: 3, Stage: "filter", ReasonCode: "navigationMismatch"},
+			{Position: 4, Complete: true},
+			{Position: 5, Stage: "top", ReasonCode: "navigationMismatch"},
+			{Position: 6, Complete: true},
+		},
+	}
+	completeLedger := &record.PositionLedger{SortVerified: true}
+	for i := 1; i <= record.PositionCount; i++ {
+		completeLedger.Positions = append(completeLedger.Positions,
+			record.PositionConclusion{Position: i, Complete: true})
+	}
+	cases := []struct {
+		id       string
+		shell    record.SessionShell
+		coverage record.CoverageStatus
+		known    bool
+		listed   []IncompletePosition
+	}{
+		{
+			id: "positions-new",
+			shell: record.SessionShell{
+				PositionLedger: ledger,
+				// The typed ledger wins over a conflicting legacy scope.
+				ObservedScope: json.RawMessage(`{"positions":[{"position":6,"complete":false,"stage":"scroll"}]}`),
+			},
+			coverage: record.CoveragePartial,
+			known:    true,
+			listed: []IncompletePosition{
+				{Position: 3, Stage: "filter", ReasonCode: "navigationMismatch"},
+				{Position: 5, Stage: "top", ReasonCode: "navigationMismatch"},
+			},
+		},
+		{
+			id:       "positions-legacy",
+			shell:    record.SessionShell{ObservedScope: scope},
+			coverage: record.CoveragePartial,
+			known:    true,
+			listed: []IncompletePosition{
+				{Position: 3, Stage: "filter", ReasonCode: "navigationMismatch"},
+				{Position: 5, Stage: "top", ReasonCode: "navigationMismatch"},
+			},
+		},
+		{
+			id:       "positions-complete",
+			shell:    record.SessionShell{PositionLedger: completeLedger},
+			coverage: record.CoverageComplete,
+			known:    true,
+		},
+		{
+			// A position cut by a session-fatal fault is explained by the
+			// termination, not by a position-level cause, so it is known
+			// but not listed as a degraded position.
+			id: "positions-fatal-cut",
+			shell: record.SessionShell{PositionLedger: &record.PositionLedger{
+				Positions: []record.PositionConclusion{
+					{Position: 1, Complete: true},
+					{Position: 2},
+				},
+			}},
+			coverage: record.CoveragePartial,
+			known:    true,
+		},
+		{id: "positions-none", coverage: record.CoveragePartial},
+	}
+	for _, tc := range cases {
+		if err := store.CreateRecord(tc.id); err != nil {
+			t.Fatalf("CreateRecord %s: %v", tc.id, err)
+		}
+		shell := tc.shell
+		shell.SessionID = tc.id
+		shell.Game = "zzz"
+		shell.Entity = "driveDisc"
+		shell.Client = record.ClientWindowsLocal
+		shell.Locale = "zh-CN"
+		shell.Scope = json.RawMessage(`{"rarity":"S"}`)
+		shell.StartedAt = started
+		shell.Coverage = record.Coverage{Status: tc.coverage}
+		if _, err := store.SaveCheckpoint(tc.id, record.Checkpoint{Session: shell}); err != nil {
+			t.Fatalf("SaveCheckpoint %s: %v", tc.id, err)
+		}
+	}
+	svc := newServiceWithStore(t, paths, store, nil, func() (Recognizer, error) { return newFakeRecognizer(), nil })
+	records, err := svc.HistoryRecords()
+	if err != nil {
+		t.Fatalf("HistoryRecords: %v", err)
+	}
+	byID := make(map[string]HistoryRecord, len(records))
+	for _, rec := range records {
+		byID[rec.ID] = rec
+	}
+	for _, tc := range cases {
+		rec := byID[tc.id]
+		if rec.IncompletePositionsKnown != tc.known {
+			t.Fatalf("%s: known = %v, want %v", tc.id, rec.IncompletePositionsKnown, tc.known)
+		}
+		if rec.IncompletePositions != len(tc.listed) {
+			t.Fatalf("%s: incomplete = %d, want %d", tc.id, rec.IncompletePositions, len(tc.listed))
+		}
+		if len(rec.IncompletePositionEntries) != len(tc.listed) {
+			t.Fatalf("%s: entries = %+v, want %+v", tc.id, rec.IncompletePositionEntries, tc.listed)
+		}
+		for i := range tc.listed {
+			if rec.IncompletePositionEntries[i] != tc.listed[i] {
+				t.Fatalf("%s: entry %d = %+v, want %+v", tc.id, i,
+					rec.IncompletePositionEntries[i], tc.listed[i])
+			}
+		}
 	}
 }
 

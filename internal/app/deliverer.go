@@ -343,9 +343,10 @@ func applyTerminalLocked(item *record.ItemRecord, rec scan.Record) error {
 }
 
 // observeScope records the range the traversal's precheck actually
-// observed (T5 §3): it amends the shell's ObservedScope — the declared
-// Scope stays untouched — and persists with the very next checkpoint,
-// so the observed range survives a crash right after the precheck. A
+// observed (T5 §3). It amends the shell's ObservedScope — the declared
+// Scope stays untouched — copies the per-position conclusions into the
+// stable PositionLedger, and persists with the very next checkpoint, so
+// the observed range survives a crash right after the precheck. A
 // report that is not a JSON document is refused, not silently dropped:
 // the record only keeps what verifies.
 func (d *recordDeliverer) observeScope(raw json.RawMessage) {
@@ -361,6 +362,9 @@ func (d *recordDeliverer) observeScope(raw json.RawMessage) {
 	d.shell.ObservedScope = append(json.RawMessage(nil), raw...)
 	if status, ok := observedCoverage(raw); ok {
 		d.shell.Coverage.Status = status
+	}
+	if ledger, ok := record.DecodePositionLedger(raw); ok {
+		d.shell.PositionLedger = &ledger
 	}
 	d.sinceSave++
 	if d.saveErr == nil {

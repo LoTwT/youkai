@@ -360,6 +360,56 @@ func TestObservedScopeReachesTheRecord(t *testing.T) {
 	}
 }
 
+// TestFinalObservedScopePersistsPositionConclusions checks that the final
+// observed-scope relay also copies the traversal's per-position ledger into
+// the record, so the summary and notification can read position conclusions
+// without decoding the opaque scope.
+func TestFinalObservedScopePersistsPositionConclusions(t *testing.T) {
+	paths := newTestPaths(t)
+	sess := platformfake.NewSession()
+	port := &platformfake.Port{NewSession: func() *platformfake.Session { return sess }}
+	final := json.RawMessage(`{"kind":"zzzInventory","page":"warehouse","sort":"verified","coverage":"partial","positions":[
+		{"position":1,"viewports":2,"visits":4,"topVerified":true,"bottomVerified":true,"complete":true},
+		{"position":2,"complete":false,"stage":"filter","reasonCode":"navigationMismatch","reason":"the filter panel never closed"}
+	]}`)
+	ctrl := &collect.Controller{
+		Port:   port,
+		Target: collect.MacCloudTarget,
+		Hotkey: platform.HotkeySpec{Key: platform.KeyS},
+		Traversal: func() collect.Traversal {
+			return &reportingTraversal{scope: json.RawMessage(`{"kind":"zzzInventory","sort":"unverified","coverage":"unknown"}`), after: final}
+		},
+	}
+	svc, _ := newTestService(t, paths, staticSource{spec: specOf(ctrl)}, func() (Recognizer, error) { return newFakeRecognizer(), nil })
+	outcome, err := svc.Start(StartRequest{ID: "final-position-ledger"})
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	waitWrapped(t, svc)
+
+	reopened, err := record.Open(paths.Data)
+	if err != nil {
+		t.Fatalf("reopen store: %v", err)
+	}
+	rec, err := reopened.Load(string(outcome.SessionID))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	ledger := rec.Checkpoint.Session.PositionLedger
+	if ledger == nil || !ledger.SortVerified || len(ledger.Positions) != 2 {
+		t.Fatalf("position ledger = %+v, want two conclusions with a verified sort", ledger)
+	}
+	want := []record.PositionConclusion{
+		{Position: 1, Complete: true},
+		{Position: 2, Stage: "filter", ReasonCode: "navigationMismatch"},
+	}
+	for i := range want {
+		if ledger.Positions[i] != want[i] {
+			t.Fatalf("position %d = %+v, want %+v", i+1, ledger.Positions[i], want[i])
+		}
+	}
+}
+
 // The final observed-scope relay (T5 §3): sort and coverage are only known
 // after the traversal ran, so the controller relays again after Collect and
 // the deliverer carries both the final scope and its coverage conclusion

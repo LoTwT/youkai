@@ -348,6 +348,11 @@ func cloneCheckpoint(cp *Checkpoint) *Checkpoint {
 	out := *cp
 	out.Session.Resources = append([]ResourceRef(nil), cp.Session.Resources...)
 	out.Session.CoverageEvidenceIDs = append([]string(nil), cp.Session.CoverageEvidenceIDs...)
+	if cp.Session.PositionLedger != nil {
+		ledger := *cp.Session.PositionLedger
+		ledger.Positions = append([]PositionConclusion(nil), cp.Session.PositionLedger.Positions...)
+		out.Session.PositionLedger = &ledger
+	}
 	out.Items = make([]ItemRecord, len(cp.Items))
 	for i, it := range cp.Items {
 		it.EvidenceIDs = append([]string(nil), it.EvidenceIDs...)

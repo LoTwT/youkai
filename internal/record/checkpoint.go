@@ -21,8 +21,9 @@ const (
 	// tolerated as absent by readers) does not bump the version; only a
 	// change to an existing field's shape or semantics does. Version
 	// history: 2 added ItemRecord.Failure, the recognition failure text
-	// of failed items. SessionShell.FailureParams and its fault params
-	// are such optional additions and keep version 2.
+	// of failed items. SessionShell.FailureParams, SessionShell.PositionLedger
+	// and its position conclusions are such optional additions and keep
+	// version 2.
 	//
 	// Cost of keeping 2: an older binary reads a new generation with
 	// DisallowUnknownFields and fails on failureParams; that downgrade is
@@ -211,6 +212,107 @@ type Coverage struct {
 	ExpectedCount *int64         `json:"expectedCount,omitempty"`
 }
 
+// PositionCount is the number of wheel positions a complete drive-disc
+// inventory scan covers. A position conclusion outside 1..PositionCount is
+// invalid rather than tolerated as an extension.
+const PositionCount = 6
+
+// PositionConclusion is one wheel position's traversal conclusion: whether
+// the walk completed it and, when it did not, the failed preparation or
+// proof stage and the underlying diagnostic code. A position cut by a
+// session-fatal fault keeps Stage and ReasonCode empty because its cause is
+// the session termination.
+type PositionConclusion struct {
+	Position   int    `json:"position"`
+	Complete   bool   `json:"complete"`
+	Stage      string `json:"stage,omitempty"`
+	ReasonCode string `json:"reasonCode,omitempty"`
+}
+
+// PositionLedger is the stable per-position conclusion the summary and
+// notification surfaces read instead of decoding the opaque observed
+// scope. SortVerified records whether every opened panel verified the sort
+// label, the same fact the coverage conclusion depends on.
+type PositionLedger struct {
+	SortVerified bool                 `json:"sortVerified"`
+	Positions    []PositionConclusion `json:"positions"`
+}
+
+// validate checks the ledger's structure. Coverage consistency is checked
+// against the shell's conclusion separately: the ledger may legitimately
+// stop at fewer than six positions when a session ends early.
+func (l *PositionLedger) validate() error {
+	previous := 0
+	for i := range l.Positions {
+		p := &l.Positions[i]
+		if p.Position < 1 || p.Position > PositionCount {
+			return fmt.Errorf("position %d is outside 1..%d", p.Position, PositionCount)
+		}
+		if p.Position <= previous {
+			return fmt.Errorf("position %d is not after position %d", p.Position, previous)
+		}
+		previous = p.Position
+		if p.Complete && (p.Stage != "" || p.ReasonCode != "") {
+			return fmt.Errorf("position %d is complete but carries stage %q and code %q",
+				p.Position, p.Stage, p.ReasonCode)
+		}
+	}
+	return nil
+}
+
+// validateAgainst rejects a ledger that cannot support the session's
+// coverage conclusion. A complete conclusion needs all six positions
+// complete and a verified sort; anything shorter or unproven is partial.
+func (l *PositionLedger) validateAgainst(status CoverageStatus) error {
+	if err := l.validate(); err != nil {
+		return err
+	}
+	if status != CoverageComplete {
+		return nil
+	}
+	if !l.SortVerified {
+		return errors.New("complete coverage with an unverified sort")
+	}
+	if len(l.Positions) != PositionCount {
+		return fmt.Errorf("complete coverage with %d position conclusions", len(l.Positions))
+	}
+	for i := range l.Positions {
+		if !l.Positions[i].Complete {
+			return fmt.Errorf("complete coverage with incomplete position %d", l.Positions[i].Position)
+		}
+	}
+	return nil
+}
+
+// DecodePositionLedger reads the traversal's observed-scope report into the
+// stable position ledger. It is the compatibility path for checkpoints
+// written before SessionShell.PositionLedger existed, and it stays the
+// source the record deliverer copies from because the traversal reports
+// positions only inside ObservedScope. It reports false when the scope
+// cannot be read or carries no positions member, so callers record "cannot
+// list" instead of inventing an empty, complete-looking ledger.
+func DecodePositionLedger(raw json.RawMessage) (PositionLedger, bool) {
+	if len(raw) == 0 || !json.Valid(raw) {
+		return PositionLedger{}, false
+	}
+	var scope struct {
+		Sort      string          `json:"sort"`
+		Positions json.RawMessage `json:"positions"`
+	}
+	if err := json.Unmarshal(raw, &scope); err != nil || len(scope.Positions) == 0 {
+		return PositionLedger{}, false
+	}
+	var positions []PositionConclusion
+	if err := json.Unmarshal(scope.Positions, &positions); err != nil || positions == nil {
+		return PositionLedger{}, false
+	}
+	ledger := PositionLedger{SortVerified: scope.Sort == "verified", Positions: positions}
+	if err := ledger.validate(); err != nil {
+		return PositionLedger{}, false
+	}
+	return ledger, true
+}
+
 // ResourceRef records one resource a scan actually used — adapter, layout,
 // model or dictionary — with its version and digest, so a saved record
 // states what produced it. The id is logical, not a file name: the
@@ -266,6 +368,8 @@ type SessionShell struct {
 	// declared Scope stays what the session set out to scan. Opaque the
 	// same way; absent when no traversal reported one (the development
 	// source verifies no page, and a failed precheck observes nothing).
+	// It remains the compatibility source for PositionLedger on records
+	// written before that field existed.
 	ObservedScope json.RawMessage `json:"observedScope,omitempty"`
 	StartedAt     time.Time       `json:"startedAt"`
 	EndedAt       *time.Time      `json:"endedAt,omitempty"`
@@ -279,6 +383,12 @@ type SessionShell struct {
 	// scan JSON, which keeps its three-field termination shape.
 	FailureParams map[string]string `json:"failureParams,omitempty"`
 	Coverage      Coverage          `json:"coverage"`
+	// PositionLedger is the traversal's per-position conclusion and the
+	// sort verification behind it. It is optional because checkpoints
+	// written before the field existed carry only ObservedScope;
+	// PositionConclusions reads that fallback once. A missing ledger means
+	// the positions cannot be listed, not that all six were complete.
+	PositionLedger *PositionLedger `json:"positionLedger,omitempty"`
 	// CapturedCount is the number of accepted observations, including
 	// those that later failed or stayed unprocessed; it must equal the
 	// item records, which is the accounting check that makes an
@@ -340,6 +450,11 @@ func (sh *SessionShell) validate(itemCount int) error {
 	if sh.Coverage.ExpectedCount != nil && *sh.Coverage.ExpectedCount < 0 {
 		return fmt.Errorf("expected count %d is negative", *sh.Coverage.ExpectedCount)
 	}
+	if sh.PositionLedger != nil {
+		if err := sh.PositionLedger.validateAgainst(sh.Coverage.Status); err != nil {
+			return fmt.Errorf("position ledger: %w", err)
+		}
+	}
 	if sh.CapturedCount != int64(itemCount) {
 		return fmt.Errorf("captured count %d does not match %d item records", sh.CapturedCount, itemCount)
 	}
@@ -359,6 +474,21 @@ func (sh *SessionShell) validate(itemCount int) error {
 		seen[id] = struct{}{}
 	}
 	return nil
+}
+
+// PositionConclusions returns the session's per-position conclusions and
+// whether the checkpoint can list them. New checkpoints carry the typed
+// ledger; older ones only have the observed scope, so this reads its
+// positions member once. A checkpoint with neither, or with an unreadable
+// scope, reports false — "cannot list" — rather than a zero that would read
+// as "all six complete".
+func (sh *SessionShell) PositionConclusions() (PositionLedger, bool) {
+	if sh.PositionLedger != nil {
+		ledger := *sh.PositionLedger
+		ledger.Positions = append([]PositionConclusion(nil), sh.PositionLedger.Positions...)
+		return ledger, true
+	}
+	return DecodePositionLedger(sh.ObservedScope)
 }
 
 // FieldChange is one field edit inside a manual revision, kept as audit
