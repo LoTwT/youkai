@@ -60,15 +60,17 @@ func cleanupPreviewService(list []record.RecordInfo, loads map[string]*record.Re
 	}
 }
 
-func TestSavePromptOffersKeepDeleteLater(t *testing.T) {
+// TestScanEndDoesNotPromptScreenshotRetention pins P-13: a completed scan
+// opens its summary without asking whether to keep, delete or postpone the
+// screenshots, and no cleanup preview is measured on its behalf.
+func TestScanEndDoesNotPromptScreenshotRetention(t *testing.T) {
 	live := recovery(structuredItem(1, zzz.DiscRecord{SetID: intp(31100), Slot: 1, Level: intp(15)}, "静听嘉音"))
-	second := recovery(structuredItem(1, zzz.DiscRecord{SetID: intp(31200), Slot: 2, Level: intp(15)}, "啄木鸟电音"))
 	svc := cleanupPreviewService(
 		[]record.RecordInfo{{ID: "live", LatestRevision: 1, SavedAt: time.Now()}},
-		map[string]*record.Recovery{"live": live, "live2": second},
+		map[string]*record.Recovery{"live": live},
 	)
 	m, q := newTestModel(t, Config{Service: svc, DirectExportSaver: &fakeDirectExportSaver{}})
-	tt := ui.NewTester(m.View, 1024, 700)
+	tt := ui.NewTester(m.View, 1180, 760)
 	settle(t, m, q, tt)
 
 	applyAndSettle(t, m, q, tt, snap("live", 1, true, scan.PhaseCapturing,
@@ -76,68 +78,13 @@ func TestSavePromptOffersKeepDeleteLater(t *testing.T) {
 	applyAndSettle(t, m, q, tt, snap("live", 2, false, scan.PhaseEnded,
 		scan.Counts{Captured: 1, Produced: 1}, 1, false, ""))
 
-	if m.savePrompt == nil || m.savePrompt.recordID != "live" ||
-		m.savePrompt.preview.EvidenceFiles != 2 || m.savePrompt.preview.PendingReview != 1 {
-		t.Fatalf("the save-completion prompt does not hold the measured preview: %+v", m.savePrompt)
-	}
-	for _, label := range []string{"保留截图", "删除截图", "稍后处理"} {
-		if !tt.HasText(label) {
-			t.Fatalf("the save prompt does not offer %q: %q", label, tt.Texts())
+	for _, label := range []string{"保留截图", "删除截图", "稍后处理", "已保留本次扫描的截图"} {
+		if tt.HasText(label) {
+			t.Fatalf("the finished scan still asks about screenshots (%q): %q", label, tt.Texts())
 		}
 	}
-	if err := tt.Click("保留截图"); err != nil {
-		t.Fatal(err)
-	}
-	settle(t, m, q, tt)
-	if m.savePrompt != nil {
-		t.Fatal("保留截图 did not dismiss the prompt")
-	}
-	if screenshots, all, records, allRecords := svc.cleanupCalls(); len(screenshots) != 0 || all != 0 || len(records) != 0 || allRecords != 0 {
-		t.Fatalf("保留截图 deleted something: %v %d %v %d", screenshots, all, records, allRecords)
-	}
-
-	// A second session offers the choice again; deleting its screenshots
-	// calls the service and reports the measured result.
-	applyAndSettle(t, m, q, tt, snap("live2", 3, true, scan.PhaseCapturing,
-		scan.Counts{Captured: 1, Produced: 1}, 1, false, ""))
-	applyAndSettle(t, m, q, tt, snap("live2", 4, false, scan.PhaseEnded,
-		scan.Counts{Captured: 1, Produced: 1}, 1, false, ""))
-	if m.savePrompt == nil || m.savePrompt.recordID != "live2" {
-		t.Fatalf("the second save prompt does not open: %+v", m.savePrompt)
-	}
-	for _, label := range []string{"保留截图", "删除截图", "稍后处理"} {
-		if !tt.HasText(label) {
-			t.Fatalf("the second save prompt does not offer %q: %q", label, tt.Texts())
-		}
-	}
-	if err := tt.Click("删除截图"); err != nil {
-		t.Fatal(err)
-	}
-	settle(t, m, q, tt)
-	screenshots, _, _, _ := svc.cleanupCalls()
-	if len(screenshots) != 1 || screenshots[0] != "live2" {
-		t.Fatalf("screenshot deletions = %v, want live2", screenshots)
-	}
-	if m.savePrompt != nil {
-		t.Fatal("删除截图 did not dismiss the prompt")
-	}
-	if !strings.Contains(m.cleanupNotice, "已删除本次扫描的 2 张截图（2.0 KB）") {
-		t.Fatalf("the screenshot deletion result does not show: %q", m.cleanupNotice)
-	}
-}
-
-func TestSavePromptNotShownAfterFailedSave(t *testing.T) {
-	svc := cleanupPreviewService(nil, map[string]*record.Recovery{})
-	m, q := newTestModel(t, Config{Service: svc, DirectExportSaver: &fakeDirectExportSaver{}})
-	tt := ui.NewTester(m.View, 1024, 700)
-	settle(t, m, q, tt)
-
-	applyAndSettle(t, m, q, tt, snap("live", 1, true, scan.PhaseCapturing,
-		scan.Counts{Captured: 1}, 0, false, ""))
-	applyAndSettle(t, m, q, tt, snap("live", 2, false, scan.PhaseEnded,
-		scan.Counts{Captured: 1}, 0, true, "磁盘已满"))
-	if m.savePrompt != nil {
-		t.Fatalf("a failed save opened the cleanup prompt: %+v", m.savePrompt)
+	if m.cleanupNotice != "" {
+		t.Fatalf("the finished scan left a screenshot notice: %q", m.cleanupNotice)
 	}
 }
 

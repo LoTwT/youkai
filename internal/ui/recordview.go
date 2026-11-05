@@ -35,6 +35,10 @@ type RecordView struct {
 	// all while it holds items: the screenshots were deleted (or are
 	// missing). The field-quality and review state stay authoritative.
 	EvidenceRemoved bool
+	// Classes is the four-class partition of Rows, computed once when the
+	// view is built. The summary's count cells and its pending/exportable
+	// totals read it instead of re-validating every payload each frame.
+	Classes app.ItemClassCounts
 	// Rows are the captured items in capture order; no item disappears
 	// for its status.
 	Rows []Row
@@ -55,6 +59,10 @@ type Row struct {
 	Failure string
 	// Quality is the field-quality state of the current revision.
 	Quality record.Quality
+	// Class is the item's four-class display class. The summary's count
+	// cells select the first row of the clicked class, so the row carries
+	// the same decision the class count was made from.
+	Class app.ItemClass
 	// Revision is the persisted item revision the row shows. An edit is
 	// saved against it, so a stale editor can only be rejected, never
 	// overwrite a newer revision.
@@ -233,9 +241,33 @@ func BuildRecordView(id string, rec *record.Recovery, live bool) *RecordView {
 		EvidenceRemoved:  evidenceWasRemoved(cp),
 	}
 	for i := range cp.Items {
-		view.Rows = append(view.Rows, buildRow(&cp.Items[i]))
+		row := buildRow(&cp.Items[i])
+		addItemClass(&view.Classes, row.Class)
+		view.Rows = append(view.Rows, row)
 	}
 	return view
+}
+
+// addItemClass adds one row to the four-class partition. It is the local
+// counterpart of app.ClassifyItems' unexported accumulator, so a record view
+// classifies each item once.
+func addItemClass(counts *app.ItemClassCounts, class app.ItemClass) {
+	adjustItemClass(counts, class, 1)
+}
+
+// adjustItemClass moves one row between classes when a saved revision
+// changes its class, without re-validating the rest of the record.
+func adjustItemClass(counts *app.ItemClassCounts, class app.ItemClass, delta int64) {
+	switch class {
+	case app.ItemClassPendingBackfill:
+		counts.PendingBackfill += delta
+	case app.ItemClassPendingReview:
+		counts.PendingReview += delta
+	case app.ItemClassWarning:
+		counts.Warning += delta
+	case app.ItemClassPassed:
+		counts.Passed += delta
+	}
 }
 
 // evidenceWasRemoved reports that the checkpoint holds items but cites no
@@ -267,6 +299,7 @@ func buildRow(it *record.ItemRecord) Row {
 		Reason:   it.Reason,
 		Failure:  it.Failure,
 		Quality:  it.Quality,
+		Class:    app.ClassifyItem(*it),
 		Revision: it.Revision,
 	}
 	res := parseResult(it.Data)
