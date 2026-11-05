@@ -11,8 +11,8 @@
 package ui
 
 import (
+	"sort"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -215,28 +215,29 @@ type Model struct {
 	history          []HistoryEntry
 	histChoice       string
 	histErr          string
-	historyFilter    string
+	historyLoading   bool
 	historyExporting string
+
+	// The records list's date filter (08 §5). The two dates are inclusive
+	// local days; active is false while the range still spans every record,
+	// so an untouched filter never hides a row. The DateInput fields always
+	// show a day, so an inactive range is kept at the newest and oldest
+	// record's day.
+	historyFilterActive bool
+	historyFilterStart  time.Time
+	historyFilterEnd    time.Time
 
 	// The history table's choice, place and row menu. historyRow indexes
 	// the visible (date-filtered) entries; the ListState keeps the scroll
 	// and the keyboard choice. Only one row's popover menu is open at once.
 	historyList     ui.ListState
 	historyRow      int
-	historyScroll   ui.ScrollState
 	historyMenuID   string
 	historyMenuOpen bool
-	// The composite table snaps precise scrolls to whole 52-DIP rows.
-	// historyScrollSeen is the offset the last frame observed, and the two
-	// times debounce the rest snap after the user stops moving.
-	historyScrollSeen    float32
-	historyScrollMovedAt time.Time
-	historyScrollSnapAt  time.Time
-	// The 860 composite's measured frame: the panel, its header and its
-	// footer give the whole-row list viewport once laid out.
-	historyPanel  ui.Ref
-	historyHead   ui.Ref
-	historyFooter ui.Ref
+	// historyFocusPending moves the keyboard to the first row when the
+	// records list is entered (08 §5). lastPage detects that entry.
+	historyFocusPending bool
+	lastPage            Page
 
 	// Screenshot/history cleanup. savePrompt is the post-save three-way
 	// choice; promptedSessions remembers the sessions it was settled for,
@@ -312,9 +313,6 @@ type Model struct {
 	resultsScrollSeen    float32
 	resultsScrollMovedAt time.Time
 	resultsScrollSnapAt  time.Time
-	// historyRowProbe measures the native history table's tallest cell, so
-	// its whole-row cap uses the platform's real line metrics.
-	historyRowProbe ui.Ref
 	// resultsDetail opens a narrow results page from its list to the
 	// chosen item's detail; it has no effect in the side-by-side split.
 	resultsDetail bool
@@ -390,6 +388,7 @@ func New(cfg Config) *Model {
 		cache:            newEvidenceCache(cfg.Evidence, limit),
 		promptedSessions: make(map[string]bool),
 		historyRow:       -1,
+		historyLoading:   true,
 		closeBehavior:    closeBehavior,
 	}
 	if cfg.Updates != nil {
@@ -617,33 +616,45 @@ func (m *Model) performShowLive() {
 type HistoryEntry struct {
 	// ID is the record identifier to reopen.
 	ID string
-	// Label is the date and record identifier used by the row actions.
+	// Label is the date and record identifier the picker and the
+	// historyID lookup use.
 	Label string
 
 	SavedAt       time.Time
 	CapturedCount int64
 	Coverage      record.CoverageStatus
 	// CoverageExpected is 0 when the record does not know the scope's
-	// expected count; the table then shows the status word instead of a
-	// percentage.
+	// expected count.
 	CoverageExpected int64
-	PendingReview    int
 	// Termination is the session's first termination trigger; nil for a
 	// record whose checkpoint predates the field or never ended.
-	Termination      *record.Termination
-	ExportableCount  int64
-	FailedCount      int64
-	UnprocessedCount int64
-	OtherCount       int64
-	TotalBytes       int64
-	Unreadable       bool
+	Termination *record.Termination
+	// Counts is the four-class partition the list's 待处理 and 可导出
+	// columns and its conclusion use (app.ItemClassCounts).
+	Counts app.ItemClassCounts
+	// Interrupted marks a record recovery finished after a crash or a
+	// lost process; it is not the still-running session.
+	Interrupted bool
+	// IncompletePositions is the number of inventory positions whose
+	// traversal was incomplete. Known is false until the checkpoint carries
+	// per-position conclusions (PR-03), so zero alone does not mean every
+	// position completed.
+	IncompletePositions      int
+	IncompletePositionsKnown bool
+	TotalBytes               int64
+	Unreadable               bool
 }
 
-// loadHistory refreshes the history list from the service.
+// loadHistory refreshes the history list from the service off the UI
+// thread. The list is ordered newest first here as well as in the service,
+// so the first row is always the record a returning user looks for
+// (07 §4).
 func (m *Model) loadHistory() {
+	m.historyLoading = true
 	m.goAsync(func() {
 		records, err := m.cfg.Service.HistoryRecords()
 		m.update(func() {
+			m.historyLoading = false
 			if err != nil {
 				m.histErr = err.Error()
 				return
@@ -656,23 +667,29 @@ func (m *Model) loadHistory() {
 					label = info.SavedAt.Format("2006-01-02 15:04") + " · " + info.ID
 				}
 				entries = append(entries, HistoryEntry{
-					ID:               info.ID,
-					Label:            label,
-					SavedAt:          info.SavedAt,
-					CapturedCount:    info.CapturedCount,
-					Coverage:         info.Coverage,
-					CoverageExpected: info.CoverageExpected,
-					PendingReview:    info.PendingReview,
-					Termination:      info.Termination,
-					ExportableCount:  info.ExportableCount,
-					FailedCount:      info.FailedCount,
-					UnprocessedCount: info.UnprocessedCount,
-					OtherCount:       info.OtherCount,
-					TotalBytes:       info.TotalBytes,
-					Unreadable:       info.Unreadable,
+					ID:                       info.ID,
+					Label:                    label,
+					SavedAt:                  info.SavedAt,
+					CapturedCount:            info.CapturedCount,
+					Coverage:                 info.Coverage,
+					CoverageExpected:         info.CoverageExpected,
+					Termination:              info.Termination,
+					Counts:                   info.Counts,
+					Interrupted:              info.Interrupted,
+					IncompletePositions:      info.IncompletePositions,
+					IncompletePositionsKnown: info.IncompletePositionsKnown,
+					TotalBytes:               info.TotalBytes,
+					Unreadable:               info.Unreadable,
 				})
 			}
+			sort.SliceStable(entries, func(i, j int) bool {
+				if !entries[i].SavedAt.Equal(entries[j].SavedAt) {
+					return entries[i].SavedAt.After(entries[j].SavedAt)
+				}
+				return entries[i].ID > entries[j].ID
+			})
 			m.history = entries
+			m.settleHistoryFilterRange()
 			labels := m.HistoryLabels()
 			if m.histChoice == "" && len(labels) > 0 {
 				m.histChoice = labels[0]
@@ -684,6 +701,8 @@ func (m *Model) loadHistory() {
 	})
 }
 
+// hasHistoryLabel reports whether a visible row still carries a label,
+// so a filter change cannot leave the picker on a hidden record.
 func (m *Model) hasHistoryLabel(label string) bool {
 	for _, e := range m.history {
 		if e.Label == label && m.historyVisible(e) {
@@ -693,30 +712,81 @@ func (m *Model) hasHistoryLabel(label string) bool {
 	return false
 }
 
-// historyFilterTime returns the parsed date filter. Empty means no
-// filter; ok is false when the text is not a valid YYYY-MM-DD date.
-func (m *Model) historyFilterTime() (time.Time, bool) {
-	text := strings.TrimSpace(m.historyFilter)
-	if text == "" {
-		return time.Time{}, true
+// settleHistoryFilterRange keeps the DateInput fields on the record
+// range while the filter is inactive, and on the newest available days
+// once records start over an empty list. An active filter keeps the days
+// the user chose, even when a later scan adds records outside it.
+func (m *Model) settleHistoryFilterRange() {
+	if len(m.history) == 0 {
+		m.historyFilterActive = false
+		m.historyFilterStart, m.historyFilterEnd = time.Time{}, time.Time{}
+		return
 	}
-	date, err := time.ParseInLocation("2006-01-02", text, time.Local)
-	if err != nil {
-		return time.Time{}, false
+	if m.historyFilterActive {
+		if m.historyFilterStart.IsZero() || m.historyFilterEnd.IsZero() {
+			m.resetHistoryFilter()
+		}
+		return
 	}
-	return date, true
+	m.historyFilterStart = historyDay(m.oldestHistoryTime())
+	m.historyFilterEnd = historyDay(m.newestHistoryTime())
 }
 
-func (m *Model) historyVisible(entry HistoryEntry) bool {
-	filter, ok := m.historyFilterTime()
-	if !ok {
-		return false
+func (m *Model) newestHistoryTime() time.Time {
+	for _, entry := range m.history {
+		if !entry.SavedAt.IsZero() {
+			return entry.SavedAt
+		}
 	}
-	if filter.IsZero() {
+	return time.Time{}
+}
+
+func (m *Model) oldestHistoryTime() time.Time {
+	for i := len(m.history) - 1; i >= 0; i-- {
+		if !m.history[i].SavedAt.IsZero() {
+			return m.history[i].SavedAt
+		}
+	}
+	return time.Time{}
+}
+
+// resetHistoryFilter puts the date range back on every record.
+func (m *Model) resetHistoryFilter() {
+	m.historyFilterActive = false
+	m.settleHistoryFilterRange()
+}
+
+// clampHistoryFilter keeps the range ordered after a DateInput change; the
+// field the user just set wins over the other end.
+func (m *Model) clampHistoryFilter(startChanged bool) {
+	if !m.historyFilterStart.After(m.historyFilterEnd) {
+		return
+	}
+	if startChanged {
+		m.historyFilterEnd = m.historyFilterStart
+		return
+	}
+	m.historyFilterStart = m.historyFilterEnd
+}
+
+// historyDay is the local calendar day of t, the granularity of the list's
+// date filter.
+func historyDay(t time.Time) time.Time {
+	y, m, d := t.In(time.Local).Date()
+	return time.Date(y, m, d, 0, 0, 0, 0, time.Local)
+}
+
+// historyVisible applies the inclusive date range. An inactive filter
+// shows every record, including one whose date is unknown.
+func (m *Model) historyVisible(entry HistoryEntry) bool {
+	if !m.historyFilterActive {
 		return true
 	}
-	saved := entry.SavedAt.In(time.Local)
-	return saved.Year() == filter.Year() && saved.Month() == filter.Month() && saved.Day() == filter.Day()
+	if entry.SavedAt.IsZero() {
+		return false
+	}
+	day := historyDay(entry.SavedAt)
+	return !day.Before(m.historyFilterStart) && !day.After(m.historyFilterEnd)
 }
 
 func (m *Model) visibleHistory() []HistoryEntry {
@@ -737,11 +807,6 @@ func (m *Model) HistoryLabels() []string {
 		labels[i] = e.Label
 	}
 	return labels
-}
-
-func (m *Model) historyFilterInvalid() bool {
-	_, ok := m.historyFilterTime()
-	return !ok
 }
 
 // OpenHistory opens the chosen history record in the history slot. The

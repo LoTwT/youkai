@@ -641,14 +641,15 @@ func TestViewHistoryReopen(t *testing.T) {
 	tt := ui.NewTester(m.View, 1020, 700)
 	settle(t, m, q, tt)
 	openRecordsList(t, m, q, tt)
-	if !tt.HasText("2026-10-17 09:00 · new") {
+	if !tt.HasText(historyTimeText(m.history[0])) {
 		t.Fatalf("the history entries do not show: %q", tt.Texts())
 	}
 
 	// Open the default entry, then the older one through the picker.
-	if err := tt.Click("打开 2026-10-17 09:00 · new"); err != nil {
+	if err := tt.Click(historyTimeText(m.history[0])); err != nil {
 		t.Fatal(err)
 	}
+	tt.Key(0, ui.KeyEnter)
 	settle(t, m, q, tt)
 	showRecordItems(m)
 	tt.Frame()
