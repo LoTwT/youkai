@@ -282,10 +282,11 @@ type settingsShortcut struct {
 
 // settingsShortcuts lists the registered keys in the design's order,
 // Windows notation throughout. The stop key's context is the registration
-// state the snapshot proves: registered while a session captures or wraps
-// up, the last failure when that session ended with hotkeyUnavailable, and
-// the future registration otherwise. The key text comes from the one
-// notation table, so it stays the platform's binding.
+// state the snapshot can prove: held after the platform Open (preparing with
+// a deadline, or capturing), never claimed before Open or during finalizing,
+// the last failure when the session ended with hotkeyUnavailable, and the
+// future registration otherwise. The key text comes from the one notation
+// table, so it stays the platform's binding.
 func (m *Model) settingsShortcuts(c *ui.Context, t *ui.Theme, tok *Tokens) {
 	for i, shortcut := range m.settingsShortcutRows() {
 		if i > 0 {
@@ -302,18 +303,30 @@ func (m *Model) settingsShortcuts(c *ui.Context, t *ui.Theme, tok *Tokens) {
 }
 
 // stopHotkeyStateText derives the stop hotkey's registration state from the
-// authoritative snapshot. The hotkey is registered when the platform session
-// opens, so only capturing and finalizing prove it is held; preparing has a
-// session but no registration yet, and an ended session has released it.
+// authoritative snapshot. The hotkey is registered at the start of Prepare's
+// Port.Open, and the controller reports PrepareDeadline only after Open
+// succeeded, so preparing without a deadline cannot promise it yet. The
+// controller releases the platform session before finalize starts recognition
+// draining, so finalizing cannot claim the hotkey is still held. A failed
+// registration is checked first: it ends the session and must stay visible
+// even if the phase around that end is ambiguous.
 func (m *Model) stopHotkeyStateText() string {
-	switch m.snap.Scan.Phase {
-	case scan.PhaseCapturing, scan.PhaseFinalizing:
-		return "已注册"
-	}
 	if trigger := m.snap.Scan.Trigger; trigger != nil && trigger.Code == "hotkeyUnavailable" {
 		return "上次注册失败：被其他程序占用"
 	}
-	return "开始扫描时注册"
+	switch m.snap.Scan.Phase {
+	case scan.PhasePreparing:
+		if !m.snap.Scan.PrepareDeadline.IsZero() {
+			return "已注册"
+		}
+		return "正在注册"
+	case scan.PhaseCapturing:
+		return "已注册"
+	case scan.PhaseFinalizing:
+		return "扫描收尾中"
+	default:
+		return "开始扫描时注册"
+	}
 }
 
 func (m *Model) settingsShortcutRows() []settingsShortcut {

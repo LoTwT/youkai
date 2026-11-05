@@ -176,44 +176,116 @@ func TestSettingsPageShortcuts(t *testing.T) {
 	}
 }
 
-// TestSettingsStopHotkeyState checks the stop row reports what the snapshot
-// proves: held while a session captures or wraps up, the last registration
-// failure after hotkeyUnavailable, and the future registration otherwise.
+// TestSettingsStopHotkeyState checks the stop row against the actual
+// registration lifetime: Open succeeds before PrepareDeadline is reported,
+// and the controller releases the port before finalizing starts. A failed
+// registration wins over the phase because it is the reason the session
+// ended.
 func TestSettingsStopHotkeyState(t *testing.T) {
 	m, q, _ := settingsTestModel(t)
 	tt := ui.NewTester(m.View, 1440, 1000)
 	settle(t, m, q, tt)
 	openSettings(t, m, q, tt)
 
+	if got := m.stopHotkeyStateText(); got != "开始扫描时注册" {
+		t.Fatalf("the idle stop key = %q, want the start promise", got)
+	}
 	if !tt.HasText("开始扫描时注册") {
-		t.Fatalf("the idle stop key does not promise registration at start: %q", tt.Texts())
+		t.Fatalf("the idle stop key is not shown: %q", tt.Texts())
 	}
 
-	applyAndSettle(t, m, q, tt, snap("s1", 1, true, scan.PhaseCapturing,
-		scan.Counts{Captured: 2}, 0, true, ""))
-	if !tt.HasText("已注册") {
-		t.Fatalf("a capturing session does not report the registered hotkey: %q", tt.Texts())
+	cases := []struct {
+		name     string
+		snapshot func() app.Snapshot
+		want     string
+	}{
+		{
+			name: "preparing before Open returns",
+			snapshot: func() app.Snapshot {
+				return snap("s1", 1, true, scan.PhasePreparing, scan.Counts{}, 0, true, "")
+			},
+			want: "正在注册",
+		},
+		{
+			name: "preparing after Open returns",
+			snapshot: func() app.Snapshot {
+				s := snap("s1", 2, true, scan.PhasePreparing, scan.Counts{}, 0, true, "")
+				s.Scan.PrepareDeadline = time.Now().Add(30 * time.Second)
+				return s
+			},
+			want: "已注册",
+		},
+		{
+			name: "capturing",
+			snapshot: func() app.Snapshot {
+				return snap("s1", 3, true, scan.PhaseCapturing, scan.Counts{Captured: 2}, 0, true, "")
+			},
+			want: "已注册",
+		},
+		{
+			name: "finalizing after the port was released",
+			snapshot: func() app.Snapshot {
+				return snap("s1", 4, true, scan.PhaseFinalizing, scan.Counts{Captured: 2}, 0, true, "")
+			},
+			want: "扫描收尾中",
+		},
+		{
+			name: "finalizing with a failed registration",
+			snapshot: func() app.Snapshot {
+				s := snap("s1", 5, true, scan.PhaseFinalizing, scan.Counts{}, 0, true, "")
+				s.Scan.Trigger = &scan.Trigger{
+					Kind: scan.TriggerFault, Code: "hotkeyUnavailable", Phase: scan.PhasePreparing,
+				}
+				return s
+			},
+			want: "上次注册失败：被其他程序占用",
+		},
+		{
+			name: "ended with a failed registration",
+			snapshot: func() app.Snapshot {
+				s := snap("s1", 6, false, scan.PhaseEnded, scan.Counts{}, 0, false, "")
+				s.Scan.End = scan.EndFailed
+				s.Scan.Trigger = &scan.Trigger{
+					Kind: scan.TriggerFault, Code: "hotkeyUnavailable", Phase: scan.PhasePreparing,
+				}
+				return s
+			},
+			want: "上次注册失败：被其他程序占用",
+		},
+		{
+			name: "ended with another fault",
+			snapshot: func() app.Snapshot {
+				s := snap("s1", 7, false, scan.PhaseEnded, scan.Counts{}, 0, false, "")
+				s.Scan.End = scan.EndFailed
+				s.Scan.Trigger = &scan.Trigger{
+					Kind: scan.TriggerFault, Code: "focusLost", Phase: scan.PhaseCapturing,
+				}
+				return s
+			},
+			want: "开始扫描时注册",
+		},
+		{
+			name: "completed normally",
+			snapshot: func() app.Snapshot {
+				s := snap("s1", 8, false, scan.PhaseEnded, scan.Counts{}, 0, false, "")
+				s.Scan.End = scan.EndCompleted
+				return s
+			},
+			want: "开始扫描时注册",
+		},
 	}
-
-	ended := snap("s1", 2, false, scan.PhaseEnded, scan.Counts{}, 0, false, "")
-	ended.Scan.End = scan.EndFailed
-	ended.Scan.Trigger = &scan.Trigger{
-		Kind: scan.TriggerFault, Code: "hotkeyUnavailable", Phase: scan.PhasePreparing,
-	}
-	applyAndSettle(t, m, q, tt, ended)
-	m.page = pageSettings
-	tt.Frame()
-	if !tt.HasText("上次注册失败：被其他程序占用") {
-		t.Fatalf("the hotkey failure is not reported: %q", tt.Texts())
-	}
-
-	completed := snap("s1", 3, false, scan.PhaseEnded, scan.Counts{}, 0, false, "")
-	completed.Scan.End = scan.EndCompleted
-	applyAndSettle(t, m, q, tt, completed)
-	m.page = pageSettings
-	tt.Frame()
-	if !tt.HasText("开始扫描时注册") {
-		t.Fatalf("a normal end left the hotkey failure behind: %q", tt.Texts())
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			applyAndSettle(t, m, q, tt, tc.snapshot())
+			m.page = pageSettings
+			tt.Frame()
+			if got := m.stopHotkeyStateText(); got != tc.want {
+				t.Fatalf("the stop hotkey state = %q, want %q", got, tc.want)
+			}
+			if !tt.HasText(tc.want) {
+				t.Fatalf("the stop hotkey state %q is not shown: %q", tc.want, tt.Texts())
+			}
+		})
 	}
 }
 
@@ -519,30 +591,109 @@ func TestSettingsCleanupReturnsFromEachFinishPath(t *testing.T) {
 	}
 }
 
-// TestSettingsCleanupFailureStaysOnSettings checks a failed batch keeps the
+// TestSettingsFailureStaysOnSettings checks every failure branch keeps the
 // user on the storage section with its retry instead of claiming the return.
-func TestSettingsCleanupFailureStaysOnSettings(t *testing.T) {
-	m, q, svc := settingsTestModel(t)
-	svc.deleteErr = errString("权限不足")
-	tt := ui.NewTester(m.View, 1440, 1000)
-	settle(t, m, q, tt)
-	m.ShowStorageFromPrepareCheck()
-	settle(t, m, q, tt)
+// The shared cache/log branch is exercised through the cache.
+func TestSettingsFailureStaysOnSettings(t *testing.T) {
+	cases := []struct {
+		name    string
+		request func(*Model)
+		seed    func(*fakeService)
+		confirm string
+		prompt  func(*Model) string
+		want    string
+	}{
+		{
+			name:    "all screenshots",
+			request: func(m *Model) { m.RequestAllScreenshotCleanup() },
+			seed:    func(s *fakeService) { s.deleteErr = errString("权限不足") },
+			confirm: "确认删除",
+			prompt: func(m *Model) string {
+				if m.cleanup == nil {
+					return ""
+				}
+				return m.cleanup.err
+			},
+			want: "删除全部截图失败：权限不足",
+		},
+		{
+			name:    "one record's screenshots",
+			request: func(m *Model) { m.RequestScreenshotCleanup("r1") },
+			seed:    func(s *fakeService) { s.deleteErr = errString("权限不足") },
+			confirm: "确认删除",
+			prompt: func(m *Model) string {
+				if m.cleanup == nil {
+					return ""
+				}
+				return m.cleanup.err
+			},
+			want: "删除截图失败：权限不足",
+		},
+		{
+			name:    "one record",
+			request: func(m *Model) { m.RequestRecordCleanup("r1") },
+			seed:    func(s *fakeService) { s.deleteErr = errString("权限不足") },
+			confirm: "确认删除",
+			prompt: func(m *Model) string {
+				if m.cleanup == nil {
+					return ""
+				}
+				return m.cleanup.err
+			},
+			want: "删除记录失败：权限不足",
+		},
+		{
+			name:    "all records",
+			request: func(m *Model) { m.RequestAllRecordCleanup() },
+			seed:    func(s *fakeService) { s.deleteErr = errString("权限不足") },
+			confirm: "确认删除",
+			prompt: func(m *Model) string {
+				if m.cleanup == nil {
+					return ""
+				}
+				return m.cleanup.err
+			},
+			want: "删除全部记录失败：权限不足",
+		},
+		{
+			name:    "cache",
+			request: func(m *Model) { m.RequestCacheClear() },
+			seed:    func(s *fakeService) { s.cacheClearErr = errString("缓存忙") },
+			confirm: "确认清理",
+			prompt: func(m *Model) string {
+				if m.storagePrompt == nil {
+					return ""
+				}
+				return m.storagePrompt.err
+			},
+			want: "清理失败：缓存忙",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m, q, svc := settingsTestModel(t)
+			tc.seed(svc)
+			tt := ui.NewTester(m.View, 1440, 1000)
+			settle(t, m, q, tt)
+			m.ShowStorageFromPrepareCheck()
+			settle(t, m, q, tt)
 
-	m.RequestAllScreenshotCleanup()
-	settle(t, m, q, tt)
-	if err := tt.Click("确认删除"); err != nil {
-		t.Fatal(err)
-	}
-	settle(t, m, q, tt)
-	if m.displayPage() != pageSettings {
-		t.Fatalf("a failed cleanup returned to %v, want settings", m.displayPage())
-	}
-	if m.cleanup == nil || m.cleanup.err == "" {
-		t.Fatalf("the failed cleanup did not keep its retry: %+v", m.cleanup)
-	}
-	if !tt.HasText("删除全部截图失败：权限不足") {
-		t.Fatalf("the failed cleanup does not show its reason: %q", tt.Texts())
+			tc.request(m)
+			settle(t, m, q, tt)
+			if err := tt.Click(tc.confirm); err != nil {
+				t.Fatal(err)
+			}
+			settle(t, m, q, tt)
+			if m.displayPage() != pageSettings {
+				t.Fatalf("a failed cleanup returned to %v, want settings", m.displayPage())
+			}
+			if got := tc.prompt(m); !strings.Contains(got, tc.want) {
+				t.Fatalf("the failed prompt = %q, want %q", got, tc.want)
+			}
+			if !tt.HasText(tc.want) {
+				t.Fatalf("the failed cleanup does not show %q: %q", tc.want, tt.Texts())
+			}
+		})
 	}
 }
 

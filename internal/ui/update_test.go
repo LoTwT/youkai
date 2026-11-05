@@ -559,6 +559,9 @@ func TestUpdateDotFollowsTheFoundVersion(t *testing.T) {
 	if !tt.HasText("更新已安装，正在重启应用……") {
 		t.Fatalf("the completed install does not show: %q", tt.Texts())
 	}
+	if got := countText(tt.Texts(), "有新版本"); got != 0 {
+		t.Fatalf("the installed state left %d update dots", got)
+	}
 }
 
 // TestUpdateInstallCancellationClearsTheServiceFlag pins the other half of
