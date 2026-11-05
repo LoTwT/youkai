@@ -69,14 +69,14 @@ func writeDirectExportContextWith(ctx context.Context, dir, defaultName string, 
 		return "", err
 	}
 	if err := ctx.Err(); err != nil {
-		if removeErr := os.Remove(path); removeErr != nil {
-			return "", &ui.ExportCleanupError{Err: errors.Join(err,
-				fmt.Errorf("预留文件 %q 未删除: %w", path, removeErr))}
+		if removeErr := ops.remove(path); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+			return "", cleanupExportError(err,
+				fmt.Sprintf("预留文件 %q 未删除: %v", path, removeErr))
 		}
 		return "", err
 	}
 	if err := writeExportFileWithCancel(path, data, ops, ctx.Err); err != nil {
-		removeErr := os.Remove(path)
+		removeErr := ops.remove(path)
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			// Preserve any cleanup detail the writer added: the dialog's
 			// cancellation promise is only true if no file remains.
@@ -85,22 +85,18 @@ func writeDirectExportContextWith(ctx context.Context, dir, defaultName string, 
 			} else if !errors.Is(err, ctxErr) {
 				err = errors.Join(ctxErr, err)
 			}
-			if removeErr != nil {
-				err = errors.Join(err, fmt.Errorf("预留文件 %q 未删除: %w", path, removeErr))
-			}
 			if err == nil {
 				err = ctxErr
 			}
-			var cleanupErr *ui.ExportCleanupError
-			if removeErr != nil && !errors.As(err, &cleanupErr) {
-				err = &ui.ExportCleanupError{Err: err}
+			if removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+				err = cleanupExportError(err,
+					fmt.Sprintf("预留文件 %q 未删除: %v", path, removeErr))
 			}
 			return "", err
 		}
-		if removeErr != nil {
-			err = errors.Join(err, &ui.ExportCleanupError{
-				Err: fmt.Errorf("预留文件 %q 未删除: %w", path, removeErr),
-			})
+		if removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+			err = cleanupExportError(err,
+				fmt.Sprintf("预留文件 %q 未删除: %v", path, removeErr))
 		}
 		if errors.Is(err, os.ErrPermission) || errors.Is(err, os.ErrNotExist) {
 			return "", &ui.ExportDirectoryError{Directory: dir, Err: err}
@@ -108,6 +104,20 @@ func writeDirectExportContextWith(ctx context.Context, dir, defaultName string, 
 		return "", fmt.Errorf("写入 %q：%w", path, err)
 	}
 	return path, nil
+}
+
+// cleanupExportError adds a user-facing cleanup detail without exposing
+// the cancellation error text. A cleanup error the writer already reported
+// keeps its detail and remains the unwrapped cause.
+func cleanupExportError(err error, detail string) *ui.ExportCleanupError {
+	var existing *ui.ExportCleanupError
+	if errors.As(err, &existing) {
+		if existing.Detail != "" {
+			detail = existing.Detail + "\n" + detail
+		}
+		err = existing.Err
+	}
+	return &ui.ExportCleanupError{Detail: detail, Err: err}
 }
 
 // reserveDirectExportPath claims the first free numbered name. The
@@ -213,9 +223,11 @@ func writeExportFileWithCancel(path string, data []byte, ops exportFileOps, canc
 		if err == nil {
 			return
 		}
-		if rmErr := ops.remove(tmpName); rmErr != nil {
-			err = &ui.ExportCleanupError{Err: fmt.Errorf("%w; 临时文件 %q 未删除: %v",
-				err, tmpName, rmErr)}
+		if rmErr := ops.remove(tmpName); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
+			err = &ui.ExportCleanupError{
+				Detail: fmt.Sprintf("临时文件 %q 未删除: %v", tmpName, rmErr),
+				Err:    err,
+			}
 		}
 	}()
 	n, err := tmp.Write(data)

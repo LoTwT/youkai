@@ -52,12 +52,20 @@ func (e *ExportDirectoryError) Unwrap() error { return e.Err }
 
 // ExportCleanupError reports that a canceled export could not remove a file
 // it had created. The dialog shows it as a failure instead of the ordinary
-// "已取消，没有写入文件" notice, which would be false.
+// "已取消，没有写入文件" notice, which would be false. Detail is the
+// user-facing cleanup reason; Err keeps the underlying cause for errors.Is.
 type ExportCleanupError struct {
-	Err error
+	Detail string
+	Err    error
 }
 
-func (e *ExportCleanupError) Error() string { return "导出文件清理失败：" + e.Err.Error() }
+func (e *ExportCleanupError) Error() string {
+	detail := e.Detail
+	if detail == "" && e.Err != nil {
+		detail = e.Err.Error()
+	}
+	return "导出文件清理失败：" + detail
+}
 
 func (e *ExportCleanupError) Unwrap() error { return e.Err }
 
@@ -423,10 +431,13 @@ func (m *Model) exportDialogPreExport(c *ui.Context, t *ui.Theme) {
 	failure := m.exportDialogFailure()
 	empty := m.exportDialogEmpty()
 
-	// MyGo v0.6.2 has no tab-index API: Tab follows the order elements are
-	// built. The visible close and review controls are therefore built last,
-	// attached to invisible placeholders that keep their wireframe places,
-	// so Tab can follow 08 §4: 导出 JSON → 导出 CSV → 去校对 → 关闭.
+	// MyGo v0.6.2 has no tab-index API. Its focus order comes from the
+	// committed tree: in-flow children first, absolute children after. The
+	// real close and review controls are built last and attached to their
+	// wireframe places; their placeholders must stay invisible to stay out
+	// of the focus order. This depends on MyGo internals, so
+	// TestExportDialogTabOrder guards the resulting order: 导出 JSON →
+	// 导出 CSV → 去校对 → 关闭.
 	var closeSlot ui.Element
 	closeShown := false
 	ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
@@ -552,6 +563,9 @@ func (m *Model) exportDialogProgress(c *ui.Context, t *ui.Theme) {
 // format.
 func (m *Model) exportDialogSummary(c *ui.Context, t *ui.Theme, empty, blocked, locked bool) (ui.Element, bool) {
 	s := m.exportData.Summary
+	// While a write runs the review link is replaced by progress, so neither
+	// its placeholder nor the separator before it may stay in the layout.
+	showReview := (s.Excluded > 0 || empty) && !m.exporting
 	var reviewSlot ui.Element
 	reviewShown := false
 	ui.Column(c).Gap(t.Space(1)).Children(func() {
@@ -567,10 +581,14 @@ func (m *Model) exportDialogSummary(c *ui.Context, t *ui.Theme, empty, blocked, 
 			ui.Text(c, "排除").Grow(1)
 			ui.Textf(c, "%s 件", formatCount(int64(s.Excluded))).FontWeight(600)
 			if s.Counts.Pending() > 0 {
-				ui.Textf(c, "待处理 %s ·", formatCount(s.Counts.Pending())).
+				pending := formatCount(s.Counts.Pending())
+				if showReview {
+					pending += " ·"
+				}
+				ui.Textf(c, "待处理 %s", pending).
 					TextColor(t.TextMuted).FontSize(t.FontSize * 0.9)
 			}
-			if s.Excluded > 0 || empty {
+			if showReview {
 				reviewSlot = ui.Button(c, "去校对").TextColor(t.Accent).
 					Background(ui.Color{}).Border(0, ui.Color{}).Padding(0, 0).
 					Disabled(locked).Invisible()

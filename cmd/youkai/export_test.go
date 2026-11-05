@@ -316,12 +316,96 @@ func TestWriteDirectExportContextCancelKeepsCleanupError(t *testing.T) {
 	if path != "" || !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled export returned path %q err %v", path, err)
 	}
-	if !strings.Contains(err.Error(), "temporary file locked") {
-		t.Fatalf("the cleanup failure was hidden: %v", err)
+	if !strings.Contains(err.Error(), "temporary file locked") ||
+		strings.Contains(err.Error(), "context canceled") {
+		t.Fatalf("cleanup text = %q", err)
 	}
 	var cleanupErr *ui.ExportCleanupError
 	if !errors.As(err, &cleanupErr) {
 		t.Fatalf("the cleanup failure is not classified: %v", err)
+	}
+}
+
+func TestWriteDirectExportContextReserveCleanupFailureIsClassified(t *testing.T) {
+	dir := t.TempDir()
+	ctx := &cancelAfterChecksContext{Context: context.Background(), cancelAt: 2}
+	ops := defaultExportFileOps
+	ops.remove = func(string) error { return errors.New("reservation locked") }
+	path, err := writeDirectExportContextWith(ctx, dir, "out.youkai.json", []byte("data"), ops)
+	if path != "" || !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled export returned path %q err %v", path, err)
+	}
+	var cleanupErr *ui.ExportCleanupError
+	if !errors.As(err, &cleanupErr) {
+		t.Fatalf("the reservation cleanup failure is not classified: %v", err)
+	}
+	if strings.Contains(err.Error(), "context canceled") ||
+		!strings.Contains(err.Error(), "reservation locked") {
+		t.Fatalf("cleanup text = %q", err)
+	}
+}
+
+func TestWriteDirectExportContextWriteCleanupFailureIsClassified(t *testing.T) {
+	dir := t.TempDir()
+	ctx, cancel := context.WithCancel(context.Background())
+	ops := defaultExportFileOps
+	ops.createTemp = func(dir, pattern string) (exportFile, error) {
+		f, err := os.CreateTemp(dir, pattern)
+		if err != nil {
+			return nil, err
+		}
+		cancel()
+		return f, nil
+	}
+	ops.remove = func(name string) error {
+		if filepath.Base(name) == "out.youkai.json" {
+			return errors.New("reservation locked")
+		}
+		return os.Remove(name)
+	}
+	path, err := writeDirectExportContextWith(ctx, dir, "out.youkai.json", []byte("data"), ops)
+	if path != "" || !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled export returned path %q err %v", path, err)
+	}
+	var cleanupErr *ui.ExportCleanupError
+	if !errors.As(err, &cleanupErr) {
+		t.Fatalf("the reservation cleanup failure is not classified: %v", err)
+	}
+	if strings.Contains(err.Error(), "context canceled") ||
+		!strings.Contains(err.Error(), "reservation locked") {
+		t.Fatalf("cleanup text = %q", err)
+	}
+}
+
+func TestWriteDirectExportContextCancelReservationAlreadyGone(t *testing.T) {
+	dir := t.TempDir()
+	ctx, cancel := context.WithCancel(context.Background())
+	ops := defaultExportFileOps
+	ops.createTemp = func(dir, pattern string) (exportFile, error) {
+		f, err := os.CreateTemp(dir, pattern)
+		if err != nil {
+			return nil, err
+		}
+		if err := os.Remove(filepath.Join(dir, "out.youkai.json")); err != nil {
+			t.Fatal(err)
+		}
+		cancel()
+		return f, nil
+	}
+	path, err := writeDirectExportContextWith(ctx, dir, "out.youkai.json", []byte("data"), ops)
+	if path != "" || !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled export returned path %q err %v", path, err)
+	}
+	var cleanupErr *ui.ExportCleanupError
+	if errors.As(err, &cleanupErr) {
+		t.Fatalf("an already removed reservation was called a cleanup failure: %v", err)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("a canceled export left files: %v", entries)
 	}
 }
 

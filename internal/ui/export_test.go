@@ -334,6 +334,57 @@ func TestExportDialogEscClosesWhenIdle(t *testing.T) {
 	}
 }
 
+// TestExportDialogAttachedControlsStayInPlace guards the placeholder and
+// AttachTo layout: dropping either attachment moves the control to the
+// bottom of the dialog instead of its wireframe row.
+func TestExportDialogAttachedControlsStayInPlace(t *testing.T) {
+	for _, size := range []struct {
+		name string
+		w, h int
+	}{{"1180x760", 1180, 760}, {"960x640", 960, 640}} {
+		t.Run(size.name, func(t *testing.T) {
+			rec := recovery(
+				uiStructuredItem(t, 1, record.QualityAutoAccepted),
+				uiStructuredItem(t, 2, record.QualityNeedsReview),
+			)
+			f := newExportDialogFixture(t, rec, false)
+			f.tt.SetSize(size.w, size.h)
+			f.m.SetContentSize(size.w, size.h)
+			f.tt.Frame()
+			f.open(t)
+
+			review, ok := f.tt.Find("去校对")
+			if !ok {
+				t.Fatalf("去校对 is missing: %q", f.tt.Texts())
+			}
+			excluded, ok := f.tt.Find("排除")
+			if !ok {
+				t.Fatalf("排除 is missing: %q", f.tt.Texts())
+			}
+			if centerY(review)-centerY(excluded) > 2 || centerY(excluded)-centerY(review) > 2 {
+				t.Fatalf("去校对 is not on the exclusion row: review %+v, 排除 %+v", review, excluded)
+			}
+			closeRect, ok := f.tt.Find("关闭导出对话框")
+			if !ok {
+				t.Fatalf("关闭导出对话框 is missing: %q", f.tt.Texts())
+			}
+			title, ok := f.tt.Find("导出这条记录")
+			if !ok {
+				t.Fatalf("导出这条记录 is missing: %q", f.tt.Texts())
+			}
+			if centerY(closeRect)-centerY(title) > 2 || centerY(title)-centerY(closeRect) > 2 {
+				t.Fatalf("close is not on the title row: close %+v, title %+v", closeRect, title)
+			}
+			if review.X <= excluded.X || closeRect.X <= title.X {
+				t.Fatalf("attached controls are not to the right of their rows: review %+v, close %+v",
+					review, closeRect)
+			}
+		})
+	}
+}
+
+func centerY(r ui.Rect) float32 { return r.Y + r.H/2 }
+
 // TestExportDialogCloseButtonWorks checks the attached close button is
 // clickable where the wireframe draws it.
 func TestExportDialogCloseButtonWorks(t *testing.T) {
@@ -684,6 +735,49 @@ func TestExportDialogRunsCancelsAndReexports(t *testing.T) {
 	}
 }
 
+// TestExportDialogProgressLeavesNoReviewSeparator checks that the review
+// link and its separator do not leave a dangling dot while the write runs.
+func TestExportDialogProgressLeavesNoReviewSeparator(t *testing.T) {
+	rec := recovery(
+		uiStructuredItem(t, 1, record.QualityAutoAccepted),
+		uiStructuredItem(t, 2, record.QualityNeedsReview),
+	)
+	f := newExportDialogFixture(t, rec, false)
+	started := make(chan struct{})
+	var once sync.Once
+	f.saver.saveCtxFn = func(ctx context.Context, _ app.ExportFormat, _ string, _ []byte) (string, error) {
+		once.Do(func() { close(started) })
+		<-ctx.Done()
+		return "", ctx.Err()
+	}
+	f.open(t)
+	if err := f.tt.Click("导出 JSON"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the export write did not start")
+	}
+	f.tt.Frame()
+	if _, ok := f.tt.Find("待处理 1 ·"); ok {
+		t.Fatalf("the exporting dialog left a dangling separator: %q", f.tt.Texts())
+	}
+	if _, ok := f.tt.Find("待处理 1"); !ok {
+		t.Fatalf("the exporting dialog lost the pending count: %q", f.tt.Texts())
+	}
+	if _, ok := f.tt.Find("去校对"); ok {
+		t.Fatalf("the exporting dialog still shows 去校对: %q", f.tt.Texts())
+	}
+	if err := f.tt.Click("取消"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, f.m, f.q, f.tt)
+	if _, ok := f.tt.Find("待处理 1 ·"); !ok {
+		t.Fatalf("the canceled dialog did not restore the review link: %q", f.tt.Texts())
+	}
+}
+
 // TestExportDialogCancelRacingAWriteShowsSuccess covers the cancel/write
 // race: once the saver returned a path, the file exists and the dialog must
 // report success even though 取消 was pressed.
@@ -731,7 +825,10 @@ func TestExportDialogCleanupFailureIsNotCancellation(t *testing.T) {
 	f.saver.saveCtxFn = func(ctx context.Context, _ app.ExportFormat, _ string, _ []byte) (string, error) {
 		once.Do(func() { close(started) })
 		<-ctx.Done()
-		return "", &ExportCleanupError{Err: errors.New("临时文件未删除")}
+		return "", &ExportCleanupError{
+			Detail: "临时文件未删除",
+			Err:    context.Canceled,
+		}
 	}
 	f.open(t)
 	if err := f.tt.Click("导出 JSON"); err != nil {
@@ -750,8 +847,9 @@ func TestExportDialogCleanupFailureIsNotCancellation(t *testing.T) {
 		t.Fatalf("a cleanup failure was called a cancellation: %+v", f.m.exportOutcome)
 	}
 	if !f.tt.HasText("导出失败：导出文件清理失败：临时文件未删除") ||
+		f.tt.HasText("context canceled") ||
 		f.tt.HasText("已取消，没有写入文件。") {
-		t.Fatalf("the cleanup failure is hidden: %q", f.tt.Texts())
+		t.Fatalf("the cleanup failure is hidden or leaks English: %q", f.tt.Texts())
 	}
 }
 
