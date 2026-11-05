@@ -61,7 +61,11 @@ type DataRootLock struct {
 // other process — including other youkai builds — is refused on the same
 // actual directory under any path alias. A failed or indeterminate
 // acquire returns an error and holds nothing; the caller must refuse to
-// operate on the data root.
+// operate on the data root. A foreign holder — usually a youkai whose
+// single-instance identity differs, though a failed handover can leave the
+// same version here (architecture §1) — is reported as ErrLockHeld, which
+// the entry point separates from other failures when it tells the user why
+// the launch could not continue (08 §10).
 func AcquireDataRootLock(dataDir string) (*DataRootLock, error) {
 	if dataDir == "" || !filepath.IsAbs(dataDir) {
 		return nil, fmt.Errorf("app: acquire data-root lock: data directory %q is not an absolute path", dataDir)
