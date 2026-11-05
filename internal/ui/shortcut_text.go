@@ -25,6 +25,9 @@ const (
 	// shortcutFocusRegion moves the keyboard between the page's large
 	// regions.
 	shortcutFocusRegion = "F6"
+	// shortcutFocusRegionBack moves the keyboard back through the same
+	// regions.
+	shortcutFocusRegionBack = "Shift+F6"
 	// shortcutOpenRecord opens the chosen record in the records list.
 	shortcutOpenRecord = "Enter"
 	// shortcutCloseOverlay closes an overlay or returns to the page's

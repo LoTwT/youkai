@@ -137,32 +137,31 @@ func TestSettingsPageCompactHidesDirectory(t *testing.T) {
 }
 
 // TestSettingsPageShortcuts checks the read-only table: only registered
-// keys, the design's order, Windows notation, and the stop key naming when
-// it is registered.
+// keys, the design's order, Windows notation, and the stop key state.
 func TestSettingsPageShortcuts(t *testing.T) {
 	m, q, _ := settingsTestModel(t)
 	tt := ui.NewTester(m.View, 1440, 1000)
 	settle(t, m, q, tt)
 	openSettings(t, m, q, tt)
 
-	rows := settingsShortcutRows()
+	rows := m.settingsShortcutRows()
 	if len(rows) != 9 {
 		t.Fatalf("the shortcut list has %d rows, want 9: %+v", len(rows), rows)
 	}
-	if got, want := rows[0], (settingsShortcut{action: "停止扫描", context: "扫描期间注册 · 全局", keys: shortcutStopScan}); got != want {
+	if got, want := rows[0], (settingsShortcut{action: "停止扫描", context: "开始扫描时注册", keys: shortcutStopScan}); got != want {
 		t.Errorf("the first shortcut row = %+v, want %+v", got, want)
 	}
 	if got, want := rows[8], (settingsShortcut{action: "关闭浮层/返回表格", context: "任意", keys: shortcutCloseOverlay}); got != want {
 		t.Errorf("the last shortcut row = %+v, want %+v", got, want)
 	}
 	for _, registered := range []string{
-		"停止扫描", "扫描期间注册 · 全局", shortcutStopScan,
+		"停止扫描", "开始扫描时注册", shortcutStopScan,
 		"开始扫描", "扫描准备", shortcutStartScan,
 		"确认并下一项", shortcutConfirmNext,
 		"保存修改", shortcutSave,
 		"下一个待处理件", shortcutNextPending,
 		"导出…", "记录工作区", shortcutExport,
-		"在大区域间跳转", shortcutFocusRegion,
+		"在大区域间跳转", shortcutFocusRegion, shortcutFocusRegionBack,
 		"打开选中的记录", shortcutOpenRecord,
 		"关闭浮层/返回表格", shortcutCloseOverlay,
 	} {
@@ -174,6 +173,47 @@ func TestSettingsPageShortcuts(t *testing.T) {
 		if strings.ContainsAny(row.keys, "⌘⌃⌥⇧↵") {
 			t.Errorf("the shortcut row %+v uses macOS notation; the interface shows Windows keys", row)
 		}
+	}
+}
+
+// TestSettingsStopHotkeyState checks the stop row reports what the snapshot
+// proves: held while a session captures or wraps up, the last registration
+// failure after hotkeyUnavailable, and the future registration otherwise.
+func TestSettingsStopHotkeyState(t *testing.T) {
+	m, q, _ := settingsTestModel(t)
+	tt := ui.NewTester(m.View, 1440, 1000)
+	settle(t, m, q, tt)
+	openSettings(t, m, q, tt)
+
+	if !tt.HasText("开始扫描时注册") {
+		t.Fatalf("the idle stop key does not promise registration at start: %q", tt.Texts())
+	}
+
+	applyAndSettle(t, m, q, tt, snap("s1", 1, true, scan.PhaseCapturing,
+		scan.Counts{Captured: 2}, 0, true, ""))
+	if !tt.HasText("已注册") {
+		t.Fatalf("a capturing session does not report the registered hotkey: %q", tt.Texts())
+	}
+
+	ended := snap("s1", 2, false, scan.PhaseEnded, scan.Counts{}, 0, false, "")
+	ended.Scan.End = scan.EndFailed
+	ended.Scan.Trigger = &scan.Trigger{
+		Kind: scan.TriggerFault, Code: "hotkeyUnavailable", Phase: scan.PhasePreparing,
+	}
+	applyAndSettle(t, m, q, tt, ended)
+	m.page = pageSettings
+	tt.Frame()
+	if !tt.HasText("上次注册失败：被其他程序占用") {
+		t.Fatalf("the hotkey failure is not reported: %q", tt.Texts())
+	}
+
+	completed := snap("s1", 3, false, scan.PhaseEnded, scan.Counts{}, 0, false, "")
+	completed.Scan.End = scan.EndCompleted
+	applyAndSettle(t, m, q, tt, completed)
+	m.page = pageSettings
+	tt.Frame()
+	if !tt.HasText("开始扫描时注册") {
+		t.Fatalf("a normal end left the hotkey failure behind: %q", tt.Texts())
 	}
 }
 
@@ -432,6 +472,77 @@ func TestSettingsStorageFromPrepareCheck(t *testing.T) {
 	}
 	if tt.HasText("完成后返回准备检查") {
 		t.Fatal("the return promise outlived the return")
+	}
+}
+
+// TestSettingsCleanupReturnsFromEachFinishPath checks every cleanup that
+// can run from the storage section returns to the prepare check after
+// success, including the single-record paths reachable from the same page's
+// shared prompt.
+func TestSettingsCleanupReturnsFromEachFinishPath(t *testing.T) {
+	cases := []struct {
+		name    string
+		request func(*Model)
+	}{
+		{"all screenshots", func(m *Model) { m.RequestAllScreenshotCleanup() }},
+		{"all records", func(m *Model) { m.RequestAllRecordCleanup() }},
+		{"one record's screenshots", func(m *Model) { m.RequestScreenshotCleanup("r1") }},
+		{"one record", func(m *Model) { m.RequestRecordCleanup("r1") }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m, q, _ := settingsTestModel(t)
+			tt := ui.NewTester(m.View, 1440, 1000)
+			settle(t, m, q, tt)
+			m.ShowStorageFromPrepareCheck()
+			settle(t, m, q, tt)
+
+			tc.request(m)
+			settle(t, m, q, tt)
+			if m.cleanup == nil || !m.cleanup.ready {
+				t.Fatalf("the preview did not become confirmable: %+v", m.cleanup)
+			}
+			if err := tt.Click("确认删除"); err != nil {
+				t.Fatal(err)
+			}
+			settle(t, m, q, tt)
+			if m.displayPage() != pageScan {
+				t.Fatalf("the completed cleanup stayed on %v, want the prepare check", m.displayPage())
+			}
+			if m.cleanup != nil {
+				t.Fatalf("the successful cleanup kept its prompt: %+v", m.cleanup)
+			}
+			if tt.HasText("完成后返回准备检查") {
+				t.Fatal("the return promise outlived the return")
+			}
+		})
+	}
+}
+
+// TestSettingsCleanupFailureStaysOnSettings checks a failed batch keeps the
+// user on the storage section with its retry instead of claiming the return.
+func TestSettingsCleanupFailureStaysOnSettings(t *testing.T) {
+	m, q, svc := settingsTestModel(t)
+	svc.deleteErr = errString("权限不足")
+	tt := ui.NewTester(m.View, 1440, 1000)
+	settle(t, m, q, tt)
+	m.ShowStorageFromPrepareCheck()
+	settle(t, m, q, tt)
+
+	m.RequestAllScreenshotCleanup()
+	settle(t, m, q, tt)
+	if err := tt.Click("确认删除"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
+	if m.displayPage() != pageSettings {
+		t.Fatalf("a failed cleanup returned to %v, want settings", m.displayPage())
+	}
+	if m.cleanup == nil || m.cleanup.err == "" {
+		t.Fatalf("the failed cleanup did not keep its retry: %+v", m.cleanup)
+	}
+	if !tt.HasText("删除全部截图失败：权限不足") {
+		t.Fatalf("the failed cleanup does not show its reason: %q", tt.Texts())
 	}
 }
 

@@ -525,12 +525,39 @@ func TestUpdateDotFollowsTheFoundVersion(t *testing.T) {
 	if got := countText(tt.Texts(), "有新版本"); got != 2 {
 		t.Fatalf("the found version came back with %d dots", got)
 	}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	defer func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	}()
+	found.install = func(progress func(downloaded, total int64)) error {
+		close(started)
+		<-release
+		return nil
+	}
 	if err := tt.Click("安装并重启"); err != nil {
 		t.Fatal(err)
 	}
-	settle(t, m, q, tt)
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the install did not start")
+	}
+	tt.Frame()
 	if got := countText(tt.Texts(), "有新版本"); got != 0 {
-		t.Fatalf("the started install left %d update dots", got)
+		t.Fatalf("the installing state left %d update dots", got)
+	}
+	if !tt.HasText("正在下载并安装更新……") {
+		t.Fatalf("the installing state does not show: %q", tt.Texts())
+	}
+	close(release)
+	settle(t, m, q, tt)
+	if !tt.HasText("更新已安装，正在重启应用……") {
+		t.Fatalf("the completed install does not show: %q", tt.Texts())
 	}
 }
 

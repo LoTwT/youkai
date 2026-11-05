@@ -4,6 +4,7 @@ import (
 	"strconv"
 
 	"github.com/LoTwT/youkai/internal/app"
+	"github.com/LoTwT/youkai/internal/scan"
 	"github.com/egoist/mygo/ui"
 )
 
@@ -280,11 +281,13 @@ type settingsShortcut struct {
 }
 
 // settingsShortcuts lists the registered keys in the design's order,
-// Windows notation throughout. The stop key is the global binding the entry
-// point registers for the duration of a scan, so its context says when it is
-// registered; the table claims no key this build does not bind.
+// Windows notation throughout. The stop key's context is the registration
+// state the snapshot proves: registered while a session captures or wraps
+// up, the last failure when that session ended with hotkeyUnavailable, and
+// the future registration otherwise. The key text comes from the one
+// notation table, so it stays the platform's binding.
 func (m *Model) settingsShortcuts(c *ui.Context, t *ui.Theme, tok *Tokens) {
-	for i, shortcut := range settingsShortcutRows() {
+	for i, shortcut := range m.settingsShortcutRows() {
 		if i > 0 {
 			ui.Divider(c)
 		}
@@ -298,15 +301,30 @@ func (m *Model) settingsShortcuts(c *ui.Context, t *ui.Theme, tok *Tokens) {
 	}
 }
 
-func settingsShortcutRows() []settingsShortcut {
+// stopHotkeyStateText derives the stop hotkey's registration state from the
+// authoritative snapshot. The hotkey is registered when the platform session
+// opens, so only capturing and finalizing prove it is held; preparing has a
+// session but no registration yet, and an ended session has released it.
+func (m *Model) stopHotkeyStateText() string {
+	switch m.snap.Scan.Phase {
+	case scan.PhaseCapturing, scan.PhaseFinalizing:
+		return "已注册"
+	}
+	if trigger := m.snap.Scan.Trigger; trigger != nil && trigger.Code == "hotkeyUnavailable" {
+		return "上次注册失败：被其他程序占用"
+	}
+	return "开始扫描时注册"
+}
+
+func (m *Model) settingsShortcutRows() []settingsShortcut {
 	return []settingsShortcut{
-		{action: "停止扫描", context: "扫描期间注册 · 全局", keys: shortcutStopScan},
+		{action: "停止扫描", context: m.stopHotkeyStateText(), keys: shortcutStopScan},
 		{action: "开始扫描", context: "扫描准备", keys: shortcutStartScan},
 		{action: "确认并下一项", context: "记录 · 逐件", keys: shortcutConfirmNext},
 		{action: "保存修改", context: "记录 · 逐件，有未保存修改时", keys: shortcutSave},
 		{action: "下一个待处理件", context: "记录 · 逐件", keys: shortcutNextPending},
 		{action: "导出…", context: "记录工作区", keys: shortcutExport},
-		{action: "在大区域间跳转", context: "任意", keys: shortcutFocusRegion},
+		{action: "在大区域间跳转", context: "任意", keys: shortcutFocusRegion + " / " + shortcutFocusRegionBack},
 		{action: "打开选中的记录", context: "全部记录", keys: shortcutOpenRecord},
 		{action: "关闭浮层/返回表格", context: "任意", keys: shortcutCloseOverlay},
 	}
