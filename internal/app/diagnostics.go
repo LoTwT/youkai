@@ -64,7 +64,7 @@ func DiagnosticsScanFromSnapshot(snapshot Snapshot) *DiagnosticsScan {
 // carries the verified-end code, not a fault, and a recovered
 // interruption carries the settlement's "interrupted" marker rather than
 // a first trigger; neither is turned into a trigger, so a normal or
-// interrupted end reports no fault code. A saved termination has no
+// interrupted end reports no trigger code. A saved termination has no
 // trigger time, so the copied text reports the time as unknown rather
 // than substituting the session's end time.
 func DiagnosticsScanFromTermination(term *record.Termination) *DiagnosticsScan {
@@ -107,15 +107,17 @@ type SystemInfo struct {
 }
 
 // DiagnosticsText assembles the copyable diagnostic summary: the same
-// text the results summary, settings and exit-failure dialogs share. It
-// reports the application version and build commit, the system version,
-// the main display's resolution and scale, and the most recent session's
-// end type, first-trigger code, kind, phase and time.
+// text the fault summary, settings, update-failure and exit-failure
+// dialogs share (09 §4.6). It reports the application version and build
+// commit, the system version, the main display's resolution and scale,
+// and the most recent session's end type, first trigger's code, kind,
+// phase and time.
 //
-// The text is privacy-bounded: it never contains an external window
-// title, the trigger's free-form message or structured params, or a
-// user's home directory. Values still pass through redaction so a caller
-// that hands over a path or malformed code cannot leak one.
+// The text is privacy-bounded by an allowlist: it never contains an
+// external window title, the trigger's free-form message or structured
+// params, or a user's home directory. Values still pass through
+// redaction so a caller that hands over a path or malformed code cannot
+// leak one, but that redaction is only a fallback.
 func DiagnosticsText(in DiagnosticsInput) string {
 	var b strings.Builder
 	b.WriteString("youkai 诊断信息\n")
@@ -139,10 +141,10 @@ func DiagnosticsText(in DiagnosticsInput) string {
 
 	trigger := in.Scan.Trigger
 	if trigger == nil {
-		b.WriteString("  故障码：无\n  首个触发：无\n")
+		b.WriteString("  触发码：无\n  首个触发：无\n")
 		return b.String()
 	}
-	b.WriteString("  故障码：")
+	b.WriteString("  触发码：")
 	b.WriteString(codeText(trigger.Code))
 	b.WriteString("\n  首个触发：")
 	b.WriteString(triggerKindText(trigger.Kind))
@@ -290,8 +292,10 @@ func commitText(commit string) string {
 }
 
 var (
-	unixHomePath = regexp.MustCompile(`(?i)(?:/Users/|/home/)[^/\\\s]+`)
-	winHomePath  = regexp.MustCompile(`(?i)[A-Za-z]:\\Users\\[^\\\s]+`)
+	// The user-name segment runs to the next path separator so a name
+	// with spaces is removed whole.
+	unixHomePath = regexp.MustCompile(`(?i)(?:/Users/|/home/)[^/\\]+`)
+	winHomePath  = regexp.MustCompile(`(?i)[A-Za-z]:\\Users\\[^\\]+`)
 )
 
 // redactText keeps a one-line diagnostic value free of the user's home
@@ -299,6 +303,10 @@ var (
 // <用户目录>, and the current user's exact home path is replaced even when
 // its parent does not follow those layouts. All other text is preserved;
 // window titles have no free-form field here to enter through.
+//
+// This redaction is a fallback, not the privacy guarantee: the guarantee
+// is the field allowlist in DiagnosticsText, which never copies a
+// trigger's message or params.
 func redactText(text string) string {
 	text = strings.TrimSpace(text)
 	if text == "" {
@@ -306,9 +314,19 @@ func redactText(text string) string {
 	}
 	text = strings.NewReplacer("\r", " ", "\n", " ", "\t", " ").Replace(text)
 	if home, err := os.UserHomeDir(); err == nil && home != "" {
-		text = strings.ReplaceAll(text, home, "<用户目录>")
+		text = replaceFold(text, home, "<用户目录>")
 	}
 	text = unixHomePath.ReplaceAllString(text, "<用户目录>")
 	text = winHomePath.ReplaceAllString(text, "<用户目录>")
 	return text
+}
+
+// replaceFold replaces every case-insensitive occurrence of old with new.
+// Windows commonly spells a path with different case from the value
+// os.UserHomeDir returns.
+func replaceFold(text, old, new string) string {
+	if old == "" {
+		return text
+	}
+	return regexp.MustCompile("(?i)"+regexp.QuoteMeta(old)).ReplaceAllString(text, new)
 }

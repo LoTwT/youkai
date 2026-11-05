@@ -40,7 +40,7 @@ func TestDiagnosticsTextReportsRequiredFields(t *testing.T) {
 		"显示：3840×2160（缩放 125%）",
 		"最近一次扫描：",
 		"结束类型：failed",
-		"故障码：windowOccluded",
+		"触发码：windowOccluded",
 		"首个触发：fault",
 		"阶段：capturing",
 		"发生时间：2026-11-05 14:03:21 +08:00",
@@ -82,7 +82,7 @@ func TestDiagnosticsTextNamesAbsentValues(t *testing.T) {
 		})
 		for _, want := range []string{
 			"结束类型：completed",
-			"故障码：无",
+			"触发码：无",
 			"首个触发：无",
 		} {
 			if !strings.Contains(text, want) {
@@ -148,13 +148,56 @@ func TestDiagnosticsTextStripsWindowTitlesAndUserPaths(t *testing.T) {
 	}
 	for _, want := range []string{
 		"结束类型：failed",
-		"故障码：windowOccluded",
+		"触发码：windowOccluded",
 		"首个触发：fault",
 		"阶段：capturing",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("diagnostic text does not contain %q:\n%s", want, text)
 		}
+	}
+}
+
+// TestRedactTextHidesHomePathsWithSpaces pins the fallback redaction: a
+// profile name may contain spaces, so the user segment must run to the
+// next path separator instead of stopping at whitespace.
+func TestRedactTextHidesHomePathsWithSpaces(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			name: "macOS",
+			in:   "/Users/John Smith/Library/Logs/Youkai",
+			want: "<用户目录>/Library/Logs/Youkai",
+		},
+		{
+			name: "Windows",
+			in:   `C:\Users\John Smith\AppData\Local\Youkai`,
+			want: `<用户目录>\AppData\Local\Youkai`,
+		},
+		{
+			name: "Windows spelled in another case",
+			in:   `c:\USERS\John Smith\AppData`,
+			want: `<用户目录>\AppData`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := redactText(tc.in); got != tc.want {
+				t.Fatalf("redactText(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestReplaceFoldIgnoresCase covers the os.UserHomeDir replacement:
+// Windows may report a home path with different case from the value the
+// caller supplied.
+func TestReplaceFoldIgnoresCase(t *testing.T) {
+	got := replaceFold(`C:\USERS\Alice\AppData`, `C:\Users\Alice`, "<用户目录>")
+	if want := `<用户目录>\AppData`; got != want {
+		t.Fatalf("replaceFold = %q, want %q", got, want)
 	}
 }
 
@@ -202,7 +245,7 @@ func TestDiagnosticsScanFromTermination(t *testing.T) {
 	if strings.Contains(text, scan.CodeVerifiedEnd) {
 		t.Errorf("completed termination reported the verified-end code as a fault:\n%s", text)
 	}
-	if !strings.Contains(text, "故障码：无") {
+	if !strings.Contains(text, "触发码：无") {
 		t.Errorf("completed termination does not report an absent fault code:\n%s", text)
 	}
 
@@ -246,7 +289,7 @@ func TestDiagnosticsTextRejectsNonCodeTriggerText(t *testing.T) {
 			Trigger: &scan.Trigger{Kind: scan.TriggerFault, Code: title, Phase: scan.PhasePreparing},
 		},
 	})
-	if !strings.Contains(text, "故障码：unknown") {
+	if !strings.Contains(text, "触发码：unknown") {
 		t.Errorf("malformed trigger code was not replaced:\n%s", text)
 	}
 	if strings.Contains(text, title) {
