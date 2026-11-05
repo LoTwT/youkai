@@ -200,10 +200,10 @@ func TestResultsSplitAt1024(t *testing.T) {
 }
 
 // TestResultsWideSplitAt1440 checks the 1440 layout: a 560-DIP table with
-// the widened set/main columns, a detail pane that keeps the design's
-// ~612-DIP room, and 340×170 evidence.
+// the widened set/main columns, the 792-DIP detail pane the 64-DIP rail
+// leaves (1440 − 64 − 24 − 560), and 340×170 evidence.
 func TestResultsWideSplitAt1440(t *testing.T) {
-	const detailTarget = 612
+	const detailWidth = 792
 	m, _, tt := openResponsiveResults(t, responsiveResultRecord(t), 1440, 900)
 	if !resultsSideBySide(m.contentWidth) {
 		t.Fatal("1440 did not use the side-by-side results split")
@@ -211,8 +211,8 @@ func TestResultsWideSplitAt1440(t *testing.T) {
 	if m.split != 560 {
 		t.Fatalf("the results table is %v DIPs wide, want 560", m.split)
 	}
-	if got := m.resultsDetailWidth(); got < detailTarget || got > 800 {
-		t.Fatalf("the detail pane is %v DIPs wide, want about %v", got, detailTarget)
+	if got := m.resultsDetailWidth(); got != detailWidth {
+		t.Fatalf("the detail pane is %v DIPs wide, want %v", got, detailWidth)
 	}
 	if width, height := m.evidenceDisplaySize(); width != 340 || height != 170 {
 		t.Fatalf("the 1440 evidence is %v×%v, want 340×170", width, height)

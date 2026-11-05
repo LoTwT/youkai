@@ -239,7 +239,7 @@ func TestHistoryPageWideTable(t *testing.T) {
 		if !ok {
 			t.Fatalf("the wide table does not show %q", title)
 		}
-		if rect.X < navRailWidth || rect.X+rect.W > 1440-12 {
+		if rect.X < navRailWidth+12 || rect.X+rect.W > 1440-12 {
 			t.Errorf("%q at %+v is outside the page", title, rect)
 		}
 	}
@@ -278,7 +278,7 @@ func TestHistoryPageNarrowTableFits(t *testing.T) {
 		if !ok {
 			t.Fatalf("the 1020 table does not show %q", title)
 		}
-		if rect.X < navRailWidth || rect.X+rect.W > 1020-12 {
+		if rect.X < navRailWidth+12 || rect.X+rect.W > 1020-12 {
 			t.Errorf("%q at %+v is outside the 1020 page", title, rect)
 		}
 	}
@@ -317,7 +317,7 @@ func TestHistoryMinFixedActionColumn(t *testing.T) {
 	if historyMinTableWidth860 != 776 {
 		t.Fatalf("860 table minimum = %v, want 776", historyMinTableWidth860)
 	}
-	panelLeft, panelRight := float32(navRailWidth), float32(860-12)
+	panelLeft, panelRight := float32(navRailWidth+12), float32(860-12)
 	for _, title := range []string{"时间", "采集", "可导出", "待校对", "无法导出", "覆盖", "操作"} {
 		rect, ok := tt.Find(title)
 		if !ok {

@@ -26,6 +26,10 @@ import (
 	"github.com/LoTwT/youkai/internal/record"
 	"github.com/LoTwT/youkai/internal/ui"
 	"github.com/egoist/mygo"
+	// MyGo's built-in controls, dialogs and menus speak Simplified Chinese
+	// only when the app links their catalog; SetLanguages alone selects a
+	// language but leaves their strings in English (R-15).
+	_ "github.com/egoist/mygo/locales/zh-Hans"
 	mgui "github.com/egoist/mygo/ui"
 )
 

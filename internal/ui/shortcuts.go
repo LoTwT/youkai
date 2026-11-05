@@ -15,7 +15,7 @@ func (m *Model) registerPageShortcuts(c *ui.Context) {
 	if m.scanStartReady() {
 		c.OnShortcut(ui.Cmd, ui.KeyR, func() { m.requestScanStart() })
 	}
-	if m.displayPage() == pageResults {
+	if m.displayPage() == pageResults && !m.exportEntryBlocked() {
 		c.OnShortcut(ui.Cmd, ui.KeyE, func() { m.revealExports() })
 	}
 	c.OnShortcut(0, ui.KeyF6, func() { m.focusPageContent(c) })

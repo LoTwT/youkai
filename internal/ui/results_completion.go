@@ -123,17 +123,28 @@ func completionExclusionText(counts recordCounts) string {
 		counts.Failed, counts.Unprocessed, counts.OtherExcluded)
 }
 
+// recordCoverage is the record's single coverage conclusion: the frozen
+// export snapshot when one exists, else the checkpoint. The workspace
+// title bar and the summary body both read it, so they cannot disagree
+// (M-1).
+func (m *Model) recordCoverage() record.CoverageStatus {
+	if m.exportData != nil {
+		return m.exportData.Summary.Coverage
+	}
+	if m.recData != nil {
+		return m.recData.Checkpoint.Session.Coverage.Status
+	}
+	return record.CoverageUnknown
+}
+
 // completionCoverageText states the coverage conclusion of the card's own
 // record. A partial coverage is never rounded up and names the snapshot
 // mark the exported file will carry.
 func (m *Model) completionCoverageText() string {
-	status := record.CoverageUnknown
+	status := m.recordCoverage()
 	var summary *app.ExportSummary
 	if m.exportData != nil {
 		summary = &m.exportData.Summary
-		status = summary.Coverage
-	} else if m.recData != nil {
-		status = m.recData.Checkpoint.Session.Coverage.Status
 	}
 	switch status {
 	case record.CoverageComplete:

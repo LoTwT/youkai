@@ -524,7 +524,6 @@ func (m *Model) detailPane(c *ui.Context) {
 			return
 		}
 		ui.Column(c).Gap(t.Space(2)).Children(func() {
-			m.navigationPrompt(c, t)
 			m.detailHeader(c, t, row)
 			if row.Status == record.StatusProduced {
 				if row.Structured == nil {

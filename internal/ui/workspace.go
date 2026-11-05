@@ -26,6 +26,15 @@ func (m *Model) recordWorkspace(c *ui.Context, t *ui.Theme) {
 	ui.Column(c).Grow(1).FillHeight().Children(func() {
 		m.recordWorkspaceHeader(c, t, tok)
 		ui.Divider(c)
+		// The unsaved-input prompt belongs to the whole workspace: leaving
+		// the record, switching destinations or quitting must show it from
+		// 摘要 as well as 逐件 (H-1).
+		if m.navPrompt != nil {
+			ui.Row(c).Padding(t.Space(2), t.Space(3)).Children(func() {
+				m.navigationPrompt(c, t)
+			})
+			ui.Divider(c)
+		}
 		switch m.recordTab {
 		case recordTabItems:
 			ui.Column(c).Grow(1).Padding(t.Space(3), t.Space(3)).Gap(t.Space(2)).Children(func() {
@@ -69,8 +78,7 @@ func (m *Model) recordWorkspaceHeader(c *ui.Context, t *ui.Theme, tok *Tokens) {
 		// The export entry is part of the record's title bar even when this
 		// build cannot write files: disabled, it still shows where export
 		// lives. The export dialog replaces this entry in PR-15.
-		blocked := !m.exportAvailable() || m.exportBlockedReason() != ""
-		if ui.Button(c, "导出…").Disabled(blocked).Clicked() {
+		if ui.Button(c, "导出…").Disabled(m.exportEntryBlocked()).Clicked() {
 			m.revealExports()
 		}
 	})
@@ -83,7 +91,7 @@ func (m *Model) recordWorkspaceHeader(c *ui.Context, t *ui.Theme, tok *Tokens) {
 func (m *Model) workspaceStatusTexts() (coverage, pending, saved string) {
 	coverage = "覆盖：—"
 	if m.recData != nil {
-		coverage = "覆盖：" + coverageText(m.recData.Checkpoint.Session.Coverage.Status)
+		coverage = "覆盖：" + coverageText(m.recordCoverage())
 	}
 	pending = "待处理 —"
 	if m.rec != nil {

@@ -311,7 +311,7 @@ func TestRecordWorkspaceShortcuts(t *testing.T) {
 			SavedAt: time.Date(2026, 10, 20, 10, 0, 0, 0, time.UTC),
 		}},
 		loads: map[string]*record.Recovery{
-			"r1": recovery(item(1, record.StatusProduced, "", "", "一")),
+			"r1": recovery(uiStructuredItem(t, 1, record.QualityAutoAccepted)),
 		},
 	}
 	m, q := newTestModel(t, Config{
@@ -351,6 +351,97 @@ func TestRecordWorkspaceShortcuts(t *testing.T) {
 	settle(t, m, q, tt)
 	if !tt.Focused("摘要") {
 		t.Fatalf("F6 did not enter the workspace's first region: %q", tt.Texts())
+	}
+}
+
+// TestWorkspaceShowsTheUnsavedPromptFromTheSummary checks H-1: switching
+// to 摘要 keeps the item editor's draft alive, so leaving the record or
+// quitting must still show the save/discard prompt from that view.
+func TestWorkspaceShowsTheUnsavedPromptFromTheSummary(t *testing.T) {
+	m, q, tt, _ := openReviewRecordPage(t, reviewRowItem(t, 1, 12))
+	if err := tt.Click("编辑"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
+	m.edit.draft.Level = "13"
+	if err := tt.Click("摘要"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
+	if m.recordTab != recordTabSummary || m.edit == nil {
+		t.Fatalf("the summary tab did not keep the draft: tab %v edit %+v", m.recordTab, m.edit)
+	}
+
+	// Leaving for settings pauses behind the prompt, visible on 摘要.
+	if err := tt.Click("设置"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if m.displayPage() != pageResults || m.navPrompt == nil ||
+		m.navPrompt.kind != navPage || m.navPrompt.page != pageSettings {
+		t.Fatalf("leaving the summary did not prompt: page %v prompt %+v", m.displayPage(), m.navPrompt)
+	}
+	if !tt.HasText("当前条目有未保存的修改。") || !tt.HasText("保存修改并继续") {
+		t.Fatalf("the summary does not show the unsaved prompt: %q", tt.Texts())
+	}
+	if !tt.HasText("留在当前项") {
+		t.Fatalf("the summary prompt lost its stay action: %q", tt.Texts())
+	}
+
+	// A quit requested from the tray shows the same prompt with exit
+	// wording while the summary stays on screen.
+	m.promptStay()
+	tt.Frame()
+	if m.AllowClose() {
+		t.Fatal("the dirty summary allowed the close")
+	}
+	tt.Frame()
+	if m.navPrompt == nil || m.navPrompt.kind != navExit {
+		t.Fatalf("the close did not hold behind the exit prompt: %+v", m.navPrompt)
+	}
+	if !tt.HasText("当前条目有未保存的修改，退出前请处理。") || !tt.HasText("保存修改并退出") {
+		t.Fatalf("the summary does not show the exit prompt: %q", tt.Texts())
+	}
+	m.promptStay()
+}
+
+// TestWorkspaceCoverageMatchesTheConclusion checks M-1: the title bar and
+// the summary body read one coverage conclusion. A record that claims
+// complete coverage without a verified sort is downgraded by the export
+// guard, and both places must say partial.
+func TestWorkspaceCoverageMatchesTheConclusion(t *testing.T) {
+	rec := recovery(item(1, record.StatusProduced, "", "", "一"))
+	rec.Checkpoint.Session.SessionID = "r1"
+	rec.Checkpoint.Session.Coverage.Status = record.CoverageComplete
+	svc := &fakeService{
+		list: []record.RecordInfo{{
+			ID: "r1", LatestRevision: 1,
+			SavedAt: time.Date(2026, 11, 5, 21, 40, 0, 0, time.UTC),
+		}},
+		loads: map[string]*record.Recovery{"r1": rec},
+	}
+	m, q := newTestModel(t, Config{
+		Service:           svc,
+		DirectExportSaver: &fakeDirectExportSaver{},
+	})
+	m.SetContentSize(1180, 760)
+	tt := ui.NewTester(m.View, 1180, 760)
+	settle(t, m, q, tt)
+	m.histChoice = slotHistoryLabel(t, m, "r1")
+	m.OpenHistory()
+	settle(t, m, q, tt)
+
+	if m.recordTab != recordTabSummary {
+		t.Fatalf("the record opened on tab %v, want the summary", m.recordTab)
+	}
+	if !tt.HasText("覆盖：部分") {
+		t.Fatalf("the title bar does not show the export guard's coverage: %q", tt.Texts())
+	}
+	if !tt.HasText("覆盖：部分覆盖（导出文件会标注“部分快照”）") {
+		t.Fatalf("the summary does not show the same coverage: %q", tt.Texts())
+	}
+	if tt.HasText("覆盖：完整") {
+		t.Fatalf("a coverage the export cannot confirm is shown as complete: %q", tt.Texts())
 	}
 }
 
