@@ -83,10 +83,11 @@ func main() {
 	// then be held before Run and everything after it: the framework reads
 	// from PathUserData as Run starts, and the service reads settings,
 	// checkpoints and history under the same root. A second youkai process
-	// on the same data root — under any path alias — fails the occupancy and
-	// exits; MyGo's single-instance lock does not cover this occupancy. The
-	// service takes over the occupancy for the explicit-exit wrap-up; the
-	// deferred release stays as the crash fallback (Close is idempotent).
+	// on the same data root — under any path alias — fails the occupancy,
+	// shows why and exits; MyGo's single-instance lock does not cover this
+	// occupancy. The service takes over the occupancy for the explicit-exit
+	// wrap-up; the deferred release stays as the crash fallback (Close is
+	// idempotent).
 	dataLock, err := acquireInstanceLocks(paths.Data, instanceLockOps{
 		requestSingleInstance: mygo.App.RequestSingleInstanceLock,
 		acquireDataRoot:       app.AcquireDataRootLock,
@@ -96,7 +97,8 @@ func main() {
 		return
 	}
 	if err != nil {
-		log.Fatalf("youkai: %v", err)
+		reportDataRootFailure(err)
+		os.Exit(1)
 	}
 	defer dataLock.Close()
 	log.Printf("youkai: data-root lock acquired on %q", paths.Data)
@@ -129,7 +131,9 @@ func main() {
 	// other's lines. The alternative — per-process file
 	// names — would leave one file per start in the directory and make
 	// "attach the log" mean picking among many. The cost is that the lines
-	// above, and lock failures, reach stderr only. The sink becomes the
+	// above, and lock failures, never reach the log file: stderr carries
+	// them on development builds, and an installed Windows build gets the
+	// startup notice instead (reportDataRootFailure). The sink becomes the
 	// logger's whole output: it writes the file first and mirrors to
 	// stderr afterwards, discarding the mirror's errors — an installed
 	// Windows process runs on the GUI subsystem with no console, where
