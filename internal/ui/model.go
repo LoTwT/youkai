@@ -614,10 +614,10 @@ type HistoryEntry struct {
 	// Interrupted marks a record recovery finished after a crash or a
 	// lost process; it is not the still-running session.
 	Interrupted bool
-	// IncompletePositions is the number of inventory positions whose
-	// traversal was incomplete. Known is false until the checkpoint carries
-	// per-position conclusions (PR-03), so zero alone does not mean every
-	// position completed.
+	// IncompletePositions is the number of inventory positions the
+	// traversal marked degraded. Known is false when the checkpoint carries
+	// no per-position conclusions and its scope cannot be read, so zero
+	// alone does not mean every position completed.
 	IncompletePositions      int
 	IncompletePositionsKnown bool
 	TotalBytes               int64

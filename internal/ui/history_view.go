@@ -265,8 +265,8 @@ type historyResult struct {
 }
 
 // historyResultFor states one record's conclusion from the four-class
-// counts of PR-02 and its termination. It never shows a raw fault code:
-// an unknown code degrades to the ending alone (09 §4.3).
+// counts and its termination. It never shows a raw fault code: an unknown
+// code degrades to the ending alone (09 §4.3).
 func (m *Model) historyResultFor(entry HistoryEntry) historyResult {
 	if entry.Unreadable {
 		return historyResult{tag: "!", text: "无法打开：记录不可读", tone: historyToneDanger}
