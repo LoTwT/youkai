@@ -111,6 +111,8 @@ func classifyWithExport(item *record.ItemRecord, exported ExportItem, usable boo
 	// quality or a payload the export refuses all leave the item with a
 	// person. usableItem already applies both steps, so one refusal check
 	// is the whole decision; no second payload decode is needed here.
+	// This relies on exportQuality and itemPendingReview keeping the same
+	// quality rule, pinned by TestUsableItemIsNeverPendingReview.
 	if !usable {
 		return ItemClassPendingReview
 	}

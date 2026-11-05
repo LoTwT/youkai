@@ -45,11 +45,12 @@ type HistoryRecord struct {
 	IncompletePositions      int
 	IncompletePositionsKnown bool
 	// Interrupted reports that the newest checkpoint never recorded a
-	// termination (or recorded the interrupted kind) and this is not the
-	// service's active record: the session ended by a crash or a lost
-	// process and was recovered as interrupted. A running scan also has no
-	// termination in its checkpoint; the service excludes it so the
-	// history view never labels an in-progress scan as interrupted.
+	// termination (or recorded the interrupted kind) and this is not a
+	// still-running scan: the session ended by a crash or a lost process
+	// and was recovered as interrupted. A running scan also has no
+	// termination in its checkpoint; the service excludes only that
+	// still-running record, so an interrupted end recorded after the
+	// session finished is reported consistently within the same run.
 	Interrupted bool
 	// ExportableCount, FailedCount, UnprocessedCount, PendingReview and
 	// OtherCount are the current history table's mutually exclusive
@@ -137,12 +138,14 @@ func historySessionSummary(info record.RecordInfo, cp *record.Checkpoint, active
 	return entry
 }
 
-// activeRecordID returns the record the service is currently scanning or
-// wrapping, or "" when the active slot is free.
+// activeRecordID returns the record the service is still running, or ""
+// when the slot is empty or its session has wrapped. A wrapped session is
+// finished even though the slot keeps it until the next start, so its
+// checkpoint — including an interrupted end — is reported as stored.
 func (s *Service) activeRecordID() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.active == nil {
+	if s.active == nil || s.active.wrapped {
 		return ""
 	}
 	return string(s.active.id)

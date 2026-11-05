@@ -88,6 +88,114 @@ func TestHistoryLegacyBucketsKeepOldSemantics(t *testing.T) {
 	}
 }
 
+// previousHistoryItemCounts is the pre-classification history breakdown
+// from 5ae58ce, kept as an independent oracle for the legacy buckets.
+func previousHistoryItemCounts(items []record.ItemRecord) (exportable, failed, unprocessed, other int64) {
+	for _, item := range items {
+		switch {
+		case item.Status == record.StatusFailed:
+			failed++
+		case item.Status == record.StatusUnprocessed:
+			unprocessed++
+		case item.Status != record.StatusProduced:
+			other++
+		case !hasStructured(item):
+			other++
+		case itemPendingReview(item):
+		default:
+			if _, ok := usableItem(&item); ok {
+				exportable++
+			} else {
+				other++
+			}
+		}
+	}
+	return exportable, failed, unprocessed, other
+}
+
+// itemClassificationCorpus is the export fixture plus every item shape the
+// history buckets distinguish, with each produced item repeated under all
+// four qualities and revisions 0 and 1. The expansion pins the two rules
+// the classifier relies on without re-decoding a usable payload.
+func itemClassificationCorpus(t *testing.T) []record.ItemRecord {
+	t.Helper()
+	none := zzz.CaptureState{ManagementState: zzz.ManagementNone, EquippedState: zzz.EquippedStateUnequipped}
+	items := append([]record.ItemRecord(nil), exportFixtureRecord(t).Checkpoint.Items...)
+	items = append(items,
+		legacyEquippedOnlyItem(t, 101),
+		warningExportableItem(t, 102),
+		unstructuredItem(103),
+		exportableHistoryItem(t, 104),
+		reviewItem(t, 105, reviewData()),
+		record.ItemRecord{Sequence: 106, Status: record.StatusQueued, Quality: record.QualityNotEvaluated},
+		record.ItemRecord{Sequence: 107, Status: record.StatusRunning, Quality: record.QualityNotEvaluated},
+		exportStructuredItem(t, 108, record.QualityAutoAccepted,
+			testDisc(31300, 2, "attack", "abc", zzz.UnitFlat), none),
+		record.ItemRecord{Sequence: 109, Status: record.StatusFailed, Failure: "识别失败", Quality: record.QualityNotEvaluated},
+		record.ItemRecord{Sequence: 110, Status: record.StatusUnprocessed, Reason: record.ReasonInterrupted, Quality: record.QualityNotEvaluated},
+	)
+	base := append([]record.ItemRecord(nil), items...)
+	qualities := []record.Quality{
+		record.QualityAutoAccepted,
+		record.QualityHumanConfirmed,
+		record.QualityNeedsReview,
+		record.QualityNotEvaluated,
+	}
+	seq := int64(1000)
+	for _, item := range base {
+		if item.Status != record.StatusProduced {
+			continue
+		}
+		for _, quality := range qualities {
+			for _, revision := range []int64{0, 1} {
+				candidate := item
+				candidate.Quality = quality
+				candidate.Revision = revision
+				seq++
+				candidate.Sequence = seq
+				items = append(items, candidate)
+			}
+		}
+	}
+	return items
+}
+
+// TestUsableItemIsNeverPendingReview pins the quality rule shared by
+// exportQuality and itemPendingReview: the classifier may decide pending
+// review from the export refusal alone only while a usable item is never
+// also pending review.
+func TestUsableItemIsNeverPendingReview(t *testing.T) {
+	corpus := itemClassificationCorpus(t)
+	for _, item := range corpus {
+		if _, usable := usableItem(&item); usable && itemPendingReview(item) {
+			t.Errorf("item %d (%s/%s rev %d) is usable and pending review",
+				item.Sequence, item.Status, item.Quality, item.Revision)
+		}
+	}
+	t.Logf("checked %d items", len(corpus))
+}
+
+// TestHistoryLegacyBucketsMatchPreviousRules compares the legacy buckets
+// item by item with the pre-classification implementation, so the existing
+// history table, results page and cleanup preview keep their numbers.
+func TestHistoryLegacyBucketsMatchPreviousRules(t *testing.T) {
+	corpus := itemClassificationCorpus(t)
+	for i := range corpus {
+		one := corpus[i : i+1]
+		oldExportable, oldFailed, oldUnprocessed, oldOther := previousHistoryItemCounts(one)
+		oldPending := int64(pendingReviewCount(one))
+		got := historyItemTotalsOf(one)
+		if got.Exportable != oldExportable || got.Failed != oldFailed ||
+			got.Unprocessed != oldUnprocessed || got.Other != oldOther ||
+			got.PendingReview != oldPending {
+			t.Errorf("item %d (%s/%s rev %d): new %+v, old e%d f%d u%d o%d p%d",
+				corpus[i].Sequence, corpus[i].Status, corpus[i].Quality, corpus[i].Revision,
+				got, oldExportable, oldFailed, oldUnprocessed, oldOther, oldPending)
+		}
+	}
+	t.Logf("checked %d items", len(corpus))
+}
+
 // TestServiceHistoryRecordsIncludesExportBreakdown checks that the history
 // metadata carries the same counts and coverage denominator the table
 // renders, without loading the record.
@@ -176,9 +284,10 @@ func TestHistoryRecordsSummaryAndInterruption(t *testing.T) {
 	store, paths := cleanupStore(t)
 	const completedID = "history-completed"
 	const interruptedID = "history-interrupted"
+	const endedInterruptedID = "history-interrupted-ended"
 	started := time.Date(2026, 11, 5, 8, 0, 0, 0, time.UTC)
 	ended := started.Add(14 * time.Minute)
-	for _, id := range []string{completedID, interruptedID} {
+	for _, id := range []string{completedID, interruptedID, endedInterruptedID} {
 		if err := store.CreateRecord(id); err != nil {
 			t.Fatalf("CreateRecord %s: %v", id, err)
 		}
@@ -211,6 +320,21 @@ func TestHistoryRecordsSummaryAndInterruption(t *testing.T) {
 	}
 	if _, err := store.SaveCheckpoint(interruptedID, interrupted); err != nil {
 		t.Fatalf("SaveCheckpoint interrupted: %v", err)
+	}
+	endedInterrupted := record.Checkpoint{
+		Session: record.SessionShell{
+			SessionID: endedInterruptedID, Game: "zzz", Entity: "driveDisc",
+			Client: record.ClientWindowsLocal, Locale: "zh-CN",
+			Scope:     json.RawMessage(`{"rarity":"S"}`),
+			StartedAt: started.Add(2 * time.Hour),
+			Termination: &record.Termination{
+				Kind: record.TerminationInterrupted, Code: "interrupted", Phase: record.PhaseCapturing,
+			},
+			Coverage: record.Coverage{Status: record.CoverageUnknown},
+		},
+	}
+	if _, err := store.SaveCheckpoint(endedInterruptedID, endedInterrupted); err != nil {
+		t.Fatalf("SaveCheckpoint ended interrupted: %v", err)
 	}
 	svc := newServiceWithStore(t, paths, store, nil, func() (Recognizer, error) { return newFakeRecognizer(), nil })
 
@@ -248,6 +372,10 @@ func TestHistoryRecordsSummaryAndInterruption(t *testing.T) {
 	if broken.Counts != (ItemClassCounts{PendingBackfill: 1}) {
 		t.Fatalf("interrupted counts = %+v, want one pending backfill", broken.Counts)
 	}
+	endedBroken := byID[endedInterruptedID]
+	if !endedBroken.Interrupted {
+		t.Fatal("an explicit interrupted termination is not marked interrupted")
+	}
 
 	estimate, err := svc.ScanDurationEstimate()
 	if err != nil {
@@ -267,6 +395,20 @@ func TestHistoryRecordsSummaryAndInterruption(t *testing.T) {
 	for _, rec := range records {
 		if rec.ID == interruptedID && rec.Interrupted {
 			t.Fatal("the active record is labeled interrupted")
+		}
+	}
+
+	// A wrapped session has finished even though the slot keeps it until
+	// the next start. Its stored interrupted termination must be reported,
+	// not suppressed as if the scan were still running.
+	svc.active = &activeSession{id: endedInterruptedID, wrapped: true}
+	records, err = svc.HistoryRecords()
+	if err != nil {
+		t.Fatalf("HistoryRecords with wrapped session: %v", err)
+	}
+	for _, rec := range records {
+		if rec.ID == endedInterruptedID && !rec.Interrupted {
+			t.Fatal("a wrapped record with an interrupted termination is not marked interrupted")
 		}
 	}
 }
