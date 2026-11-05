@@ -365,6 +365,10 @@ func (d *recordDeliverer) observeScope(raw json.RawMessage) {
 	}
 	if ledger, ok := record.DecodePositionLedger(raw); ok {
 		d.shell.PositionLedger = &ledger
+	} else {
+		// A final report that cannot be decoded must not leave an older
+		// ledger looking current: readers go back to "cannot list".
+		d.shell.PositionLedger = nil
 	}
 	d.sinceSave++
 	if d.saveErr == nil {

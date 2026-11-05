@@ -396,7 +396,7 @@ func TestFinalObservedScopePersistsPositionConclusions(t *testing.T) {
 		t.Fatalf("load: %v", err)
 	}
 	ledger := rec.Checkpoint.Session.PositionLedger
-	if ledger == nil || !ledger.SortVerified || len(ledger.Positions) != 2 {
+	if ledger == nil || ledger.Sort != record.SortVerificationVerified || len(ledger.Positions) != 2 {
 		t.Fatalf("position ledger = %+v, want two conclusions with a verified sort", ledger)
 	}
 	want := []record.PositionConclusion{
@@ -407,6 +407,48 @@ func TestFinalObservedScopePersistsPositionConclusions(t *testing.T) {
 		if ledger.Positions[i] != want[i] {
 			t.Fatalf("position %d = %+v, want %+v", i+1, ledger.Positions[i], want[i])
 		}
+	}
+}
+
+// TestUndecodableFinalScopeClearsPositionLedger checks the failure path:
+// when the final report cannot be decoded, a ledger written from an
+// earlier report must not survive as if it were current. Readers go back
+// to "cannot list".
+func TestUndecodableFinalScopeClearsPositionLedger(t *testing.T) {
+	paths := newTestPaths(t)
+	sess := platformfake.NewSession()
+	port := &platformfake.Port{NewSession: func() *platformfake.Session { return sess }}
+	initial := json.RawMessage(`{"kind":"zzzInventory","sort":"verified","coverage":"partial","positions":[{"position":1,"complete":true}]}`)
+	final := json.RawMessage(`{"kind":"zzzInventory","sort":"verified","coverage":"partial","positions":"nope"}`)
+	ctrl := &collect.Controller{
+		Port:   port,
+		Target: collect.MacCloudTarget,
+		Hotkey: platform.HotkeySpec{Key: platform.KeyS},
+		Traversal: func() collect.Traversal {
+			return &reportingTraversal{scope: initial, after: final}
+		},
+	}
+	svc, _ := newTestService(t, paths, staticSource{spec: specOf(ctrl)}, func() (Recognizer, error) { return newFakeRecognizer(), nil })
+	outcome, err := svc.Start(StartRequest{ID: "undecodable-position-ledger"})
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	waitWrapped(t, svc)
+
+	reopened, err := record.Open(paths.Data)
+	if err != nil {
+		t.Fatalf("reopen store: %v", err)
+	}
+	rec, err := reopened.Load(string(outcome.SessionID))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if rec.Checkpoint.Session.PositionLedger != nil {
+		t.Fatalf("position ledger survived an undecodable final report: %+v",
+			rec.Checkpoint.Session.PositionLedger)
+	}
+	if _, known := rec.Checkpoint.Session.PositionConclusions(); known {
+		t.Fatal("positions are reported as known after an undecodable final report")
 	}
 }
 

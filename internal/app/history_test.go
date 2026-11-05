@@ -278,9 +278,11 @@ func TestServiceHistoryRecordsIncludesExportBreakdown(t *testing.T) {
 }
 
 // TestHistoryRecordsPositionConclusions checks the summary-facing
-// position conclusions across the three checkpoint shapes: the new typed
-// ledger, a legacy checkpoint whose conclusions live only in the observed
-// scope, and a record with neither (cannot list).
+// position conclusions across the checkpoint shapes the summary and
+// notification must describe: a new typed ledger, a legacy checkpoint
+// whose conclusions live only in the observed scope, a complete scan, a
+// scan with six complete positions but an unverified sort, a stop at
+// position 3, and a record with no position data (cannot list).
 func TestHistoryRecordsPositionConclusions(t *testing.T) {
 	store, paths := cleanupStore(t)
 	started := time.Date(2026, 11, 5, 9, 0, 0, 0, time.UTC)
@@ -292,8 +294,16 @@ func TestHistoryRecordsPositionConclusions(t *testing.T) {
 		{"position":5,"complete":false,"stage":"top","reasonCode":"navigationMismatch"},
 		{"position":6,"complete":true}
 	]}`)
-	ledger := &record.PositionLedger{
-		SortVerified: true,
+	allComplete := func(sort record.SortVerification) *record.PositionLedger {
+		ledger := &record.PositionLedger{Sort: sort}
+		for i := 1; i <= record.PositionCount; i++ {
+			ledger.Positions = append(ledger.Positions,
+				record.PositionConclusion{Position: i, Complete: true})
+		}
+		return ledger
+	}
+	degradedLedger := &record.PositionLedger{
+		Sort: record.SortVerificationVerified,
 		Positions: []record.PositionConclusion{
 			{Position: 1, Complete: true},
 			{Position: 2, Complete: true},
@@ -303,61 +313,116 @@ func TestHistoryRecordsPositionConclusions(t *testing.T) {
 			{Position: 6, Complete: true},
 		},
 	}
-	completeLedger := &record.PositionLedger{SortVerified: true}
-	for i := 1; i <= record.PositionCount; i++ {
-		completeLedger.Positions = append(completeLedger.Positions,
-			record.PositionConclusion{Position: i, Complete: true})
+	states := func(states ...PositionOutcomeState) []PositionOutcomeState { return states }
+	allCompleteStates := states(
+		PositionOutcomeComplete, PositionOutcomeComplete, PositionOutcomeComplete,
+		PositionOutcomeComplete, PositionOutcomeComplete, PositionOutcomeComplete,
+	)
+	degradedStates := states(
+		PositionOutcomeComplete, PositionOutcomeComplete, PositionOutcomeDegraded,
+		PositionOutcomeComplete, PositionOutcomeDegraded, PositionOutcomeComplete,
+	)
+	degradedCauses := map[int][2]string{
+		3: {"filter", "navigationMismatch"},
+		5: {"top", "navigationMismatch"},
 	}
 	cases := []struct {
-		id       string
-		shell    record.SessionShell
-		coverage record.CoverageStatus
-		known    bool
-		listed   []IncompletePosition
+		id           string
+		shell        record.SessionShell
+		coverage     record.CoverageStatus
+		known        bool
+		incomplete   int
+		sortVerified bool
+		sortKnown    bool
+		states       []PositionOutcomeState
+		degraded     map[int][2]string
 	}{
 		{
 			id: "positions-new",
 			shell: record.SessionShell{
-				PositionLedger: ledger,
+				PositionLedger: degradedLedger,
 				// The typed ledger wins over a conflicting legacy scope.
 				ObservedScope: json.RawMessage(`{"positions":[{"position":6,"complete":false,"stage":"scroll"}]}`),
 			},
-			coverage: record.CoveragePartial,
-			known:    true,
-			listed: []IncompletePosition{
-				{Position: 3, Stage: "filter", ReasonCode: "navigationMismatch"},
-				{Position: 5, Stage: "top", ReasonCode: "navigationMismatch"},
-			},
+			coverage:     record.CoveragePartial,
+			known:        true,
+			incomplete:   2,
+			sortVerified: true,
+			sortKnown:    true,
+			states:       degradedStates,
+			degraded:     degradedCauses,
 		},
 		{
-			id:       "positions-legacy",
-			shell:    record.SessionShell{ObservedScope: scope},
-			coverage: record.CoveragePartial,
-			known:    true,
-			listed: []IncompletePosition{
-				{Position: 3, Stage: "filter", ReasonCode: "navigationMismatch"},
-				{Position: 5, Stage: "top", ReasonCode: "navigationMismatch"},
-			},
+			id:           "positions-legacy",
+			shell:        record.SessionShell{ObservedScope: scope},
+			coverage:     record.CoveragePartial,
+			known:        true,
+			incomplete:   2,
+			sortVerified: true,
+			sortKnown:    true,
+			states:       degradedStates,
+			degraded:     degradedCauses,
 		},
 		{
-			id:       "positions-complete",
-			shell:    record.SessionShell{PositionLedger: completeLedger},
-			coverage: record.CoverageComplete,
-			known:    true,
+			id:           "positions-complete",
+			shell:        record.SessionShell{PositionLedger: allComplete(record.SortVerificationVerified)},
+			coverage:     record.CoverageComplete,
+			known:        true,
+			sortVerified: true,
+			sortKnown:    true,
+			states:       allCompleteStates,
 		},
 		{
-			// A position cut by a session-fatal fault is explained by the
-			// termination, not by a position-level cause, so it is known
-			// but not listed as a degraded position.
-			id: "positions-fatal-cut",
+			id:           "positions-unverified-sort",
+			shell:        record.SessionShell{PositionLedger: allComplete(record.SortVerificationUnverified)},
+			coverage:     record.CoveragePartial,
+			known:        true,
+			sortVerified: false,
+			sortKnown:    true,
+			states:       allCompleteStates,
+		},
+		{
+			// Stopping at position 3 leaves 1 and 2 complete, 3
+			// truncated and 4–6 never reached; the summary can say the
+			// scan covered two positions.
+			id: "positions-cancelled-at-3",
 			shell: record.SessionShell{PositionLedger: &record.PositionLedger{
+				Sort: record.SortVerificationVerified,
 				Positions: []record.PositionConclusion{
 					{Position: 1, Complete: true},
-					{Position: 2},
+					{Position: 2, Complete: true},
+					{Position: 3},
 				},
 			}},
+			coverage:     record.CoveragePartial,
+			known:        true,
+			sortVerified: true,
+			sortKnown:    true,
+			states: states(
+				PositionOutcomeComplete, PositionOutcomeComplete, PositionOutcomeTruncated,
+				PositionOutcomeNotReached, PositionOutcomeNotReached, PositionOutcomeNotReached,
+			),
+		},
+		{
+			// A legacy scope without a sort member still lists positions,
+			// but the sort state stays unknown rather than unverified.
+			id:       "positions-legacy-unsorted",
+			shell:    record.SessionShell{ObservedScope: json.RawMessage(`{"positions":[{"position":1,"complete":true}]}`)},
 			coverage: record.CoveragePartial,
 			known:    true,
+			states: states(
+				PositionOutcomeComplete, PositionOutcomeNotReached, PositionOutcomeNotReached,
+				PositionOutcomeNotReached, PositionOutcomeNotReached, PositionOutcomeNotReached,
+			),
+		},
+		{
+			// The sort verdict is independent of the position list: a
+			// legacy scope can state it before any position is reached.
+			id:           "positions-sort-only",
+			shell:        record.SessionShell{ObservedScope: json.RawMessage(`{"sort":"verified"}`)},
+			coverage:     record.CoveragePartial,
+			sortVerified: true,
+			sortKnown:    true,
 		},
 		{id: "positions-none", coverage: record.CoveragePartial},
 	}
@@ -392,16 +457,27 @@ func TestHistoryRecordsPositionConclusions(t *testing.T) {
 		if rec.IncompletePositionsKnown != tc.known {
 			t.Fatalf("%s: known = %v, want %v", tc.id, rec.IncompletePositionsKnown, tc.known)
 		}
-		if rec.IncompletePositions != len(tc.listed) {
-			t.Fatalf("%s: incomplete = %d, want %d", tc.id, rec.IncompletePositions, len(tc.listed))
+		if rec.IncompletePositions != tc.incomplete {
+			t.Fatalf("%s: incomplete = %d, want %d", tc.id, rec.IncompletePositions, tc.incomplete)
 		}
-		if len(rec.IncompletePositionEntries) != len(tc.listed) {
-			t.Fatalf("%s: entries = %+v, want %+v", tc.id, rec.IncompletePositionEntries, tc.listed)
+		if rec.SortVerified != tc.sortVerified || rec.SortVerifiedKnown != tc.sortKnown {
+			t.Fatalf("%s: sort = %v/%v, want %v/%v", tc.id,
+				rec.SortVerified, rec.SortVerifiedKnown, tc.sortVerified, tc.sortKnown)
 		}
-		for i := range tc.listed {
-			if rec.IncompletePositionEntries[i] != tc.listed[i] {
-				t.Fatalf("%s: entry %d = %+v, want %+v", tc.id, i,
-					rec.IncompletePositionEntries[i], tc.listed[i])
+		if len(rec.PositionOutcomes) != len(tc.states) {
+			t.Fatalf("%s: outcomes = %+v, want %d states", tc.id, rec.PositionOutcomes, len(tc.states))
+		}
+		for i, want := range tc.states {
+			got := rec.PositionOutcomes[i]
+			if got.Position != i+1 || got.State != want {
+				t.Fatalf("%s: outcome %d = %+v, want position %d state %q", tc.id, i, got, i+1, want)
+			}
+		}
+		for position, want := range tc.degraded {
+			got := rec.PositionOutcomes[position-1]
+			if got.Stage != want[0] || got.ReasonCode != want[1] {
+				t.Fatalf("%s: position %d cause = %q/%q, want %q/%q",
+					tc.id, position, got.Stage, got.ReasonCode, want[0], want[1])
 			}
 		}
 	}

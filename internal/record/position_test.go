@@ -12,7 +12,7 @@ import (
 func TestPositionConclusionsPreferStoredLedger(t *testing.T) {
 	sh := testShell()
 	sh.PositionLedger = &PositionLedger{
-		SortVerified: true,
+		Sort: SortVerificationVerified,
 		Positions: []PositionConclusion{
 			{Position: 1, Complete: true},
 			{Position: 2, Stage: "filter", ReasonCode: "navigationMismatch"},
@@ -30,8 +30,8 @@ func TestPositionConclusionsPreferStoredLedger(t *testing.T) {
 	if !reflect.DeepEqual(got.Positions, want) {
 		t.Fatalf("positions = %+v, want %+v", got.Positions, want)
 	}
-	if !got.SortVerified {
-		t.Fatal("the stored sort verification is lost")
+	if got.Sort != SortVerificationVerified {
+		t.Fatalf("sort = %q, want verified", got.Sort)
 	}
 }
 
@@ -45,8 +45,8 @@ func TestPositionConclusionsReadLegacyObservedScope(t *testing.T) {
 	if !known {
 		t.Fatal("a legacy scope with positions is reported as unknown")
 	}
-	if !got.SortVerified {
-		t.Fatal("the legacy sort field is not reflected")
+	if got.Sort != SortVerificationVerified {
+		t.Fatalf("sort = %q, want verified", got.Sort)
 	}
 	want := []PositionConclusion{
 		{Position: 1, Complete: true},
@@ -126,6 +126,59 @@ func TestDecodePositionLedgerValidatesStructure(t *testing.T) {
 	}
 }
 
+// TestPositionConclusionsLegacySortUnknown keeps a legacy scope without a
+// sort member readable: the positions are known, but the sort state is not
+// guessed as unverified.
+func TestPositionConclusionsLegacySortUnknown(t *testing.T) {
+	sh := testShell()
+	sh.ObservedScope = json.RawMessage(`{"positions":[{"position":1,"complete":true}]}`)
+	got, known := sh.PositionConclusions()
+	if !known {
+		t.Fatal("positions without a sort member are reported as unknown")
+	}
+	if got.Sort != SortVerificationUnknown {
+		t.Fatalf("sort = %q, want unknown", got.Sort)
+	}
+}
+
+// TestSortVerificationReadsScopeWithoutPositions keeps the sort verdict
+// independent of the position list: a legacy scope can state the sort
+// before any position is reached.
+func TestSortVerificationReadsScopeWithoutPositions(t *testing.T) {
+	sh := testShell()
+	sh.ObservedScope = json.RawMessage(`{"kind":"zzzInventory","sort":"unverified"}`)
+	if _, known := sh.PositionConclusions(); known {
+		t.Fatal("a scope without positions is reported as a position ledger")
+	}
+	sort, known := sh.SortVerification()
+	if !known || sort != SortVerificationUnverified {
+		t.Fatalf("sort = %q/%v, want unverified/true", sort, known)
+	}
+}
+
+// TestPositionConclusionDegraded pins the shared predicate: a position
+// with its own stage or code is degraded, while a complete one or a
+// session-fatal cut is not.
+func TestPositionConclusionDegraded(t *testing.T) {
+	cases := []struct {
+		name string
+		p    PositionConclusion
+		want bool
+	}{
+		{name: "complete", p: PositionConclusion{Position: 1, Complete: true}},
+		{name: "cut by session fault", p: PositionConclusion{Position: 1}},
+		{name: "stage", p: PositionConclusion{Position: 1, Stage: "filter"}, want: true},
+		{name: "code without stage", p: PositionConclusion{Position: 1, ReasonCode: "navigationMismatch"}, want: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.p.Degraded(); got != tc.want {
+				t.Fatalf("Degraded = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 // TestCompleteCoverageRequiresCompleteLedger guards the invariant the
 // summary relies on: a new checkpoint may claim complete coverage only
 // when the ledger lists all six positions complete and the sort verified.
@@ -137,8 +190,8 @@ func TestCompleteCoverageRequiresCompleteLedger(t *testing.T) {
 		}
 		return positions
 	}
-	ledgerWith := func(sortVerified bool, positions []PositionConclusion) *PositionLedger {
-		return &PositionLedger{SortVerified: sortVerified, Positions: positions}
+	ledgerWith := func(sort SortVerification, positions []PositionConclusion) *PositionLedger {
+		return &PositionLedger{Sort: sort, Positions: positions}
 	}
 	cases := []struct {
 		name   string
@@ -146,11 +199,12 @@ func TestCompleteCoverageRequiresCompleteLedger(t *testing.T) {
 		ledger *PositionLedger
 		ok     bool
 	}{
-		{name: "complete coverage with full verified ledger", status: CoverageComplete, ledger: ledgerWith(true, full()), ok: true},
-		{name: "partial coverage with full verified ledger", status: CoveragePartial, ledger: ledgerWith(true, full()), ok: true},
-		{name: "complete coverage without sort", status: CoverageComplete, ledger: ledgerWith(false, full())},
-		{name: "complete coverage with five positions", status: CoverageComplete, ledger: ledgerWith(true, full()[:PositionCount-1])},
-		{name: "complete coverage with a degraded position", status: CoverageComplete, ledger: ledgerWith(true, append(full()[:PositionCount-1],
+		{name: "complete coverage with full verified ledger", status: CoverageComplete, ledger: ledgerWith(SortVerificationVerified, full()), ok: true},
+		{name: "partial coverage with full verified ledger", status: CoveragePartial, ledger: ledgerWith(SortVerificationVerified, full()), ok: true},
+		{name: "complete coverage with an unverified sort", status: CoverageComplete, ledger: ledgerWith(SortVerificationUnverified, full())},
+		{name: "complete coverage with an unknown sort", status: CoverageComplete, ledger: ledgerWith(SortVerificationUnknown, full())},
+		{name: "complete coverage with five positions", status: CoverageComplete, ledger: ledgerWith(SortVerificationVerified, full()[:PositionCount-1])},
+		{name: "complete coverage with a degraded position", status: CoverageComplete, ledger: ledgerWith(SortVerificationVerified, append(full()[:PositionCount-1],
 			PositionConclusion{Position: PositionCount, Stage: "bottom", ReasonCode: "navigationMismatch"}))},
 	}
 	for _, tc := range cases {

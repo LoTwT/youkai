@@ -26,8 +26,11 @@ const (
 	// version 2.
 	//
 	// Cost of keeping 2: an older binary reads a new generation with
-	// DisallowUnknownFields and fails on failureParams; that downgrade is
-	// accepted because the application does not support downgrades.
+	// DisallowUnknownFields and fails on failureParams or positionLedger;
+	// that downgrade is accepted because the application does not support
+	// downgrades. Every finished traversal now writes positionLedger, so
+	// the incompatibility applies to all records that ran a traversal, not
+	// only to sessions that recorded structured failure params.
 	FormatVersion = 2
 )
 
@@ -217,6 +220,25 @@ type Coverage struct {
 // invalid rather than tolerated as an extension.
 const PositionCount = 6
 
+// SortVerification is whether the traversal verified the sort label at
+// every opened panel. Unknown is distinct from unverified: a checkpoint
+// written before the observed scope carried a sort field proved neither.
+type SortVerification string
+
+const (
+	SortVerificationUnknown    SortVerification = "unknown"
+	SortVerificationUnverified SortVerification = "unverified"
+	SortVerificationVerified   SortVerification = "verified"
+)
+
+func (s SortVerification) valid() bool {
+	switch s {
+	case SortVerificationUnknown, SortVerificationUnverified, SortVerificationVerified:
+		return true
+	}
+	return false
+}
+
 // PositionConclusion is one wheel position's traversal conclusion: whether
 // the walk completed it and, when it did not, the failed preparation or
 // proof stage and the underlying diagnostic code. A position cut by a
@@ -229,19 +251,31 @@ type PositionConclusion struct {
 	ReasonCode string `json:"reasonCode,omitempty"`
 }
 
+// Degraded reports whether the position failed on its own preparation or
+// proof, with a position-level cause, rather than being cut by a
+// session-fatal fault (which leaves Stage and ReasonCode empty). The app
+// summary and the results view share this predicate so they always count
+// the same positions as incomplete.
+func (p PositionConclusion) Degraded() bool {
+	return !p.Complete && (p.Stage != "" || p.ReasonCode != "")
+}
+
 // PositionLedger is the stable per-position conclusion the summary and
 // notification surfaces read instead of decoding the opaque observed
-// scope. SortVerified records whether every opened panel verified the sort
-// label, the same fact the coverage conclusion depends on.
+// scope. Sort carries the sort verification the coverage conclusion
+// depends on, with unknown kept separate from unverified.
 type PositionLedger struct {
-	SortVerified bool                 `json:"sortVerified"`
-	Positions    []PositionConclusion `json:"positions"`
+	Sort      SortVerification     `json:"sort"`
+	Positions []PositionConclusion `json:"positions"`
 }
 
 // validate checks the ledger's structure. Coverage consistency is checked
 // against the shell's conclusion separately: the ledger may legitimately
 // stop at fewer than six positions when a session ends early.
 func (l *PositionLedger) validate() error {
+	if !l.Sort.valid() {
+		return fmt.Errorf("sort verification %q", l.Sort)
+	}
 	previous := 0
 	for i := range l.Positions {
 		p := &l.Positions[i]
@@ -270,8 +304,8 @@ func (l *PositionLedger) validateAgainst(status CoverageStatus) error {
 	if status != CoverageComplete {
 		return nil
 	}
-	if !l.SortVerified {
-		return errors.New("complete coverage with an unverified sort")
+	if l.Sort != SortVerificationVerified {
+		return fmt.Errorf("complete coverage with sort verification %q", l.Sort)
 	}
 	if len(l.Positions) != PositionCount {
 		return fmt.Errorf("complete coverage with %d position conclusions", len(l.Positions))
@@ -296,7 +330,6 @@ func DecodePositionLedger(raw json.RawMessage) (PositionLedger, bool) {
 		return PositionLedger{}, false
 	}
 	var scope struct {
-		Sort      string          `json:"sort"`
 		Positions json.RawMessage `json:"positions"`
 	}
 	if err := json.Unmarshal(raw, &scope); err != nil || len(scope.Positions) == 0 {
@@ -306,11 +339,34 @@ func DecodePositionLedger(raw json.RawMessage) (PositionLedger, bool) {
 	if err := json.Unmarshal(scope.Positions, &positions); err != nil || positions == nil {
 		return PositionLedger{}, false
 	}
-	ledger := PositionLedger{SortVerified: scope.Sort == "verified", Positions: positions}
+	sort, _ := decodeObservedSort(raw)
+	ledger := PositionLedger{Sort: sort, Positions: positions}
 	if err := ledger.validate(); err != nil {
 		return PositionLedger{}, false
 	}
 	return ledger, true
+}
+
+// decodeObservedSort reads the sort verdict from an observed-scope report.
+// It reports false when the scope is unreadable or has no sort member, so a
+// caller can distinguish "unverified" from "the record does not say". The
+// sort member is independent of the positions: the precheck can record it
+// before any position is reached.
+func decodeObservedSort(raw json.RawMessage) (SortVerification, bool) {
+	if len(raw) == 0 || !json.Valid(raw) {
+		return SortVerificationUnknown, false
+	}
+	var scope struct {
+		Sort json.RawMessage `json:"sort"`
+	}
+	if err := json.Unmarshal(raw, &scope); err != nil || len(scope.Sort) == 0 {
+		return SortVerificationUnknown, false
+	}
+	var sort SortVerification
+	if err := json.Unmarshal(scope.Sort, &sort); err != nil || !sort.valid() {
+		return SortVerificationUnknown, false
+	}
+	return sort, true
 }
 
 // ResourceRef records one resource a scan actually used — adapter, layout,
@@ -489,6 +545,18 @@ func (sh *SessionShell) PositionConclusions() (PositionLedger, bool) {
 		return ledger, true
 	}
 	return DecodePositionLedger(sh.ObservedScope)
+}
+
+// SortVerification returns the sort verdict and whether the checkpoint
+// states one. The persisted ledger is authoritative for new records; an
+// older record carries the verdict only in its observed scope. It is
+// independent of PositionConclusions: a scope can state the sort before any
+// position is reached.
+func (sh *SessionShell) SortVerification() (SortVerification, bool) {
+	if sh.PositionLedger != nil {
+		return sh.PositionLedger.Sort, sh.PositionLedger.Sort.valid()
+	}
+	return decodeObservedSort(sh.ObservedScope)
 }
 
 // FieldChange is one field edit inside a manual revision, kept as audit
