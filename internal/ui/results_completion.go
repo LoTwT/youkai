@@ -21,10 +21,10 @@ func (m *Model) reviewSettled() bool {
 	if m.pendingCount() != 0 || m.reviewSaving || m.editingDirty() {
 		return false
 	}
-	if m.activeSlot == resultSlotHistory {
+	if !m.rec.Live {
 		return true
 	}
-	if !m.rec.Live || m.snap.SessionID == "" || string(m.snap.SessionID) != m.rec.ID {
+	if m.snap.SessionID == "" || string(m.snap.SessionID) != m.rec.ID {
 		return false
 	}
 	if m.snap.Busy || m.snap.Scan.Phase != scan.PhaseEnded ||
