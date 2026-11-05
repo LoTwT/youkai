@@ -306,10 +306,11 @@ func (m *Model) settingsShortcuts(c *ui.Context, t *ui.Theme, tok *Tokens) {
 // authoritative snapshot. The hotkey is registered at the start of Prepare's
 // Port.Open, and the controller reports PrepareDeadline only after Open
 // succeeded, so preparing without a deadline cannot promise it yet. The
-// controller releases the platform session before finalize starts recognition
-// draining, so finalizing cannot claim the hotkey is still held. A failed
-// registration is checked first: it ends the session and must stay visible
-// even if the phase around that end is ambiguous.
+// controller marks PhaseFinalizing before it releases the platform session,
+// and recognition draining follows that release, so a finalizing snapshot
+// cannot prove the hotkey is still held. A failed registration is checked
+// first: it ends the session and must stay visible even if the phase around
+// that end is ambiguous.
 func (m *Model) stopHotkeyStateText() string {
 	if trigger := m.snap.Scan.Trigger; trigger != nil && trigger.Code == "hotkeyUnavailable" {
 		return "上次注册失败：被其他程序占用"
@@ -425,7 +426,7 @@ func (m *Model) storageActionsRow(c *ui.Context, t *ui.Theme, tok *Tokens) {
 // surface shares (09 §4.6) and states what a copy excludes.
 func (m *Model) settingsDiagnostics(c *ui.Context, t *ui.Theme, tok *Tokens) {
 	ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Wrap().Children(func() {
-		if ui.Button(c, "复制诊断信息").Disabled(m.cfg.DiagnosticsText == nil).Clicked() {
+		if ui.Button(c, "复制诊断信息").Clicked() {
 			m.copyDiagnostics(c)
 		}
 		if ui.Button(c, "打开诊断目录").Disabled(m.cfg.OpenDiagnosticsDirectory == nil).Clicked() {
@@ -442,14 +443,11 @@ func (m *Model) settingsDiagnostics(c *ui.Context, t *ui.Theme, tok *Tokens) {
 	}
 }
 
-// copyDiagnostics copies the allowlisted summary from the application
-// service. The text is built on demand: it describes the newest session at
-// the moment the user asks, not the frame that built the page.
+// copyDiagnostics copies the newest session's allowlisted summary. The text
+// is built on demand, through the same helper as the record summary, so it
+// describes the newest session at the moment the user asks.
 func (m *Model) copyDiagnostics(c *ui.Context) {
-	if m.cfg.DiagnosticsText == nil {
-		return
-	}
-	text := m.cfg.DiagnosticsText()
+	text := m.diagnosticsText(app.DiagnosticsScanFromSnapshot(m.snap))
 	if text == "" {
 		m.diagnosticsNotice = ""
 		m.diagnosticsErr = "没有可复制的诊断信息。"

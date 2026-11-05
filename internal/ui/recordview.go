@@ -35,6 +35,11 @@ type RecordView struct {
 	// all while it holds items: the screenshots were deleted (or are
 	// missing). The field-quality and review state stay authoritative.
 	EvidenceRemoved bool
+	// Classes is the four-class partition of Rows, computed once when the
+	// view is built. The summary's count cells fall back to it when the
+	// export snapshot is unavailable; the snapshot remains authoritative
+	// for a readable record.
+	Classes app.ItemClassCounts
 	// Rows are the captured items in capture order; no item disappears
 	// for its status.
 	Rows []Row
@@ -232,6 +237,7 @@ func BuildRecordView(id string, rec *record.Recovery, live bool) *RecordView {
 		Shell:            cp.Session,
 		EvidenceRemoved:  evidenceWasRemoved(cp),
 	}
+	view.Classes = app.ClassifyItems(cp.Items)
 	for i := range cp.Items {
 		view.Rows = append(view.Rows, buildRow(&cp.Items[i]))
 	}

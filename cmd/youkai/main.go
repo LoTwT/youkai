@@ -232,18 +232,10 @@ func main() {
 			return mygo.Shell.OpenPath(dir)
 		},
 		OpenDataDirectory: func() error { return mygo.Shell.OpenPath(paths.Data) },
-		// Settings › 诊断 shares the application service's allowlisted
-		// summary and the log directory with every other diagnostic
-		// surface (09 §4.6). The text is assembled when the user asks so it
-		// describes the newest session at that moment.
-		DiagnosticsText: func() string {
-			return app.DiagnosticsText(app.DiagnosticsInput{
-				Version: mygo.App.Version(),
-				Commit:  app.BuildCommit(),
-				System:  app.CurrentSystemInfo(),
-				Scan:    app.DiagnosticsScanFromSnapshot(svc.Snapshot()),
-			})
-		},
+		// Diagnostics reuse the log directory: the copy carries a
+		// privacy-bounded summary, and the directory holds youkai.log and
+		// the collector subtrees.
+		SystemInfo: app.CurrentSystemInfo,
 		OpenDiagnosticsDirectory: func() error {
 			return mygo.Shell.OpenPath(app.DiagnosticsDirectory(paths))
 		},

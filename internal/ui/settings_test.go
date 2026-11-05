@@ -36,14 +36,12 @@ func settingsTestModel(t *testing.T) (*Model, *queueUpdater, *fakeService) {
 		}, nil
 	}
 	m, q := newTestModel(t, Config{
-		Service:           svc,
-		DirectExportSaver: &fakeDirectExportSaver{},
-		Updates:           &fakeUpdates{enabled: false},
-		AppVersion:        "0.6.0 (build 1021)",
-		OpenDataDirectory: func() error { return nil },
-		DiagnosticsText: func() string {
-			return "youkai 诊断信息\n版本：0.6.0\n"
-		},
+		Service:                  svc,
+		DirectExportSaver:        &fakeDirectExportSaver{},
+		Updates:                  &fakeUpdates{enabled: false},
+		AppVersion:               "0.6.0 (build 1021)",
+		OpenDataDirectory:        func() error { return nil },
+		SystemInfo:               func() app.SystemInfo { return app.SystemInfo{OS: "Windows"} },
 		OpenDiagnosticsDirectory: func() error { return nil },
 		OpenLicenses:             func() error { return nil },
 	})
@@ -177,10 +175,11 @@ func TestSettingsPageShortcuts(t *testing.T) {
 }
 
 // TestSettingsStopHotkeyState checks the stop row against the actual
-// registration lifetime: Open succeeds before PrepareDeadline is reported,
-// and the controller releases the port before finalizing starts. A failed
-// registration wins over the phase because it is the reason the session
-// ended.
+// registration lifetime: Open succeeds before PrepareDeadline is reported;
+// the controller marks finalizing before releasing the port, and recognition
+// draining follows that release, so finalizing cannot prove the hotkey is
+// held. A failed registration wins over the phase because it is the reason
+// the session ended.
 func TestSettingsStopHotkeyState(t *testing.T) {
 	m, q, _ := settingsTestModel(t)
 	tt := ui.NewTester(m.View, 1440, 1000)
@@ -223,7 +222,7 @@ func TestSettingsStopHotkeyState(t *testing.T) {
 			want: "已注册",
 		},
 		{
-			name: "finalizing after the port was released",
+			name: "finalizing does not prove the port is held",
 			snapshot: func() app.Snapshot {
 				return snap("s1", 4, true, scan.PhaseFinalizing, scan.Counts{Captured: 2}, 0, true, "")
 			},
@@ -703,7 +702,6 @@ func TestSettingsFailureStaysOnSettings(t *testing.T) {
 func TestSettingsDiagnosticsActions(t *testing.T) {
 	opened := 0
 	m, q, _ := settingsTestModel(t)
-	m.cfg.DiagnosticsText = func() string { return "youkai 诊断信息\n触发码：focusLost\n" }
 	m.cfg.OpenDiagnosticsDirectory = func() error {
 		opened++
 		return nil
@@ -719,8 +717,12 @@ func TestSettingsDiagnosticsActions(t *testing.T) {
 		t.Fatal(err)
 	}
 	settle(t, m, q, tt)
-	if got := tt.Clipboard(); got != "youkai 诊断信息\n触发码：focusLost\n" {
-		t.Fatalf("the clipboard holds %q", got)
+	want := app.DiagnosticsText(app.DiagnosticsInput{
+		Version: "0.6.0 (build 1021)",
+		System:  app.SystemInfo{OS: "Windows"},
+	})
+	if got := tt.Clipboard(); got != want {
+		t.Fatalf("the clipboard holds %q, want %q", got, want)
 	}
 	if !tt.HasText("已复制诊断信息。") {
 		t.Fatalf("the copy result does not show: %q", tt.Texts())
@@ -735,22 +737,15 @@ func TestSettingsDiagnosticsActions(t *testing.T) {
 	}
 }
 
-// TestSettingsDiagnosticsFailure checks the failure exit of both actions.
-func TestSettingsDiagnosticsFailure(t *testing.T) {
+// TestSettingsOpenDiagnosticsDirectoryFailure checks the directory
+// action's failure exit.
+func TestSettingsOpenDiagnosticsDirectoryFailure(t *testing.T) {
 	m, q, _ := settingsTestModel(t)
-	m.cfg.DiagnosticsText = func() string { return "" }
 	m.cfg.OpenDiagnosticsDirectory = func() error { return errString("没有文件管理器") }
 	tt := ui.NewTester(m.View, 1440, 1000)
 	settle(t, m, q, tt)
 	openSettings(t, m, q, tt)
 
-	if err := tt.Click("复制诊断信息"); err != nil {
-		t.Fatal(err)
-	}
-	settle(t, m, q, tt)
-	if !tt.HasText("没有可复制的诊断信息。") {
-		t.Fatalf("the empty diagnostic text is not explained: %q", tt.Texts())
-	}
 	if err := tt.Click("打开诊断目录"); err != nil {
 		t.Fatal(err)
 	}

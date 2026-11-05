@@ -1,7 +1,6 @@
 package ui
 
 import (
-	"encoding/json"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -216,37 +215,65 @@ func TestIntegrityLevelText(t *testing.T) {
 	}
 }
 
-// TestIncompletePositionsTextNamesEveryPosition pins the note's wording:
-// a known stage carries the localized cause, an unknown stage still names
-// the position as unfinished, and the raw code never reaches the surface.
+// TestIncompletePositionsTextNamesEveryPosition pins the note's wording
+// against the typed position ledger #129 added: a known stage carries the
+// localized cause, an unknown stage still names the position as unfinished,
+// and the raw code never reaches the surface.
 func TestIncompletePositionsTextNamesEveryPosition(t *testing.T) {
-	scope := json.RawMessage(`{"positions":[
-		{"position":2,"stage":"filter","reasonCode":"navigationMismatch","reason":"the filter panel never closed"},
-		{"position":5,"stage":"unexpected"}
-	]}`)
-	got := incompletePositionsText(scope)
+	shell := record.SessionShell{PositionLedger: &record.PositionLedger{
+		Sort: record.SortVerificationVerified,
+		Positions: []record.PositionConclusion{
+			{Position: 2, Stage: "filter", ReasonCode: "navigationMismatch"},
+			{Position: 5, Stage: "unexpected"},
+		},
+	}}
+	got := incompletePositionsText(shell)
 	want := "不完整号位：2 号位 筛选准备失败：点击或拖拽后页面没有按预期变化；5 号位 未完成"
 	if got != want {
 		t.Fatalf("incomplete positions = %q, want %q", got, want)
 	}
-	if strings.Contains(got, "navigationMismatch") || strings.Contains(got, "the filter panel never closed") {
+	if strings.Contains(got, "navigationMismatch") {
 		t.Fatalf("the note leaks English diagnostics: %q", got)
 	}
 }
 
-// TestIncompletePositionsTextSkipsTruncatedAndNamesCodeOnly covers the
-// two predicate edges: a position cut by a session-fatal fault has no
-// position-level cause and must not appear, while a position that carries
-// only a reason code is degraded and keeps the generic "unfinished" stage.
+// TestIncompletePositionsTextSkipsTruncatedAndNamesCodeOnly covers the two
+// predicate edges through the typed ledger: a position cut by a
+// session-fatal fault has no position-level cause and must not appear, while
+// a position that carries only a reason code is degraded and keeps the
+// generic "unfinished" stage.
 func TestIncompletePositionsTextSkipsTruncatedAndNamesCodeOnly(t *testing.T) {
-	truncated := json.RawMessage(`{"positions":[{"position":3,"complete":false}]}`)
+	truncated := record.SessionShell{PositionLedger: &record.PositionLedger{
+		Sort:      record.SortVerificationUnverified,
+		Positions: []record.PositionConclusion{{Position: 3}},
+	}}
 	if got := incompletePositionsText(truncated); got != "" {
 		t.Fatalf("truncated position produced a note: %q", got)
 	}
-	codeOnly := json.RawMessage(`{"positions":[{"position":4,"complete":false,"reasonCode":"navigationMismatch"}]}`)
+	codeOnly := record.SessionShell{PositionLedger: &record.PositionLedger{
+		Sort: record.SortVerificationVerified,
+		Positions: []record.PositionConclusion{
+			{Position: 4, ReasonCode: "navigationMismatch"},
+		},
+	}}
 	want := "不完整号位：4 号位 未完成：点击或拖拽后页面没有按预期变化"
 	if got := incompletePositionsText(codeOnly); got != want {
 		t.Fatalf("code-only position = %q, want %q", got, want)
+	}
+}
+
+// TestIncompletePositionsTextReadsLegacyObservedScope keeps the one-time
+// compatibility path visible at this layer too: a record written before the
+// ledger existed still names its degraded positions, without the UI parsing
+// the raw scope itself.
+func TestIncompletePositionsTextReadsLegacyObservedScope(t *testing.T) {
+	shell := record.SessionShell{ObservedScope: []byte(`{"positions":[
+		{"position":2,"stage":"filter","reasonCode":"navigationMismatch","reason":"the filter panel never closed"}
+	]}`)}
+	got := incompletePositionsText(shell)
+	want := "不完整号位：2 号位 筛选准备失败：点击或拖拽后页面没有按预期变化"
+	if got != want {
+		t.Fatalf("legacy scope note = %q, want %q", got, want)
 	}
 }
 
