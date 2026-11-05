@@ -114,7 +114,11 @@ func TestDataRootFailureMessageHidesRawError(t *testing.T) {
 	if !strings.Contains(message, "没有读写权限") {
 		t.Fatalf("message = %q, want the permission reason", message)
 	}
-	for _, leaked := range []string{dataRoot, `C:\Users\alice`, "permission denied", "acquire data-root lock"} {
+	// The wrapped path is %q-escaped, so a literal `C:\Users\alice` would
+	// never match the error text even if it leaked. Check the components
+	// that survive escaping instead: the user name, the directory name,
+	// and the backslash itself.
+	for _, leaked := range []string{"alice", "Users", `\`, "permission denied", "acquire data-root lock"} {
 		if strings.Contains(message, leaked) {
 			t.Fatalf("message = %q, leaked %q from the wrapped error", message, leaked)
 		}
@@ -158,6 +162,12 @@ func TestDataRootFailureClassificationFromAcquire(t *testing.T) {
 		}
 		if got := classifyDataRootFailure(err); got != dataRootUnavailable {
 			t.Fatalf("classified as %v, want dataRootUnavailable", got)
+		}
+		// The real acquire path must also reach the file-blocked reason,
+		// including on Windows, where os.MkdirAll reports the condition
+		// through syscall.ENOTDIR rather than a Unix errno.
+		if got := dataRootFailureReason(err); got != "数据目录的位置被一个文件占用" {
+			t.Fatalf("reason = %q, want the file-blocked reason", got)
 		}
 	})
 }
