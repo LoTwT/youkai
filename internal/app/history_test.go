@@ -39,11 +39,11 @@ func exportableHistoryItem(t *testing.T, seq int64) record.ItemRecord {
 	return item
 }
 
-// TestHistoryItemCountsSplitsCapturedItems checks the four export states
-// behind the history table's columns: exportable (warning or passed),
-// failed, unprocessed and the queued remainder of pending backfill;
-// pending review is counted separately and is not exportable yet.
-func TestHistoryItemCountsSplitsCapturedItems(t *testing.T) {
+// TestHistoryItemTotalsSplitsCapturedItems checks the current history
+// table's buckets and the separate four-class partition on the same
+// items: exportable (warning or passed), failed, unprocessed, the review
+// editor's quality queue, and the queued/running remainder.
+func TestHistoryItemTotalsSplitsCapturedItems(t *testing.T) {
 	exportable := exportableHistoryItem(t, 1)
 	pending := reviewItem(t, 2, reviewData())
 	other := record.ItemRecord{Sequence: 3, Status: record.StatusQueued, Quality: record.QualityNotEvaluated}
@@ -51,22 +51,40 @@ func TestHistoryItemCountsSplitsCapturedItems(t *testing.T) {
 	unprocessed := record.ItemRecord{Sequence: 5, Status: record.StatusUnprocessed, Reason: record.ReasonCancelled, Quality: record.QualityNotEvaluated}
 
 	items := []record.ItemRecord{exportable, pending, other, failed, unprocessed}
-	counts, failedCount, unprocessedCount := historyItemCounts(items)
-	if exported := counts.Exportable(); exported != 1 || failedCount != 1 || unprocessedCount != 1 {
-		t.Fatalf("counts = exportable %d, failed %d, unprocessed %d; want 1/1/1",
-			exported, failedCount, unprocessedCount)
+	totals := historyItemTotalsOf(items)
+	if totals.Exportable != 1 || totals.Failed != 1 || totals.Unprocessed != 1 ||
+		totals.PendingReview != 1 || totals.Other != 1 {
+		t.Fatalf("legacy buckets = exportable %d, failed %d, unprocessed %d, pending %d, other %d; want 1/1/1/1/1",
+			totals.Exportable, totals.Failed, totals.Unprocessed, totals.PendingReview, totals.Other)
 	}
-	if otherCount := counts.PendingBackfill - failedCount - unprocessedCount; otherCount != 1 {
-		t.Fatalf("other = %d, want 1", otherCount)
+	if totals.Exportable+totals.Failed+totals.Unprocessed+totals.PendingReview+totals.Other != int64(len(items)) {
+		t.Fatalf("legacy buckets = %+v, do not add up to %d", totals, len(items))
 	}
-	if counts.PendingReview != 1 {
-		t.Fatalf("pending review = %d, want 1", counts.PendingReview)
-	}
+	counts := totals.Counts
 	if counts.Total() != int64(len(items)) {
 		t.Fatalf("class total = %d, want %d", counts.Total(), len(items))
 	}
-	if counts.Warning != 0 || counts.Passed != 1 {
-		t.Fatalf("warning/passed = %d/%d, want 0/1", counts.Warning, counts.Passed)
+	want := ItemClassCounts{PendingBackfill: 3, PendingReview: 1, Passed: 1}
+	if counts != want {
+		t.Fatalf("four-class counts = %+v, want %+v", counts, want)
+	}
+}
+
+// TestHistoryLegacyBucketsKeepOldSemantics pins the split between the two
+// views: a produced item the export cannot use stays in the table's
+// "other" bucket while the four-class view calls it pending review, so the
+// existing history numbers do not change before the UI switches.
+func TestHistoryLegacyBucketsKeepOldSemantics(t *testing.T) {
+	invalid := exportStructuredItem(t, 1, record.QualityAutoAccepted,
+		testDisc(31300, 2, "attack", "abc", zzz.UnitFlat),
+		zzz.CaptureState{ManagementState: zzz.ManagementNone, EquippedState: zzz.EquippedStateUnequipped})
+	unstructured := unstructuredItem(2)
+	totals := historyItemTotalsOf([]record.ItemRecord{invalid, unstructured})
+	if totals.Other != 2 || totals.PendingReview != 0 || totals.Exportable != 0 {
+		t.Fatalf("legacy buckets = %+v, want two other items", totals)
+	}
+	if totals.Counts != (ItemClassCounts{PendingReview: 2}) {
+		t.Fatalf("counts = %+v, want two pending-review items", totals.Counts)
 	}
 }
 
@@ -237,6 +255,19 @@ func TestHistoryRecordsSummaryAndInterruption(t *testing.T) {
 	}
 	if !estimate.Known() || estimate.Samples != 1 || estimate.Median != 14*time.Minute {
 		t.Fatalf("estimate = %+v, want one 14m sample", estimate)
+	}
+
+	// A running scan also has no termination in its newest checkpoint; the
+	// active record must not be labeled as an interrupted recovery.
+	svc.active = &activeSession{id: interruptedID}
+	records, err = svc.HistoryRecords()
+	if err != nil {
+		t.Fatalf("HistoryRecords with active session: %v", err)
+	}
+	for _, rec := range records {
+		if rec.ID == interruptedID && rec.Interrupted {
+			t.Fatal("the active record is labeled interrupted")
+		}
 	}
 }
 

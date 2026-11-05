@@ -80,11 +80,9 @@ func (c *ItemClassCounts) add(class ItemClass) {
 //
 // The validation and quality steps reuse the export decision
 // (usableItem): an item is only usable after the persisted issues and the
-// current validation are error-free and its quality is settled. The
-// quality step is additionally named through itemPendingReview, so a
-// needs-review item cannot become "warning" or "passed" if the export
-// rules ever widen. Warnings are checked last, on the same issue lists the
-// export carries.
+// current validation are error-free and its quality is settled. Any item
+// the export refuses therefore stays in pending review; warnings are only
+// inspected for usable items, which is the last step of the order.
 func ClassifyItem(item record.ItemRecord) ItemClass {
 	exported, usable := usableItem(&item)
 	return classifyWithExport(&item, exported, usable)
@@ -111,9 +109,9 @@ func classifyWithExport(item *record.ItemRecord, exported ExportItem, usable boo
 	}
 	// 2. Validation and 3. Quality: a validation failure, an unresolved
 	// quality or a payload the export refuses all leave the item with a
-	// person. itemPendingReview is only consulted for otherwise usable
-	// items, so the common refusal path stays cheap.
-	if !usable || itemPendingReview(*item) {
+	// person. usableItem already applies both steps, so one refusal check
+	// is the whole decision; no second payload decode is needed here.
+	if !usable {
 		return ItemClassPendingReview
 	}
 	// 4. Warning: only a usable item can be "warning but exportable".

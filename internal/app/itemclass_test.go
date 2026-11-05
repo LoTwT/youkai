@@ -27,10 +27,7 @@ func legacyEquippedOnlyItem(t *testing.T, seq int64) record.ItemRecord {
 	structured := zzz.ToStructuredWithState(
 		testDisc(31100, 4, "critRate", "24", zzz.UnitPercent),
 		zzz.RarityS,
-		zzz.CaptureState{
-			ManagementState: zzz.ManagementLocked,
-			EquippedState:   zzz.EquippedStateEquipped,
-		},
+		zzz.CaptureState{ManagementState: zzz.ManagementLocked},
 		nil,
 	)
 	structured.Validation = zzz.Validation{

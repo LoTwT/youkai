@@ -24,15 +24,19 @@ type HistoryRecord struct {
 	// record does not know it. The history table only shows a percentage
 	// when it can divide by a real expected count.
 	CoverageExpected int64
-	PendingReview    int
+	// PendingReview is the current history table's "待校对" column: the
+	// review editor's quality-only queue (pendingReviewCount), not the
+	// four-class PendingReview in Counts.
+	PendingReview int
 	// Termination is the session's first termination trigger, when the
 	// checkpoint recorded one. The list shows its kind and code so a
 	// zero-item failure is not summarized only as item-level "失败 0 件".
 	Termination *record.Termination
 	// Counts is the four-class partition of the captured items; see
-	// ItemClass. It is the source of the exportable and pending numbers,
-	// and the legacy split fields below keep the current history table
-	// compiling until its UI switches to Counts.
+	// ItemClass. It is the new source of the exportable and pending
+	// numbers, while the legacy fields below keep the current history
+	// table, results page and cleanup preview on their existing numbers
+	// until the UI switches to Counts.
 	Counts ItemClassCounts
 	// IncompletePositions is the number of inventory positions whose
 	// traversal conclusion was incomplete. IncompletePositionsKnown is
@@ -41,14 +45,20 @@ type HistoryRecord struct {
 	IncompletePositions      int
 	IncompletePositionsKnown bool
 	// Interrupted reports that the newest checkpoint never recorded a
-	// termination (or recorded the interrupted kind): the session ended by
-	// a crash or a lost process and was recovered as interrupted.
+	// termination (or recorded the interrupted kind) and this is not the
+	// service's active record: the session ended by a crash or a lost
+	// process and was recovered as interrupted. A running scan also has no
+	// termination in its checkpoint; the service excludes it so the
+	// history view never labels an in-progress scan as interrupted.
 	Interrupted bool
-	// ExportableCount, FailedCount, UnprocessedCount and OtherCount are
-	// the mutually exclusive parts of CapturedCount after review:
-	// exportable items, failed observations, unprocessed observations, and
-	// the remaining not-yet-processed observations (queued or running in a
-	// checkpoint saved mid-session).
+	// ExportableCount, FailedCount, UnprocessedCount, PendingReview and
+	// OtherCount are the current history table's mutually exclusive
+	// buckets: exportable items, failed and unprocessed observations,
+	// produced items still waiting for review, and everything else
+	// (produced but unusable, or queued/running in a checkpoint saved
+	// mid-session). They keep the pre-classification rules so the existing
+	// table, results page and cleanup preview do not change; the four-class
+	// view is Counts.
 	ExportableCount  int64
 	FailedCount      int64
 	UnprocessedCount int64
@@ -68,44 +78,74 @@ func (s *Service) HistoryRecords() ([]HistoryRecord, error) {
 	if err != nil {
 		return nil, fmt.Errorf("app: history records: %w", err)
 	}
+	activeID := s.activeRecordID()
 	out := make([]HistoryRecord, 0, len(infos))
 	for _, info := range infos {
-		entry := HistoryRecord{
-			ID:            info.ID,
-			SavedAt:       info.SavedAt,
-			TotalBytes:    info.TotalBytes,
-			EvidenceBytes: info.EvidenceBytes,
-			EvidenceFiles: info.EvidenceFiles,
-		}
+		entry := historyRecordBase(info)
 		cp, err := s.store.Peek(info.ID)
 		if err != nil {
 			entry.Unreadable = true
 			out = append(out, entry)
 			continue
 		}
-		entry.StartedAt = cp.Session.StartedAt
-		if cp.Session.EndedAt != nil {
-			ended := *cp.Session.EndedAt
-			entry.EndedAt = &ended
-		}
-		entry.Interrupted = interruptedSession(cp.Session.Termination)
-		entry.Client = cp.Session.Client
-		entry.CapturedCount = cp.Session.CapturedCount
-		entry.Coverage = cp.Session.Coverage.Status
-		if cp.Session.Termination != nil {
-			term := *cp.Session.Termination
-			entry.Termination = &term
-		}
-		if cp.Session.Coverage.ExpectedCount != nil {
-			entry.CoverageExpected = *cp.Session.Coverage.ExpectedCount
-		}
-		entry.Counts, entry.FailedCount, entry.UnprocessedCount = historyItemCounts(cp.Items)
-		entry.PendingReview = int(entry.Counts.PendingReview)
-		entry.ExportableCount = entry.Counts.Exportable()
-		entry.OtherCount = entry.Counts.PendingBackfill - entry.FailedCount - entry.UnprocessedCount
+		entry = historySessionSummary(info, cp, activeID)
+		totals := historyItemTotalsOf(cp.Items)
+		entry.Counts = totals.Counts
+		entry.ExportableCount = totals.Exportable
+		entry.FailedCount = totals.Failed
+		entry.UnprocessedCount = totals.Unprocessed
+		entry.PendingReview = int(totals.PendingReview)
+		entry.OtherCount = totals.Other
 		out = append(out, entry)
 	}
 	return out, nil
+}
+
+// historyRecordBase is the part of a history record known without reading
+// the checkpoint.
+func historyRecordBase(info record.RecordInfo) HistoryRecord {
+	return HistoryRecord{
+		ID:            info.ID,
+		SavedAt:       info.SavedAt,
+		TotalBytes:    info.TotalBytes,
+		EvidenceBytes: info.EvidenceBytes,
+		EvidenceFiles: info.EvidenceFiles,
+	}
+}
+
+// historySessionSummary fills the fields that come from the checkpoint's
+// session shell. Both the full history list and the duration estimate
+// use it. activeID is the service's current record, if any.
+func historySessionSummary(info record.RecordInfo, cp *record.Checkpoint, activeID string) HistoryRecord {
+	entry := historyRecordBase(info)
+	entry.StartedAt = cp.Session.StartedAt
+	if cp.Session.EndedAt != nil {
+		ended := *cp.Session.EndedAt
+		entry.EndedAt = &ended
+	}
+	entry.Interrupted = info.ID != activeID && interruptedSession(cp.Session.Termination)
+	entry.Client = cp.Session.Client
+	entry.CapturedCount = cp.Session.CapturedCount
+	entry.Coverage = cp.Session.Coverage.Status
+	if cp.Session.Termination != nil {
+		term := *cp.Session.Termination
+		entry.Termination = &term
+	}
+	if cp.Session.Coverage.ExpectedCount != nil {
+		entry.CoverageExpected = *cp.Session.Coverage.ExpectedCount
+	}
+	return entry
+}
+
+// activeRecordID returns the record the service is currently scanning or
+// wrapping, or "" when the active slot is free.
+func (s *Service) activeRecordID() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.active == nil {
+		return ""
+	}
+	return string(s.active.id)
 }
 
 // interruptedSession reports whether a checkpoint represents a session
@@ -116,22 +156,55 @@ func interruptedSession(termination *record.Termination) bool {
 	return termination == nil || termination.Kind == record.TerminationInterrupted
 }
 
-// historyItemCounts classifies a record's items once for the history
-// table. It also returns the failed and unprocessed split the current
-// table shows inside the backfill class; the remainder of that class is
-// the queued/running "other" column.
-func historyItemCounts(items []record.ItemRecord) (counts ItemClassCounts, failed, unprocessed int64) {
+// historyItemTotals is one record's item accounting for the current
+// history table together with the new four-class partition.
+type historyItemTotals struct {
+	Counts        ItemClassCounts
+	Exportable    int64
+	Failed        int64
+	Unprocessed   int64
+	PendingReview int64
+	Other         int64
+}
+
+// historyItemTotalsOf computes the existing history-table buckets and the
+// four-class counts in one pass. The existing buckets keep their old
+// meaning: PendingReview is only the review editor's quality queue, and
+// Other covers produced items the export cannot use plus queued/running
+// observations. The exportable decision is shared with the classifier, so
+// the item is validated only once.
+func historyItemTotalsOf(items []record.ItemRecord) historyItemTotals {
+	var totals historyItemTotals
 	for i := range items {
 		item := &items[i]
 		switch item.Status {
 		case record.StatusFailed:
-			failed++
+			totals.Failed++
+			totals.Counts.PendingBackfill++
+			continue
 		case record.StatusUnprocessed:
-			unprocessed++
+			totals.Unprocessed++
+			totals.Counts.PendingBackfill++
+			continue
+		case record.StatusProduced:
+			// Assessed below.
+		default:
+			totals.Other++
+			totals.Counts.PendingBackfill++
+			continue
 		}
-		counts.add(ClassifyItem(*item))
+		exported, usable := usableItem(item)
+		totals.Counts.add(classifyWithExport(item, exported, usable))
+		switch {
+		case usable:
+			totals.Exportable++
+		case itemPendingReview(*item):
+			totals.PendingReview++
+		default:
+			totals.Other++
+		}
 	}
-	return counts, failed, unprocessed
+	return totals
 }
 
 // Duration returns the recorded scan's wall-clock duration. ok is false
@@ -221,13 +294,25 @@ func (r HistoryRecord) fullScanDuration() (time.Duration, bool) {
 	return r.Duration()
 }
 
-// ScanDurationEstimate is the same estimate over the saved records. The
-// scan page calls it before a scan; like HistoryRecords it reads every
-// listed checkpoint, so callers run it off the UI thread.
+// ScanDurationEstimate is the same estimate over the saved records. It
+// uses only the session shell of each checkpoint and does not classify
+// items, so it is cheaper than HistoryRecords; a caller that already has
+// the list should call EstimateScanDuration(records) instead of reading
+// the records again. Like HistoryRecords it must run off the UI thread.
 func (s *Service) ScanDurationEstimate() (ScanDurationEstimate, error) {
-	records, err := s.HistoryRecords()
+	infos, err := s.store.ListRecords()
 	if err != nil {
-		return ScanDurationEstimate{}, err
+		return ScanDurationEstimate{}, fmt.Errorf("app: scan duration estimate: %w", err)
+	}
+	activeID := s.activeRecordID()
+	records := make([]HistoryRecord, 0, len(infos))
+	for _, info := range infos {
+		cp, err := s.store.Peek(info.ID)
+		if err != nil {
+			// An unreadable record cannot be an eligible normal scan.
+			continue
+		}
+		records = append(records, historySessionSummary(info, cp, activeID))
 	}
 	return EstimateScanDuration(records), nil
 }
