@@ -1010,9 +1010,9 @@ func (m *Model) reviewFieldControl(c *ui.Context, t *ui.Theme, row *Row, field F
 		input = m.reviewFocus(field, input)
 		m.noteReviewControlFocus(field, input.FocusWithin())
 	case FormFieldLevel:
-		input := ui.TextInput(c, &draft.Level).Width(110).
+		input := m.noteTextInputFocus(ui.TextInput(c, &draft.Level).Width(110).
 			Placeholder("0–15").Disabled(m.reviewActionsBlocked()).
-			Label("等级")
+			Label("等级"))
 		input = m.reviewFocus(field, input)
 		m.noteReviewControlFocus(field, input.FocusWithin())
 	case FormFieldMainStat:

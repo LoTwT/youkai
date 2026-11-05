@@ -460,9 +460,10 @@ func TestConfirmStayKeepsItemInPendingSegment(t *testing.T) {
 	if m.recentlyConfirmed != nil {
 		t.Fatal("leaving the results page kept the confirmed row")
 	}
-	if err := tt.Click("打开"); err != nil {
-		t.Fatalf("reopen the record: %v", err)
+	if err := tt.Click(historyTimeText(m.history[0])); err != nil {
+		t.Fatalf("select the record: %v", err)
 	}
+	tt.Key(0, ui.KeyEnter)
 	settle(t, m, q, tt)
 	if m.displayPage() != pageResults {
 		t.Fatalf("returning to the scan destination shows page %v", m.displayPage())

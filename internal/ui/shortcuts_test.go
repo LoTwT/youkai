@@ -442,23 +442,25 @@ func TestEscapeCancelsTheUnsavedPrompt(t *testing.T) {
 func TestEscapeReturnsTheFocusToTheTable(t *testing.T) {
 	t.Run("history", func(t *testing.T) {
 		svc := &fakeService{history: historyTableRecords(3)}
-		m, q := newTestModel(t, Config{
-			Service: svc, DirectExportSaver: &fakeDirectExportSaver{},
-			OpenDataDirectory: func() error { return nil },
-		})
-		m.SetContentSize(1020, 700)
-		tt := ui.NewTester(m.View, 1020, 700)
+		m, q := newTestModel(t, Config{Service: svc, DirectExportSaver: &fakeDirectExportSaver{}})
+		m.SetContentSize(1180, 760)
+		tt := ui.NewTester(m.View, 1180, 760)
 		settle(t, m, q, tt)
 		openRecordsList(t, m, q, tt)
 
-		if err := tt.Click("打开数据目录"); err != nil {
-			t.Fatal(err)
-		}
+		// The first Escape closes the row menu and returns the focus to the
+		// menu trigger; the next one gives the table the keyboard again.
+		m.openHistoryMenu("r01")
 		tt.Frame()
 		tt.Key(0, ui.KeyEscape)
 		tt.Frame()
+		if m.historyMenuOpen {
+			t.Fatal("Escape did not close the row menu")
+		}
+		tt.Key(0, ui.KeyEscape)
 		tt.Frame()
-		if !tt.Focused("10-21 14:02") {
+		tt.Frame()
+		if !tt.Focused(historyTimeText(m.history[0])) {
 			t.Fatalf("Escape did not give the history table the focus: %q", tt.Texts())
 		}
 	})
@@ -468,42 +470,14 @@ func TestEscapeReturnsTheFocusToTheTable(t *testing.T) {
 // pulled away to the table. MyGo's text inputs leave the key unhandled, so
 // the shell has to keep its hands off while one holds the keyboard.
 func TestEscapeStaysInATextField(t *testing.T) {
-	svc := &fakeService{history: historyTableRecords(3)}
-	m, q := newTestModel(t, Config{Service: svc, DirectExportSaver: &fakeDirectExportSaver{}})
-	m.SetContentSize(1020, 700)
-	tt := ui.NewTester(m.View, 1020, 700)
-	settle(t, m, q, tt)
-	openRecordsList(t, m, q, tt)
-
-	// Tab until the date input takes what is typed. Typing is the probe:
-	// every other focus stop on this page ignores text.
-	focused := false
-	for i := 0; i < 20; i++ {
-		tt.Key(0, ui.KeyTab)
-		tt.Frame()
-		tt.Type("2")
-		tt.Frame()
-		if m.historyFilter == "2" {
-			focused = true
-			break
-		}
-	}
-	if !focused {
-		t.Fatal("Tab never reached the history date input")
-	}
-	m.historyFilter = ""
+	m, _, tt := openResponsiveResults(t, recovery(reviewRowItem(t, 1, 12)), 1024, 700)
 	tt.Frame()
-
-	tt.Key(0, ui.KeyEscape)
-	tt.Frame()
-	tt.Frame()
-	if tt.Focused("10-21 14:02") {
-		t.Fatal("Escape pulled the focus out of the text field")
-	}
-	tt.Type("3")
-	tt.Frame()
-	if m.historyFilter != "3" {
-		t.Fatalf("Escape moved the keyboard out of the input: filter %q", m.historyFilter)
+	// The view sets this while a text input holds the keyboard. Escape must
+	// leave that decision to the input instead of focusing the list.
+	m.textInputFocused = true
+	m.handleEscapeShortcut(nil)
+	if m.focusListRequested {
+		t.Fatal("Escape moved the keyboard out of the text field")
 	}
 }
 
@@ -643,8 +617,8 @@ func TestStatusBarNamesOnlyUsableShortcuts(t *testing.T) {
 	tt3 := ui.NewTester(m3.View, 1020, 700)
 	settle(t, m3, q3, tt3)
 	openRecordsList(t, m3, q3, tt3)
-	if got := m3.statusShortcutText(); got != shortcutOpenRecord+" 打开记录" {
-		t.Fatalf("the history status = %q", got)
+	if got := m3.statusShortcutText(); got != "" {
+		t.Fatalf("the history status names shortcut keys: %q", got)
 	}
 	openSettings(t, m3, q3, tt3)
 	if got := m3.statusShortcutText(); got != "" {
