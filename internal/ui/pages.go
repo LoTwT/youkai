@@ -3,71 +3,73 @@ package ui
 import (
 	"fmt"
 
+	"github.com/LoTwT/youkai/internal/scan"
 	"github.com/egoist/mygo/ui"
 )
 
-// Page is the main window's current task page. Scan and review are two
-// stages of one workflow; history and settings are separate destinations.
+// Page is the shell's destination. The navigation rail has exactly three:
+// scan, records and settings (design 07 §3.1). Scan is the only place a
+// scan starts and where its live progress shows; record results are the
+// records destination's drill-down level, not a fourth destination.
+//
+// pageResults is the opened record workspace and pageHistory its parent
+// list; the rail highlights the records destination for both.
 type Page int
 
 const (
-	pageAuto Page = iota
-	pageScan
+	pageScan Page = iota
 	pageResults
 	pageHistory
 	pageSettings
 )
 
-// The page shell's navigation rail. The design fixes 168 DIP at 1440 and
-// 144 DIP at 1020/1024 and 860; folding below 1200 keeps that room for the
-// page as the window narrows while leaving the wide screenshots untouched.
+// The navigation rail's fixed metrics: 64-DIP rail with 52-DIP items and a
+// 20-DIP icon, settings pinned to the bottom (design 07 §3.1, wireframe 01).
 const (
-	sidebarWideWidth     = 168
-	sidebarNarrowWidth   = 144
-	sidebarNarrowMaxSize = 1200
+	navRailWidth     = 64
+	navRailItemWidth = 52
 )
 
 var (
 	scanIcon     = ui.MustParseSVG([]byte(`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3"/><circle cx="12" cy="12" r="3"/></svg>`))
-	historyIcon  = ui.MustParseSVG([]byte(`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/><path d="M12 7v5l3 2"/></svg>`))
+	recordsIcon  = ui.MustParseSVG([]byte(`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h14a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z"/><path d="M8 9h8M8 13h8M8 17h5"/></svg>`))
 	settingsIcon = ui.MustParseSVG([]byte(`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M4 12h16M4 17h16"/><circle cx="9" cy="7" r="2"/><circle cx="15" cy="12" r="2"/><circle cx="10" cy="17" r="2"/></svg>`))
 )
 
+// displayPage is the destination the shell renders. The page starts on
+// scan (the zero value), never on a record or the records list: startup
+// always lands on the scan page (design 07 §4).
 func (m *Model) displayPage() Page {
-	if m.page != pageAuto {
+	switch m.page {
+	case pageScan, pageResults, pageHistory, pageSettings:
 		return m.page
-	}
-	switch {
-	case m.rec != nil:
-		return pageResults
-	case len(m.history) > 0:
-		return pageHistory
 	default:
 		return pageScan
 	}
 }
 
-// viewPages is the sidebar shell: the navigation rail, the current page's
+// viewPages is the shell: the 64-DIP navigation rail, the current page's
 // body and actions, and the shared status bar.
 func (m *Model) viewPages(c *ui.Context) {
 	tok := ApplyTheme(c)
 	t := c.Theme()
 	m.registerPageShortcuts(c)
-	if m.displayPage() == pageResults {
+	if m.displayPage() == pageResults && m.recordTab == recordTabItems {
 		m.registerResultsShortcuts(c)
 	} else {
-		// Confirmed rows linger in the pending segment only for the
-		// current results visit; leaving the destination refreshes it.
+		// The pending segment's just-confirmed markers belong to the item
+		// browser's current visit; the summary and other destinations
+		// refresh it.
 		m.clearRecentlyConfirmed()
 	}
 	if m.displayPage() != pageHistory {
-		// The row menu only exists on the history page; leaving it must not
+		// The row menu only exists on the records list; leaving it must not
 		// leave an open menu to reappear on the next visit.
 		m.historyMenuOpen = false
 	}
 
 	ui.Row(c).Fill().Children(func() {
-		m.sidebar(c, t, tok)
+		m.navRail(c, t, tok)
 		ui.Divider(c)
 		ui.Column(c).Grow(1).FillHeight().Children(func() {
 			m.pageBody(c, t)
@@ -82,104 +84,89 @@ func (m *Model) viewPages(c *ui.Context) {
 	})
 }
 
-// sidebarWidth folds the rail to the design's narrow width when the window
-// is compact. The window reports its content size through SetContentSize,
-// so a resize redraws with the other width without any extra state.
-func (m *Model) sidebarWidth() float32 {
-	if m.contentWidth > 0 && m.contentWidth < sidebarNarrowMaxSize {
-		return sidebarNarrowWidth
-	}
-	return sidebarWideWidth
-}
-
-// sidebar is the navigation rail: rectangular items with an icon and a
-// label. Settings stays pinned to the bottom; the upper items are
-// destinations.
-func (m *Model) sidebar(c *ui.Context, t *ui.Theme, tok *Tokens) {
-	width := m.sidebarWidth()
-	horizontal := t.Space(2.5)
-	vertical := t.Space(3.5)
-	if width == sidebarNarrowWidth {
-		horizontal = t.Space(2)
-		vertical = t.Space(3)
-	}
-	ui.Column(c).Width(width).FillHeight().Background(tok.SurfaceWindow).
-		Padding(vertical, horizontal).Gap(t.Space(0.5)).Children(func() {
-		page := m.displayPage()
-		results := page == pageResults
-		// An opened history snapshot is shown by the results area but
-		// belongs to the history destination; only the live session's
-		// results belong to scan.
-		m.sidebarButton(c, t, tok, "扫描", scanIcon,
-			page == pageScan || (results && m.activeSlot == resultSlotSession), m.sidebarScan)
-		m.sidebarButton(c, t, tok, "历史", historyIcon,
-			page == pageHistory || (results && m.activeSlot == resultSlotHistory), m.sidebarHistory)
+// navRail is the three-destination rail: icon above label, the active
+// destination with the accent-soft face, and settings pinned to the
+// bottom. The rail is built first, so Tab reaches it before any page
+// content (design 09 §4.4).
+func (m *Model) navRail(c *ui.Context, t *ui.Theme, tok *Tokens) {
+	page := m.displayPage()
+	onRecords := page == pageResults || page == pageHistory
+	ui.Column(c).Width(navRailWidth).FillHeight().Background(tok.SurfaceWindow).
+		Padding(t.Space(2.5), 0).Gap(t.Space(1.5)).AlignItems(ui.Center).Children(func() {
+		m.navRailItem(c, t, tok, "扫描", scanIcon, page == pageScan, m.showScanDestination)
+		m.navRailItem(c, t, tok, "记录", recordsIcon, onRecords, m.showRecordsDestination)
 		ui.Box(c).Grow(1)
-		ui.Divider(c)
-		m.sidebarButton(c, t, tok, "设置", settingsIcon,
-			page == pageSettings, m.sidebarSettings)
+		m.navRailItem(c, t, tok, "设置", settingsIcon, page == pageSettings, m.showSettingsDestination)
 	})
 }
 
-// sidebarScan routes the scan destination: its prepare page while no
-// session is live, and the live session's results once there is one. A
-// reopened history record belongs to the history destination, so it is
-// never presented as the scan destination's content.
-func (m *Model) sidebarScan() {
-	switch m.displayPage() {
-	case pageResults:
-		if m.activeSlot == resultSlotSession {
-			return // the live session stays
-		}
-		if m.appliedSession == "" {
-			// A history snapshot is showing and no live session exists:
-			// the scan destination is its prepare page.
-			m.navigatePage(pageScan)
-			return
-		}
-		// A history snapshot is showing. The scan destination is the
-		// live session; the draft guard turns this into the unsaved
-		// prompt.
-		m.ShowLive()
-		return
-	case pageScan:
-		return // already preparing
+// navRailItem is one rail destination. The active item carries the
+// accent-soft face and the accent foreground, and its ref lets F6 return
+// the keyboard to the rail.
+func (m *Model) navRailItem(c *ui.Context, t *ui.Theme, tok *Tokens, label string, icon *ui.SVG, active bool, action func()) {
+	bg, fg := tok.SurfaceWindow, tok.TextSecondary
+	if active {
+		bg, fg = tok.AccentSoft, tok.AccentFG
 	}
-	if m.appliedSession != "" {
-		m.ShowLive()
+	item := ui.Button(c, "").Label(label).Background(bg).TextColor(fg).
+		Border(0, ui.Color{}).Radius(t.Space(2)).
+		Width(navRailItemWidth).Padding(t.Space(1.75), 0)
+	if active {
+		item = item.Bind(&m.railActiveRef)
+	}
+	if item.Clicked() {
+		action()
+	}
+	item.Children(func() {
+		ui.Column(c).Gap(t.Space(0.5)).AlignItems(ui.Center).Children(func() {
+			ui.Icon(c, icon).Size(t.Space(5), t.Space(5)).TextColor(fg)
+			ui.Text(c, label).FontSize(t.FontSize * 0.8).TextColor(fg).SingleLine()
+		})
+	})
+}
+
+// showScanDestination opens the scan page. Scan is the only destination
+// that starts a scan and shows its live progress; a record, live or
+// reopened, is read in the records destination.
+func (m *Model) showScanDestination() {
+	if m.displayPage() == pageScan {
 		return
 	}
 	m.navigatePage(pageScan)
 }
 
-// sidebarHistory routes the history destination. An opened snapshot is
-// restored on the results page (its filters, selection and scroll stay
-// live), while only the history snapshot's own "← 返回历史" goes to the
-// list. Without an opened record the rail opens the list. The destination
-// already on screen ignores the click: a reopen would settle the editor
-// and could hold a dirty draft behind a prompt for a move that is not one.
-func (m *Model) sidebarHistory() {
-	page := m.displayPage()
-	if page == pageHistory {
-		return // already on the list
+// showRecordsDestination opens the records destination. An already open
+// workspace stays where it is; from another destination, the record the
+// user was reading comes back with its view state — the opened history
+// record, or the session slot's record — and otherwise the whole list
+// opens.
+func (m *Model) showRecordsDestination() {
+	switch m.displayPage() {
+	case pageHistory, pageResults:
+		return
 	}
-	if page == pageResults && m.activeSlot == resultSlotHistory {
-		return // the opened snapshot already is this destination
-	}
-	if m.historySlot.recordID != "" {
+	if m.activeSlot == resultSlotHistory && m.historySlot.recordID != "" {
 		m.requestNavigation(navigationRequest{
 			kind:     navOpenHistory,
 			recordID: m.historySlot.recordID,
 		})
 		return
 	}
+	if m.activeSlot == resultSlotSession && m.sessionSlot.recordID != "" &&
+		!m.snap.Busy && m.snap.Scan.Phase == scan.PhaseEnded &&
+		m.appliedSession != "" && m.exitState != exitRunning && m.exitState != exitDone {
+		// A finished session is a saved record; a running one belongs to
+		// the scan page, so the records destination opens the list.
+		m.ShowLive()
+		return
+	}
 	m.navigatePage(pageHistory)
 }
 
-// sidebarSettings routes the settings destination through the same draft
-// guard as the result destinations, so leaving a dirty item prompts
-// instead of dropping its input.
-func (m *Model) sidebarSettings() {
+// showSettingsDestination routes settings through the same draft guard as
+// the record destinations, so leaving a dirty item prompts instead of
+// dropping its input.
+func (m *Model) showSettingsDestination() {
 	m.navigatePage(pageSettings)
 }
 
@@ -191,33 +178,24 @@ func (m *Model) navigatePage(page Page) {
 	m.requestNavigation(navigationRequest{kind: navPage, page: page})
 }
 
-// sidebarButton is one rectangular navigation item. The active item uses
-// the accent-soft face and accent foreground, as the design's wide sidebar.
-func (m *Model) sidebarButton(c *ui.Context, t *ui.Theme, tok *Tokens, label string, icon *ui.SVG, active bool, action func()) {
-	bg, fg := tok.SurfaceWindow, tok.TextSecondary
-	if active {
-		bg, fg = tok.AccentSoft, tok.AccentFG
-	}
-	button := ui.Button(c, "").Label(label).Background(bg).TextColor(fg).
-		Border(0, ui.Color{}).Radius(t.Space(2)).
-		Height(t.Space(9.5)).Padding(0, t.Space(2.5)).Gap(t.Space(2.5))
-	if button.Clicked() {
-		action()
-	}
-	button.Children(func() {
-		ui.Icon(c, icon).Size(t.Space(4.5), t.Space(4.5)).TextColor(fg)
-		ui.Text(c, label).FontSize(t.FontSize).TextColor(fg).SingleLine()
-	})
-}
-
 func (m *Model) pageBody(c *ui.Context, t *ui.Theme) {
-	page := m.displayPage()
-	if page == pageScan || page == pageResults {
+	switch m.displayPage() {
+	case pageResults:
+		m.recordWorkspace(c, t)
+	case pageHistory:
+		// The records table owns its vertical scrolling; an outer scroll
+		// would give the List an unbounded height and defeat row snapping.
+		ui.Column(c).Grow(1).FillHeight().Padding(t.Space(3), t.Space(3)).Children(func() {
+			m.historyPage(c, t)
+		})
+	case pageSettings:
+		ui.Scroll(c).Grow(1).Children(func() {
+			ui.Column(c).Gap(t.Space(2)).Padding(t.Space(3), t.Space(3)).Children(func() {
+				m.settingsPage(c, t)
+			})
+		})
+	default:
 		ui.Column(c).Grow(1).Padding(t.Space(3), t.Space(3)).Gap(t.Space(2)).Children(func() {
-			if page == pageResults {
-				m.resultsArea(c, t)
-				return
-			}
 			ui.Scroll(c).Grow(1).Children(func() {
 				ui.Column(c).Gap(t.Space(2)).Children(func() {
 					m.navigationPrompt(c, t)
@@ -233,31 +211,12 @@ func (m *Model) pageBody(c *ui.Context, t *ui.Theme) {
 				})
 			})
 		})
-		return
 	}
-
-	if page == pageHistory {
-		// The history table owns its vertical scrolling; an outer scroll
-		// would give the List an unbounded height and defeat row snapping.
-		ui.Column(c).Grow(1).FillHeight().Padding(t.Space(3), t.Space(3)).Children(func() {
-			m.historyPage(c, t)
-		})
-		return
-	}
-
-	ui.Scroll(c).Grow(1).Children(func() {
-		ui.Column(c).Gap(t.Space(2)).Padding(t.Space(3), t.Space(3)).Children(func() {
-			switch page {
-			case pageSettings:
-				m.settingsPage(c, t)
-			}
-		})
-	})
 }
 
 // pageActions is the scan page's bottom action bar: start while idle, stop
-// while a session is running. The results page keeps its actions in the
-// page header instead, so this bar renders only on the scan destination.
+// while a session is running. The records workspace keeps its actions in
+// its title bar instead.
 func (m *Model) pageActions(c *ui.Context, t *ui.Theme, tok *Tokens) {
 	if m.displayPage() != pageScan {
 		return
@@ -267,12 +226,14 @@ func (m *Model) pageActions(c *ui.Context, t *ui.Theme, tok *Tokens) {
 		Padding(0, t.Space(3)).AlignItems(ui.Center).Children(func() {
 		ui.Box(c).Grow(1)
 		if m.snap.Busy || m.startReqID != "" {
-			if ui.Button(c, "停止扫描").TextColor(t.Danger).Clicked() {
+			button := ui.Button(c, "停止扫描").TextColor(t.Danger).Bind(&m.scanActionRef)
+			if button.Clicked() {
 				m.Stop()
 			}
 			return
 		}
-		if ui.PrimaryButton(c, "开始扫描").Disabled(!m.scanStartReady()).Clicked() {
+		button := ui.PrimaryButton(c, "开始扫描").Disabled(!m.scanStartReady()).Bind(&m.scanActionRef)
+		if button.Clicked() {
 			m.requestScanStart()
 		}
 	})
@@ -289,23 +250,26 @@ func (m *Model) pageStatusBar(c *ui.Context, t *ui.Theme) {
 }
 
 // statusShortcutText names only the keys this build registers for the
-// current page. The results page's keys follow its list/detail/edit
-// layout; the scan page's stop key is the platform hotkey registered by
-// the entry point, and its start key exists only when ⌘R is registered.
+// current page. Every label comes from shortcut_text.go, so the interface
+// shows one platform's notation.
 func (m *Model) statusShortcutText() string {
 	switch m.displayPage() {
 	case pageResults:
-		return m.resultShortcutText()
+		// The review keys belong to the item browser; the summary has no
+		// list and names none of them.
+		if m.recordTab == recordTabItems {
+			return m.resultShortcutText()
+		}
 	case pageScan:
 		if m.snap.Busy || m.startReqID != "" {
-			return "⌃⌥⌘S 停止扫描"
+			return shortcutStopScan + " 停止扫描"
 		}
 		if m.scanStartReady() {
-			return "⌘R 开始扫描"
+			return shortcutStartScan + " 开始扫描"
 		}
 	case pageHistory:
 		if len(m.visibleHistory()) > 0 {
-			return "↵ 打开记录"
+			return shortcutOpenRecord + " 打开记录"
 		}
 	}
 	return ""

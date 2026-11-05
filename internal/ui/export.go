@@ -125,6 +125,13 @@ func (m *Model) exportBlockedReason() string {
 	}
 }
 
+// exportEntryBlocked reports whether the workspace's export entry and its
+// Ctrl+E shortcut are unusable now. The title-bar button and the shortcut
+// share this answer, so they cannot disagree (L-2).
+func (m *Model) exportEntryBlocked() bool {
+	return !m.exportAvailable() || m.exportBlockedReason() != ""
+}
+
 // ExportJSON starts the JSON export: the write runs asynchronously, so it
 // never blocks the window. The state of the internal record is untouched on
 // refusal or write failure.

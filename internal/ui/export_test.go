@@ -93,6 +93,8 @@ func exportModel(t *testing.T, saver *fakeDirectExportSaver) (*Model, *queueUpda
 	m, q := newTestModel(t, Config{Service: svc, DirectExportSaver: saver, AppVersion: "test-1"})
 	m.reloadRecord("rec", false)
 	drainAll(t, m, q)
+	m.page = pageResults
+	showRecordItems(m)
 	if m.rec == nil || m.exportData == nil {
 		t.Fatalf("the export snapshot did not load: rec=%v err=%q", m.rec, m.exportBuildErr)
 	}
@@ -530,6 +532,8 @@ func directExportModel(t *testing.T, saver *fakeDirectExportSaver, rec *record.R
 	m.SetContentSize(1024, 700)
 	m.reloadRecord(id, live)
 	drainAll(t, m, q)
+	m.page = pageResults
+	showRecordItems(m)
 	if m.exportData == nil {
 		t.Fatalf("the direct export snapshot did not load: %v", m.exportBuildErr)
 	}
@@ -556,6 +560,8 @@ func TestDirectExportDirectoryFailureOffersActions(t *testing.T) {
 	m.SetContentSize(1024, 700)
 	m.reloadRecord("rec", false)
 	drainAll(t, m, q)
+	m.page = pageResults
+	showRecordItems(m)
 	tt := ui.NewTester(m.View, 1024, 700)
 	settle(t, m, q, tt)
 
