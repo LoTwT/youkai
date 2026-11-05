@@ -6,7 +6,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/LoTwT/youkai/internal/record"
 	"github.com/egoist/mygo/ui"
 )
 
@@ -211,7 +210,7 @@ func (m *Model) historyCell(c *ui.Context, t *ui.Theme, tok *Tokens, entry Histo
 	}
 	switch id {
 	case "时间":
-		m.historyTimeCell(c, t, tok, entry, latest)
+		m.historyTimeCell(c, t, tok, entry, latest, chosen)
 	case "结果":
 		m.historyResultCell(c, t, tok, entry, latest, chosen)
 	case "件数":
@@ -231,12 +230,17 @@ func (m *Model) historyCell(c *ui.Context, t *ui.Theme, tok *Tokens, entry Histo
 
 // historyTimeCell is the row's first cell. Its height keeps the design's
 // comfortable rows instead of the toolkit's minimum.
-func (m *Model) historyTimeCell(c *ui.Context, t *ui.Theme, tok *Tokens, entry HistoryEntry, latest bool) {
+func (m *Model) historyTimeCell(c *ui.Context, t *ui.Theme, tok *Tokens, entry HistoryEntry, latest, chosen bool) {
 	ui.Row(c).Height(t.Space(8)).AlignItems(ui.Center).Children(func() {
 		ui.Row(c).Gap(t.Space(1)).AlignItems(ui.Center).Children(func() {
 			text := ui.Text(c, historyTimeText(entry)).SingleLine()
-			if latest {
+			if latest && !entry.Unreadable {
 				text.FontWeight(600)
+			}
+			if entry.Unreadable {
+				// 线框 10 keeps a damaged row's time muted: its reason, not
+				// its date, is what the user needs from the row.
+				text.TextColor(colorWhenChosen(chosen, tok.TextMuted, t.AccentText))
 			}
 			if entry.ID != "" && entry.ID == string(m.appliedSession) {
 				ui.Text(c, "本次").FontSize(t.FontSize*0.75).TextColor(tok.AccentFG).
@@ -246,107 +250,21 @@ func (m *Model) historyTimeCell(c *ui.Context, t *ui.Theme, tok *Tokens, entry H
 	})
 }
 
-// historyResultTone picks the result text's color and tag.
-type historyResultTone int
-
-const (
-	historyToneNeutral historyResultTone = iota
-	historyToneMuted
-	historyToneWarning
-	historyToneDanger
-)
-
-// historyResult is the 结果 column's verdict: an optional tag drawn as a
-// shape plus text, and one conclusion sentence (08 §5, C-26).
-type historyResult struct {
-	tag  string
-	text string
-	tone historyResultTone
-}
-
-// historyResultFor states one record's conclusion from the four-class
-// counts and its termination. It never shows a raw fault code: an unknown
-// code degrades to the ending alone (09 §4.3).
-func (m *Model) historyResultFor(entry HistoryEntry) historyResult {
-	if entry.Unreadable {
-		return historyResult{tag: "!", text: "无法打开：记录不可读", tone: historyToneDanger}
-	}
-	if entry.Interrupted || (entry.Termination != nil && entry.Termination.Kind == record.TerminationInterrupted) {
-		return historyResult{tag: "中断", text: "已恢复已保存部分", tone: historyToneWarning}
-	}
-	if entry.ID != "" && entry.ID == string(m.appliedSession) && m.snap.Busy {
-		return historyResult{text: "扫描进行中"}
-	}
-	term := entry.Termination
-	if term == nil {
-		return historyResult{text: "结束状态未知", tone: historyToneMuted}
-	}
-	switch term.Kind {
-	case record.TerminationCancelled:
-		return historyResult{text: "手动停止 · 覆盖：" + coverageText(entry.Coverage)}
-	case record.TerminationFailed:
-		cause := faultCauseText(term.Code, nil)
-		if term.Phase == record.PhasePreparing && entry.CapturedCount == 0 {
-			if cause == "" {
-				return historyResult{text: "没有开始", tone: historyToneWarning}
-			}
-			return historyResult{tag: "失败", text: "没有开始：" + cause, tone: historyToneDanger}
-		}
-		if cause == "" {
-			return historyResult{text: "中途停止", tone: historyToneDanger}
-		}
-		return historyResult{tag: "失败", text: "中途停止：" + cause, tone: historyToneDanger}
-	case record.TerminationCompleted:
-		return historyCompletedResult(entry)
-	default:
-		return historyResult{text: "结束状态未知", tone: historyToneMuted}
-	}
-}
-
-// historyCompletedResult is the conclusion of a normally ended scan: the
-// coverage first, then the four classes' pending work, then the warning
-// count that still lets the record export.
-func historyCompletedResult(entry HistoryEntry) historyResult {
-	counts := entry.Counts
-	if entry.CapturedCount == 0 && counts.Total() == 0 {
-		return historyResult{text: "正常结束 · 没有采集到驱动盘", tone: historyToneWarning}
-	}
-	switch entry.Coverage {
-	case record.CoverageComplete:
-		// Assessed below.
-	case record.CoveragePartial:
-		if entry.IncompletePositionsKnown && entry.IncompletePositions > 0 {
-			return historyResult{
-				text: fmt.Sprintf("没有扫全 · %d 个号位不完整", entry.IncompletePositions),
-				tone: historyToneWarning,
-			}
-		}
-		return historyResult{text: "没有扫全 · 覆盖：部分", tone: historyToneWarning}
-	default:
-		return historyResult{text: "正常结束 · 覆盖：无法确认", tone: historyToneMuted}
-	}
-	if counts.Total() == 0 {
-		// A record from before the four-class counts: the ending is all it
-		// can honestly say.
-		return historyResult{text: "正常结束 · 覆盖：完整"}
-	}
-	if pending := counts.Pending(); pending > 0 {
-		switch {
-		case counts.PendingBackfill > 0 && counts.PendingReview > 0:
-			return historyResult{text: fmt.Sprintf("扫全了，%s 件待处理", formatCount(pending))}
-		case counts.PendingBackfill > 0:
-			return historyResult{text: fmt.Sprintf("扫全了，%s 件待补录", formatCount(counts.PendingBackfill))}
-		default:
-			return historyResult{text: fmt.Sprintf("扫全了，%s 件待校对", formatCount(counts.PendingReview))}
-		}
-	}
-	if counts.Warning > 0 {
-		return historyResult{
-			text: fmt.Sprintf("扫全了，%s 件有警告", formatCount(counts.Warning)),
-			tone: historyToneWarning,
-		}
-	}
-	return historyResult{text: "扫全了，可以直接导出"}
+// historyResultFor adapts one list entry to the shared conclusion. The
+// running flag is model state: the record data alone cannot say whether its
+// scan has wrapped.
+func (m *Model) historyResultFor(entry HistoryEntry) recordConclusion {
+	return recordConclusionFor(recordConclusionInput{
+		CapturedCount:            entry.CapturedCount,
+		Coverage:                 entry.Coverage,
+		Termination:              entry.Termination,
+		Counts:                   entry.Counts,
+		Interrupted:              entry.Interrupted,
+		IncompletePositions:      entry.IncompletePositions,
+		IncompletePositionsKnown: entry.IncompletePositionsKnown,
+		Unreadable:               entry.Unreadable,
+		Running:                  entry.ID != "" && entry.ID == string(m.appliedSession) && m.snap.Busy,
+	})
 }
 
 // historyResultCell draws the tag and the conclusion.
@@ -355,7 +273,7 @@ func (m *Model) historyResultCell(c *ui.Context, t *ui.Theme, tok *Tokens, entry
 	ui.Row(c).Gap(t.Space(1)).AlignItems(ui.Center).Children(func() {
 		if result.tag != "" {
 			bg, fg := tok.WarningSoft, tok.WarningFG
-			if result.tone == historyToneDanger {
+			if result.tone == recordToneDanger {
 				bg, fg = tok.DangerSoft, tok.DangerFG
 			}
 			if chosen {
@@ -371,20 +289,20 @@ func (m *Model) historyResultCell(c *ui.Context, t *ui.Theme, tok *Tokens, entry
 			text.FontWeight(600)
 		}
 		switch result.tone {
-		case historyToneMuted:
+		case recordToneMuted:
 			text.TextColor(colorWhenChosen(chosen, tok.TextMuted, t.AccentText))
-		case historyToneWarning:
+		case recordToneWarning:
 			text.TextColor(colorWhenChosen(chosen, tok.WarningFG, t.AccentText))
-		case historyToneDanger:
+		case recordToneDanger:
 			text.TextColor(colorWhenChosen(chosen, t.Danger, t.AccentText))
 		}
 	})
 }
 
-// historyNumberCell draws one integer column. known=false renders the
-// dash an unreadable record needs; strong marks the latest row.
-func (m *Model) historyNumberCell(c *ui.Context, t *ui.Theme, tok *Tokens, entry HistoryEntry, count int64, known, strong, chosen bool) {
-	if !known {
+// historyNumberCell draws one integer column. unreadable renders the dash
+// a damaged record needs; strong marks the latest row.
+func (m *Model) historyNumberCell(c *ui.Context, t *ui.Theme, tok *Tokens, entry HistoryEntry, count int64, unreadable, strong, chosen bool) {
+	if unreadable {
 		ui.Text(c, "—").TextColor(colorWhenChosen(chosen, tok.TextMuted, t.AccentText))
 		return
 	}

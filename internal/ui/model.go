@@ -213,10 +213,13 @@ type Model struct {
 	startReqID  string
 	startErr    string
 
-	history          []HistoryEntry
-	histChoice       string
-	histErr          string
-	historyLoading   bool
+	history        []HistoryEntry
+	histChoice     string
+	histErr        string
+	historyLoading bool
+	// historyLoadSeq identifies the newest load; a late result from an
+	// older load must not replace its list or clear its loading state.
+	historyLoadSeq   uint64
 	historyExporting string
 
 	// The records list's date filter (08 §5). The two dates are inclusive
@@ -629,10 +632,16 @@ type HistoryEntry struct {
 // so the first row is always the record a returning user looks for
 // (07 §4).
 func (m *Model) loadHistory() {
+	m.historyLoadSeq++
+	seq := m.historyLoadSeq
 	m.historyLoading = true
 	m.goAsync(func() {
 		records, err := m.cfg.Service.HistoryRecords()
 		m.update(func() {
+			if seq != m.historyLoadSeq {
+				// A newer load owns the list and its loading state.
+				return
+			}
 			m.historyLoading = false
 			if err != nil {
 				m.histErr = err.Error()

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -144,6 +145,135 @@ func TestHistoryLoadingState(t *testing.T) {
 	}
 	if !tt.HasText(historyTimeText(m.history[0])) || tt.HasText("正在读取记录……") {
 		t.Fatalf("the loaded list does not replace its loading state: %q", tt.Texts())
+	}
+}
+
+// waitForHistoryUpdate waits until the model queued one update, then runs
+// it. Tests that keep a load blocked cannot use settle: Idle would wait for
+// the blocked load.
+func waitForHistoryUpdate(t *testing.T, q *queueUpdater) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for q.empty() {
+		if time.Now().After(deadline) {
+			t.Fatal("the model did not queue a history update")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	for _, fn := range q.take() {
+		fn()
+	}
+}
+
+// TestHistoryLoadsDoNotApplyOutOfOrder starts two loads, lets the older
+// one finish first, and checks that it neither replaces the newer list nor
+// clears the newer load's loading state.
+func TestHistoryLoadsDoNotApplyOutOfOrder(t *testing.T) {
+	initial := historyTableRecords(1)
+	stale := historyTableRecords(2)
+	fresh := historyTableRecords(3)
+
+	var mu sync.Mutex
+	calls := 0
+	started := make(chan int, 4)
+	releaseStale := make(chan struct{})
+	releaseFresh := make(chan struct{})
+	svc := &fakeService{}
+	svc.historyFn = func() ([]app.HistoryRecord, error) {
+		mu.Lock()
+		calls++
+		n := calls
+		mu.Unlock()
+		started <- n
+		switch n {
+		case 1:
+			return initial, nil
+		case 2:
+			<-releaseStale
+			return stale, nil
+		default:
+			<-releaseFresh
+			return fresh, nil
+		}
+	}
+	m, q := newTestModel(t, Config{Service: svc})
+	tt := ui.NewTester(m.View, 1180, 760)
+	settle(t, m, q, tt)
+	if n := <-started; n != 1 {
+		t.Fatalf("the startup load is call %d, want 1", n)
+	}
+	if len(m.history) != 1 {
+		t.Fatalf("the startup load shows %d records", len(m.history))
+	}
+
+	m.loadHistory()
+	if n := <-started; n != 2 {
+		t.Fatalf("the slow load is call %d, want 2", n)
+	}
+	m.loadHistory()
+	if n := <-started; n != 3 {
+		t.Fatalf("the fresh load is call %d, want 3", n)
+	}
+	if !m.historyLoading {
+		t.Fatal("two in-flight loads left the list not loading")
+	}
+
+	// The older load lands first. Its result and its loading-state change
+	// both belong to a load that no longer owns the list.
+	close(releaseStale)
+	waitForHistoryUpdate(t, q)
+	if len(m.history) != 1 {
+		t.Fatalf("the stale load replaced the list: %d records", len(m.history))
+	}
+	if !m.historyLoading {
+		t.Fatal("the stale load cleared the newer load's loading state")
+	}
+
+	close(releaseFresh)
+	waitForHistoryUpdate(t, q)
+	if len(m.history) != 3 {
+		t.Fatalf("the fresh load shows %d records, want 3", len(m.history))
+	}
+	if m.historyLoading {
+		t.Fatal("the fresh load did not clear the loading state")
+	}
+	m.Idle()
+}
+
+// TestHistoryNumberColumnsShowReadableValues checks the standard tier's
+// visible 件数 and 可导出 cells, not only the row's accessibility label:
+// both show the record's numbers.
+func TestHistoryNumberColumnsShowReadableValues(t *testing.T) {
+	svc := &fakeService{history: historyTableRecords(1)}
+	m, q := newTestModel(t, Config{Service: svc})
+	m.SetContentSize(1180, 760)
+	tt := ui.NewTester(m.View, 1180, 760)
+	settle(t, m, q, tt)
+	openRecordsList(t, m, q, tt)
+
+	if got := countText(tt.Texts(), "1,008"); got != 2 {
+		t.Fatalf("visible 件数/可导出 cells show 1,008 %d times, want 2: %q", got, tt.Texts())
+	}
+}
+
+// TestHistoryNumberColumnsDashDamagedRow checks that a damaged row shows
+// the design's dash in 件数, 待处理 and 可导出, and invents no zero.
+func TestHistoryNumberColumnsDashDamagedRow(t *testing.T) {
+	svc := &fakeService{history: []app.HistoryRecord{{
+		ID: "bad", SavedAt: time.Date(2026, 11, 1, 23, 40, 0, 0, time.Local),
+		Unreadable: true, TotalBytes: 88 * 1024 * 1024,
+	}}}
+	m, q := newTestModel(t, Config{Service: svc})
+	m.SetContentSize(1180, 760)
+	tt := ui.NewTester(m.View, 1180, 760)
+	settle(t, m, q, tt)
+	openRecordsList(t, m, q, tt)
+
+	if got := countText(tt.Texts(), "—"); got != 3 {
+		t.Fatalf("the damaged row shows %d dashes, want 3 (件数/待处理/可导出): %q", got, tt.Texts())
+	}
+	if got := countText(tt.Texts(), "0"); got != 0 {
+		t.Fatalf("the damaged row invents a zero: %q", tt.Texts())
 	}
 }
 
@@ -448,34 +578,35 @@ func TestHistoryCompactMovesStorageIntoTheMenu(t *testing.T) {
 	}
 }
 
-// TestHistoryResultConclusions covers the 结果 column's conclusion texts:
-// they use the four-class counts from PR-02 and localize the termination
-// without leaking a fault code (08 §5, 09 §4.3).
-func TestHistoryResultConclusions(t *testing.T) {
+// TestRecordConclusion covers the shared conclusion texts: they use the
+// four-class counts and localize the termination without leaking a fault
+// code (08 §5, 09 §4.3). The records list and the summary share this
+// function.
+func TestRecordConclusion(t *testing.T) {
 	completed := &record.Termination{
 		Kind: record.TerminationCompleted, Code: "verifiedEnd", Phase: record.PhaseCapturing,
 	}
 	cases := []struct {
 		name  string
-		entry HistoryEntry
+		input recordConclusionInput
 		tag   string
 		text  string
 	}{
 		{
 			name:  "unreadable",
-			entry: HistoryEntry{Unreadable: true},
+			input: recordConclusionInput{Unreadable: true},
 			tag:   "!",
 			text:  "无法打开：记录不可读",
 		},
 		{
 			name:  "interrupted",
-			entry: HistoryEntry{Interrupted: true, CapturedCount: 3},
+			input: recordConclusionInput{Interrupted: true, CapturedCount: 3},
 			tag:   "中断",
 			text:  "已恢复已保存部分",
 		},
 		{
 			name: "all pass",
-			entry: HistoryEntry{
+			input: recordConclusionInput{
 				Termination: completed, Coverage: record.CoverageComplete,
 				CapturedCount: 1_017, Counts: app.ItemClassCounts{Passed: 1_017},
 			},
@@ -483,7 +614,7 @@ func TestHistoryResultConclusions(t *testing.T) {
 		},
 		{
 			name: "one pending review",
-			entry: HistoryEntry{
+			input: recordConclusionInput{
 				Termination: completed, Coverage: record.CoverageComplete,
 				CapturedCount: 1_017,
 				Counts:        app.ItemClassCounts{Passed: 1_016, PendingReview: 1},
@@ -492,7 +623,7 @@ func TestHistoryResultConclusions(t *testing.T) {
 		},
 		{
 			name: "pending backfill and review",
-			entry: HistoryEntry{
+			input: recordConclusionInput{
 				Termination: completed, Coverage: record.CoverageComplete,
 				CapturedCount: 8,
 				Counts:        app.ItemClassCounts{Passed: 6, PendingBackfill: 1, PendingReview: 1},
@@ -501,7 +632,7 @@ func TestHistoryResultConclusions(t *testing.T) {
 		},
 		{
 			name: "warnings stay exportable",
-			entry: HistoryEntry{
+			input: recordConclusionInput{
 				Termination: completed, Coverage: record.CoverageComplete,
 				CapturedCount: 8, Counts: app.ItemClassCounts{Passed: 6, Warning: 2},
 			},
@@ -509,7 +640,7 @@ func TestHistoryResultConclusions(t *testing.T) {
 		},
 		{
 			name: "partial coverage",
-			entry: HistoryEntry{
+			input: recordConclusionInput{
 				Termination: completed, Coverage: record.CoveragePartial,
 				CapturedCount: 6, Counts: app.ItemClassCounts{Passed: 6},
 			},
@@ -517,7 +648,7 @@ func TestHistoryResultConclusions(t *testing.T) {
 		},
 		{
 			name: "partial coverage with known positions",
-			entry: HistoryEntry{
+			input: recordConclusionInput{
 				Termination: completed, Coverage: record.CoveragePartial,
 				CapturedCount: 6, Counts: app.ItemClassCounts{Passed: 6},
 				IncompletePositions: 2, IncompletePositionsKnown: true,
@@ -526,7 +657,7 @@ func TestHistoryResultConclusions(t *testing.T) {
 		},
 		{
 			name: "manual stop",
-			entry: HistoryEntry{
+			input: recordConclusionInput{
 				Termination: &record.Termination{
 					Kind: record.TerminationCancelled, Code: "userCancelled", Phase: record.PhaseCapturing,
 				},
@@ -537,7 +668,7 @@ func TestHistoryResultConclusions(t *testing.T) {
 		},
 		{
 			name: "fault while capturing",
-			entry: HistoryEntry{
+			input: recordConclusionInput{
 				Termination: &record.Termination{
 					Kind: record.TerminationFailed, Code: "focusLost", Phase: record.PhaseCapturing,
 				},
@@ -549,7 +680,7 @@ func TestHistoryResultConclusions(t *testing.T) {
 		},
 		{
 			name: "stopped before starting",
-			entry: HistoryEntry{
+			input: recordConclusionInput{
 				Termination: &record.Termination{
 					Kind: record.TerminationFailed, Code: "prepareTimeout", Phase: record.PhasePreparing,
 				},
@@ -559,10 +690,18 @@ func TestHistoryResultConclusions(t *testing.T) {
 			text: "没有开始：30 秒内游戏没有就绪",
 		},
 	}
-	m := New(Config{Service: &fakeService{}})
+	// Running is model state rather than record data; the shared function
+	// still owns the wording.
+	cases = append(cases, struct {
+		name  string
+		input recordConclusionInput
+		tag   string
+		text  string
+	}{name: "scan still running", input: recordConclusionInput{Running: true}, text: "扫描进行中"})
+
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := m.historyResultFor(tc.entry)
+			got := recordConclusionFor(tc.input)
 			if got.tag != tc.tag || got.text != tc.text {
 				t.Fatalf("result = %q/%q, want %q/%q", got.tag, got.text, tc.tag, tc.text)
 			}
