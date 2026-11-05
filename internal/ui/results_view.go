@@ -568,7 +568,7 @@ func (m *Model) detailHeader(c *ui.Context, t *ui.Theme, row *Row) {
 }
 
 func (m *Model) evidenceToggle(c *ui.Context, row *Row) {
-	if len(row.Lines) == 0 && len(row.EvidenceIDs) == 0 {
+	if len(row.Lines) == 0 && len(row.Evidence) == 0 {
 		return
 	}
 	label := "显示证据"
@@ -1158,7 +1158,7 @@ func (m *Model) substatField(c *ui.Context, t *ui.Theme, row *Row) {
 // evidenceArea keeps the raw OCR lines, model scores, screenshots and
 // their provenance out of the main view until the user asks for them.
 func (m *Model) evidenceArea(c *ui.Context, t *ui.Theme, row *Row) {
-	if len(row.Lines) == 0 && len(row.EvidenceIDs) == 0 {
+	if len(row.Lines) == 0 && len(row.Evidence) == 0 {
 		ui.Text(c, "该条目没有证据行。").TextColor(t.TextMuted)
 		return
 	}
@@ -1178,10 +1178,18 @@ func (m *Model) evidenceArea(c *ui.Context, t *ui.Theme, row *Row) {
 	for i := range row.Lines {
 		m.lineDetail(c, t, row, i)
 	}
-	// Evidence beyond the observed lines (a line without metadata still
-	// has its image).
-	for i := len(row.Lines); i < len(row.EvidenceIDs); i++ {
-		m.lineDetail(c, t, row, i)
+	// Evidence without an observed line record follows the lines in capture
+	// order: a line crop whose record carries no line metadata still has its
+	// image, and context crops never carry text.
+	for i := range row.Evidence {
+		ev := &row.Evidence[i]
+		if ev.Kind == EvidenceLine {
+			if ev.Index >= len(row.Lines) {
+				m.lineDetail(c, t, row, ev.Index)
+			}
+			continue
+		}
+		m.evidenceDetail(c, t, ev)
 	}
 }
 
@@ -1206,10 +1214,11 @@ func (m *Model) lineDetail(c *ui.Context, t *ui.Theme, row *Row, i int) {
 	if i < len(row.Lines) {
 		line = row.Lines[i]
 	}
+	evidence := row.LineEvidence(i)
 	if m.evidenceStacked() {
 		ui.Column(c).Gap(t.Space(1)).Children(func() {
 			m.lineRole(c, t, line, i)
-			m.lineEvidence(c, t, row, i)
+			m.lineEvidence(c, t, row, evidence)
 			m.lineText(c, t, row, line)
 		})
 		return
@@ -1218,9 +1227,45 @@ func (m *Model) lineDetail(c *ui.Context, t *ui.Theme, row *Row, i int) {
 		ui.Column(c).Width(96).Gap(t.Space(0.5)).Children(func() {
 			m.lineRole(c, t, line, i)
 		})
-		m.lineEvidence(c, t, row, i)
+		m.lineEvidence(c, t, row, evidence)
 		m.lineText(c, t, row, line)
 	})
+}
+
+// evidenceDetail shows one evidence crop that carries no text line: the
+// context crops (rarity badge, selected cell, equipped-agent avatars) and any
+// id the deliverer's shape does not cover. The observed role labels it when
+// the record has one.
+func (m *Model) evidenceDetail(c *ui.Context, t *ui.Theme, ev *Evidence) {
+	if m.evidenceStacked() {
+		ui.Column(c).Gap(t.Space(1)).Children(func() {
+			m.evidenceRole(c, t, ev)
+			m.evidenceImage(c, t, m.rec.ID, ev.ID)
+		})
+		return
+	}
+	ui.Row(c).Gap(t.Space(3)).AlignItems(ui.Start).Children(func() {
+		ui.Column(c).Width(96).Gap(t.Space(0.5)).Children(func() {
+			m.evidenceRole(c, t, ev)
+		})
+		m.evidenceImage(c, t, m.rec.ID, ev.ID)
+	})
+}
+
+func (m *Model) evidenceRole(c *ui.Context, t *ui.Theme, ev *Evidence) {
+	role := ev.Role
+	if role == "" {
+		switch ev.Kind {
+		case EvidenceContext:
+			role = fmt.Sprintf("上下文 %d", ev.Index+1)
+		default:
+			role = "证据"
+		}
+	}
+	ui.Text(c, role).SingleLine()
+	if ev.Source != "" {
+		ui.Text(c, ev.Source).FontSize(t.FontSize * 0.8).TextColor(t.TextMuted).SingleLine()
+	}
 }
 
 func (m *Model) lineRole(c *ui.Context, t *ui.Theme, line Line, i int) {
@@ -1234,10 +1279,11 @@ func (m *Model) lineRole(c *ui.Context, t *ui.Theme, line Line, i int) {
 	}
 }
 
-func (m *Model) lineEvidence(c *ui.Context, t *ui.Theme, row *Row, i int) {
-	if i < len(row.EvidenceIDs) {
-		m.evidenceImage(c, t, m.rec.ID, row.EvidenceIDs[i])
-	} else if row.MissingEvidence() {
+func (m *Model) lineEvidence(c *ui.Context, t *ui.Theme, row *Row, evidence *Evidence) {
+	switch {
+	case evidence != nil:
+		m.evidenceImage(c, t, m.rec.ID, evidence.ID)
+	case row.MissingEvidence():
 		ui.Text(c, "截图已删除或缺失").TextColor(t.TextMuted).FontSize(t.FontSize * 0.9)
 	}
 }
