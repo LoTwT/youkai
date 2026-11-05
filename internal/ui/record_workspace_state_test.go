@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/LoTwT/youkai/internal/app"
+	"github.com/LoTwT/youkai/internal/game/zzz"
 	"github.com/LoTwT/youkai/internal/record"
 	"github.com/LoTwT/youkai/internal/scan"
 	"github.com/egoist/mygo/ui"
@@ -119,6 +120,138 @@ func TestFinishedScanAndListShareOneRecordWorkspace(t *testing.T) {
 	}
 }
 
+// TestUnsavedPromptSavesOrStaysForAnotherRecord checks the prompt's save
+// action when the draft belongs to the just-finished scan: a successful
+// save reaches that record and then opens the other one cleanly; a failed
+// save keeps the draft and never loads the other record.
+func TestUnsavedPromptSavesOrStaysForAnotherRecord(t *testing.T) {
+	newDirtyModel := func(t *testing.T) (*Model, *queueUpdater, *fakeService) {
+		t.Helper()
+		live := recovery(reviewRowItem(t, 1, 12))
+		live.Checkpoint.Session.SessionID = "s1"
+		other := recovery(structuredItem(1,
+			zzz.DiscRecord{SetID: intp(31200), Slot: 2, Level: intp(15)}, "另一条"))
+		other.Checkpoint.Session.SessionID = "old"
+		svc := &fakeService{
+			list: []record.RecordInfo{
+				{ID: "s1", SavedAt: time.Date(2026, 10, 21, 10, 0, 0, 0, time.UTC)},
+				{ID: "old", SavedAt: time.Date(2026, 10, 20, 10, 0, 0, 0, time.UTC)},
+			},
+			loads: map[string]*record.Recovery{"s1": live, "old": other},
+		}
+		installReviewSave(svc)
+		m, q := newTestModel(t, Config{Service: svc})
+		drainAll(t, m, q)
+		m.Apply(snap("s1", 1, true, scan.PhaseCapturing,
+			scan.Counts{Captured: 1, Produced: 1}, 1, true, ""))
+		drainAll(t, m, q)
+		showRecordItems(m)
+		m.startEdit()
+		if m.edit == nil {
+			t.Fatal("the editor did not open")
+		}
+		m.edit.draft.Level = "13"
+		m.histChoice = historyLabel(t, m, "old")
+		return m, q, svc
+	}
+
+	t.Run("save", func(t *testing.T) {
+		m, q, svc := newDirtyModel(t)
+		m.OpenHistory()
+		if m.navPrompt == nil || m.navPrompt.kind != navOpenRecord || m.navPrompt.recordID != "old" {
+			t.Fatalf("the dirty switch did not prompt: %+v", m.navPrompt)
+		}
+		m.promptSaveAndContinue()
+		drainAll(t, m, q)
+		svc.mu.Lock()
+		saves := append([]saveCall(nil), svc.saves...)
+		svc.mu.Unlock()
+		if len(saves) != 1 || saves[0].recordID != "s1" {
+			t.Fatalf("the save went to %+v, want the draft's record s1", saves)
+		}
+		if m.rec == nil || m.rec.ID != "old" || m.rec.Live || m.edit != nil || m.navPrompt != nil {
+			t.Fatalf("save-and-continue did not switch cleanly: record %+v edit %v prompt %+v",
+				m.rec, m.edit, m.navPrompt)
+		}
+		row := m.rec.Rows[0]
+		if row.Structured == nil || row.Structured.Data.Slot == nil || *row.Structured.Data.Slot != 2 {
+			t.Fatalf("the saved item leaked into the other record: %+v", row)
+		}
+	})
+
+	t.Run("save failure", func(t *testing.T) {
+		m, q, svc := newDirtyModel(t)
+		svc.mu.Lock()
+		svc.saveFn = func(string, int64, int64, app.ItemRevisionEdit) (app.ItemRevisionResult, error) {
+			return app.ItemRevisionResult{}, errors.New("磁盘已满")
+		}
+		svc.mu.Unlock()
+		m.OpenHistory()
+		m.promptSaveAndContinue()
+		drainAll(t, m, q)
+		if m.rec == nil || m.rec.ID != "s1" || !m.rec.Live {
+			t.Fatalf("a failed save switched records: %+v", m.rec)
+		}
+		if m.edit == nil || m.edit.draft.Level != "13" {
+			t.Fatalf("the failed save lost the draft: %+v", m.edit)
+		}
+		if m.navPrompt == nil {
+			t.Fatal("the failed save dropped the held navigation")
+		}
+		if !strings.Contains(m.reviewErr, "磁盘已满") {
+			t.Fatalf("the save failure was not shown: %q", m.reviewErr)
+		}
+		if got := recordLoadCount(svc, "old"); got != 0 {
+			t.Fatalf("the other record loaded behind the failed save (%d loads)", got)
+		}
+	})
+}
+
+// TestShowLivePromptsForAHistoryDraft checks the current-scan entry:
+// showing the live record while the reopened record holds unsaved input
+// goes through the same prompt instead of discarding it.
+func TestShowLivePromptsForAHistoryDraft(t *testing.T) {
+	live := recovery(reviewRowItem(t, 1, 12))
+	live.Checkpoint.Session.SessionID = "s1"
+	old := recovery(structuredItem(1,
+		zzz.DiscRecord{SetID: intp(31200), Slot: 2, Level: intp(15)}, "另一条"))
+	old.Checkpoint.Session.SessionID = "old"
+	svc := &fakeService{
+		list: []record.RecordInfo{
+			{ID: "s1", SavedAt: time.Date(2026, 10, 21, 10, 0, 0, 0, time.UTC)},
+			{ID: "old", SavedAt: time.Date(2026, 10, 20, 10, 0, 0, 0, time.UTC)},
+		},
+		loads: map[string]*record.Recovery{"s1": live, "old": old},
+	}
+	installReviewSave(svc)
+	m, q := newTestModel(t, Config{Service: svc})
+	drainAll(t, m, q)
+	m.Apply(snap("s1", 1, true, scan.PhaseCapturing,
+		scan.Counts{Captured: 1, Produced: 1}, 1, true, ""))
+	drainAll(t, m, q)
+	m.histChoice = historyLabel(t, m, "old")
+	m.OpenHistory()
+	drainAll(t, m, q)
+	showRecordItems(m)
+	m.startEdit()
+	if m.edit == nil {
+		t.Fatal("the editor did not open on the history record")
+	}
+	m.edit.draft.Level = "13"
+	loads := recordLoadCount(svc, "s1")
+
+	m.ShowLive()
+	if m.navPrompt == nil || m.navPrompt.kind != navOpenRecord || m.navPrompt.recordID != "s1" {
+		t.Fatalf("ShowLive with a dirty history record did not prompt: %+v", m.navPrompt)
+	}
+	if m.rec == nil || m.rec.ID != "old" || m.edit == nil || m.edit.draft.Level != "13" {
+		t.Fatalf("ShowLive moved before the prompt settled: record %+v edit %+v", m.rec, m.edit)
+	}
+	if got := recordLoadCount(svc, "s1"); got != loads {
+		t.Fatalf("ShowLive loaded the live record behind the prompt (%d loads, want %d)", got, loads)
+	}
+}
+
 // TestSavedRevisionIsTheOpenRecordWhenReopenedFromList checks the other
 // direction of the merge: a revision saved from the just-finished scan is
 // already in the one workspace, so reopening the record from the list
@@ -213,6 +346,88 @@ func TestFinishedScanLeavesAnotherOpenRecordAlone(t *testing.T) {
 	}
 }
 
+// TestRefusedStartKeepsTheDraftOnTheReturningRecord checks a start the
+// service refuses: the snapshot falls back to the session the draft
+// belongs to, so that record keeps its editor and becomes live again
+// instead of being replaced by an empty view.
+func TestRefusedStartKeepsTheDraftOnTheReturningRecord(t *testing.T) {
+	rec := recovery(reviewRowItem(t, 1, 12))
+	rec.Checkpoint.Session.SessionID = "s1"
+	svc := &fakeService{loads: map[string]*record.Recovery{"s1": rec}}
+	installReviewSave(svc)
+	m, q := newTestModel(t, Config{Service: svc})
+	drainAll(t, m, q)
+	m.Apply(snap("s1", 1, true, scan.PhaseCapturing,
+		scan.Counts{Captured: 1, Produced: 1}, 1, true, ""))
+	drainAll(t, m, q)
+	showRecordItems(m)
+	m.startEdit()
+	if m.edit == nil {
+		t.Fatal("the editor did not open")
+	}
+	m.edit.draft.Level = "13"
+	loads := recordLoadCount(svc, "s1")
+
+	// Another scan starts behind the draft: the open record is history for
+	// now, but the editor stays.
+	m.Apply(snap("s2", 2, true, scan.PhasePreparing, scan.Counts{}, 1, true, ""))
+	drainAll(t, m, q)
+	if m.rec == nil || m.rec.ID != "s1" || m.rec.Live || m.edit == nil ||
+		m.edit.draft.Level != "13" {
+		t.Fatalf("the background scan disturbed the draft: record %+v edit %+v", m.rec, m.edit)
+	}
+
+	// The service refuses s2 and rolls back to s1.
+	m.Apply(snap("s1", 3, true, scan.PhasePreparing, scan.Counts{}, 1, true, ""))
+	drainAll(t, m, q)
+	if m.rec == nil || m.rec.ID != "s1" || !m.rec.Live {
+		t.Fatalf("the returning record is not live again: %+v", m.rec)
+	}
+	if m.edit == nil || m.edit.draft.Level != "13" {
+		t.Fatalf("the rollback dropped the draft: %+v", m.edit)
+	}
+	if m.reviewNotice != "" {
+		t.Fatalf("the rollback kept the replaced-scanner notice: %q", m.reviewNotice)
+	}
+	if got := recordLoadCount(svc, "s1"); got != loads {
+		t.Fatalf("the rollback reloaded the record (%d loads, want %d)", got, loads)
+	}
+}
+
+// TestReopeningAFailedRecordRetriesTheLoad checks the records entry after a
+// failed load: opening the record again clears the stale view and loads it,
+// so the workspace never stays stuck on the error.
+func TestReopeningAFailedRecordRetriesTheLoad(t *testing.T) {
+	rec := recovery(reviewRowItem(t, 1, 12))
+	rec.Checkpoint.Session.SessionID = "r1"
+	svc := &fakeService{
+		list: []record.RecordInfo{{
+			ID: "r1", SavedAt: time.Date(2026, 10, 20, 10, 0, 0, 0, time.UTC),
+		}},
+		loads: map[string]*record.Recovery{"r1": rec},
+	}
+	m, q := newTestModel(t, Config{Service: svc})
+	drainAll(t, m, q)
+	m.histChoice = historyLabel(t, m, "r1")
+	svc.mu.Lock()
+	svc.loadErr = map[string]error{"r1": errors.New("磁盘读取失败")}
+	svc.mu.Unlock()
+	m.OpenHistory()
+	drainAll(t, m, q)
+	if m.recErr == "" || m.rec == nil || m.rec.ID != "r1" {
+		t.Fatalf("the failed load did not leave its error: record %+v err %q", m.rec, m.recErr)
+	}
+
+	svc.mu.Lock()
+	svc.loadErr = nil
+	svc.mu.Unlock()
+	m.OpenHistory()
+	drainAll(t, m, q)
+	if m.recErr != "" || m.rec == nil || m.rec.ID != "r1" || len(m.rec.Rows) != 1 {
+		t.Fatalf("reopening did not retry the load: record %+v err %q", m.rec, m.recErr)
+	}
+}
+
 // TestLateSaveResponseDoesNotTouchAnotherRecord checks the save identity
 // guard: a response for the record replaced by a later one is discarded
 // instead of writing its item into the new record's row with the same
@@ -244,7 +459,23 @@ func TestLateSaveResponseDoesNotTouchAnotherRecord(t *testing.T) {
 	m.saveEdit(reviewSave, nil)
 	<-started
 
-	// The other record replaces the workspace while the save is in flight.
+	// The real UI cannot switch while a save runs; the navigation guard
+	// rejects the attempt and leaves the workspace alone.
+	m.openRecord("old")
+	if m.navPrompt != nil || m.rec == nil || m.rec.ID != "s1" {
+		t.Fatalf("a navigation during the save moved the workspace: record %+v prompt %+v",
+			m.rec, m.navPrompt)
+	}
+	if !strings.Contains(m.reviewErr, "正在保存") {
+		t.Fatalf("the blocked navigation gave no reason: %q", m.reviewErr)
+	}
+	if got := recordLoadCount(svc, "old"); got != 0 {
+		t.Fatalf("the blocked navigation loaded the other record (%d loads)", got)
+	}
+
+	// The identity check is still the last line of defence: replace the
+	// record directly, as a state change that bypassed the guard would,
+	// and let the late response land.
 	m.showRecord("old", false)
 	m.applyLoadedRecord("old", second, false)
 	if m.rec == nil || m.rec.ID != "old" {

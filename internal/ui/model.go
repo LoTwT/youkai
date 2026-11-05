@@ -539,7 +539,15 @@ func (m *Model) beginSession(id string) {
 		m.promptedSessions[m.savePrompt.recordID] = true
 		m.savePrompt = nil
 	}
-	if busyEditing && m.rec != nil && m.rec.ID != id {
+	if busyEditing && m.rec != nil {
+		if m.rec.ID == id {
+			// A refused start rolled the service back to the record the
+			// draft belongs to: keep the editor and make the record live
+			// again instead of replacing it.
+			m.rec.Live = true
+			m.reviewNotice = ""
+			return
+		}
 		// The open record is history now; the new session's record waits
 		// until the draft settles so a background scan never discards input.
 		m.rec.Live = false
@@ -735,15 +743,11 @@ func (m *Model) openRecord(id string) {
 }
 
 // performOpenRecord is the navigation action behind OpenHistory and
-// ShowLive. A record already on screen keeps its view; any other record
-// replaces the workspace and loads from disk.
+// ShowLive. The entry checks keep a record already on screen in place, so
+// this action always replaces the workspace and loads from disk; it also
+// retries a record whose previous load failed.
 func (m *Model) performOpenRecord(id string) {
 	if id == "" {
-		return
-	}
-	if m.recordIsOpen(id) && m.recErr == "" {
-		m.clearRecentlyConfirmed()
-		m.settleResultSelection()
 		return
 	}
 	live := m.recordIsLive(id)
