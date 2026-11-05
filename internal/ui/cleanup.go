@@ -27,17 +27,6 @@ func (t cleanupTarget) all() bool {
 	return t == cleanupAllScreenshots || t == cleanupAllRecords
 }
 
-// savePrompt is the post-save three-way choice: keep the screenshots,
-// delete them, or postpone. It is opened once per ended session after a
-// successful final save; "稍后处理" (and every other choice) marks the
-// session so it never reopens on its own.
-type savePrompt struct {
-	recordID string
-	preview  app.CleanupPreview
-	running  bool
-	err      string
-}
-
 // cleanupPrompt is one measured deletion waiting for confirmation.
 // previewing means the numbers are still being computed; err keeps a
 // failed preview or deletion visible while the entry stays retryable.
@@ -69,145 +58,6 @@ type storagePrompt struct {
 	ready      bool
 	running    bool
 	err        string
-}
-
-// requestSavePrompt measures the just-finished session and opens the
-// post-save choice. A failed measurement is reported instead of showing
-// zero as exact; nothing is deleted without the user's choice.
-func (m *Model) requestSavePrompt(recordID string) {
-	if recordID == "" || m.promptedSessions[recordID] {
-		return
-	}
-	if m.savePrompt != nil && m.savePrompt.recordID == recordID {
-		return
-	}
-	m.goAsync(func() {
-		preview, err := m.cfg.Service.PreviewRecordScreenshots(recordID)
-		m.update(func() {
-			if m.promptedSessions[recordID] {
-				return
-			}
-			if err != nil {
-				m.cleanupNotice = "保存完成，但无法读取清理预览：" + err.Error()
-				return
-			}
-			if preview.EvidenceFiles == 0 {
-				m.promptedSessions[recordID] = true
-				return
-			}
-			m.savePrompt = &savePrompt{recordID: recordID, preview: preview}
-		})
-	})
-}
-
-// SavePromptKeep dismisses the post-save prompt and keeps the
-// screenshots.
-func (m *Model) SavePromptKeep() {
-	p := m.savePrompt
-	if p == nil || p.running {
-		return
-	}
-	m.promptedSessions[p.recordID] = true
-	m.savePrompt = nil
-	m.cleanupNotice = "已保留本次扫描的截图。"
-}
-
-// SavePromptLater dismisses the post-save prompt without deleting
-// anything; it never opens again on its own.
-func (m *Model) SavePromptLater() {
-	p := m.savePrompt
-	if p == nil || p.running {
-		return
-	}
-	m.promptedSessions[p.recordID] = true
-	m.savePrompt = nil
-	m.cleanupNotice = "已稍后处理截图；不会再次自动提示。"
-}
-
-// SavePromptDelete deletes the just-saved record's screenshots. The
-// record, revisions, quality and validation stay; only the crops go.
-func (m *Model) SavePromptDelete() {
-	p := m.savePrompt
-	if p == nil || p.running {
-		return
-	}
-	if reason := m.cleanupBlockedReason(); reason != "" {
-		p.err = reason
-		return
-	}
-	p.running = true
-	p.err = ""
-	id := p.recordID
-	m.goAsync(func() {
-		removal, err := m.cfg.Service.DeleteRecordScreenshots(id)
-		m.update(func() {
-			p.running = false
-			if m.savePrompt != p {
-				m.loadHistory()
-				m.refreshStorage()
-				return
-			}
-			if err != nil {
-				p.err = "删除截图失败：" + err.Error()
-				m.refreshStorage()
-				m.loadHistory()
-				return
-			}
-			m.promptedSessions[id] = true
-			m.savePrompt = nil
-			m.cleanupNotice = fmt.Sprintf("已删除本次扫描的 %d 张截图（%s），结果与校对状态保留。",
-				removal.RemovedFiles, formatBytes(removal.RemovedBytes))
-			if m.rec != nil && m.rec.ID == id {
-				m.reloadRecord(id, m.rec.Live)
-			}
-			m.loadHistory()
-			m.refreshStorage()
-		})
-	})
-}
-
-// savePromptArea is the post-save three-way choice. It appears at the top
-// of the live session's results page until the user answers it. The three
-// choices keep the screenshots, delete only this record's crops, or defer;
-// the record, revisions and review state are never removed here.
-func (m *Model) savePromptArea(c *ui.Context, t *ui.Theme) {
-	p := m.savePrompt
-	if p == nil || m.rec == nil || m.rec.ID != p.recordID || !m.rec.Live {
-		return
-	}
-	_, tok := themeWithTokens(t, c.Preferences())
-	blocked := m.cleanupBlockedReason()
-	ui.Column(c).Background(tok.SurfaceCard).Border(1, tok.TableBorder).
-		Radius(t.Space(1.5)).Padding(t.Space(2), t.Space(2.5)).
-		Gap(t.Space(1)).Children(func() {
-		ui.Textf(c, "本次扫描已保存：截图 %d 张 · %s · 待校对 %d 项。",
-			p.preview.EvidenceFiles, formatBytes(p.preview.EvidenceBytes), p.preview.PendingReview).
-			TextColor(tok.TextPrimary)
-		if p.preview.Unreadable > 0 {
-			ui.Textf(c, "其中 %d 条记录无法读取，待校对数量不完整。", p.preview.Unreadable).
-				TextColor(tok.TextMuted).FontSize(t.FontSize * 0.9)
-		}
-		ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
-			if ui.Button(c, "保留截图").Disabled(p.running).Clicked() {
-				m.SavePromptKeep()
-			}
-			if ui.Button(c, "删除截图").Disabled(p.running || blocked != "").Clicked() {
-				m.SavePromptDelete()
-			}
-			if ui.Button(c, "稍后处理").Disabled(p.running).Clicked() {
-				m.SavePromptLater()
-			}
-			if p.running {
-				ui.Text(c, "正在删除截图……").TextColor(tok.TextMuted)
-			}
-		})
-		if blocked != "" && !p.running {
-			ui.Text(c, blocked).TextColor(tok.TextMuted).FontSize(t.FontSize * 0.9)
-		}
-		if p.err != "" {
-			ui.Text(c, p.err).TextColor(t.Danger)
-		}
-	})
 }
 
 // RequestScreenshotCleanup opens the measured confirmation for one
@@ -544,7 +394,6 @@ func (m *Model) finishScreenshotCleanup(p *cleanupPrompt, removal record.Evidenc
 		m.cleanupNotice = fmt.Sprintf("已删除 %d 张截图（%s），结果与校对状态保留。",
 			removal.RemovedFiles, formatBytes(removal.RemovedBytes))
 	}
-	m.dismissSavePromptFor(p.target, p.recordID)
 	if m.rec != nil && m.rec.ID == p.recordID {
 		m.reloadRecord(m.rec.ID, m.rec.Live)
 	}
@@ -569,7 +418,6 @@ func (m *Model) finishScreenshotBatch(p *cleanupPrompt, batch record.EvidenceBat
 		m.cleanup = nil
 		m.cleanupNotice = partial
 	}
-	m.dismissSavePromptFor(p.target, "")
 	if m.rec != nil {
 		m.reloadRecord(m.rec.ID, m.rec.Live)
 	}
@@ -594,7 +442,6 @@ func (m *Model) finishRecordCleanup(p *cleanupPrompt, deletion record.RecordDele
 			m.clearResultsLocked()
 		}
 	}
-	m.dismissSavePromptFor(p.target, p.recordID)
 	m.loadHistory()
 	m.refreshStorage()
 }
@@ -618,28 +465,8 @@ func (m *Model) finishRecordBatch(p *cleanupPrompt, batch record.RecordDeletionB
 	// partial failure could have removed it too, so close it rather
 	// than keep a stale view.
 	m.clearResultsLocked()
-	m.dismissSavePromptFor(p.target, "")
 	m.loadHistory()
 	m.refreshStorage()
-}
-
-// dismissSavePromptFor marks the post-save prompt settled when the same
-// record (or every record) is cleaned through another entry.
-func (m *Model) dismissSavePromptFor(target cleanupTarget, recordID string) {
-	if target.all() {
-		if m.savePrompt != nil {
-			m.promptedSessions[m.savePrompt.recordID] = true
-			m.savePrompt = nil
-		}
-		return
-	}
-	// Mark the record even when its prompt has not landed yet: a late
-	// preview must not reopen a choice for content that was just
-	// cleaned.
-	m.promptedSessions[recordID] = true
-	if m.savePrompt != nil && m.savePrompt.recordID == recordID {
-		m.savePrompt = nil
-	}
 }
 
 // clearResultsLocked closes the results area and returns it to its empty

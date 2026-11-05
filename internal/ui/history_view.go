@@ -250,21 +250,29 @@ func (m *Model) historyTimeCell(c *ui.Context, t *ui.Theme, tok *Tokens, entry H
 	})
 }
 
-// historyResultFor adapts one list entry to the shared conclusion.
-// ScanNotWrapped is model state: the record data alone cannot say whether
-// the service still owns the session, including its wrap-up save.
-func (m *Model) historyResultFor(entry HistoryEntry) recordConclusion {
-	return recordConclusionFor(recordConclusionInput{
+// historyConclusionInput adapts one list entry to the shared conclusion.
+// ScanNotWrapped and SaveFailed are model state: the record data alone
+// cannot say whether the service still owns the session, including its
+// wrap-up save.
+func (m *Model) historyConclusionInput(entry HistoryEntry) recordConclusionInput {
+	active := entry.ID != "" && entry.ID == string(m.appliedSession)
+	return recordConclusionInput{
 		CapturedCount:            entry.CapturedCount,
 		Coverage:                 entry.Coverage,
 		Termination:              entry.Termination,
 		Counts:                   entry.Counts,
-		Interrupted:              entry.Interrupted,
+		Interrupted:              recordConclusionInterrupted(entry.Termination, entry.Interrupted, false),
 		IncompletePositions:      entry.IncompletePositions,
 		IncompletePositionsKnown: entry.IncompletePositionsKnown,
 		Unreadable:               entry.Unreadable,
-		ScanNotWrapped:           entry.ID != "" && entry.ID == string(m.appliedSession) && m.snap.Busy,
-	})
+		ScanNotWrapped:           active && m.snap.Busy,
+		SaveFailed:               active && m.snap.SaveError != "",
+	}
+}
+
+// historyResultFor states one list entry's conclusion.
+func (m *Model) historyResultFor(entry HistoryEntry) recordConclusion {
+	return recordConclusionFor(m.historyConclusionInput(entry))
 }
 
 // historyResultCell draws the tag and the conclusion.

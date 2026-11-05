@@ -227,9 +227,22 @@ func (o *exportOutcome) text() string {
 }
 
 // exportArea is the results area's export control: the two formats side by
-// side with no default, the usable/excluded counts, the coverage
-// conclusion and the no-screenshots notice.
+// side with no default, the usable/excluded counts, coverage conclusion and
+// no-screenshots notice.
 func (m *Model) exportArea(c *ui.Context, t *ui.Theme) {
+	m.exportControls(c, t, true)
+}
+
+// summaryExportArea keeps the two format entries reachable from the summary
+// until PR-15's export dialog, without repeating the count line the summary
+// already shows.
+func (m *Model) summaryExportArea(c *ui.Context, t *ui.Theme) {
+	m.exportControls(c, t, false)
+}
+
+// exportControls renders the two format buttons and the optional summary
+// line shared by the results area and the summary.
+func (m *Model) exportControls(c *ui.Context, t *ui.Theme, withSummary bool) {
 	if !m.exportAvailable() {
 		return
 	}
@@ -243,7 +256,9 @@ func (m *Model) exportArea(c *ui.Context, t *ui.Theme) {
 				m.ExportCSV()
 			}
 		})
-		ui.Text(c, m.exportSummaryText()).TextColor(t.TextMuted)
+		if withSummary {
+			ui.Text(c, m.exportSummaryText()).TextColor(t.TextMuted)
+		}
 		if blocked != "" && !m.exporting {
 			ui.Text(c, blocked).TextColor(t.TextMuted).FontSize(t.FontSize * 0.9)
 		}
@@ -326,7 +341,7 @@ func (m *Model) exportSummaryText() string {
 func coverageText(status record.CoverageStatus) string {
 	switch status {
 	case record.CoverageComplete:
-		return "完整"
+		return "全部"
 	case record.CoveragePartial:
 		return "部分"
 	case record.CoverageUnknown:

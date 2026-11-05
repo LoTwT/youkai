@@ -124,6 +124,15 @@ type Config struct {
 	// area as "当前版本 …" so the window itself names the build it runs;
 	// the entry point passes mygo.App.Version(). Empty hides the line.
 	AppVersion string
+	// SystemInfo reads the operating-system and display context the copied
+	// diagnostic text reports. The entry point passes app.CurrentSystemInfo;
+	// nil or a zero result says unknown. It runs only when the user copies,
+	// after the window has established the process's DPI awareness.
+	SystemInfo func() app.SystemInfo
+	// OpenDiagnosticsDirectory reveals the directory holding the diagnostic
+	// log and its collector subtrees, as app.DiagnosticsDirectory names it.
+	// Nil hides the action.
+	OpenDiagnosticsDirectory func() error
 	// DevAutoInstall installs an update a check found on its own, without
 	// the install button. It is a development switch (the entry point sets
 	// it from YOUKAI_DEV_AUTOUPDATE) for driving the real install and
@@ -243,20 +252,18 @@ type Model struct {
 	historyFocusPending bool
 	lastPage            Page
 
-	// Screenshot/history cleanup. savePrompt is the post-save three-way
-	// choice; promptedSessions remembers the sessions it was settled for,
-	// so "稍后处理" never reopens it. cleanup is the preview awaiting
+	// Screenshot/history cleanup. cleanup is the preview awaiting
 	// confirmation, and storage is the storeroom view's last successful
 	// measurement (nil after a failure — old numbers are never shown as
-	// exact).
-	savePrompt       *savePrompt
-	promptedSessions map[string]bool
-	cleanup          *cleanupPrompt
-	cleanupNotice    string
-	storage          *app.StorageUsage
-	storageErr       string
-	storageLoading   bool
-	storagePrompt    *storagePrompt
+	// exact). A finished scan never asks whether to keep its screenshots
+	// (P-13); the summary's detail area and the cleanup entries are the
+	// only places screenshots are managed.
+	cleanup        *cleanupPrompt
+	cleanupNotice  string
+	storage        *app.StorageUsage
+	storageErr     string
+	storageLoading bool
+	storagePrompt  *storagePrompt
 
 	// exporting is the shared export slot: one export runs at a time. Its
 	// frozen snapshot lives in the open record's workspace; exportOutcome
@@ -382,18 +389,17 @@ func New(cfg Config) *Model {
 		closeBehavior = app.CloseBehaviorHide
 	}
 	m := &Model{
-		cfg:              cfg,
-		source:           cfg.ScanSource,
-		split:            420,
-		page:             pageScan,
-		recordTab:        recordTabSummary,
-		contentWidth:     1180,
-		contentHeight:    760,
-		cache:            newEvidenceCache(cfg.Evidence, limit),
-		promptedSessions: make(map[string]bool),
-		historyRow:       -1,
-		historyLoading:   true,
-		closeBehavior:    closeBehavior,
+		cfg:            cfg,
+		source:         cfg.ScanSource,
+		split:          420,
+		page:           pageScan,
+		recordTab:      recordTabSummary,
+		contentWidth:   1180,
+		contentHeight:  760,
+		cache:          newEvidenceCache(cfg.Evidence, limit),
+		historyRow:     -1,
+		historyLoading: true,
+		closeBehavior:  closeBehavior,
 	}
 	if cfg.Updates != nil {
 		m.updates = cfg.Updates
@@ -516,7 +522,6 @@ func (m *Model) Apply(snap app.Snapshot) {
 	// at startup loads history once via Attach.
 	if prevBusy && !snap.Busy && snap.SessionID != "" {
 		if snap.SaveError == "" && snap.Scan.Phase == scan.PhaseEnded {
-			m.requestSavePrompt(string(snap.SessionID))
 			if m.liveRecordOpen() && !m.editingDirty() && !m.reviewSaving {
 				m.openRecordWorkspace()
 			}
@@ -543,12 +548,6 @@ func (m *Model) Apply(snap app.Snapshot) {
 func (m *Model) beginSession(id, replacedSession string) {
 	busyEditing := m.reviewSaving || m.editingDirty()
 	rolledBack := replacedSession != "" && id == replacedSession
-	if m.savePrompt != nil && m.savePrompt.recordID != id {
-		// A new scan replaces the results view; the old session's prompt is
-		// settled as postponed instead of floating over unrelated content.
-		m.promptedSessions[m.savePrompt.recordID] = true
-		m.savePrompt = nil
-	}
 	if busyEditing && m.rec != nil {
 		if m.rec.ID == id {
 			// A refused start rolled the service back to the record the
@@ -624,7 +623,11 @@ type HistoryEntry struct {
 	IncompletePositions      int
 	IncompletePositionsKnown bool
 	TotalBytes               int64
-	Unreadable               bool
+	// EvidenceFiles and EvidenceBytes are the record's screenshot footprint,
+	// shown in the summary's detail area; zero means unknown or no evidence.
+	EvidenceFiles int
+	EvidenceBytes int64
+	Unreadable    bool
 }
 
 // loadHistory refreshes the history list from the service off the UI
@@ -667,6 +670,8 @@ func (m *Model) loadHistory() {
 					IncompletePositions:      info.IncompletePositions,
 					IncompletePositionsKnown: info.IncompletePositionsKnown,
 					TotalBytes:               info.TotalBytes,
+					EvidenceFiles:            info.EvidenceFiles,
+					EvidenceBytes:            info.EvidenceBytes,
 					Unreadable:               info.Unreadable,
 				})
 			}

@@ -1,8 +1,6 @@
 package ui
 
 import (
-	"fmt"
-
 	"github.com/egoist/mygo/ui"
 )
 
@@ -18,9 +16,8 @@ const (
 )
 
 // recordWorkspace is an opened record: its title bar, the 摘要 / 逐件
-// switch and the chosen view. This PR builds only the frame around the
-// existing surfaces; the summary and the item browser keep their content
-// until their own PRs replace it.
+// switch and the chosen view. The summary is the designed conclusion; the
+// item browser keeps its existing content until PR-14b replaces it.
 func (m *Model) recordWorkspace(c *ui.Context, t *ui.Theme) {
 	_, tok := themeWithTokens(t, c.Preferences())
 	ui.Column(c).Grow(1).FillHeight().Children(func() {
@@ -84,10 +81,10 @@ func (m *Model) recordWorkspaceHeader(c *ui.Context, t *ui.Theme, tok *Tokens) {
 	})
 }
 
-// workspaceStatusTexts fills the header's three status slots. They are
-// placeholders for the summary work of PR-13: coverage and pending come
-// from the loaded record, and the save slot names the live record's state
-// rather than claiming a save that has not happened.
+// workspaceStatusTexts fills the header's three status slots: coverage and
+// pending come from the loaded record (待处理 is the four-class total, the
+// same number the summary's pending action counts), and the save slot names
+// the live record's state rather than claiming a save that has not happened.
 func (m *Model) workspaceStatusTexts() (coverage, pending, saved string) {
 	coverage = "覆盖：—"
 	if m.recData != nil {
@@ -95,7 +92,7 @@ func (m *Model) workspaceStatusTexts() (coverage, pending, saved string) {
 	}
 	pending = "待处理 —"
 	if m.rec != nil {
-		pending = fmt.Sprintf("待处理 %d", m.pendingCount())
+		pending = "待处理 " + formatCount(m.summaryCounts().Pending())
 	}
 	saved = "已保存"
 	switch {
@@ -111,68 +108,6 @@ func (m *Model) workspaceStatusTexts() (coverage, pending, saved string) {
 		saved = "未保存"
 	}
 	return coverage, pending, saved
-}
-
-// recordSummary is the summary view's first version: the existing
-// conclusion and export controls, without the item browser. PR-13 replaces
-// it with the designed summary.
-func (m *Model) recordSummary(c *ui.Context, t *ui.Theme) {
-	ui.Scroll(c).Grow(1).Children(func() {
-		ui.Column(c).Gap(t.Space(2)).Padding(t.Space(3)).Children(func() {
-			m.sessionTerminationArea(c, t)
-			m.savePromptArea(c, t)
-			if m.histErr != "" {
-				ui.Text(c, "历史记录读取失败："+m.histErr).TextColor(t.Danger)
-			}
-			if m.cleanupNotice != "" {
-				ui.Text(c, m.cleanupNotice)
-			}
-			if m.cleanup != nil && !m.cleanup.target.all() {
-				m.cleanupPromptArea(c, t)
-			}
-			if m.recErr != "" {
-				ui.Text(c, "记录读取失败："+m.recErr).TextColor(t.Danger)
-				return
-			}
-			if m.rec == nil || len(m.rec.Rows) == 0 {
-				if m.rec != nil && m.completionVisible() {
-					m.completionCard(c, t)
-					return
-				}
-				if m.rec != nil {
-					m.exportArea(c, t)
-				}
-				ui.Text(c, m.emptyResultsText()).TextColor(t.TextMuted)
-				return
-			}
-			if m.completionVisible() {
-				m.completionCard(c, t)
-				return
-			}
-			m.resultConclusion(c, t)
-			m.exportArea(c, t)
-		})
-	})
-}
-
-// resultConclusion states the record's conclusion from the data the
-// results header already shows: the pending count, the exportable and
-// captured counts, the coverage conclusion and an incomplete-position
-// note that the termination notice does not already carry.
-func (m *Model) resultConclusion(c *ui.Context, t *ui.Theme) {
-	counts := m.recordCounts()
-	ui.Column(c).Gap(t.Space(1)).Padding(t.Space(3)).
-		Background(t.Surface).Border(1, t.Border).Radius(t.Radius).
-		Children(func() {
-			ui.Text(c, m.pendingText()).FontWeight(600)
-			if counts.ExportKnown {
-				ui.Textf(c, "可导出 %d 件 · 共采集 %d 件", counts.Exportable, counts.Captured)
-			}
-			ui.Text(c, m.completionCoverageText()).TextColor(t.TextMuted)
-			if note := m.incompletePositionsNote(); note != "" && !m.sessionTerminationShown() {
-				ui.Text(c, note).TextColor(t.Warning)
-			}
-		})
 }
 
 // openRecordWorkspace shows the opened record's summary. It switches only

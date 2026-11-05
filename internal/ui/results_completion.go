@@ -124,15 +124,19 @@ func completionExclusionText(counts recordCounts) string {
 }
 
 // recordCoverage is the record's single coverage conclusion: the frozen
-// export snapshot when one exists, else the checkpoint. The workspace
-// title bar and the summary body both read it, so they cannot disagree
-// (M-1).
+// export snapshot when one exists, else the loaded checkpoint, else the
+// view's shell (a view built without its recovery, as in tests). The
+// workspace title bar and the summary body both read it, so they cannot
+// disagree (M-1).
 func (m *Model) recordCoverage() record.CoverageStatus {
 	if m.exportData != nil {
 		return m.exportData.Summary.Coverage
 	}
 	if m.recData != nil {
 		return m.recData.Checkpoint.Session.Coverage.Status
+	}
+	if m.rec != nil {
+		return m.rec.Shell.Coverage.Status
 	}
 	return record.CoverageUnknown
 }
@@ -148,7 +152,7 @@ func (m *Model) completionCoverageText() string {
 	}
 	switch status {
 	case record.CoverageComplete:
-		return "覆盖：完整"
+		return "覆盖：全部"
 	case record.CoveragePartial:
 		text := "覆盖：部分覆盖"
 		if summary != nil && summary.ExpectedCount != nil && *summary.ExpectedCount > 0 {
