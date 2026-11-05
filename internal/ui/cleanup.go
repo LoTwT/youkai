@@ -172,7 +172,7 @@ func (m *Model) SavePromptDelete() {
 // the record, revisions and review state are never removed here.
 func (m *Model) savePromptArea(c *ui.Context, t *ui.Theme) {
 	p := m.savePrompt
-	if p == nil || m.rec == nil || m.rec.ID != p.recordID || m.activeSlot != resultSlotSession {
+	if p == nil || m.rec == nil || m.rec.ID != p.recordID || !m.rec.Live {
 		return
 	}
 	_, tok := themeWithTokens(t, c.Preferences())
@@ -647,7 +647,6 @@ func (m *Model) dismissSavePromptFor(target cleanupTarget, recordID string) {
 func (m *Model) clearResultsLocked() {
 	m.recLoad++
 	m.loading = false
-	m.activeResultSlot().state.loading = false
 	m.rec = nil
 	m.recData = nil
 	m.recErr = ""

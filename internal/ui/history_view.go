@@ -61,7 +61,9 @@ func historyColumnsFor(contentWidth int) []ui.TableColumn {
 // historyPage is the records destination: the title, the date filter, the
 // record table and its row menu. The newest record is first and carries
 // its conclusion in the 结果 column, so a returning user finds last time's
-// scan without reading counts (07 §4, 08 §5).
+// scan without reading counts (07 §4, 08 §5). The live session appears as
+// the first row with the 本次 badge; it opens the same record workspace as
+// any other row, so one record never has two editable copies.
 func (m *Model) historyPage(c *ui.Context, t *ui.Theme) {
 	_, tok := themeWithTokens(t, c.Preferences())
 	m.historyHeader(c, t, tok)
@@ -576,8 +578,8 @@ func (m *Model) openSelectedHistoryMenu() {
 
 // historyDeleteBlockedReason explains why a row's deletion entries are
 // disabled. The live session's record is never deletable while it is the
-// current session, even after the scan finished: the scan slot owns it
-// until a new session replaces it.
+// current session, even after the scan finished: the current session owns
+// it until a new session replaces it.
 func (m *Model) historyDeleteBlockedReason(entry HistoryEntry) string {
 	if entry.ID != "" && entry.ID == string(m.appliedSession) {
 		return "当前会话记录，扫描中或未转移前不能删除。"
@@ -702,9 +704,10 @@ func (m *Model) openHistoryRow(row int) {
 	m.openHistoryEntry(entries[row])
 }
 
-// openHistoryEntry routes the row's 打开 action. A damaged record cannot
-// be opened; its row menu only deletes it. "本次" goes back to the live
-// session slot through ShowLive; every other row opens the history slot.
+// openHistoryEntry routes the row's 打开 action through the merged record
+// workspace: "本次" and every other row open the same place, and a record
+// already open keeps its state. A damaged record cannot be opened; its row
+// menu only deletes it.
 func (m *Model) openHistoryEntry(entry HistoryEntry) {
 	m.closeHistoryMenu()
 	m.historyMenuID = ""

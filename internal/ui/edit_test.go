@@ -257,7 +257,7 @@ func openReviewRecordPage(t *testing.T, items ...record.ItemRecord) (*Model, *qu
 	m.SetContentSize(1024, reviewPageHeight)
 	tt := ui.NewTester(m.View, 1024, reviewPageHeight)
 	settle(t, m, q, tt)
-	m.histChoice = slotHistoryLabel(t, m, "r1")
+	m.histChoice = historyLabel(t, m, "r1")
 	m.OpenHistory()
 	settle(t, m, q, tt)
 	showRecordItems(m)
@@ -893,7 +893,8 @@ func TestUnsavedEditSwitchPrompt(t *testing.T) {
 	tt.Frame()
 
 	loadsBefore := len(svc.loadLog)
-	m.OpenHistory()
+	svc.loads["r2"] = recovery(reviewRowItem(t, 1, 12))
+	m.openRecord("r2")
 	settle(t, m, q, tt)
 	showRecordItems(m)
 	tt.Frame()
@@ -916,7 +917,7 @@ func TestUnsavedEditSwitchPrompt(t *testing.T) {
 	}
 
 	// Save-and-continue performs the save first, then the navigation.
-	m.OpenHistory()
+	m.openRecord("r2")
 	settle(t, m, q, tt)
 	showRecordItems(m)
 	tt.Frame()
@@ -947,7 +948,8 @@ func TestDiscardUnsavedEditContinues(t *testing.T) {
 	m.edit.draft.Level = "13"
 	tt.Frame()
 	loadsBefore := len(svc.loadLog)
-	m.OpenHistory()
+	svc.loads["r2"] = recovery(reviewRowItem(t, 1, 12))
+	m.openRecord("r2")
 	settle(t, m, q, tt)
 	showRecordItems(m)
 	tt.Frame()

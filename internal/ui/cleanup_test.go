@@ -126,6 +126,43 @@ func TestSavePromptOffersKeepDeleteLater(t *testing.T) {
 	}
 }
 
+// TestSavePromptHiddenForAFormerLiveRecord checks the prompt's ownership
+// rule: it renders only while its record is still the live one, so a stale
+// prompt cannot show over a record that is history now.
+func TestSavePromptHiddenForAFormerLiveRecord(t *testing.T) {
+	live := recovery(structuredItem(1, zzz.DiscRecord{SetID: intp(31100), Slot: 1, Level: intp(15)}, "静听嘉音"))
+	svc := cleanupPreviewService(
+		[]record.RecordInfo{{ID: "live", LatestRevision: 1, SavedAt: time.Now()}},
+		map[string]*record.Recovery{"live": live},
+	)
+	m, q := newTestModel(t, Config{Service: svc, DirectExportSaver: &fakeDirectExportSaver{}})
+	tt := ui.NewTester(m.View, 1024, 700)
+	settle(t, m, q, tt)
+
+	applyAndSettle(t, m, q, tt, snap("live", 1, true, scan.PhaseCapturing,
+		scan.Counts{Captured: 1, Produced: 1}, 1, false, ""))
+	applyAndSettle(t, m, q, tt, snap("live", 2, false, scan.PhaseEnded,
+		scan.Counts{Captured: 1, Produced: 1}, 1, false, ""))
+	if m.savePrompt == nil || m.rec == nil || m.rec.ID != "live" || !m.rec.Live {
+		t.Fatalf("the prompt setup is wrong: prompt %+v record %+v", m.savePrompt, m.rec)
+	}
+	tt.Frame()
+	if !tt.HasText("本次扫描已保存") {
+		t.Fatalf("the live record's prompt does not render: %q", tt.Texts())
+	}
+
+	// The record is no longer the live one while the prompt still names
+	// it; the summary must not render the prompt for history.
+	m.rec.Live = false
+	tt.Frame()
+	if tt.HasText("本次扫描已保存") {
+		t.Fatalf("a non-live record still renders the save prompt: %q", tt.Texts())
+	}
+	if m.savePrompt == nil {
+		t.Fatal("the test state no longer holds the prompt")
+	}
+}
+
 func TestSavePromptNotShownAfterFailedSave(t *testing.T) {
 	svc := cleanupPreviewService(nil, map[string]*record.Recovery{})
 	m, q := newTestModel(t, Config{Service: svc, DirectExportSaver: &fakeDirectExportSaver{}})

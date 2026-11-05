@@ -363,8 +363,8 @@ func TestHistoryKeyboard(t *testing.T) {
 	}
 	tt.Key(0, ui.KeyEnter)
 	settle(t, m, q, tt)
-	if m.displayPage() != pageResults || m.historySlot.recordID != "r01" {
-		t.Fatalf("Enter opened page %v, record %q", m.displayPage(), m.historySlot.recordID)
+	if m.displayPage() != pageResults || m.rec == nil || m.rec.ID != "r01" {
+		t.Fatalf("Enter opened page %v, record %+v", m.displayPage(), m.rec)
 	}
 
 	if err := tt.Click("‹ 全部记录"); err != nil {
@@ -615,41 +615,12 @@ func TestHistoryRowMenu(t *testing.T) {
 		t.Fatal(err)
 	}
 	settle(t, m, q, tt)
-	if m.displayPage() != pageResults || m.historySlot.recordID != "r01" {
-		t.Fatalf("导出… = page %v, record %q, want the record's existing export entry",
-			m.displayPage(), m.historySlot.recordID)
+	if m.displayPage() != pageResults || m.rec == nil || m.rec.ID != "r01" {
+		t.Fatalf("导出… = page %v, record %+v, want the record's existing export entry",
+			m.displayPage(), m.rec)
 	}
 	if !tt.HasText("导出 JSON") || !tt.HasText("导出 CSV") {
 		t.Fatalf("the existing export controls do not show: %q", tt.Texts())
-	}
-}
-
-// TestHistoryCurrentRowOpensLiveSession checks that the 本次 row opens the
-// session slot and never creates a second history slot.
-func TestHistoryCurrentRowOpensLiveSession(t *testing.T) {
-	svc := &fakeService{
-		history: historyTableRecords(3),
-		loads:   map[string]*record.Recovery{"r01": testRecord()},
-	}
-	m, q := newTestModel(t, Config{Service: svc, DirectExportSaver: &fakeDirectExportSaver{}})
-	m.Apply(snap("r01", 1, false, scan.PhaseEnded, scan.Counts{Captured: 1}, 1, false, ""))
-	m.page = pageHistory
-	tt := ui.NewTester(m.View, 1180, 760)
-	settle(t, m, q, tt)
-
-	if !tt.HasText("本次") {
-		t.Fatalf("the current session row has no 本次 badge: %q", tt.Texts())
-	}
-	if err := tt.Click(historyTimeText(m.history[0])); err != nil {
-		t.Fatal(err)
-	}
-	tt.Key(0, ui.KeyEnter)
-	settle(t, m, q, tt)
-	if m.displayPage() != pageResults || m.activeSlot != resultSlotSession {
-		t.Fatalf("the current row opened page %v, slot %v", m.displayPage(), m.activeSlot)
-	}
-	if m.historySlot.recordID != "" {
-		t.Fatalf("the current row created a history slot for %q", m.historySlot.recordID)
 	}
 }
 
@@ -673,8 +644,9 @@ func TestHistoryOpenAndReturn(t *testing.T) {
 	}
 	tt.Key(0, ui.KeyEnter)
 	settle(t, m, q, tt)
-	if m.displayPage() != pageResults || m.historySlot.recordID != "r02" {
-		t.Fatalf("Enter opened page %v, record %q", m.displayPage(), m.historySlot.recordID)
+	if m.displayPage() != pageResults || m.rec == nil || m.rec.ID != "r02" ||
+		m.rec.Live {
+		t.Fatalf("Enter opened page %v, record %+v", m.displayPage(), m.rec)
 	}
 
 	if err := tt.Click("‹ 全部记录"); err != nil {
@@ -711,6 +683,38 @@ func TestHistoryExportFailure(t *testing.T) {
 	if m.historyExporting != "" || m.exportOutcome == nil || m.exportOutcome.err == nil ||
 		!strings.Contains(m.exportOutcome.text(), "no space left on device") {
 		t.Fatalf("failure state = exporting %q, outcome %+v", m.historyExporting, m.exportOutcome)
+	}
+}
+
+// TestHistoryCurrentRowOpensLiveRecord checks that the 本次 row opens the
+// current session's live record in the one record workspace, with no
+// second editable copy.
+func TestHistoryCurrentRowOpensLiveRecord(t *testing.T) {
+	svc := &fakeService{
+		history: historyTableRecords(3),
+		loads: map[string]*record.Recovery{
+			"r01": testRecord(),
+		},
+	}
+	m, q := newTestModel(t, Config{Service: svc, DirectExportSaver: &fakeDirectExportSaver{}})
+	m.Apply(snap("r01", 1, false, scan.PhaseEnded, scan.Counts{Captured: 1}, 1, false, ""))
+	m.page = pageHistory
+	tt := ui.NewTester(m.View, 1180, 760)
+	settle(t, m, q, tt)
+
+	if !tt.HasText("本次") {
+		t.Fatalf("the current session row has no 本次 badge: %q", tt.Texts())
+	}
+	if err := tt.Click(historyTimeText(m.history[0])); err != nil {
+		t.Fatal(err)
+	}
+	tt.Key(0, ui.KeyEnter)
+	settle(t, m, q, tt)
+	if m.displayPage() != pageResults {
+		t.Fatalf("the current row opened page %v, want results", m.displayPage())
+	}
+	if m.rec == nil || m.rec.ID != "r01" || !m.rec.Live {
+		t.Fatalf("the current row opened %+v, want the live record", m.rec)
 	}
 }
 

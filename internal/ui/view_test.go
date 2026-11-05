@@ -1164,12 +1164,12 @@ func TestCompletionUsesHistoryRecordCounts(t *testing.T) {
 			m.pendingCount(), m.completionVisible())
 	}
 
-	m.histChoice = slotHistoryLabel(t, m, "old")
+	m.histChoice = historyLabel(t, m, "old")
 	m.OpenHistory()
 	settle(t, m, q, tt)
 	showRecordItems(m)
 	tt.Frame()
-	if m.activeSlot != resultSlotHistory || !m.completionVisible() {
+	if m.rec == nil || m.rec.Live || !m.completionVisible() {
 		t.Fatalf("the finished history snapshot does not show completion: %q", tt.Texts())
 	}
 	if !tt.HasText("可导出 1 件 · 共采集 2 件") {
@@ -1177,9 +1177,6 @@ func TestCompletionUsesHistoryRecordCounts(t *testing.T) {
 	}
 	if counts := m.recordCounts(); counts.Exportable != 1 || counts.Captured != 2 || !counts.ExportKnown {
 		t.Fatalf("the history completion counts = %+v", counts)
-	}
-	if m.sessionSlot.state.exportData == nil || m.sessionSlot.state.exportData.Summary.Included != 0 {
-		t.Fatalf("opening history changed the session export snapshot: %+v", m.sessionSlot.state.exportData)
 	}
 }
 
