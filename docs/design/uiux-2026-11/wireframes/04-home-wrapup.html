@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>04 扫描页 · 扫描中与收尾</title><link rel="stylesheet" href="wireframe.css"></head>
+<body><div class="sheet">
+<div class="sheet-head"><div><div class="kicker">YOUKAI · WINDOWS 本地客户端 · 第二阶段线框</div><h1>04 扫描页 · 扫描中（窗口恰好可见）/ 收尾 / 保存失败</h1><div class="sub">三个状态出现在扫描区同一位置；对应 05 S4 采集中、S5 已停止操作 / 保存中 / 保存失败</div></div><div class="stamp">低保真 · 非视觉稿</div></div>
+<div class="stage">
+<div class="win">
+  <div class="titlebar"><span>youkai</span><span class="ctl"><span>—</span><span>☐</span><span>✕</span></span></div>
+  <div class="frame">
+    <nav class="rail"><div class="it on"><i></i>扫描</div><div class="it"><i></i>记录</div><div class="spacer"></div><div class="it"><i></i>设置</div></nav>
+    <main class="content"><div class="pad" style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:16px; height:100%">
+      <section class="col" style="gap:10px">
+        <div class="row"><h4 style="margin:0">A · 扫描中</h4><span class="m">1</span></div>
+        <div class="scancard">
+          <div class="list col" style="gap:10px; padding:16px">
+            <h2 style="font-size:18px">正在扫描</h2>
+            <div class="row"><span class="grow">已采集</span><b style="font-size:22px">431</b><span>件</span></div>
+            <div class="row"><span class="grow">当前</span><b>3 号位</b><span class="small muted">（共 6 个）</span></div>
+            <div class="small muted">总数未知，不显示百分比</div>
+          </div>
+          <div class="actbar"><div class="notice"><span style="white-space:nowrap">停止 <span class="kbd">Ctrl</span>+<span class="kbd">Alt</span>+<span class="kbd">Shift</span>+<span class="kbd">S</span></span><span>点击 youkai 也会停止扫描</span></div><div class="go"><span class="btn">停止扫描</span></div></div>
+        </div>
+      </section>
+      <section class="col" style="gap:10px">
+        <div class="row"><h4 style="margin:0">B · 收尾中</h4><span class="m">2</span></div>
+        <div class="scancard">
+          <div class="list col" style="gap:10px; padding:16px">
+            <h2 style="font-size:18px">已停止操作游戏</h2>
+            <div class="col" style="gap:6px">
+              <div class="row small">✓ 已停止操作游戏</div>
+              <div class="row small">… 正在识别剩余 12 件</div>
+              <div class="row small muted">○ 保存结果</div>
+            </div>
+          </div>
+        </div>
+      </section>
+      <section class="col" style="gap:10px">
+        <div class="row"><h4 style="margin:0">C · 保存失败</h4><span class="m">3</span></div>
+        <div class="scancard" style="border:2px solid var(--strong)">
+          <div class="list col" style="gap:10px; padding:16px">
+            <span class="tag solid" style="align-self:flex-start">! 需要处理</span>
+            <h2 style="font-size:18px">扫描结果还没有保存</h2>
+            <div class="small"><b>原因：</b>磁盘空间不足，最后 37 件没有写入。<br><b>怎么做：</b>释放空间后重试；在保存成功之前，不能开始新扫描、不能安装更新，退出也会被拒绝。</div>
+          </div>
+          <div class="actbar"><div class="notice"><span class="link">复制诊断信息</span></div><div class="go"><span class="btn primary">重试保存</span></div></div>
+        </div>
+      </section>
+    </div></main>
+  </div>
+</div>
+<div class="notes">
+  <h3>标注</h3>
+  <ol>
+    <li>扫描中 youkai 通常被游戏盖住；这个状态只在窗口恰好可见时有意义（4K + 125% 并排，09 §1.1）。按“扫描中完全没有反馈”设计，主流程不依赖它（06 §3 第 1 条）。当前号位需要 R-11。</li>
+    <li>收尾写实际状态，不把“已请求停止”说成完成（F-13）。收尾完成后自动进入新记录的摘要，但不把窗口提到前台（C-09）。</li>
+    <li>保存失败升为扫描区的首要问题（C-25）；只在这一次收尾的第一次失败时发通知（09 §4.8；已决定（2026-11-03，用户选 A，11 Q-04））。</li>
+  </ol>
+  <div class="state">三栏只为对照；实际同一时间只显示一个状态，撑满扫描页的内容宽度（检查点 2 后扫描页没有最近记录卡）。<br>相关规格：08 §1.2；09 §4.7。</div>
+</div>
+</div></div></body></html>

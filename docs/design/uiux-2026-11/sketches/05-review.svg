@@ -1,0 +1,88 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1050" viewBox="0 0 1600 1050">
+<defs>
+  <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M 0 0 L 10 5 L 0 10 z" fill="#777777"/>
+  </marker>
+  <style>
+    text { font-family: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif; }
+    svg { background: #ffffff; }
+  </style>
+</defs>
+<rect x="0" y="0" width="1600" height="1050" fill="#ffffff"/>
+<text x="42" y="38" font-size="17" font-weight="500" text-anchor="start" fill="#777777">YOUKAI · WINDOWS 本地客户端</text>
+<text x="42" y="82" font-size="35" font-weight="650" text-anchor="start" fill="#333333">校对：证据与表单同时可见</text>
+<text x="42" y="116" font-size="20" font-weight="400" text-anchor="start" fill="#777777">当前件、证据、编辑和“确认并下一项”在同一任务视图里完成。</text>
+<rect x="1340" y="28" width="218" height="44" rx="8" fill="#ffffff" stroke="#777777" stroke-width="1.5" stroke-dasharray="6 4"/>
+<text x="1449" y="57" font-size="20" font-weight="500" text-anchor="middle" fill="#777777">示意，非定稿</text>
+<rect x="45" y="150" width="1510" height="830" rx="12" fill="#ffffff" stroke="#333333" stroke-width="2"/>
+<text x="75" y="197" font-size="24" font-weight="600" text-anchor="start" fill="#333333">youkai · 校对</text>
+<text x="1525" y="197" font-size="18" font-weight="500" text-anchor="end" fill="#777777">覆盖：全部 ｜ 待校对：3 件 ｜ 已保存</text>
+<line x1="70" y1="225" x2="1530" y2="225" stroke="#bbbbbb" stroke-width="1.5" fill="none"/>
+<rect x="75" y="255" width="280" height="620" rx="8" fill="#f7f7f7" stroke="#aaaaaa" stroke-width="1.5"/>
+<text x="95" y="296" font-size="22" font-weight="600" text-anchor="start" fill="#333333">全部件</text>
+<rect x="95" y="318" width="240" height="42" rx="6" fill="#ffffff" stroke="#777777" stroke-width="1"/>
+<text x="215" y="346" font-size="16" font-weight="400" text-anchor="middle" fill="#777777">筛选：待校对</text>
+<rect x="90" y="385" width="250" height="82" rx="7" fill="#ffffff" stroke="#cccccc" stroke-width="1"/>
+<text x="104" y="413" font-size="16" font-weight="600" text-anchor="start" fill="#333333">#0127</text>
+<text x="326" y="413" font-size="16" font-weight="600" text-anchor="end" fill="#777777">已通过</text>
+<text x="104" y="443" font-size="15" font-weight="400" text-anchor="start" fill="#777777">河豚电音 · 4 号位</text>
+<rect x="90" y="485" width="250" height="82" rx="7" fill="#eeeeee" stroke="#333333" stroke-width="2"/>
+<text x="104" y="513" font-size="16" font-weight="600" text-anchor="start" fill="#333333">#0128</text>
+<text x="326" y="513" font-size="16" font-weight="600" text-anchor="end" fill="#333333">待校对</text>
+<text x="104" y="543" font-size="15" font-weight="400" text-anchor="start" fill="#777777">河豚电音 · 4 号位</text>
+<rect x="90" y="585" width="250" height="82" rx="7" fill="#ffffff" stroke="#cccccc" stroke-width="1"/>
+<text x="104" y="613" font-size="16" font-weight="600" text-anchor="start" fill="#333333">#0129</text>
+<text x="326" y="613" font-size="14" font-weight="600" text-anchor="end" fill="#777777">有警告但可导出</text>
+<text x="104" y="643" font-size="15" font-weight="400" text-anchor="start" fill="#777777">朋克洛德 · 5 号位</text>
+<rect x="90" y="685" width="250" height="82" rx="7" fill="#ffffff" stroke="#cccccc" stroke-width="1"/>
+<text x="104" y="713" font-size="16" font-weight="600" text-anchor="start" fill="#333333">#0130</text>
+<text x="326" y="713" font-size="16" font-weight="600" text-anchor="end" fill="#777777">待校对</text>
+<text x="104" y="743" font-size="15" font-weight="400" text-anchor="start" fill="#777777">静听嘉音 · 6 号位</text>
+<text x="95" y="825" font-size="17" font-weight="500" text-anchor="start" fill="#333333">当前：第 0128 件</text>
+<rect x="380" y="255" width="590" height="620" rx="8" fill="#ffffff" stroke="#aaaaaa" stroke-width="1.5"/>
+<text x="400" y="296" font-size="22" font-weight="600" text-anchor="start" fill="#333333">证据（始终可见）</text>
+<rect x="400" y="320" width="550" height="340" rx="5" fill="#e8e8e8" stroke="#777777" stroke-width="1.5"/>
+<text x="420" y="350" font-size="16" font-weight="500" text-anchor="start" fill="#777777">游戏详情截图（灰阶占位）</text>
+<rect x="420" y="375" width="210" height="245" rx="4" fill="#f5f5f5" stroke="#bbbbbb" stroke-width="1"/>
+<rect x="650" y="375" width="280" height="245" rx="4" fill="#f5f5f5" stroke="#bbbbbb" stroke-width="1"/>
+<text x="670" y="405" font-size="19" font-weight="400" text-anchor="start" fill="#333333">河豚电音[4]</text>
+<text x="670" y="445" font-size="19" font-weight="400" text-anchor="start" fill="#333333">等级 15/15</text>
+<text x="670" y="485" font-size="19" font-weight="400" text-anchor="start" fill="#333333">攻击力 7.5%</text>
+<text x="670" y="525" font-size="19" font-weight="400" text-anchor="start" fill="#333333">暴击率 +2.4%</text>
+<text x="670" y="565" font-size="19" font-weight="400" text-anchor="start" fill="#333333">防御力 +36</text>
+<rect x="662" y="458" width="254" height="44" rx="4" fill="#ffffff" stroke="#333333" stroke-width="2" stroke-dasharray="5 3"/>
+<text x="425" y="694" font-size="17" font-weight="500" text-anchor="start" fill="#333333">字段裁剪 · 可放大</text>
+<rect x="400" y="715" width="550" height="110" rx="5" fill="#f7f7f7" stroke="#777777" stroke-width="1.5"/>
+<text x="425" y="758" font-size="23" font-weight="600" text-anchor="start" fill="#333333">主词条证据：攻击力 7.5%</text>
+<text x="425" y="797" font-size="16" font-weight="400" text-anchor="start" fill="#777777">点选字段可定位对应证据区域</text>
+<path d="M 916 480 C 1030 480 1010 525 1050 525" stroke="#777777" stroke-width="2" fill="none" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+<rect x="995" y="255" width="530" height="620" rx="8" fill="#ffffff" stroke="#aaaaaa" stroke-width="1.5"/>
+<text x="1015" y="296" font-size="22" font-weight="600" text-anchor="start" fill="#333333">字段表单（同时可见）</text>
+<text x="1018" y="347" font-size="16" font-weight="500" text-anchor="start" fill="#777777">套装</text>
+<rect x="1115" y="325" width="380" height="48" rx="6" fill="#ffffff" stroke="#bbbbbb" stroke-width="1"/>
+<text x="1132" y="357" font-size="19" font-weight="500" text-anchor="start" fill="#333333">河豚电音</text>
+<text x="1018" y="419" font-size="16" font-weight="500" text-anchor="start" fill="#777777">槽位</text>
+<rect x="1115" y="397" width="380" height="48" rx="6" fill="#ffffff" stroke="#bbbbbb" stroke-width="1"/>
+<text x="1132" y="429" font-size="19" font-weight="500" text-anchor="start" fill="#333333">4</text>
+<text x="1018" y="491" font-size="16" font-weight="500" text-anchor="start" fill="#777777">等级</text>
+<rect x="1115" y="469" width="380" height="48" rx="6" fill="#ffffff" stroke="#bbbbbb" stroke-width="1"/>
+<text x="1132" y="501" font-size="19" font-weight="500" text-anchor="start" fill="#333333">15</text>
+<text x="1018" y="563" font-size="16" font-weight="500" text-anchor="start" fill="#777777">主词条</text>
+<rect x="1115" y="541" width="380" height="48" rx="6" fill="#ffffff" stroke="#bbbbbb" stroke-width="1"/>
+<text x="1132" y="573" font-size="19" font-weight="500" text-anchor="start" fill="#333333">攻击力%</text>
+<text x="1018" y="635" font-size="16" font-weight="500" text-anchor="start" fill="#777777">数值</text>
+<rect x="1115" y="613" width="380" height="48" rx="6" fill="#ffffff" stroke="#333333" stroke-width="2"/>
+<text x="1132" y="645" font-size="19" font-weight="500" text-anchor="start" fill="#333333">7.5</text>
+<text x="1118" y="696" font-size="16" font-weight="500" text-anchor="start" fill="#333333">待校对：请对照证据确认数值</text>
+<text x="1018" y="742" font-size="16" font-weight="500" text-anchor="start" fill="#777777">装备者</text>
+<rect x="1115" y="718" width="380" height="48" rx="6" fill="#f7f7f7" stroke="#bbbbbb" stroke-width="1"/>
+<text x="1132" y="750" font-size="18" font-weight="400" text-anchor="start" fill="#777777">留空</text>
+<text x="1118" y="794" font-size="15" font-weight="400" text-anchor="start" fill="#777777">有警告但可导出</text>
+<line x1="70" y1="895" x2="1530" y2="895" stroke="#bbbbbb" stroke-width="1.5" fill="none"/>
+<text x="78" y="936" font-size="16" font-weight="400" text-anchor="start" fill="#777777">保存失败：留在当前件并保留输入</text>
+<rect x="920" y="910" width="240" height="58" rx="8" fill="#ffffff" stroke="#777777" stroke-width="2"/>
+<text x="1040.0" y="946.0" font-size="21" font-weight="500" text-anchor="middle" fill="#333333">保存修改</text>
+<rect x="1180" y="910" width="340" height="58" rx="8" fill="#555555" stroke="#555555" stroke-width="2"/>
+<text x="1350.0" y="946.0" font-size="22" font-weight="600" text-anchor="middle" fill="#ffffff">确认并下一项</text>
+<text x="800" y="1010" font-size="18" font-weight="400" text-anchor="middle" fill="#777777">确认后定位下一待校对件；列表、证据和表单是否采用这种三栏排列，留待布局定稿。</text>
+</svg>

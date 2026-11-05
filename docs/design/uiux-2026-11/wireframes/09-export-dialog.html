@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>09 导出对话框</title><link rel="stylesheet" href="wireframe.css"></head>
+<body><div class="sheet">
+<div class="sheet-head"><div><div class="kicker">YOUKAI · WINDOWS 本地客户端 · 第二阶段线框</div><h1>09 导出对话框（导出前 / 成功）</h1><div class="sub">记录工作区上的模态对话框，宽 520；对应 05 S8 可导出、成功</div></div><div class="stamp">低保真 · 非视觉稿</div></div>
+<div class="stage">
+<div class="win">
+  <div class="titlebar"><span>youkai</span><span class="ctl"><span>—</span><span>☐</span><span>✕</span></span></div>
+  <div class="frame">
+    <nav class="rail"><div class="it"><i></i>扫描</div><div class="it on"><i></i>记录</div><div class="spacer"></div><div class="it"><i></i>设置</div></nav>
+    <main class="content">
+      <div class="rhead"><span class="back">‹ 全部记录</span><span class="title">11 月 2 日 22:16</span><span class="seg"><span class="on">摘要</span><span>逐件</span></span><span class="status"><span>覆盖：部分</span><span>待处理 2</span><span>已保存</span></span><span class="btn ghost">导出…</span></div>
+    </main>
+  </div>
+  <div class="scrim" style="gap:24px">
+    <div class="dialog col" style="gap:12px">
+      <div class="row"><h2 style="font-size:18px">导出这条记录</h2><span class="right muted">✕</span></div>
+      <div class="well small" style="padding:8px 12px">这是<b>中途停止</b>的扫描结果（4 号位不完整，5、6 号位没有扫描），不是完整库存；不能据此删除没出现的驱动盘。<span class="m">1</span></div>
+      <div class="col" style="gap:6px">
+        <div class="row"><span class="grow">纳入</span><b>429 件</b><span class="small muted">（含 40 件有警告）</span></div>
+        <div class="row"><span class="grow">排除</span><b>2 件</b><span class="small">待校对 2 · <span class="link">去校对</span></span><span class="m">2</span></div>
+        <div class="row"><span class="grow">覆盖</span><span>部分</span></div>
+        <div class="row"><span class="grow">不含截图</span><span class="muted">—</span></div>
+        <div class="row"><span class="grow">写入位置</span><span>下载（C:\Users\…\Downloads）</span></div>
+      </div>
+      <div class="row" style="gap:12px; margin-top:4px"><span class="btn big grow">导出 JSON</span><span class="btn big grow">导出 CSV</span><span class="m">3</span></div>
+      <div class="small muted">JSON：带来源扫描、覆盖结论、筛选方式、排除数量和目录。CSV：一行一件的表格，不含这些信息。两者来自同一已保存修订。</div>
+    </div>
+    <div class="dialog col" style="gap:12px; width:380px">
+      <div class="row"><span class="tag solid">✓</span><h2 style="font-size:18px">已导出 429 件</h2><span class="m">4</span></div>
+      <div class="small">youkai-2026-11-02-2216.json<br>已写入“下载”文件夹</div>
+      <div class="row"><span class="btn primary grow">打开下载目录</span><span class="btn ghost">完成</span></div>
+    </div>
+  </div>
+</div>
+<div class="notes">
+  <h3>标注</h3>
+  <ol>
+    <li>部分扫描的导出在顶部写清楚“不是完整库存”（C-27）。</li>
+    <li>纳入、排除、覆盖、不含截图、写入位置一次看全（W4 步骤 2）；排除原因可追到“去校对”。警告件已纳入，不算排除。</li>
+    <li>格式区别在选择时可见（W4 步骤 1、05 S8），不折叠。JSON 与 CSV 两个按钮并列、同等权重、无默认（F-22）——全应用唯一的“双主操作”例外（09 §4.1）。推翻示意图 04 第一张 JSON 实心、CSV 描边的画法。</li>
+    <li>成功提示在写入并关闭后才出现，就在对话框里（现状 M7 的“提示离按钮远”），主按钮“打开下载目录”（D-11）。示意并排，实际替换同一对话框的内容。</li>
+  </ol>
+  <div class="state">打开时焦点：导出 JSON。<kbd class="kbd">Esc</kbd> 关闭（导出中除外）。写入失败：对话框内横条写原因与“重试”，说明内部记录未受影响。<br>相关规格：08 §4。</div>
+</div>
+</div></div></body></html>

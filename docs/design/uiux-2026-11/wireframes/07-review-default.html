@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>07 记录 · 逐件（默认宽度）</title><link rel="stylesheet" href="wireframe.css"></head>
+<body><div class="sheet">
+<div class="sheet-head"><div><div class="kicker">YOUKAI · WINDOWS 本地客户端 · 第二阶段线框</div><h1>07 记录 · 逐件（默认宽度，校对一件待校对件）</h1><div class="sub">默认窗口 1180 × 760；对应 05 S7 浏览、查看一件、编辑中、校验失败</div></div><div class="stamp">低保真 · 非视觉稿</div></div>
+<div class="stage">
+<div class="win">
+  <div class="titlebar"><span>youkai</span><span class="ctl"><span>—</span><span>☐</span><span>✕</span></span></div>
+  <div class="frame">
+    <nav class="rail"><div class="it"><i></i>扫描</div><div class="it on"><i></i>记录</div><div class="spacer"></div><div class="it"><i></i>设置</div></nav>
+    <main class="content">
+      <div class="rhead"><span class="back">‹ 全部记录</span><span class="title">11 月 3 日 21:40</span><span class="seg"><span>摘要</span><span class="on">逐件</span></span>
+        <span class="status"><span>覆盖：全部</span><span>待处理 3</span><span>未保存修改</span></span><span class="btn ghost">导出…</span></div>
+      <div class="frame" style="min-height:0">
+        <section style="width:240px; border-right:1px solid var(--line-soft); display:flex; flex-direction:column">
+          <div style="padding:10px"><div class="row"><span class="seg"><span class="on">待处理</span><span>警告</span><span>全部</span></span><span class="m">1</span></div></div>
+          <div class="col" style="gap:0; font-size:13px">
+            <div style="padding:9px 12px; background:var(--fill-2); border-left:3px solid var(--strong)"><div class="row"><b>#0128</b><span class="right tag solid">待校对</span></div><div class="small">河豚电音 · 4 号位</div></div>
+            <div style="padding:9px 12px; border-bottom:1px solid var(--line-soft)"><div class="row"><b>#0516</b><span class="right tag">待校对</span></div><div class="small">静听嘉音 · 6 号位</div></div>
+            <div style="padding:9px 12px; border-bottom:1px solid var(--line-soft)"><div class="row"><b>#0877</b><span class="right tag dash">待补录 · 识别失败</span></div><div class="small muted">套装未识别 · 2 号位</div></div>
+          </div>
+          <div class="small muted" style="margin-top:auto; padding:10px 12px; border-top:1px solid var(--line-soft)">待处理 1 / 3</div>
+        </section>
+        <section class="grow col" style="padding:12px 14px; gap:8px; min-width:360px">
+          <div class="row small"><b>截图（逐行）</b><span class="right"><span class="link">放大</span> · <span class="link">适合</span></span><span class="m">2</span></div>
+          <div class="crops"><div class="crop"><span>套装</span><div class="shot"><span class="lbl">河豚电音</span></div></div><div class="crop"><span>等级</span><div class="shot"><span class="lbl">等级 15/15</span></div></div><div class="crop on"><span>主词条</span><div class="shot"><span class="lbl">攻击力 7.5%</span></div></div><div class="crop"><span>副词条 1</span><div class="shot"><span class="lbl">暴击率 +2.4%</span></div></div><div class="crop"><span>副词条 2</span><div class="shot"><span class="lbl">防御力 +36</span></div></div><div class="crop"><span>副词条 3</span><div class="shot"><span class="lbl">攻击力 +19</span></div></div><div class="crop"><span>副词条 4</span><div class="shot"><span class="lbl">生命值 +112</span></div></div></div>
+          <div class="small muted" style="margin-top:4px">其他截图</div>
+          <div class="crop"><span>装备者</span><div class="shot" style="width:60px"><span class="lbl">头像</span></div></div>
+          <div class="crop"><span>稀有度</span><div class="shot" style="width:60px"><span class="lbl">S</span></div></div>
+        </section>
+        <section style="width:400px; border-left:1px solid var(--line-soft); display:flex; flex-direction:column">
+          <div class="col" style="padding:12px 16px; gap:10px">
+            <div class="row"><b>#0128 河豚电音 · 4 号位</b><span class="right tag solid">待校对</span><span class="m">3</span></div>
+            <div class="field"><label>主词条数值 <span class="tag solid">需确认</span></label><div class="input focus">7.5</div><div class="hint">识别置信度低，请对照截图确认。原始识别：“7.5%”</div></div>
+            <div class="field"><label>主词条</label><div class="input sel">攻击力%</div></div>
+            <div class="hr" style="margin:4px 0"></div>
+            <div class="row small"><span class="grow">其余 9 个字段</span><span>展开 ▾</span></div>
+            <div class="field"><label>装备者</label><div class="input muted">未识别（可留空导出）</div></div>
+            <div class="row small"><span class="link">修订记录与原始文字 ▾</span><span class="m">4</span></div>
+          </div>
+          <div style="margin-top:auto; padding:10px 16px; border-top:1px solid var(--line-soft)" class="col">
+            <div class="row"><span class="btn primary grow">确认并下一项 <span style="opacity:.75; margin-left:6px; font-weight:400">Ctrl+Enter</span></span><span class="btn">保存修改</span><span class="m">5</span></div>
+          </div>
+        </section>
+      </div>
+    </main>
+  </div>
+</div>
+<div class="notes">
+  <h3>标注</h3>
+  <ol>
+    <li>件列表约 240 DIP，筛选“待处理 / 警告 / 全部”；从“校对 n 件”进入默认“待处理”。标签用文字 + 实心 / 描边 / 虚线区分，不只靠颜色。待补录的两种原因分开写。</li>
+    <li>截图区弹性宽度（≥ 360）：现有证据没有整块详情面板图，首版截图区是<b>逐行裁剪列表</b>（套装、等级、主词条、副词条 1–4，再加装备者头像等）；点选表单字段时高亮并滚动到对应行（需要 R-07a）。缺少行角色时按采集顺序列出、不高亮。是否补采面板图见 11 Q-06。</li>
+    <li>表单约 400 DIP：问题字段排最前并写原因；其余字段收起为一组；不出现 null，装备者为空写“未识别（可留空导出）”（M2）。</li>
+    <li>原始文字、修订前后值按需展开（F-18）。</li>
+    <li>底部固定：保存状态，下面是确认并下一项（主，在左、先获得焦点）和保存修改（次要）。保存失败时留在当前件，横条写原因与“重试”（F-20）。</li>
+  </ol>
+  <div class="state">初始焦点：第一个问题字段。<kbd class="kbd">F6</kbd> 在列表 / 截图 / 表单间跳转。确认后焦点到下一件的第一个问题字段；确认的件留在列表中直到切换筛选。<br>相关规格：08 §3；09 §2、§4.5。</div>
+</div>
+</div></div></body></html>

@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>10 记录列表</title><link rel="stylesheet" href="wireframe.css"></head>
+<body><div class="sheet">
+<div class="sheet-head"><div><div class="kicker">YOUKAI · WINDOWS 本地客户端 · 第二阶段线框</div><h1>10 记录列表（历史）</h1><div class="sub">默认窗口；对应 05 S9 历史列表、记录损坏、中断恢复的记录、删除确认</div></div><div class="stamp">低保真 · 非视觉稿</div></div>
+<div class="stage">
+<div class="win">
+  <div class="titlebar"><span>youkai</span><span class="ctl"><span>—</span><span>☐</span><span>✕</span></span></div>
+  <div class="frame">
+    <nav class="rail"><div class="it"><i></i>扫描</div><div class="it on"><i></i>记录</div><div class="spacer"></div><div class="it"><i></i>设置</div></nav>
+    <main class="content"><div class="pad col" style="gap:14px; height:100%">
+      <div class="row"><h2>记录</h2><span class="small muted">12 条</span><span class="right small">日期</span><span class="input" style="width:150px">2026-11-01</span><span>–</span><span class="input" style="width:150px">2026-11-03 ▾</span><span class="m">1</span></div>
+      <table class="t">
+        <thead><tr><th>时间</th><th>结果</th><th class="num">件数</th><th class="num">待处理</th><th class="num">可导出</th><th class="num">占用</th><th style="width:44px"></th></tr></thead>
+        <tbody>
+          <tr class="sel"><td><b>11 月 3 日 21:40</b></td><td><b>扫全了，1 件待校对</b></td><td class="num">1,017</td><td class="num">1</td><td class="num">1,016</td><td class="num">312 MB</td><td>⋯ <span class="m">3</span></td></tr>
+          <tr><td>11 月 3 日 20:12</td><td>正常结束 · 覆盖：部分（2 个号位）</td><td class="num">612</td><td class="num">0</td><td class="num">612</td><td class="num">190 MB</td><td>⋯</td></tr>
+          <tr><td>11 月 3 日 19:58</td><td>没有开始 · 准备超时</td><td class="num">0</td><td class="num">—</td><td class="num">0</td><td class="num">1 MB</td><td>⋯</td></tr>
+          <tr><td>11 月 2 日 22:16</td><td>中途停止 · 游戏失去了焦点</td><td class="num">431</td><td class="num">2</td><td class="num">429</td><td class="num">140 MB</td><td>⋯</td></tr>
+          <tr><td>11 月 2 日 17:05</td><td><span class="tag dash">中断</span> 已恢复已保存部分</td><td class="num">203</td><td class="num">0</td><td class="num">203</td><td class="num">66 MB</td><td>⋯</td></tr>
+          <tr><td class="muted">11 月 1 日 23:40</td><td><span class="tag solid">!</span> 无法打开：文件已损坏 <span class="m">2</span></td><td class="num muted">—</td><td class="num muted">—</td><td class="num muted">—</td><td class="num">88 MB</td><td>⋯</td></tr>
+        </tbody>
+      </table>
+      <div class="row" style="align-items:flex-start; gap:18px; margin-top:auto">
+        <div class="menu"><div>打开</div><div>导出…</div><div class="sep"></div><div>删除截图…（312 MB）</div><div>删除记录…</div></div><span class="m">4</span>
+        <div class="dialog col" style="gap:10px; width:440px">
+          <h2 style="font-size:17px">删除这条记录的截图？</h2>
+          <div class="small">11 月 3 日 21:40 · 可释放 312 MB · 其中 1 件待校对<br>结果与修订会保留；之后校对这条记录时会显示“截图已删除”。</div>
+          <div class="row"><span class="btn danger">删除截图</span><span class="btn ghost" style="outline:2px solid var(--ink); outline-offset:2px">取消</span></div>
+        </div><span class="m">5</span>
+      </div>
+    </div></main>
+  </div>
+</div>
+<div class="notes">
+  <h3>标注</h3>
+  <ol>
+    <li>扫描页不再显示最近记录（检查点 2 用户决定），回访者从这里打开最前面一条查看上次结果、继续校对或再导出；所以“结果”列写结论，不只写“完成”。日期筛选用日期选择控件（MyGo <code>DateInput</code>），不再手输（M6）。首版只有一种客户端，不显示客户端列（08 §5）。</li>
+    <li>异常记录行内写原因，不显示故障码；损坏记录只能删除。</li>
+    <li>主操作“打开”不放在行内按钮上，用选中 + Enter / 双击；行内只有“⋯”（<span class="kbd">Shift</span>+<span class="kbd">F10</span> 可打开）。</li>
+    <li>“⋯”菜单：打开、导出…、删除截图…、删除记录…；紧凑档隐藏“占用”列，容量写进删除项。</li>
+    <li>删除确认预览影响（记录数、容量、待校对数）并说明删除截图与删除记录的区别；危险按钮在左但不是主按钮样式，默认焦点在“取消”（C-28、09 §4.1–4.2）。</li>
+  </ol>
+  <div class="state">空状态：“还没有扫描记录” + “去扫描页开始扫描”；筛选无结果：“清除筛选”。<br>相关规格：08 §5、§9；10 R-06。</div>
+</div>
+</div></div></body></html>
