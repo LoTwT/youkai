@@ -243,6 +243,48 @@ func TestLegacyEvidencePairsLinesOnly(t *testing.T) {
 	})
 }
 
+// TestEvidenceRejectsForeignAndMalformedIDs checks that an id with another
+// item's sequence, a malformed suffix or a non-decimal sequence pairs with
+// nothing: it stays visible at the end without a role.
+func TestEvidenceRejectsForeignAndMalformedIDs(t *testing.T) {
+	row := evidenceRow(t, []byte(`{"lines":[{"role":"name"}]}`),
+		[]app.RecognizedLine{{Role: "name", Text: "河豚电音[4]", Score: 0.99}},
+		"000001-line0", "foo", "000001-line", "000001-linex", "000002-line0", "+1-line0", "-line0")
+
+	if got := len(row.Evidence); got != 7 {
+		t.Fatalf("evidence = %d, want the valid id and the six foreign ones", got)
+	}
+	first := row.Evidence[0]
+	if first.ID != "000001-line0" || first.Kind != EvidenceLine || first.Role != "name" {
+		t.Fatalf("first evidence = %+v, want the item's own line 0", first)
+	}
+	foreign := []string{"foo", "000001-line", "000001-linex", "000002-line0", "+1-line0", "-line0"}
+	for i, want := range foreign {
+		ev := row.Evidence[i+1]
+		if ev.ID != want {
+			t.Errorf("evidence %d = %q, want %q", i+1, ev.ID, want)
+		}
+		if ev.Kind != "" || ev.Role != "" {
+			t.Errorf("%q = %+v, want an unrecognized image without a role", want, ev)
+		}
+	}
+	if ev := row.LineEvidence(0); ev == nil || ev.ID != "000001-line0" {
+		t.Errorf("line 0 evidence = %+v, want the valid id", ev)
+	}
+}
+
+// TestEvidenceDeduplicatesRepeatedIDs checks that a repeated id keeps its
+// first occurrence, so one image cannot render twice.
+func TestEvidenceDeduplicatesRepeatedIDs(t *testing.T) {
+	row := evidenceRow(t, []byte(`{"lines":[{"role":"name"},{"role":"level"}]}`),
+		[]app.RecognizedLine{{Role: "name", Text: "河豚电音[4]"}, {Role: "level", Text: "等级15/15"}},
+		"000001-line1", "000001-line0", "000001-line1", "000001-line0")
+
+	if got := strings.Join(evidenceIDs(row), ","); got != "000001-line0,000001-line1" {
+		t.Fatalf("evidence = %q, want each id once in capture order", got)
+	}
+}
+
 // TestFormFieldEvidenceMapping locks the R-07a role table: every recognized
 // line role locates its form field, both equipped-agent avatar crops locate
 // the equipper, and the management state has no screenshot.

@@ -73,6 +73,8 @@ P-04 实测通过后，快照需要给出准备循环当前未满足的条件（
 - `Context` 裁剪的角色也已持久化（`internal/app/payload.go:92-95` 的 `context`），但界面层的观测文档只读取 `lines`（`internal/ui/recordview.go:89-94` 的 `observedDoc`），“装备者 → 头像裁剪”要先补读 `context`。
 - 证据写入会跳过空图（`internal/app/deliverer.go:242-244`），而界面层现在按下标把第 i 行配给第 i 个证据 ID（`internal/ui/results_view.go:1272-1273`，`:1217` 把 `len(Lines)` 之后的 ID 当作 `Context`；这一约定写在 `internal/ui/recordview.go:62-63` 的字段注释里），跳过时会错位。写入失败同样不追加 ID（`deliverer.go:245-250`），也会错位。应按证据 ID 里的行号配对（`deliverer.go:581-583` 的 `<序号>-line<i>`，`Context` 为 `<序号>-context<i>`，`:588-590`）。
 
+按下标配对与只读 `lines` 的问题已由 PR-04 修复（证据按 ID 配对、补读 `context`）；本节前面的行号引用保留为修复前的历史说明。
+
 这是 P0：首版不采集面板图时，行裁剪列表就是校对屏的全部证据，“字段能对应到证据”（P-11 第②层）只能靠这张映射实现。**退路**：某件缺少角色（如旧记录或开发数据源）时，按采集顺序列出全部行裁剪、不高亮，也不画框。
 
 ## R-07b 采集并保存详情面板图

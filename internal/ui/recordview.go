@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
-	"strconv"
 	"strings"
 
 	"github.com/LoTwT/youkai/internal/app"
@@ -279,7 +278,7 @@ func buildRow(it *record.ItemRecord) Row {
 	}
 	obs := parseObserved(it.Observed)
 	row.Lines = mergeLines(obs, res)
-	row.Evidence = pairEvidence(it.EvidenceIDs, obs)
+	row.Evidence = pairEvidence(it.EvidenceIDs, it.Sequence, obs)
 	return row
 }
 
@@ -295,15 +294,22 @@ func parseObserved(data json.RawMessage) observedDoc {
 }
 
 // pairEvidence decodes the evidence ids and attaches each crop's observed
-// role. The result is ordered by crop kind and index (lines, then context),
-// not by the record's evidence order, so the screenshot list always follows
-// the game panel's reading order. An id the deliverer's shape does not cover
-// stays at the end without a role rather than disappearing.
-func pairEvidence(ids []string, obs observedDoc) []Evidence {
+// role. A repeated id keeps its first occurrence. The result is ordered by
+// crop kind and index (lines, then context), not by the record's evidence
+// order, so the screenshot list always follows the game panel's reading
+// order. An id the deliverer's shape does not cover, including one that names
+// another item's sequence, stays at the end without a role rather than
+// disappearing.
+func pairEvidence(ids []string, seq int64, obs observedDoc) []Evidence {
 	evidence := make([]Evidence, 0, len(ids))
+	seen := make(map[string]struct{}, len(ids))
 	for _, id := range ids {
+		if _, duplicate := seen[id]; duplicate {
+			continue
+		}
+		seen[id] = struct{}{}
 		ev := Evidence{ID: id}
-		if kind, index, ok := parseEvidenceID(id); ok {
+		if kind, index, ok := parseEvidenceID(id, seq); ok {
 			ev.Kind, ev.Index = kind, index
 			regions := obs.Lines
 			if kind == EvidenceContext {
@@ -331,11 +337,15 @@ func pairEvidence(ids []string, obs observedDoc) []Evidence {
 
 // parseEvidenceID decodes the crop kind and index from an evidence id of the
 // deliverer's shape (<sequence>-line<i>, <sequence>-context<i>). ok is false
-// for any other shape: the image is still shown, but the view does not guess
-// where it belongs.
-func parseEvidenceID(id string) (kind EvidenceKind, index int, ok bool) {
+// for any other shape or for a sequence that names another item: the image is
+// still shown, but the view does not guess where it belongs.
+func parseEvidenceID(id string, seq int64) (kind EvidenceKind, index int, ok bool) {
 	dash := strings.LastIndexByte(id, '-')
-	if dash < 0 || dash == len(id)-1 {
+	if dash <= 0 || dash == len(id)-1 {
+		return "", 0, false
+	}
+	sequence, valid := parseDecimalInt(id[:dash])
+	if !valid || int64(sequence) != seq {
 		return "", 0, false
 	}
 	suffix := id[dash+1:]
@@ -349,11 +359,11 @@ func parseEvidenceID(id string) (kind EvidenceKind, index int, ok bool) {
 	default:
 		return "", 0, false
 	}
-	n, err := strconv.Atoi(suffix)
-	if err != nil || n < 0 {
+	index, valid = parseDecimalInt(suffix)
+	if !valid {
 		return "", 0, false
 	}
-	return kind, n, true
+	return kind, index, true
 }
 
 // parseResult reads one item's result payload defensively: a shape that
