@@ -167,6 +167,12 @@ type StartRequest struct {
 	// active session with a busy marker. Nothing persists request IDs:
 	// a restarted process never replays a start.
 	ID string
+	// Target is the game window the user confirmed from the discovered
+	// candidates (P-01). A discovery source refuses a request without it,
+	// even when only one window is running; sources with a fixed target
+	// ignore it. The source re-checks that the window instance still
+	// exists before accepting.
+	Target *TargetCandidate
 }
 
 // StartOutcome is what Start returns: the session the request produced
@@ -220,6 +226,17 @@ func NewService(cfg Config) (*Service, error) {
 		binder.bindStop(svc.Stop)
 	}
 	return svc, nil
+}
+
+// DiscoverTargets enumerates the game windows the wired source offers for
+// user confirmation (P-01). The window calls it only when its source
+// reports TargetSelection; a source without the capability reports why.
+func (s *Service) DiscoverTargets() ([]TargetCandidate, error) {
+	discovery, ok := s.cfg.Source.(TargetDiscoverer)
+	if !ok {
+		return nil, errors.New("app: the wired scan source cannot discover target windows")
+	}
+	return discovery.DiscoverTargets()
 }
 
 // Start accepts a start request into the single active slot: it takes
@@ -293,7 +310,16 @@ func (s *Service) Start(req StartRequest) (StartOutcome, error) {
 	if s.cfg.Source == nil {
 		return abort(errors.New("no scan source is wired"))
 	}
-	spec, err := s.cfg.Source.NewScan()
+	var spec ScanSpec
+	if req.Target != nil {
+		targeted, ok := s.cfg.Source.(TargetScanSource)
+		if !ok {
+			return abort(errors.New("the wired scan source does not accept a confirmed target"))
+		}
+		spec, err = targeted.NewScanForTarget(*req.Target)
+	} else {
+		spec, err = s.cfg.Source.NewScan()
+	}
 	if err != nil {
 		return abort(err)
 	}

@@ -99,6 +99,11 @@ type fakeService struct {
 	quits   int
 	quitFn  func() error
 
+	targets     []app.TargetCandidate
+	targetsErr  error
+	discoveries int
+	discoverFn  func() ([]app.TargetCandidate, error)
+
 	list    []record.RecordInfo
 	history []app.HistoryRecord
 	listErr error
@@ -148,6 +153,26 @@ func (f *fakeService) Start(req app.StartRequest) (app.StartOutcome, error) {
 		return f.startFn(req)
 	}
 	return app.StartOutcome{SessionID: scan.ID("scan-1")}, nil
+}
+
+func (f *fakeService) DiscoverTargets() ([]app.TargetCandidate, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.discoveries++
+	if f.discoverFn != nil {
+		return f.discoverFn()
+	}
+	return f.targets, f.targetsErr
+}
+
+// lastStart returns the most recent recorded start request.
+func (f *fakeService) lastStart() app.StartRequest {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.starts) == 0 {
+		return app.StartRequest{}
+	}
+	return f.starts[len(f.starts)-1]
 }
 
 func (f *fakeService) Stop() {

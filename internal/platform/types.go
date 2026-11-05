@@ -23,8 +23,43 @@ type TargetSpec struct {
 	// ExecutablePath is the Windows target's full executable path, the
 	// authoritative identity; class and title are screening hints only.
 	ExecutablePath string
-	ClassNameHint  string
-	TitleHint      string
+	// HandleHint is the window handle the user confirmed when the
+	// installed build enumerated candidates (P-01). It narrows selection
+	// to exactly that window; a session is never opened on another window
+	// of the same executable after the confirmed one disappeared. It is a
+	// hint, not identity: handles are recycled, so the path and process
+	// instance are still verified on every observation.
+	HandleHint    uintptr
+	ClassNameHint string
+	TitleHint     string
+}
+
+// TargetCandidate identifies one running game window a user can confirm
+// as the scan target (P-01). Candidate enumeration reads only the owning
+// process's image path, process instance and window class — never a
+// window title.
+type TargetCandidate struct {
+	// Handle is the platform window handle (the Windows HWND). It is a
+	// selection hint; the executable path stays the authoritative
+	// identity and handles are recycled.
+	Handle uintptr
+	// PID is the owning process instance at enumeration time.
+	PID uint32
+	// ExecutablePath is the owning process's full executable path.
+	ExecutablePath string
+	// ProcessStartedAt distinguishes a restarted process that reused the
+	// PID.
+	ProcessStartedAt time.Time
+	// ClassName is the window class recorded for display and screening
+	// only.
+	ClassName string
+}
+
+// TargetDiscovery is the optional Port capability: enumerate the game
+// windows the user can confirm as the scan target. Ports without it
+// (macOS) scan a target selected by configuration instead.
+type TargetDiscovery interface {
+	DiscoverTargets() ([]TargetCandidate, error)
 }
 
 // Key is a neutral key name of the port's vocabulary: KeyA…KeyZ,

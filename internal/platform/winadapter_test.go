@@ -36,6 +36,9 @@ type fakeWinWindow struct {
 	mu    sync.Mutex
 	wnds  []*fakeWnd
 	query int
+	// titleReads counts Title calls: discovery must never read another
+	// process's window caption.
+	titleReads int
 }
 
 func (f *fakeWinWindow) EnumTopLevel(visit func(windows.HWND)) error {
@@ -105,6 +108,7 @@ func (f *fakeWinWindow) ClassName(hwnd windows.HWND) (string, error) {
 func (f *fakeWinWindow) Title(hwnd windows.HWND) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.titleReads++
 	if w := f.lookup(hwnd); w != nil {
 		return w.title, nil
 	}
@@ -1025,5 +1029,78 @@ func TestWinWatcherReportsFaults(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 	if n := w.faultCount(CodeFocusLost); n != 1 {
 		t.Fatalf("focusLost delivered %d times, want 1", n)
+	}
+}
+
+// Discovery (P-01): the adapter enumerates the game client's visible
+// windows by process image name, lists two installations as two
+// candidates, and never reads a window title.
+func TestWinDiscoverTargets(t *testing.T) {
+	w := newWinWorld(t)
+	started := time.Date(2026, 11, 2, 8, 0, 0, 0, time.UTC)
+	w.win.mu.Lock()
+	w.win.wnds = append(w.win.wnds,
+		&fakeWnd{hwnd: 0xB0ABF, pid: gamePID, visible: false, className: "MSCTFIME UI", title: "Default IME"},
+		&fakeWnd{hwnd: 0xB0AC0, pid: 7777, visible: true, className: "UnityWndClass", title: "Second install"},
+	)
+	w.win.mu.Unlock()
+	w.procs.mu.Lock()
+	w.procs.byPID[7777] = fakeProcInfo{path: `D:\Other\ZenlessZoneZero.exe`, started: started}
+	w.procs.mu.Unlock()
+
+	candidates, err := w.adapter.DiscoverTargets()
+	if err != nil {
+		t.Fatalf("discover: %v", err)
+	}
+	if len(candidates) != 2 {
+		t.Fatalf("want the two visible installations, got %+v", candidates)
+	}
+	if candidates[0].Handle != uintptr(gameHwnd) || candidates[0].PID != uint32(gamePID) ||
+		candidates[0].ExecutablePath != gameExe || candidates[0].ProcessStartedAt.IsZero() {
+		t.Fatalf("first candidate: %+v", candidates[0])
+	}
+	if candidates[1].ExecutablePath != `D:\Other\ZenlessZoneZero.exe` {
+		t.Fatalf("second candidate keeps its own path: %+v", candidates[1])
+	}
+	w.win.mu.Lock()
+	titles := w.win.titleReads
+	w.win.mu.Unlock()
+	if titles != 0 {
+		t.Fatalf("discovery read %d window titles; it must not read them", titles)
+	}
+}
+
+// A confirmed handle locks exactly that window, and a stale handle fails
+// closed instead of locking another window of the same executable.
+func TestWinOpenConfirmedHandleHint(t *testing.T) {
+	w := newWinWorld(t)
+	const second = windows.HWND(9)
+	w.win.mu.Lock()
+	w.win.wnds = append(w.win.wnds, &fakeWnd{
+		hwnd: second, pid: gamePID, visible: true, className: "UnityWndClass", title: "绝区零",
+	})
+	w.win.mu.Unlock()
+	w.fg.set(second)
+
+	cfg := w.config()
+	cfg.Target.HandleHint = uintptr(second)
+	sess, err := w.adapter.Open(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("open with the confirmed handle: %v", err)
+	}
+	if info := sess.Target(); info.HWND != uintptr(second) {
+		t.Fatalf("locked hwnd %d, want the confirmed %d", info.HWND, second)
+	}
+	sess.Close()
+
+	stale := w.config()
+	stale.Target.HandleHint = 0xDEAD
+	_, err = w.adapter.Open(context.Background(), stale)
+	var f *Fault
+	if !errors.As(err, &f) || f.Code != CodeTargetNotFound || f.Class != ClassSetup {
+		t.Fatalf("a vanished confirmed window must report targetNotFound, got %v", err)
+	}
+	if w.hotkey.registered() {
+		t.Fatal("the hotkey must be unregistered on rollback")
 	}
 }

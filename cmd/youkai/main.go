@@ -179,6 +179,12 @@ func main() {
 	}
 
 	source, sourceLabel := scanSource(filepath.Join(paths.Logs, "diagnostics"))
+	// The installed Windows source starts only the window the user
+	// confirms (P-01); the window lists the discovered candidates.
+	targetSelection := false
+	if game, ok := source.(*app.GameScanSource); ok {
+		targetSelection = game.RequiresTargetConfirmation()
+	}
 	svc, err := app.NewService(app.Config{
 		Paths:    paths,
 		DataLock: dataLock,
@@ -205,7 +211,11 @@ func main() {
 		ScanSource: ui.ScanSourceInfo{
 			Available: source != nil,
 			Label:     sourceLabel,
-			Reason:    "当前安装版没有接入扫描源；开发构建可通过环境变量 YOUKAI_DEV_SOURCE 启用开发数据源，或用 YOUKAI_GAME_SOURCE=observe/traverse 接入游戏窗口。",
+			Reason:    "这个版本没有接入扫描源，暂时不能开始扫描。",
+			// The prepare area lists discovered windows and requires the
+			// user's confirmation; the development environment variables
+			// are not mentioned in the installed UI (P-01).
+			TargetSelection: targetSelection,
 		},
 		Evidence: ui.FileEvidence{Root: paths.Data},
 		// Usable-data exports write straight into the system downloads
@@ -423,12 +433,15 @@ func selfTest(root string) {
 //     through the unified platform port — a session opens the platform,
 //     observes the target and waits; no input is dispatched;
 //   - YOUKAI_GAME_SOURCE=traverse wires the calibrated macOS cloud
-//     inventory traversal (darwin only; Windows has no calibrated
-//     layout);
+//     inventory traversal (darwin only) or the Windows local client with
+//     an explicitly fixed target;
 //   - YOUKAI_DEV_SOURCE and YOUKAI_GAME_SOURCE set at once is a wiring
 //     error the entry point refuses;
-//   - neither leaves the production state: no source, starts refused
-//     with the documented reason.
+//   - on Windows neither variable is the installed default: the local
+//     client's traversal is wired, and the target window is discovered
+//     and confirmed by the user (D-01, P-01). On macOS neither leaves the
+//     production state: no source, starts refused with the documented
+//     reason.
 func scanSource(diagnosticDir string) (app.ScanSource, string) {
 	source, label, err := scanSourceFrom(os.Getenv, runtime.GOOS, platform.Host)
 	if err != nil {
@@ -488,7 +501,51 @@ func scanSourceFrom(getenv func(string) string, goos string, host func() (platfo
 	if gameMode != "" {
 		return gameScanSourceFrom(gameMode, goos, getenv, host)
 	}
+	if goos == "windows" {
+		// The installed default (D-01, P-01): the local client with its
+		// target discovered from the running windows and confirmed by the
+		// user. No environment variable is needed.
+		return installedWindowsSource(host, getenv)
+	}
 	return nil, "开发数据源", nil
+}
+
+// installedWindowsSource wires the Windows installation's default scan
+// source: the local client's calibrated traversal, with the target window
+// discovered from the running processes (P-01). The source has no fixed
+// target, so the prepare area lists the candidates and refuses a start
+// until the user confirms one — even when only one window is running.
+func installedWindowsSource(host func() (platform.Port, error), getenv func(string) string) (app.ScanSource, string, error) {
+	port, err := host()
+	if err != nil {
+		return nil, "", fmt.Errorf("platform: %w", err)
+	}
+	src := &app.GameScanSource{
+		Port:   port,
+		Hotkey: platform.HotkeySpec{Key: platform.KeyS, Ctrl: true, Alt: true, Shift: true},
+		Client: record.ClientWindowsLocal,
+		Mode:   "traverse",
+	}
+	src.TraversalForClient = windowsLocalTraversal(getenv)
+	log.Printf("youkai: game scan source wired (installed default): client=%s target=confirm-one-discovered-window timing=%s",
+		src.Client, collect.WindowsLocalTimingProvenance)
+	return src, "游戏窗口（自动遍历）", nil
+}
+
+// windowsLocalTraversal builds the Windows local client's traversal from
+// the client area the platform precheck measured. The installed default
+// and the environment override share it.
+func windowsLocalTraversal(getenv func(string) string) func(image.Point) (collect.Traversal, error) {
+	return func(clientArea image.Point) (collect.Traversal, error) {
+		profile, err := collect.WindowsLocalProfileFor(clientArea)
+		if err != nil {
+			return nil, err
+		}
+		log.Printf("youkai: game scan source: windows local traverse: %s", profile.Diagnostic())
+		inv := profile.Inventory(strings.ToLower(getenv("YOUKAI_SCROLL_MATCHER")) == "legacy")
+		inv.Project = app.ProjectDiscObservation
+		return inv, nil
+	}
 }
 
 // gameScanSourceFrom wires the game source for one mode and platform. The
@@ -523,7 +580,7 @@ func gameScanSourceFrom(mode, goos string, getenv func(string) string, host func
 		exe := getenv("YOUKAI_GAME_EXE")
 		kind := getenv("YOUKAI_GAME_CLIENT")
 		if exe == "" || (kind != "local" && kind != "cloud") {
-			return nil, "", fmt.Errorf("the Windows game target needs YOUKAI_GAME_EXE=<game exe path> and YOUKAI_GAME_CLIENT=local|cloud (the real window identity is measured in field round ②; refusing to guess), got exe=%q client=%q", exe, kind)
+			return nil, "", fmt.Errorf("an explicit Windows target override needs YOUKAI_GAME_EXE=<game exe path> and YOUKAI_GAME_CLIENT=local|cloud (the installed default needs neither: unset YOUKAI_GAME_SOURCE and confirm a discovered window instead), got exe=%q client=%q", exe, kind)
 		}
 		if mode == "traverse" && kind == "cloud" {
 			return nil, "", fmt.Errorf("YOUKAI_GAME_SOURCE=traverse on Windows supports only the local client (YOUKAI_GAME_CLIENT=local): the Windows cloud client's traversal is not implemented yet — its game video rectangle would need a measuredVideoRect transform, and the reference canvas model only defines that interface without measuring one. Set YOUKAI_GAME_CLIENT=local, or use YOUKAI_GAME_SOURCE=observe")
@@ -555,16 +612,7 @@ func gameScanSourceFrom(mode, goos string, getenv func(string) string, host func
 		// accepted the tier — rather than here. The macOS cloud layout is
 		// fixed and does not take this path.
 		src.Mode = "traverse"
-		src.TraversalForClient = func(clientArea image.Point) (collect.Traversal, error) {
-			profile, err := collect.WindowsLocalProfileFor(clientArea)
-			if err != nil {
-				return nil, err
-			}
-			log.Printf("youkai: game scan source: windows local traverse: %s", profile.Diagnostic())
-			inv := profile.Inventory(strings.ToLower(getenv("YOUKAI_SCROLL_MATCHER")) == "legacy")
-			inv.Project = app.ProjectDiscObservation
-			return inv, nil
-		}
+		src.TraversalForClient = windowsLocalTraversal(getenv)
 		log.Printf("youkai: game scan source wired (traverse): client=%s target=%+v tier=selected-from-measured-client-area timing=%s",
 			client, target, collect.WindowsLocalTimingProvenance)
 		return src, "游戏窗口（自动遍历）", nil
