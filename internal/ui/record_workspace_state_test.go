@@ -8,14 +8,13 @@ import (
 	"time"
 
 	"github.com/LoTwT/youkai/internal/app"
-	"github.com/LoTwT/youkai/internal/game/zzz"
 	"github.com/LoTwT/youkai/internal/record"
 	"github.com/LoTwT/youkai/internal/scan"
 	"github.com/egoist/mygo/ui"
 )
 
-// slotHistoryLabel returns the picker label of one loaded history record.
-func slotHistoryLabel(t *testing.T, m *Model, id string) string {
+// historyLabel returns the picker label of one loaded history record.
+func historyLabel(t *testing.T, m *Model, id string) string {
 	t.Helper()
 	for _, entry := range m.history {
 		if entry.ID == id {
@@ -26,8 +25,8 @@ func slotHistoryLabel(t *testing.T, m *Model, id string) string {
 	return ""
 }
 
-// slotLoadCount counts the loads of one record.
-func slotLoadCount(svc *fakeService, id string) int {
+// recordLoadCount counts the loads of one record.
+func recordLoadCount(svc *fakeService, id string) int {
 	svc.mu.Lock()
 	defer svc.mu.Unlock()
 	count := 0
@@ -39,228 +38,238 @@ func slotLoadCount(svc *fakeService, id string) int {
 	return count
 }
 
-// TestOpenHistoryKeepsSessionAndShowLiveRestoresIt checks the two result
-// destinations: opening history leaves the session slot intact, and
-// returning to the live session restores its own filters, selection,
-// scroll and export snapshot without another load.
-func TestOpenHistoryKeepsSessionAndShowLiveRestoresIt(t *testing.T) {
+// TestFinishedScanAndListShareOneRecordWorkspace checks the merge: the
+// record of a just-finished scan and the same record reopened from the
+// records list are one workspace with one edit buffer. Reopening it keeps
+// the unsaved edit; switching to another record asks what to do with it.
+func TestFinishedScanAndListShareOneRecordWorkspace(t *testing.T) {
+	svc := &fakeService{
+		list: []record.RecordInfo{
+			{ID: "s1", SavedAt: time.Date(2026, 10, 21, 10, 0, 0, 0, time.UTC)},
+			{ID: "old", SavedAt: time.Date(2026, 10, 20, 10, 0, 0, 0, time.UTC)},
+		},
+		loads: map[string]*record.Recovery{
+			"s1":  recovery(reviewRowItem(t, 1, 12)),
+			"old": recovery(reviewRowItem(t, 1, 12)),
+		},
+	}
+	installReviewSave(svc)
+	m, q := newTestModel(t, Config{Service: svc})
+	drainAll(t, m, q)
+	m.Apply(snap("s1", 1, true, scan.PhaseCapturing,
+		scan.Counts{Captured: 1, Produced: 1}, 0, true, ""))
+	drainAll(t, m, q)
+	m.Apply(snap("s1", 2, false, scan.PhaseEnded,
+		scan.Counts{Captured: 1, Produced: 1}, 1, false, ""))
+	drainAll(t, m, q)
+	if m.displayPage() != pageResults || m.recordTab != recordTabSummary {
+		t.Fatalf("the finished scan did not enter the new record's summary: page %v tab %v",
+			m.displayPage(), m.recordTab)
+	}
+	if m.rec == nil || m.rec.ID != "s1" || !m.rec.Live {
+		t.Fatalf("the finished scan's record is not open: %+v", m.rec)
+	}
+
+	showRecordItems(m)
+	m.startEdit()
+	if m.edit == nil {
+		t.Fatal("the editor did not open")
+	}
+	m.edit.draft.Level = "13"
+	loads := recordLoadCount(svc, "s1")
+
+	m.histChoice = historyLabel(t, m, "s1")
+	m.OpenHistory()
+	drainAll(t, m, q)
+	if m.navPrompt != nil {
+		t.Fatalf("reopening the same record prompted for its own draft: %+v", m.navPrompt)
+	}
+	if m.rec == nil || m.rec.ID != "s1" || m.edit == nil || m.edit.draft.Level != "13" {
+		t.Fatalf("the same record lost its edit buffer: record %+v edit %+v", m.rec, m.edit)
+	}
+	if got := recordLoadCount(svc, "s1"); got != loads {
+		t.Fatalf("reopening the same record reloaded it from disk (%d loads, want %d)", got, loads)
+	}
+
+	// Another record waits for the draft through the existing prompt.
+	m.histChoice = historyLabel(t, m, "old")
+	m.OpenHistory()
+	if m.navPrompt == nil || m.navPrompt.kind != navOpenRecord || m.navPrompt.recordID != "old" {
+		t.Fatalf("a dirty switch did not prompt: %+v", m.navPrompt)
+	}
+	if m.rec == nil || m.rec.ID != "s1" {
+		t.Fatal("the record switched before the draft settled")
+	}
+	if recordLoadCount(svc, "old") != 0 {
+		t.Fatal("the other record loaded behind the prompt")
+	}
+	m.promptStay()
+	if m.edit == nil || m.edit.draft.Level != "13" {
+		t.Fatal("staying lost the draft")
+	}
+	m.OpenHistory()
+	m.promptDiscardAndContinue()
+	drainAll(t, m, q)
+	if m.rec == nil || m.rec.ID != "old" || m.rec.Live || m.edit != nil {
+		t.Fatalf("discarding did not open the other record cleanly: record %+v edit %v",
+			m.rec, m.edit)
+	}
+	if got := recordLoadCount(svc, "old"); got != 1 {
+		t.Fatalf("the other record loaded %d times, want 1", got)
+	}
+}
+
+// TestSavedRevisionIsTheOpenRecordWhenReopenedFromList checks the other
+// direction of the merge: a revision saved from the just-finished scan is
+// already in the one workspace, so reopening the record from the list
+// shows it without a stale buffer or a reload.
+func TestSavedRevisionIsTheOpenRecordWhenReopenedFromList(t *testing.T) {
 	svc := &fakeService{
 		list: []record.RecordInfo{{
-			ID:      "old",
-			SavedAt: time.Date(2026, 10, 20, 10, 0, 0, 0, time.UTC),
+			ID: "s1", SavedAt: time.Date(2026, 10, 21, 10, 0, 0, 0, time.UTC),
+		}},
+		loads: map[string]*record.Recovery{"s1": recovery(reviewRowItem(t, 1, 12))},
+	}
+	installReviewSave(svc)
+	m, q := newTestModel(t, Config{Service: svc})
+	drainAll(t, m, q)
+	m.Apply(snap("s1", 1, false, scan.PhaseEnded,
+		scan.Counts{Captured: 1, Produced: 1}, 1, false, ""))
+	drainAll(t, m, q)
+	if m.rec == nil || m.rec.ID != "s1" || len(m.rec.Rows) != 1 {
+		t.Fatalf("the finished record did not load: %+v", m.rec)
+	}
+	showRecordItems(m)
+	selected := m.selected
+	before := m.rec.Rows[selected].Revision
+	m.startEdit()
+	m.edit.draft.Level = "13"
+	m.saveEdit(reviewSave, nil)
+	drainAll(t, m, q)
+	if m.edit != nil {
+		t.Fatalf("the save left the editor open: %+v", m.edit)
+	}
+	saved := m.rec.Rows[selected].Revision
+	if saved != before+1 {
+		t.Fatalf("the open record shows revision %d, want %d", saved, before+1)
+	}
+	loads := recordLoadCount(svc, "s1")
+
+	m.histChoice = historyLabel(t, m, "s1")
+	m.OpenHistory()
+	drainAll(t, m, q)
+	if m.rec == nil || m.rec.ID != "s1" || m.rec.Rows[selected].Revision != saved {
+		t.Fatalf("the reopened record does not show the saved revision: %+v", m.rec)
+	}
+	if m.edit != nil {
+		t.Fatal("the reopened record brought back an edit buffer")
+	}
+	if got := recordLoadCount(svc, "s1"); got != loads {
+		t.Fatalf("reopening the record reloaded it (%d loads, want %d)", got, loads)
+	}
+}
+
+// TestFinishedScanLeavesAnotherOpenRecordAlone checks the boundary: when
+// the user is reading a different record while a scan finishes in the
+// background, the new record does not steal the workspace or its tab.
+func TestFinishedScanLeavesAnotherOpenRecordAlone(t *testing.T) {
+	svc := &fakeService{
+		list: []record.RecordInfo{{
+			ID: "old", SavedAt: time.Date(2026, 10, 20, 10, 0, 0, 0, time.UTC),
 		}},
 		loads: map[string]*record.Recovery{
-			"s1": recovery(
-				structuredItem(1, zzz.DiscRecord{SetID: intp(31100), Slot: 4, Level: intp(15)}, "一号"),
-				structuredItem(2, zzz.DiscRecord{SetID: intp(31100), Slot: 4, Level: intp(15)}, "二号"),
-			),
-			"old": recovery(
-				structuredItem(1, zzz.DiscRecord{SetID: intp(99999), Slot: 2, Level: intp(15)}, "旧一"),
-				structuredItem(2, zzz.DiscRecord{SetID: intp(99999), Slot: 2, Level: intp(15)}, "旧二"),
-			),
+			"s1":  recovery(reviewRowItem(t, 1, 12)),
+			"old": recovery(reviewRowItem(t, 1, 12)),
 		},
+	}
+	installReviewSave(svc)
+	m, q := newTestModel(t, Config{Service: svc})
+	drainAll(t, m, q)
+	m.Apply(snap("s1", 1, true, scan.PhaseCapturing,
+		scan.Counts{Captured: 1, Produced: 1}, 1, true, ""))
+	drainAll(t, m, q)
+
+	m.histChoice = historyLabel(t, m, "old")
+	m.OpenHistory()
+	drainAll(t, m, q)
+	showRecordItems(m)
+	if m.rec == nil || m.rec.ID != "old" || m.rec.Live {
+		t.Fatalf("the other record did not open: %+v", m.rec)
+	}
+	loads := recordLoadCount(svc, "old")
+
+	m.Apply(snap("s1", 2, false, scan.PhaseEnded,
+		scan.Counts{Captured: 1, Produced: 1}, 1, false, ""))
+	drainAll(t, m, q)
+	if m.rec == nil || m.rec.ID != "old" || m.rec.Live {
+		t.Fatalf("the finished scan replaced the open record: %+v", m.rec)
+	}
+	if m.displayPage() != pageResults || m.recordTab != recordTabItems {
+		t.Fatalf("the finished scan stole the page: page %v tab %v",
+			m.displayPage(), m.recordTab)
+	}
+	if got := recordLoadCount(svc, "old"); got != loads {
+		t.Fatalf("the finished scan reloaded the open record (%d loads, want %d)", got, loads)
+	}
+}
+
+// TestLateSaveResponseDoesNotTouchAnotherRecord checks the save identity
+// guard: a response for the record replaced by a later one is discarded
+// instead of writing its item into the new record's row with the same
+// capture sequence.
+func TestLateSaveResponseDoesNotTouchAnotherRecord(t *testing.T) {
+	first := recovery(reviewRowItem(t, 1, 12))
+	first.Checkpoint.Session.SessionID = "s1"
+	second := recovery(reviewRowItem(t, 1, 10))
+	second.Checkpoint.Session.SessionID = "old"
+	svc := &fakeService{loads: map[string]*record.Recovery{"s1": first, "old": second}}
+
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+	svc.saveFn = func(recordID string, sequence, expectedRevision int64, edit app.ItemRevisionEdit) (app.ItemRevisionResult, error) {
+		started <- struct{}{}
+		<-release
+		item := first.Checkpoint.Items[0]
+		item.Revision = expectedRevision + 1
+		return app.ItemRevisionResult{Item: item, Generation: 2}, nil
 	}
 	m, q := newTestModel(t, Config{Service: svc})
 	drainAll(t, m, q)
-	m.Apply(snap("s1", 1, true, scan.PhaseCapturing, scan.Counts{Captured: 2, Produced: 2}, 1, true, ""))
+	m.Apply(snap("s1", 1, false, scan.PhaseEnded,
+		scan.Counts{Captured: 1, Produced: 1}, 1, false, ""))
 	drainAll(t, m, q)
-	if m.rec == nil || m.rec.ID != "s1" || !m.rec.Live {
-		t.Fatalf("the live session did not load: %+v", m.rec)
+	showRecordItems(m)
+	m.startEdit()
+	m.edit.draft.Level = "13"
+	m.saveEdit(reviewSave, nil)
+	<-started
+
+	// The other record replaces the workspace while the save is in flight.
+	m.showRecord("old", false)
+	m.applyLoadedRecord("old", second, false)
+	if m.rec == nil || m.rec.ID != "old" {
+		t.Fatalf("the other record did not open: %+v", m.rec)
 	}
-
-	sessionExport := &app.UsableExport{Summary: app.ExportSummary{Included: 2, Captured: 2}}
-	m.filter = resultFilterAll
-	m.search = ""
-	m.setFilter = "31100"
-	m.slotFilter = "4"
-	m.selected = 1
-	m.scroll = 1
-	m.exportData = sessionExport
-
-	m.histChoice = slotHistoryLabel(t, m, "old")
-	m.OpenHistory()
+	close(release)
 	drainAll(t, m, q)
-	if m.activeSlot != resultSlotHistory || m.rec == nil || m.rec.ID != "old" || m.rec.Live {
-		t.Fatalf("history did not become the active destination: %+v", m.rec)
-	}
-	if m.sessionSlot.recordID != "s1" || m.sessionSlot.state.rec == nil || m.sessionSlot.state.rec.ID != "s1" {
-		t.Fatalf("opening history cleared the session slot: %+v", m.sessionSlot)
-	}
-	if m.sessionSlot.state.recData == nil || m.sessionSlot.state.selected != 1 || m.sessionSlot.state.scroll != 1 ||
-		m.sessionSlot.state.filter != resultFilterAll || m.sessionSlot.state.search != "" ||
-		m.sessionSlot.state.setFilter != "31100" || m.sessionSlot.state.slotFilter != "4" ||
-		m.sessionSlot.state.exportData != sessionExport {
-		t.Fatalf("the session slot lost its view state: %+v", m.sessionSlot.state)
-	}
 
-	historyExport := &app.UsableExport{Summary: app.ExportSummary{Included: 1, Captured: 2}}
-	m.filter = resultFilterAll
-	m.search = ""
-	m.setFilter = "99999"
-	m.slotFilter = "2"
-	m.selected = 1
-	m.scroll = 1
-	m.exportData = historyExport
-
-	loadsBefore := slotLoadCount(svc, "s1")
-	m.ShowLive()
-	drainAll(t, m, q)
-	if m.activeSlot != resultSlotSession || m.rec == nil || m.rec.ID != "s1" || !m.rec.Live {
-		t.Fatalf("ShowLive did not return to the session: %+v", m.rec)
+	if m.rec == nil || m.rec.ID != "old" || len(m.rec.Rows) != 1 {
+		t.Fatalf("the late save replaced the workspace: %+v", m.rec)
 	}
-	if m.filter != resultFilterAll || m.search != "" || m.setFilter != "31100" ||
-		m.slotFilter != "4" || m.selected != 1 || m.scroll != 1 || m.exportData != sessionExport {
-		t.Fatalf("the session state was not restored: filter %v search %q set %q slot %q selected %d scroll %d",
-			m.filter, m.search, m.setFilter, m.slotFilter, m.selected, m.scroll)
+	row := m.rec.Rows[0]
+	if row.Revision != second.Checkpoint.Items[0].Revision || row.Structured == nil ||
+		row.Structured.Data.Level == nil || *row.Structured.Data.Level != 10 {
+		t.Fatalf("the late save wrote into the other record: %+v", row)
 	}
-	if slotLoadCount(svc, "s1") != loadsBefore {
-		t.Fatal("ShowLive reloaded the cached session")
-	}
-	if m.historySlot.state.rec == nil || m.historySlot.state.filter != resultFilterAll ||
-		m.historySlot.state.search != "" || m.historySlot.state.selected != 1 ||
-		m.historySlot.state.exportData != historyExport {
-		t.Fatalf("leaving history lost its state: %+v", m.historySlot.state)
-	}
-
-	m.OpenHistory() // the picker still names the same record
-	drainAll(t, m, q)
-	if m.activeSlot != resultSlotHistory || m.rec.ID != "old" {
-		t.Fatalf("reopening history did not restore the slot: %+v", m.rec)
-	}
-	if m.filter != resultFilterAll || m.search != "" || m.setFilter != "99999" ||
-		m.slotFilter != "2" || m.selected != 1 || m.scroll != 1 || m.exportData != historyExport {
-		t.Fatalf("the history state was not restored: filter %v search %q selected %d scroll %d",
-			m.filter, m.search, m.selected, m.scroll)
-	}
-	if slotLoadCount(svc, "old") != 1 {
-		t.Fatalf("revisiting history reloaded it: %v", svc.loadLog)
+	if m.edit != nil {
+		t.Fatalf("the late save left an edit buffer: %+v", m.edit)
 	}
 }
 
-// TestResultSlotDraftMustSettleBeforeSwitch checks that a slot switch waits
-// for the active draft and that only the active slot can be dirty.
-func TestResultSlotDraftMustSettleBeforeSwitch(t *testing.T) {
-	newDirtyModel := func(t *testing.T) (*Model, *queueUpdater, *fakeService) {
-		t.Helper()
-		svc := &fakeService{
-			list: []record.RecordInfo{{
-				ID:      "old",
-				SavedAt: time.Date(2026, 10, 20, 10, 0, 0, 0, time.UTC),
-			}},
-			loads: map[string]*record.Recovery{
-				"s1":  recovery(reviewRowItem(t, 1, 12)),
-				"old": recovery(reviewRowItem(t, 1, 12)),
-			},
-		}
-		installReviewSave(svc)
-		m, q := newTestModel(t, Config{Service: svc})
-		drainAll(t, m, q)
-		m.Apply(snap("s1", 1, true, scan.PhaseCapturing, scan.Counts{Captured: 1, Produced: 1}, 1, true, ""))
-		drainAll(t, m, q)
-		m.startEdit()
-		m.edit.draft.Level = "13"
-		m.histChoice = slotHistoryLabel(t, m, "old")
-		return m, q, svc
-	}
-
-	t.Run("stay", func(t *testing.T) {
-		m, q, svc := newDirtyModel(t)
-		m.OpenHistory()
-		if m.navPrompt == nil || m.navPrompt.kind != navOpenHistory {
-			t.Fatalf("a dirty switch did not prompt: %+v", m.navPrompt)
-		}
-		if m.activeSlot != resultSlotSession || m.historySlot.recordID != "" {
-			t.Fatal("the destination switched before the draft settled")
-		}
-		if slotLoadCount(svc, "old") != 0 {
-			t.Fatal("the history record loaded behind the prompt")
-		}
-		m.promptStay()
-		drainAll(t, m, q)
-		if m.navPrompt != nil || m.edit == nil || m.edit.draft.Level != "13" {
-			t.Fatalf("staying lost the draft: prompt %+v edit %+v", m.navPrompt, m.edit)
-		}
-		if m.activeSlot != resultSlotSession {
-			t.Fatal("staying moved the destination")
-		}
-	})
-
-	t.Run("discard", func(t *testing.T) {
-		m, q, _ := newDirtyModel(t)
-		m.OpenHistory()
-		m.promptDiscardAndContinue()
-		drainAll(t, m, q)
-		if m.edit != nil || m.navPrompt != nil || m.activeSlot != resultSlotHistory {
-			t.Fatalf("discard did not switch: edit %v prompt %+v slot %v",
-				m.edit, m.navPrompt, m.activeSlot)
-		}
-		if m.sessionSlot.state.rec == nil || m.sessionSlot.state.rec.ID != "s1" {
-			t.Fatal("discarding cleared the session slot")
-		}
-
-		// The history slot may now hold its own draft; the session slot is
-		// not edited at the same time.
-		m.startEdit()
-		m.edit.draft.Level = "14"
-		m.ShowLive()
-		if m.navPrompt == nil || m.navPrompt.kind != navShowLive {
-			t.Fatalf("a dirty return did not prompt: %+v", m.navPrompt)
-		}
-		if m.activeSlot != resultSlotHistory {
-			t.Fatal("the dirty history slot was left behind without a prompt")
-		}
-		m.promptDiscardAndContinue()
-		drainAll(t, m, q)
-		if m.activeSlot != resultSlotSession || m.edit != nil {
-			t.Fatalf("discarding did not return to the session: slot %v edit %v", m.activeSlot, m.edit)
-		}
-	})
-
-	t.Run("save", func(t *testing.T) {
-		m, q, svc := newDirtyModel(t)
-		m.OpenHistory()
-		m.promptSaveAndContinue()
-		drainAll(t, m, q)
-		if m.edit != nil || m.navPrompt != nil || m.activeSlot != resultSlotHistory {
-			t.Fatalf("save did not switch: edit %v prompt %+v slot %v",
-				m.edit, m.navPrompt, m.activeSlot)
-		}
-		if svc.saveCount() != 1 {
-			t.Fatalf("save-and-continue issued %d saves", svc.saveCount())
-		}
-		if m.sessionSlot.state.rec == nil || m.sessionSlot.state.rec.Rows[0].Revision != 1 {
-			t.Fatalf("the saved revision did not reach the session slot: %+v", m.sessionSlot.state.rec)
-		}
-	})
-
-	t.Run("save failure", func(t *testing.T) {
-		m, q, svc := newDirtyModel(t)
-		svc.mu.Lock()
-		svc.saveFn = func(string, int64, int64, app.ItemRevisionEdit) (app.ItemRevisionResult, error) {
-			return app.ItemRevisionResult{}, errors.New("磁盘已满")
-		}
-		svc.mu.Unlock()
-		m.OpenHistory()
-		m.promptSaveAndContinue()
-		drainAll(t, m, q)
-		if m.activeSlot != resultSlotSession || m.edit == nil || m.navPrompt == nil {
-			t.Fatalf("a failed save left the draft: slot %v edit %v prompt %+v",
-				m.activeSlot, m.edit, m.navPrompt)
-		}
-		if !strings.Contains(m.reviewErr, "磁盘已满") {
-			t.Fatalf("the save failure was not shown: %q", m.reviewErr)
-		}
-		if slotLoadCount(svc, "old") != 0 {
-			t.Fatal("a failed save switched to history")
-		}
-	})
-}
-
-// TestStaleResultLoadsStayInTheirSlot checks the slot + version guard:
-// a history load that lands after the user returned to the live session
-// updates only the history slot, and a superseded history load never
-// replaces a newer history record.
-func TestStaleResultLoadsStayInTheirSlot(t *testing.T) {
+// TestStaleResultLoadsNeverReplaceTheOpenRecord checks the load version
+// and identity guard: a record load that lands after the user opened another
+// record is discarded, and a superseded load never replaces a newer one.
+func TestStaleResultLoadsNeverReplaceTheOpenRecord(t *testing.T) {
 	svc := &fakeService{
 		list: []record.RecordInfo{
 			{ID: "old1", SavedAt: time.Date(2026, 10, 20, 10, 0, 0, 0, time.UTC)},
@@ -297,45 +306,36 @@ func TestStaleResultLoadsStayInTheirSlot(t *testing.T) {
 	}
 	svc.mu.Unlock()
 
-	// A history load still in flight must not replace the session after
-	// ShowLive; it lands in the inactive history slot.
-	m.histChoice = slotHistoryLabel(t, m, "old1")
+	// A record load still in flight must not replace the live record after
+	// the user returned to it.
+	m.histChoice = historyLabel(t, m, "old1")
 	m.OpenHistory()
 	<-gates["old1"].started
 	m.ShowLive()
-	if m.activeSlot != resultSlotSession || m.rec.ID != "s1" {
-		t.Fatalf("ShowLive did not switch while history loaded: %+v", m.rec)
+	if m.rec == nil || m.rec.ID != "s1" {
+		t.Fatalf("ShowLive did not open the live record while history loaded: %+v", m.rec)
 	}
 	close(gates["old1"].release)
 	drainAll(t, m, q)
 	if m.rec == nil || m.rec.ID != "s1" || !m.rec.Live {
-		t.Fatalf("a stale history load overwrote the session: %+v", m.rec)
-	}
-	if m.historySlot.state.rec == nil || m.historySlot.state.rec.ID != "old1" {
-		t.Fatalf("the history load did not settle in its own slot: %+v", m.historySlot.state.rec)
+		t.Fatalf("a stale history load overwrote the live record: %+v", m.rec)
 	}
 
 	// Consecutive history opens: the first response is superseded even if
 	// it lands, and the last chosen record wins.
 	gates["old2"] = &loadGate{started: make(chan struct{}, 1), release: make(chan struct{})}
 	gates["old1"] = &loadGate{started: make(chan struct{}, 1), release: make(chan struct{})}
-	m.histChoice = slotHistoryLabel(t, m, "old2")
+	m.histChoice = historyLabel(t, m, "old2")
 	m.OpenHistory()
 	<-gates["old2"].started
-	m.histChoice = slotHistoryLabel(t, m, "old1")
+	m.histChoice = historyLabel(t, m, "old1")
 	m.OpenHistory()
 	<-gates["old1"].started
 	close(gates["old2"].release)
 	close(gates["old1"].release)
 	drainAll(t, m, q)
-	if m.activeSlot != resultSlotHistory || m.rec == nil || m.rec.ID != "old1" {
+	if m.rec == nil || m.rec.ID != "old1" || m.rec.Live {
 		t.Fatalf("a superseded history load replaced the newer record: %+v", m.rec)
-	}
-	if m.historySlot.state.rec == nil || m.historySlot.state.rec.ID != "old1" {
-		t.Fatalf("the history slot holds %+v", m.historySlot.state.rec)
-	}
-	if m.sessionSlot.state.rec == nil || m.sessionSlot.state.rec.ID != "s1" {
-		t.Fatal("history switching changed the session slot")
 	}
 }
 
@@ -363,7 +363,7 @@ func TestHistoryPendingZeroUsesItsOwnRecord(t *testing.T) {
 		t.Fatalf("the session baseline is wrong: pending %d export %+v", m.pendingCount(), m.exportData)
 	}
 
-	m.histChoice = slotHistoryLabel(t, m, "old")
+	m.histChoice = historyLabel(t, m, "old")
 	m.OpenHistory()
 	drainAll(t, m, q)
 	if m.rec == nil || m.rec.ID != "old" || m.rec.Live {
@@ -377,9 +377,6 @@ func TestHistoryPendingZeroUsesItsOwnRecord(t *testing.T) {
 	}
 	if m.exportData.Summary.Included != 1 || m.exportData.Summary.Captured != 1 {
 		t.Fatalf("history used another record's export summary: %+v", m.exportData.Summary)
-	}
-	if m.sessionSlot.state.exportData == nil || m.sessionSlot.state.exportData.Summary.Included != 0 {
-		t.Fatalf("opening history changed the session export snapshot: %+v", m.sessionSlot.state.exportData)
 	}
 }
 
@@ -428,7 +425,7 @@ func TestFinalCheckpointLoadingGatesCompletionAndExport(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("the final checkpoint load did not start")
 	}
-	if !m.loading || !m.sessionSlot.state.loading {
+	if !m.loading {
 		t.Fatal("the session slot does not mark its final load as pending")
 	}
 	if m.completionVisible() {
@@ -472,7 +469,7 @@ func TestFinalCheckpointLoadingGatesCompletionAndExport(t *testing.T) {
 		return nil, errors.New("磁盘读取失败")
 	}
 	svc.mu.Unlock()
-	m.reloadSessionRecord("s1")
+	m.reloadRecord("s1", true)
 	drainAll(t, m, q)
 	if m.loading || m.recErr == "" {
 		t.Fatalf("the failed reload state = loading %v err %q", m.loading, m.recErr)
@@ -486,13 +483,14 @@ func TestFinalCheckpointLoadingGatesCompletionAndExport(t *testing.T) {
 }
 
 // TestSupersededResultLoadDoesNotClearLoading checks that only the current
-// load's response clears the slot's loading state; an older response that
-// lands while a newer load is in flight must leave the guard in place.
+// load's response clears the workspace's loading state; an older response
+// that lands while a newer load is in flight must leave the guard in place.
 func TestSupersededResultLoadDoesNotClearLoading(t *testing.T) {
 	svc := &fakeService{loads: map[string]*record.Recovery{
 		"s1": recovery(confirmedReviewItem(t, 1, 12)),
 	}}
 	m, q := newTestModel(t, Config{Service: svc})
+	m.showRecord("s1", true)
 	releases := []chan struct{}{make(chan struct{}), make(chan struct{})}
 	started := []chan struct{}{make(chan struct{}, 1), make(chan struct{}, 1)}
 	responses := []*record.Recovery{
@@ -510,12 +508,12 @@ func TestSupersededResultLoadDoesNotClearLoading(t *testing.T) {
 	}
 	svc.mu.Unlock()
 
-	m.reloadResultRecord(&m.sessionSlot, "s1", true)
+	m.reloadRecord("s1", true)
 	<-started[0]
-	m.reloadResultRecord(&m.sessionSlot, "s1", true)
+	m.reloadRecord("s1", true)
 	<-started[1]
-	if !m.sessionSlot.state.loading {
-		t.Fatal("the newer load did not mark the slot loading")
+	if !m.loading {
+		t.Fatal("the newer load did not mark the workspace loading")
 	}
 
 	// Let the superseded response land while the newer one is still
@@ -531,16 +529,16 @@ func TestSupersededResultLoadDoesNotClearLoading(t *testing.T) {
 	for _, fn := range q.take() {
 		fn()
 	}
-	if !m.loading || !m.sessionSlot.state.loading {
+	if !m.loading {
 		t.Fatal("a superseded response cleared the loading guard")
 	}
-	if m.sessionSlot.state.rec != nil {
-		t.Fatalf("a superseded response applied its record: %+v", m.sessionSlot.state.rec)
+	if len(m.rec.Rows) != 0 {
+		t.Fatalf("a superseded response applied its record: %+v", m.rec)
 	}
 
 	close(releases[1])
 	drainAll(t, m, q)
-	if m.loading || m.sessionSlot.state.loading {
+	if m.loading {
 		t.Fatal("the current response did not clear the loading guard")
 	}
 	if m.rec == nil || len(m.rec.Rows) != 3 {
@@ -789,7 +787,7 @@ func TestFailedRecordLoadBlocksReviewActions(t *testing.T) {
 	svc.mu.Lock()
 	svc.loadErr = map[string]error{"s1": errors.New("磁盘读取失败")}
 	svc.mu.Unlock()
-	m.reloadSessionRecord("s1")
+	m.reloadRecord("s1", true)
 	drainAll(t, m, q)
 	if m.recErr == "" || m.rec == nil || len(m.rec.Rows) != 1 {
 		t.Fatalf("the failed load did not leave its error and stale row: rec %+v err %q",

@@ -297,8 +297,8 @@ func TestSplitResultsRestoreFiltersSelectionAndScroll(t *testing.T) {
 			}
 			tt.Frame()
 			tt.Frame()
-			if m.displayPage() != pageResults || m.activeSlot != resultSlotHistory {
-				t.Fatalf("returning = page %v slot %v", m.displayPage(), m.activeSlot)
+			if m.displayPage() != pageResults || m.rec == nil || m.rec.Live {
+				t.Fatalf("returning = page %v record %+v", m.displayPage(), m.rec)
 			}
 			if m.filter != resultFilterAll || m.slotFilter != "2" || m.setFilter != "31100" || m.search != "2 号位" {
 				t.Fatalf("the return lost the filters: segment %v slot %q set %q search %q",

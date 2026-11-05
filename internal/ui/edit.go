@@ -82,8 +82,7 @@ type navKind int
 
 const (
 	navSelect navKind = iota
-	navOpenHistory
-	navShowLive
+	navOpenRecord
 	navPage
 	navExit
 	navStartScan
@@ -97,9 +96,6 @@ type navigationRequest struct {
 	recordID string
 	// page is the destination of a navPage request.
 	page Page
-	// reload forces an explicit history reopen to reload its record instead
-	// of restoring the slot's stored view after a dirty prompt settled.
-	reload bool
 }
 
 // cloneDraft copies a draft including its substat slice.
@@ -501,17 +497,15 @@ func (m *Model) runNavigation(req navigationRequest) {
 			m.reviewErr = ""
 			m.reviewNotice = ""
 		}
-	case navOpenHistory:
+	case navOpenRecord:
 		m.page = pageResults
-		m.performOpenHistory(req.recordID, req.reload)
-	case navShowLive:
-		m.performShowLive()
+		m.performOpenRecord(req.recordID)
 	case navPage:
 		if m.displayPage() == pageResults {
 			// Leaving the results page stores the list's actual place, not
 			// just the last captured one: the user may have scrolled the
 			// ListState without any explicit capture.
-			m.captureActiveResult()
+			m.captureResultPlace()
 		}
 		m.page = req.page
 	case navExit:
@@ -696,10 +690,7 @@ func (m *Model) submitReview(recordID string, seq, expectedRevision int64, data 
 			// save's applied revision is the newest view. No current load
 			// remains, so the loading guard must not outlive it.
 			m.recLoad++
-			active := m.activeResultSlot()
-			active.state.recLoad = m.recLoad
 			m.loading = false
-			active.state.loading = false
 			if m.edit != nil && m.edit.recordID == recordID && m.edit.seq == seq {
 				m.edit = nil
 			}

@@ -359,9 +359,10 @@ func TestHistoryMinFixedActionColumn(t *testing.T) {
 		t.Fatalf("the fixed action button is not clickable: %v", err)
 	}
 	settle(t, m, q, tt)
-	if m.displayPage() != pageResults || m.activeSlot != resultSlotHistory || m.historySlot.recordID != "r01" {
-		t.Fatalf("opening from the fixed column = page %v, slot %v, record %q",
-			m.displayPage(), m.activeSlot, m.historySlot.recordID)
+	if m.displayPage() != pageResults || m.rec == nil || m.rec.ID != "r01" ||
+		m.rec.Live {
+		t.Fatalf("opening from the fixed column = page %v, record %+v",
+			m.displayPage(), m.rec)
 	}
 	if err := tt.Click("‹ 全部记录"); err != nil {
 		t.Fatalf("click the workspace back action: %v", err)
@@ -427,8 +428,9 @@ func TestHistoryOpenAndReturn(t *testing.T) {
 	}
 	tt.Key(0, ui.KeyEnter)
 	settle(t, m, q, tt)
-	if m.displayPage() != pageResults || m.activeSlot != resultSlotHistory || m.historySlot.recordID != "r02" {
-		t.Fatalf("Enter opened page %v, slot %v, record %q", m.displayPage(), m.activeSlot, m.historySlot.recordID)
+	if m.displayPage() != pageResults || m.rec == nil || m.rec.ID != "r02" ||
+		m.rec.Live {
+		t.Fatalf("Enter opened page %v, record %+v", m.displayPage(), m.rec)
 	}
 
 	if err := tt.Click("‹ 全部记录"); err != nil {
@@ -443,9 +445,10 @@ func TestHistoryOpenAndReturn(t *testing.T) {
 	}
 }
 
-// TestHistoryCurrentRowOpensLiveSession checks that the 本次 row opens the
-// session slot and never creates a second history slot.
-func TestHistoryCurrentRowOpensLiveSession(t *testing.T) {
+// TestHistoryCurrentRowOpensLiveRecord checks that the 本次 row opens the
+// current session's live record in the one record workspace, with no
+// second editable copy.
+func TestHistoryCurrentRowOpensLiveRecord(t *testing.T) {
 	svc := &fakeService{
 		history: historyTableRecords(3),
 		loads: map[string]*record.Recovery{
@@ -470,11 +473,8 @@ func TestHistoryCurrentRowOpensLiveSession(t *testing.T) {
 	if m.displayPage() != pageResults {
 		t.Fatalf("the current row opened page %v, want results", m.displayPage())
 	}
-	if m.activeSlot != resultSlotSession {
-		t.Fatalf("the current row opened slot %v, want session", m.activeSlot)
-	}
-	if m.historySlot.recordID != "" {
-		t.Fatalf("the current row created a history slot for %q", m.historySlot.recordID)
+	if m.rec == nil || m.rec.ID != "r01" || !m.rec.Live {
+		t.Fatalf("the current row opened %+v, want the live record", m.rec)
 	}
 }
 

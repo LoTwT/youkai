@@ -67,7 +67,7 @@ func openResponsiveResults(t *testing.T, rec *record.Recovery, width, height int
 	m.SetContentSize(width, height)
 	tt := ui.NewTester(m.View, width, height)
 	settle(t, m, q, tt)
-	m.histChoice = slotHistoryLabel(t, m, "rec")
+	m.histChoice = historyLabel(t, m, "rec")
 	m.OpenHistory()
 	settle(t, m, q, tt)
 	showRecordItems(m)
@@ -93,7 +93,7 @@ func openReviewableResults(t *testing.T, rec *record.Recovery, width, height int
 	m.SetContentSize(width, height)
 	tt := ui.NewTester(m.View, width, height)
 	settle(t, m, q, tt)
-	m.histChoice = slotHistoryLabel(t, m, "rec")
+	m.histChoice = historyLabel(t, m, "rec")
 	m.OpenHistory()
 	settle(t, m, q, tt)
 	showRecordItems(m)
@@ -354,9 +354,11 @@ func TestResultsSearchSetAndSlotFilters(t *testing.T) {
 	}
 }
 
-// TestResultsFilterRestoresPerSlot checks that each result destination
-// keeps its own segment and narrowing values when the other is reopened.
-func TestResultsFilterRestoresPerSlot(t *testing.T) {
+// TestResultsFilterStateBelongsToTheOpenRecord checks that the browser
+// state is the open record's own: opening another record starts with the
+// pending segment and no narrowing values, while reopening the record
+// already on screen keeps them.
+func TestResultsFilterStateBelongsToTheOpenRecord(t *testing.T) {
 	svc := &fakeService{
 		list: []record.RecordInfo{{
 			ID: "old", LatestRevision: 1,
@@ -377,26 +379,33 @@ func TestResultsFilterRestoresPerSlot(t *testing.T) {
 	m.slotFilter = "2"
 	m.selected = 1
 	m.selectedSequence = 2
-	m.histChoice = slotHistoryLabel(t, m, "old")
+	m.histChoice = historyLabel(t, m, "old")
 	m.OpenHistory()
 	settle(t, m, q, tt)
 	showRecordItems(m)
 	tt.Frame()
 
-	m.filter = resultFilterUnexportable
+	if m.rec == nil || m.rec.ID != "old" || m.rec.Live {
+		t.Fatalf("the chosen history record did not open: %+v", m.rec)
+	}
+	if m.filter != resultFilterPending || m.search != "" || m.setFilter != "" || m.slotFilter != "" {
+		t.Fatalf("the new record kept the previous record's filters: filter %v search %q set %q slot %q",
+			m.filter, m.search, m.setFilter, m.slotFilter)
+	}
+
+	m.filter = resultFilterAll
 	m.search = ""
 	m.setFilter = ""
 	m.slotFilter = ""
-	m.selected = 3
-	m.selectedSequence = 4
-	m.ShowLive()
+	m.selected = 1
+	m.selectedSequence = m.rec.Rows[1].Seq
+	m.OpenHistory() // reopen the record already on screen
 	settle(t, m, q, tt)
-	if m.filter != resultFilterAll || m.search != "2 号位" || m.setFilter != "31200" || m.slotFilter != "2" {
-		t.Fatalf("the session filters were not restored: filter %v search %q set %q slot %q",
-			m.filter, m.search, m.setFilter, m.slotFilter)
+	if m.filter != resultFilterAll {
+		t.Fatalf("reopening the open record reset its segment: filter %v", m.filter)
 	}
-	if m.selectedSeq() != 2 {
-		t.Fatalf("the session selection is seq %d, want 2", m.selectedSeq())
+	if m.selectedSeq() != m.rec.Rows[1].Seq {
+		t.Fatalf("the reopen moved the selection to seq %d", m.selectedSeq())
 	}
 }
 
