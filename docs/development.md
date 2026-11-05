@@ -142,6 +142,25 @@ go build -o winprobe.exe ./tools/winprobe
 - 日志打不开（如目录不可写）不阻止启动：stderr 照常输出并提示一次原因；运行中文件写入失败同样只退回 stderr 镜像（降级逻辑在 `internal/app`，Windows 上备份文件被杀毒或备份软件占用时轮转重试而不丢行，每轮失败只提示一次）。
 - `YOUKAI_SELFTEST` 自检在路径解析之前运行，仍只写 stderr（安装布局验证按[打包与安装包](#打包与安装包)的重定向方式读取）。
 
+### 复制诊断信息的内容清单
+
+“复制诊断信息”的文本由 `internal/app` 的 `DiagnosticsText` 组装，故障结束摘要、设置 › 诊断和退出失败三处共用（出现位置见 [09 §4.6](design/uiux-2026-11/09-window-and-interaction.md#46-诊断信息的折叠)）。文本固定包含以下各项，缺值时写明“未知”或“无”，不省略字段：
+
+| 项 | 内容 |
+| --- | --- |
+| 版本 | youkai 版本；构建带 VCS 戳记时附 12 位提交号（与每次运行首行日志同源，见上节） |
+| 系统 | 操作系统名称与版本：Windows 的版本号（如 `10.0.22631`），macOS 的产品版本（如 `14.6`） |
+| 显示 | 主显示器的像素分辨率与有效缩放（如 `3840×2160（缩放 125%）`） |
+| 最近一次扫描 | 结束类型：`completed`、`cancelled`、`failed`、`interrupted`；没有扫描写“无”，仍在进行写“进行中” |
+| 故障码 | 首个触发的原始码（如 `windowOccluded`），供反馈时对照日志；正常结束写“无” |
+| 首个触发 | 触发者（`user` / `fault`）、阶段（`preparing` / `capturing` / `finalizing`）与发生时间；没有触发时写“无” |
+
+隐私边界：文本**不含**外部窗口标题、首个触发的 message 与结构化参数、用户名与用户目录路径。平台或调用方即使传入这些值，组装时也只取上表列出的字段；版本、系统与故障码还会再做脱敏和形状校验（非标识符形状的故障码写作 `unknown`）。
+
+最近一次扫描从服务快照或已保存记录取得时，分别用 `DiagnosticsScanFromSnapshot` / `DiagnosticsScanFromTermination`，避免把 completed 记录的 `verifiedEnd` 或 interrupted 的结算码当成故障码。
+
+“打开诊断目录”不复用这段文本中的路径，而是使用 `Paths.Logs`（`internal/app.DiagnosticsDirectory`）：即本节表格里的日志目录，包含 `youkai.log`、轮转备份与 `diagnostics/`。复制文本不写该目录路径，避免带出用户名；日志格式与轮转规则不因复制功能改变。
+
 ### 扫描耗时诊断
 
 日志时间戳使用微秒级格式（`log.LstdFlags|log.Lmicroseconds`），便于与行内毫秒耗时对照。遍历与保存新增的计时字段都只用于观测，不改变导航、阈值或等待时长：
