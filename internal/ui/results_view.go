@@ -99,7 +99,6 @@ func (m *Model) resultsArea(c *ui.Context, t *ui.Theme) {
 				return
 			}
 		}
-		m.resultsHeader(c, t)
 		m.sessionTerminationArea(c, t)
 		m.savePromptArea(c, t)
 		if m.histErr != "" {
@@ -149,38 +148,6 @@ func (m *Model) resultsArea(c *ui.Context, t *ui.Theme) {
 			func() { m.tablePane(c) },
 			func() { m.detailPane(c) },
 		).Grow(1).MinHeight(0)
-	})
-}
-
-// resultsHeader is the results destination's title, review summary and
-// page actions. A narrow detail page replaces it with its own header.
-func (m *Model) resultsHeader(c *ui.Context, t *ui.Theme) {
-	ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, m.resultsTitle()).FontWeight(600)
-		if m.rec != nil && len(m.rec.Rows) > 0 {
-			ui.Text(c, m.pendingText()).TextColor(t.TextMuted)
-		}
-		if m.rec != nil && m.rec.ID != string(m.appliedSession) && m.appliedSession != "" && m.exitState != exitRunning {
-			if ui.Button(c, "查看本次扫描").Clicked() {
-				m.ShowLive()
-			}
-		}
-		ui.Box(c).Grow(1)
-		if m.activeSlot == resultSlotHistory {
-			// A history snapshot returns to the list; the new-scan
-			// action belongs to the scan destination.
-			if ui.Button(c, "← 返回历史").Clicked() {
-				m.navigatePage(pageHistory)
-			}
-			return
-		}
-		action := "+ 准备新扫描"
-		if m.snap.Busy || m.startReqID != "" {
-			action = "返回扫描中"
-		}
-		if ui.Button(c, action).Clicked() {
-			m.page = pageScan
-		}
 	})
 }
 

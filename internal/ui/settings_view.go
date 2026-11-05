@@ -1,8 +1,6 @@
 package ui
 
 import (
-	"runtime"
-
 	"github.com/LoTwT/youkai/internal/app"
 	"github.com/egoist/mygo/ui"
 )
@@ -117,26 +115,22 @@ func (m *Model) settingsShortcutsCard(c *ui.Context, t *ui.Theme, tok *Tokens) {
 }
 
 // settingsShortcutRows lists the registered keys in the design's order.
-// The global stop key follows the platform binding the entry point
+// The global stop key follows the Windows binding the entry point
 // registers for a scan session; every other row is a key the page shell
-// itself handles.
+// itself handles. The labels come from shortcut_text.go, so the interface
+// shows one notation everywhere.
 func settingsShortcutRows() []settingsShortcut {
 	return []settingsShortcut{
-		{action: "开始扫描", context: "扫描准备", keys: "⌘R"},
-		{action: "停止扫描", context: "扫描中 · 全局", keys: stopHotkeyLabel()},
-		{action: "确认并下一项", context: "结果与校对", keys: "⌘↵"},
-		{action: "下一个待校对", context: "结果与校对", keys: "⌘J"},
-		{action: "保存修改", context: "编辑中", keys: "⌘S"},
-		{action: "打开记录", context: "历史", keys: "↵"},
-		{action: "关闭浮层/返回表格", context: "任意", keys: "Esc"},
+		{action: "开始扫描", context: "扫描准备", keys: shortcutStartScan},
+		{action: "停止扫描", context: "扫描中 · 全局", keys: shortcutStopScan},
+		{action: "确认并下一项", context: "记录 · 逐件", keys: shortcutConfirmNext},
+		{action: "下一个待校对", context: "记录 · 逐件", keys: shortcutNextPending},
+		{action: "保存修改", context: "编辑中", keys: shortcutSave},
+		{action: "导出…", context: "记录工作区", keys: shortcutExport},
+		{action: "在大区域间跳转", context: "任意", keys: shortcutFocusRegion},
+		{action: "打开记录", context: "全部记录", keys: shortcutOpenRecord},
+		{action: "关闭浮层/返回表格", context: "任意", keys: shortcutCloseOverlay},
 	}
-}
-
-func stopHotkeyLabel() string {
-	if runtime.GOOS == "windows" {
-		return "Ctrl+Alt+Shift+S"
-	}
-	return "⌃⌥⌘S"
 }
 
 // settingsDangerZone is the full-width destructive group. The 3-DIP red
@@ -165,7 +159,7 @@ func (m *Model) settingsDangerZone(c *ui.Context, t *ui.Theme, tok *Tokens) {
 func (m *Model) closeBehaviorArea(c *ui.Context, t *ui.Theme) {
 	exitOnClose := m.CloseBehavior() == app.CloseBehaviorExit
 	ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
-		ui.Checkbox(c, &exitOnClose, "关闭窗口时停止扫描并退出应用")
+		ui.Checkbox(c, &exitOnClose, "关闭窗口时停止扫描并退出应用").Bind(&m.settingsFirstRef)
 		if exitOnClose != (m.CloseBehavior() == app.CloseBehaviorExit) {
 			behavior := app.CloseBehaviorHide
 			if exitOnClose {

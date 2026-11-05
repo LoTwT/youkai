@@ -5,19 +5,52 @@ import "github.com/egoist/mygo/ui"
 // registerPageShortcuts wires the keys the page shell owns across
 // destinations. Escape keeps the design's order: MyGo's overlays (menus,
 // Select popovers) take it first, then a held navigation is cancelled, then
-// the focus returns to the page's table. ⌘R exists only while the scan
-// prepare page can actually start a scan; it is not a global key.
+// the focus returns to the page's table. Ctrl+R exists only while the scan
+// prepare page can actually start a scan; it is not a global key. Ctrl+E
+// reveals the record's export entry, and F6 / Shift+F6 move between the
+// rail and the page's content region (PR-14b extends F6 to the review
+// view's item list, screenshots and form).
 func (m *Model) registerPageShortcuts(c *ui.Context) {
 	c.OnShortcut(0, ui.KeyEscape, func() { m.handleEscapeShortcut(c) })
 	if m.scanStartReady() {
 		c.OnShortcut(ui.Cmd, ui.KeyR, func() { m.requestScanStart() })
 	}
+	if m.displayPage() == pageResults {
+		c.OnShortcut(ui.Cmd, ui.KeyE, func() { m.revealExports() })
+	}
+	c.OnShortcut(0, ui.KeyF6, func() { m.focusPageContent(c) })
+	c.OnShortcut(ui.Shift, ui.KeyF6, func() { m.focusNavRail(c) })
+}
+
+// focusPageContent is the F6 skeleton: it moves the keyboard into the
+// current page's main region. The review view's regions (item list,
+// screenshots, form) replace this single step in PR-14b.
+func (m *Model) focusPageContent(c *ui.Context) {
+	switch m.displayPage() {
+	case pageResults:
+		if m.recordTab == recordTabItems && !(m.narrowResults() && m.resultsDetail) {
+			m.list.Focus(c)
+			return
+		}
+		m.workspaceTabsRef.Focus(c)
+	case pageHistory:
+		m.historyList.Focus(c)
+	case pageScan:
+		m.scanActionRef.Focus(c)
+	case pageSettings:
+		m.settingsFirstRef.Focus(c)
+	}
+}
+
+// focusNavRail returns the keyboard to the rail's active destination.
+func (m *Model) focusNavRail(c *ui.Context) {
+	m.railActiveRef.Focus(c)
 }
 
 // scanStartReady reports whether the prepare page may start a scan now:
 // the prepare destination is showing, the start guards pass, and no review
-// save or export is in flight. The start button, ⌘R and the status bar all
-// use this answer, so they cannot disagree.
+// save or export is in flight. The start button, Ctrl+R and the status bar
+// all use this answer, so they cannot disagree.
 func (m *Model) scanStartReady() bool {
 	return m.displayPage() == pageScan && m.canStart() && !m.reviewSaving && !m.exportBusy()
 }

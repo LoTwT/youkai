@@ -64,6 +64,11 @@ func main() {
 	mygo.App.SetPath(mygo.PathUserData, paths.Data)
 	mygo.App.SetPath(mygo.PathCache, paths.Cache)
 	mygo.App.SetPath(mygo.PathLogs, paths.Logs)
+	// The first release targets Windows only and its interface is
+	// Simplified Chinese (C-29, R-15): MyGo's built-in controls (search
+	// fields, date pickers, dialogs) use zh-Hans instead of following the
+	// system language.
+	mygo.App.SetLanguages("zh-Hans")
 	log.Printf("youkai: data=%q cache=%q logs=%q resources=%q",
 		paths.Data, paths.Cache, paths.Logs, paths.Resources)
 
@@ -301,13 +306,17 @@ func main() {
 	})
 
 	mygo.App.WhenReady(func() {
+		placement := windowPlacementFor(mygo.Screen.PrimaryDisplay().WorkArea)
 		win := mygo.NewWindow(mygo.WindowOptions{
 			Title:     "Youkai",
-			Width:     1020,
-			Height:    700,
-			MinWidth:  860,
-			MinHeight: 560,
-			Content:   mgui.View(model.View),
+			Width:     placement.Width,
+			Height:    placement.Height,
+			MinWidth:  placement.MinWidth,
+			MinHeight: placement.MinHeight,
+			// Restore the last position, size and maximized state from the
+			// previous run (R-12).
+			StateKey: windowStateKey,
+			Content:  mgui.View(model.View),
 		})
 		win.OnClose(func(e *mygo.CloseEvent) {
 			life.OnWindowClose(e)

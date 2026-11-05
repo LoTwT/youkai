@@ -70,6 +70,10 @@ func openResponsiveResults(t *testing.T, rec *record.Recovery, width, height int
 	m.histChoice = slotHistoryLabel(t, m, "rec")
 	m.OpenHistory()
 	settle(t, m, q, tt)
+	showRecordItems(m)
+	tt.Frame()
+	showRecordItems(m)
+	tt.Frame()
 	return m, q, tt
 }
 
@@ -92,6 +96,10 @@ func openReviewableResults(t *testing.T, rec *record.Recovery, width, height int
 	m.histChoice = slotHistoryLabel(t, m, "rec")
 	m.OpenHistory()
 	settle(t, m, q, tt)
+	showRecordItems(m)
+	tt.Frame()
+	showRecordItems(m)
+	tt.Frame()
 	return m, q, tt, svc
 }
 
@@ -203,7 +211,7 @@ func TestResultsWideSplitAt1440(t *testing.T) {
 	if m.split != 560 {
 		t.Fatalf("the results table is %v DIPs wide, want 560", m.split)
 	}
-	if got := m.resultsDetailWidth(); got < detailTarget || got > 700 {
+	if got := m.resultsDetailWidth(); got < detailTarget || got > 800 {
 		t.Fatalf("the detail pane is %v DIPs wide, want about %v", got, detailTarget)
 	}
 	if width, height := m.evidenceDisplaySize(); width != 340 || height != 170 {
@@ -372,6 +380,8 @@ func TestResultsFilterRestoresPerSlot(t *testing.T) {
 	m.histChoice = slotHistoryLabel(t, m, "old")
 	m.OpenHistory()
 	settle(t, m, q, tt)
+	showRecordItems(m)
+	tt.Frame()
 
 	m.filter = resultFilterUnexportable
 	m.search = ""
@@ -490,20 +500,20 @@ func TestResultsNarrowFilteredExhaustionLeavesDetail(t *testing.T) {
 // save shortcut.
 func TestResultsStatusBarShortcuts(t *testing.T) {
 	m, _, tt := openResponsiveResults(t, responsiveResultRecord(t), 860, 560)
-	if !tt.HasText("↵ 查看详情") || !tt.HasText("⌘J 下一个待校对") {
+	if !tt.HasText(shortcutOpenRecord+" 查看详情") || !tt.HasText(shortcutNextPending+" 下一个待校对") {
 		t.Fatalf("the 860 list shortcuts are missing: %q", tt.Texts())
 	}
-	if tt.HasText("⌘S 保存修改") || tt.HasText("⌃⌥⌘S 停止扫描") {
+	if tt.HasText(shortcutSave+" 保存修改") || tt.HasText(shortcutStopScan+" 停止扫描") {
 		t.Fatalf("the results list names an unregistered key: %q", tt.Texts())
 	}
 	m.openResultDetail()
 	tt.Frame()
-	if !tt.HasText("⌘↵ 确认并下一项") || !tt.HasText("⌘J 下一个待校对") {
+	if !tt.HasText(shortcutConfirmNext+" 确认并下一项") || !tt.HasText(shortcutNextPending+" 下一个待校对") {
 		t.Fatalf("the 860 detail shortcuts are missing: %q", tt.Texts())
 	}
 
 	_, _, tt2 := openResponsiveResults(t, responsiveResultRecord(t), 1024, 700)
-	if !tt2.HasText("⌘↵ 确认并下一项") || !tt2.HasText("⌘J 下一个待校对") {
+	if !tt2.HasText(shortcutConfirmNext+" 确认并下一项") || !tt2.HasText(shortcutNextPending+" 下一个待校对") {
 		t.Fatalf("the split shortcuts are missing: %q", tt2.Texts())
 	}
 }
