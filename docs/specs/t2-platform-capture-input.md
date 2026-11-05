@@ -158,7 +158,7 @@ Mac 的显示配置随后续版本确定：先在现有设备上检查客户端�
    - **画面兜底：**在前台条件成立、锁定基线之前截一帧。每条边从边缘向内检查「已标定纯黑余量」内的所有行/列：只要其中有一行/列不是整条纯黑即通过。1920×1080 原生帧的顶部实测有约 22 px 游戏自带黑边（2026-11-01），因此开放档位配置 24 px 顶部余量（2 px 富余），左/右/底余量为 0；余量内出现全黑行/列说明屏幕外区域被 GDI 截成纯黑。可选的内容探针区域也要求至少一个非黑像素；参考夹具是掩码图，尚无未掩码的底部按钮栏实测样本，因此当前不配置这一可选探针，只有四边检查生效，开放新档位前应补测。
 3. **基线锁定后：**预检不再重复遮挡/全屏/画面兜底；采集中一旦几何变化按既有 Broken 规则停止，输入前仍逐次做落点命中检查。
 
-**故障码、参数与中文提示约定：**平台和采集层只返回稳定故障码与结构化参数（`Fault.Params` / `scan.Trigger.Params` / 记录的 `SessionShell.FailureParams`），不在底层拼接中文句子；界面在 [`internal/ui/session_status.go`](../../internal/ui/session_status.go) 的故障码映射表（`failureText`）统一生成“原因 + 怎么做 + 出口”，逐字文案只在该表维护。下表的“中文提示（摘要）”只规定处理方法和必须保留的事实，不构成第二份逐字文案。参数至少保留当前尺寸、期望档位、显示器与工作区、命中的窗口（句柄/类名/进程名）以及双方完整性级别；外部窗口标题不作为参数持久化。未识别的码仍显示诊断码，不能因此改写结束类型。
+**故障码、参数与中文提示约定：**平台和采集层只返回稳定故障码与结构化参数（`Fault.Params` / `scan.Trigger.Params` / 记录的 `SessionShell.FailureParams`），不在底层拼接中文句子；界面在 [`internal/ui/session_status.go`](../../internal/ui/session_status.go) 的故障码映射表（`faultGuidanceTable`）统一生成“原因 + 怎么做 + 出口”，逐字文案只在该表维护。下表的“中文提示（摘要）”只规定处理方法和必须保留的事实，不构成第二份逐字文案。参数至少保留当前尺寸、期望档位、显示器与工作区、命中的窗口（句柄/类名/进程名）以及双方完整性级别；外部窗口标题不作为参数持久化。未识别的码仍显示诊断码，不能因此改写结束类型。
 
 | 故障码 | 阶段/类别 | 关键参数 | 中文提示（摘要） |
 | --- | --- | --- | --- |
@@ -167,7 +167,7 @@ Mac 的显示配置随后续版本确定：先在现有设备上检查客户端�
 | `windowOutsideWorkArea` | 切换焦点前 / Setup | `client`、`monitor`、`workArea`、`allowed` | 窗口超出屏幕或被任务栏遮挡，请切换到 `allowed` 中的窗口模式并把窗口完整放在屏幕内。 |
 | `dpiAwarenessMismatch` | 切换焦点前 / Setup | — | youkai 自身不是每显示器 DPI 感知 v2；用户无法自行修复，界面说明这是 youkai 自身的问题并给出“复制诊断信息”，不引导修改系统缩放。 |
 | `dpiVirtualized` | 切换焦点前 / Setup | — | 游戏窗口被 DPI 虚拟化；请在游戏程序的兼容性设置中关闭“替代高 DPI 缩放行为”，重新打开游戏后重试，仍不通过时复制诊断信息。 |
-| `dpiCheckUnavailable` | 切换焦点前 / Setup | — | DPI 事实无法读取，按拒绝处理；请重新打开 youkai 后重试，仍无法读取时复制诊断信息。 |
+| `dpiCheckUnavailable` | 切换焦点前 / Setup | — | DPI 事实无法读取，按拒绝处理；请重新打开游戏和 youkai 后重试，仍无法读取时复制诊断信息。 |
 | `integrityMismatch` | 切换焦点前 / Setup | `target`、`self` | 游戏正在以管理员身份运行，youkai 需要同样的权限；请右键 youkai 选择“以管理员身份运行”后重新打开。另说明只发送鼠标操作、不加载驱动、不注入、不读内存。 |
 | `integrityUnverifiable` | 切换焦点前 / Setup | `target`、`self`、`detail` | 无法读取双方权限级别，出于安全考虑不能开始；请以管理员身份运行 youkai 后重试。同样说明只发送鼠标操作、不加载驱动、不注入、不读内存；级别以中文显示。 |
 | `windowOccluded` | 切回游戏后 / Premise | `probe`、`point`、`hit`、`hitClass`、`hitProcess`、`target` | 游戏窗口被其他窗口遮挡（写出检查点、窗口类或进程名），请关闭遮挡窗口后重新开始。外部窗口标题可能含隐私，不写入参数、日志或记录。 |
@@ -178,7 +178,9 @@ Mac 的显示配置随后续版本确定：先在现有设备上检查客户端�
 | `frameConfigMismatch` | 采集预检 / Broken | `client`、`image`、`content`、`expectedImage`、`expectedContent`、`allowed` | 游戏画面尺寸与已标定配置不一致；macOS 云客户端请把窗口调整为 1164×762，Windows 本地客户端请恢复到 `allowed` 中的窗口模式。 |
 | `anchorsMissing` | 采集预检 / 采集层 | 布局诊断 | 游戏画面与当前客户端布局不匹配，请确认分辨率与窗口尺寸后重新开始。 |
 
-**DPI 检查的处理方法（S3 待定行）：**`dpiAwarenessMismatch` 是 youkai 自身的配置问题，用户无法自行修复；界面只说明这一点并给出“复制诊断信息”，不引导用户修改系统缩放。`dpiVirtualized` 的处理方法是关闭游戏程序的“替代高 DPI 缩放行为”后重新打开游戏重试；`dpiCheckUnavailable` 的处理方法是重新打开 youkai 后重试。两者仍失败时都复制诊断信息；无法判定时按拒绝处理，不能开始。平台不按 DPI 数缩放整张图绕过（见 2.1）。
+**DPI 检查的处理方法：**`dpiAwarenessMismatch` 是 youkai 自身的配置问题，用户无法自行修复；界面只说明这一点并给出“复制诊断信息”，不引导用户修改系统缩放。`dpiVirtualized` 的处理方法是关闭游戏程序的“替代高 DPI 缩放行为”后重新打开游戏重试；`dpiCheckUnavailable` 的处理方法是重新打开游戏和 youkai 后重试。两者仍失败时都复制诊断信息；无法判定时按拒绝处理，不能开始。平台不按 DPI 数缩放整张图绕过（见 2.1）。
+
+**DPI 码的当前映射：**适配器仍把 `dpiAwarenessMismatch` 映射为 `permissionMissing`，把 `dpiVirtualized`、`dpiCheckUnavailable` 映射为 `geometryInvalid`（`internal/platform/winadapter.go` 的 `mapWinFault`）；计划在只读准备检查（PR-11）中改为透传，届时这三行才在界面上可达。
 
 **macOS 云客户端（后续版本，沿用已验收 1164×762）：**目标解析先按 bundle、layer 0、onScreen、最小尺寸和“完整落在一块显示器内”过滤。若同 bundle 存在满足其他条件、只是跨屏或超出所有显示器的正常窗口，报 `targetOffscreen`，而不是笼统的 `targetNotFound`；确实没有可解析窗口仍报 `targetNotFound`。窗口点尺寸不是 1164×762 时在启动采集流之前报 `windowSizeUnsupported`；采集流已启动但帧尺寸或内容区与 `MacCloudLayout()` 不一致时报 `frameConfigMismatch`。三者的中文提示见上表。macOS 的窗口常量、布局和阈值不变。
 

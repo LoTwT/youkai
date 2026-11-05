@@ -1026,7 +1026,7 @@ func TestCompletionCardNamesIncompletePositions(t *testing.T) {
 	rec.Checkpoint.Session.Coverage = record.Coverage{Status: record.CoveragePartial}
 	rec.Checkpoint.Session.ObservedScope = []byte(`{"kind":"zzzInventory","sort":"verified","coverage":"partial","positions":[{"position":1,"complete":true,"topVerified":true,"bottomVerified":true},{"position":2,"complete":false,"stage":"filter","reasonCode":"navigationMismatch","reason":"the filter panel never closed"}]}`)
 	_, _, tt := openResponsiveResults(t, rec, 1024, 700)
-	if !tt.HasText("不完整位置：位置 2 筛选准备失败：点击或拖拽后页面没有按预期变化") {
+	if !tt.HasText("不完整位置：2 号位 筛选准备失败：点击或拖拽后页面没有按预期变化") {
 		t.Fatalf("the degraded position is not explained: %q", tt.Texts())
 	}
 	if tt.HasText("navigationMismatch") || tt.HasText("the filter panel never closed") {
@@ -1045,7 +1045,7 @@ func TestSessionTerminationNoticeNamesIncompletePositions(t *testing.T) {
 	}
 	rec.Checkpoint.Session.ObservedScope = []byte(`{"positions":[{"position":1,"complete":false,"stage":"filter","reasonCode":"navigationMismatch","reason":"three preparations failed"}]}`)
 	_, _, tt := openResponsiveResults(t, rec, 1024, 700)
-	if !tt.HasText("扫描失败：多个号位没有完成") || !tt.HasText("不完整位置：位置 1 筛选准备失败：点击或拖拽后页面没有按预期变化") {
+	if !tt.HasText("扫描失败：多个号位没有完成") || !tt.HasText("不完整位置：1 号位 筛选准备失败：点击或拖拽后页面没有按预期变化") {
 		t.Fatalf("the failed-session surface omits the degraded positions: %q", tt.Texts())
 	}
 }

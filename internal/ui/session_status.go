@@ -55,7 +55,7 @@ func incompletePositionsText(observed json.RawMessage) string {
 		default:
 			detail += "：" + cause
 		}
-		parts = append(parts, fmt.Sprintf("位置 %d %s", p.Position, detail))
+		parts = append(parts, fmt.Sprintf("%d 号位 %s", p.Position, detail))
 	}
 	if len(parts) == 0 {
 		return ""
@@ -79,7 +79,7 @@ func positionStageText(stage string) string {
 	case "bottom":
 		return "底部确认失败"
 	default:
-		return "位置未完成"
+		return "未完成"
 	}
 }
 
@@ -163,18 +163,19 @@ func staticGuidance(cause, action string, exit faultExit, diagnostics bool) func
 }
 
 // faultGuidanceTable maps every diagnostic code the platform, collector
-// and kernel can report to its cause, action and exit. It is the single
-// source of user-facing fault text; the preparation checklist, summary,
-// notification and diagnostics surfaces all read it. Coverage is enforced
-// by TestFaultGuidanceCoversEveryCode, including new constants in the
+// and kernel can report to its cause, action and exit. It is the intended
+// single source of user-facing fault text, shared by the preparation
+// checklist, summary, notification and diagnostics surfaces; only the
+// cause and action fields are rendered today. Coverage is enforced by
+// TestFaultGuidanceCoversEveryCode, including new constants in the
 // platform packages.
 var faultGuidanceTable = map[string]func(faultFacts) faultGuidance{
 	// Platform setup faults.
 
 	"permissionMissing": staticGuidance(
-		"youkai 缺少操作游戏所需的系统权限",
-		"请在系统设置中允许 youkai 所需的权限，然后重新打开 youkai。",
-		faultExitSystemSettings, true),
+		"youkai 缺少运行所需的系统能力",
+		"这通常是 youkai 自身的显示缩放支持不完整，请复制诊断信息反馈。",
+		faultExitDiagnostics, true),
 	"hotkeyUnavailable": staticGuidance(
 		"停止热键已被其他程序占用",
 		"请关闭占用该热键的程序后重试。",
@@ -189,7 +190,7 @@ var faultGuidanceTable = map[string]func(faultFacts) faultGuidance{
 		faultExitSystemSettings, false),
 	"unsupportedPlatform": staticGuidance(
 		"当前系统不支持扫描",
-		"首版只支持 Windows 本地客户端。",
+		"当前版本只支持 Windows 本地客户端。",
 		faultExitDiagnostics, true),
 	"targetOffscreen": staticGuidance(
 		"游戏窗口跨屏或超出了屏幕范围",
@@ -286,11 +287,11 @@ var faultGuidanceTable = map[string]func(faultFacts) faultGuidance{
 		faultExitDiagnostics, true),
 	"dpiVirtualized": staticGuidance(
 		"游戏窗口的显示缩放与显示器不一致",
-		"请关闭游戏程序的“替代高 DPI 缩放行为”，重新打开游戏后再试；仍不通过时复制诊断信息。",
+		"请右键游戏程序 › 属性 › 兼容性 › 更改高 DPI 设置，关闭“替代高 DPI 缩放行为”，重新打开游戏后再试；仍不通过时复制诊断信息。",
 		faultExitDisplayScale, true),
 	"dpiCheckUnavailable": staticGuidance(
 		"无法读取游戏窗口或显示器的显示缩放",
-		"请重新打开 youkai 后再试；仍无法读取时复制诊断信息。",
+		"请重新打开游戏和 youkai 后再试；仍无法读取时复制诊断信息。",
 		faultExitDisplayScale, true),
 	"geometryUnavailable": staticGuidance(
 		"无法稳定测量游戏窗口的位置和大小",
@@ -363,7 +364,7 @@ var faultGuidanceTable = map[string]func(faultFacts) faultGuidance{
 		faultExitSystemSettings, false),
 	"inputBlocked": staticGuidance(
 		"系统拦截了 youkai 的鼠标操作",
-		"请以管理员身份运行 youkai 后重新开始扫描。",
+		"请先从托盘退出 youkai，再右键 youkai 选择“以管理员身份运行”重新打开，然后重新开始扫描。youkai 只向游戏发送鼠标操作，不加载驱动、不注入、不读取游戏内存。",
 		faultExitAdmin, false),
 	"inputFailed": staticGuidance(
 		"鼠标操作没有成功发送",
@@ -409,11 +410,11 @@ var faultGuidanceTable = map[string]func(faultFacts) faultGuidance{
 		"请重新开始扫描；反复出现时复制诊断信息。",
 		faultExitRestart, true),
 	"evidenceFailed": staticGuidance(
-		"采集到的画面没有保存为证据",
+		"采集到的截图没有保存成功",
 		"请重新开始扫描；反复出现时复制诊断信息。",
 		faultExitRestart, true),
 	"positionLost": staticGuidance(
-		"列表滚动后丢失了号位对应关系",
+		"列表滚动后无法确认滚到了哪里",
 		"请重新开始扫描；反复出现时复制诊断信息。",
 		faultExitRestart, true),
 	"positionFailureLimit": staticGuidance(

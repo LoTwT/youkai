@@ -221,6 +221,12 @@ func TestIntegrityLevelText(t *testing.T) {
 // leaking an English code to the user.
 func TestFaultGuidanceCoversEveryCode(t *testing.T) {
 	codes := map[string]string{"unknownEnd": "internal/app/deliverer.go"}
+	// Keep this list aligned with every package that can emit a terminal
+	// trigger or a position reason code; a new package stays invisible
+	// until it is added here. internal/app also writes codes as plain
+	// strings (unknownEnd in deliverer.go), so it needs an explicit entry
+	// instead of a source scan. internal/game/zzz/disc.go is deliberately
+	// absent: its Code* constants are per-item review codes, not faults.
 	for _, dir := range []string{
 		"../platform",
 		"../platform/windows",
@@ -345,13 +351,7 @@ func collectFaultCodeConstants(t *testing.T, dir string, out map[string]string) 
 // was undecided when the design was written. The wording is the contract
 // the checklist and diagnostics reuse.
 func TestFaultGuidanceDPIWording(t *testing.T) {
-	cases := []struct {
-		code       string
-		wantCause  string
-		wantAction string
-		wantExit   faultExit
-		diag       bool
-	}{
+	checkFaultGuidanceRows(t, []faultGuidanceCase{
 		{
 			code:       "dpiAwarenessMismatch",
 			wantCause:  "youkai 的显示缩放支持不完整",
@@ -362,18 +362,72 @@ func TestFaultGuidanceDPIWording(t *testing.T) {
 		{
 			code:       "dpiVirtualized",
 			wantCause:  "游戏窗口的显示缩放与显示器不一致",
-			wantAction: "请关闭游戏程序的“替代高 DPI 缩放行为”，重新打开游戏后再试；仍不通过时复制诊断信息。",
+			wantAction: "请右键游戏程序 › 属性 › 兼容性 › 更改高 DPI 设置，关闭“替代高 DPI 缩放行为”，重新打开游戏后再试；仍不通过时复制诊断信息。",
 			wantExit:   faultExitDisplayScale,
 			diag:       true,
 		},
 		{
 			code:       "dpiCheckUnavailable",
 			wantCause:  "无法读取游戏窗口或显示器的显示缩放",
-			wantAction: "请重新打开 youkai 后再试；仍无法读取时复制诊断信息。",
+			wantAction: "请重新打开游戏和 youkai 后再试；仍无法读取时复制诊断信息。",
 			wantExit:   faultExitDisplayScale,
 			diag:       true,
 		},
-	}
+	})
+}
+
+// TestFaultGuidanceRecoveryWording pins the rows whose recovery path is
+// easy to get wrong: the Windows capability check, UIPI blocking, a lost
+// scroll position, an unsaved screenshot, and the platform notice.
+func TestFaultGuidanceRecoveryWording(t *testing.T) {
+	checkFaultGuidanceRows(t, []faultGuidanceCase{
+		{
+			code:       "permissionMissing",
+			wantCause:  "youkai 缺少运行所需的系统能力",
+			wantAction: "这通常是 youkai 自身的显示缩放支持不完整，请复制诊断信息反馈。",
+			wantExit:   faultExitDiagnostics,
+			diag:       true,
+		},
+		{
+			code:       "inputBlocked",
+			wantCause:  "系统拦截了 youkai 的鼠标操作",
+			wantAction: "请先从托盘退出 youkai，再右键 youkai 选择“以管理员身份运行”重新打开，然后重新开始扫描。youkai 只向游戏发送鼠标操作，不加载驱动、不注入、不读取游戏内存。",
+			wantExit:   faultExitAdmin,
+		},
+		{
+			code:       "evidenceFailed",
+			wantCause:  "采集到的截图没有保存成功",
+			wantAction: "请重新开始扫描；反复出现时复制诊断信息。",
+			wantExit:   faultExitRestart,
+			diag:       true,
+		},
+		{
+			code:       "positionLost",
+			wantCause:  "列表滚动后无法确认滚到了哪里",
+			wantAction: "请重新开始扫描；反复出现时复制诊断信息。",
+			wantExit:   faultExitRestart,
+			diag:       true,
+		},
+		{
+			code:       "unsupportedPlatform",
+			wantCause:  "当前系统不支持扫描",
+			wantAction: "当前版本只支持 Windows 本地客户端。",
+			wantExit:   faultExitDiagnostics,
+			diag:       true,
+		},
+	})
+}
+
+type faultGuidanceCase struct {
+	code       string
+	wantCause  string
+	wantAction string
+	wantExit   faultExit
+	diag       bool
+}
+
+func checkFaultGuidanceRows(t *testing.T, cases []faultGuidanceCase) {
+	t.Helper()
 	for _, tc := range cases {
 		guidance, ok := faultGuidanceFor(tc.code, nil)
 		if !ok {
