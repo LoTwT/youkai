@@ -232,6 +232,33 @@ func TestViewElevatedGameSuggestsAdmin(t *testing.T) {
 	}
 }
 
+// M1′: an already-elevated youkai that still cannot read the game process
+// gets the generic diagnostic copy, not the administrator hint and not
+// "not found".
+func TestViewUnreadableGameShowsGenericCopy(t *testing.T) {
+	svc := &fakeService{targetsUnreadable: 1}
+	m, q := newTestModel(t, Config{Service: svc, ScanSource: targetSource()})
+	tt := ui.NewTester(m.View, 1020, 700)
+	settle(t, m, q, tt)
+
+	if !tt.HasText(targetUnreadableText) {
+		t.Fatalf("the unreadable-game copy does not show: %q", tt.Texts())
+	}
+	if tt.HasText(targetElevatedText) {
+		t.Fatalf("an elevated youkai was told to run as administrator: %q", tt.Texts())
+	}
+	if tt.HasText(targetNotFoundText) {
+		t.Fatalf("an unreadable game window was reported as not found: %q", tt.Texts())
+	}
+	if err := tt.Click("开始扫描"); err != nil {
+		t.Fatal(err)
+	}
+	drainAll(t, m, q)
+	if len(svc.starts) != 0 {
+		t.Fatalf("the disabled start issued a request: %+v", svc.starts)
+	}
+}
+
 // A readable candidate wins over the access-denied count: the list is
 // shown, not the elevated hint.
 func TestViewReadableCandidateWinsOverAccessDenied(t *testing.T) {

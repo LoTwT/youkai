@@ -117,7 +117,10 @@ func (f *fakeWindows) Title(hwnd HWND) (string, error) {
 type fakeProc struct {
 	path    string
 	started time.Time
-	err     error
+	// imageName is the name a process snapshot would report; it stays
+	// readable when err models a denied OpenProcess.
+	imageName string
+	err       error
 }
 
 // fakeProcesses implements ProcessAPI over a PID table.
@@ -139,6 +142,17 @@ func (f *fakeProcesses) Query(pid ProcessID) (string, time.Time, error) {
 		return "", time.Time{}, err
 	}
 	return p.path, p.started, nil
+}
+
+func (f *fakeProcesses) ImageName(pid ProcessID) (string, error) {
+	p, ok := f.byPID[pid]
+	if !ok {
+		return "", errors.New("no such process")
+	}
+	if p.imageName != "" {
+		return p.imageName, nil
+	}
+	return imageBaseName(p.path), nil
 }
 
 // fakeGeometry implements GeometryAPI with settable behaviors; the

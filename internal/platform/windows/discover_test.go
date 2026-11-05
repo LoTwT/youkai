@@ -29,7 +29,7 @@ func TestDiscoverTargetsEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatalf("discover: %v", err)
 	}
-	if len(result.Candidates) != 0 || result.AccessDeniedWindows != 0 {
+	if len(result.Candidates) != 0 || result.AccessDeniedWindows != 0 || result.UnreadableGameWindows != 0 {
 		t.Fatalf("a window of another executable must not be a candidate: %+v", result)
 	}
 }
@@ -133,27 +133,32 @@ func TestDiscoverTargetsSkipsCloakedAndVanishedProcesses(t *testing.T) {
 	if err != nil {
 		t.Fatalf("discover: %v", err)
 	}
-	if len(result.Candidates) != 0 || result.AccessDeniedWindows != 0 {
+	if len(result.Candidates) != 0 || result.AccessDeniedWindows != 0 || result.UnreadableGameWindows != 0 {
 		t.Fatalf("cloaked windows and vanished processes are not candidates: %+v", result)
 	}
 }
 
-// M1: a visible game-class window whose process cannot be opened is the
-// shape of "the game runs elevated, youkai does not". It is counted, not a
+// M1: a visible game window whose process cannot be opened is the shape of
+// "the game runs elevated, youkai does not". It is counted, not a
 // candidate, and it must not be confused with a vanished process or a
-// window of another class.
+// window of another executable.
 func TestDiscoverTargetsCountsAccessDeniedGameWindows(t *testing.T) {
 	win := newFakeWindows()
 	win.add(1, &fakeWnd{pid: 100, visible: true, class: DefaultGameWindowClass})
-	win.add(2, &fakeWnd{pid: 200, visible: true, class: "OtherClass"})
+	win.add(2, &fakeWnd{pid: 200, visible: true, class: DefaultGameWindowClass})
 	win.add(3, &fakeWnd{pid: 300, visible: true, class: DefaultGameWindowClass})
+	win.add(4, &fakeWnd{pid: 400, visible: true, class: "OtherClass"})
 	procs := newFakeProcesses()
-	procs.byPID[100] = fakeProc{err: ErrProcessAccessDenied}
-	procs.byPID[200] = fakeProc{err: ErrProcessAccessDenied}
-	procs.byPID[300] = fakeProc{err: errors.New("process gone")}
+	procs.byPID[100] = fakeProc{err: ErrProcessAccessDenied, imageName: DefaultGameImageName}
+	// Another elevated Unity game is not the target (M1′): the shared
+	// window class alone must not count it.
+	procs.byPID[200] = fakeProc{err: ErrProcessAccessDenied, imageName: "GenshinImpact.exe"}
+	procs.byPID[300] = fakeProc{err: errors.New("process gone"), imageName: DefaultGameImageName}
+	procs.byPID[400] = fakeProc{err: ErrProcessAccessDenied, imageName: DefaultGameImageName}
 
 	result, err := DiscoverTargets(win, procs, DiscoverySpec{
 		ImageName: DefaultGameImageName, ClassNameHint: DefaultGameWindowClass,
+		SelfElevationKnown: true, SelfElevated: false,
 	})
 	if err != nil {
 		t.Fatalf("discover: %v", err)
@@ -162,7 +167,50 @@ func TestDiscoverTargetsCountsAccessDeniedGameWindows(t *testing.T) {
 		t.Fatalf("an unreadable process cannot be a candidate: %+v", result)
 	}
 	if result.AccessDeniedWindows != 1 {
-		t.Fatalf("access-denied windows = %d, want only the game-class one: %+v", result.AccessDeniedWindows, result)
+		t.Fatalf("access-denied windows = %d, want only the game image with the game class: %+v",
+			result.AccessDeniedWindows, result)
+	}
+	if result.UnreadableGameWindows != 0 {
+		t.Fatalf("lower-integrity denials must be the elevation hint, got %+v", result)
+	}
+}
+
+// M1′: an already-elevated youkai that is still denied gets the generic
+// unreadable count, never the administrator hint.
+func TestDiscoverTargetsElevatedCallerGetsUnreadable(t *testing.T) {
+	win := newFakeWindows()
+	win.add(1, &fakeWnd{pid: 100, visible: true, class: DefaultGameWindowClass})
+	procs := newFakeProcesses()
+	procs.byPID[100] = fakeProc{err: ErrProcessAccessDenied, imageName: DefaultGameImageName}
+
+	result, err := DiscoverTargets(win, procs, DiscoverySpec{
+		ImageName: DefaultGameImageName, ClassNameHint: DefaultGameWindowClass,
+		SelfElevationKnown: true, SelfElevated: true,
+	})
+	if err != nil {
+		t.Fatalf("discover: %v", err)
+	}
+	if result.AccessDeniedWindows != 0 || result.UnreadableGameWindows != 1 {
+		t.Fatalf("an elevated caller must get the unreadable count, got %+v", result)
+	}
+}
+
+// An unreadable self integrity cannot claim an elevation mismatch; it
+// falls back to the generic unreadable count.
+func TestDiscoverTargetsUnknownCallerElevationIsUnreadable(t *testing.T) {
+	win := newFakeWindows()
+	win.add(1, &fakeWnd{pid: 100, visible: true, class: DefaultGameWindowClass})
+	procs := newFakeProcesses()
+	procs.byPID[100] = fakeProc{err: ErrProcessAccessDenied, imageName: DefaultGameImageName}
+
+	result, err := DiscoverTargets(win, procs, DiscoverySpec{
+		ImageName: DefaultGameImageName, ClassNameHint: DefaultGameWindowClass,
+	})
+	if err != nil {
+		t.Fatalf("discover: %v", err)
+	}
+	if result.AccessDeniedWindows != 0 || result.UnreadableGameWindows != 1 {
+		t.Fatalf("an unknown caller elevation must not claim an elevation mismatch: %+v", result)
 	}
 }
 

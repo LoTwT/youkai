@@ -334,6 +334,12 @@ type ProcessAPI interface {
 	// Query reports the full executable path and creation time of pid.
 	// The handle the query opens is closed within the call.
 	Query(pid ProcessID) (path string, started time.Time, err error)
+	// ImageName reports the executable file name of pid from a process
+	// snapshot (CreateToolhelp32Snapshot), which does not open the target
+	// process and works across integrity levels. It is the fallback for
+	// naming a window whose Query was denied, so a denied window can be
+	// checked against the game's image name without being opened.
+	ImageName(pid ProcessID) (string, error)
 }
 
 // CollectProbes enumerates all top-level windows and resolves their

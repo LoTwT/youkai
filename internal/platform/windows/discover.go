@@ -37,10 +37,18 @@ type DiscoverySpec struct {
 	ImageName string
 	// ClassNameHint narrows several remaining candidates to this exact
 	// window class. A hint that matches nothing leaves the candidates
-	// alone: it must not turn a matchable set into "not found". It is also
-	// the only signal available for a window whose process cannot be
-	// opened, so the access-denied count is limited to this class.
+	// alone: it must not turn a matchable set into "not found". It is an
+	// additional condition for the denied-process count: a window must
+	// match the class and the image name below.
 	ClassNameHint string
+	// SelfElevated reports whether the caller runs at high integrity
+	// (administrator). SelfElevationKnown reports whether that fact could
+	// be read. Together they split a denied game-window query: a denial
+	// while the caller is not elevated is the elevation hint, a denial
+	// while it is already elevated (or when the fact is unknown) is a
+	// generic unreadable result instead.
+	SelfElevated       bool
+	SelfElevationKnown bool
 }
 
 // TargetCandidate is one visible top-level window of the game client that
@@ -58,15 +66,20 @@ type TargetCandidate struct {
 	Minimized bool
 }
 
-// DiscoveryResult is one enumeration pass. AccessDeniedWindows counts
-// visible windows of the game's class whose owning process could not be
-// opened for lack of permission. They cannot become candidates because
-// their executable is unknown, but the count lets the caller suggest
-// running youkai with the game's privileges (D-1) instead of claiming the
-// game is not running.
+// DiscoveryResult is one enumeration pass.
 type DiscoveryResult struct {
-	Candidates          []TargetCandidate
+	Candidates []TargetCandidate
+	// AccessDeniedWindows counts visible windows of the game (window class
+	// and image name both verified) whose process could not be opened while
+	// the caller is not elevated. It is the elevation hint: run youkai as
+	// administrator. Such a window is never a candidate.
 	AccessDeniedWindows int
+	// UnreadableGameWindows counts visible windows of the game (class and
+	// image name verified) whose process could not be opened even though
+	// the caller is already elevated, or when its own elevation could not
+	// be read. The window shows a generic diagnostic message, not the
+	// elevation hint.
+	UnreadableGameWindows int
 }
 
 // DiscoverTargets enumerates the visible top-level windows whose process
@@ -98,12 +111,23 @@ func DiscoverTargets(win WindowAPI, procs ProcessAPI, spec DiscoverySpec) (Disco
 		}
 		path, started, err := procs.Query(pid)
 		if err != nil {
-			// A window with the game's class whose process we may not open
-			// is the shape of "the game runs elevated, youkai does not".
-			// Without the image path it cannot be a candidate.
+			// A denied window can still be named without opening its
+			// process: the process snapshot (ImageName) reads the executable
+			// file name across integrity levels. Only a window that matches
+			// both the game's class and image name is a hint; it is never a
+			// candidate because its full identity is unknown.
 			if errors.Is(err, ErrProcessAccessDenied) && spec.ClassNameHint != "" {
 				if className, classErr := win.ClassName(h); classErr == nil && className == spec.ClassNameHint {
-					result.AccessDeniedWindows++
+					if name, nameErr := procs.ImageName(pid); nameErr == nil && strings.EqualFold(name, spec.ImageName) {
+						if spec.SelfElevationKnown && !spec.SelfElevated {
+							result.AccessDeniedWindows++
+						} else {
+							// Already elevated (or unknown): a denial is not
+							// an elevation mismatch; show the generic
+							// unreadable copy instead of asking for admin.
+							result.UnreadableGameWindows++
+						}
+					}
 				}
 			}
 			continue

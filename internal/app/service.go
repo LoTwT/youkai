@@ -262,16 +262,21 @@ func (s *Service) DiscoverTargets() (TargetDiscoveryResult, error) {
 // rolls the placeholder back on any refusal.
 func (s *Service) Start(req StartRequest) (StartOutcome, error) {
 	if req.ID == "" {
-		return StartOutcome{}, errors.New("app: start: request id is empty")
+		cause := errors.New("app: start: request id is empty")
+		log.Printf("youkai: start refused: %v", cause)
+		return StartOutcome{}, cause
 	}
 	recordID, err := record.NewRecordID()
 	if err != nil {
+		log.Printf("youkai: start refused: %v", err)
 		return StartOutcome{}, fmt.Errorf("app: start: %w", err)
 	}
 	s.mu.Lock()
 	if s.quitting {
 		s.mu.Unlock()
-		return StartOutcome{}, errors.New("app: start: the service is quitting")
+		cause := errors.New("app: start: the service is quitting")
+		log.Printf("youkai: start refused: %v", cause)
+		return StartOutcome{}, cause
 	}
 	var prev *activeSession
 	if a := s.active; a != nil {

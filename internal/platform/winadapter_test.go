@@ -118,7 +118,10 @@ func (f *fakeWinWindow) Title(hwnd windows.HWND) (string, error) {
 type fakeProcInfo struct {
 	path    string
 	started time.Time
-	err     error
+	// imageName is what a Toolhelp snapshot would report; it stays readable
+	// when err models a denied OpenProcess.
+	imageName string
+	err       error
 }
 
 type fakeWinProcs struct {
@@ -136,6 +139,22 @@ func (f *fakeWinProcs) Query(pid windows.ProcessID) (string, time.Time, error) {
 		return info.path, info.started, nil
 	}
 	return "", time.Time{}, fmt.Errorf("no such process %d", pid)
+}
+
+func (f *fakeWinProcs) ImageName(pid windows.ProcessID) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	info, ok := f.byPID[pid]
+	if !ok {
+		return "", fmt.Errorf("no such process %d", pid)
+	}
+	if info.imageName != "" {
+		return info.imageName, nil
+	}
+	if i := strings.LastIndexAny(info.path, `\/`); i >= 0 {
+		return info.path[i+1:], nil
+	}
+	return info.path, nil
 }
 
 type fakeWinGeo struct {
@@ -1068,8 +1087,8 @@ func TestWinDiscoverTargets(t *testing.T) {
 	if result.Candidates[1].ExecutablePath != `D:\Other\ZenlessZoneZero.exe` {
 		t.Fatalf("second candidate keeps its own path: %+v", result.Candidates[1])
 	}
-	if result.AccessDeniedWindows != 0 {
-		t.Fatalf("unexpected access-denied count: %+v", result)
+	if result.AccessDeniedWindows != 0 || result.UnreadableGameWindows != 0 {
+		t.Fatalf("unexpected unreadable count: %+v", result)
 	}
 	w.win.mu.Lock()
 	titles := w.win.titleReads
@@ -1079,17 +1098,21 @@ func TestWinDiscoverTargets(t *testing.T) {
 	}
 }
 
-// M1 at the adapter: a game-class window whose process cannot be opened is
-// counted for the elevated-game hint.
+// M1/M1′ at the adapter: only a denied window whose image name is the game
+// counts, and an already-elevated youkai gets the generic unreadable count
+// instead of the administrator hint.
 func TestWinDiscoverTargetsCountsAccessDenied(t *testing.T) {
 	w := newWinWorld(t)
 	w.win.mu.Lock()
-	w.win.wnds = append(w.win.wnds, &fakeWnd{
-		hwnd: 0xB0AC0, pid: 8888, visible: true, className: "UnityWndClass", title: "绝区零",
-	})
+	w.win.wnds = append(w.win.wnds,
+		&fakeWnd{hwnd: 0xB0AC0, pid: 8888, visible: true, className: "UnityWndClass", title: "绝区零"},
+		// Another elevated Unity game: the shared class alone must not count.
+		&fakeWnd{hwnd: 0xB0AC1, pid: 9999, visible: true, className: "UnityWndClass", title: "原神"},
+	)
 	w.win.mu.Unlock()
 	w.procs.mu.Lock()
-	w.procs.byPID[8888] = fakeProcInfo{err: windows.ErrProcessAccessDenied}
+	w.procs.byPID[8888] = fakeProcInfo{err: windows.ErrProcessAccessDenied, imageName: "ZenlessZoneZero.exe"}
+	w.procs.byPID[9999] = fakeProcInfo{err: windows.ErrProcessAccessDenied, imageName: "GenshinImpact.exe"}
 	w.procs.mu.Unlock()
 
 	result, err := w.adapter.DiscoverTargets()
@@ -1097,12 +1120,23 @@ func TestWinDiscoverTargetsCountsAccessDenied(t *testing.T) {
 		t.Fatalf("discover: %v", err)
 	}
 	// The existing game window is still readable and remains a candidate;
-	// the unreadable one is only a hint.
+	// the unreadable game window is only a hint.
 	if len(result.Candidates) != 1 || result.Candidates[0].Handle != uintptr(gameHwnd) {
 		t.Fatalf("candidates = %+v, want the readable game window", result.Candidates)
 	}
-	if result.AccessDeniedWindows != 1 {
-		t.Fatalf("access-denied windows = %d, want 1", result.AccessDeniedWindows)
+	if result.AccessDeniedWindows != 1 || result.UnreadableGameWindows != 0 {
+		t.Fatalf("lower-integrity denial: %+v, want one elevation hint and no unreadable", result)
+	}
+
+	// The same denial while youkai is already elevated is not an elevation
+	// mismatch: it becomes the generic unreadable count.
+	w.integrity.self = windows.IntegrityHigh
+	result, err = w.adapter.DiscoverTargets()
+	if err != nil {
+		t.Fatalf("discover while elevated: %v", err)
+	}
+	if result.AccessDeniedWindows != 0 || result.UnreadableGameWindows != 1 {
+		t.Fatalf("elevated denial: %+v, want one unreadable and no elevation hint", result)
 	}
 }
 

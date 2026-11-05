@@ -148,16 +148,20 @@ func TestGameScanSourceFixedTargetIgnoresConfirmedCandidate(t *testing.T) {
 	}
 }
 
-// The M1 signal reaches the source unchanged: game-class windows whose
-// process could not be opened are counted beside the candidates.
-func TestGameScanSourceDiscoveryReturnsAccessDeniedCount(t *testing.T) {
-	source, _ := discoveringSourceResult(platform.TargetDiscoveryResult{AccessDeniedWindows: 1})
+// The M1/M1′ signals reach the source unchanged: game windows whose process
+// could not be opened are counted beside the candidates, split by whether
+// youkai itself was elevated.
+func TestGameScanSourceDiscoveryReturnsUnreadableCounts(t *testing.T) {
+	source, _ := discoveringSourceResult(platform.TargetDiscoveryResult{
+		AccessDeniedWindows:   1,
+		UnreadableGameWindows: 2,
+	})
 	got, err := source.DiscoverTargets()
 	if err != nil {
 		t.Fatalf("discover: %v", err)
 	}
-	if len(got.Candidates) != 0 || got.AccessDeniedWindows != 1 {
-		t.Fatalf("result = %+v, want one access-denied window", got)
+	if len(got.Candidates) != 0 || got.AccessDeniedWindows != 1 || got.UnreadableGameWindows != 2 {
+		t.Fatalf("result = %+v, want the two unreadable counts", got)
 	}
 }
 

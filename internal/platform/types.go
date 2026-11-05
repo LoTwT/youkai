@@ -62,15 +62,17 @@ type TargetCandidate struct {
 }
 
 // TargetDiscoveryResult is one candidate enumeration pass. Candidates is
-// ordered stably for display; AccessDeniedWindows counts visible windows
-// of the game's window class whose owning process could not be opened
-// because the caller lacks permission. Those windows are not candidates —
-// their executable is unknown — but the count lets the window tell "the
-// game runs elevated, run youkai the same way" apart from "the game is
-// not running".
+// ordered stably for display. AccessDeniedWindows counts visible windows of
+// the game (window class and image name verified) whose process could not
+// be opened because youkai runs at lower integrity; the window suggests
+// running youkai as administrator. UnreadableGameWindows counts the same
+// shape when youkai is already elevated or its own integrity could not be
+// read: the window shows a generic diagnostic message instead. Neither
+// count is a candidate — their full identity is unknown.
 type TargetDiscoveryResult struct {
-	Candidates          []TargetCandidate
-	AccessDeniedWindows int
+	Candidates            []TargetCandidate
+	AccessDeniedWindows   int
+	UnreadableGameWindows int
 }
 
 // TargetDiscovery is the optional Port capability: enumerate the game

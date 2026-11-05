@@ -71,6 +71,8 @@ func (m *Model) targetArea(c *ui.Context, t *ui.Theme) {
 			ui.Text(c, m.targetsErr).TextColor(t.Danger)
 		case len(m.targets) == 0 && m.targetsAccessDenied > 0:
 			ui.Text(c, targetElevatedText).TextColor(t.Danger)
+		case len(m.targets) == 0 && m.targetsUnreadable > 0:
+			ui.Text(c, targetUnreadableText).TextColor(t.Danger)
 		case len(m.targets) == 0:
 			ui.Text(c, targetNotFoundText).TextColor(t.TextMuted)
 		default:
@@ -111,6 +113,8 @@ func (m *Model) startNote() string {
 		return m.targetsErr
 	case m.source.TargetSelection && len(m.targets) == 0 && m.targetsAccessDenied > 0:
 		return "游戏正在以管理员身份运行，请以管理员身份重新打开 youkai。"
+	case m.source.TargetSelection && len(m.targets) == 0 && m.targetsUnreadable > 0:
+		return targetUnreadableText
 	case m.source.TargetSelection && len(m.targets) == 0:
 		return "未找到《绝区零》窗口，请启动游戏后点“重新检查”。"
 	case m.source.TargetSelection && m.chosenTarget() == nil:

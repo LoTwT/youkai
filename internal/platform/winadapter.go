@@ -143,18 +143,36 @@ var (
 // recorded in the 2026-11-02 field acceptance, with the client's window
 // class as a screening hint when several windows remain. Window titles are
 // never read. The user confirms exactly one candidate before a session
-// starts (P-01). Visible windows of the game class whose process cannot be
-// opened (the game runs elevated, youkai does not) are counted separately
-// so the window can ask for the same privileges instead of "not found".
+// starts (P-01). A denied game window is named through the process
+// snapshot (no process handle needed): a denial while youkai is not
+// elevated becomes the administrator hint, a denial while it is already
+// elevated (or its own level is unknown) becomes the generic unreadable
+// count, and windows of other executables are never counted.
 func (a *WinAdapter) DiscoverTargets() (TargetDiscoveryResult, error) {
+	selfLevel, selfErr := a.natives.Integrity.SelfIntegrity()
+	selfKnown := selfErr == nil
+	selfElevated := selfKnown && selfLevel >= windows.IntegrityHigh
+	if selfErr != nil {
+		a.logf("discovery: youkai self integrity unreadable: %v", selfErr)
+	}
 	found, err := windows.DiscoverTargets(a.natives.Win, a.natives.Procs, windows.DiscoverySpec{
-		ImageName:     windows.DefaultGameImageName,
-		ClassNameHint: windows.DefaultGameWindowClass,
+		ImageName:          windows.DefaultGameImageName,
+		ClassNameHint:      windows.DefaultGameWindowClass,
+		SelfElevated:       selfElevated,
+		SelfElevationKnown: selfKnown,
 	})
 	if err != nil {
 		return TargetDiscoveryResult{}, err
 	}
-	result := TargetDiscoveryResult{AccessDeniedWindows: found.AccessDeniedWindows}
+	if found.AccessDeniedWindows > 0 || found.UnreadableGameWindows > 0 {
+		a.logf("discovery: unreadable game windows: elevation-hint=%d generic=%d self=%s",
+			found.AccessDeniedWindows, found.UnreadableGameWindows,
+			windows.IntegrityLabel(selfLevel, selfErr))
+	}
+	result := TargetDiscoveryResult{
+		AccessDeniedWindows:   found.AccessDeniedWindows,
+		UnreadableGameWindows: found.UnreadableGameWindows,
+	}
 	result.Candidates = make([]TargetCandidate, 0, len(found.Candidates))
 	for _, c := range found.Candidates {
 		result.Candidates = append(result.Candidates, TargetCandidate{

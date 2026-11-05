@@ -101,6 +101,7 @@ type fakeService struct {
 
 	targets             []app.TargetCandidate
 	targetsAccessDenied int
+	targetsUnreadable   int
 	targetsErr          error
 	discoveries         int
 	discoverFn          func() (app.TargetDiscoveryResult, error)
@@ -164,8 +165,9 @@ func (f *fakeService) DiscoverTargets() (app.TargetDiscoveryResult, error) {
 		return f.discoverFn()
 	}
 	return app.TargetDiscoveryResult{
-		Candidates:          f.targets,
-		AccessDeniedWindows: f.targetsAccessDenied,
+		Candidates:            f.targets,
+		AccessDeniedWindows:   f.targetsAccessDenied,
+		UnreadableGameWindows: f.targetsUnreadable,
 	}, f.targetsErr
 }
 

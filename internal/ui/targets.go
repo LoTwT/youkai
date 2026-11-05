@@ -25,6 +25,10 @@ const (
 	// its process cannot be opened, the shape of an elevated game and a
 	// non-elevated youkai.
 	targetElevatedText = "游戏正在以管理员身份运行，youkai 需要同样的权限才能操作游戏。请右键 youkai，选择“以管理员身份运行”后重新打开。youkai 只向游戏发送鼠标操作，不加载驱动、不注入、不读取游戏内存。"
+	// targetUnreadableText: the game window exists and youkai is already
+	// elevated (or its own level is unknown), so a denied process query is
+	// not an elevation mismatch. The raw failure is in the diagnostic log.
+	targetUnreadableText = "无法读取游戏进程信息，请稍后重试；若持续出现，请把诊断日志提供给开发者。"
 	// targetDiscoveryFailedText: enumeration itself failed.
 	targetDiscoveryFailedText = "查找游戏窗口失败，请稍后重试；详细信息已写入诊断日志。"
 	// targetGoneText: the confirmed window vanished between confirmation
@@ -54,9 +58,10 @@ func (m *Model) refreshTargets() {
 			}
 			m.targetsLoading = false
 			if err != nil {
-				m.targetsErr = targetDiscoveryErrorText(err)
+				m.targetsErr = targetDiscoveryFailedText
 				m.targets = nil
 				m.targetsAccessDenied = 0
+				m.targetsUnreadable = 0
 				m.targetChoice = -1
 				return
 			}
@@ -72,6 +77,7 @@ func (m *Model) applyTargets(result app.TargetDiscoveryResult) {
 	chosen := m.chosenTarget()
 	m.targets = result.Candidates
 	m.targetsAccessDenied = result.AccessDeniedWindows
+	m.targetsUnreadable = result.UnreadableGameWindows
 	m.targetChoice = -1
 	if chosen == nil {
 		return
@@ -101,13 +107,6 @@ func (m *Model) targetReady() bool {
 		return true
 	}
 	return !m.targetsLoading && m.targetsErr == "" && m.chosenTarget() != nil
-}
-
-// targetDiscoveryErrorText maps a failed discovery to user copy. The raw
-// error is already in the diagnostic log (the service logs it); the sentinel
-// and any unexpected failure share the same user-facing sentence.
-func targetDiscoveryErrorText(err error) string {
-	return targetDiscoveryFailedText
 }
 
 // startErrorText maps a refused start in the installed UI to user copy; a

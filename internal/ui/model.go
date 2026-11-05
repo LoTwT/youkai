@@ -223,13 +223,14 @@ type Model struct {
 
 	// Target candidates (P-01): the last discovery result, whether a
 	// discovery is in flight, its user-facing failure, the chosen row (-1
-	// for none), the count of game-class windows whose process could not
-	// be opened (the game runs elevated) and the serial that discards stale
-	// results.
+	// for none), the counts of game windows whose process could not be
+	// opened (lower-integrity vs. elevated-or-unknown) and the serial that
+	// discards stale results.
 	targets             []app.TargetCandidate
 	targetsLoading      bool
 	targetsErr          string
 	targetsAccessDenied int
+	targetsUnreadable   int
 	targetChoice        int
 	targetsSerial       int
 
