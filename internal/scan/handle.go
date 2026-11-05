@@ -4,16 +4,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 )
 
 // ControllerHandle is the kernel side of the controller contract: the
 // query and admission points the collection loop uses. The kernel hands
-// one handle to the controller's Prepare and Collect calls. InputPermitted
-// and Fail are safe to call from any goroutine (their implementations take
-// the session lock; the port layer's watcher reports stream faults through
-// Fail from its own goroutine); Acquire and the Slot methods belong to the
-// single producer goroutine, because admission and capacity are the
-// producer's alone.
+// one handle to the controller's Prepare and Collect calls. InputPermitted,
+// SetPrepareDeadline, SetActivation and Fail are safe to call from any
+// goroutine (their implementations take the session lock; the port layer's
+// watcher reports stream faults through Fail from its own goroutine);
+// Acquire and the Slot methods belong to the single producer goroutine,
+// because admission and capacity are the producer's alone.
 type ControllerHandle struct {
 	s *Session
 }
@@ -27,6 +28,42 @@ func (h *ControllerHandle) InputPermitted() bool {
 	h.s.mu.Lock()
 	defer h.s.mu.Unlock()
 	return h.s.permit
+}
+
+// SetPrepareDeadline records when the preparation budget closes, so a
+// snapshot can show the countdown without the kernel ticking. The
+// controller calls it from Prepare when the wait for the target starts.
+// Only the first non-zero report takes effect: the deadline is fixed for
+// the session, so a repeated report changes no state and wakes no
+// subscriber. Safe to call from any goroutine.
+func (h *ControllerHandle) SetPrepareDeadline(deadline time.Time) {
+	if deadline.IsZero() {
+		return
+	}
+	h.s.mu.Lock()
+	defer h.s.mu.Unlock()
+	if !h.s.prepareDeadline.IsZero() {
+		return
+	}
+	h.s.prepareDeadline = deadline
+	h.s.notifyLocked()
+}
+
+// SetActivation reports how the controller's one request to bring the
+// target forward ended. Only the first report takes effect — there is one
+// request per session — and ActivationNotRequested records nothing.
+// Safe to call from any goroutine.
+func (h *ControllerHandle) SetActivation(outcome ActivationOutcome) {
+	if outcome == ActivationNotRequested {
+		return
+	}
+	h.s.mu.Lock()
+	defer h.s.mu.Unlock()
+	if h.s.activation != ActivationNotRequested {
+		return
+	}
+	h.s.activation = outcome
+	h.s.notifyLocked()
 }
 
 // Acquire waits for one processing slot of the bounded pipeline. The

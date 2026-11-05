@@ -180,6 +180,15 @@ func TestPrepareActivatesTargetOnce(t *testing.T) {
 	if got := sess.Activations(); got != 1 {
 		t.Fatalf("Activate calls: %d, want 1", got)
 	}
+	// The snapshot carries what the scan page renders: the activation
+	// result and the preparation deadline.
+	snap := h.kernel.Snapshot()
+	if snap.Activation != scan.ActivationActivated {
+		t.Fatalf("activation = %q, want %q", snap.Activation, scan.ActivationActivated)
+	}
+	if snap.PrepareDeadline.IsZero() {
+		t.Fatal("the engine never reported the preparation deadline")
+	}
 	h.kernel.Cancel()
 	h.end()
 }
@@ -194,6 +203,9 @@ func TestPrepareActivationFailureFallsBackToReadinessWait(t *testing.T) {
 	})
 	if got := sess.Activations(); got != 1 {
 		t.Fatalf("Activate calls: %d, want 1", got)
+	}
+	if snap := h.kernel.Snapshot(); snap.Activation != scan.ActivationRefused {
+		t.Fatalf("activation = %q, want %q", snap.Activation, scan.ActivationRefused)
 	}
 	h.kernel.Cancel()
 	h.end()

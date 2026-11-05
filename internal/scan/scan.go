@@ -90,6 +90,16 @@ type Session struct {
 	// permit is the input permission: open only during capturing, and
 	// once closed never reopened.
 	permit bool
+	// permitOpened records that the permission opened once; it survives
+	// the closing, so a snapshot can distinguish a session whose input
+	// stopped from one that never opened input.
+	permitOpened bool
+	// prepareDeadline is the preparation budget's end, reported once by
+	// the controller; the zero time means none was reported.
+	prepareDeadline time.Time
+	// activation is the outcome of the controller's one activation
+	// request, reported once; the zero value means no request was made.
+	activation ActivationOutcome
 	// stopping is set when a trigger cut the work (user stop or fault);
 	// normal completion leaves it false and goes through draining.
 	stopping bool
@@ -357,6 +367,7 @@ func (s *Session) enterCapturing() bool {
 	}
 	s.phase = PhaseCapturing
 	s.permit = true
+	s.permitOpened = true
 	s.workersWG.Add(s.workers)
 	for i := 0; i < s.workers; i++ {
 		go s.runWorker()
