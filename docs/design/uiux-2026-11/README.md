@@ -56,11 +56,7 @@
 - **扫描**：从点击开始到收尾保存完成的一次会话，阶段为准备 → 采集 → 收尾 → 已结束（[架构 §5 生命周期](../../specs/scanner-architecture.md#生命周期)）。
 - **记录**：一次扫描在本机保存的结果，可从历史重新打开。
 - **件**：一件驱动盘（一条观测）。
-- **件的四类**（判定顺序：先看处理结局，再看 validation，再看 quality，最后看 warning；每件只落入第一个命中的类）：
-  1. **待补录**：处理结局失败（OCR 失败）或中断未处理的件；两者分开展示（[T6 §5](../../specs/t6-review-export-workflow.md#5-正式功能验收与后续)）。补录前不能导出，手动补录后可变为可用（[JSON/CSV v2 §3](../../specs/scan-json-format.md#3-一件驱动盘)）。本草案说的“失败件”只指处理结局失败，不包括 `validation.status=failed`。
-  2. **待校对**：`quality=needsReview` 的件，以及历史重开时 `validation.status` 为 `failed` 或 `unavailable` 的件（[JSON/CSV v2 当前校验](../../specs/scan-json-format.md#当前校验)）。
-  3. **有警告但可导出**：带 warning（如装备者未识别）但满足导出规则的件；警告不阻止自动接受（[JSON/CSV v2 §3](../../specs/scan-json-format.md#3-一件驱动盘)、[11-02 真机报告](../../reports/2026-11-02-windows-local-field-acceptance.md)第 131 行），因此它可能是自动接受的，但不算已通过。
-  4. **已通过**：自动接受或人工确认、且没有 warning 的件。
+- **件的四类**：待补录、待校对、有警告但可导出、已通过；判定顺序为“处理结局 → validation → quality → warning”，每件只落入第一个命中的类。定义与边界见 [T6 §2 件的四类与判定顺序](../../specs/t6-review-export-workflow.md#件的四类与判定顺序)。
 - **可导出**：满足 [T6 导出规则](../../specs/t6-review-export-workflow.md#3-保存重新查看与导出建议)的件。
 - **准备检查**：开始扫描前常驻的条件清单，每项显示“当前值 → 需要值”（P-03）。
 - **结果摘要**：扫描结束后回答“扫全了吗、能直接导出吗”的结论视图内容（不是布局）。
