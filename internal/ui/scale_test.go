@@ -246,14 +246,15 @@ func TestScaleEvidenceCacheStaysBoundedAcrossItems(t *testing.T) {
 
 	for row := range visited {
 		m.selected = row
-		for _, id := range m.rec.Rows[row].EvidenceIDs {
-			m.evidenceFor("r1", id)
+		for _, ev := range m.rec.Rows[row].Evidence {
+			m.evidenceFor("r1", ev.ID)
 		}
 		drainAll(t, m, q)
 		if got := len(m.cache.entries); got > limit {
 			t.Fatalf("row %d: cache holds %d entries above the limit %d", row, got, limit)
 		}
-		for _, id := range m.rec.Rows[row].EvidenceIDs {
+		for _, itemEv := range m.rec.Rows[row].Evidence {
+			id := itemEv.ID
 			key := evidenceKey{record: "r1", id: id}
 			entry := m.cache.get(key)
 			if entry == nil || entry.bitmap == nil {

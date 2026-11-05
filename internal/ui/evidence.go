@@ -169,10 +169,10 @@ func (m *Model) protectedEvidence() map[evidenceKey]struct{} {
 	if m.rec == nil || m.selected < 0 || m.selected >= len(m.rec.Rows) {
 		return nil
 	}
-	ids := m.rec.Rows[m.selected].EvidenceIDs
-	set := make(map[evidenceKey]struct{}, len(ids))
-	for _, id := range ids {
-		set[evidenceKey{record: m.rec.ID, id: id}] = struct{}{}
+	evidence := m.rec.Rows[m.selected].Evidence
+	set := make(map[evidenceKey]struct{}, len(evidence))
+	for _, ev := range evidence {
+		set[evidenceKey{record: m.rec.ID, id: ev.ID}] = struct{}{}
 	}
 	return set
 }
