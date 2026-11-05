@@ -16,7 +16,7 @@ import (
 // scaleExportPayload builds one reusable structured payload for the scale
 // fixtures. The same bytes back many items so 10,000 records stay cheap to
 // prepare; BuildUsableExport still parses and revalidates every item.
-func scaleExportPayload(t *testing.T, disc zzz.DiscRecord, state zzz.CaptureState) []byte {
+func scaleExportPayload(t testing.TB, disc zzz.DiscRecord, state zzz.CaptureState) []byte {
 	t.Helper()
 	structured := zzz.ToStructuredWithState(disc, zzz.RarityS, state, nil)
 	if structured.Validation.Status != zzz.ValidationPassed {
@@ -40,7 +40,7 @@ func scaleExportPayload(t *testing.T, disc zzz.DiscRecord, state zzz.CaptureStat
 // records that the export must count but omit, and the rest are usable.
 // Usable items alternate two sets; every twentieth is equipped with a known
 // agent so the catalog subset has both kinds of entry.
-func scaleExportItems(t *testing.T, n, excluded int) []record.ItemRecord {
+func scaleExportItems(t testing.TB, n, excluded int) []record.ItemRecord {
 	t.Helper()
 	none := zzz.CaptureState{ManagementState: zzz.ManagementNone, EquippedState: zzz.EquippedStateUnequipped}
 	equipped := zzz.CaptureState{ManagementState: zzz.ManagementNone, EquippedState: zzz.EquippedStateEquipped, AgentID: 1311}
