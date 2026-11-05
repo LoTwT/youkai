@@ -306,6 +306,27 @@ func TestViewSummaryCountsOpenFilteredItems(t *testing.T) {
 	}
 }
 
+// TestSummaryDisclosuresFollowTheOpenRecord checks that the summary's
+// disclosure state belongs to the record workspace: revisiting the same
+// record keeps it, while another record starts with both disclosures
+// collapsed and no stale diagnostics error.
+func TestSummaryDisclosuresFollowTheOpenRecord(t *testing.T) {
+	m := summaryModel(summaryView(1, app.ItemClassCounts{Passed: 1}, record.SessionShell{}), app.Snapshot{})
+	m.summaryDetailsOpen = true
+	m.summaryDiagnosticsOpen = true
+	m.summaryDiagnosticsErr = "旧错误"
+
+	m.openRecord("rec")
+	if !m.summaryDetailsOpen || !m.summaryDiagnosticsOpen || m.summaryDiagnosticsErr != "旧错误" {
+		t.Fatalf("revisiting the same record reset the summary: %+v", m.recordWorkspaceState)
+	}
+
+	m.showRecord("another", false)
+	if m.summaryDetailsOpen || m.summaryDiagnosticsOpen || m.summaryDiagnosticsErr != "" {
+		t.Fatalf("another record inherited the summary state: %+v", m.recordWorkspaceState)
+	}
+}
+
 // selectedSummaryClass classifies the item the item browser selected.
 func selectedSummaryClass(t *testing.T, m *Model) app.ItemClass {
 	t.Helper()

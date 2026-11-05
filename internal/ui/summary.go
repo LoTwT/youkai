@@ -79,15 +79,6 @@ func (m *Model) recordSummary(c *ui.Context, t *ui.Theme) {
 		})
 		return
 	}
-	// A different record starts with both disclosures collapsed (09 §2,
-	// §4.6); a reload of the same record keeps the user's state.
-	if m.summaryRecordID != m.rec.ID {
-		m.summaryRecordID = m.rec.ID
-		m.summaryDetailsOpen = false
-		m.summaryDiagnosticsOpen = false
-		m.summaryDiagnosticsErr = ""
-	}
-
 	conclusion := m.recordSummaryConclusion()
 	body := func(withActions bool) {
 		m.summaryNotices(c, t)

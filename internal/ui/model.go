@@ -331,14 +331,6 @@ type Model struct {
 	// default so the structured form stays the main view.
 	showEvidence bool
 
-	// The summary's two disclosures and the last diagnostics-open failure.
-	// Both start collapsed (09 §2, §4.6); the disclosure state belongs to
-	// the record workspace rather than to one tab.
-	summaryRecordID        string
-	summaryDetailsOpen     bool
-	summaryDiagnosticsOpen bool
-	summaryDiagnosticsErr  string
-
 	// The review editor: one item's unsaved draft, and the save currently
 	// in flight. reviewSerial invalidates a late response when a newer
 	// action owns the editor. navPrompt holds a navigation that waits for
