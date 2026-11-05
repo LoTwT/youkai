@@ -200,6 +200,12 @@ func (c *Controller) Prepare(ctx context.Context, h *scan.ControllerHandle) erro
 		h.SetActivation(outcome)
 	}
 
+	// The preparation budget starts here, after the activation request:
+	// confirming the foreground switch may take up to the settle limit
+	// (500 ms on Windows), and that time is not part of the window the
+	// user gets to switch back and satisfy the premises. The snapshot
+	// therefore learns the deadline only when the wait starts; until then
+	// the scan page shows "waiting for the game" without a countdown.
 	deadline := time.Now().Add(c.budget())
 	h.SetPrepareDeadline(deadline)
 	every := c.every()

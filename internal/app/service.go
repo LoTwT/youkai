@@ -232,7 +232,7 @@ func NewService(cfg Config) (*Service, error) {
 // session kernel. The busy and replay outcomes are protocol answers, not
 // errors; errors mean the start was refused (another process holds the
 // scan occupancy, no source is wired, the recognizer's resources are
-// unusable).
+// unusable, the service is quitting, or an update install is running).
 //
 // Acceptance occupies the slot at once — a placeholder session with the
 // new identity — but the slow preparation (scan occupancy, recognizer
@@ -252,6 +252,13 @@ func (s *Service) Start(req StartRequest) (StartOutcome, error) {
 	if s.quitting {
 		s.mu.Unlock()
 		return StartOutcome{}, errors.New("app: start: the service is quitting")
+	}
+	if s.updateInstalling {
+		// The install ends in a restart; a scan begun now would be cut
+		// short. Refusing here keeps the refusal and the snapshot's
+		// start-blocked reason in agreement.
+		s.mu.Unlock()
+		return StartOutcome{}, errors.New("app: start: an update install is in progress")
 	}
 	var prev *activeSession
 	if a := s.active; a != nil {
@@ -460,7 +467,6 @@ func (s *Service) Snapshot() Snapshot {
 
 func (s *Service) snapshotLocked() Snapshot {
 	snap := Snapshot{Revision: s.revision}
-	var saveFailed bool
 	if a := s.active; a != nil {
 		snap.SessionID = a.id
 		snap.Busy = !a.wrapped
@@ -478,30 +484,29 @@ func (s *Service) snapshotLocked() Snapshot {
 			snap.FinalSaveFailures = st.finalFailures
 			if st.err != nil {
 				snap.SaveError = st.err.Error()
-				saveFailed = true
 			}
 		}
 	}
-	snap.StartBlocked = s.startBlockedLocked(saveFailed)
+	snap.StartBlocked = s.startBlockedLocked()
 	return snap
 }
 
 // startBlockedLocked names the service's part of why a start would not
-// begin a new session now. saveFailed is whether an unresolved save
-// failure waits for a retry. Callers hold mu.
-func (s *Service) startBlockedLocked(saveFailed bool) StartBlockedReason {
+// begin a new session now. Callers hold mu.
+func (s *Service) startBlockedLocked() StartBlockedReason {
 	switch {
 	case s.quitting:
 		return StartBlockedQuitting
 	case s.updateInstalling:
 		return StartBlockedUpdateInstall
-	case saveFailed:
+	case s.active != nil && !s.active.wrapped && s.active.saveErr != nil:
+		// The wrap-up's final save failed. A batch save failure during
+		// capturing is not this reason: that session has not reached its
+		// wrap-up yet, so it reports occupied until the final attempt
+		// either succeeds (the slot frees) or fails (this reason).
 		return StartBlockedSaveRetry
 	case s.active != nil && !s.active.wrapped:
-		// The previous session has not released the slot yet: it is
-		// preparing, capturing, or wrapping up. The start surface only
-		// ever shows this while that session is wrapping up.
-		return StartBlockedFinishing
+		return StartBlockedOccupied
 	default:
 		return StartBlockedNone
 	}
@@ -516,11 +521,14 @@ type StartBlockedReason string
 const (
 	// StartBlockedNone: nothing service-side blocks a start.
 	StartBlockedNone StartBlockedReason = ""
-	// StartBlockedFinishing: the previous session still occupies the
-	// active slot and has not wrapped up.
-	StartBlockedFinishing StartBlockedReason = "finishing"
-	// StartBlockedSaveRetry: the previous session's save failed and waits
-	// for a retry; unsaved results forbid a new session.
+	// StartBlockedOccupied: the previous session still occupies the
+	// active slot and has not wrapped up — it may be preparing, capturing,
+	// or in its wrap-up. The start surface only ever displays this for an
+	// unwrapped previous session, where its copy reads "the previous scan
+	// is still wrapping up".
+	StartBlockedOccupied StartBlockedReason = "occupied"
+	// StartBlockedSaveRetry: the previous session's final save failed and
+	// waits for a retry; unsaved results forbid a new session.
 	StartBlockedSaveRetry StartBlockedReason = "saveRetry"
 	// StartBlockedUpdateInstall: an update install is in progress and the
 	// process is about to restart.
@@ -738,8 +746,10 @@ func (s *Service) RetrySave() error {
 
 // SetUpdateInstalling reports that an update install is in progress (or
 // ended). The update flow owns the fact — the service cannot observe a
-// download — and publishes it so snapshot readers can explain why a start
-// is blocked and stop offering scans that the restart would cut short.
+// download — and publishes it so the service refuses new scans (the
+// install ends in a restart) and snapshot readers can explain why.
+// The caller must report false when the install fails or is cancelled:
+// leaving the flag set keeps Start refused for the rest of the process.
 // Only a change bumps the revision.
 func (s *Service) SetUpdateInstalling(installing bool) {
 	s.mu.Lock()

@@ -107,10 +107,11 @@ type recordDeliverer struct {
 	// saveErr is the unresolved save failure; nil while clean.
 	saveErr error
 	// finalSaveFailures counts the wrap-up's failed save attempts: the
-	// final generation and every retry after it. Batched saves before the
-	// kernel sealed are not wrap-up attempts and do not count. The count
-	// keeps its history after a successful retry; notification code uses
-	// "the first failure is 1" to notify once per wrap-up.
+	// final generation and every retry after it. Batched saves and user
+	// retries before the kernel sealed are running-session attempts and
+	// do not count. The count keeps its history after a successful retry;
+	// notification code uses "the first failure is 1" to notify once per
+	// wrap-up.
 	finalSaveFailures int
 	// finished reports that finish ran (the kernel sealed).
 	finished bool
@@ -506,7 +507,12 @@ func (d *recordDeliverer) retry() error {
 	}
 	if err := d.saveLocked(); err != nil {
 		d.saveErr = err
-		d.finalSaveFailures++
+		// A retry before the seal belongs to the running session's batch
+		// saving, not to the wrap-up: the notification edge counts only
+		// attempts made after the kernel sealed.
+		if d.finished {
+			d.finalSaveFailures++
+		}
 		return err
 	}
 	d.saveErr = nil
