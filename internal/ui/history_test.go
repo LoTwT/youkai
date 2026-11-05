@@ -99,8 +99,18 @@ func TestViewHistoryShowsSessionTermination(t *testing.T) {
 	settle(t, m, q, tt)
 	openRecordsList(t, m, q, tt)
 
-	if !tt.HasText("失败：navigationMismatch") {
-		t.Fatalf("history does not show the failed session code: %q", tt.Texts())
+	labelShown := false
+	for _, text := range tt.Texts() {
+		if text == "失败" {
+			labelShown = true
+			break
+		}
+	}
+	if !labelShown {
+		t.Fatalf("history does not show the failed session state: %q", tt.Texts())
+	}
+	if tt.HasText("navigationMismatch") {
+		t.Fatalf("history leaks the raw diagnostic code: %q", tt.Texts())
 	}
 }
 

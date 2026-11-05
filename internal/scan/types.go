@@ -67,6 +67,24 @@ func (st State) IsTerminal() bool {
 	}
 }
 
+// ActivationOutcome is how the controller's single request to bring the
+// target application forward at the start of preparation ended. The
+// request never decides readiness: after a refusal the user can still
+// focus the target manually within the preparation budget.
+type ActivationOutcome string
+
+const (
+	// ActivationNotRequested means no request was made — the platform has
+	// no activation capability, or preparation never reached the request.
+	ActivationNotRequested ActivationOutcome = ""
+	// ActivationActivated: the platform accepted the request and the
+	// target reached the foreground.
+	ActivationActivated ActivationOutcome = "activated"
+	// ActivationRefused: the platform (or the foreground rules) refused
+	// the request; the user has to switch to the game themselves.
+	ActivationRefused ActivationOutcome = "refused"
+)
+
 // EndKind is how a session ended. It is derived from the first stop
 // trigger when there was one, and completed otherwise. The JSON contract's
 // interrupted kind only exists for sessions restored after a crash, so the
@@ -242,6 +260,20 @@ type Snapshot struct {
 	// short game operations. It is false while preparing, open only
 	// during capturing, and once closed it never reopens.
 	InputPermitted bool
+	// InputOpened reports whether input permission ever opened in this
+	// session. It stays false for a session that ended during
+	// preparation, which is what tells "input stopped" apart from "never
+	// started" on the notification edges.
+	InputOpened bool
+	// PrepareDeadline is when the preparation budget closes, as the
+	// controller reported it when preparation began; zero when nothing
+	// was reported. It does not change for the rest of the session: the
+	// countdown is the UI's own calculation, so no per-tick revision is
+	// spent on it.
+	PrepareDeadline time.Time
+	// Activation is the outcome of the controller's one request to bring
+	// the target forward at the start of preparation.
+	Activation ActivationOutcome
 	// Trigger is the first stop trigger, or nil when the session ran to a
 	// normal completion without one.
 	Trigger *Trigger
