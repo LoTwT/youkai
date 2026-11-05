@@ -26,15 +26,6 @@ func (m *Model) recordWorkspace(c *ui.Context, t *ui.Theme) {
 	ui.Column(c).Grow(1).FillHeight().Children(func() {
 		m.recordWorkspaceHeader(c, t, tok)
 		ui.Divider(c)
-		// The unsaved-input prompt belongs to the whole workspace: leaving
-		// the record, switching destinations or quitting must show it from
-		// 摘要 as well as 逐件 (H-1).
-		if m.navPrompt != nil {
-			ui.Row(c).Padding(t.Space(2), t.Space(3)).Children(func() {
-				m.navigationPrompt(c, t)
-			})
-			ui.Divider(c)
-		}
 		switch m.recordTab {
 		case recordTabItems:
 			ui.Column(c).Grow(1).Padding(t.Space(3), t.Space(3)).Gap(t.Space(2)).Children(func() {
@@ -66,8 +57,11 @@ func (m *Model) recordWorkspaceHeader(c *ui.Context, t *ui.Theme, tok *Tokens) {
 		}
 		tab := int(m.recordTab)
 		ui.Segmented(c, &tab, "摘要", "逐件").Bind(&m.workspaceTabsRef)
-		if tab >= 0 && tab < int(recordTabCount) {
+		if tab >= 0 && tab < int(recordTabCount) && recordTab(tab) != m.recordTab {
 			m.recordTab = recordTab(tab)
+			if m.recordTab == recordTabItems {
+				m.enterReviewView()
+			}
 		}
 		ui.Box(c).Grow(1)
 		coverage, pending, saved := m.workspaceStatusTexts()
@@ -84,10 +78,9 @@ func (m *Model) recordWorkspaceHeader(c *ui.Context, t *ui.Theme, tok *Tokens) {
 	})
 }
 
-// workspaceStatusTexts fills the header's three status slots. They are
-// placeholders for the summary work of PR-13: coverage and pending come
-// from the loaded record, and the save slot names the live record's state
-// rather than claiming a save that has not happened.
+// workspaceStatusTexts fills the header's three status slots. The pending
+// slot is the design's 待处理 total (backfill + review), the same number the
+// item list's pending segment counts.
 func (m *Model) workspaceStatusTexts() (coverage, pending, saved string) {
 	coverage = "覆盖：—"
 	if m.recData != nil {
@@ -95,7 +88,7 @@ func (m *Model) workspaceStatusTexts() (coverage, pending, saved string) {
 	}
 	pending = "待处理 —"
 	if m.rec != nil {
-		pending = fmt.Sprintf("待处理 %d", m.pendingCount())
+		pending = fmt.Sprintf("待处理 %d", m.pendingItemsCount())
 	}
 	saved = "已保存"
 	switch {
@@ -181,6 +174,15 @@ func (m *Model) resultConclusion(c *ui.Context, t *ui.Theme) {
 func (m *Model) openRecordWorkspace() {
 	m.page = pageResults
 	m.recordTab = recordTabSummary
+}
+
+// enterReviewView starts a review visit on the item tab: the form region
+// and its first problem field take the focus, as 08 §3 requires.
+func (m *Model) enterReviewView() {
+	m.reviewRegion = reviewRegionForm
+	m.reviewField = ""
+	m.requestReviewFieldFocus("")
+	m.scrollToCrop = false
 }
 
 // revealExports brings the existing export controls into view. The export

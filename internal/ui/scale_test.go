@@ -92,6 +92,10 @@ func TestScaleBuildRecordViewOneAndTenThousandRows(t *testing.T) {
 			if got := m.pendingCount(); got != wantPending {
 				t.Fatalf("pending count = %d, want %d", got, wantPending)
 			}
+			m.filter = resultFilterPending
+			if visible := m.visibleResultRows(); len(visible) != wantPending {
+				t.Fatalf("the pending list renders %d rows, want %d", len(visible), wantPending)
+			}
 			// Index 0 is settled (auto-accepted); the next pending row is
 			// index 1. Index 8 (seq 9) is pending, index 9 (seq 10) is
 			// settled, so the walk skips it and stops at index 10.

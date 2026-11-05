@@ -287,3 +287,52 @@ func TestSaveRevisionStampedAtSaveTime(t *testing.T) {
 		t.Errorf("savedAt = %v, want the store's save time, not a caller-supplied one", item.Revisions[0].SavedAt)
 	}
 }
+
+// TestSaveRevisionCompletedTurnsBackfillIntoProduced checks the one
+// revision that changes a processing outcome: completing a failed item
+// makes it produced, clears the failure, and requires its data payload.
+func TestSaveRevisionCompletedTurnsBackfillIntoProduced(t *testing.T) {
+	st, _ := newTestStore(t)
+	id := newRecord(t, st)
+	cp := Checkpoint{Session: testShell()}
+	cp.Items = []ItemRecord{{
+		Sequence: 1,
+		Status:   StatusFailed,
+		Failure:  "识别超时",
+		Quality:  QualityNotEvaluated,
+		Observed: json.RawMessage(`{"lines":[]}`),
+	}}
+	cp.Session.CapturedCount = 1
+	saveCheckpoint(t, st, id, cp)
+
+	item, _, err := st.SaveRevision(id, 1, 0, ItemEdit{
+		Data:      json.RawMessage(`{"structured":{"data":{}}}`),
+		Confirmed: true,
+		Completed: true,
+	})
+	if err != nil {
+		t.Fatalf("complete failed item: %v", err)
+	}
+	if item.Status != StatusProduced || item.Failure != "" || item.Reason != "" {
+		t.Fatalf("completed item = %+v, want produced with no failure", item)
+	}
+	if item.Quality != QualityHumanConfirmed || string(item.Observed) != `{"lines":[]}` {
+		t.Fatalf("completed item = %+v, want humanConfirmed and the observation intact", item)
+	}
+
+	if _, _, err := st.SaveRevision(id, 1, 1, ItemEdit{Completed: true}); err == nil {
+		t.Fatal("a completed revision without data succeeded")
+	}
+}
+
+func TestSaveRevisionCompletedNeedsData(t *testing.T) {
+	st, _ := newTestStore(t)
+	id := newRecord(t, st)
+	cp := Checkpoint{Session: testShell()}
+	cp.Items = []ItemRecord{{Sequence: 1, Status: StatusFailed, Failure: "识别超时", Quality: QualityNotEvaluated}}
+	cp.Session.CapturedCount = 1
+	saveCheckpoint(t, st, id, cp)
+	if _, _, err := st.SaveRevision(id, 1, 0, ItemEdit{Completed: true}); err == nil {
+		t.Fatal("a completed revision without data succeeded")
+	}
+}

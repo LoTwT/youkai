@@ -392,10 +392,7 @@ func TestRecordWorkspaceShortcuts(t *testing.T) {
 // quitting must still show the save/discard prompt from that view.
 func TestWorkspaceShowsTheUnsavedPromptFromTheSummary(t *testing.T) {
 	m, q, tt, _ := openReviewRecordPage(t, reviewRowItem(t, 1, 12))
-	if err := tt.Click("编辑"); err != nil {
-		t.Fatal(err)
-	}
-	settle(t, m, q, tt)
+	tt.Frame()
 	m.edit.draft.Level = "13"
 	if err := tt.Click("摘要"); err != nil {
 		t.Fatal(err)
@@ -414,10 +411,10 @@ func TestWorkspaceShowsTheUnsavedPromptFromTheSummary(t *testing.T) {
 		m.navPrompt.kind != navPage || m.navPrompt.page != pageSettings {
 		t.Fatalf("leaving the summary did not prompt: page %v prompt %+v", m.displayPage(), m.navPrompt)
 	}
-	if !tt.HasText("当前条目有未保存的修改。") || !tt.HasText("保存修改并继续") {
+	if !tt.HasText("第 1 件有未保存的修改") || !tt.HasText("保存并继续") {
 		t.Fatalf("the summary does not show the unsaved prompt: %q", tt.Texts())
 	}
-	if !tt.HasText("留在当前项") {
+	if !tt.HasText("留在这里") {
 		t.Fatalf("the summary prompt lost its stay action: %q", tt.Texts())
 	}
 
@@ -432,7 +429,7 @@ func TestWorkspaceShowsTheUnsavedPromptFromTheSummary(t *testing.T) {
 	if m.navPrompt == nil || m.navPrompt.kind != navExit {
 		t.Fatalf("the close did not hold behind the exit prompt: %+v", m.navPrompt)
 	}
-	if !tt.HasText("当前条目有未保存的修改，退出前请处理。") || !tt.HasText("保存修改并退出") {
+	if !tt.HasText("第 1 件有未保存的修改") || !tt.HasText("保存并继续") {
 		t.Fatalf("the summary does not show the exit prompt: %q", tt.Texts())
 	}
 	m.promptStay()
@@ -710,11 +707,9 @@ func TestNavRailRecordsRoundTripRestoresViewState(t *testing.T) {
 	}
 	loads := recordLoadCount(svc, "old")
 
-	// A segment, a search that keeps every row, a set filter, a chosen row
-	// and a first visible row well down the list.
+	// A segment, a chosen row and a first visible row well down the
+	// list.
 	m.filter = resultFilterAll
-	m.search = "待校对"
-	m.setFilter = "31100"
 	m.selected = 32
 	m.selectedSequence = m.rec.Rows[32].Seq
 	m.scroll = 30
@@ -732,9 +727,8 @@ func TestNavRailRecordsRoundTripRestoresViewState(t *testing.T) {
 			t.Fatalf("%s: page %v record %+v", stage,
 				m.displayPage(), m.rec)
 		}
-		if m.filter != resultFilterAll || m.search != "待校对" || m.setFilter != "31100" {
-			t.Fatalf("%s: view state = filter %v search %q set %q",
-				stage, m.filter, m.search, m.setFilter)
+		if m.filter != resultFilterAll {
+			t.Fatalf("%s: view state = filter %v", stage, m.filter)
 		}
 		if m.selected != 32 || m.selectedSeq() != wantSeq {
 			t.Fatalf("%s: selection = %d (seq %d), want 32 (seq %d)",
@@ -844,9 +838,7 @@ func TestNavRailRecordsRevalidatesConfirmedStaySelection(t *testing.T) {
 		reviewRowItem(t, 2, 10),
 	)
 
-	if err := tt.Click("确认"); err != nil {
-		t.Fatalf("click 确认: %v", err)
-	}
+	m.confirmCurrentStay()
 	settle(t, m, q, tt)
 	if visible := m.visibleResultRows(); m.pendingCount() != 1 || len(visible) != 2 ||
 		m.selected != 0 || m.selectedSeq() != 1 {
@@ -875,7 +867,7 @@ func TestNavRailRecordsRevalidatesConfirmedStaySelection(t *testing.T) {
 		t.Fatalf("the restored scroll is %d, want the first visible row", m.scroll)
 	}
 	// The rendered detail follows the settled selection.
-	if !tt.HasText("2 · ") {
+	if !tt.HasText("#0002") {
 		t.Fatalf("the detail does not show row 2: %q", tt.Texts())
 	}
 
@@ -934,11 +926,9 @@ func TestHistoryConfirmedStayListReopenRevalidatesSelection(t *testing.T) {
 				loads := recordLoadCount(svc, "r1")
 				rowLabel := historyTimeText(m.history[0])
 
-				if err := tt.Click("确认"); err != nil {
-					t.Fatalf("click 确认: %v", err)
-				}
+				m.confirmCurrentStay()
 				settle(t, m, q, tt)
-				wantVisible := 0
+				wantVisible := 1
 				if rows == 2 {
 					// The confirmed row lingers in this visit's pending
 					// segment only while the results page stays open.
@@ -989,7 +979,7 @@ func TestHistoryConfirmedStayListReopenRevalidatesSelection(t *testing.T) {
 						t.Fatalf("the reopened list shows %v selected %d, want only row 2",
 							visible, m.selected)
 					}
-					if !tt.HasText("2 · ") || tt.HasText("1 · ") {
+					if !tt.HasText("#0002") || tt.HasText("#0001") {
 						t.Fatalf("the detail does not follow row 2: %q", tt.Texts())
 					}
 				case 1:
@@ -997,10 +987,10 @@ func TestHistoryConfirmedStayListReopenRevalidatesSelection(t *testing.T) {
 						t.Fatalf("the completed segment shows %v selected %d",
 							visible, m.selected)
 					}
-					if tt.HasText("1 · ") {
+					if tt.HasText("#0001") {
 						t.Fatalf("the empty list still shows the confirmed row's detail: %q", tt.Texts())
 					}
-					if !tt.HasText("结果已保存，没有待校对的条目。") {
+					if !tt.HasText("都处理完了") {
 						t.Fatalf("the completed segment has no empty state: %q", tt.Texts())
 					}
 				}
@@ -1028,8 +1018,8 @@ func TestHistoryListReopenSettlesSelectionAgainstFilters(t *testing.T) {
 		loads: map[string]*record.Recovery{"r1": rec},
 	}
 	m, q := newTestModel(t, Config{Service: svc})
-	m.SetContentSize(1024, 700)
-	tt := ui.NewTester(m.View, 1024, 700)
+	m.SetContentSize(1180, 760)
+	tt := ui.NewTester(m.View, 1180, 760)
 	settle(t, m, q, tt)
 	m.histChoice = historyLabel(t, m, "r1")
 	m.OpenHistory()
@@ -1066,8 +1056,8 @@ func TestHistoryListReopenSettlesSelectionAgainstFilters(t *testing.T) {
 	if m.displayPage() != pageResults || m.rec == nil || m.rec.ID != "r1" {
 		t.Fatalf("reopening = page %v record %+v", m.displayPage(), m.rec)
 	}
-	if m.filter != resultFilterAll || m.search != "" {
-		t.Fatalf("the reopen reset the filters: filter %v search %q", m.filter, m.search)
+	if m.filter != resultFilterAll {
+		t.Fatalf("the reopen reset the filters: filter %v", m.filter)
 	}
 	if m.selected != 13 || m.selectedSeq() != 14 {
 		t.Fatalf("the reopen moved the visible selection: selected %d (seq %d)",
@@ -1078,22 +1068,6 @@ func TestHistoryListReopenSettlesSelectionAgainstFilters(t *testing.T) {
 		t.Fatalf("the reopen reset the scroll: first %d, want 5", first)
 	}
 
-	// A selection the segment no longer shows falls back to its first row.
-	m.slotFilter = "2"
-	m.selected = 0
-	m.selectedSequence = 1
-	backToRecord()
-	visible := m.visibleResultRows()
-	if len(visible) == 0 || m.selected != visible[0] || m.selectedSeq() != 2 || m.scroll != 0 {
-		t.Fatalf("the hidden selection was kept: selected %d (seq %d) scroll %d visible %v",
-			m.selected, m.selectedSeq(), m.scroll, visible)
-	}
-	if m.slotFilter != "2" {
-		t.Fatalf("the fallback dropped the set/slot choice: %q", m.slotFilter)
-	}
-	if !tt.HasText("2 · ") {
-		t.Fatalf("the detail does not follow the fallback row: %q", tt.Texts())
-	}
 	if got := recordLoadCount(svc, "r1"); got != loads {
 		t.Fatalf("reopening from the list reloaded the record (%d loads, want %d)", got, loads)
 	}
@@ -1182,6 +1156,7 @@ func TestNavRailDestinationsGuardDirtyDrafts(t *testing.T) {
 		t.Fatal("the dirty record switched before the prompt settled")
 	}
 	m.promptStay()
+	tt.Frame()
 	if m.edit == nil || m.edit.draft.Level != "13" {
 		t.Fatal("staying lost the dirty history draft")
 	}
@@ -1195,6 +1170,7 @@ func TestNavRailDestinationsGuardDirtyDrafts(t *testing.T) {
 	}
 	m.promptDiscardAndContinue()
 	drainAll(t, m, q)
+	tt.Frame()
 	if m.displayPage() != pageScan || m.edit != nil {
 		t.Fatalf("discarding did not open the scan page: page %v edit %v", m.displayPage(), m.edit)
 	}
@@ -1218,7 +1194,7 @@ func TestNavRailDestinationsGuardDirtyDrafts(t *testing.T) {
 		t.Fatalf("dirty history did not prompt before settings: %+v", m.navPrompt)
 	}
 	if m.displayPage() != pageResults {
-		t.Fatal("settings opened before the dirty prompt settled")
+		t.Fatalf("settings opened before the dirty prompt settled: page %v prompt %+v edit %+v rec %+v", m.displayPage(), m.navPrompt, m.edit, m.rec)
 	}
 	m.promptStay()
 	if m.edit == nil || m.edit.draft.Level != "14" {
@@ -1231,7 +1207,7 @@ func TestNavRailDestinationsGuardDirtyDrafts(t *testing.T) {
 // to the same snapshot. The destination must keep the list's real place,
 // not just the last explicitly captured one.
 func TestNavRailRecordsRestoresActualScroll(t *testing.T) {
-	for _, width := range []int{1440, 1024, 1020, 860} {
+	for _, width := range []int{1440, 1180} {
 		height := 700
 		switch width {
 		case 1440:
@@ -1265,7 +1241,7 @@ func TestNavRailRecordsRestoresActualScroll(t *testing.T) {
 
 				// Actual pointer scrolling: no direct m.scroll or
 				// List.ScrollTo writes.
-				tt.Scroll(350, 350, 0, 240)
+				tt.Scroll(150, 350, 0, 240)
 				tt.Advance(time.Second)
 				settle(t, m, q, tt)
 				first, _ := m.list.Visible()
@@ -1315,7 +1291,7 @@ func TestNavRailRecordsRestoresActualScroll(t *testing.T) {
 // left the pending segment, so the revisit must revalidate the selection
 // against the visible rows instead of keeping its hidden detail.
 func TestNavRailSessionConfirmedStayRevisitRevalidates(t *testing.T) {
-	for _, width := range []int{1440, 1024, 1020, 860} {
+	for _, width := range []int{1440, 1180} {
 		for _, rows := range []int{2, 1} {
 			t.Run(fmt.Sprintf("%d/%drows", width, rows), func(t *testing.T) {
 				items := []record.ItemRecord{
@@ -1342,16 +1318,13 @@ func TestNavRailSessionConfirmedStayRevisitRevalidates(t *testing.T) {
 				settle(t, m, q, tt)
 				m.ShowLive()
 				showRecordItems(m)
-				if m.narrowResults() {
-					m.openResultDetail()
-				}
 				settle(t, m, q, tt)
 				if m.rec == nil || m.rec.ID != "s1" || !m.rec.Live {
 					t.Fatalf("the live session is not open: %+v", m.rec)
 				}
 
-				if err := tt.Click("确认"); err != nil {
-					t.Fatalf("click 确认: %v", err)
+				if err := tt.Click("确认并下一项"); err != nil {
+					t.Fatalf("click 确认并下一项: %v", err)
 				}
 				settle(t, m, q, tt)
 				if m.pendingCount() != rows-1 {

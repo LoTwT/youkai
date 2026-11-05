@@ -18,7 +18,7 @@ func (m *Model) reviewSettled() bool {
 	if m.rec == nil || m.recData == nil || m.recErr != "" || m.loading {
 		return false
 	}
-	if m.pendingCount() != 0 || m.reviewSaving || m.editingDirty() {
+	if m.unsettledReviewCount() != 0 || m.reviewSaving || m.editingDirty() {
 		return false
 	}
 	if !m.rec.Live {
@@ -34,34 +34,27 @@ func (m *Model) reviewSettled() bool {
 	return true
 }
 
+// unsettledReviewCount is the number of rows whose quality review is
+// still open (the summary's 待校对 queue). Backfill and export-excluded
+// rows are reported by the summary's exclusion groups instead.
+func (m *Model) unsettledReviewCount() int {
+	if m.rec == nil {
+		return 0
+	}
+	count := 0
+	for i := range m.rec.Rows {
+		if m.rec.Rows[i].PendingReview() {
+			count++
+		}
+	}
+	return count
+}
+
 // completionVisible reports whether the pending-zero completion surface
 // replaces the results table. The card belongs to the pending segment
 // only; "全部" and "无法导出" keep their table even after review is done.
 func (m *Model) completionVisible() bool {
 	return m.filter == resultFilterPending && m.reviewSettled()
-}
-
-// completionArea renders the finished review: the empty pending queue and
-// the completion card that owns the export entry. In the split layout the
-// left pane stays the empty queue, matching the results table's place.
-func (m *Model) completionArea(c *ui.Context, t *ui.Theme) {
-	if resultsSideBySide(m.contentWidth) {
-		ui.Split(c, &m.split,
-			func() { m.completionEmptyPane(c, t) },
-			func() { m.completionCard(c, t) },
-		).Fill()
-		return
-	}
-	m.completionCard(c, t)
-}
-
-// completionEmptyPane is the pending segment's empty state beside the
-// completion card.
-func (m *Model) completionEmptyPane(c *ui.Context, t *ui.Theme) {
-	ui.Column(c).Fill().Padding(t.Space(3)).Gap(t.Space(1)).Children(func() {
-		ui.Text(c, "待校对 0 件").FontWeight(600)
-		ui.Text(c, "结果已保存，没有待校对的条目。").TextColor(t.TextMuted)
-	})
 }
 
 // completionCard states the result of the review: the exportable count,

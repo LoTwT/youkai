@@ -950,6 +950,8 @@ func TestFinalCheckpointLoadingBlocksConfirmation(t *testing.T) {
 		t.Fatalf("the export snapshot did not advance: %+v", m.exportData)
 	}
 
+	m.recordTab = recordTabSummary
+	tt.Frame()
 	if err := tt.Click("导出 JSON"); err != nil {
 		t.Fatalf("click 导出 JSON: %v", err)
 	}
@@ -1027,8 +1029,8 @@ func TestFinalCheckpointLoadingBlocksEditorSave(t *testing.T) {
 	m.edit.draft.Level = "13"
 	showRecordItems(m)
 	tt.Frame()
-	if err := tt.Click("保存"); err != nil {
-		t.Fatalf("click 保存: %v", err)
+	if err := tt.Click("保存修改"); err != nil {
+		t.Fatalf("click 保存修改: %v", err)
 	}
 	tt.Key(ui.Cmd, ui.KeyS)
 	m.saveEdit(reviewSave, nil)
@@ -1093,10 +1095,15 @@ func TestFailedRecordLoadBlocksReviewActions(t *testing.T) {
 		t.Fatal("a failed load does not block review actions")
 	}
 	m.startEdit()
+	tt.Frame()
 	if m.edit != nil {
-		t.Fatal("a failed load still opens the editor")
+		m.edit.draft.Level = "13"
+		m.saveEdit(reviewSave, nil)
+		drainAll(t, m, q)
+		if calls := svc.saveCount(); calls != 0 {
+			t.Fatalf("a failed load still saved over the stale row: %+v", svc.saves)
+		}
 	}
-
 	tt.Frame()
 	if !tt.HasText("记录读取失败：磁盘读取失败") {
 		t.Fatalf("the load failure is not visible: %q", tt.Texts())

@@ -8,8 +8,8 @@ import "github.com/egoist/mygo/ui"
 // the focus returns to the page's table. Ctrl+R exists only while the scan
 // prepare page can actually start a scan; it is not a global key. Ctrl+E
 // reveals the record's export entry, and F6 / Shift+F6 move between the
-// rail and the page's content region (PR-14b extends F6 to the review
-// view's item list, screenshots and form).
+// review's item list, screenshots and form (other pages keep the rail and
+// the page's content).
 func (m *Model) registerPageShortcuts(c *ui.Context) {
 	c.OnShortcut(0, ui.KeyEscape, func() { m.handleEscapeShortcut(c) })
 	if m.scanStartReady() {
@@ -18,27 +18,65 @@ func (m *Model) registerPageShortcuts(c *ui.Context) {
 	if m.displayPage() == pageResults && !m.exportEntryBlocked() {
 		c.OnShortcut(ui.Cmd, ui.KeyE, func() { m.revealExports() })
 	}
-	c.OnShortcut(0, ui.KeyF6, func() { m.focusPageContent(c) })
-	c.OnShortcut(ui.Shift, ui.KeyF6, func() { m.focusNavRail(c) })
+	c.OnShortcut(0, ui.KeyF6, func() { m.focusPageContent(c, 1) })
+	c.OnShortcut(ui.Shift, ui.KeyF6, func() { m.focusPageContent(c, -1) })
 }
 
-// focusPageContent is the F6 skeleton: it moves the keyboard into the
-// current page's main region. The review view's regions (item list,
-// screenshots, form) replace this single step in PR-14b.
-func (m *Model) focusPageContent(c *ui.Context) {
+// focusPageContent moves the keyboard between the page's large regions.
+// The review view has three (item list, screenshots, form); elsewhere F6
+// enters the page's main region and Shift+F6 returns to the rail.
+func (m *Model) focusPageContent(c *ui.Context, direction int) {
 	switch m.displayPage() {
 	case pageResults:
-		if m.recordTab == recordTabItems && !(m.narrowResults() && m.resultsDetail) {
-			m.list.Focus(c)
+		if m.recordTab == recordTabItems {
+			m.focusReviewRegion(c, direction)
+			return
+		}
+		if direction < 0 {
+			m.focusNavRail(c)
 			return
 		}
 		m.workspaceTabsRef.Focus(c)
 	case pageHistory:
+		if direction < 0 {
+			m.focusNavRail(c)
+			return
+		}
 		m.historyList.Focus(c)
 	case pageScan:
+		if direction < 0 {
+			m.focusNavRail(c)
+			return
+		}
 		m.scanActionRef.Focus(c)
 	case pageSettings:
+		if direction < 0 {
+			m.focusNavRail(c)
+			return
+		}
 		m.settingsFirstRef.Focus(c)
+	}
+}
+
+// focusReviewRegion cycles the review's three regions. The form step also
+// focuses the first problem field of the chosen item.
+func (m *Model) focusReviewRegion(c *ui.Context, direction int) {
+	next := (int(m.reviewRegion) + direction + int(reviewRegionCount)) % int(reviewRegionCount)
+	m.reviewRegion = reviewRegion(next)
+	switch m.reviewRegion {
+	case reviewRegionList:
+		if m.reviewStandard() {
+			// The list is built after the page shortcuts this frame;
+			// the request lands when its rows are built.
+			m.focusListRequested = true
+		} else {
+			// The compact profile's list is the strip's popover.
+			m.reviewCompactRef.Focus(c)
+		}
+	case reviewRegionCrops:
+		m.reviewCropsRef.Focus(c)
+	case reviewRegionForm:
+		m.requestReviewFieldFocus(m.firstReviewField())
 	}
 }
 
@@ -87,15 +125,17 @@ func (m *Model) handleEscapeShortcut(c *ui.Context) {
 }
 
 // focusPageTable returns the keyboard to the visible results or history
-// table. Other destinations have no table, and a narrow results detail
-// page has none either, so the key is a no-op there.
+// table. Other destinations have no table, so the key is a no-op there.
 func (m *Model) focusPageTable(c *ui.Context) {
 	switch m.displayPage() {
 	case pageResults:
-		if m.narrowResults() && m.resultsDetail {
-			return
+		if m.recordTab == recordTabItems {
+			if m.reviewStandard() {
+				m.focusListRequested = true
+			} else {
+				m.reviewCompactRef.Focus(c)
+			}
 		}
-		m.list.Focus(c)
 	case pageHistory:
 		m.historyList.Focus(c)
 	}

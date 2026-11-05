@@ -19,8 +19,10 @@ var (
 
 // ItemEdit is one manual revision of a saved item. The store appends it
 // to the item's history and moves its current payload forward; the
-// original observation — status, reason, observed payload, evidence — is
-// never modified by it.
+// observed payload and evidence are never modified by it. A completion
+// (Completed) is the one revision that also changes the processing
+// outcome, because a failed or unprocessed item had no interpretation to
+// revise.
 type ItemEdit struct {
 	// Changes records what the revision edited, for the audit history.
 	// Field names and values belong to the item payload and stay opaque
@@ -32,6 +34,11 @@ type ItemEdit struct {
 	Data json.RawMessage
 	// Confirmed marks the revision as a whole-item human confirmation.
 	Confirmed bool
+	// Completed supplies the missing interpretation of a failed or
+	// unprocessed item: the item becomes produced, and its failure or
+	// unprocessed reason is cleared. Data is required; a produced item
+	// ignores the flag.
+	Completed bool
 }
 
 // SaveRevision appends one manual revision to an item of the record's
@@ -108,6 +115,14 @@ func (s *Store) SaveRevision(recordID string, sequence, expectedRevision int64, 
 	if edit.Data != nil {
 		item.Data = append(json.RawMessage(nil), edit.Data...)
 	}
+	if edit.Completed && item.Status != StatusProduced {
+		// A manual completion replaces the failed or unprocessed outcome:
+		// the item now carries an interpretation and joins the export's
+		// usable set under the same quality rules as a produced revision.
+		item.Status = StatusProduced
+		item.Failure = ""
+		item.Reason = ""
+	}
 	if edit.Confirmed {
 		item.Quality = QualityHumanConfirmed
 	} else {
@@ -146,6 +161,9 @@ func validateEdit(edit *ItemEdit) error {
 	}
 	if err := checkPayload("revision data", edit.Data); err != nil {
 		return err
+	}
+	if edit.Completed && edit.Data == nil {
+		return errors.New("record: a completed revision needs its data payload")
 	}
 	return nil
 }

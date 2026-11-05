@@ -282,47 +282,30 @@ type Model struct {
 	contentWidth  int
 	contentHeight int
 
-	// The results table's place and its chosen row live in the record
-	// workspace state; list keeps the toolkit's per-pass list state.
-	// tableSelected is the chosen display row of the filtered table, which
-	// maps back to the workspace's full-row selected index. textInputFocused
-	// is rebuilt every frame: MyGo's text inputs leave Escape to shortcuts,
-	// so the shell keeps the key with a focused field instead of taking it.
+	// The results list's chosen row lives in the record workspace state;
+	// list keeps the toolkit's per-pass list state. tableSelected is the
+	// chosen display row of the filtered list, which maps back to the
+	// workspace's full-row selected index. textInputFocused is rebuilt
+	// every frame: MyGo's text inputs leave Escape to shortcuts, so the
+	// shell keeps the key with a focused field instead of taking it.
 	list             ui.ListState
 	tableSelected    int
 	textInputFocused bool
-	split            float32
-	// The results composite takes a whole number of rows, so a partial row
-	// cannot sit at the bottom. Its slot fills the pane whatever the
-	// table's capped height, giving each frame the room to measure. The
-	// last whole-row height is kept for a page that returns before its
-	// slot has a committed frame.
-	resultsTableSlot   ui.Ref
-	resultsTableHeight float32
-	// textScale is the desktop's text size as View last read it. The
-	// composite's rows scale with it, and the scroll/reset paths run from
-	// update handlers without a Context, so they read this recorded value
-	// instead of threading a Context through unrelated code. Zero means no
-	// frame has read the preference yet, which resultsMetricsFor treats as
-	// the 100% design.
-	textScale float32
-	// The results composite tracks its list's vertical offset. A precise
-	// scroll may stop between rows; resultsScrollSeen and the two times
-	// debounce the rest snap that aligns it to a row.
-	resultsScroll        ui.ScrollState
-	resultsScrollSeen    float32
-	resultsScrollMovedAt time.Time
-	resultsScrollSnapAt  time.Time
+	// The review layout's pane refs. The list is 240 DIP, the form 400,
+	// and the screenshots take the rest (never under 360). reviewLayout
+	// records the laid-out widths so tests can check the three profiles.
+	reviewFilterRef  ui.Ref
+	reviewCompactRef ui.Ref
+	reviewListRef    ui.Ref
+	reviewCropsRef   ui.Ref
+	reviewFormRef    ui.Ref
+	reviewLayout     reviewLayoutWidths
 	// historyRowProbe measures the native history table's tallest cell, so
 	// its whole-row cap uses the platform's real line metrics.
 	historyRowProbe ui.Ref
-	// resultsDetail opens a narrow results page from its list to the
-	// chosen item's detail; it has no effect in the side-by-side split.
-	resultsDetail bool
-	// showEvidence reveals the detail pane's evidence area — screenshots,
-	// raw OCR lines, their provenance and model scores. It is off by
-	// default so the structured form stays the main view.
-	showEvidence bool
+	// textScale is the desktop's text size as View last read it. The
+	// list rows and badges scale with it.
+	textScale float32
 
 	// The review editor: one item's unsaved draft, and the save currently
 	// in flight. reviewSerial invalidates a late response when a newer
@@ -383,7 +366,6 @@ func New(cfg Config) *Model {
 	m := &Model{
 		cfg:              cfg,
 		source:           cfg.ScanSource,
-		split:            420,
 		page:             pageScan,
 		recordTab:        recordTabSummary,
 		contentWidth:     1180,
@@ -405,7 +387,10 @@ func New(cfg Config) *Model {
 }
 
 // SetContentSize records the page area for responsive layout. The entry
-// point calls it once at ready and again from Window.OnResize.
+// point calls it once at ready and again from Window.OnResize. The review
+// view has two width profiles — standard (with the 240-DIP item list) and
+// compact (the list in the top strip) — but both keep the screenshots and
+// the form side by side (09 §2).
 func (m *Model) SetContentSize(width, height int) {
 	if width <= 0 || height <= 0 {
 		return
@@ -413,19 +398,7 @@ func (m *Model) SetContentSize(width, height int) {
 	if m.contentWidth == width && m.contentHeight == height {
 		return
 	}
-	sideBySide := resultsSideBySide(m.contentWidth)
 	m.contentWidth, m.contentHeight = width, height
-	m.split = resultsSplitTableWidth(width)
-	if sideBySide != resultsSideBySide(width) && m.rec != nil {
-		// Crossing the split breakpoint changes the table pane and its
-		// column widths. Re-enter on the first visible row so the new
-		// layout starts from the same row and a mid-input offset cannot
-		// leave half rows behind.
-		if first, last := m.list.Visible(); last >= first && first >= 0 {
-			m.resetResultsScroll(first)
-			m.list.ScrollTo(first, ui.Start)
-		}
-	}
 	if m.upd != nil {
 		m.upd.Update(func() {})
 	}

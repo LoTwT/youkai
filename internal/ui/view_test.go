@@ -269,20 +269,18 @@ func openTestRecord(t *testing.T, ev EvidenceSource, cacheLimit int) (*Model, *q
 		loads: map[string]*record.Recovery{"r1": testRecord()},
 	}
 	m, q := newTestModel(t, Config{Service: svc, Evidence: ev, EvidenceCacheLimit: cacheLimit})
-	// The 1024 split keeps the detail pane beside the list; the taller test
-	// window keeps the structured form and evidence in the rendered
-	// viewport without changing the product's scrollable detail pane. The
-	// all segment keeps every outcome in the list, as the review flow sees
-	// them.
-	m.SetContentSize(1024, 900)
-	tt := ui.NewTester(m.View, 1024, 900)
+	// The standard width keeps the 240-DIP item list beside the
+	// screenshots and form. The all segment keeps every outcome in the
+	// list, as the review flow sees them.
+	m.SetContentSize(1180, 900)
+	tt := ui.NewTester(m.View, 1180, 900)
 	settle(t, m, q, tt)
 	m.OpenHistory()
 	settle(t, m, q, tt)
 	showRecordItems(m)
 	tt.Frame()
 	m.setResultFilter(resultFilterAll)
-	tt.Frame()
+	settle(t, m, q, tt)
 	return m, q, tt
 }
 
@@ -308,28 +306,17 @@ func TestViewDetailMatchesSelection(t *testing.T) {
 	// Every outcome stays in the list, and the recovery mark shows.
 	for _, want := range []string{
 		"结果：历史记录 r1（4 条，中断恢复 1 条）",
-		"河豚电音", "失败", "未处理",
+		"河豚电音", "待补录 · 识别失败", "待补录 · 未处理",
 	} {
 		if !tt.HasText(want) {
 			t.Fatalf("the results list does not show %q: %q", want, tt.Texts())
 		}
 	}
 
-	// The first record is chosen by default. Its structured form shows
-	// while the evidence stays folded; revealing the evidence adds the
-	// raw texts and scores with their images.
-	if !tt.HasText("1 · 河豚电音 · 1 号位 · 15 级") {
+	// The first record is chosen by default; its screenshots are always
+	// visible beside the form.
+	if !tt.HasText("#0001 · 河豚电音 · 1 号位 · 15 级") {
 		t.Fatalf("the default selection does not show: %q", tt.Texts())
-	}
-	if tt.HasText("模型分数 0.900") {
-		t.Fatalf("the evidence showed before it was asked for: %q", tt.Texts())
-	}
-	if err := tt.Click("显示证据"); err != nil {
-		t.Fatal(err)
-	}
-	settle(t, m, q, tt)
-	if !tt.HasText("模型分数 0.900") || !tt.HasText("+15") {
-		t.Fatalf("the produced texts or scores do not show: %q", tt.Texts())
 	}
 	if n := countColor(tt.Image(), item1A); n < 100 {
 		t.Fatalf("the first item's first image does not show (%d px)", n)
@@ -340,7 +327,7 @@ func TestViewDetailMatchesSelection(t *testing.T) {
 	m.tableSelected = 1
 	tt.Frame()
 	settle(t, m, q, tt)
-	if !tt.HasText("2 · 失败") || !tt.HasText("识别失败：识别超时") {
+	if !tt.HasText("#0002 · 失败") || !tt.HasText("补录：这件识别失败，补全必填字段后才能导出。") {
 		t.Fatalf("the failed row's details do not show: %q", tt.Texts())
 	}
 	if n := countColor(tt.Image(), item2A); n < 100 {
@@ -350,74 +337,43 @@ func TestViewDetailMatchesSelection(t *testing.T) {
 		t.Fatalf("another item's image shows for the failed item (%d px)", n)
 	}
 
-	// The user-cancelled row shows its unprocessed reason.
+	// The user-cancelled row shows its backfill notice and text.
 	m.selected = 2
 	m.tableSelected = 2
 	tt.Frame()
 	settle(t, m, q, tt)
-	if !tt.HasText("未处理原因：用户取消（识别未运行）") {
+	if !tt.HasText("补录：这件没有处理，补全必填字段后才能导出。") {
 		t.Fatalf("the cancelled reason does not show: %q", tt.Texts())
-	}
-	if !tt.HasText("（未运行识别）") {
-		t.Fatalf("the unrun recognition does not show: %q", tt.Texts())
 	}
 	if n := countColor(tt.Image(), item1A); n != 0 {
 		t.Fatalf("another item's image shows for the cancelled item (%d px)", n)
 	}
 }
 
-// TestViewStructuredFormAndEvidenceToggle checks the results detail's
-// default shape: the read-only structured form is visible, the evidence
-// stays collapsed, and the toggle reveals and hides the raw OCR evidence
-// without losing the selected item's images.
-func TestViewStructuredFormAndEvidenceToggle(t *testing.T) {
+// TestViewStructuredFormAndScreenshots checks that the item form shows
+// the parsed fields and the screenshots are always visible beside it.
+func TestViewStructuredFormAndScreenshots(t *testing.T) {
 	img := color.RGBA{R: 171, G: 31, B: 91, A: 255}
 	ev := &fakeEvidence{images: map[string]*ui.Bitmap{
 		"r1/000001-line0": solidBitmap(img),
 	}}
-	m, q, tt := openTestRecord(t, ev, 0)
-
+	_, _, tt := openTestRecord(t, ev, 0)
+	if err := tt.Click("其余 6 个字段"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
 	for _, want := range []string{
-		"套装", "河豚电音（31100）", "稀有度", "S", "槽位", "1 号位",
-		"等级", "15 级", "主词条", "生命值 · 2200 · 固定值",
-		"副词条", "暴击伤害 · 19.2 · 百分比 · 强化 +3",
-		"管理状态", "装备", "校验状态", "不可用",
-		"截图与原始识别文本已折叠。",
+		"套装", "31100 河豚电音", "稀有度", "S", "槽位", "1 号位",
+		"等级", "15 级", "主词条", "health 生命值", "flat 固定值",
+		"副词条", "critDamage 暴击伤害", "percent 百分比",
+		"管理状态", "装备",
 	} {
 		if !tt.HasText(want) {
 			t.Fatalf("the structured form does not show %q: %q", want, tt.Texts())
 		}
 	}
-	if tt.HasText("无标记") || tt.HasText("未装备") {
-		t.Fatalf("a null management/equipped rendered as a read state: %q", tt.Texts())
-	}
-	if tt.HasText("模型分数") || tt.HasText("证据（原始 OCR）") {
-		t.Fatalf("the evidence occupied the main view: %q", tt.Texts())
-	}
-	if n := countColor(tt.Image(), img); n != 0 {
-		t.Fatalf("the collapsed evidence still showed its image (%d px)", n)
-	}
-
-	if err := tt.Click("显示证据"); err != nil {
-		t.Fatal(err)
-	}
-	settle(t, m, q, tt)
-	if !tt.HasText("隐藏证据") || !tt.HasText("证据（原始 OCR）") || !tt.HasText("模型分数 0.900") {
-		t.Fatalf("the evidence did not reveal: %q", tt.Texts())
-	}
 	if n := countColor(tt.Image(), img); n < 100 {
-		t.Fatalf("the revealed evidence image does not show (%d px)", n)
-	}
-
-	if err := tt.Click("隐藏证据"); err != nil {
-		t.Fatal(err)
-	}
-	settle(t, m, q, tt)
-	if !tt.HasText("显示证据") || tt.HasText("模型分数") || tt.HasText("证据（原始 OCR）") {
-		t.Fatalf("the evidence did not fold back: %q", tt.Texts())
-	}
-	if n := countColor(tt.Image(), img); n != 0 {
-		t.Fatalf("the folded evidence still showed its image (%d px)", n)
+		t.Fatalf("the screenshot is not beside the form (%d px)", n)
 	}
 }
 
@@ -438,12 +394,6 @@ func TestViewFastSelectionSwitch(t *testing.T) {
 	}}
 	m, q, tt := openTestRecord(t, ev, 0)
 
-	// Reveal the evidence area before checking image loading and switching.
-	if err := tt.Click("显示证据"); err != nil {
-		t.Fatal(err)
-	}
-	settle(t, m, q, tt)
-
 	// The first item is chosen and its loads are scheduled. Switch to the
 	// second item before the loads land, then settle: the second item's
 	// own images show, the first item's do not.
@@ -451,7 +401,7 @@ func TestViewFastSelectionSwitch(t *testing.T) {
 	m.tableSelected = 1
 	tt.Frame()
 	settle(t, m, q, tt)
-	if !tt.HasText("2 · 失败") {
+	if !tt.HasText("#0002 · 失败") {
 		t.Fatalf("the switch did not choose the second item: %q", tt.Texts())
 	}
 	if n := countColor(tt.Image(), item2A); n < 100 {
@@ -467,9 +417,9 @@ func TestViewFastSelectionSwitch(t *testing.T) {
 
 	// Switching back shows the first item's images from the cache without
 	// loading anything again.
-	if err := tt.Click("河豚电音"); err != nil {
-		t.Fatal(err)
-	}
+	m.selected = 0
+	m.tableSelected = 0
+	tt.Frame()
 	settle(t, m, q, tt)
 	if n := countColor(tt.Image(), item1A); n < 100 {
 		t.Fatalf("the first item's image does not show after switching back (%d px)", n)
@@ -487,11 +437,8 @@ func TestViewFastSelectionSwitch(t *testing.T) {
 func TestViewEvidenceFailureShows(t *testing.T) {
 	ev := &fakeEvidence{images: map[string]*ui.Bitmap{}}
 	m, q, tt := openTestRecord(t, ev, 0)
-	if err := tt.Click("显示证据"); err != nil {
-		t.Fatal(err)
-	}
 	settle(t, m, q, tt)
-	if !tt.HasText("证据图片不可用：missing evidence 000001-line0") {
+	if !tt.HasText("截图不可用：missing evidence 000001-line0") {
 		t.Fatalf("the evidence failure does not show: %q", tt.Texts())
 	}
 	loaded := ev.callsCount()
@@ -709,16 +656,13 @@ func TestEvidenceCacheIsBounded(t *testing.T) {
 		}
 	}
 	m, q := newTestModel(t, Config{Service: svc, Evidence: ev, EvidenceCacheLimit: 8})
-	m.SetContentSize(1024, 700)
-	tt := ui.NewTester(m.View, 1024, 700)
+	m.SetContentSize(1180, 760)
+	tt := ui.NewTester(m.View, 1180, 760)
 	settle(t, m, q, tt)
 	m.OpenHistory()
 	settle(t, m, q, tt)
 	showRecordItems(m)
 	tt.Frame()
-	if err := tt.Click("显示证据"); err != nil {
-		t.Fatal(err)
-	}
 	settle(t, m, q, tt)
 
 	// The first item's six images load and stay (they are on screen).
@@ -731,9 +675,9 @@ func TestEvidenceCacheIsBounded(t *testing.T) {
 
 	// Switching to the second item loads its six; eviction trims the
 	// first item's down to the limit while keeping what is on screen.
-	if err := tt.Click("震星迪斯科"); err != nil {
-		t.Fatal(err)
-	}
+	m.selected = 1
+	m.tableSelected = 1
+	tt.Frame()
 	settle(t, m, q, tt)
 	if ev.callsCount() != 12 {
 		t.Fatalf("the second item's six lines did not load: %d calls", ev.callsCount())
@@ -743,9 +687,9 @@ func TestEvidenceCacheIsBounded(t *testing.T) {
 	}
 
 	// Switching back reloads only what was evicted.
-	if err := tt.Click("河豚电音"); err != nil {
-		t.Fatal(err)
-	}
+	m.selected = 0
+	m.tableSelected = 0
+	tt.Frame()
 	settle(t, m, q, tt)
 	if ev.callsCount() != 16 {
 		t.Fatalf("the evicted images did not reload once: %d calls", ev.callsCount())
@@ -790,63 +734,6 @@ func TestFileEvidence(t *testing.T) {
 	}
 	if _, err := src.Evidence("r1", "000002-line0"); err == nil {
 		t.Fatal("loading a missing evidence image succeeded")
-	}
-}
-
-// TestResultsSideBySideBreakpoint guards the confirmed 1024 breakpoint:
-// 1024 and wider split the table and detail, while 1020 and 860 are whole
-// list/detail pages. The table is 420 DIPs at 1024 and 560 DIPs at 1440,
-// and each column set must fit and fill its pane.
-func TestResultsSideBySideBreakpoint(t *testing.T) {
-	if resultsSideBySideMinWidth != 1024 {
-		t.Fatalf("results breakpoint = %d, want 1024", resultsSideBySideMinWidth)
-	}
-	for _, width := range []int{860, 1020, 1023} {
-		if resultsSideBySide(width) {
-			t.Fatalf("results split side by side at %d", width)
-		}
-	}
-	for _, width := range []int{1024, 1439, 1440} {
-		if !resultsSideBySide(width) {
-			t.Fatalf("results did not split side by side at %d", width)
-		}
-	}
-	for _, tc := range []struct {
-		width int
-		want  float32
-	}{
-		{width: 1024, want: 420},
-		{width: 1439, want: 420},
-		{width: 1440, want: 560},
-	} {
-		if got := resultsSplitTableWidth(tc.width); got != tc.want {
-			t.Errorf("results table at %d = %v, want %v", tc.width, got, tc.want)
-		}
-	}
-	for _, tc := range []struct {
-		width int
-		table float32
-	}{
-		{width: 1024, table: 420},
-		{width: 1440, table: 560},
-	} {
-		columns := resultsColumnsFor(tc.width)
-		explicit := float32(0)
-		for _, column := range columns {
-			explicit += column.Width
-		}
-		if explicit > tc.table {
-			t.Errorf("the columns at %d take %v DIPs, want at most the %v-DIP pane", tc.width, explicit, tc.table)
-		}
-		if remaining := tc.table - explicit; remaining < columns[len(columns)-1].MinWidth {
-			t.Errorf("the state column at %d gets %v DIPs, want at least %v",
-				tc.width, remaining, columns[len(columns)-1].MinWidth)
-		}
-		if tc.width >= 1440 {
-			if columns[1].Width != 120 || columns[3].Width != 140 {
-				t.Errorf("the 1440 set/main columns are %v/%v, want 120/140", columns[1].Width, columns[3].Width)
-			}
-		}
 	}
 }
 
@@ -902,7 +789,9 @@ func TestFailedSessionExplainsTermination(t *testing.T) {
 // TestCompletionCardEmptyRecord checks that a saved record with no rows
 // still reaches the pending-zero surface and does not offer an export.
 func TestCompletionCardEmptyRecord(t *testing.T) {
-	_, _, tt := openResponsiveResults(t, recovery(), 1024, 700)
+	m, _, tt := openResponsiveResults(t, recovery(), 1024, 700)
+	m.recordTab = recordTabSummary
+	tt.Frame()
 	if !tt.HasText("无可导出条目") || !tt.HasText("不可确认：无可导出的条目。") {
 		t.Fatalf("the empty saved record has no completion surface: %q", tt.Texts())
 	}
@@ -925,10 +814,11 @@ func TestCompletionCardShowsCountsExclusionsAndExports(t *testing.T) {
 	saver := &fakeDirectExportSaver{}
 	m.cfg.DirectExportSaver = saver
 	m.cfg.AppVersion = "test-1"
+	m.recordTab = recordTabSummary
 	tt.Frame()
 
 	if !m.completionVisible() {
-		t.Fatal("the finished record does not show the completion state")
+		t.Fatalf("the finished record does not show the completion state: filter %v pendingReview %d loading %v recData %v dirty %v", m.filter, m.pendingReviewCount(), m.loading, m.recData != nil, m.editingDirty())
 	}
 	if !tt.HasText("校对完成") || !tt.HasText("可导出 1 件 · 共采集 4 件") {
 		t.Fatalf("the completion summary is missing: %q", tt.Texts())
@@ -959,6 +849,7 @@ func TestCompletionCardBlocksZeroExportable(t *testing.T) {
 	m, q, tt := openResponsiveResults(t, rec, 1024, 700)
 	saver := &fakeDirectExportSaver{}
 	m.cfg.DirectExportSaver = saver
+	m.recordTab = recordTabSummary
 	tt.Frame()
 
 	if !m.completionVisible() {
@@ -991,6 +882,7 @@ func TestCompletionCardBlocksUnknownExport(t *testing.T) {
 	m.cfg.DirectExportSaver = saver
 	m.exportData = nil
 	m.exportBuildErr = ""
+	m.recordTab = recordTabSummary
 	tt.Frame()
 
 	if !m.completionVisible() {
@@ -1023,7 +915,9 @@ func TestCompletionCardShowsPartialCoverage(t *testing.T) {
 		Status:        record.CoveragePartial,
 		ExpectedCount: &expected,
 	}
-	_, _, tt := openResponsiveResults(t, rec, 1024, 700)
+	m, _, tt := openResponsiveResults(t, rec, 1024, 700)
+	m.recordTab = recordTabSummary
+	tt.Frame()
 	if !tt.HasText("校对完成") {
 		t.Fatalf("the partial record does not show completion: %q", tt.Texts())
 	}
@@ -1039,7 +933,9 @@ func TestCompletionCardNamesIncompletePositions(t *testing.T) {
 	rec := recovery(confirmedReviewItem(t, 1, 12))
 	rec.Checkpoint.Session.Coverage = record.Coverage{Status: record.CoveragePartial}
 	rec.Checkpoint.Session.ObservedScope = []byte(`{"kind":"zzzInventory","sort":"verified","coverage":"partial","positions":[{"position":1,"complete":true,"topVerified":true,"bottomVerified":true},{"position":2,"complete":false,"stage":"filter","reasonCode":"navigationMismatch","reason":"the filter panel never closed"}]}`)
-	_, _, tt := openResponsiveResults(t, rec, 1024, 700)
+	m, _, tt := openResponsiveResults(t, rec, 1024, 700)
+	m.recordTab = recordTabSummary
+	tt.Frame()
 	if !tt.HasText("不完整号位：2 号位 筛选准备失败：点击或拖拽后页面没有按预期变化") {
 		t.Fatalf("the degraded position is not explained: %q", tt.Texts())
 	}
@@ -1073,26 +969,15 @@ func TestCompletionCardOnlyInPendingSegment(t *testing.T) {
 		confirmedReviewItem(t, 2, 10),
 	)
 	m, _, tt := openResponsiveResults(t, rec, 1024, 700)
+	m.recordTab = recordTabSummary
+	tt.Frame()
 	if !tt.HasText("校对完成") {
 		t.Fatalf("the finished record does not show completion: %q", tt.Texts())
 	}
-	if err := tt.Click("全部 2"); err != nil {
-		t.Fatal(err)
-	}
+	m.recordTab = recordTabItems
 	tt.Frame()
-	if m.filter != resultFilterAll || tt.HasText("校对完成") {
-		t.Fatalf("the all segment kept the completion card: filter %v", m.filter)
-	}
-	if !tt.HasText("字段（只读）") {
-		t.Fatalf("the all segment does not show the table and detail: %q", tt.Texts())
-	}
-
-	if err := tt.Click("待校对 0"); err != nil {
-		t.Fatal(err)
-	}
-	tt.Frame()
-	if m.filter != resultFilterPending || !tt.HasText("校对完成") {
-		t.Fatalf("returning to the empty pending segment lost completion: filter %v", m.filter)
+	if !tt.HasText("都处理完了") {
+		t.Fatalf("the review's empty state is missing: %q", tt.Texts())
 	}
 }
 
@@ -1104,8 +989,8 @@ func TestCompletionRequiresEndedAndSavedSession(t *testing.T) {
 	svc := &fakeService{loads: map[string]*record.Recovery{"s1": rec}}
 	saver := &fakeDirectExportSaver{}
 	m, q := newTestModel(t, Config{Service: svc, DirectExportSaver: saver})
-	m.SetContentSize(1024, 700)
-	tt := ui.NewTester(m.View, 1024, 700)
+	m.SetContentSize(1180, 760)
+	tt := ui.NewTester(m.View, 1180, 760)
 	settle(t, m, q, tt)
 
 	applyAndSettle(t, m, q, tt, snap("s1", 1, true, scan.PhaseCapturing,
@@ -1153,8 +1038,8 @@ func TestCompletionUsesHistoryRecordCounts(t *testing.T) {
 	}
 	saver := &fakeDirectExportSaver{}
 	m, q := newTestModel(t, Config{Service: svc, DirectExportSaver: saver})
-	m.SetContentSize(1024, 700)
-	tt := ui.NewTester(m.View, 1024, 700)
+	m.SetContentSize(1180, 760)
+	tt := ui.NewTester(m.View, 1180, 760)
 	settle(t, m, q, tt)
 	applyAndSettle(t, m, q, tt, snap("s1", 1, false, scan.PhaseEnded,
 		scan.Counts{Captured: 2, Produced: 2}, 2, false, ""))
@@ -1166,7 +1051,7 @@ func TestCompletionUsesHistoryRecordCounts(t *testing.T) {
 	m.histChoice = historyLabel(t, m, "old")
 	m.OpenHistory()
 	settle(t, m, q, tt)
-	showRecordItems(m)
+	m.recordTab = recordTabSummary
 	tt.Frame()
 	if m.rec == nil || m.rec.Live || !m.completionVisible() {
 		t.Fatalf("the finished history snapshot does not show completion: %q", tt.Texts())

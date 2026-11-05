@@ -82,6 +82,9 @@ func (m *Model) viewPages(c *ui.Context) {
 			m.pageStatusBar(c, t)
 		})
 	})
+	// The unsaved-changes dialog covers the whole window, whichever page
+	// triggered it (08 §9).
+	m.navigationPrompt(c, t)
 }
 
 // navRail is the three-destination rail: icon above label, the active
@@ -196,7 +199,6 @@ func (m *Model) pageBody(c *ui.Context, t *ui.Theme) {
 		ui.Column(c).Grow(1).Padding(t.Space(3), t.Space(3)).Gap(t.Space(2)).Children(func() {
 			ui.Scroll(c).Grow(1).Children(func() {
 				ui.Column(c).Gap(t.Space(2)).Children(func() {
-					m.navigationPrompt(c, t)
 					m.prepareArea(c, t)
 					if m.snap.SessionID != "" {
 						ui.Divider(c)

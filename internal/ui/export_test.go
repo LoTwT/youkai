@@ -95,7 +95,7 @@ func exportModel(t *testing.T, saver *fakeDirectExportSaver) (*Model, *queueUpda
 	m.reloadRecord("rec", false)
 	drainAll(t, m, q)
 	m.page = pageResults
-	showRecordItems(m)
+	m.recordTab = recordTabSummary
 	if m.rec == nil || m.exportData == nil {
 		t.Fatalf("the export snapshot did not load: rec=%v err=%q", m.rec, m.exportBuildErr)
 	}
@@ -508,8 +508,13 @@ func TestDirectExportDisablesReviewActions(t *testing.T) {
 	}
 	tt := ui.NewTester(m.View, 1024, 700)
 	tt.Frame()
-	if !tt.HasText("正在导出……") || !tt.HasText("正在导出，完成前不能编辑或确认。") {
+	if !tt.HasText("正在导出……") {
 		t.Fatalf("the export busy state is not shown: %q", tt.Texts())
+	}
+	m.recordTab = recordTabItems
+	tt.Frame()
+	if !tt.HasText("正在导出，完成前不能编辑或确认。") {
+		t.Fatalf("the review does not name the export block: %q", tt.Texts())
 	}
 
 	close(release)
@@ -535,7 +540,7 @@ func directExportModel(t *testing.T, saver *fakeDirectExportSaver, rec *record.R
 	m.reloadRecord(id, live)
 	drainAll(t, m, q)
 	m.page = pageResults
-	showRecordItems(m)
+	m.recordTab = recordTabSummary
 	if m.exportData == nil {
 		t.Fatalf("the direct export snapshot did not load: %v", m.exportBuildErr)
 	}
@@ -564,7 +569,7 @@ func TestDirectExportDirectoryFailureOffersActions(t *testing.T) {
 	m.reloadRecord("rec", false)
 	drainAll(t, m, q)
 	m.page = pageResults
-	showRecordItems(m)
+	m.recordTab = recordTabSummary
 	tt := ui.NewTester(m.View, 1024, 700)
 	settle(t, m, q, tt)
 

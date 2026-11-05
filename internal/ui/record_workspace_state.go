@@ -6,13 +6,26 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-// resultFilter is the results table's chosen segment.
+// resultFilter is the item list's chosen segment: the items a person still
+// has to handle (backfill + review), the exportable items with a warning,
+// or every captured item.
 type resultFilter int
 
 const (
 	resultFilterPending resultFilter = iota
+	resultFilterWarning
 	resultFilterAll
-	resultFilterUnexportable
+)
+
+// reviewRegion is one of the three large regions of the item review:
+// the item list, the screenshots and the form. F6 cycles through them.
+type reviewRegion int
+
+const (
+	reviewRegionList reviewRegion = iota
+	reviewRegionCrops
+	reviewRegionForm
+	reviewRegionCount
 )
 
 // recordWorkspaceState is everything the record workspace remembers while
@@ -39,16 +52,33 @@ type recordWorkspaceState struct {
 	// loaded from disk.
 	liveSavedShown int
 
-	// The browser state: segment, search text, set and slot filters, the
-	// chosen row and its stable capture sequence, and the first visible
-	// row.
+	// The browser state: segment, the chosen row and its stable capture
+	// sequence, and the first visible row. The item list is 240 DIP; the
+	// old search and set/slot filters are gone with the final design.
 	filter           resultFilter
-	search           string
-	setFilter        string
-	slotFilter       string
 	selected         int
 	selectedSequence int64
 	scroll           int
+
+	// The review layout's transient state. reviewRegion is the F6 region
+	// the keyboard is in; reviewField is the form field whose crop is
+	// highlighted; focusReviewField asks the next frame to focus that
+	// field's control; scrollToCrop asks it to bring the highlighted crop
+	// into view. cropZoom 0 means fit the screenshot area, >0 multiplies
+	// the fit width. formExtrasOpen is the "其余字段" disclosure, and
+	// compactListOpen is the compact strip's "全部件" popover.
+	reviewRegion       reviewRegion
+	reviewField        FormField
+	focusReviewField   FormField
+	focusedReviewField FormField
+	scrollToCrop       bool
+	cropZoom           float32
+	formExtrasOpen     bool
+	formRawOpen        bool
+	compactListOpen    bool
+	// focusListRequested asks the next list build to take the keyboard;
+	// ListState.Focus must be called while its rows are being built.
+	focusListRequested bool
 
 	// recentlyConfirmed holds items confirmed with the "confirm and stay"
 	// action. They remain visible in the pending segment, marked as
@@ -61,11 +91,12 @@ type recordWorkspaceState struct {
 }
 
 // newRecordWorkspaceState is the empty workspace: no record, no selection
-// and the pending-review segment the design starts on.
+// and the pending segment the design starts on.
 func newRecordWorkspaceState() recordWorkspaceState {
 	return recordWorkspaceState{
-		filter:   resultFilterPending,
-		selected: -1,
+		filter:       resultFilterPending,
+		selected:     -1,
+		reviewRegion: reviewRegionForm,
 	}
 }
 
@@ -115,6 +146,145 @@ func (m *Model) recentlyConfirmedNow(row *Row) bool {
 		m.recentlyConfirmed[row.Seq]
 }
 
+// classCounts is the four-class partition of the open record's items,
+// taken from the classification every row already carries.
+func (m *Model) classCounts() app.ItemClassCounts {
+	var counts app.ItemClassCounts
+	if m.rec == nil {
+		return counts
+	}
+	for i := range m.rec.Rows {
+		switch m.rec.Rows[i].ItemClass {
+		case app.ItemClassPendingBackfill:
+			counts.PendingBackfill++
+		case app.ItemClassPendingReview:
+			counts.PendingReview++
+		case app.ItemClassWarning:
+			counts.Warning++
+		case app.ItemClassPassed:
+			counts.Passed++
+		}
+	}
+	return counts
+}
+
+// pendingItemsCount is the design's "待处理" total: backfill plus review.
+func (m *Model) pendingItemsCount() int {
+	return int(m.classCounts().Pending())
+}
+
+// pendingReviewCount is the review queue alone (backfill excluded): the
+// rows a confirmation settles and "下一个待校对" moves between.
+func (m *Model) pendingReviewCount() int {
+	return int(m.classCounts().PendingReview)
+}
+
+// pendingCount is the review queue's historical name used by the review
+// action tests; it never includes backfill.
+func (m *Model) pendingCount() int { return m.pendingReviewCount() }
+
+// selectReviewRegion moves the keyboard to one of the review's three
+// regions on the next frame.
+func (m *Model) selectReviewRegion(region reviewRegion) {
+	if region < 0 || region >= reviewRegionCount {
+		return
+	}
+	m.reviewRegion = region
+	if region == reviewRegionForm && m.reviewField == "" {
+		m.requestReviewFieldFocus(m.firstReviewField())
+	}
+}
+
+// selectReviewField highlights the screenshots that back one form field
+// and asks the next frame to bring the matching crop into view.
+func (m *Model) selectReviewField(field FormField) {
+	if field == "" {
+		return
+	}
+	m.reviewRegion = reviewRegionForm
+	if m.reviewField != field {
+		m.reviewField = field
+		m.scrollToCrop = true
+	}
+}
+
+// focusFirstReviewField starts a newly chosen item on its first problem
+// field and clears the previous item's screenshot highlight.
+func (m *Model) focusFirstReviewField() {
+	m.reviewField = ""
+	m.scrollToCrop = false
+	m.requestReviewFieldFocus("")
+}
+
+// pointFirstReviewField highlights a newly chosen item's first problem
+// field without taking keyboard focus away from the list it was chosen in.
+func (m *Model) pointFirstReviewField() {
+	m.reviewField = m.firstReviewField()
+	m.scrollToCrop = true
+}
+
+// requestReviewFieldFocus focuses one form field's control on the next
+// frame. The marker is consumed once, so later Tab moves are the user's.
+func (m *Model) requestReviewFieldFocus(field FormField) {
+	if field == "" {
+		field = m.firstReviewField()
+	}
+	m.focusReviewField = field
+}
+
+// firstReviewField is the field the form starts on: the first problem
+// field in form order, else the first required field.
+func (m *Model) firstReviewField() FormField {
+	row := m.selectedRow()
+	if row == nil {
+		return FormFieldSetID
+	}
+	problems := m.reviewProblems(row)
+	for _, problem := range problems {
+		if field := canonicalFormField(problem.Field); field != "" && problem.Blocks() {
+			return reviewFocusField(field)
+		}
+	}
+	for _, problem := range problems {
+		if field := canonicalFormField(problem.Field); field != "" {
+			return reviewFocusField(field)
+		}
+	}
+	return FormFieldSetID
+}
+
+// selectedRow is the open record's chosen row, or nil.
+func (m *Model) selectedRow() *Row {
+	if m.rec == nil || m.selected < 0 || m.selected >= len(m.rec.Rows) {
+		return nil
+	}
+	return &m.rec.Rows[m.selected]
+}
+
+// zoomCrop steps the screenshot zoom in or out; reset returns to fitting
+// the screenshot area.
+func (m *Model) zoomCrop(delta float32) {
+	if delta == 0 {
+		m.cropZoom = 0
+		return
+	}
+	zoom := m.cropZoom
+	if zoom <= 0 {
+		zoom = 1
+	}
+	zoom += delta
+	switch {
+	case zoom < 1:
+		zoom = 1
+	case zoom > 4:
+		zoom = 4
+	}
+	if zoom <= 1 {
+		zoom = 0
+	}
+	m.cropZoom = zoom
+}
+
 // captureResultPlace records the list's actual scroll position before the
 // workspace is left, so returning to the same record restores its place.
 func (m *Model) captureResultPlace() {
@@ -134,7 +304,12 @@ func (m *Model) showRecord(id string, live bool) {
 	m.recLoad = version
 	m.rec = &RecordView{ID: id, Live: live}
 	m.resetResultList()
-	m.resultsDetail = false
+	m.reviewField = ""
+	m.focusReviewField = ""
+	m.scrollToCrop = false
+	m.cropZoom = 0
+	m.formExtrasOpen = false
+	m.compactListOpen = false
 	m.edit = nil
 	m.navPrompt = nil
 	m.reviewErr = ""
@@ -142,11 +317,10 @@ func (m *Model) showRecord(id string, live bool) {
 	m.lastAction = reviewSave
 }
 
-// resetResultList clears the table's scroll and selection internals before
+// resetResultList clears the list's scroll and selection internals before
 // the record's own place is restored.
 func (m *Model) resetResultList() {
 	m.list = ui.ListState{Selected: &m.tableSelected}
-	m.resetResultsScroll(0)
 	if m.rec == nil {
 		m.selected = -1
 		m.scroll = 0
@@ -171,7 +345,6 @@ func (m *Model) resetResultList() {
 		m.scroll = rows - 1
 	}
 	if m.scroll > 0 {
-		m.resetResultsScroll(m.scroll)
 		m.list.ScrollTo(m.scroll, ui.Start)
 	}
 }

@@ -2,10 +2,8 @@ package ui
 
 import (
 	"fmt"
-	"math"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/LoTwT/youkai/internal/app"
 	"github.com/LoTwT/youkai/internal/game/zzz"
@@ -13,168 +11,85 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-// splitResultColumns is the results table at both the 1024 split and the
-// narrow list: the capture sequence, set, slot/level, main stat and state.
-// Problems stay out of the table and appear in the detail subtitle and
-// evidence description.
-var splitResultColumns = []ui.TableColumn{
-	{Title: "序号", Width: 40, Align: ui.End, Fixed: true},
-	{Title: "套装", Width: 90, Fixed: true},
-	{Title: "槽位·等级", Width: 84, Fixed: true},
-	{Title: "主词条", Width: 96},
-	{Title: "状态", MinWidth: 110},
+// The review layout's fixed metrics (08 §3.1, 09 §2): a 240-DIP item list,
+// a 400-DIP form and the screenshots in between, never under 360 DIP. The
+// standard profile shows the list as a column; the compact profile folds it
+// into the top strip. Both keep screenshots and form side by side.
+const (
+	reviewListWidth       = 240
+	reviewFormWidth       = 400
+	reviewMinCropsWidth   = 360
+	reviewStandardWidth   = 1120
+	reviewShortMaxHeight  = 720
+	reviewListRowHeight   = 52
+	reviewPagePadding     = 12
+	reviewPanePaddingX    = 12
+	reviewPanePaddingY    = 10
+	reviewCropImageMin    = 120
+	reviewZoomStep        = 0.25
+	reviewZoomMax         = 4
+	reviewHeaderSizeRatio = 0.9
+)
+
+// reviewLayoutWidths is the laid-out width of each review region, recorded
+// for the acceptance checks of the three profiles.
+type reviewLayoutWidths struct {
+	List        float32
+	Crops       float32
+	Form        float32
+	Standard    bool
+	ListFocused bool
 }
 
-// wideSplitResultColumns fills the 1440 layout's 560-DIP table: the set
-// and main-stat columns take the extra room and the state column absorbs
-// what is left, so the table never leaves an empty right edge.
-var wideSplitResultColumns = []ui.TableColumn{
-	{Title: "序号", Width: 40, Align: ui.End, Fixed: true},
-	{Title: "套装", Width: 120, Fixed: true},
-	{Title: "槽位·等级", Width: 84, Fixed: true},
-	{Title: "主词条", Width: 140},
-	{Title: "状态", MinWidth: 110},
+// reviewStandard reports the standard width profile (window ≥ 1120 DIP):
+// the item list is its own column. Below it the compact profile puts the
+// list into the top strip.
+func (m *Model) reviewStandard() bool {
+	return m.contentWidth >= reviewStandardWidth
 }
 
-// resultsSideBySideMinWidth starts the results page's side-by-side split.
-// At 1024 the page keeps the 144-DIP rail and 24 DIP of padding; the table
-// takes 420 DIPs, leaving the detail pane about 408 DIPs after its own
-// padding. Below it the list and the detail are separate full-width pages.
-const resultsSideBySideMinWidth = 1024
+// reviewShortWindow reports the short-height profile (window < 720 DIP),
+// where the screenshot list and the form content scroll and the action bar
+// stays fixed.
+func (m *Model) reviewShortWindow() bool {
+	return m.contentHeight > 0 && m.contentHeight < reviewShortMaxHeight
+}
 
-// resultsWideSplitMinWidth starts the 1440 layout's wider table.
-const resultsWideSplitMinWidth = 1440
-
-// resultsSplitTableWidth is the table pane's design width: 560 DIPs on
-// 1440 screens and 420 DIPs from 1024 through 1439. The split divider and
-// the detail take the rest.
-func resultsSplitTableWidth(contentWidth int) float32 {
-	if contentWidth >= resultsWideSplitMinWidth {
-		return 560
+// reviewInnerWidth is the width the page leaves for its panes: the window
+// less the navigation rail and the page padding.
+func (m *Model) reviewInnerWidth() float32 {
+	width := float32(m.contentWidth) - navRailWidth - 2*reviewPagePadding
+	if width < 0 {
+		return 0
 	}
-	return 420
+	return width
 }
 
-// resultsColumnsFor picks the column widths that fill the current split
-// table.
-func resultsColumnsFor(contentWidth int) []ui.TableColumn {
-	if contentWidth >= resultsWideSplitMinWidth {
-		return wideSplitResultColumns
+// reviewCropsWidth is the width the screenshot pane gets from the layout
+// arithmetic. The pane's real bounds are recorded in reviewLayout; this
+// value sizes the crops before the first frame commits.
+func (m *Model) reviewCropsWidth() float32 {
+	width := m.reviewInnerWidth()
+	if m.reviewStandard() {
+		width -= reviewListWidth + 1
 	}
-	return splitResultColumns
-}
-
-func resultsSideBySide(contentWidth int) bool {
-	return contentWidth >= resultsSideBySideMinWidth
-}
-
-// resultsRowHeight is the design's 32-DIP results row at 100% text size.
-// resultsMetricsFor scales it for the composite's rows and snapping at
-// every page-layout width.
-const resultsRowHeight = 32
-
-// resultsSnapDelay is how long the results composite waits after the last
-// precise scroll move before snapping a small offset to the nearest
-// text-scaled row.
-const resultsSnapDelay = 120 * time.Millisecond
-
-// resultsArea is the results browser: the current record's items in
-// capture order, the chosen item's evidence and recognized texts. The shell
-// starts its side-by-side split at 1024 and switches whole pages below it.
-func (m *Model) resultsArea(c *ui.Context, t *ui.Theme) {
-	ui.Column(c).Grow(1).Gap(t.Space(1)).Children(func() {
-		if m.narrowResults() && m.resultsDetail {
-			switch {
-			case m.completionVisible():
-				// The last confirmation finishes the review; the narrow
-				// detail page gives way to the completion card.
-				m.resultsDetail = false
-			case !m.resultDetailHasRow():
-				// The confirmed item left the current filtered view and
-				// no other row replaced it: return to the list, whose
-				// filter bar and empty state are the only useful surface.
-				m.closeResultDetail()
-			default:
-				m.resultsDetailArea(c, t)
-				return
-			}
-		}
-		m.sessionTerminationArea(c, t)
-		m.savePromptArea(c, t)
-		if m.histErr != "" {
-			ui.Text(c, "历史记录读取失败："+m.histErr).TextColor(t.Danger)
-		}
-		if m.cleanupNotice != "" {
-			ui.Text(c, m.cleanupNotice)
-		}
-		if m.cleanup != nil && !m.cleanup.target.all() {
-			m.cleanupPromptArea(c, t)
-		}
-		if m.recErr != "" {
-			ui.Text(c, "记录读取失败："+m.recErr).TextColor(t.Danger)
-			return
-		}
-		if m.rec == nil || len(m.rec.Rows) == 0 {
-			if m.rec != nil && m.completionVisible() {
-				m.completionArea(c, t)
-				return
-			}
-			if m.rec != nil {
-				m.exportArea(c, t)
-			}
-			ui.Text(c, m.emptyResultsText()).TextColor(t.TextMuted)
-			return
-		}
-		m.resultsFilterBar(c, t)
-		if m.completionVisible() {
-			m.completionArea(c, t)
-			return
-		}
-		m.exportArea(c, t)
-		visible := m.visibleResultRows()
-		if len(visible) == 0 {
-			ui.Text(c, m.filteredEmptyText()).TextColor(t.TextMuted)
-			return
-		}
-		if !resultsSideBySide(m.contentWidth) {
-			m.tablePane(c)
-			return
-		}
-		// Grow takes the room the header and filters leave, rather than
-		// 100% of the results area: Fill would let the table viewport run
-		// past the window's bottom, where the window itself would clip a
-		// partial last row whatever the list's row boundary.
-		ui.Split(c, &m.split,
-			func() { m.tablePane(c) },
-			func() { m.detailPane(c) },
-		).Grow(1).MinHeight(0)
-	})
-}
-
-// resultsDetailArea is a narrow page's full-width detail: its own header
-// returns to the list, and the page keeps no filters or exports.
-func (m *Model) resultsDetailArea(c *ui.Context, t *ui.Theme) {
-	if m.recErr != "" {
-		ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
-			if ui.Button(c, "← 结果列表").Clicked() {
-				m.closeResultDetail()
-			}
-		})
-		ui.Text(c, "记录读取失败："+m.recErr).TextColor(t.Danger)
-		return
+	width -= reviewFormWidth + 1
+	if width < reviewMinCropsWidth {
+		width = reviewMinCropsWidth
 	}
-	if m.cleanupNotice != "" {
-		ui.Text(c, m.cleanupNotice)
-	}
-	m.sessionTerminationArea(c, t)
-	if m.rec == nil || len(m.rec.Rows) == 0 {
-		ui.Text(c, m.emptyResultsText()).TextColor(t.TextMuted)
-		return
-	}
-	m.detailPane(c)
+	return width
 }
 
-// resultsTitle names what the results area shows: the live session's saved
+// reviewCropImageWidth is the crop's fit width inside the screenshot pane.
+func (m *Model) reviewCropImageWidth() float32 {
+	width := m.reviewCropsWidth() - 2*reviewPanePaddingX - 14 // scrollbar
+	if width < reviewCropImageMin {
+		return reviewCropImageMin
+	}
+	return width
+}
+
+// resultsTitle names what the review area shows: the live session's saved
 // record or a reopened history record, with the recovery mark.
 func (m *Model) resultsTitle() string {
 	if m.rec == nil {
@@ -194,33 +109,118 @@ func (m *Model) resultsTitle() string {
 	return fmt.Sprintf("结果：历史记录 %s（%d 条%s%s）", m.rec.ID, len(m.rec.Rows), mark, evidence)
 }
 
-func (m *Model) emptyResultsText() string {
-	if m.rec == nil {
-		return "还没有扫描结果。开始一次扫描，或从历史记录打开一条已保存的记录。"
-	}
-	if text := m.emptyResultsTextForTermination(); text != "" {
-		return text
-	}
-	if m.rec.Live {
-		return "本次扫描还没有已保存的条目；扫描过程中条目按批次保存，收尾后全部可见。"
-	}
-	return "该记录没有条目。"
+// resultsArea is the review workspace: the record's items, their
+// screenshots and the editable form. The summary is a separate view of the
+// same record, so this area never falls back to a whole-page list/detail
+// switch (P-11): screenshots and the form are always side by side.
+func (m *Model) resultsArea(c *ui.Context, t *ui.Theme) {
+	ui.Column(c).Grow(1).FillHeight().MinHeight(0).Gap(t.Space(1)).Children(func() {
+		m.sessionTerminationArea(c, t)
+		m.savePromptArea(c, t)
+		if m.histErr != "" {
+			ui.Text(c, "历史记录读取失败："+m.histErr).TextColor(t.Danger)
+		}
+		if m.cleanupNotice != "" {
+			ui.Text(c, m.cleanupNotice)
+		}
+		if m.cleanup != nil && !m.cleanup.target.all() {
+			m.cleanupPromptArea(c, t)
+		}
+		if m.recErr != "" {
+			ui.Text(c, "记录读取失败："+m.recErr).TextColor(t.Danger)
+			return
+		}
+		if m.rec == nil || len(m.rec.Rows) == 0 {
+			ui.Column(c).Gap(t.Space(1)).Children(func() {
+				if m.rec != nil {
+					m.exportArea(c, t)
+				}
+				ui.Text(c, m.emptyResultsText()).TextColor(t.TextMuted)
+			})
+			return
+		}
+		m.reviewArea(c, t)
+	})
 }
 
-// tablePane is the results list. Every captured item stays in the record
-// whatever its state; the page shell's segments, search and set/slot
-// choices decide which rows the table shows, and a narrow list opens the
-// chosen row's detail page.
-func (m *Model) tablePane(c *ui.Context) {
-	if m.rec == nil {
+// reviewArea is the three-region review. The list is a column at standard
+// widths and a top strip at compact widths; the screenshot pane and the
+// 400-DIP form keep their places at every width.
+func (m *Model) reviewArea(c *ui.Context, t *ui.Theme) {
+	visible := m.visibleResultRows()
+	m.settleResultSelection()
+	if m.reviewField == "" && m.selectedRow() != nil {
+		// Entering the review (or returning to it) starts on the first
+		// problem field (08 §3).
+		m.requestReviewFieldFocus("")
+	}
+	ui.Column(c).Grow(1).FillHeight().MinHeight(0).Children(func() {
+		if !m.reviewStandard() {
+			m.reviewCompactStrip(c, t, visible)
+			ui.Divider(c)
+		}
+		ui.Row(c).Grow(1).FillHeight().MinHeight(0).Children(func() {
+			if m.reviewStandard() {
+				m.reviewListPane(c, t, visible)
+				ui.Divider(c)
+			}
+			m.reviewCropsPane(c, t, visible)
+			ui.Divider(c)
+			m.reviewFormPane(c, t, visible)
+		})
+	})
+	m.recordReviewLayout(c)
+}
+
+// recordReviewLayout stores the pane widths the frame laid out, for the
+// profile checks.
+func (m *Model) recordReviewLayout(c *ui.Context) {
+	layout := reviewLayoutWidths{Standard: m.reviewStandard()}
+	if layout.Standard {
+		layout.List = m.reviewListRef.Bounds(c).W
+		layout.ListFocused = m.list.Focused(c)
+	}
+	layout.Crops = m.reviewCropsRef.Bounds(c).W
+	layout.Form = m.reviewFormRef.Bounds(c).W
+	if layout.List == 0 && layout.Crops == 0 && layout.Form == 0 {
 		return
 	}
-	visible := m.visibleResultRows()
+	m.reviewLayout = layout
+}
+
+// reviewListPane is the standard profile's item list column.
+func (m *Model) reviewListPane(c *ui.Context, t *ui.Theme, visible []int) {
+	_, tok := themeWithTokens(t, c.Preferences())
+	ui.Column(c).Width(reviewListWidth).Shrink(0).FillHeight().MinHeight(0).
+		Background(tok.SurfaceContent).Bind(&m.reviewListRef).Children(func() {
+		ui.Column(c).Padding(reviewPanePaddingY, reviewPanePaddingX).Children(func() {
+			m.resultsFilterBar(c, t)
+		})
+		ui.Divider(c)
+		if len(visible) == 0 {
+			ui.Column(c).Grow(1).Padding(t.Space(2), reviewPanePaddingX).Children(func() {
+				ui.Text(c, m.filteredEmptyText()).TextColor(t.TextMuted)
+			})
+			return
+		}
+		m.reviewItemList(c, t, tok, visible)
+		ui.Divider(c)
+		ui.Row(c).Padding(t.Space(1.5), reviewPanePaddingX).Children(func() {
+			ui.Text(c, m.listFooterText(visible)).FontSize(t.FontSize * reviewHeaderSizeRatio).
+				TextColor(t.TextMuted).SingleLine()
+		})
+	})
+}
+
+// reviewItemList is the keyboard-driven item list. The ListState owns the
+// chosen display row; the frame maps it back to the workspace's full-row
+// selection through the same editor guard as before.
+func (m *Model) reviewItemList(c *ui.Context, t *ui.Theme, tok *Tokens, visible []int) {
 	previous := m.selected
 	previousDisplay := resultDisplayIndex(visible, previous)
-	m.tableSelected = previousDisplay
-
-	_, tok := themeWithTokens(c.Theme(), c.Preferences())
+	if previousDisplay >= 0 {
+		m.tableSelected = previousDisplay
+	}
 	m.list.Key = func(row int) any {
 		if row < 0 || row >= len(visible) {
 			return row
@@ -231,367 +231,961 @@ func (m *Model) tablePane(c *ui.Context) {
 		if row < 0 || row >= len(visible) {
 			return ""
 		}
-		return m.rec.Rows[visible[row]].Label()
+		r := &m.rec.Rows[visible[row]]
+		return fmt.Sprintf("#%04d %s %s", r.Seq, r.ClassText(), r.labelSetSlot())
 	}
-	// Every results list uses the composite, so the split table gains the
-	// same fixed header and 32-DIP row snapping as the narrow list. The
-	// wrapper gives the composite the slot the page leaves, whatever its
-	// capped height. The narrow page's column has a remaining height to grow
-	// into; the split pane stretches it, so there the wrapper fills that
-	// pane's height explicitly.
-	slot := ui.Column(c).Grow(1).MinHeight(0)
-	if resultsSideBySide(m.contentWidth) {
-		slot = ui.Column(c).FillHeight().MinHeight(0)
+	list := ui.List(c, &m.list, len(visible), func(row int) {
+		if row < 0 || row >= len(visible) {
+			return
+		}
+		m.reviewItemRow(c, t, tok, visible, row)
+	}).Grow(1).MinHeight(0)
+	if m.focusListRequested && m.list.Focus(c) {
+		m.focusListRequested = false
 	}
-	var table ui.Element
-	slot.Bind(&m.resultsTableSlot).Children(func() {
-		table = m.resultsCompositeTable(c, c.Theme(), tok, visible)
-	})
-	if m.resultsRowOpensDetail() {
-		table.OnClick(func() { m.openResultDetail() })
-	}
-
+	_ = list
 	chosen := m.tableSelected
-	m.tableSelected = previousDisplay
 	if chosen != previousDisplay && chosen >= 0 && chosen < len(visible) {
-		// The table writes the chosen display row directly; settle it
-		// through the editor guard so a dirty item is never replaced by a
-		// plain click.
 		m.selected = visible[chosen]
 		m.applyTableSelection(previous)
 		m.tableSelected = resultDisplayIndex(visible, m.selected)
 	}
-	if m.resultsRowOpensDetail() && table.Submitted() {
-		m.openResultDetail()
-	}
 }
 
-// wholeRowTableHeight is a MyGo table's header and divider plus as many
-// whole rows as available leaves. A leftover strip shorter than a row stays
-// blank instead of showing a clipped last row.
-func wholeRowTableHeight(available, row, chrome float32) (float32, bool) {
-	if row <= 0 || chrome <= 0 || available <= chrome {
-		return 0, false
-	}
-	rows := int((available - chrome) / row)
-	return chrome + float32(rows)*row, true
-}
-
-// resultCellContent builds one results-table cell's content. The header and
-// rows share it so the five columns, the status badge and the narrow row
-// action cannot drift apart.
-func (m *Model) resultCellContent(c *ui.Context, visible []int, row, col int, tok *Tokens) {
+// reviewItemRow renders one item: its capture number and category on the
+// first line, set and slot on the second. The category is text plus a
+// glyph and a border shape, never color alone.
+func (m *Model) reviewItemRow(c *ui.Context, t *ui.Theme, tok *Tokens, visible []int, row int) {
 	if row < 0 || row >= len(visible) {
 		return
 	}
 	r := &m.rec.Rows[visible[row]]
-	cellText := func(text string) {
-		cell := ui.Text(c, text).SingleLine()
-		if m.resultsRowOpensDetail() {
-			full := visible[row]
-			cell.OnClick(func() { m.openResultDetailAt(full) })
-		}
+	selected := row == m.tableSelected
+	background := ui.Transparent
+	border := ui.Transparent
+	if selected {
+		background, border = tok.RowSelected, tok.RowSelectedBorder
 	}
-	switch col {
-	case 0:
-		cellText(fmt.Sprintf("%d", r.Seq))
-	case 1:
-		cellText(r.SetColumnText())
-	case 2:
-		cellText(r.SlotLevelColumnText())
-	case 3:
-		text := r.MainStatText()
-		if text == "" {
-			text = "—"
-		}
-		cellText(text)
-	case 4:
-		m.resultStatusBadge(c, c.Theme(), tok, r, true, m.tableSelected == row)
+	height := float32(reviewListRowHeight)
+	if m.textScale > 0 {
+		height *= m.textScale
 	}
-}
-
-// resultsCompositeTable is the results list at every page-layout width:
-// the 1020/860 list pages and the 1024/1440 split table. MyGo's Table keeps
-// its rows in an internal scroll container and exposes no offset, so a
-// precise 17-DIP move can stop between two 32-DIP rows. This header and
-// List composite uses the same fixed columns and cell builder, but tracks
-// the List's offset: the header stays above the list, the rows keep their
-// design height, and the rest snap aligns the offset to a row. Only the
-// narrow list page gives a row click the detail action; in the split it
-// chooses the row the visible detail already follows.
-func (m *Model) resultsCompositeTable(c *ui.Context, t *ui.Theme, tok *Tokens, visible []int) ui.Element {
-	columns := resultsColumnsFor(m.contentWidth)
-	metrics := resultsMetricsFor(m.textScale)
-	ui.Row(c).Height(metrics.RowHeight).Shrink(0).Clip().AlignItems(ui.Stretch).Children(func() {
-		for col := range columns {
-			m.resultsCompositeCell(c, t, tok, columns, col, visible, -1, true)
-		}
-	})
-	ui.Divider(c)
-	openDetail := m.resultsRowOpensDetail()
-	list := ui.List(c, &m.list, len(visible), func(row int) {
-		line := ui.Row(c).Height(metrics.RowHeight).AlignItems(ui.Stretch)
-		if openDetail {
-			line.OnClick(func() { m.openResultDetailAt(visible[row]) })
-		}
-		line.Children(func() {
-			for col := range columns {
-				m.resultsCompositeCell(c, t, tok, columns, col, visible, row, false)
-			}
+	ui.Column(c).Height(height).Shrink(0).Padding(t.Space(1.5), reviewPanePaddingX).
+		Gap(t.Space(0.5)).Background(background).
+		BorderWidth(0, 0, 0, 3).BorderColor(border).Children(func() {
+		ui.Row(c).Gap(t.Space(1)).AlignItems(ui.Center).Children(func() {
+			ui.Textf(c, "#%04d", r.Seq).FontWeight(600).SingleLine().Shrink(1)
+			ui.Box(c).Grow(1)
+			m.reviewCategoryTag(c, t, tok, r, selected)
 		})
-	}).MinHeight(0).TrackScroll(&m.resultsScroll)
-
-	m.snapResultsScroll(c, len(visible))
-	height, measured := m.resultsCompositeListHeight(c)
-	switch {
-	case height > 0:
-		// The header and divider are outside the list; an exact whole-row
-		// height keeps its last row from being clipped. A page that just
-		// returned has no committed slot frame yet: keep the last measured
-		// height and ask for another frame, rather than filling the pane
-		// for one frame and clamping the tracked offset to a transient
-		// end, which would leave half a row.
-		list.Height(height)
-		if !measured {
-			c.Invalidate()
-		}
-	default:
-		// Measure the slot once with the list filling the rest, then
-		// rebuild with the snapped viewport.
-		list.Grow(1)
-		c.Invalidate()
-	}
-	return list
-}
-
-// resultsCompositeListHeight is the largest whole number of text-scaled
-// rows the results table's slot leaves under its header and divider.
-// measured is false until the slot has a committed frame; the last measured
-// height is then the fallback, so returning from another destination cannot
-// grow the list for a frame.
-func (m *Model) resultsCompositeListHeight(c *ui.Context) (height float32, measured bool) {
-	rowHeight := resultsMetricsFor(m.textScale).RowHeight
-	bounds := m.resultsTableSlot.Bounds(c)
-	if bounds.H <= 0 {
-		return m.resultsTableHeight, false
-	}
-	table, ok := wholeRowTableHeight(bounds.H, rowHeight, rowHeight+1)
-	if !ok {
-		return 0, false
-	}
-	height = table - (rowHeight + 1)
-	m.resultsTableHeight = height
-	return height, true
-}
-
-// resultsCompositeCell is one fixed-width data cell of the composite. The
-// header and rows share it, so their columns cannot drift apart. On the
-// narrow list page the row's whole area carries the detail action,
-// including the cell padding beside a short value; the split leaves the
-// click to the list's own row choice.
-func (m *Model) resultsCompositeCell(c *ui.Context, t *ui.Theme, tok *Tokens, columns []ui.TableColumn, col int, visible []int, row int, header bool) {
-	column := &columns[col]
-	cell := ui.Row(c).Shrink(0).Clip().Padding(t.Space(1.5), t.Space(2.5)).AlignItems(ui.Center)
-	if column.Width > 0 {
-		cell.Width(column.Width)
-	} else {
-		cell.Grow(1).Shrink(1).MinWidth(column.MinWidth)
-	}
-	switch column.Align {
-	case ui.End:
-		cell.Justify(ui.End)
-	case ui.Center:
-		cell.Justify(ui.Center)
-	}
-	if !header && m.resultsRowOpensDetail() {
-		full := visible[row]
-		cell.OnClick(func() { m.openResultDetailAt(full) })
-	}
-	cell.Children(func() {
-		if header {
-			ui.Text(c, column.Title).SingleLine().FontWeight(600).TextColor(t.TextMuted)
-			return
-		}
-		m.resultCellContent(c, visible, row, col, tok)
+		ui.Text(c, r.labelSetSlot()).FontSize(t.FontSize * reviewHeaderSizeRatio).
+			TextColor(t.TextMuted).SingleLine()
 	})
 }
 
-// snapResultsScroll aligns the composite's vertical offset with a row
-// boundary a precise scroll leaves between rows. Like the history table's
-// composite, the offset belongs to the input until the motion stops: writing
-// it mid-glide would make MyGo cancel the rest of a wheel's travel.
-func (m *Model) snapResultsScroll(c *ui.Context, rows int) {
-	if rows == 0 {
-		return
-	}
-	wait, snap := m.resultsScrollSnapStep(c.Now())
+// labelSetSlot is the item list's second line: set and slot, with the
+// explicit "未识别" wording for an unparsed item.
+func (r Row) labelSetSlot() string {
+	set := r.SetColumnText()
+	slot := r.SlotText()
 	switch {
-	case snap:
-		m.applyResultsScrollSnap(resultRowOffset(m.resultsScroll.Y, resultsMetricsFor(m.textScale).RowHeight))
-	case wait > 0:
-		// A repaint between the scroll and the deadline must ask again:
-		// MyGo keeps only the timer the last frame armed.
-		c.After(wait)
+	case set == "" || set == "—":
+		set = "套装未识别"
+	case slot == "":
+		slot = "号位未识别"
 	}
+	if slot == "" {
+		return set
+	}
+	return set + " · " + slot
 }
 
-// resultsScrollSnapStep advances the rest debounce at now and reports how
-// long until the next frame it needs; snap reports that the offset has been
-// still for the whole delay and belongs on a row boundary.
-func (m *Model) resultsScrollSnapStep(now time.Time) (wait time.Duration, snap bool) {
-	y := m.resultsScroll.Y
-	if y < 0 {
-		m.resultsScroll.Y = 0
-		y = 0
+// reviewCategoryTag is the four-class label as text plus shape.
+func (m *Model) reviewCategoryTag(c *ui.Context, t *ui.Theme, tok *Tokens, row *Row, selected bool) {
+	glyph, label := reviewCategoryParts(row)
+	if m.recentlyConfirmedNow(row) {
+		glyph, label = "✓", "已确认"
 	}
-	if y != m.resultsScrollSeen {
-		m.resultsScrollSeen = y
-		m.resultsScrollMovedAt = now
-		if m.resultsScrollSnapAt.IsZero() || !now.Before(m.resultsScrollSnapAt) {
-			m.resultsScrollSnapAt = now.Add(resultsSnapDelay)
+	background, border, text := tok.SurfaceControl, tok.BorderDefault, tok.TextSecondary
+	dashed := false
+	switch {
+	case m.recentlyConfirmedNow(row):
+		background, border, text = tok.SuccessSoft, tok.SuccessBorder, tok.SuccessFG
+	case row.ItemClass == app.ItemClassPendingBackfill:
+		background, border, text = tok.WarningSoft, tok.WarningBorder, tok.WarningFG
+		dashed = true
+	case row.ItemClass == app.ItemClassPendingReview:
+		background, border, text = tok.WarningSoft, tok.WarningBorder, tok.WarningFG
+	case row.ItemClass == app.ItemClassWarning:
+		background, border, text = ui.Transparent, tok.WarningBorder, tok.WarningFG
+		dashed = true
+	case row.ItemClass == app.ItemClassPassed:
+		background, border, text = ui.Transparent, tok.SuccessBorder, tok.SuccessFG
+	default:
+		switch row.Status {
+		case record.StatusFailed:
+			background, border, text = tok.DangerSoft, tok.DangerBorder, tok.DangerFG
+		case record.StatusUnprocessed:
+			dashed = true
 		}
-		return resultsSnapDelay, false
 	}
-	if m.resultsScrollSnapAt.IsZero() {
-		return 0, false
+	if selected {
+		background, border, text = tok.AccentSoft, tok.AccentBorder, tok.AccentFG
 	}
-	if now.Before(m.resultsScrollSnapAt) {
-		return m.resultsScrollSnapAt.Sub(now), false
+	tag := ui.Row(c).Shrink(0).Padding(t.Space(0.25), t.Space(1)).Gap(t.Space(0.5)).
+		AlignItems(ui.Center).Background(background).Border(1, border).
+		BorderStyle(ui.BorderSolid).Radius(t.Space(2)).Label("状态：" + label)
+	if dashed {
+		tag = tag.BorderStyle(ui.BorderDashed)
 	}
-	if wait := m.resultsScrollMovedAt.Add(resultsSnapDelay).Sub(now); wait > 0 {
-		m.resultsScrollSnapAt = now.Add(wait)
-		return wait, false
-	}
-	m.resultsScrollSnapAt = time.Time{}
-	return 0, true
+	tag.Children(func() {
+		ui.Text(c, glyph).FontSize(t.FontSize * 0.8).FontWeight(600).
+			TextColor(text).SingleLine().Role(ui.RoleNone)
+		ui.Text(c, label).FontSize(t.FontSize * 0.8).FontWeight(600).
+			TextColor(text).SingleLine().Role(ui.RoleNone)
+	})
 }
 
-// resultRowOffset is the nearest row boundary to y at the given row height.
-func resultRowOffset(y, rowHeight float32) float32 {
-	if rowHeight <= 0 {
-		return 0
-	}
-	return float32(math.Round(float64(y)/float64(rowHeight))) * rowHeight
-}
-
-// applyResultsScrollSnap moves the tracked offset and the list to one row
-// boundary. MaxY keeps the end of the content in reach.
-func (m *Model) applyResultsScrollSnap(target float32) {
-	if maxY := m.resultsScroll.MaxY; maxY > 0 && target > maxY {
-		target = maxY
-	}
-	if target < 0 {
-		target = 0
-	}
-	m.resultsScrollSeen = target
-	if target == m.resultsScroll.Y {
-		return
-	}
-	m.resultsScroll.Y = target
-	rowHeight := resultsMetricsFor(m.textScale).RowHeight
-	m.list.ScrollTo(int(math.Round(float64(target)/float64(rowHeight))), ui.Start)
-}
-
-// resetResultsScroll clears the composite's tracked offset before a new
-// ListState takes over, then places it on the row that list will show. A
-// stale offset would otherwise override the restored scroll of another
-// record.
-func (m *Model) resetResultsScroll(row int) {
-	m.resultsScroll = ui.ScrollState{}
-	m.resultsScrollSeen = 0
-	m.resultsScrollMovedAt = time.Time{}
-	m.resultsScrollSnapAt = time.Time{}
-	if row <= 0 {
-		return
-	}
-	m.resultsScroll.Y = float32(row) * resultsMetricsFor(m.textScale).RowHeight
-	m.resultsScrollSeen = m.resultsScroll.Y
-}
-
-// detailPane shows the chosen item: its outcome and quality, the failure
-// or unprocessed reason, the read-only structured form of a produced disc
-// and, folded away by default, its evidence. The evidence area keeps every
-// observed line with its image, recognized text and raw model score.
-func (m *Model) detailPane(c *ui.Context) {
-	t := c.Theme()
-	var row *Row
-	if m.rec != nil && m.selected >= 0 && m.selected < len(m.rec.Rows) {
-		row = &m.rec.Rows[m.selected]
-	}
-	ui.ScrollBoth(c).Fill().Padding(t.Space(2)).Children(func() {
-		if row == nil {
-			ui.Text(c, "选择一条记录查看详情。").TextColor(t.TextMuted)
-			return
+// reviewCategoryParts maps a row to its category glyph and label.
+func reviewCategoryParts(row *Row) (glyph, label string) {
+	label = row.ClassText()
+	switch row.ItemClass {
+	case app.ItemClassPendingBackfill:
+		if row.Status == record.StatusUnprocessed {
+			return "⊘", label
 		}
-		ui.Column(c).Gap(t.Space(2)).Children(func() {
-			m.detailHeader(c, t, row)
-			if row.Status == record.StatusProduced {
-				if row.Structured == nil {
-					ui.Text(c, "该条目没有结构化字段，原始识别文本见下方证据。").TextColor(t.TextMuted)
-				} else {
-					m.structuredForm(c, t, row)
+		return "✕", label
+	case app.ItemClassPendingReview:
+		return "◐", label
+	case app.ItemClassWarning:
+		return "!", label
+	case app.ItemClassPassed:
+		return "✓", label
+	}
+	switch row.Status {
+	case record.StatusFailed:
+		return "✕", label
+	case record.StatusUnprocessed:
+		return "⊘", label
+	}
+	return "◐", label
+}
+
+// reviewCompactStrip is the compact profile's top bar: previous / next,
+// the pending position, the filter segments and the "全部件" popover list.
+func (m *Model) reviewCompactStrip(c *ui.Context, t *ui.Theme, visible []int) {
+	_, tok := themeWithTokens(t, c.Preferences())
+	ui.Row(c).Padding(t.Space(1.5), reviewPanePaddingX).Gap(t.Space(1.5)).
+		AlignItems(ui.Center).Background(tok.SurfaceHeader).Children(func() {
+		position := resultDisplayIndex(visible, m.selected)
+		back := ui.Button(c, "‹").Disabled(position <= 0)
+		if back.Clicked() {
+			m.selectAdjacentVisible(-1)
+		}
+		ui.Text(c, m.compactPositionText(visible)).FontWeight(600).SingleLine().Shrink(1)
+		forward := ui.Button(c, "›").Disabled(position < 0 || position >= len(visible)-1)
+		if forward.Clicked() {
+			m.selectAdjacentVisible(1)
+		}
+		ui.Box(c).Grow(1)
+		m.resultsFilterBar(c, t)
+		m.compactItemPopover(c, t, visible)
+	})
+}
+
+// compactItemPopover is the "全部件" popover: the same rows as the standard
+// list, without the 240-DIP column.
+func (m *Model) compactItemPopover(c *ui.Context, t *ui.Theme, visible []int) {
+	_, tok := themeWithTokens(t, c.Preferences())
+	anchor := ui.Button(c, "全部件 ▾").Bind(&m.reviewCompactRef)
+	if anchor.Clicked() {
+		m.compactListOpen = !m.compactListOpen
+	}
+	popover := ui.Popover(c, anchor, &m.compactListOpen, func() {
+		ui.Column(c).Width(280).Gap(0).Padding(t.Space(1)).Children(func() {
+			for row, index := range visible {
+				r := &m.rec.Rows[index]
+				label := fmt.Sprintf("#%04d  %s · %s  %s", r.Seq, r.SetColumnText(), r.SlotText(), r.ClassText())
+				item := ui.Button(c, label).Width(268).Label(label)
+				if row == resultDisplayIndex(visible, m.selected) {
+					item = item.Background(tok.AccentSoft)
+				}
+				if item.Clicked() {
+					m.compactListOpen = false
+					m.requestNavigation(navigationRequest{kind: navSelect, seq: r.Seq})
+					if m.navPrompt == nil {
+						m.list.ScrollIntoView(row)
+						m.tableSelected = row
+					}
 				}
 			}
-			m.evidenceArea(c, t, row)
 		})
 	})
+	if popover.Dismissed() {
+		m.compactListOpen = false
+	}
 }
 
-// detailHeader shows the item's identity and outcome, with the evidence
-// disclosure control. The page shell puts the problem in the subtitle
-// (the table no longer has a problem column) and keeps evidence folded so
-// the structured form is the main view. A narrow detail page starts with
-// its way back to the list.
-func (m *Model) detailHeader(c *ui.Context, t *ui.Theme, row *Row) {
-	if m.narrowResults() && m.resultsDetail {
-		ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
-			back := ui.Button(c, "← 结果列表").Disabled(m.reviewSaving || m.editingDirty())
-			if back.Clicked() {
-				m.closeResultDetail()
-			}
-			if m.reviewSaving || m.editingDirty() {
-				ui.Text(c, "有未保存修改，先保存或放弃。").TextColor(t.TextMuted).
-					FontSize(t.FontSize * 0.9)
-			}
-		})
-	}
-	ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, resultDetailTitle(row)).FontWeight(600).SingleLine()
-		ui.Box(c).Grow(1)
-		m.evidenceToggle(c, row)
-	})
+// reviewCropsPane is the screenshots: one crop per observed line in the
+// game panel's reading order, then the context crops. Selecting a form
+// field highlights its crops and scrolls the first into view; a record
+// without line roles falls back to capture order without a highlight.
+func (m *Model) reviewCropsPane(c *ui.Context, t *ui.Theme, visible []int) {
 	_, tok := themeWithTokens(t, c.Preferences())
-	ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
-		m.resultStatusBadge(c, t, tok, row, false, false)
-		ui.Text(c, resultIssueText(row)).TextColor(resultIssueColor(t, row)).SingleLine()
+	row := m.selectedRow()
+	ui.Column(c).Grow(1).Shrink(1).MinWidth(reviewMinCropsWidth).FillHeight().MinHeight(0).
+		Background(tok.SurfaceContent).Children(func() {
+		ui.Row(c).Padding(t.Space(2), reviewPanePaddingX).Gap(t.Space(2)).
+			AlignItems(ui.Center).Children(func() {
+			ui.Text(c, "截图（逐行）").FontWeight(600).SingleLine()
+			ui.Box(c).Grow(1)
+			if row != nil {
+				m.reviewZoomControls(c, t)
+			}
+		})
+		ui.Divider(c)
+		scroll := ui.ScrollBoth(c).Grow(1).FillHeight().MinHeight(0).Bind(&m.reviewCropsRef)
+		if m.reviewRegion == reviewRegionCrops {
+			scroll.Focus()
+		}
+		scroll.Children(func() {
+			ui.Column(c).Padding(reviewPanePaddingY, reviewPanePaddingX).Gap(t.Space(2)).Children(func() {
+				m.reviewCropList(c, t, row)
+			})
+		})
 	})
+	_ = visible
 }
 
-func (m *Model) evidenceToggle(c *ui.Context, row *Row) {
-	if len(row.Lines) == 0 && len(row.Evidence) == 0 {
-		return
+// reviewZoomControls are the screenshot zoom actions: enlarge, shrink and
+// fit the area. The current scale is named so the user can tell the fit
+// state from a zoomed one.
+func (m *Model) reviewZoomControls(c *ui.Context, t *ui.Theme) {
+	label := "适合"
+	if m.cropZoom > 0 {
+		label = fmt.Sprintf("%d%%", int(m.cropZoom*100+0.5))
 	}
-	label := "显示证据"
-	if m.showEvidence {
-		label = "隐藏证据"
+	if ui.Button(c, "缩小").Disabled(m.cropZoom == 0).Clicked() {
+		m.zoomCrop(-reviewZoomStep)
+	}
+	if ui.Button(c, "放大").Clicked() {
+		m.zoomCrop(reviewZoomStep)
 	}
 	if ui.Button(c, label).Clicked() {
-		m.showEvidence = !m.showEvidence
+		m.zoomCrop(0)
 	}
 }
 
-func resultIssueColor(t *ui.Theme, row *Row) ui.Color {
-	if row.Status == record.StatusFailed {
-		return t.Danger
+// reviewCropList builds the crops of one item, with the highlight and the
+// one-time scroll-to-crop of the selected form field.
+func (m *Model) reviewCropList(c *ui.Context, t *ui.Theme, row *Row) {
+	if m.rec != nil && m.rec.EvidenceRemoved {
+		ui.Text(c, "该记录的截图已删除或缺失，无法显示图像；识别文本与字段数据仍保留。").
+			TextColor(t.TextMuted)
 	}
-	return t.TextMuted
+	if row == nil {
+		ui.Text(c, "选择一件查看截图。").TextColor(t.TextMuted)
+		m.scrollToCrop = false
+		return
+	}
+	crops, rolesComplete := reviewCropsForRow(row)
+	highlight := m.highlightedCropRoles(row, rolesComplete)
+	if len(crops) == 0 {
+		if row.MissingEvidence() {
+			ui.Text(c, "这件缺少截图。").TextColor(t.TextMuted)
+		} else {
+			ui.Text(c, "这件没有可显示的截图。").TextColor(t.TextMuted)
+		}
+		m.scrollToCrop = false
+		return
+	}
+	if !rolesComplete {
+		ui.Text(c, "这件缺少行角色，截图按采集顺序列出。").
+			FontSize(t.FontSize * reviewHeaderSizeRatio).TextColor(t.TextMuted)
+	}
+	if m.reviewField != "" && len(EvidenceRolesForField(m.reviewField)) == 0 && rolesComplete {
+		ui.Text(c, "这个字段没有截图。").
+			FontSize(t.FontSize * reviewHeaderSizeRatio).TextColor(t.TextMuted)
+	}
+	scrolled := false
+	lastContext := false
+	for i := range crops {
+		crop := &crops[i]
+		if crop.context != lastContext {
+			if crop.context {
+				ui.Text(c, "其他截图").FontSize(t.FontSize * reviewHeaderSizeRatio).
+					TextColor(t.TextMuted)
+			}
+			lastContext = crop.context
+		}
+		role := crop.role()
+		highlighted := highlight != nil && highlight[role]
+		target := highlighted && m.scrollToCrop && !scrolled
+		m.reviewCrop(c, t, row, crop, highlighted, target)
+		if target {
+			scrolled = true
+		}
+	}
+	if scrolled || m.scrollToCrop {
+		m.scrollToCrop = false
+	}
 }
 
-// resultDetailTitle is the item identity the detail page names: sequence,
-// set, slot and level, never a fabricated value for a row without a
-// structured interpretation.
+// reviewCrop is one crop block: its Chinese role label and the image, or
+// the missing-image note that belongs to this row alone.
+func (m *Model) reviewCrop(c *ui.Context, t *ui.Theme, row *Row, crop *reviewCropRow, highlighted, scrollIntoView bool) {
+	_, tok := themeWithTokens(t, c.Preferences())
+	background := tok.SurfaceContent
+	border := ui.Transparent
+	if highlighted {
+		background, border = tok.AccentSoft, tok.AccentBorder
+	}
+	block := ui.Column(c).Gap(t.Space(1)).Padding(t.Space(1)).
+		Background(background).Border(1, border).Radius(t.Space(1))
+	if scrollIntoView {
+		block = block.ScrollIntoView()
+	}
+	block.Children(func() {
+		label := crop.roleLabel()
+		text := ui.Text(c, label).FontSize(t.FontSize * reviewHeaderSizeRatio).SingleLine()
+		if highlighted {
+			text.TextColor(tok.AccentFG).FontWeight(600)
+		} else {
+			text.TextColor(t.TextMuted)
+		}
+		if crop.evidence == nil {
+			ui.Text(c, "这一行缺少截图。").FontSize(t.FontSize * reviewHeaderSizeRatio).
+				TextColor(t.TextMuted)
+			return
+		}
+		m.reviewCropImage(c, t, crop.evidence)
+	})
+}
+
+// reviewCropImage draws one crop at the screenshot area's width, scaled up
+// by the zoom with pixel-art edges. The image belongs to its own evidence
+// identity, so a late load can never attach to another item.
+func (m *Model) reviewCropImage(c *ui.Context, t *ui.Theme, evidence *Evidence) {
+	if m.rec == nil || evidence == nil || evidence.ID == "" || m.cache.load == nil {
+		return
+	}
+	entry := m.evidenceFor(m.rec.ID, evidence.ID)
+	switch {
+	case entry == nil:
+		ui.Text(c, "截图加载中……").TextColor(t.TextMuted)
+	case entry.err != nil:
+		ui.Textf(c, "截图不可用：%v", entry.err).TextColor(t.Danger)
+	default:
+		width := m.reviewCropImageWidth()
+		if m.cropZoom > 0 {
+			width *= m.cropZoom
+			entry.bitmap.Pixelated()
+		}
+		imageWidth, imageHeight := entry.bitmap.Size()
+		if imageWidth <= 0 || imageHeight <= 0 {
+			return
+		}
+		height := width * float32(imageHeight) / float32(imageWidth)
+		ui.Image(c, entry.bitmap).Size(width, height).Fit(ui.Contain)
+	}
+}
+
+// reviewCropRow is one screenshot block: an observed line with (or
+// without) its crop, or a context crop that carries no text.
+type reviewCropRow struct {
+	line     *Line
+	evidence *Evidence
+	context  bool
+	index    int
+}
+
+func (c *reviewCropRow) role() string {
+	if c.evidence != nil && c.evidence.Role != "" {
+		return c.evidence.Role
+	}
+	if c.line != nil {
+		return c.line.Role
+	}
+	return ""
+}
+
+func (c *reviewCropRow) roleLabel() string {
+	if c.context {
+		return contextRoleText(c.role(), c.index)
+	}
+	return lineRoleText(c.role(), c.index)
+}
+
+// reviewCropsForRow builds the screenshot list and reports whether every
+// line crop carries a locatable role. When a role is missing the list
+// follows capture order and nothing is highlighted (R-07a's fallback).
+func reviewCropsForRow(row *Row) ([]reviewCropRow, bool) {
+	if row == nil {
+		return nil, false
+	}
+	lineCount := len(row.Lines)
+	for i := range row.Evidence {
+		ev := &row.Evidence[i]
+		if ev.Kind == EvidenceLine && ev.Index >= lineCount {
+			lineCount = ev.Index + 1
+		}
+	}
+	crops := make([]reviewCropRow, 0, lineCount+len(row.Evidence))
+	complete := true
+	for i := 0; i < lineCount; i++ {
+		crop := reviewCropRow{index: i}
+		if i < len(row.Lines) {
+			crop.line = &row.Lines[i]
+		}
+		crop.evidence = row.LineEvidence(i)
+		role := crop.role()
+		if _, ok := lineRoleRank(role); !ok {
+			complete = false
+		}
+		crops = append(crops, crop)
+	}
+	if complete {
+		// The game panel's reading order: set, level, main stat, then
+		// substats 1–4.
+		sortCropsByRole(crops)
+	}
+	for i := range row.Evidence {
+		ev := &row.Evidence[i]
+		if ev.Kind != EvidenceContext {
+			continue
+		}
+		crops = append(crops, reviewCropRow{evidence: ev, context: true, index: ev.Index})
+	}
+	return crops, complete
+}
+
+func sortCropsByRole(crops []reviewCropRow) {
+	for i := 1; i < len(crops); i++ {
+		current := crops[i]
+		currentRank, _ := lineRoleRank(current.role())
+		j := i - 1
+		for j >= 0 {
+			rank, _ := lineRoleRank(crops[j].role())
+			if rank <= currentRank {
+				break
+			}
+			crops[j+1] = crops[j]
+			j--
+		}
+		crops[j+1] = current
+	}
+}
+
+// highlightedCropRoles maps the selected form field to the crop roles it
+// locates. A record without complete line roles gets no highlight.
+func (m *Model) highlightedCropRoles(row *Row, rolesComplete bool) map[string]bool {
+	if row == nil || !rolesComplete || m.reviewField == "" {
+		return nil
+	}
+	roles := EvidenceRolesForField(m.reviewField)
+	if len(roles) == 0 {
+		return nil
+	}
+	set := make(map[string]bool, len(roles))
+	for _, role := range roles {
+		set[role] = true
+	}
+	return set
+}
+
+// reviewFormPane is the 400-DIP form. Its content scrolls inside the pane;
+// the action bar stays fixed at the bottom at every height.
+func (m *Model) reviewFormPane(c *ui.Context, t *ui.Theme, visible []int) {
+	_, tok := themeWithTokens(t, c.Preferences())
+	row := m.selectedRow()
+	ui.Column(c).Width(reviewFormWidth).Shrink(0).FillHeight().MinHeight(0).
+		Background(tok.SurfaceContent).Bind(&m.reviewFormRef).Children(func() {
+		ui.Scroll(c).Grow(1).MinHeight(0).Children(func() {
+			ui.Column(c).Padding(reviewPanePaddingY, t.Space(4)).Gap(t.Space(2.5)).Children(func() {
+				if row == nil {
+					m.reviewEmptyForm(c, t, visible)
+					return
+				}
+				m.ensureReviewEdit(row)
+				m.reviewFormHeader(c, t, row)
+				if m.edit != nil && m.rec != nil &&
+					m.edit.recordID == m.rec.ID && m.edit.seq == row.Seq {
+					m.reviewEditForm(c, t, row)
+				} else {
+					m.reviewReadOnlyForm(c, t, row)
+				}
+			})
+		})
+		// The one-shot focus request belongs to the frame that built the
+		// field it names; later Tab moves are the user's.
+		m.focusReviewField = ""
+		ui.Divider(c)
+		m.reviewActionBar(c, t, row)
+	})
+}
+
+// reviewEmptyForm is the form pane with no chosen item. Following the
+// design, an empty pending queue is a finished review, not a blank page.
+func (m *Model) reviewEmptyForm(c *ui.Context, t *ui.Theme, visible []int) {
+	if m.filter == resultFilterPending && m.pendingItemsCount() == 0 {
+		counts := m.recordCounts()
+		ui.Text(c, "都处理完了").FontWeight(600)
+		if counts.ExportKnown {
+			ui.Textf(c, "可导出 %d 件 · 排除 %d 件", counts.Exportable, counts.Captured-counts.Exportable)
+		}
+		if ui.PrimaryButton(c, "导出…").Disabled(m.exportEntryBlocked()).Clicked() {
+			m.revealExports()
+		}
+		if ui.Button(c, "删除这条记录的截图…").Clicked() {
+			m.RequestScreenshotCleanup(m.rec.ID)
+		}
+		return
+	}
+	ui.Text(c, m.filteredEmptyText()).TextColor(t.TextMuted)
+	if ui.Button(c, "显示全部").Clicked() {
+		m.setResultFilter(resultFilterAll)
+		m.afterResultFilterChange()
+	}
+	_ = visible
+}
+
+// reviewFormHeader names the item and its category, then the form's state
+// bands: backfill, exportable warning, save failure, loading and export.
+func (m *Model) reviewFormHeader(c *ui.Context, t *ui.Theme, row *Row) {
+	_, tok := themeWithTokens(t, c.Preferences())
+	ui.Row(c).Gap(t.Space(1)).AlignItems(ui.Center).Children(func() {
+		ui.Text(c, resultDetailTitle(row)).FontWeight(600).SingleLine().Shrink(1)
+		ui.Box(c).Grow(1)
+		m.reviewCategoryTag(c, t, tok, row, false)
+	})
+	if notice := backfillNotice(row); notice != "" {
+		ui.Text(c, notice).FontSize(t.FontSize * reviewHeaderSizeRatio).TextColor(t.Warning)
+	}
+	if notice := warningNotice(row); notice != "" {
+		ui.Column(c).Padding(t.Space(1.5), t.Space(2)).Gap(t.Space(0.5)).
+			Background(t.Surface).Radius(t.Radius).Children(func() {
+			ui.Text(c, notice).FontSize(t.FontSize * reviewHeaderSizeRatio)
+		})
+	}
+	if m.reviewErr != "" {
+		ui.Column(c).Padding(t.Space(1.5), t.Space(2)).Gap(t.Space(1)).
+			Background(tok.DangerSoft).Border(1, tok.DangerBorder).Radius(t.Radius).Children(func() {
+			ui.Row(c).Gap(t.Space(1)).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, "没有保存："+m.reviewErr).TextColor(t.Danger).Shrink(1)
+				if ui.Button(c, m.retryActionLabel()).Disabled(m.reviewSaving).Clicked() {
+					m.saveEdit(m.lastAction, nil)
+				}
+			})
+			ui.Text(c, "输入已保留。").FontSize(t.FontSize * reviewHeaderSizeRatio).
+				TextColor(t.TextMuted)
+		})
+	}
+	if m.loading {
+		ui.Text(c, "正在加载最新检查点，加载完成前不能编辑、保存或确认。").TextColor(t.TextMuted)
+	}
+	if m.exportBusy() {
+		ui.Text(c, "正在导出，完成前不能编辑或确认。").TextColor(t.TextMuted)
+	}
+}
+
+// retryActionLabel names the failed action the error band retries.
+func (m *Model) retryActionLabel() string {
+	switch m.lastAction {
+	case reviewConfirmStay:
+		return "重试确认"
+	case reviewConfirmNext:
+		return "重试确认并下一项"
+	default:
+		return "重试保存"
+	}
+}
+
+// reviewEditForm is the editable form: problem fields first with their
+// reasons, the rest folded away, then the raw text and revision history.
+func (m *Model) reviewEditForm(c *ui.Context, t *ui.Theme, row *Row) {
+	if m.edit == nil {
+		return
+	}
+	m.edit.refresh()
+	draft := &m.edit.draft
+	problems := m.reviewProblems(row)
+	first, rest := reviewFormFields(problems)
+	for _, field := range first {
+		m.reviewEditField(c, t, row, field, problems)
+	}
+	if len(rest) > 0 {
+		if len(first) == 0 {
+			// Nothing is wrong with this item: with no problem field to
+			// lead with, the rest of the form is the form.
+			for _, field := range rest {
+				m.reviewEditField(c, t, row, field, problems)
+			}
+		} else {
+			label := fmt.Sprintf("其余 %d 个字段", len(rest))
+			ui.Collapsible(c, label, &m.formExtrasOpen, func() {
+				ui.Column(c).Gap(t.Space(2)).Children(func() {
+					for _, field := range rest {
+						m.reviewEditField(c, t, row, field, problems)
+					}
+				})
+			})
+		}
+	}
+	m.rawTextArea(c, t, row)
+	_ = draft
+}
+
+// reviewEditField is one editable field: its label, the control, and the
+// reason under it. The whole block is a click target for the screenshots.
+func (m *Model) reviewEditField(c *ui.Context, t *ui.Theme, row *Row, field FormField, problems []reviewProblem) {
+	if m.edit == nil {
+		return
+	}
+	problem, hasProblem := reviewProblemKindFor(problems, field)
+	block := ui.Column(c).Gap(t.Space(1)).Padding(t.Space(0.5), 0)
+	if m.reviewField == field {
+		block = block.Padding(t.Space(1)).Background(t.Surface).Radius(t.Radius)
+	}
+	block.OnClick(func() { m.selectReviewField(field) })
+	block.Children(func() {
+		ui.Row(c).Gap(t.Space(1)).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, formFieldLabel(field)).Width(100).TextColor(t.TextMuted)
+			if hasProblem {
+				m.reviewProblemTag(c, t, problem)
+			}
+		})
+		m.reviewFieldControl(c, t, row, field)
+		if hasProblem {
+			text := reviewProblemText(problems, field)
+			color := t.Warning
+			if problem == reviewProblemBlocking {
+				color = t.Danger
+			}
+			ui.Text(c, text).FontSize(t.FontSize * 0.85).TextColor(color)
+		}
+	})
+}
+
+// reviewProblemTag is the small "需确认" / "!" marker beside a field label.
+func (m *Model) reviewProblemTag(c *ui.Context, t *ui.Theme, kind reviewProblemKind) {
+	_, tok := themeWithTokens(t, c.Preferences())
+	if kind == reviewProblemWarning {
+		ui.Text(c, "!").FontSize(t.FontSize*0.85).FontWeight(600).TextColor(tok.WarningFG).
+			Border(1, tok.WarningBorder).Padding(0, t.Space(0.75)).BorderStyle(ui.BorderDashed).
+			Radius(t.Space(1)).SingleLine()
+		return
+	}
+	label := "需确认"
+	if kind == reviewProblemGap {
+		label = "需补全"
+	}
+	ui.Text(c, label).FontSize(t.FontSize*0.8).FontWeight(600).TextColor(tok.WarningFG).
+		Background(tok.WarningSoft).Border(1, tok.WarningBorder).Padding(0, t.Space(1)).
+		Radius(t.Space(1)).SingleLine()
+}
+
+// reviewFieldControl builds one field's editable control. The control is
+// focused once when the form asks for this field, and any focus inside it
+// selects the field for the screenshot highlight.
+func (m *Model) reviewFieldControl(c *ui.Context, t *ui.Theme, row *Row, field FormField) {
+	if m.edit == nil {
+		return
+	}
+	draft := &m.edit.draft
+	width := float32(reviewFormWidth - 2*reviewPanePaddingX - 14)
+	switch field {
+	case FormFieldSetID:
+		input := ui.Select(c, &draft.SetID, setChoices(currentID(draft.SetID))).
+			Width(width).Disabled(m.reviewActionsBlocked()).
+			Label("套装：" + draft.SetID)
+		input = m.reviewFocus(field, input)
+		m.noteReviewControlFocus(field, input.FocusWithin())
+	case FormFieldRarity:
+		if row.Structured != nil {
+			if m.focusReviewField == field {
+				m.selectReviewField(field)
+			}
+			ui.Text(c, row.RarityText())
+			return
+		}
+		input := ui.Select(c, &draft.Rarity, rarityChoices(draft.Rarity)).
+			Width(width).Disabled(m.reviewActionsBlocked()).
+			Label("稀有度：" + draft.Rarity)
+		input = m.reviewFocus(field, input)
+		m.noteReviewControlFocus(field, input.FocusWithin())
+	case FormFieldSlot:
+		input := ui.Select(c, &draft.Slot, slotChoices(currentID(draft.Slot))).
+			Width(width).Disabled(m.reviewActionsBlocked()).
+			Label("槽位：" + draft.Slot)
+		input = m.reviewFocus(field, input)
+		m.noteReviewControlFocus(field, input.FocusWithin())
+	case FormFieldLevel:
+		input := ui.TextInput(c, &draft.Level).Width(110).
+			Placeholder("0–15").Disabled(m.reviewActionsBlocked()).
+			Label("等级")
+		input = m.reviewFocus(field, input)
+		m.noteReviewControlFocus(field, input.FocusWithin())
+	case FormFieldMainStat:
+		ui.Row(c).Gap(t.Space(1)).AlignItems(ui.Center).Children(func() {
+			attribute := ui.Select(c, &draft.MainAttribute,
+				attributeChoices(attributeTextValue(draft.MainAttribute))).
+				Width(148).Disabled(m.reviewActionsBlocked()).Label("主词条类型")
+			m.noteTextInputFocus(attribute)
+			value := m.noteTextInputFocus(ui.TextInput(c, &draft.MainValue).
+				Width(80).Placeholder("数值").Disabled(m.reviewActionsBlocked()).Label("主词条数值"))
+			if m.focusReviewField == field {
+				value.Focus()
+			}
+			unit := ui.Select(c, &draft.MainUnit,
+				unitChoices(attributeTextValue(draft.MainAttribute), attributeTextValue(draft.MainUnit))).
+				Width(112).Disabled(m.reviewActionsBlocked()).Label("主词条单位")
+			m.noteReviewControlFocus(field, attribute.FocusWithin() || value.FocusWithin() || unit.FocusWithin())
+		})
+	case FormFieldSubstats, FormFieldSubstat1, FormFieldSubstat2, FormFieldSubstat3, FormFieldSubstat4:
+		if field != FormFieldSubstats {
+			return // the group control renders every row
+		}
+		m.editSubstats(c, t, m.edit)
+	case FormFieldManagementState:
+		input := ui.Select(c, &draft.ManagementState,
+			managementChoices(attributeTextValue(draft.ManagementState))).
+			Width(width).Disabled(m.reviewActionsBlocked()).Label("管理状态")
+		input = m.reviewFocus(field, input)
+		m.noteReviewControlFocus(field, input.FocusWithin())
+	case FormFieldEquipped:
+		ui.Row(c).Gap(t.Space(1)).AlignItems(ui.Center).Children(func() {
+			state := ui.Select(c, &draft.EquippedState,
+				equippedChoices(optionValue(draft.EquippedState))).
+				Width(150).Disabled(m.reviewActionsBlocked()).Label("装备状态")
+			disabled := optionValue(draft.EquippedState) != string(zzz.EquippedStateEquipped)
+			agent := ui.Select(c, &draft.AgentID, agentChoices(currentID(draft.AgentID))).
+				Width(170).Disabled(disabled || m.reviewSaving).Label("代理人")
+			if m.focusReviewField == field {
+				state.Focus()
+			}
+			m.noteReviewControlFocus(field, state.FocusWithin() || agent.FocusWithin())
+		})
+		if optionValue(draft.EquippedState) == "" {
+			ui.Text(c, "未识别（可留空导出）").FontSize(t.FontSize * 0.85).TextColor(t.TextMuted)
+		}
+	}
+}
+
+// noteReviewControlFocus follows the keyboard between form controls: a
+// newly focused control selects its field, while a click-selected field is
+// not overwritten by a control that merely kept the focus.
+func (m *Model) noteReviewControlFocus(field FormField, focused bool) {
+	if focused {
+		if m.focusedReviewField != field {
+			m.focusedReviewField = field
+			m.selectReviewField(field)
+		}
+		return
+	}
+	if m.focusedReviewField == field {
+		m.focusedReviewField = ""
+	}
+}
+
+// reviewFocus applies the one-shot focus request for a field.
+func (m *Model) reviewFocus(field FormField, el ui.Element) ui.Element {
+	if m.focusReviewField == field {
+		// A Select's wrapper has no focus state of its own, so the
+		// request also selects the field here instead of waiting for
+		// FocusWithin to report it.
+		m.selectReviewField(field)
+		return el.Focus()
+	}
+	return el
+}
+
+// rarityChoices is the backfill rarity picker: the only assertable rarity
+// or the explicit unread choice.
+func rarityChoices(current string) []string {
+	options := []string{unreadOption, zzz.RarityS}
+	if current == "" || current == unreadOption {
+		return options
+	}
+	if !containsString(options, current) {
+		options = append(options, current)
+	}
+	return options
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
+// reviewReadOnlyForm is a settled item's form. Every field is text; the
+// header's 修改 action opens the editor. The full read-only design for
+// passed and warning items (08 §3.3, §3.4) is PR-19a.
+func (m *Model) reviewReadOnlyForm(c *ui.Context, t *ui.Theme, row *Row) {
+	ui.Column(c).Gap(t.Space(1.5)).Children(func() {
+		fields := []struct {
+			field FormField
+			build func()
+		}{
+			{FormFieldSetID, func() { formField(c, t, "套装", row.SetFormText()) }},
+			{FormFieldRarity, func() { formField(c, t, "稀有度", row.RarityText()) }},
+			{FormFieldSlot, func() { formField(c, t, "槽位", row.SlotText()) }},
+			{FormFieldLevel, func() { formField(c, t, "等级", row.LevelText()) }},
+			{FormFieldMainStat, func() { formField(c, t, "主词条", row.MainStatText()) }},
+			{FormFieldSubstats, func() { m.substatField(c, t, row) }},
+			{FormFieldManagementState, func() { formField(c, t, "管理状态", row.ManagementStateText()) }},
+			{FormFieldEquipped, func() { formField(c, t, "装备", row.EquippedText()) }},
+		}
+		for _, entry := range fields {
+			field := entry.field
+			block := ui.Column(c).Gap(t.Space(0.5))
+			block.OnClick(func() { m.selectReviewField(field) })
+			block.Children(entry.build)
+		}
+		m.rawTextArea(c, t, row)
+	})
+}
+
+// reviewActionBar is the fixed bottom bar: the primary "确认并下一项" on the
+// left, the secondary save, and the reason a disabled action cannot run.
+func (m *Model) reviewActionBar(c *ui.Context, t *ui.Theme, row *Row) {
+	ui.Column(c).Padding(t.Space(2), t.Space(4)).Gap(t.Space(1)).Children(func() {
+		if row == nil {
+			return
+		}
+		editing := m.edit != nil && m.rec != nil &&
+			m.edit.recordID == m.rec.ID && m.edit.seq == row.Seq
+		if editing {
+			reason := m.reviewConfirmBlockedReason(row)
+			ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
+				confirmLabel := "确认并下一项"
+				if m.reviewErr != "" && m.lastAction == reviewConfirmNext {
+					confirmLabel = "重试确认并下一项"
+				}
+				confirm := ui.PrimaryButton(c, confirmLabel).Disabled(reason != "" || m.reviewActionsBlocked())
+				if confirm.Clicked() {
+					m.saveEdit(reviewConfirmNext, nil)
+				}
+				saveLabel := "保存修改"
+				if m.reviewErr != "" && m.lastAction == reviewSave {
+					saveLabel = "重试保存"
+				}
+				save := ui.Button(c, saveLabel).Disabled(!m.edit.canSave() || m.reviewActionsBlocked())
+				if save.Clicked() {
+					m.saveEdit(reviewSave, nil)
+				}
+			})
+			if reason != "" {
+				ui.Text(c, reason).FontSize(t.FontSize * 0.85).TextColor(t.TextMuted)
+			}
+		} else {
+			ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
+				if ui.Button(c, "修改").Disabled(m.reviewActionsBlocked()).Clicked() {
+					m.startEditRow(row)
+				}
+				if row.PendingReview() && ui.PrimaryButton(c, "确认并下一项").Disabled(m.reviewActionsBlocked()).Clicked() {
+					m.confirmCurrent()
+				}
+			})
+		}
+		if m.reviewSaving {
+			ui.Text(c, "正在保存……").TextColor(t.TextMuted)
+		}
+		if m.reviewNotice != "" {
+			ui.Text(c, m.reviewNotice).FontSize(t.FontSize * 0.85).TextColor(t.TextMuted)
+		}
+	})
+}
+
+// rawTextArea is the per-item disclosure of the recognized text and the
+// revision history. The form owns it, so the screenshot pane stays a crop
+// list.
+func (m *Model) rawTextArea(c *ui.Context, t *ui.Theme, row *Row) {
+	ui.Divider(c)
+	label := fmt.Sprintf("原始识别文字与修订（%d 条）", len(row.Lines))
+	ui.Collapsible(c, label, &m.formRawOpen, func() {
+		ui.Column(c).Gap(t.Space(0.5)).Children(func() {
+			if len(row.Lines) == 0 {
+				ui.Text(c, "这件没有识别文字。").TextColor(t.TextMuted)
+			}
+			for i := range row.Lines {
+				line := row.Lines[i]
+				text := line.Text
+				if text == "" {
+					text = "（该行未识别出文本）"
+				}
+				ui.Textf(c, "%s：%s", lineRoleText(line.Role, i), text).
+					FontSize(t.FontSize * 0.85).TextColor(t.TextMuted)
+			}
+			ui.Textf(c, "当前修订：%d", row.Revision).
+				FontSize(t.FontSize * 0.85).TextColor(t.TextMuted)
+		})
+	})
+}
+
+// navigationPrompt is the unsaved-changes dialog (08 §9). It is a modal
+// over the whole window; Save and Continue is primary, Discard and Stay
+// stay secondary, and Stay keeps the default focus and Escape.
+func (m *Model) navigationPrompt(c *ui.Context, t *ui.Theme) {
+	if m.navPrompt == nil {
+		return
+	}
+	open := true
+	ui.Modal(c, &open, func() {
+		ui.Column(c).Width(420).Gap(t.Space(2)).Padding(t.Space(4)).
+			Background(t.Background).Border(1, t.Border).Radius(t.Radius).Children(func() {
+			seq := m.editSeqForPrompt()
+			title := "有未保存的修改"
+			if seq > 0 {
+				title = fmt.Sprintf("第 %d 件有未保存的修改", seq)
+			}
+			ui.Text(c, title).FontWeight(600)
+			ui.Text(c, "保存后继续，或放弃这次修改。").TextColor(t.TextMuted).
+				FontSize(t.FontSize * 0.9)
+			ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
+				if ui.PrimaryButton(c, "保存并继续").Disabled(m.reviewActionsBlocked()).Clicked() {
+					m.promptSaveAndContinue()
+				}
+				if ui.Button(c, "放弃修改").Disabled(m.reviewSaving).Clicked() {
+					m.promptDiscardAndContinue()
+				}
+				stay := ui.Button(c, "留在这里").Disabled(m.reviewSaving).AutoFocus()
+				if stay.Clicked() {
+					m.promptStay()
+				}
+			})
+			if m.reviewSaving {
+				ui.Text(c, "正在保存……").TextColor(t.TextMuted)
+			}
+			if m.reviewErr != "" {
+				ui.Text(c, m.reviewErr).TextColor(t.Danger)
+			}
+		})
+	})
+	if !open && m.navPrompt != nil {
+		m.promptStay()
+	}
+}
+
+// editSeqForPrompt names the item in the unsaved dialog.
+func (m *Model) editSeqForPrompt() int64 {
+	if m.edit != nil {
+		return m.edit.seq
+	}
+	if m.rec != nil && m.selected >= 0 && m.selected < len(m.rec.Rows) {
+		return m.rec.Rows[m.selected].Seq
+	}
+	return 0
+}
+
+// resultDetailTitle is the item identity the form names: sequence, set,
+// slot and level, never a fabricated value for a row without a structured
+// interpretation.
 func resultDetailTitle(row *Row) string {
-	parts := []string{fmt.Sprintf("%d", row.Seq)}
+	parts := []string{fmt.Sprintf("#%04d", row.Seq)}
 	if set := row.SetText(); set != "" {
 		parts = append(parts, set)
 	}
@@ -607,113 +1201,12 @@ func resultDetailTitle(row *Row) string {
 	return strings.Join(parts, " · ")
 }
 
-// resultIssueText is the detail subtitle the table's problem column used
-// to carry: the failure, the unprocessed reason, the first review problem
-// or the settled conclusion.
-func resultIssueText(row *Row) string {
-	switch row.Status {
-	case record.StatusFailed:
-		return "识别失败：" + row.Failure
-	case record.StatusUnprocessed:
-		return "未处理原因：" + unprocessedReasonText(row.Reason)
-	case record.StatusProduced:
-		if row.Structured == nil {
-			return "未解析：没有结构化字段，原始识别文本见证据。"
-		}
-		if row.PendingReview() {
-			check := app.CheckDiscData(row.Structured.Data)
-			if problem := firstCheckProblem(check); problem != "" {
-				return "需核对：" + problem
-			}
-			if issues := row.Issues(); len(issues) > 0 {
-				return "需核对：" + issues[0].Message
-			}
-			return "需核对：该条目尚未确认。"
-		}
-		if row.Quality == record.QualityAutoAccepted {
-			return "自动校验通过，未发现需核对项"
-		}
-		return "人工确认，未发现需核对项"
-	default:
-		return "识别尚未完成，暂无结构化字段。"
+// resultIssueColor is the problem subtitle's color.
+func resultIssueColor(t *ui.Theme, row *Row) ui.Color {
+	if row.Status == record.StatusFailed {
+		return t.Danger
 	}
-}
-
-// resultEvidenceNote explains what the evidence is for, carrying the same
-// problem the detail subtitle names.
-func resultEvidenceNote(row *Row) string {
-	switch row.Status {
-	case record.StatusFailed:
-		return "识别失败；证据保留用于复核失败原因。"
-	case record.StatusUnprocessed:
-		return "识别未运行；证据保留用于确认未处理原因。"
-	case record.StatusProduced:
-		if row.PendingReview() {
-			return "待核对；证据用于核对副标题中的问题。"
-		}
-		return "自动校验通过；证据供复核。"
-	default:
-		return "识别尚未完成。"
-	}
-}
-
-// structuredForm renders the produced item's fields: read-only by
-// default, editable while this item's editor is open. Every field the
-// payload can leave unread says "未读取", and management state and the
-// equipper keep null distinct from none/unequipped. The validation shown
-// here is recomputed from the current data and rules, so it can never
-// outlive the values it describes.
-func (m *Model) structuredForm(c *ui.Context, t *ui.Theme, row *Row) {
-	if m.edit != nil && m.rec != nil && m.edit.recordID == m.rec.ID && m.edit.seq == row.Seq {
-		m.editForm(c, t, row)
-		return
-	}
-	check := app.CheckDiscData(row.Structured.Data)
-	issues := currentIssues(row, check)
-	ui.Text(c, "字段（只读）").FontWeight(600)
-	ui.Column(c).Gap(t.Space(1)).Children(func() {
-		formField(c, t, "套装", row.SetFormText())
-		formField(c, t, "稀有度", row.RarityText())
-		formField(c, t, "槽位", row.SlotText())
-		formField(c, t, "等级", row.LevelText())
-		formField(c, t, "主词条", row.MainStatText())
-		m.substatField(c, t, row)
-		formField(c, t, "管理状态", row.ManagementStateText())
-		formField(c, t, "装备", row.EquippedText())
-		formField(c, t, "校验状态", validationStatusText(check.Validation.Status))
-		formField(c, t, "问题", issueSummaryText(issues))
-		for _, issue := range issues {
-			field := issue.Field
-			if field == "" {
-				field = "整件"
-			}
-			ui.Textf(c, "· %s · %s（%s）：%s", field, issue.Code, issue.Severity, issue.Message).
-				MaxWidth(360).FontSize(t.FontSize * 0.9).TextColor(t.TextMuted)
-		}
-		// An item that cannot be exported offers no edit or confirmation
-		// actions; the read-only fields still explain why it is excluded.
-		m.reviewActions(c, t, row, check)
-	})
-}
-
-// currentIssues merges the persisted recognition issues with the
-// validation recomputed for the current values, showing an exact
-// duplicate once.
-func currentIssues(row *Row, check app.DataCheck) []zzz.Issue {
-	out := append([]zzz.Issue(nil), row.Structured.Issues...)
-	for _, issue := range check.Issues {
-		present := false
-		for _, have := range out {
-			if have == issue {
-				present = true
-				break
-			}
-		}
-		if !present {
-			out = append(out, issue)
-		}
-	}
-	return out
+	return t.TextMuted
 }
 
 // issueSummaryText is the compact count of an issue list.
@@ -739,98 +1232,6 @@ func issueSummaryText(issues []zzz.Issue) string {
 	}
 }
 
-// reviewActions offers the per-item review controls in the read-only
-// view: entering the editor, confirming the item where it stands, or
-// confirming it and moving on. An already-settled item has no confirmation
-// action; only a pending row offers the two confirmation buttons.
-func (m *Model) reviewActions(c *ui.Context, t *ui.Theme, row *Row, check app.DataCheck) {
-	if row.Structured == nil {
-		return
-	}
-	ui.Divider(c)
-	unexportable := resultRowUnexportable(row)
-	pending := row.PendingReview()
-	editButton := func() {
-		if ui.Button(c, "编辑").Disabled(m.reviewActionsBlocked()).Clicked() {
-			m.startEdit()
-		}
-	}
-	stayLabel := "确认"
-	if m.reviewErr != "" && m.lastAction == reviewConfirmStay {
-		stayLabel = "重试确认"
-	}
-	stayButton := func() {
-		confirm := ui.Button(c, stayLabel).Disabled(!check.Confirmable() || m.reviewActionsBlocked())
-		if confirm.Clicked() {
-			m.confirmCurrentStay()
-		}
-	}
-	nextLabel := "确认并下一项"
-	if m.reviewErr != "" && m.lastAction == reviewConfirmNext {
-		nextLabel = "重试确认并下一项"
-	}
-	nextButton := func() {
-		if ui.PrimaryButton(c, nextLabel).Disabled(!check.Confirmable() || m.reviewActionsBlocked()).Clicked() {
-			m.confirmCurrent()
-		}
-	}
-	selectNext := func() {
-		if ui.Button(c, "下一个待校对").Disabled(m.reviewActionsBlocked()).Clicked() {
-			m.selectNextPendingResult()
-		}
-	}
-	if !m.narrowResults() {
-		ui.Column(c).Gap(t.Space(1)).Children(func() {
-			if !unexportable || pending {
-				ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
-					if !unexportable {
-						editButton()
-					}
-					if pending {
-						stayButton()
-					}
-				})
-			}
-			ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
-				selectNext()
-				if pending {
-					nextButton()
-				}
-			})
-		})
-	} else {
-		ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
-			if !unexportable {
-				editButton()
-			}
-			if pending {
-				stayButton()
-			}
-			selectNext()
-			if pending {
-				nextButton()
-			}
-		})
-	}
-	if pending {
-		if problem := firstCheckProblem(check); problem != "" {
-			ui.Text(c, "确认前还需："+problem).TextColor(t.TextMuted)
-		}
-	}
-	if m.loading {
-		ui.Text(c, "正在加载最新检查点，加载完成前不能编辑、保存或确认。").TextColor(t.TextMuted)
-	}
-	if m.exportBusy() {
-		ui.Text(c, "正在导出，完成前不能编辑或确认。").TextColor(t.TextMuted)
-	}
-	if m.reviewNotice != "" {
-		ui.Text(c, m.reviewNotice)
-	}
-	if m.reviewErr != "" {
-		ui.Text(c, m.reviewErr).TextColor(t.Danger)
-	}
-}
-
 // firstCheckProblem names the first reason a row cannot be confirmed.
 func firstCheckProblem(check app.DataCheck) string {
 	if len(check.Blocking) > 0 {
@@ -842,165 +1243,41 @@ func firstCheckProblem(check app.DataCheck) string {
 	return ""
 }
 
-// editForm is the editable structured form. It shows fixed catalog
-// pickers, decimal text boxes and the current revision's validation
-// preview; saving is refused while a present value is malformed, and
-// confirmation additionally needs every required field.
-func (m *Model) editForm(c *ui.Context, t *ui.Theme, row *Row) {
-	edit := m.edit
-	edit.refresh()
-	draft := &edit.draft
-
-	ui.Text(c, "字段（编辑中）").FontWeight(600)
-	ui.Column(c).Gap(t.Space(1)).Children(func() {
-		ui.Text(c, "稀有度："+row.RarityText()+"（本修订不可编辑）").TextColor(t.TextMuted)
-
-		labeledRow(c, t, "套装", func() {
-			ui.Select(c, &draft.SetID, setChoices(currentID(draft.SetID))).Width(240).Disabled(m.reviewActionsBlocked())
-		})
-		labeledRow(c, t, "槽位", func() {
-			ui.Select(c, &draft.Slot, slotChoices(currentID(draft.Slot))).Width(120).Disabled(m.reviewActionsBlocked())
-		})
-		labeledRow(c, t, "等级", func() {
-			m.noteTextInputFocus(ui.TextInput(c, &draft.Level).Width(80).Disabled(m.reviewActionsBlocked()))
-		})
-
-		labeledRow(c, t, "主词条", func() {
-			ui.Row(c).Gap(t.Space(1)).AlignItems(ui.Center).Children(func() {
-				ui.Select(c, &draft.MainAttribute, attributeChoices(attributeTextValue(draft.MainAttribute))).Width(170).Disabled(m.reviewActionsBlocked())
-				m.noteTextInputFocus(ui.TextInput(c, &draft.MainValue).Width(100).Disabled(m.reviewActionsBlocked()))
-				ui.Select(c, &draft.MainUnit, unitChoices(attributeTextValue(draft.MainAttribute), attributeTextValue(draft.MainUnit))).Width(150).Disabled(m.reviewActionsBlocked())
-			})
-		})
-
-		m.editSubstats(c, t, edit)
-
-		labeledRow(c, t, "管理状态", func() {
-			ui.Select(c, &draft.ManagementState, managementChoices(attributeTextValue(draft.ManagementState))).Width(170).Disabled(m.reviewActionsBlocked())
-		})
-		labeledRow(c, t, "装备", func() {
-			ui.Select(c, &draft.EquippedState, equippedChoices(optionValue(draft.EquippedState))).Width(170).Disabled(m.reviewActionsBlocked())
-		})
-		labeledRow(c, t, "代理人", func() {
-			disabled := optionValue(draft.EquippedState) != string(zzz.EquippedStateEquipped)
-			ui.Select(c, &draft.AgentID, agentChoices(currentID(draft.AgentID))).Width(220).Disabled(disabled || m.reviewSaving)
-		})
-
-		ui.Divider(c)
-		ui.Text(c, "校验预览："+validationStatusText(edit.check.Validation.Status)).FontWeight(600)
-		for _, problem := range edit.fieldErrors {
-			ui.Textf(c, "· %s：%s", reviewFieldLabel(problem.Field), problem.Message).
-				MaxWidth(380).FontSize(t.FontSize * 0.9).TextColor(t.Danger)
-		}
-		for _, issue := range edit.check.Blocking {
-			ui.Textf(c, "· %s：%s", reviewFieldLabel(issue.Field), issue.Message).
-				MaxWidth(380).FontSize(t.FontSize * 0.9).TextColor(t.Danger)
-		}
-		for _, gap := range edit.check.Gaps {
-			ui.Textf(c, "· 待补全 %s：%s", reviewFieldLabel(gap.Field), gap.Message).
-				MaxWidth(380).FontSize(t.FontSize * 0.9).TextColor(t.TextMuted)
-		}
-
-		saveLabel := "保存"
-		if m.reviewErr != "" && m.lastAction == reviewSave {
-			saveLabel = "重试保存"
-		}
-		confirmStayLabel := "保存并确认"
-		if m.reviewErr != "" && m.lastAction == reviewConfirmStay {
-			confirmStayLabel = "重试保存并确认"
-		}
-		confirmNextLabel := "保存并确认并下一项"
-		if m.reviewErr != "" && m.lastAction == reviewConfirmNext {
-			confirmNextLabel = "重试保存并确认并下一项"
-		}
-		discardButton := func() {
-			if ui.Button(c, "放弃修改").Disabled(m.reviewSaving).Clicked() {
-				m.discardEdit()
-			}
-		}
-		saveButton := func() {
-			if ui.Button(c, saveLabel).Disabled(!edit.canSave() || m.reviewActionsBlocked()).Clicked() {
-				m.saveEdit(reviewSave, nil)
-			}
-		}
-		confirmStayButton := func() {
-			if ui.Button(c, confirmStayLabel).Disabled(!edit.canConfirm() || m.reviewActionsBlocked()).Clicked() {
-				m.saveEdit(reviewConfirmStay, nil)
-			}
-		}
-		confirmNextButton := func() {
-			if ui.PrimaryButton(c, confirmNextLabel).Disabled(!edit.canConfirm() || m.reviewActionsBlocked()).Clicked() {
-				m.saveEdit(reviewConfirmNext, nil)
-			}
-		}
-		if !m.narrowResults() {
-			ui.Column(c).Gap(t.Space(1)).Children(func() {
-				ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
-					discardButton()
-					saveButton()
-					confirmStayButton()
-				})
-				ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
-					confirmNextButton()
-				})
-			})
-		} else {
-			ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
-				discardButton()
-				saveButton()
-				confirmStayButton()
-				confirmNextButton()
-			})
-		}
-		if m.reviewSaving {
-			ui.Text(c, "正在保存……").TextColor(t.TextMuted)
-		}
-		if m.loading {
-			ui.Text(c, "正在加载最新检查点，加载完成前不能保存或确认。").TextColor(t.TextMuted)
-		}
-		if m.reviewErr != "" {
-			ui.Text(c, m.reviewErr).TextColor(t.Danger)
-		}
-		if m.reviewNotice != "" {
-			ui.Text(c, m.reviewNotice)
-		}
-	})
-}
-
 // editSubstats renders the substat list and its null/confirmed-empty
 // distinction.
 func (m *Model) editSubstats(c *ui.Context, t *ui.Theme, edit *editState) {
 	draft := &edit.draft
-	ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Start).Children(func() {
-		ui.Text(c, "副词条").Width(72).TextColor(t.TextMuted)
-		ui.Column(c).Grow(1).Gap(t.Space(1)).Children(func() {
-			unknown := !draft.SubstatsKnown
-			ui.Checkbox(c, &unknown, "数量未读取（保存为 null）").Disabled(m.reviewActionsBlocked())
-			if unknown != !draft.SubstatsKnown {
-				draft.SubstatsKnown = !unknown
-				if !draft.SubstatsKnown {
-					draft.Substats = nil
-				}
-			}
+	ui.Column(c).Grow(1).Gap(t.Space(1)).Children(func() {
+		unknown := !draft.SubstatsKnown
+		unknownBox := ui.Checkbox(c, &unknown, "数量未读取").Disabled(m.reviewActionsBlocked())
+		if m.focusReviewField == FormFieldSubstats {
+			m.selectReviewField(FormFieldSubstats)
+			unknownBox.Focus()
+		}
+		if unknown != !draft.SubstatsKnown {
+			draft.SubstatsKnown = !unknown
 			if !draft.SubstatsKnown {
-				return
+				draft.Substats = nil
 			}
-			for i := range draft.Substats {
-				if m.editSubstatRow(c, t, i) {
-					draft.Substats = append(draft.Substats[:i], draft.Substats[i+1:]...)
-					break
-				}
+		}
+		if !draft.SubstatsKnown {
+			return
+		}
+		for i := range draft.Substats {
+			if m.editSubstatRow(c, t, i) {
+				draft.Substats = append(draft.Substats[:i], draft.Substats[i+1:]...)
+				break
 			}
-			if len(draft.Substats) == 0 {
-				ui.Text(c, "无（确认没有可见副词条）").TextColor(t.TextMuted)
-			}
-			if ui.Button(c, "添加副词条").Disabled(len(draft.Substats) >= 4 || m.reviewSaving).Clicked() {
-				draft.Substats = append(draft.Substats, substatDraft{
-					Attribute: unreadOption,
-					Unit:      unreadOption,
-				})
-			}
-		})
+		}
+		if len(draft.Substats) == 0 {
+			ui.Text(c, "无（确认没有可见副词条）").TextColor(t.TextMuted)
+		}
+		if ui.Button(c, "添加副词条").Disabled(len(draft.Substats) >= 4 || m.reviewSaving).Clicked() {
+			draft.Substats = append(draft.Substats, substatDraft{
+				Attribute: unreadOption,
+				Unit:      unreadOption,
+			})
+		}
 	})
 }
 
@@ -1012,61 +1289,19 @@ func (m *Model) editSubstatRow(c *ui.Context, t *ui.Theme, index int) bool {
 	remove := false
 	ui.Row(c).Gap(t.Space(1)).AlignItems(ui.Center).Children(func() {
 		ui.Textf(c, "%d", index+1).Width(16).TextColor(t.TextMuted)
-		ui.Select(c, &sub.Attribute, attributeChoices(attributeTextValue(sub.Attribute))).Width(160).Disabled(m.reviewActionsBlocked())
-		m.noteTextInputFocus(ui.TextInput(c, &sub.Value).Width(90).Disabled(m.reviewActionsBlocked()))
-		ui.Select(c, &sub.Unit, unitChoices(attributeTextValue(sub.Attribute), attributeTextValue(sub.Unit))).Width(140).Disabled(m.reviewActionsBlocked())
-		ui.Text(c, "强化").TextColor(t.TextMuted)
-		m.noteTextInputFocus(ui.TextInput(c, &sub.Rolls).Width(50).Disabled(m.reviewActionsBlocked()))
-		if ui.Button(c, "删除").Disabled(m.reviewActionsBlocked()).Clicked() {
+		ui.Select(c, &sub.Attribute, attributeChoices(attributeTextValue(sub.Attribute))).
+			Width(116).Disabled(m.reviewActionsBlocked()).Label("副词条类型")
+		m.noteTextInputFocus(ui.TextInput(c, &sub.Value).Width(60).Placeholder("数值").
+			Disabled(m.reviewActionsBlocked()).Label("副词条数值"))
+		ui.Select(c, &sub.Unit, unitChoices(attributeTextValue(sub.Attribute), attributeTextValue(sub.Unit))).
+			Width(96).Disabled(m.reviewActionsBlocked()).Label("副词条单位")
+		m.noteTextInputFocus(ui.TextInput(c, &sub.Rolls).Width(34).Placeholder("强化").
+			Disabled(m.reviewActionsBlocked()).Label("强化档位"))
+		if ui.Button(c, "×").Width(24).Disabled(m.reviewActionsBlocked()).Clicked() {
 			remove = true
 		}
 	})
 	return remove
-}
-
-// labeledRow is one editor label followed by its controls.
-func labeledRow(c *ui.Context, t *ui.Theme, label string, build func()) {
-	ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, label).Width(72).TextColor(t.TextMuted)
-		build()
-	})
-}
-
-// navigationPrompt asks what to do with unsaved input before a record
-// switch or exit. Normal browsing never shows it.
-func (m *Model) navigationPrompt(c *ui.Context, t *ui.Theme) {
-	if m.navPrompt == nil {
-		return
-	}
-	exit := m.navPrompt.kind == navExit
-	text := "当前条目有未保存的修改。"
-	if exit {
-		text = "当前条目有未保存的修改，退出前请处理。"
-	}
-	ui.Column(c).Gap(t.Space(1)).Children(func() {
-		ui.Text(c, text).FontWeight(600)
-		ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
-			saveLabel, discardLabel := "保存修改并继续", "放弃修改"
-			if exit {
-				saveLabel, discardLabel = "保存修改并退出", "放弃修改并退出"
-			}
-			if ui.Button(c, saveLabel).Disabled(m.reviewActionsBlocked()).Clicked() {
-				m.promptSaveAndContinue()
-			}
-			if ui.Button(c, discardLabel).Disabled(m.reviewSaving).Clicked() {
-				m.promptDiscardAndContinue()
-			}
-			if ui.Button(c, "留在当前项").Disabled(m.reviewSaving).Clicked() {
-				m.promptStay()
-			}
-		})
-		if m.reviewSaving {
-			ui.Text(c, "正在保存……").TextColor(t.TextMuted)
-		}
-		if m.reviewErr != "" {
-			ui.Text(c, m.reviewErr).TextColor(t.Danger)
-		}
-	})
 }
 
 // currentID reads a numeric picker label back to its id.
@@ -1091,28 +1326,13 @@ func attributeTextValue(label string) *string {
 	return &value
 }
 
-// reviewFieldLabel renders one data field path for the editor's error
-// list.
+// reviewFieldLabel renders one data field path for error lists.
 func reviewFieldLabel(field string) string {
-	switch field {
-	case "":
+	if field == "" {
 		return "整件"
-	case "setId":
-		return "套装"
-	case "rarity":
-		return "稀有度"
-	case "slot":
-		return "槽位"
-	case "level":
-		return "等级"
-	case "mainStat":
-		return "主词条"
-	case "substats":
-		return "副词条"
-	case "managementState":
-		return "管理状态"
-	case "equipped":
-		return "装备"
+	}
+	if form := canonicalFormField(field); form != "" {
+		return formFieldLabel(form)
 	}
 	if strings.HasPrefix(field, "substats[") {
 		index := strings.TrimSuffix(strings.TrimPrefix(field, "substats["), "]")
@@ -1129,7 +1349,7 @@ func formField(c *ui.Context, t *ui.Theme, label, value string) {
 		value = "—"
 	}
 	ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Start).Children(func() {
-		ui.Text(c, label).Width(72).TextColor(t.TextMuted)
+		ui.Text(c, label).Width(100).TextColor(t.TextMuted)
 		ui.Text(c, value)
 	})
 }
@@ -1138,7 +1358,7 @@ func formField(c *ui.Context, t *ui.Theme, label, value string) {
 // line count) stays distinct from a confirmed empty one.
 func (m *Model) substatField(c *ui.Context, t *ui.Theme, row *Row) {
 	ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Start).Children(func() {
-		ui.Text(c, "副词条").Width(72).TextColor(t.TextMuted)
+		ui.Text(c, "副词条").Width(100).TextColor(t.TextMuted)
 		ui.Column(c).Grow(1).Gap(t.Space(0.5)).Children(func() {
 			texts, known := row.SubstatTexts()
 			switch {
@@ -1153,174 +1373,4 @@ func (m *Model) substatField(c *ui.Context, t *ui.Theme, row *Row) {
 			}
 		})
 	})
-}
-
-// evidenceArea keeps the raw OCR lines, model scores, screenshots and
-// their provenance out of the main view until the user asks for them.
-func (m *Model) evidenceArea(c *ui.Context, t *ui.Theme, row *Row) {
-	if len(row.Lines) == 0 && len(row.Evidence) == 0 {
-		ui.Text(c, "该条目没有证据行。").TextColor(t.TextMuted)
-		return
-	}
-	if !m.showEvidence {
-		ui.Text(c, "截图与原始识别文本已折叠。").TextColor(t.TextMuted).FontSize(t.FontSize * 0.9)
-		ui.Text(c, "证据说明："+resultEvidenceNote(row)).TextColor(t.TextMuted).FontSize(t.FontSize * 0.9)
-		return
-	}
-	ui.Divider(c)
-	ui.Text(c, "证据（原始 OCR）").FontWeight(600)
-	ui.Text(c, "证据说明："+resultEvidenceNote(row)).TextColor(t.TextMuted).
-		FontSize(t.FontSize * 0.9)
-	if m.rec != nil && m.rec.EvidenceRemoved {
-		ui.Text(c, "该记录的截图已删除或缺失，无法显示图像；识别文本与字段数据仍保留。").
-			TextColor(t.TextMuted)
-	}
-	for i := range row.Lines {
-		m.lineDetail(c, t, row, i)
-	}
-	// Evidence without an observed line record follows the lines in capture
-	// order: a line crop whose record carries no line metadata still has its
-	// image, and context crops never carry text.
-	for i := range row.Evidence {
-		ev := &row.Evidence[i]
-		if ev.Kind == EvidenceLine {
-			if ev.Index >= len(row.Lines) {
-				m.lineDetail(c, t, row, ev.Index)
-			}
-			continue
-		}
-		m.evidenceDetail(c, t, ev)
-	}
-}
-
-func unprocessedReasonText(reason record.UnprocessedReason) string {
-	switch reason {
-	case record.ReasonCancelled:
-		return "用户取消（识别未运行）"
-	case record.ReasonInterrupted:
-		return "进程中断（识别未完成）"
-	default:
-		return string(reason)
-	}
-}
-
-// lineDetail shows one observed line: its role and provenance, its
-// evidence image and its recognized text with the raw model score. The
-// image belongs to this item's evidence identity — a load that completes
-// after a switch to another item lands in the cache under its own key and
-// can never attach here.
-func (m *Model) lineDetail(c *ui.Context, t *ui.Theme, row *Row, i int) {
-	var line Line
-	if i < len(row.Lines) {
-		line = row.Lines[i]
-	}
-	evidence := row.LineEvidence(i)
-	if m.evidenceStacked() {
-		ui.Column(c).Gap(t.Space(1)).Children(func() {
-			m.lineRole(c, t, line, i)
-			m.lineEvidence(c, t, row, evidence)
-			m.lineText(c, t, row, line)
-		})
-		return
-	}
-	ui.Row(c).Gap(t.Space(3)).AlignItems(ui.Start).Children(func() {
-		ui.Column(c).Width(96).Gap(t.Space(0.5)).Children(func() {
-			m.lineRole(c, t, line, i)
-		})
-		m.lineEvidence(c, t, row, evidence)
-		m.lineText(c, t, row, line)
-	})
-}
-
-// evidenceDetail shows one evidence crop that carries no text line: the
-// context crops (rarity badge, selected cell, equipped-agent avatars) and any
-// id the deliverer's shape does not cover. The observed role labels it when
-// the record has one.
-func (m *Model) evidenceDetail(c *ui.Context, t *ui.Theme, ev *Evidence) {
-	if m.evidenceStacked() {
-		ui.Column(c).Gap(t.Space(1)).Children(func() {
-			m.evidenceRole(c, t, ev)
-			m.evidenceImage(c, t, m.rec.ID, ev.ID)
-		})
-		return
-	}
-	ui.Row(c).Gap(t.Space(3)).AlignItems(ui.Start).Children(func() {
-		ui.Column(c).Width(96).Gap(t.Space(0.5)).Children(func() {
-			m.evidenceRole(c, t, ev)
-		})
-		m.evidenceImage(c, t, m.rec.ID, ev.ID)
-	})
-}
-
-func (m *Model) evidenceRole(c *ui.Context, t *ui.Theme, ev *Evidence) {
-	role := ev.Role
-	if role == "" {
-		switch ev.Kind {
-		case EvidenceContext:
-			role = fmt.Sprintf("上下文 %d", ev.Index+1)
-		default:
-			role = "证据"
-		}
-	}
-	ui.Text(c, role).SingleLine()
-	if ev.Source != "" {
-		ui.Text(c, ev.Source).FontSize(t.FontSize * 0.8).TextColor(t.TextMuted).SingleLine()
-	}
-}
-
-func (m *Model) lineRole(c *ui.Context, t *ui.Theme, line Line, i int) {
-	role := line.Role
-	if role == "" {
-		role = fmt.Sprintf("行 %d", i+1)
-	}
-	ui.Text(c, role).SingleLine()
-	if line.Source != "" {
-		ui.Text(c, line.Source).FontSize(t.FontSize * 0.8).TextColor(t.TextMuted).SingleLine()
-	}
-}
-
-func (m *Model) lineEvidence(c *ui.Context, t *ui.Theme, row *Row, evidence *Evidence) {
-	switch {
-	case evidence != nil:
-		m.evidenceImage(c, t, m.rec.ID, evidence.ID)
-	case row.MissingEvidence():
-		ui.Text(c, "截图已删除或缺失").TextColor(t.TextMuted).FontSize(t.FontSize * 0.9)
-	}
-}
-
-func (m *Model) lineText(c *ui.Context, t *ui.Theme, row *Row, line Line) {
-	ui.Column(c).Grow(1).Gap(t.Space(0.5)).Children(func() {
-		switch {
-		case line.Scored:
-			ui.Text(c, line.Text)
-			ui.Textf(c, "模型分数 %.3f", line.Score).
-				FontSize(t.FontSize * 0.85).TextColor(t.TextMuted)
-		case row.Status == record.StatusProduced:
-			ui.Text(c, "（该行未识别出文本）").TextColor(t.TextMuted)
-		default:
-			ui.Text(c, "（未运行识别）").TextColor(t.TextMuted)
-		}
-	})
-}
-
-// evidenceImage shows one evidence image at its own size, loading it on
-// demand: absent shows a placeholder, a failed load shows the failure, and
-// a completed load never attaches to another item (the cache is keyed by
-// the image's own identity).
-func (m *Model) evidenceImage(c *ui.Context, t *ui.Theme, recordID, id string) {
-	if id == "" || m.cache.load == nil {
-		return
-	}
-	entry := m.evidenceFor(recordID, id)
-	switch {
-	case entry == nil:
-		ui.Text(c, "证据图片加载中……").TextColor(t.TextMuted)
-	case entry.err != nil:
-		ui.Textf(c, "证据图片不可用：%v", entry.err).TextColor(t.Danger)
-	default:
-		image := ui.Image(c, entry.bitmap)
-		if width, height := m.evidenceDisplaySize(); width > 0 && height > 0 {
-			image.Size(width, height).Fit(ui.ScaleDown)
-		}
-	}
 }
