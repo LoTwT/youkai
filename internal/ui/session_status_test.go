@@ -1,6 +1,12 @@
 package ui
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -26,7 +32,7 @@ func TestSessionTerminationNotice(t *testing.T) {
 		{
 			name:     "failed without rows",
 			term:     &record.Termination{Kind: record.TerminationFailed, Code: "navigationMismatch", Phase: record.PhaseCapturing},
-			want:     "扫描失败：navigationMismatch（采集阶段），未保留任何条目",
+			want:     "扫描失败：点击或拖拽后页面没有按预期变化。请重新开始扫描；反复出现时复制诊断信息。（采集阶段），未保留任何条目",
 			wantKind: record.TerminationFailed,
 			wantOK:   true,
 		},
@@ -34,7 +40,15 @@ func TestSessionTerminationNotice(t *testing.T) {
 			name:     "failed preparing",
 			term:     &record.Termination{Kind: record.TerminationFailed, Code: "pageUnverified", Phase: record.PhasePreparing},
 			rows:     3,
-			want:     "扫描失败：pageUnverified（准备阶段）",
+			want:     "扫描失败：游戏页面不是驱动盘仓库页。请打开驱动盘仓库页后重新开始扫描。（准备阶段）",
+			wantKind: record.TerminationFailed,
+			wantOK:   true,
+		},
+		{
+			name:     "failed without a code",
+			term:     &record.Termination{Kind: record.TerminationFailed, Phase: record.PhaseCapturing},
+			rows:     1,
+			want:     "扫描失败：原因未知（采集阶段）",
 			wantKind: record.TerminationFailed,
 			wantOK:   true,
 		},
@@ -78,7 +92,7 @@ func TestHistoryTerminationLabel(t *testing.T) {
 	}{
 		{"nil", nil, ""},
 		{"completed", &record.Termination{Kind: record.TerminationCompleted, Code: "verifiedEnd"}, ""},
-		{"failed", &record.Termination{Kind: record.TerminationFailed, Code: "navigationMismatch"}, "失败：navigationMismatch"},
+		{"failed", &record.Termination{Kind: record.TerminationFailed, Code: "navigationMismatch"}, "失败"},
 		{"failed without code", &record.Termination{Kind: record.TerminationFailed}, "失败"},
 		{"cancelled", &record.Termination{Kind: record.TerminationCancelled, Code: "userCancelled"}, "已停止"},
 		{"interrupted", &record.Termination{Kind: record.TerminationInterrupted, Code: "interrupted"}, "中断"},
@@ -197,6 +211,179 @@ func TestIntegrityLevelText(t *testing.T) {
 	for level, want := range cases {
 		if got := integrityLevelText(level); got != want {
 			t.Errorf("%q = %q, want %q", level, got, want)
+		}
+	}
+}
+
+// TestFaultGuidanceCoversEveryCode is the table's completeness gate. It
+// reads the diagnostic-code constants from every package that defines
+// faults, so adding a code without a guidance row fails here instead of
+// leaking an English code to the user.
+func TestFaultGuidanceCoversEveryCode(t *testing.T) {
+	codes := map[string]string{"unknownEnd": "internal/app/deliverer.go"}
+	for _, dir := range []string{
+		"../platform",
+		"../platform/windows",
+		"../game/zzz/collect",
+		"../scan",
+	} {
+		collectFaultCodeConstants(t, dir, codes)
+	}
+	for _, want := range []string{"focusLost", "dpiVirtualized", "prepareTimeout", "storageFailure", "unknownEnd"} {
+		if _, ok := codes[want]; !ok {
+			t.Fatalf("fault-code collection missed %s; the source scan found only %v", want, codes)
+		}
+	}
+
+	// Normal completion and a user stop have their own termination
+	// surfaces; they are not failures and never ask for a recovery action.
+	nonFailure := map[string]bool{"verifiedEnd": true, "userCancelled": true}
+	for code, source := range codes {
+		if nonFailure[code] {
+			continue
+		}
+		guidance, ok := faultGuidanceFor(code, nil)
+		if !ok {
+			t.Errorf("%s (%s) has no fault-guidance entry", code, source)
+			continue
+		}
+		checkFaultGuidance(t, code, guidance)
+	}
+	for code := range faultGuidanceTable {
+		if _, ok := codes[code]; !ok {
+			t.Errorf("fault-guidance entry %q does not match any defined fault code", code)
+		}
+	}
+}
+
+// checkFaultGuidance enforces the wording contract of 09 §5: every entry
+// has a cause and an action, the action is a complete sentence, the row
+// names an exit, and no English diagnostic code reaches the UI.
+func checkFaultGuidance(t *testing.T, code string, guidance faultGuidance) {
+	t.Helper()
+	if guidance.cause == "" {
+		t.Errorf("%s has no cause", code)
+	}
+	if guidance.action == "" {
+		t.Errorf("%s has no action", code)
+	}
+	if guidance.exit == faultExitNone {
+		t.Errorf("%s has no exit", code)
+	}
+	if strings.HasSuffix(guidance.cause, "。") {
+		t.Errorf("%s cause must not end with a full stop: %q", code, guidance.cause)
+	}
+	if !strings.HasSuffix(guidance.action, "。") {
+		t.Errorf("%s action must be a complete sentence: %q", code, guidance.action)
+	}
+	for _, part := range []string{guidance.cause, guidance.action} {
+		if strings.Contains(part, code) {
+			t.Errorf("%s text leaks the raw diagnostic code: %q", code, part)
+		}
+		if strings.Contains(part, "\n") {
+			t.Errorf("%s text must be one line: %q", code, part)
+		}
+	}
+	text := failureText(code, nil)
+	if text == "" || !strings.HasSuffix(text, "。") {
+		t.Errorf("%s failureText = %q, want a complete sentence", code, text)
+	}
+}
+
+// collectFaultCodeConstants adds every `Code… = "…"` constant under dir to
+// out. It parses source instead of keeping a second hand-written list, so
+// a new code in the platform layers extends the gate automatically. The
+// windows package's Precheck* values are internal refusal details that the
+// adapter translates to Code* before the UI sees them, so the Code prefix
+// is the right boundary.
+func collectFaultCodeConstants(t *testing.T, dir string, out map[string]string) {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read fault-code directory %s: %v", dir, err)
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		path := filepath.Join(dir, name)
+		file, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", path, err)
+		}
+		for _, decl := range file.Decls {
+			gen, ok := decl.(*ast.GenDecl)
+			if !ok || gen.Tok != token.CONST {
+				continue
+			}
+			for _, spec := range gen.Specs {
+				valueSpec, ok := spec.(*ast.ValueSpec)
+				if !ok {
+					continue
+				}
+				for i, ident := range valueSpec.Names {
+					if !strings.HasPrefix(ident.Name, "Code") || i >= len(valueSpec.Values) {
+						continue
+					}
+					lit, ok := valueSpec.Values[i].(*ast.BasicLit)
+					if !ok || lit.Kind != token.STRING {
+						continue
+					}
+					value, err := strconv.Unquote(lit.Value)
+					if err != nil {
+						t.Fatalf("unquote %s in %s: %v", ident.Name, path, err)
+					}
+					out[value] = path
+				}
+			}
+		}
+	}
+}
+
+// TestFaultGuidanceDPIWording pins the three S3 DPI rows whose treatment
+// was undecided when the design was written. The wording is the contract
+// the checklist and diagnostics reuse.
+func TestFaultGuidanceDPIWording(t *testing.T) {
+	cases := []struct {
+		code       string
+		wantCause  string
+		wantAction string
+		wantExit   faultExit
+		diag       bool
+	}{
+		{
+			code:       "dpiAwarenessMismatch",
+			wantCause:  "youkai 的显示缩放支持不完整",
+			wantAction: "这是 youkai 自身的问题，请复制诊断信息反馈。",
+			wantExit:   faultExitDiagnostics,
+			diag:       true,
+		},
+		{
+			code:       "dpiVirtualized",
+			wantCause:  "游戏窗口的显示缩放与显示器不一致",
+			wantAction: "请关闭游戏程序的“替代高 DPI 缩放行为”，重新打开游戏后再试；仍不通过时复制诊断信息。",
+			wantExit:   faultExitDisplayScale,
+			diag:       true,
+		},
+		{
+			code:       "dpiCheckUnavailable",
+			wantCause:  "无法读取游戏窗口或显示器的显示缩放",
+			wantAction: "请重新打开 youkai 后再试；仍无法读取时复制诊断信息。",
+			wantExit:   faultExitDisplayScale,
+			diag:       true,
+		},
+	}
+	for _, tc := range cases {
+		guidance, ok := faultGuidanceFor(tc.code, nil)
+		if !ok {
+			t.Fatalf("%s has no guidance", tc.code)
+		}
+		if guidance.cause != tc.wantCause || guidance.action != tc.wantAction {
+			t.Errorf("%s = %q / %q, want %q / %q", tc.code, guidance.cause, guidance.action, tc.wantCause, tc.wantAction)
+		}
+		if guidance.exit != tc.wantExit || guidance.diagnostics != tc.diag {
+			t.Errorf("%s exit = %v/%v, want %v/%v", tc.code, guidance.exit, guidance.diagnostics, tc.wantExit, tc.diag)
 		}
 	}
 }
