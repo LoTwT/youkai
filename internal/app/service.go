@@ -169,9 +169,9 @@ type StartRequest struct {
 	ID string
 	// Target is the game window the user confirmed from the discovered
 	// candidates (P-01). A discovery source refuses a request without it,
-	// even when only one window is running; sources with a fixed target
-	// ignore it. The source re-checks that the window instance still
-	// exists before accepting.
+	// even when only one window is running. A source with a fixed target
+	// ignores it and starts its configured target. The source re-checks
+	// that the window instance still exists before accepting.
 	Target *TargetCandidate
 }
 
@@ -231,12 +231,19 @@ func NewService(cfg Config) (*Service, error) {
 // DiscoverTargets enumerates the game windows the wired source offers for
 // user confirmation (P-01). The window calls it only when its source
 // reports TargetSelection; a source without the capability reports why.
-func (s *Service) DiscoverTargets() ([]TargetCandidate, error) {
+// The raw failure is logged for diagnostics while the window shows
+// user-facing copy.
+func (s *Service) DiscoverTargets() (TargetDiscoveryResult, error) {
 	discovery, ok := s.cfg.Source.(TargetDiscoverer)
 	if !ok {
-		return nil, errors.New("app: the wired scan source cannot discover target windows")
+		return TargetDiscoveryResult{}, errors.New("app: the wired scan source cannot discover target windows")
 	}
-	return discovery.DiscoverTargets()
+	result, err := discovery.DiscoverTargets()
+	if err != nil {
+		log.Printf("youkai: discover game windows: %v", err)
+		return TargetDiscoveryResult{}, err
+	}
+	return result, nil
 }
 
 // Start accepts a start request into the single active slot: it takes

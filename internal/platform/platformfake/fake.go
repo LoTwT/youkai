@@ -34,7 +34,7 @@ type Port struct {
 	NewSession func() *Session
 	// DiscoverFn answers DiscoverTargets; nil models a platform without
 	// target discovery.
-	DiscoverFn func() ([]platform.TargetCandidate, error)
+	DiscoverFn func() (platform.TargetDiscoveryResult, error)
 
 	openCalls     int
 	discoverCalls int
@@ -51,13 +51,13 @@ func (p *Port) Preflight() platform.Preflight {
 }
 
 // DiscoverTargets implements platform.TargetDiscovery over DiscoverFn.
-func (p *Port) DiscoverTargets() ([]platform.TargetCandidate, error) {
+func (p *Port) DiscoverTargets() (platform.TargetDiscoveryResult, error) {
 	p.mu.Lock()
 	fn := p.DiscoverFn
 	p.discoverCalls++
 	p.mu.Unlock()
 	if fn == nil {
-		return nil, fmt.Errorf("fake port has no target discovery")
+		return platform.TargetDiscoveryResult{}, fmt.Errorf("fake port has no target discovery")
 	}
 	return fn()
 }

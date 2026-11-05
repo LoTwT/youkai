@@ -83,6 +83,11 @@ type TargetSpec struct {
 	// executable. Handles are recycled, so the path and process instance
 	// remain the identity checks.
 	HWNDHint HWND
+	// PIDHint and ProcessStartedAtHint, when set, must match the window's
+	// process instance inside the confirmed-handle branch: a handle the
+	// OS recycled into a restarted process is stale, not the target.
+	PIDHint              ProcessID
+	ProcessStartedAtHint time.Time
 	// ClassNameHint, when set, must equal the candidate's class name.
 	ClassNameHint string
 	// TitleHint, when set, must be contained in the candidate's title.
@@ -141,9 +146,11 @@ func (e *SelectionError) Error() string {
 //
 //  1. keep the probes whose process image path matches the spec
 //     (case-insensitive);
-//  2. if the caller confirmed a specific handle, keep exactly that window:
-//     a confirmed window that vanished is a stale selection, never a cue
-//     to pick another window of the same executable;
+//  2. if the caller confirmed a specific handle, keep exactly that window
+//     and require the confirmed process instance (PID and start time when
+//     set) to match: a confirmed window that vanished or was recycled is
+//     a stale selection, never a cue to pick another window of the same
+//     executable;
 //  3. if several remain and hints are set, narrow by exact class name,
 //     then by title substring — hints refine identity, they never pick a
 //     window the executable does not own;
@@ -181,6 +188,11 @@ func SelectTarget(probes []WindowProbe, spec TargetSpec) (WindowProbe, error) {
 		if !found {
 			return WindowProbe{}, &SelectionError{Kind: SelectionHintGone, Executable: spec.ExecutablePath,
 				HintDetail: fmt.Sprintf("%d", spec.HWNDHint)}
+		}
+		if (spec.PIDHint != 0 && confirmed.PID != spec.PIDHint) ||
+			(!spec.ProcessStartedAtHint.IsZero() && !confirmed.ProcessStartedAt.Equal(spec.ProcessStartedAtHint)) {
+			return WindowProbe{}, &SelectionError{Kind: SelectionHintGone, Executable: spec.ExecutablePath,
+				HintDetail: fmt.Sprintf("%d (process instance changed)", spec.HWNDHint)}
 		}
 		candidates = []WindowProbe{confirmed}
 	}

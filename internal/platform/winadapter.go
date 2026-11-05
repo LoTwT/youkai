@@ -143,18 +143,21 @@ var (
 // recorded in the 2026-11-02 field acceptance, with the client's window
 // class as a screening hint when several windows remain. Window titles are
 // never read. The user confirms exactly one candidate before a session
-// starts (P-01).
-func (a *WinAdapter) DiscoverTargets() ([]TargetCandidate, error) {
-	candidates, err := windows.DiscoverTargets(a.natives.Win, a.natives.Procs, windows.DiscoverySpec{
+// starts (P-01). Visible windows of the game class whose process cannot be
+// opened (the game runs elevated, youkai does not) are counted separately
+// so the window can ask for the same privileges instead of "not found".
+func (a *WinAdapter) DiscoverTargets() (TargetDiscoveryResult, error) {
+	found, err := windows.DiscoverTargets(a.natives.Win, a.natives.Procs, windows.DiscoverySpec{
 		ImageName:     windows.DefaultGameImageName,
 		ClassNameHint: windows.DefaultGameWindowClass,
 	})
 	if err != nil {
-		return nil, err
+		return TargetDiscoveryResult{}, err
 	}
-	out := make([]TargetCandidate, 0, len(candidates))
-	for _, c := range candidates {
-		out = append(out, TargetCandidate{
+	result := TargetDiscoveryResult{AccessDeniedWindows: found.AccessDeniedWindows}
+	result.Candidates = make([]TargetCandidate, 0, len(found.Candidates))
+	for _, c := range found.Candidates {
+		result.Candidates = append(result.Candidates, TargetCandidate{
 			Handle:           uintptr(c.HWND),
 			PID:              uint32(c.PID),
 			ExecutablePath:   c.ImagePath,
@@ -162,7 +165,7 @@ func (a *WinAdapter) DiscoverTargets() ([]TargetCandidate, error) {
 			ClassName:        c.ClassName,
 		})
 	}
-	return out, nil
+	return result, nil
 }
 
 // Open implements Port. Sequence: stop hotkey on its message-loop
@@ -207,11 +210,13 @@ func (a *WinAdapter) Open(ctx context.Context, cfg SessionConfig) (Session, erro
 		return nil, NewFault(CodeObservationFailed, "window enumeration failed: "+err.Error())
 	}
 	spec := windows.TargetSpec{
-		ExecutablePath: cfg.Target.ExecutablePath,
-		HWNDHint:       windows.HWND(cfg.Target.HandleHint),
-		ClassNameHint:  cfg.Target.ClassNameHint,
-		TitleHint:      cfg.Target.TitleHint,
-		RequireVisible: true,
+		ExecutablePath:       cfg.Target.ExecutablePath,
+		HWNDHint:             windows.HWND(cfg.Target.HandleHint),
+		PIDHint:              windows.ProcessID(cfg.Target.PIDHint),
+		ProcessStartedAtHint: cfg.Target.ProcessStartedAtHint,
+		ClassNameHint:        cfg.Target.ClassNameHint,
+		TitleHint:            cfg.Target.TitleHint,
+		RequireVisible:       true,
 	}
 	probe, err := windows.SelectTarget(probes, spec)
 	if err != nil {

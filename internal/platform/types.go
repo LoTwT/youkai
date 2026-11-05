@@ -29,9 +29,15 @@ type TargetSpec struct {
 	// of the same executable after the confirmed one disappeared. It is a
 	// hint, not identity: handles are recycled, so the path and process
 	// instance are still verified on every observation.
-	HandleHint    uintptr
-	ClassNameHint string
-	TitleHint     string
+	HandleHint uintptr
+	// PIDHint and ProcessStartedAtHint are the confirmed candidate's
+	// process instance. They are compared together with HandleHint so a
+	// handle the OS recycled into another process cannot be mistaken for
+	// the confirmed window; zero values leave the check out.
+	PIDHint              uint32
+	ProcessStartedAtHint time.Time
+	ClassNameHint        string
+	TitleHint            string
 }
 
 // TargetCandidate identifies one running game window a user can confirm
@@ -55,11 +61,23 @@ type TargetCandidate struct {
 	ClassName string
 }
 
+// TargetDiscoveryResult is one candidate enumeration pass. Candidates is
+// ordered stably for display; AccessDeniedWindows counts visible windows
+// of the game's window class whose owning process could not be opened
+// because the caller lacks permission. Those windows are not candidates —
+// their executable is unknown — but the count lets the window tell "the
+// game runs elevated, run youkai the same way" apart from "the game is
+// not running".
+type TargetDiscoveryResult struct {
+	Candidates          []TargetCandidate
+	AccessDeniedWindows int
+}
+
 // TargetDiscovery is the optional Port capability: enumerate the game
 // windows the user can confirm as the scan target. Ports without it
 // (macOS) scan a target selected by configuration instead.
 type TargetDiscovery interface {
-	DiscoverTargets() ([]TargetCandidate, error)
+	DiscoverTargets() (TargetDiscoveryResult, error)
 }
 
 // Key is a neutral key name of the port's vocabulary: KeyA…KeyZ,

@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -11,10 +12,32 @@ import (
 // game window the user confirmed, so the prepare area lists the discovered
 // windows and the start stays disabled until one is chosen. Hide and
 // replace are handled fail-closed: a refresh keeps the choice only when the
-// same window instance is still present.
+// same window instance is still present (same handle and process instance).
+//
+// The user-facing strings below are the installed UI's copy; raw errors
+// stay in the diagnostic log (the service logs discovery failures and
+// refused starts).
+
+const (
+	// targetNotFoundText: no window of the game is running.
+	targetNotFoundText = "未找到《绝区零》窗口。请启动游戏并保持窗口可见，然后点“重新检查”。"
+	// targetElevatedText is the D-1 copy: the game-class window exists but
+	// its process cannot be opened, the shape of an elevated game and a
+	// non-elevated youkai.
+	targetElevatedText = "游戏正在以管理员身份运行，youkai 需要同样的权限才能操作游戏。请右键 youkai，选择“以管理员身份运行”后重新打开。youkai 只向游戏发送鼠标操作，不加载驱动、不注入、不读取游戏内存。"
+	// targetDiscoveryFailedText: enumeration itself failed.
+	targetDiscoveryFailedText = "查找游戏窗口失败，请稍后重试；详细信息已写入诊断日志。"
+	// targetGoneText: the confirmed window vanished between confirmation
+	// and start.
+	targetGoneText = "确认的游戏窗口已关闭或被替换，请点“重新检查”后重新选择。"
+	// targetStartFailedText is the generic fallback for any other start
+	// refusal in the installed UI.
+	targetStartFailedText = "开始扫描失败，请稍后重试；详细信息已写入诊断日志。"
+)
 
 // refreshTargets begins a discovery pass. Results land through update; a
-// serial discards a pass that a later refresh superseded.
+// serial discards a pass that a later refresh superseded. The service logs
+// the raw failure before returning it.
 func (m *Model) refreshTargets() {
 	if !m.source.TargetSelection {
 		return
@@ -24,19 +47,20 @@ func (m *Model) refreshTargets() {
 	m.targetsLoading = true
 	m.targetsErr = ""
 	m.goAsync(func() {
-		candidates, err := m.cfg.Service.DiscoverTargets()
+		result, err := m.cfg.Service.DiscoverTargets()
 		m.update(func() {
 			if serial != m.targetsSerial {
 				return
 			}
 			m.targetsLoading = false
 			if err != nil {
-				m.targetsErr = err.Error()
+				m.targetsErr = targetDiscoveryErrorText(err)
 				m.targets = nil
+				m.targetsAccessDenied = 0
 				m.targetChoice = -1
 				return
 			}
-			m.applyTargets(candidates)
+			m.applyTargets(result)
 		})
 	})
 }
@@ -44,14 +68,15 @@ func (m *Model) refreshTargets() {
 // applyTargets replaces the list and keeps the choice only when the same
 // window instance is still among the candidates. A vanished or restarted
 // window clears the choice so the user has to confirm again.
-func (m *Model) applyTargets(candidates []app.TargetCandidate) {
+func (m *Model) applyTargets(result app.TargetDiscoveryResult) {
 	chosen := m.chosenTarget()
-	m.targets = candidates
+	m.targets = result.Candidates
+	m.targetsAccessDenied = result.AccessDeniedWindows
 	m.targetChoice = -1
 	if chosen == nil {
 		return
 	}
-	for i, c := range candidates {
+	for i, c := range m.targets {
 		if sameTarget(*chosen, c) {
 			m.targetChoice = i
 			return
@@ -76,6 +101,27 @@ func (m *Model) targetReady() bool {
 		return true
 	}
 	return !m.targetsLoading && m.targetsErr == "" && m.chosenTarget() != nil
+}
+
+// targetDiscoveryErrorText maps a failed discovery to user copy. The raw
+// error is already in the diagnostic log (the service logs it); the sentinel
+// and any unexpected failure share the same user-facing sentence.
+func targetDiscoveryErrorText(err error) string {
+	return targetDiscoveryFailedText
+}
+
+// startErrorText maps a refused start in the installed UI to user copy; a
+// fixed-target development source keeps its raw error for field work. The
+// service's start refusal already logged the original.
+func startErrorText(err error) string {
+	switch {
+	case errors.Is(err, app.ErrTargetGone):
+		return targetGoneText
+	case errors.Is(err, app.ErrTargetDiscoveryFailed):
+		return targetDiscoveryFailedText
+	default:
+		return targetStartFailedText
+	}
 }
 
 // sameTarget reports whether two candidates describe the same window of

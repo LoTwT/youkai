@@ -68,9 +68,11 @@ func (m *Model) targetArea(c *ui.Context, t *ui.Theme) {
 		case m.targetsLoading:
 			ui.Text(c, "正在查找游戏窗口……").TextColor(t.TextMuted)
 		case m.targetsErr != "":
-			ui.Text(c, "查找游戏窗口失败："+m.targetsErr).TextColor(t.Danger)
+			ui.Text(c, m.targetsErr).TextColor(t.Danger)
+		case len(m.targets) == 0 && m.targetsAccessDenied > 0:
+			ui.Text(c, targetElevatedText).TextColor(t.Danger)
 		case len(m.targets) == 0:
-			ui.Text(c, "未找到《绝区零》窗口。请启动游戏并保持窗口可见，然后点“重新检查”。").TextColor(t.TextMuted)
+			ui.Text(c, targetNotFoundText).TextColor(t.TextMuted)
 		default:
 			ui.Textf(c, "已找到 %d 个窗口，请选择要扫描的一个。", len(m.targets)).TextColor(t.TextMuted)
 			ui.RadioGroup(c, func() {
@@ -91,6 +93,9 @@ func (m *Model) startNote() string {
 	case m.exitState == exitRunning:
 		return "正在退出，不能再开始扫描。"
 	case m.startErr != "":
+		if m.source.TargetSelection {
+			return m.startErr
+		}
 		return "开始失败：" + m.startErr
 	case m.snap.Busy:
 		return fmt.Sprintf("扫描进行中（会话 %s），结束后可再次开始。", m.snap.SessionID)
@@ -103,7 +108,9 @@ func (m *Model) startNote() string {
 	case m.source.TargetSelection && m.targetsLoading:
 		return "正在查找游戏窗口……"
 	case m.source.TargetSelection && m.targetsErr != "":
-		return "查找游戏窗口失败：" + m.targetsErr
+		return m.targetsErr
+	case m.source.TargetSelection && len(m.targets) == 0 && m.targetsAccessDenied > 0:
+		return "游戏正在以管理员身份运行，请以管理员身份重新打开 youkai。"
 	case m.source.TargetSelection && len(m.targets) == 0:
 		return "未找到《绝区零》窗口，请启动游戏后点“重新检查”。"
 	case m.source.TargetSelection && m.chosenTarget() == nil:

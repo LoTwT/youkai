@@ -33,7 +33,7 @@ type Service interface {
 	// DiscoverTargets enumerates the game windows the wired source offers
 	// for user confirmation (P-01). The model calls it only when
 	// ScanSourceInfo.TargetSelection is set.
-	DiscoverTargets() ([]app.TargetCandidate, error)
+	DiscoverTargets() (app.TargetDiscoveryResult, error)
 	// Stop requests an idempotent user stop of the active session.
 	Stop()
 	// Snapshot is the authoritative state at one service revision.
@@ -222,13 +222,16 @@ type Model struct {
 	startErr    string
 
 	// Target candidates (P-01): the last discovery result, whether a
-	// discovery is in flight, its failure, the chosen row (-1 for none)
-	// and the serial that discards stale results.
-	targets        []app.TargetCandidate
-	targetsLoading bool
-	targetsErr     string
-	targetChoice   int
-	targetsSerial  int
+	// discovery is in flight, its user-facing failure, the chosen row (-1
+	// for none), the count of game-class windows whose process could not
+	// be opened (the game runs elevated) and the serial that discards stale
+	// results.
+	targets             []app.TargetCandidate
+	targetsLoading      bool
+	targetsErr          string
+	targetsAccessDenied int
+	targetChoice        int
+	targetsSerial       int
 
 	history          []HistoryEntry
 	histChoice       string
@@ -870,6 +873,12 @@ func (m *Model) Start() {
 			m.startReqID = ""
 			if err != nil {
 				m.startErr = err.Error()
+				if m.source.TargetSelection {
+					// The installed UI shows user copy; the raw error is
+					// already in the diagnostic log (the service logs the
+					// refused start) and stays hidden here.
+					m.startErr = startErrorText(err)
+				}
 				// The refused start may be a window that vanished
 				// between confirmation and start: refresh the list so the
 				// stale candidate cannot be chosen again.

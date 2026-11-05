@@ -181,16 +181,20 @@ func TestViewTargetRefreshClearsVanishedChoice(t *testing.T) {
 	}
 }
 
-// TestViewTargetDiscoveryFailure shows the enumeration failure and keeps
-// the start disabled until a check succeeds.
+// TestViewTargetDiscoveryFailure shows the user-facing failure, keeps the
+// raw internal error out of the UI, and keeps the start disabled until a
+// check succeeds.
 func TestViewTargetDiscoveryFailure(t *testing.T) {
 	svc := &fakeService{targetsErr: errString("枚举失败")}
 	m, q := newTestModel(t, Config{Service: svc, ScanSource: targetSource()})
 	tt := ui.NewTester(m.View, 1020, 700)
 	settle(t, m, q, tt)
 
-	if !tt.HasText("查找游戏窗口失败：枚举失败") {
+	if !tt.HasText(targetDiscoveryFailedText) {
 		t.Fatalf("the discovery failure does not show: %q", tt.Texts())
+	}
+	if tt.HasText("枚举失败") {
+		t.Fatalf("the raw discovery error reached the UI: %q", tt.Texts())
 	}
 	if err := tt.Click("开始扫描"); err != nil {
 		t.Fatal(err)
@@ -198,6 +202,126 @@ func TestViewTargetDiscoveryFailure(t *testing.T) {
 	drainAll(t, m, q)
 	if len(svc.starts) != 0 {
 		t.Fatalf("a failed discovery still allowed a start: %+v", svc.starts)
+	}
+}
+
+// TestViewElevatedGameSuggestsAdmin is the M1 shape: a visible game-class
+// window whose process cannot be opened (the game runs elevated) must ask
+// for the same privileges, never claim the game is not running.
+func TestViewElevatedGameSuggestsAdmin(t *testing.T) {
+	svc := &fakeService{targetsAccessDenied: 1}
+	m, q := newTestModel(t, Config{Service: svc, ScanSource: targetSource()})
+	tt := ui.NewTester(m.View, 1020, 700)
+	settle(t, m, q, tt)
+
+	if !tt.HasText(targetElevatedText) {
+		t.Fatalf("the elevated-game hint does not show: %q", tt.Texts())
+	}
+	if tt.HasText(targetNotFoundText) {
+		t.Fatalf("an unreadable elevated window was reported as not found: %q", tt.Texts())
+	}
+	if !tt.HasText("游戏正在以管理员身份运行，请以管理员身份重新打开 youkai。") {
+		t.Fatalf("the start's refusal reason does not show: %q", tt.Texts())
+	}
+	if err := tt.Click("开始扫描"); err != nil {
+		t.Fatal(err)
+	}
+	drainAll(t, m, q)
+	if len(svc.starts) != 0 {
+		t.Fatalf("the disabled start issued a request: %+v", svc.starts)
+	}
+}
+
+// A readable candidate wins over the access-denied count: the list is
+// shown, not the elevated hint.
+func TestViewReadableCandidateWinsOverAccessDenied(t *testing.T) {
+	cand := testTarget(0xB0ABE, 42, `C:\Games\ZZZ\ZenlessZoneZero.exe`)
+	svc := &fakeService{targets: []app.TargetCandidate{cand}, targetsAccessDenied: 1}
+	m, q := newTestModel(t, Config{Service: svc, ScanSource: targetSource()})
+	tt := ui.NewTester(m.View, 1020, 700)
+	settle(t, m, q, tt)
+
+	if !tt.HasText(targetLabel(cand)) {
+		t.Fatalf("the readable candidate is not listed: %q", tt.Texts())
+	}
+	if tt.HasText(targetElevatedText) {
+		t.Fatalf("the elevated hint replaced a usable candidate list: %q", tt.Texts())
+	}
+}
+
+// TestViewStartTargetGoneMapsAndRefreshes covers two review gaps at once:
+// the vanished-window refusal has Chinese copy (not the English internal
+// error), and the failed start refreshes the candidate list automatically.
+func TestViewStartTargetGoneMapsAndRefreshes(t *testing.T) {
+	cand := testTarget(0xB0ABE, 42, `C:\Games\ZZZ\ZenlessZoneZero.exe`)
+	svc := &fakeService{
+		targets: []app.TargetCandidate{cand},
+		startFn: func(app.StartRequest) (app.StartOutcome, error) {
+			return app.StartOutcome{}, app.ErrTargetGone
+		},
+	}
+	m, q := newTestModel(t, Config{Service: svc, ScanSource: targetSource()})
+	tt := ui.NewTester(m.View, 1020, 700)
+	settle(t, m, q, tt)
+	if err := tt.Click(targetLabel(cand)); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
+
+	// The window disappears while the start is in flight: the service
+	// refuses and the model re-enumerates.
+	svc.mu.Lock()
+	svc.targets = nil
+	svc.mu.Unlock()
+	if err := tt.Click("开始扫描"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
+
+	if !tt.HasText(targetGoneText) {
+		t.Fatalf("the vanished-window copy does not show: %q", tt.Texts())
+	}
+	if tt.HasText("gone or was replaced") {
+		t.Fatalf("the raw target-gone error reached the UI: %q", tt.Texts())
+	}
+	if !tt.HasText(targetNotFoundText) {
+		t.Fatalf("the candidate list was not refreshed: %q", tt.Texts())
+	}
+	if m.targetReady() {
+		t.Fatal("the start must stay disabled after the confirmed window vanished")
+	}
+	if svc.discoveries < 2 {
+		t.Fatalf("discoveries = %d, want a refresh after the refused start", svc.discoveries)
+	}
+}
+
+// Any other start refusal in the installed UI gets the generic Chinese
+// fallback; the detail stays in the diagnostic log.
+func TestViewStartRefusalGenericFallback(t *testing.T) {
+	cand := testTarget(0xB0ABE, 42, `C:\Games\ZZZ\ZenlessZoneZero.exe`)
+	svc := &fakeService{
+		targets: []app.TargetCandidate{cand},
+		startFn: func(app.StartRequest) (app.StartOutcome, error) {
+			return app.StartOutcome{}, errString("internal detail")
+		},
+	}
+	m, q := newTestModel(t, Config{Service: svc, ScanSource: targetSource()})
+	tt := ui.NewTester(m.View, 1020, 700)
+	settle(t, m, q, tt)
+	if err := tt.Click(targetLabel(cand)); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
+	if err := tt.Click("开始扫描"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
+
+	if !tt.HasText(targetStartFailedText) {
+		t.Fatalf("the generic start copy does not show: %q", tt.Texts())
+	}
+	if tt.HasText("internal detail") {
+		t.Fatalf("the raw start error reached the UI: %q", tt.Texts())
 	}
 }
 

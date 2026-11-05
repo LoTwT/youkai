@@ -82,12 +82,45 @@ func TestSelectTargetConfirmedHandleWins(t *testing.T) {
 		{HWND: 20, PID: 300, ImagePath: `C:\game.exe`, ProcessStartedAt: started, Visible: true, ClassName: "GameWnd"},
 		{HWND: 21, PID: 300, ImagePath: `C:\GAME.EXE`, ProcessStartedAt: started, Visible: true, ClassName: "GameWnd"},
 	}
-	got, err := SelectTarget(probes, TargetSpec{ExecutablePath: `C:\game.exe`, HWNDHint: 21})
+	got, err := SelectTarget(probes, TargetSpec{
+		ExecutablePath: `C:\game.exe`, HWNDHint: 21, PIDHint: 300, ProcessStartedAtHint: started,
+	})
 	if err != nil {
 		t.Fatalf("select with a confirmed handle: %v", err)
 	}
 	if got.HWND != 21 {
 		t.Fatalf("the confirmed handle must win over the other window: %+v", got)
+	}
+}
+
+func TestSelectTargetConfirmedProcessInstanceMismatchRefuses(t *testing.T) {
+	started := time.Date(2026, 11, 2, 8, 0, 0, 0, time.UTC)
+	probes := []WindowProbe{
+		{HWND: 21, PID: 300, ImagePath: `C:\game.exe`, ProcessStartedAt: started, Visible: true},
+	}
+	cases := []struct {
+		name string
+		spec TargetSpec
+	}{
+		{
+			name: "different pid",
+			spec: TargetSpec{ExecutablePath: `C:\game.exe`, HWNDHint: 21,
+				PIDHint: 301, ProcessStartedAtHint: started},
+		},
+		{
+			name: "restarted process",
+			spec: TargetSpec{ExecutablePath: `C:\game.exe`, HWNDHint: 21,
+				PIDHint: 300, ProcessStartedAtHint: started.Add(time.Hour)},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := SelectTarget(probes, tc.spec)
+			var selErr *SelectionError
+			if !errors.As(err, &selErr) || selErr.Kind != SelectionHintGone {
+				t.Fatalf("a changed process instance must be a stale selection, got %v", err)
+			}
+		})
 	}
 }
 

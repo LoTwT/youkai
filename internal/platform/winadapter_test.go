@@ -118,6 +118,7 @@ func (f *fakeWinWindow) Title(hwnd windows.HWND) (string, error) {
 type fakeProcInfo struct {
 	path    string
 	started time.Time
+	err     error
 }
 
 type fakeWinProcs struct {
@@ -129,6 +130,9 @@ func (f *fakeWinProcs) Query(pid windows.ProcessID) (string, time.Time, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if info, ok := f.byPID[pid]; ok {
+		if info.err != nil {
+			return "", time.Time{}, info.err
+		}
 		return info.path, info.started, nil
 	}
 	return "", time.Time{}, fmt.Errorf("no such process %d", pid)
@@ -421,6 +425,7 @@ type winWorld struct {
 	hotkey     *fakeWinHotkeyAPI
 	gate       *fakeGate
 	mgr        *windows.HotkeyManager
+	started    time.Time
 
 	faultsMu sync.Mutex
 	faults   []*Fault
@@ -450,6 +455,7 @@ func newWinWorld(t *testing.T) *winWorld {
 	t.Helper()
 	started := time.Date(2026, 10, 19, 9, 0, 0, 0, time.UTC)
 	w := &winWorld{
+		started: started,
 		win: &fakeWinWindow{wnds: []*fakeWnd{{
 			hwnd: gameHwnd, pid: gamePID, visible: true,
 			className: "UnityWndClass", title: "绝区零",
@@ -1048,25 +1054,55 @@ func TestWinDiscoverTargets(t *testing.T) {
 	w.procs.byPID[7777] = fakeProcInfo{path: `D:\Other\ZenlessZoneZero.exe`, started: started}
 	w.procs.mu.Unlock()
 
-	candidates, err := w.adapter.DiscoverTargets()
+	result, err := w.adapter.DiscoverTargets()
 	if err != nil {
 		t.Fatalf("discover: %v", err)
 	}
-	if len(candidates) != 2 {
-		t.Fatalf("want the two visible installations, got %+v", candidates)
+	if len(result.Candidates) != 2 {
+		t.Fatalf("want the two visible installations, got %+v", result)
 	}
-	if candidates[0].Handle != uintptr(gameHwnd) || candidates[0].PID != uint32(gamePID) ||
-		candidates[0].ExecutablePath != gameExe || candidates[0].ProcessStartedAt.IsZero() {
-		t.Fatalf("first candidate: %+v", candidates[0])
+	if result.Candidates[0].Handle != uintptr(gameHwnd) || result.Candidates[0].PID != uint32(gamePID) ||
+		result.Candidates[0].ExecutablePath != gameExe || result.Candidates[0].ProcessStartedAt.IsZero() {
+		t.Fatalf("first candidate: %+v", result.Candidates[0])
 	}
-	if candidates[1].ExecutablePath != `D:\Other\ZenlessZoneZero.exe` {
-		t.Fatalf("second candidate keeps its own path: %+v", candidates[1])
+	if result.Candidates[1].ExecutablePath != `D:\Other\ZenlessZoneZero.exe` {
+		t.Fatalf("second candidate keeps its own path: %+v", result.Candidates[1])
+	}
+	if result.AccessDeniedWindows != 0 {
+		t.Fatalf("unexpected access-denied count: %+v", result)
 	}
 	w.win.mu.Lock()
 	titles := w.win.titleReads
 	w.win.mu.Unlock()
 	if titles != 0 {
 		t.Fatalf("discovery read %d window titles; it must not read them", titles)
+	}
+}
+
+// M1 at the adapter: a game-class window whose process cannot be opened is
+// counted for the elevated-game hint.
+func TestWinDiscoverTargetsCountsAccessDenied(t *testing.T) {
+	w := newWinWorld(t)
+	w.win.mu.Lock()
+	w.win.wnds = append(w.win.wnds, &fakeWnd{
+		hwnd: 0xB0AC0, pid: 8888, visible: true, className: "UnityWndClass", title: "绝区零",
+	})
+	w.win.mu.Unlock()
+	w.procs.mu.Lock()
+	w.procs.byPID[8888] = fakeProcInfo{err: windows.ErrProcessAccessDenied}
+	w.procs.mu.Unlock()
+
+	result, err := w.adapter.DiscoverTargets()
+	if err != nil {
+		t.Fatalf("discover: %v", err)
+	}
+	// The existing game window is still readable and remains a candidate;
+	// the unreadable one is only a hint.
+	if len(result.Candidates) != 1 || result.Candidates[0].Handle != uintptr(gameHwnd) {
+		t.Fatalf("candidates = %+v, want the readable game window", result.Candidates)
+	}
+	if result.AccessDeniedWindows != 1 {
+		t.Fatalf("access-denied windows = %d, want 1", result.AccessDeniedWindows)
 	}
 }
 
@@ -1084,6 +1120,8 @@ func TestWinOpenConfirmedHandleHint(t *testing.T) {
 
 	cfg := w.config()
 	cfg.Target.HandleHint = uintptr(second)
+	cfg.Target.PIDHint = uint32(gamePID)
+	cfg.Target.ProcessStartedAtHint = w.started
 	sess, err := w.adapter.Open(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("open with the confirmed handle: %v", err)
@@ -1102,5 +1140,16 @@ func TestWinOpenConfirmedHandleHint(t *testing.T) {
 	}
 	if w.hotkey.registered() {
 		t.Fatal("the hotkey must be unregistered on rollback")
+	}
+
+	// L2: a handle whose process instance changed is stale too, even
+	// though the handle and path still match.
+	recycled := w.config()
+	recycled.Target.HandleHint = uintptr(second)
+	recycled.Target.PIDHint = uint32(gamePID) + 1
+	recycled.Target.ProcessStartedAtHint = w.started
+	_, err = w.adapter.Open(context.Background(), recycled)
+	if !errors.As(err, &f) || f.Code != CodeTargetNotFound {
+		t.Fatalf("a recycled handle must report targetNotFound, got %v", err)
 	}
 }

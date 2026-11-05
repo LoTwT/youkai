@@ -1,6 +1,7 @@
 package windows
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -21,6 +22,12 @@ const (
 	DefaultGameWindowClass = "UnityWndClass"
 )
 
+// ErrProcessAccessDenied marks a process query the caller was not allowed
+// to complete (OpenProcess returned ERROR_ACCESS_DENIED). Discovery uses
+// it to tell "the game runs elevated and youkai does not" apart from "the
+// process vanished"; the real Win32 layer wraps the OS error with it.
+var ErrProcessAccessDenied = errors.New("the process cannot be opened without permission")
+
 // DiscoverySpec selects the candidate windows of one game client by the
 // owning process's image file name (not its full path: installations live
 // in user-chosen directories).
@@ -30,7 +37,9 @@ type DiscoverySpec struct {
 	ImageName string
 	// ClassNameHint narrows several remaining candidates to this exact
 	// window class. A hint that matches nothing leaves the candidates
-	// alone: it must not turn a matchable set into "not found".
+	// alone: it must not turn a matchable set into "not found". It is also
+	// the only signal available for a window whose process cannot be
+	// opened, so the access-denied count is limited to this class.
 	ClassNameHint string
 }
 
@@ -49,6 +58,17 @@ type TargetCandidate struct {
 	Minimized bool
 }
 
+// DiscoveryResult is one enumeration pass. AccessDeniedWindows counts
+// visible windows of the game's class whose owning process could not be
+// opened for lack of permission. They cannot become candidates because
+// their executable is unknown, but the count lets the caller suggest
+// running youkai with the game's privileges (D-1) instead of claiming the
+// game is not running.
+type DiscoveryResult struct {
+	Candidates          []TargetCandidate
+	AccessDeniedWindows int
+}
+
 // DiscoverTargets enumerates the visible top-level windows whose process
 // image name is spec.ImageName. Windows of that executable that are
 // hidden or DWM-cloaked are skipped — they cannot be the window the user
@@ -56,15 +76,15 @@ type TargetCandidate struct {
 // rather than failing the whole enumeration. An enumeration error fails
 // the call. The result is ordered by PID and handle so the selection list
 // is stable between checks.
-func DiscoverTargets(win WindowAPI, procs ProcessAPI, spec DiscoverySpec) ([]TargetCandidate, error) {
+func DiscoverTargets(win WindowAPI, procs ProcessAPI, spec DiscoverySpec) (DiscoveryResult, error) {
 	if strings.TrimSpace(spec.ImageName) == "" {
-		return nil, fmt.Errorf("discover game windows: the process image name is empty")
+		return DiscoveryResult{}, fmt.Errorf("discover game windows: the process image name is empty")
 	}
 	var handles []HWND
 	if err := win.EnumTopLevel(func(h HWND) { handles = append(handles, h) }); err != nil {
-		return nil, fmt.Errorf("enumerate top-level windows: %w", err)
+		return DiscoveryResult{}, fmt.Errorf("enumerate top-level windows: %w", err)
 	}
-	candidates := make([]TargetCandidate, 0, len(handles))
+	result := DiscoveryResult{Candidates: make([]TargetCandidate, 0, len(handles))}
 	for _, h := range handles {
 		if !win.IsWindowVisible(h) {
 			continue
@@ -78,13 +98,21 @@ func DiscoverTargets(win WindowAPI, procs ProcessAPI, spec DiscoverySpec) ([]Tar
 		}
 		path, started, err := procs.Query(pid)
 		if err != nil {
+			// A window with the game's class whose process we may not open
+			// is the shape of "the game runs elevated, youkai does not".
+			// Without the image path it cannot be a candidate.
+			if errors.Is(err, ErrProcessAccessDenied) && spec.ClassNameHint != "" {
+				if className, classErr := win.ClassName(h); classErr == nil && className == spec.ClassNameHint {
+					result.AccessDeniedWindows++
+				}
+			}
 			continue
 		}
 		if !strings.EqualFold(imageBaseName(path), spec.ImageName) {
 			continue
 		}
 		className, _ := win.ClassName(h)
-		candidates = append(candidates, TargetCandidate{
+		result.Candidates = append(result.Candidates, TargetCandidate{
 			HWND:             h,
 			PID:              pid,
 			ImagePath:        path,
@@ -93,24 +121,24 @@ func DiscoverTargets(win WindowAPI, procs ProcessAPI, spec DiscoverySpec) ([]Tar
 			Minimized:        win.IsIconic(h),
 		})
 	}
-	if len(candidates) > 1 && spec.ClassNameHint != "" {
-		narrowed := make([]TargetCandidate, 0, len(candidates))
-		for _, c := range candidates {
+	if len(result.Candidates) > 1 && spec.ClassNameHint != "" {
+		narrowed := make([]TargetCandidate, 0, len(result.Candidates))
+		for _, c := range result.Candidates {
 			if c.ClassName == spec.ClassNameHint {
 				narrowed = append(narrowed, c)
 			}
 		}
 		if len(narrowed) > 0 {
-			candidates = narrowed
+			result.Candidates = narrowed
 		}
 	}
-	sort.Slice(candidates, func(i, j int) bool {
-		if candidates[i].PID != candidates[j].PID {
-			return candidates[i].PID < candidates[j].PID
+	sort.Slice(result.Candidates, func(i, j int) bool {
+		if result.Candidates[i].PID != result.Candidates[j].PID {
+			return result.Candidates[i].PID < result.Candidates[j].PID
 		}
-		return candidates[i].HWND < candidates[j].HWND
+		return result.Candidates[i].HWND < result.Candidates[j].HWND
 	})
-	return candidates, nil
+	return result, nil
 }
 
 // imageBaseName returns the file name of a Windows path without relying

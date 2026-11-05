@@ -92,22 +92,33 @@ func RealProcessAPI() ProcessAPI { return winProcessAPI{} }
 func (winProcessAPI) Query(pid ProcessID) (string, time.Time, error) {
 	h, err := windows.OpenProcess(processQueryLimitedInformation, false, uint32(pid))
 	if err != nil {
-		return "", time.Time{}, fmt.Errorf("open process %d: %w", pid, err)
+		return "", time.Time{}, processQueryError(fmt.Sprintf("open process %d", pid), err)
 	}
 	defer windows.CloseHandle(h)
 
 	var buf [1024]uint16
 	size := uint32(len(buf))
 	if err := windows.QueryFullProcessImageName(h, 0, &buf[0], &size); err != nil {
-		return "", time.Time{}, fmt.Errorf("query image name of pid %d: %w", pid, err)
+		return "", time.Time{}, processQueryError(fmt.Sprintf("query image name of pid %d", pid), err)
 	}
 	var created, exit, kernel, user windows.Filetime
 	if err := windows.GetProcessTimes(h, &created, &exit, &kernel, &user); err != nil {
-		return "", time.Time{}, fmt.Errorf("query times of pid %d: %w", pid, err)
+		return "", time.Time{}, processQueryError(fmt.Sprintf("query times of pid %d", pid), err)
 	}
 	// Filetime.Nanoseconds already converts to nanoseconds since the
 	// Unix epoch.
 	return windows.UTF16ToString(buf[:size]), time.Unix(0, created.Nanoseconds()).UTC(), nil
+}
+
+// processQueryError maps an access denial to ErrProcessAccessDenied, so
+// candidate discovery can tell "the game runs elevated and youkai does
+// not" apart from "the process vanished". Other failures keep their
+// context.
+func processQueryError(what string, err error) error {
+	if errors.Is(err, windows.ERROR_ACCESS_DENIED) {
+		return fmt.Errorf("%w: %s: %v", ErrProcessAccessDenied, what, err)
+	}
+	return fmt.Errorf("%s: %w", what, err)
 }
 
 type winGeometryAPI struct{}

@@ -23,14 +23,14 @@ func TestDiscoverTargetsEmpty(t *testing.T) {
 	win := newFakeWindows()
 	win.add(1, &fakeWnd{pid: 10, visible: true, class: "OtherWnd"})
 
-	candidates, err := DiscoverTargets(win, procs, DiscoverySpec{
+	result, err := DiscoverTargets(win, procs, DiscoverySpec{
 		ImageName: DefaultGameImageName, ClassNameHint: DefaultGameWindowClass,
 	})
 	if err != nil {
 		t.Fatalf("discover: %v", err)
 	}
-	if len(candidates) != 0 {
-		t.Fatalf("a window of another executable must not be a candidate: %+v", candidates)
+	if len(result.Candidates) != 0 || result.AccessDeniedWindows != 0 {
+		t.Fatalf("a window of another executable must not be a candidate: %+v", result)
 	}
 }
 
@@ -44,16 +44,16 @@ func TestDiscoverTargetsSingleVisibleGameWindow(t *testing.T) {
 	procs := newFakeProcesses()
 	procs.byPID[100] = fakeProc{path: `C:\Games\ZZZ\ZenlessZoneZero.exe`, started: started}
 
-	candidates, err := DiscoverTargets(titleGuard{win, t}, procs, DiscoverySpec{
+	result, err := DiscoverTargets(titleGuard{win, t}, procs, DiscoverySpec{
 		ImageName: DefaultGameImageName, ClassNameHint: DefaultGameWindowClass,
 	})
 	if err != nil {
 		t.Fatalf("discover: %v", err)
 	}
-	if len(candidates) != 1 {
-		t.Fatalf("want one visible candidate, got %+v", candidates)
+	if len(result.Candidates) != 1 {
+		t.Fatalf("want one visible candidate, got %+v", result)
 	}
-	got := candidates[0]
+	got := result.Candidates[0]
 	if got.HWND != 1 || got.PID != 100 || got.ImagePath != `C:\Games\ZZZ\ZenlessZoneZero.exe` ||
 		!got.ProcessStartedAt.Equal(started) || got.ClassName != DefaultGameWindowClass {
 		t.Fatalf("candidate facts: %+v", got)
@@ -69,23 +69,23 @@ func TestDiscoverTargetsSameImageDifferentPaths(t *testing.T) {
 	procs.byPID[100] = fakeProc{path: `C:\Games\ZZZ\ZenlessZoneZero.exe`, started: started}
 	procs.byPID[200] = fakeProc{path: `D:\Other\ZenlessZoneZero.exe`, started: started}
 
-	candidates, err := DiscoverTargets(win, procs, DiscoverySpec{
+	result, err := DiscoverTargets(win, procs, DiscoverySpec{
 		ImageName: DefaultGameImageName, ClassNameHint: DefaultGameWindowClass,
 	})
 	if err != nil {
 		t.Fatalf("discover: %v", err)
 	}
-	if len(candidates) != 2 {
-		t.Fatalf("two installations with the same image name are two candidates: %+v", candidates)
+	if len(result.Candidates) != 2 {
+		t.Fatalf("two installations with the same image name are two candidates: %+v", result)
 	}
 	// Stable order by PID, then handle, so repeated checks list the same
 	// rows.
-	if candidates[0].PID != 100 || candidates[0].HWND != 3 ||
-		candidates[1].PID != 200 || candidates[1].HWND != 7 {
-		t.Fatalf("candidate order: %+v", candidates)
+	if result.Candidates[0].PID != 100 || result.Candidates[0].HWND != 3 ||
+		result.Candidates[1].PID != 200 || result.Candidates[1].HWND != 7 {
+		t.Fatalf("candidate order: %+v", result.Candidates)
 	}
-	if candidates[0].ImagePath == candidates[1].ImagePath {
-		t.Fatalf("the two candidates must keep their own full paths: %+v", candidates)
+	if result.Candidates[0].ImagePath == result.Candidates[1].ImagePath {
+		t.Fatalf("the two candidates must keep their own full paths: %+v", result.Candidates)
 	}
 }
 
@@ -97,26 +97,26 @@ func TestDiscoverTargetsClassHintNarrows(t *testing.T) {
 	procs := newFakeProcesses()
 	procs.byPID[100] = fakeProc{path: `C:\Games\ZZZ\ZenlessZoneZero.exe`, started: started}
 
-	candidates, err := DiscoverTargets(win, procs, DiscoverySpec{
+	result, err := DiscoverTargets(win, procs, DiscoverySpec{
 		ImageName: DefaultGameImageName, ClassNameHint: DefaultGameWindowClass,
 	})
 	if err != nil {
 		t.Fatalf("discover: %v", err)
 	}
-	if len(candidates) != 1 || candidates[0].HWND != 2 {
-		t.Fatalf("class hint must narrow to the game window: %+v", candidates)
+	if len(result.Candidates) != 1 || result.Candidates[0].HWND != 2 {
+		t.Fatalf("class hint must narrow to the game window: %+v", result)
 	}
 
 	// A hint that matches nothing (a client update renamed the class) must
 	// keep the image-name candidates rather than report "not found".
-	candidates, err = DiscoverTargets(win, procs, DiscoverySpec{
+	result, err = DiscoverTargets(win, procs, DiscoverySpec{
 		ImageName: DefaultGameImageName, ClassNameHint: "NewClass",
 	})
 	if err != nil {
 		t.Fatalf("discover: %v", err)
 	}
-	if len(candidates) != 2 {
-		t.Fatalf("a non-matching class hint must leave both candidates: %+v", candidates)
+	if len(result.Candidates) != 2 {
+		t.Fatalf("a non-matching class hint must leave both candidates: %+v", result)
 	}
 }
 
@@ -129,12 +129,40 @@ func TestDiscoverTargetsSkipsCloakedAndVanishedProcesses(t *testing.T) {
 	procs.byPID[100] = fakeProc{path: `C:\Games\ZZZ\ZenlessZoneZero.exe`, started: started}
 	procs.byPID[200] = fakeProc{err: errors.New("process gone")}
 
-	candidates, err := DiscoverTargets(win, procs, DiscoverySpec{ImageName: DefaultGameImageName})
+	result, err := DiscoverTargets(win, procs, DiscoverySpec{ImageName: DefaultGameImageName})
 	if err != nil {
 		t.Fatalf("discover: %v", err)
 	}
-	if len(candidates) != 0 {
-		t.Fatalf("cloaked windows and vanished processes are not candidates: %+v", candidates)
+	if len(result.Candidates) != 0 || result.AccessDeniedWindows != 0 {
+		t.Fatalf("cloaked windows and vanished processes are not candidates: %+v", result)
+	}
+}
+
+// M1: a visible game-class window whose process cannot be opened is the
+// shape of "the game runs elevated, youkai does not". It is counted, not a
+// candidate, and it must not be confused with a vanished process or a
+// window of another class.
+func TestDiscoverTargetsCountsAccessDeniedGameWindows(t *testing.T) {
+	win := newFakeWindows()
+	win.add(1, &fakeWnd{pid: 100, visible: true, class: DefaultGameWindowClass})
+	win.add(2, &fakeWnd{pid: 200, visible: true, class: "OtherClass"})
+	win.add(3, &fakeWnd{pid: 300, visible: true, class: DefaultGameWindowClass})
+	procs := newFakeProcesses()
+	procs.byPID[100] = fakeProc{err: ErrProcessAccessDenied}
+	procs.byPID[200] = fakeProc{err: ErrProcessAccessDenied}
+	procs.byPID[300] = fakeProc{err: errors.New("process gone")}
+
+	result, err := DiscoverTargets(win, procs, DiscoverySpec{
+		ImageName: DefaultGameImageName, ClassNameHint: DefaultGameWindowClass,
+	})
+	if err != nil {
+		t.Fatalf("discover: %v", err)
+	}
+	if len(result.Candidates) != 0 {
+		t.Fatalf("an unreadable process cannot be a candidate: %+v", result)
+	}
+	if result.AccessDeniedWindows != 1 {
+		t.Fatalf("access-denied windows = %d, want only the game-class one: %+v", result.AccessDeniedWindows, result)
 	}
 }
 

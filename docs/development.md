@@ -29,7 +29,7 @@ CGO_ENABLED=1 YOUKAI_DEV_SOURCE=$PWD/internal/recognition/testdata \
 ```
 
 - `YOUKAI_DEV_SOURCE` 指定观测目录（含 `lines.tsv`），启用开发数据源；目录缺失或清单不符会在启动时失败。
-- `YOUKAI_DEV_AUTOSTART` 置任意非空值时，应用就绪后自动开始一次扫描（同样仅开发开关生效；就绪回调本身不做耗时工作，开始请求在独立 goroutine 中发出）。
+- `YOUKAI_DEV_AUTOSTART` 置任意非空值时，应用就绪后自动开始一次扫描（同样仅开发开关生效；就绪回调本身不做耗时工作，开始请求在独立 goroutine 中发出）。安装版默认扫描源没有用户确认的目标，自动开始会以“未确认目标”被拒绝并只在日志留一行；需要自动开始时改用固定目标：`YOUKAI_GAME_SOURCE=traverse YOUKAI_GAME_CLIENT=local YOUKAI_GAME_EXE=<游戏 exe 完整路径>`。
 - `YOUKAI_DEV_PACE` 可选，把开发数据源的接纳节奏改为给定时长（如 `3s`）；默认 250ms。需要观察进度或练习中途停止时用它把扫描拉长：主界面的“停止”按钮可随时中途停止。当前实现中关闭主窗口走明确退出收尾；M3 将按[架构第 5 节](specs/scanner-architecture.md#隐藏恢复与退出)改为默认隐藏到托盘或菜单栏，明确退出才收尾。
 
 ## 仅观测演练（游戏窗口，PR 4a）
