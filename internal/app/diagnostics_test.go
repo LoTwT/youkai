@@ -74,6 +74,15 @@ func TestDiagnosticsTextNamesAbsentValues(t *testing.T) {
 		}
 	})
 
+	t.Run("display without a scale", func(t *testing.T) {
+		text := DiagnosticsText(DiagnosticsInput{
+			System: SystemInfo{OS: "Windows", DisplayWidth: 1920, DisplayHeight: 1080},
+		})
+		if want := "显示：1920×1080（缩放未知）"; !strings.Contains(text, want) {
+			t.Errorf("diagnostic text does not contain %q:\n%s", want, text)
+		}
+	})
+
 	t.Run("completed scan", func(t *testing.T) {
 		text := DiagnosticsText(DiagnosticsInput{
 			Version: "0.0.1",

@@ -206,10 +206,10 @@ func displayText(info SystemInfo) string {
 		return "分辨率未知（缩放 " + scale + "）"
 	}
 	text := fmt.Sprintf("%d×%d", width, height)
-	if scale != "" {
-		text += "（缩放 " + scale + "）"
+	if scale == "" {
+		return text + "（缩放未知）"
 	}
-	return text
+	return text + "（缩放 " + scale + "）"
 }
 
 func scaleText(scale float64) string {
