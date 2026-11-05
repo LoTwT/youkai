@@ -873,7 +873,7 @@ func excludedReviewItem(t *testing.T, seq int64) record.ItemRecord {
 
 // TestFailedSessionExplainsTermination checks that a zero-item failure is
 // not summarized only as item-level "失败 0 件": the results page states
-// the session's termination code and phase, and the empty state says no
+// the session's termination cause and phase, and the empty state says no
 // item was saved.
 func TestFailedSessionExplainsTermination(t *testing.T) {
 	rec := recovery()
@@ -883,7 +883,7 @@ func TestFailedSessionExplainsTermination(t *testing.T) {
 	rec.Checkpoint.Session.Coverage = record.Coverage{Status: record.CoveragePartial}
 	m, _, tt := openResponsiveResults(t, rec, 1024, 700)
 
-	if !tt.HasText("扫描失败：navigationMismatch（采集阶段），未保留任何条目") {
+	if !tt.HasText("扫描失败：点击或拖拽后页面没有按预期变化。请重新开始扫描；反复出现时复制诊断信息。（采集阶段），未保留任何条目") {
 		t.Fatalf("the failed session does not name its termination: %q", tt.Texts())
 	}
 	if !tt.HasText("无可导出条目") {
@@ -1033,22 +1033,23 @@ func TestCompletionCardShowsPartialCoverage(t *testing.T) {
 }
 
 // TestCompletionCardNamesIncompletePositions checks that a degraded
-// position's stage, cause code and reason reach the results page beside the
-// partial coverage conclusion.
+// position's stage and localized cause reach the results page beside the
+// partial coverage conclusion without leaking the diagnostic code.
 func TestCompletionCardNamesIncompletePositions(t *testing.T) {
 	rec := recovery(confirmedReviewItem(t, 1, 12))
 	rec.Checkpoint.Session.Coverage = record.Coverage{Status: record.CoveragePartial}
 	rec.Checkpoint.Session.ObservedScope = []byte(`{"kind":"zzzInventory","sort":"verified","coverage":"partial","positions":[{"position":1,"complete":true,"topVerified":true,"bottomVerified":true},{"position":2,"complete":false,"stage":"filter","reasonCode":"navigationMismatch","reason":"the filter panel never closed"}]}`)
 	_, _, tt := openResponsiveResults(t, rec, 1024, 700)
-	if !tt.HasText("不完整位置：位置 2 筛选准备失败") ||
-		!tt.HasText("navigationMismatch") ||
-		!tt.HasText("the filter panel never closed") {
+	if !tt.HasText("不完整号位：2 号位 筛选准备失败：点击或拖拽后页面没有按预期变化") {
 		t.Fatalf("the degraded position is not explained: %q", tt.Texts())
+	}
+	if tt.HasText("navigationMismatch") || tt.HasText("the filter panel never closed") {
+		t.Fatalf("the degraded position leaks English diagnostics: %q", tt.Texts())
 	}
 }
 
 // TestSessionTerminationNoticeNamesIncompletePositions checks the failed
-// session surface: the termination code and the degraded positions appear
+// session surface: the termination cause and the degraded positions appear
 // together, because a limit stop is diagnosed by both.
 func TestSessionTerminationNoticeNamesIncompletePositions(t *testing.T) {
 	rec := recovery(confirmedReviewItem(t, 1, 12))
@@ -1058,7 +1059,7 @@ func TestSessionTerminationNoticeNamesIncompletePositions(t *testing.T) {
 	}
 	rec.Checkpoint.Session.ObservedScope = []byte(`{"positions":[{"position":1,"complete":false,"stage":"filter","reasonCode":"navigationMismatch","reason":"three preparations failed"}]}`)
 	_, _, tt := openResponsiveResults(t, rec, 1024, 700)
-	if !tt.HasText("扫描失败：positionFailureLimit") || !tt.HasText("不完整位置：位置 1 筛选准备失败") {
+	if !tt.HasText("扫描失败：多个号位没有完成") || !tt.HasText("不完整号位：1 号位 筛选准备失败：点击或拖拽后页面没有按预期变化") {
 		t.Fatalf("the failed-session surface omits the degraded positions: %q", tt.Texts())
 	}
 }
