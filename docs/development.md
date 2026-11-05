@@ -29,7 +29,7 @@ CGO_ENABLED=1 YOUKAI_DEV_SOURCE=$PWD/internal/recognition/testdata \
 ```
 
 - `YOUKAI_DEV_SOURCE` 指定观测目录（含 `lines.tsv`），启用开发数据源；目录缺失或清单不符会在启动时失败。
-- `YOUKAI_DEV_AUTOSTART` 置任意非空值时，应用就绪后自动开始一次扫描（同样仅开发开关生效；就绪回调本身不做耗时工作，开始请求在独立 goroutine 中发出）。
+- `YOUKAI_DEV_AUTOSTART` 置任意非空值时，应用就绪后自动开始一次扫描（同样仅开发开关生效；就绪回调本身不做耗时工作，开始请求在独立 goroutine 中发出）。安装版默认扫描源没有用户确认的目标，自动开始会以“未确认目标”被拒绝并只在日志留一行；需要自动开始时改用固定目标：`YOUKAI_GAME_SOURCE=traverse YOUKAI_GAME_CLIENT=local YOUKAI_GAME_EXE=<游戏 exe 完整路径>`。
 - `YOUKAI_DEV_PACE` 可选，把开发数据源的接纳节奏改为给定时长（如 `3s`）；默认 250ms。需要观察进度或练习中途停止时用它把扫描拉长：主界面的“停止”按钮可随时中途停止。当前实现中关闭主窗口走明确退出收尾；M3 将按[架构第 5 节](specs/scanner-architecture.md#隐藏恢复与退出)改为默认隐藏到托盘或菜单栏，明确退出才收尾。
 
 ## 仅观测演练（游戏窗口，PR 4a）
@@ -37,16 +37,16 @@ CGO_ENABLED=1 YOUKAI_DEV_SOURCE=$PWD/internal/recognition/testdata \
 M2 平台会话集成后可用另一组开关接入真实游戏窗口做仅观测演练（不发送任何输入）：
 
 - `YOUKAI_GAME_SOURCE=observe` 启用游戏窗口仅观测演练：会话经统一平台端口（`internal/platform`）打开真实窗口、解析目标、锁定几何基线并持续观测，全程不派发输入、不接纳观测，用于联调平台集成与停止链路；主界面标签显示“游戏窗口（仅观测演练，不发送输入）”。与 `YOUKAI_DEV_SOURCE` 同时设置会拒绝启动。
-- Windows 目标身份待实测轮 ②，须显式提供：`YOUKAI_GAME_EXE=<游戏 exe 完整路径>` 与 `YOUKAI_GAME_CLIENT=local|cloud`（分别对应完整客户端与云客户端记录标识）；缺失时拒绝接线并说明原因——猜一个身份可能作用于错误窗口。macOS 目标固定为实测轮 ① 记录的云客户端（bundle `com.miHoYo.cloudgames.Nap`）。
+- Windows 的 `observe` 演练仍须显式提供目标：`YOUKAI_GAME_EXE=<游戏 exe 完整路径>` 与 `YOUKAI_GAME_CLIENT=local|cloud`（分别对应完整客户端与云客户端记录标识）；缺失时拒绝接线并说明原因——猜一个身份可能作用于错误窗口。安装版默认扫描源不需要这些变量（见下一节）。macOS 目标固定为实测轮 ① 记录的云客户端（bundle `com.miHoYo.cloudgames.Nap`）。
 - 停止热键：macOS 默认 ⌃⌥⌘S（实测验证）；Windows 默认 Ctrl+Alt+Shift+S 加 NoRepeat（避开 Win 键组合；2026-11-03 真机在一次扫描中触发停止，仅该配置已验证）。热键在准备阶段注册、持续到会话释放，全局可用；自定义留待 M3 设置。
-- 真实遍历（4b/4c）就位后，`observe` 演练模式仍可用于无输入联调；两者都不设置时保持生产默认（无扫描源，开始被拒）。
+- 真实遍历（4b/4c）就位后，`observe` 演练模式仍可用于无输入联调；两者都不设置时：Windows 走安装版默认扫描源（下一节），macOS 保持生产默认（无扫描源，开始被拒），其余平台没有扫描源。
 
 ## 真实遍历（macOS 云客户端，4b-2）
 
 - `YOUKAI_GAME_SOURCE=traverse` 在 **darwin** 上接入已标定的驱动盘仓库遍历：预检只要求仓库页、列表形状与唯一转盘位；点击开始后先解析并锁定游戏窗口，若游戏未运行或没有合格窗口则立即停止并报告 `targetNotFound`，已打开时自动把游戏应用切到前台一次（扫描期间失焦仍停止）。随后按转盘位置 1→6 自动切换位置，并按一次面板访问准备筛选：打开→重置→勾选 S→关闭→要求漏斗 Active（S 未生效即停止，A/B 不进入列表；重置是否生效并入同一次校验，旧筛选残留是已知残余风险）；再回顶并确认，逐件点击/初始读取、等待详情归属、截帧接纳。S 选中态尚无像素探针；用户 2026-10-19/25 决定重置与 S 只共用一次面板访问和一次 Active 校验。回顶确认遇到位移、或 Lost 但未取得“最终比较 Undecided + 滑块稳定在顶部”的例外时继续向上，未取得稳定非移动的顶部确认不开始遍历（详见 [T5 §5](specs/t5-zzz-inventory-traversal.md#5-滚动衔接重复物品与末尾) 的 4b-2 实现状态）。回顶甩动本身的终局 Undecided 仅在最后一帧仍是可验证仓库列表时继续向上（探索动作，受 16 次与连续 2 次无进展上限，并从该帧重建基准）；最后一帧不是仓库列表或未收到帧时按页面无法验证停止；顶部确认的 Undecided 则不重拖。每位置自动准备失败即停止并保留已接纳结果，不做补偿动作。滚动判定自阶段 2（2026-10-30）起以选中框位移为主要证据、归一化相关与滚动条为辅助核对（`ScrollEvidenceMatcher`，见 [T5 §5](specs/t5-zzz-inventory-traversal.md#5-滚动衔接重复物品与末尾) 的阶段 2 实现状态）：candidate 须相对自身连续 2 次独立的 fresh 帧观测稳定才提交（复用帧为中性观测）；等待截止时间至少覆盖 `MotionStartBudget`，到 `ScrollBudget` 仍不停稳按 Lost 安全停止。设置 `YOUKAI_SCROLL_MATCHER=legacy` 可回退到阶段 2 之前的灰度 MAD 判定（现场排查用；不设置即用新判定）。当前入口仍要求用户手动把游戏打开到驱动盘仓库页；从待机/主菜单自动导航到仓库页尚未实现。
 - 该模式的 macOS 云客户端路径只在 darwin 可用；其他平台（以及 Windows 云客户端）没有已标定布局，入口直接拒绝并说明原因，不会猜测锚点或窗口身份。Windows 本地客户端自 W2c 起有自己的入口，见下一节；Windows 的 `observe` 演练仍按上一节要求提供目标身份。
 - 初始观测范围写入会话记录的 `observedScope`（`kind/page/layout/geometry/slots/startPosition/filterAtStart/sort`），不声称顶部或数量；`filterAtStart` 是准备前的漏斗状态，不代表本轮的 S 筛选声明。每件接纳的 `capture` 带 `position`（1–6）、逐位置重新计数的 `viewportIndex`、`rarityFilter:"S"` 与可选的一次性 `scrollEvidence`。详情行裁剪送识别，品质徽章与选中格边框作为上下文证据落盘、不送识别。
-- 与 `YOUKAI_DEV_SOURCE` 同时设置仍会拒绝启动；未设置任何来源时保持生产默认（无扫描源）。这是开发/联调开关，不是面向用户的扫描模式选择。
+- 与 `YOUKAI_DEV_SOURCE` 同时设置仍会拒绝启动；在 macOS 上未设置任何来源时保持生产默认（无扫描源）。这是开发/联调开关，不是面向用户的扫描模式选择。
 
 日志确认要点：`dev scan source wired`、`scan <id> accepted`、每件盘一行 `item N recognized: name=… level=…`、每位置准备成功一行 `youkai: collect: position N prepared: S filter active, top confirmed`、每次已提交滚动一行 `youkai: collect: position N scroll <before> -> <after>: R rows, M correspondences`、`checkpoint generation N saved (… items)` 与结束行的检查点路径（开发应用数据根 `~/Library/Application Support/Youkai Dev/sessions/<id>/checkpoints/<gen>.json`）、退出时 `exit wrap-up complete`。当前实现的退出事件（⌘Q/关窗）异步触发明确退出收尾：停止活动会话 → 等待收尾与最终保存 → 关闭识别器 → 销毁 ORT 环境 → 释放占用；M3 改为关闭默认隐藏、仅明确退出走该收尾。
 
@@ -54,7 +54,8 @@ M2 平台会话集成后可用另一组开关接入真实游戏窗口做仅观�
 
 状态以[架构 §6 的 Windows 本地客户端遍历状态](specs/scanner-architecture.md#windows-本地客户端遍历状态1920x1080-首次全量真机扫描完成时序未标定)为唯一权威说明；这里只写开发运行方式。
 
-- **环境变量：** `YOUKAI_GAME_SOURCE=traverse`、`YOUKAI_GAME_CLIENT=local`、`YOUKAI_GAME_EXE=<游戏 exe 完整路径>`。三层都必须满足；缺 `YOUKAI_GAME_EXE` 或把客户端设为 `cloud` 都会在接线时拒绝并说明原因。`observe` 仍按上一节的方式工作。
+- **安装版默认扫描源（PR-05，P-01）：** Windows 构建在未设置任何环境变量时自动接入本地客户端遍历，不需要 `YOUKAI_GAME_EXE`；目标识别与确认规则以 [T2 §3.2](specs/t2-platform-capture-input.md#windows-扫描前预检w2b权威说明) 为准。扫描区列出候选，唯一候选也要点选确认，未确认时“开始扫描”禁用；点“重新检查”重新枚举，确认的窗口在开始前消失或被替换时开始被拒绝并刷新列表。
+- **环境变量（开发覆盖）：** `YOUKAI_GAME_SOURCE=traverse`、`YOUKAI_GAME_CLIENT=local`、`YOUKAI_GAME_EXE=<游戏 exe 完整路径>` 仍可用于固定一个开发目标；此时跳过候选列表，直接锁定该路径。三层都必须满足；缺 `YOUKAI_GAME_EXE` 或把客户端设为 `cloud` 都会在接线时拒绝并说明原因。`observe` 仍按上一节的方式工作。`YOUKAI_SCROLL_MATCHER=legacy` 对安装版默认与固定目标覆盖都生效。
 - **权限（D-1）：** 必须以管理员身份运行 youkai，否则开始扫描时因游戏进程完整性级别更高而拒绝；程序清单不要求提权。点击在提权后有效，2026-11-02 的 1920×1080 全量扫描也在 `target=high self=high` 下完成；但仍以 T5 的动作效果证据为准。
 - **开始前激活：** 点击开始后，Windows 会话对预检锁定的 HWND 请求一次前台（`SetForegroundWindow`），随后在最多 500 ms 内每 25 ms 观察一次实际前台；日志先写 `platform windows: activate: requesting foreground...`，再写 `accepted after N ms`（目标已在前台）或 `not foreground after 500 ms` 加 `waiting for the user to focus the game`（超时后照常进入 30 秒准备等待）。成功不跳过准备核验。2026-11-02 真机首次运行发现旧实现没有 `Activator`，日志只记录 `another window is the actual foreground window`（操作者记录当时前台是 Youkai），最终以 `prepareTimeout`（`focusLost`）结束且没有激活失败日志；#110 补齐后，同日第二次和第三次运行（自动开始）都在激活后立即复查未见游戏在前台，约 0.24 s 后游戏已在前台并通过就绪检查，这正是本次有界等待要覆盖的异步切换。2026-11-03 的手动开始真机复验（dev `48dec0f`）确认了 #113 的成功路径：请求后 26 ms 记录 `accepted after 26 ms`，游戏切到前台。`YOUKAI_DEV_AUTOSTART` 自动开始路径下 #113 的激活结果尚未复验；进程可能没有前台权限，到上限仍未见前台是预期路径，但不能据此断言 `SetForegroundWindow` 被拒。最小化由预检拒绝，不做恢复窗口。状态以[架构 §6](specs/scanner-architecture.md#windows-本地客户端遍历状态1920x1080-首次全量真机扫描完成时序未标定)为准。
 - **显示档位：** 首批只开放 1920×1080（窗口/无边框模式）。其他已知 16:9 档位与任意非 16:9 尺寸都会被预检拒绝并提示切换；列出的档位不等于已开放。

@@ -30,6 +30,10 @@ type Service interface {
 	// Start accepts a start request into the single active slot; the
 	// same request ID returns the session it created.
 	Start(req app.StartRequest) (app.StartOutcome, error)
+	// DiscoverTargets enumerates the game windows the wired source offers
+	// for user confirmation (P-01). The model calls it only when
+	// ScanSourceInfo.TargetSelection is set.
+	DiscoverTargets() (app.TargetDiscoveryResult, error)
 	// Stop requests an idempotent user stop of the active session.
 	Stop()
 	// Snapshot is the authoritative state at one service revision.
@@ -84,8 +88,8 @@ type Updater interface {
 }
 
 // ScanSourceInfo says whether a scan can start and why. The entry point
-// knows whether it wired a source (M1: only the development data source);
-// the service refuses starts without one, and the button explains it.
+// knows whether it wired a source; the service refuses starts without one,
+// and the button explains it.
 type ScanSourceInfo struct {
 	// Available is whether the service has a source to start from.
 	Available bool
@@ -93,6 +97,11 @@ type ScanSourceInfo struct {
 	Label string
 	// Reason explains why starts are impossible when Available is false.
 	Reason string
+	// TargetSelection means the source discovers game windows and starts
+	// only the candidate the user confirms (P-01). The prepare area then
+	// lists the candidates and the start stays disabled until one is
+	// chosen; a single candidate is shown for confirmation too.
+	TargetSelection bool
 }
 
 // Config assembles the main-window model.
@@ -211,6 +220,19 @@ type Model struct {
 	startSerial int
 	startReqID  string
 	startErr    string
+
+	// Target candidates (P-01): the last discovery result, whether a
+	// discovery is in flight, its user-facing failure, the chosen row (-1
+	// for none), the counts of game windows whose process could not be
+	// opened (lower-integrity vs. elevated-or-unknown) and the serial that
+	// discards stale results.
+	targets             []app.TargetCandidate
+	targetsLoading      bool
+	targetsErr          string
+	targetsAccessDenied int
+	targetsUnreadable   int
+	targetChoice        int
+	targetsSerial       int
 
 	history          []HistoryEntry
 	histChoice       string
@@ -390,6 +412,7 @@ func New(cfg Config) *Model {
 		cache:            newEvidenceCache(cfg.Evidence, limit),
 		promptedSessions: make(map[string]bool),
 		historyRow:       -1,
+		targetChoice:     -1,
 		closeBehavior:    closeBehavior,
 	}
 	if cfg.Updates != nil {
@@ -442,6 +465,12 @@ func (m *Model) Attach(upd Updater) {
 	m.upd = upd
 	m.loadHistory()
 	m.refreshStorage()
+	// The installed Windows source discovers its target windows: the
+	// prepare area lists them for confirmation before the first start
+	// (P-01). A source with a fixed target does not need this.
+	if m.source.TargetSelection {
+		m.refreshTargets()
+	}
 }
 
 // update applies fn on the UI thread: in the window through Updater, which
@@ -841,7 +870,8 @@ func (m *Model) selectedSeq() int64 {
 // Start begins a scan: a fresh request identity per attempt, reused until
 // the service answered, so repeated clicks cannot start two sessions. The
 // click only schedules the call; the outcome arrives through update and
-// the service's snapshots.
+// the service's snapshots. A source that discovers targets starts only the
+// candidate the user confirmed.
 func (m *Model) Start() {
 	if !m.canStart() {
 		return
@@ -853,23 +883,37 @@ func (m *Model) Start() {
 	}
 	m.startErr = ""
 	reqID := m.startReqID
+	req := app.StartRequest{ID: reqID, Target: m.chosenTarget()}
 	m.goAsync(func() {
-		_, err := m.cfg.Service.Start(app.StartRequest{ID: reqID})
+		_, err := m.cfg.Service.Start(req)
 		m.update(func() {
 			m.startReqID = ""
 			if err != nil {
 				m.startErr = err.Error()
+				if m.source.TargetSelection {
+					// The installed UI shows user copy; the raw error is
+					// already in the diagnostic log (the service logs the
+					// refused start) and stays hidden here.
+					m.startErr = startErrorText(err)
+				}
+				// The refused start may be a window that vanished
+				// between confirmation and start: refresh the list so the
+				// stale candidate cannot be chosen again.
+				if m.source.TargetSelection {
+					m.refreshTargets()
+				}
 			}
 		})
 	})
 }
 
 // canStart says whether the start button is usable: a source must be
-// wired, no start may be in flight, no session may hold the active slot,
-// the process may not be exiting, and no update may be installing or done
-// and about to restart — a scan just begun would be cut short by it.
+// wired, a discovery source must have a confirmed candidate, no start may
+// be in flight, no session may hold the active slot, the process may not
+// be exiting, and no update may be installing or done and about to
+// restart — a scan just begun would be cut short by it.
 func (m *Model) canStart() bool {
-	return m.source.Available && m.startReqID == "" && !m.snap.Busy &&
+	return m.source.Available && m.targetReady() && m.startReqID == "" && !m.snap.Busy &&
 		m.exitState == exitIdle && !m.updateRestartImminent()
 }
 

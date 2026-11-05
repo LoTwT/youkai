@@ -32,9 +32,13 @@ type Port struct {
 	// NewSession builds the session Open returns; nil builds a plain
 	// ready session.
 	NewSession func() *Session
+	// DiscoverFn answers DiscoverTargets; nil models a platform without
+	// target discovery.
+	DiscoverFn func() (platform.TargetDiscoveryResult, error)
 
-	openCalls int
-	lastCfg   *platform.SessionConfig
+	openCalls     int
+	discoverCalls int
+	lastCfg       *platform.SessionConfig
 }
 
 // Preflight implements platform.Port.
@@ -44,6 +48,25 @@ func (p *Port) Preflight() platform.Preflight {
 	return platform.Preflight{Checks: []platform.CapabilityCheck{
 		{Name: "fakeCapability", OK: p.FailingCheck == ""},
 	}}
+}
+
+// DiscoverTargets implements platform.TargetDiscovery over DiscoverFn.
+func (p *Port) DiscoverTargets() (platform.TargetDiscoveryResult, error) {
+	p.mu.Lock()
+	fn := p.DiscoverFn
+	p.discoverCalls++
+	p.mu.Unlock()
+	if fn == nil {
+		return platform.TargetDiscoveryResult{}, fmt.Errorf("fake port has no target discovery")
+	}
+	return fn()
+}
+
+// DiscoveryCount reports how often DiscoverTargets ran.
+func (p *Port) DiscoveryCount() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.discoverCalls
 }
 
 // Open implements platform.Port.

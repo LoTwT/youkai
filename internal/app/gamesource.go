@@ -2,13 +2,54 @@ package app
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"image"
+	"strings"
 
 	"github.com/LoTwT/youkai/internal/game/zzz/collect"
 	"github.com/LoTwT/youkai/internal/platform"
 	"github.com/LoTwT/youkai/internal/record"
 )
+
+// TargetCandidate is one running game window the user can confirm as the
+// scan target (P-01). It is the platform's candidate shape, re-exported so
+// the window and the service share one vocabulary.
+type TargetCandidate = platform.TargetCandidate
+
+// TargetDiscoveryResult is one candidate enumeration pass, re-exported for
+// the same reason: Candidates plus the count of game-class windows whose
+// process could not be opened for lack of permission.
+type TargetDiscoveryResult = platform.TargetDiscoveryResult
+
+// Sentinel errors the window maps to user-facing Chinese text. The
+// original error text stays in the diagnostic log.
+var (
+	// ErrTargetDiscoveryFailed: enumerating the game windows failed.
+	ErrTargetDiscoveryFailed = errors.New("game window discovery failed")
+	// ErrTargetGone: the confirmed window vanished or was replaced before
+	// the session could lock it.
+	ErrTargetGone = errors.New("the confirmed game window is gone or was replaced; check the target again")
+	// ErrTargetNotConfirmed: a discovery source was asked to start without
+	// a user-confirmed candidate.
+	ErrTargetNotConfirmed = errors.New("the game window must be confirmed before starting")
+)
+
+// TargetDiscoverer is the optional capability of a ScanSource that can
+// enumerate the game windows a user may confirm. Sources with a fixed
+// target (macOS, the environment overrides, development fixtures) do not
+// implement it.
+type TargetDiscoverer interface {
+	DiscoverTargets() (TargetDiscoveryResult, error)
+}
+
+// TargetScanSource is the optional capability of a ScanSource that starts
+// one user-confirmed window. StartRequest.Target reaches it instead of
+// NewScan, so a source that discovers targets never starts without the
+// user's confirmation.
+type TargetScanSource interface {
+	NewScanForTarget(TargetCandidate) (ScanSpec, error)
+}
 
 // scopeRelay is the controller capability that receives the traversal's
 // observed-scope relay; collect.Controller implements it (see its
@@ -23,13 +64,17 @@ type scopeRelay interface {
 // through the unified platform port. It serves two modes: the observe-only
 // rehearsal (the session opens the platform, resolves and observes the
 // target and holds until a stop — no input is dispatched and nothing is
-// admitted) and the calibrated inventory traversal on darwin (the
-// traversal seam carries collect.Inventory). The source itself changes
-// nothing between modes except the scope label and the traversal factory.
+// admitted) and the calibrated inventory traversal (the traversal seam
+// carries collect.Inventory). The source itself changes nothing between
+// modes except the scope label and the traversal factory. A source wired
+// without a fixed target discovers the running game windows and starts
+// only the candidate the user confirmed (P-01).
 type GameScanSource struct {
 	// Port is the platform the sessions run on (platform.Host()).
 	Port platform.Port
-	// Target selects the game window.
+	// Target selects the game window. Empty means the user must confirm
+	// one of the windows DiscoverTargets returns; the source then refuses
+	// NewScan.
 	Target platform.TargetSpec
 	// Hotkey is the global stop hotkey the sessions register.
 	Hotkey platform.HotkeySpec
@@ -54,8 +99,80 @@ type GameScanSource struct {
 }
 
 // NewScan implements ScanSource: a fresh collect.Controller per start,
-// described by the source's mode (observe-only or traverse).
+// described by the source's mode (observe-only or traverse). A source
+// without a fixed target refuses here: the user must confirm one of the
+// discovered windows first, even when only one is running (P-01).
 func (g *GameScanSource) NewScan() (ScanSpec, error) {
+	if g.RequiresTargetConfirmation() {
+		return ScanSpec{}, fmt.Errorf("app: game scan source: %w", ErrTargetNotConfirmed)
+	}
+	return g.newScan(g.Target)
+}
+
+// RequiresTargetConfirmation reports whether a start must carry a
+// user-confirmed candidate. It is true for the installed Windows source,
+// which is wired without a target and discovers the running client.
+func (g *GameScanSource) RequiresTargetConfirmation() bool {
+	return g.Target.BundleID == "" && g.Target.ExecutablePath == ""
+}
+
+// DiscoverTargets implements TargetDiscoverer through the platform port.
+func (g *GameScanSource) DiscoverTargets() (TargetDiscoveryResult, error) {
+	if g.Port == nil {
+		return TargetDiscoveryResult{}, fmt.Errorf("app: game scan source: %w: no port", ErrTargetDiscoveryFailed)
+	}
+	discovery, ok := g.Port.(platform.TargetDiscovery)
+	if !ok {
+		return TargetDiscoveryResult{}, fmt.Errorf("app: game scan source: %w: the wired platform cannot discover target windows", ErrTargetDiscoveryFailed)
+	}
+	result, err := discovery.DiscoverTargets()
+	if err != nil {
+		return TargetDiscoveryResult{}, fmt.Errorf("app: game scan source: %w: %v", ErrTargetDiscoveryFailed, err)
+	}
+	return result, nil
+}
+
+// NewScanForTarget implements TargetScanSource: it re-enumerates the game
+// windows and requires the confirmed window to still be present with the
+// same process instance. A window that vanished or was replaced refuses the
+// start instead of locking another window of the same executable. A source
+// with a fixed target ignores the confirmed candidate and keeps its
+// configured target.
+func (g *GameScanSource) NewScanForTarget(confirmed TargetCandidate) (ScanSpec, error) {
+	if !g.RequiresTargetConfirmation() {
+		return g.newScan(g.Target)
+	}
+	if confirmed.Handle == 0 {
+		return ScanSpec{}, errors.New("app: game scan source: the confirmed target has no window handle")
+	}
+	found, err := g.DiscoverTargets()
+	if err != nil {
+		return ScanSpec{}, err
+	}
+	for _, c := range found.Candidates {
+		if sameTargetInstance(c, confirmed) {
+			return g.newScan(platform.TargetSpec{
+				ExecutablePath:       c.ExecutablePath,
+				HandleHint:           c.Handle,
+				PIDHint:              c.PID,
+				ProcessStartedAtHint: c.ProcessStartedAt,
+			})
+		}
+	}
+	return ScanSpec{}, fmt.Errorf("app: game scan source: %w", ErrTargetGone)
+}
+
+// sameTargetInstance reports whether two candidates describe the same
+// window of the same process instance. Paths compare case-insensitively
+// like Windows compares them.
+func sameTargetInstance(a, b TargetCandidate) bool {
+	return a.Handle == b.Handle && a.PID == b.PID &&
+		a.ProcessStartedAt.Equal(b.ProcessStartedAt) &&
+		strings.EqualFold(a.ExecutablePath, b.ExecutablePath)
+}
+
+// newScan builds the accepted spec for one target.
+func (g *GameScanSource) newScan(target platform.TargetSpec) (ScanSpec, error) {
 	if g.Port == nil {
 		return ScanSpec{}, fmt.Errorf("app: game scan source: no port")
 	}
@@ -74,7 +191,7 @@ func (g *GameScanSource) NewScan() (ScanSpec, error) {
 		Scope:  scope,
 		Controller: &collect.Controller{
 			Port:               g.Port,
-			Target:             g.Target,
+			Target:             target,
 			Hotkey:             g.Hotkey,
 			Traversal:          g.Traversal,
 			TraversalForClient: g.TraversalForClient,

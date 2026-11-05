@@ -76,6 +76,18 @@ type TargetSpec struct {
 	// ExecutablePath is the full path of the game executable, compared
 	// case-insensitively.
 	ExecutablePath string
+	// HWNDHint, when set, restricts selection to exactly this window: the
+	// user confirmed it from the discovered candidates. A hint that
+	// matches no window is a stale selection (SelectionHintGone) — it
+	// never lets the selector fall back to another window of the same
+	// executable. Handles are recycled, so the path and process instance
+	// remain the identity checks.
+	HWNDHint HWND
+	// PIDHint and ProcessStartedAtHint, when set, must match the window's
+	// process instance inside the confirmed-handle branch: a handle the
+	// OS recycled into a restarted process is stale, not the target.
+	PIDHint              ProcessID
+	ProcessStartedAtHint time.Time
 	// ClassNameHint, when set, must equal the candidate's class name.
 	ClassNameHint string
 	// TitleHint, when set, must be contained in the candidate's title.
@@ -100,6 +112,11 @@ const (
 	// of them could act on the wrong window (launcher, login window,
 	// second instance), so the caller must disambiguate.
 	SelectionAmbiguous SelectionErrorKind = "ambiguous"
+	// SelectionHintGone: the caller confirmed a specific window handle
+	// that no longer exists among the executable's windows (closed or
+	// replaced). The user must enumerate and confirm again; the selector
+	// never substitutes another window.
+	SelectionHintGone SelectionErrorKind = "hintGone"
 )
 
 // SelectionError reports that selection did not yield exactly one
@@ -117,6 +134,8 @@ func (e *SelectionError) Error() string {
 		return fmt.Sprintf("no top-level window of %q", e.Executable)
 	case SelectionNotReady:
 		return fmt.Sprintf("target window of %q is %s", e.Executable, e.HintDetail)
+	case SelectionHintGone:
+		return fmt.Sprintf("the confirmed window %s of %q is gone or was replaced", e.HintDetail, e.Executable)
 	default:
 		return fmt.Sprintf("%d candidate windows of %q remain (launcher, login or same-name windows must be told apart)", len(e.Candidates), e.Executable)
 	}
@@ -127,17 +146,22 @@ func (e *SelectionError) Error() string {
 //
 //  1. keep the probes whose process image path matches the spec
 //     (case-insensitive);
-//  2. if several remain and hints are set, narrow by exact class name,
+//  2. if the caller confirmed a specific handle, keep exactly that window
+//     and require the confirmed process instance (PID and start time when
+//     set) to match: a confirmed window that vanished or was recycled is
+//     a stale selection, never a cue to pick another window of the same
+//     executable;
+//  3. if several remain and hints are set, narrow by exact class name,
 //     then by title substring — hints refine identity, they never pick a
 //     window the executable does not own;
-//  3. if several remain, drop hidden and cloaked windows whenever at
+//  4. if several remain, drop hidden and cloaked windows whenever at
 //     least one visible candidate exists: one visible candidate is
 //     selected, several visible candidates are an ambiguity error whose
 //     list contains only the visible ones, and with no visible candidate
 //     the set is left unchanged;
-//  4. more than one candidate at that point is an ambiguity error —
+//  5. more than one candidate at that point is an ambiguity error —
 //     never a guess;
-//  5. the single candidate fails not-ready when it is hidden or cloaked
+//  6. the single candidate fails not-ready when it is hidden or cloaked
 //     and RequireVisible is set; a minimized window is still selected
 //     (minimization is an observed state, input is refused while it
 //     lasts).
@@ -150,6 +174,27 @@ func SelectTarget(probes []WindowProbe, spec TargetSpec) (WindowProbe, error) {
 	}
 	if len(candidates) == 0 {
 		return WindowProbe{}, &SelectionError{Kind: SelectionNoWindow, Executable: spec.ExecutablePath}
+	}
+	if spec.HWNDHint != 0 {
+		confirmed := WindowProbe{}
+		found := false
+		for _, p := range candidates {
+			if p.HWND == spec.HWNDHint {
+				confirmed = p
+				found = true
+				break
+			}
+		}
+		if !found {
+			return WindowProbe{}, &SelectionError{Kind: SelectionHintGone, Executable: spec.ExecutablePath,
+				HintDetail: fmt.Sprintf("%d", spec.HWNDHint)}
+		}
+		if (spec.PIDHint != 0 && confirmed.PID != spec.PIDHint) ||
+			(!spec.ProcessStartedAtHint.IsZero() && !confirmed.ProcessStartedAt.Equal(spec.ProcessStartedAtHint)) {
+			return WindowProbe{}, &SelectionError{Kind: SelectionHintGone, Executable: spec.ExecutablePath,
+				HintDetail: fmt.Sprintf("%d (process instance changed)", spec.HWNDHint)}
+		}
+		candidates = []WindowProbe{confirmed}
 	}
 	if len(candidates) > 1 && spec.ClassNameHint != "" {
 		narrowed := candidates[:0]
@@ -289,6 +334,12 @@ type ProcessAPI interface {
 	// Query reports the full executable path and creation time of pid.
 	// The handle the query opens is closed within the call.
 	Query(pid ProcessID) (path string, started time.Time, err error)
+	// ImageName reports the executable file name of pid from a process
+	// snapshot (CreateToolhelp32Snapshot), which does not open the target
+	// process and works across integrity levels. It is the fallback for
+	// naming a window whose Query was denied, so a denied window can be
+	// checked against the game's image name without being opened.
+	ImageName(pid ProcessID) (string, error)
 }
 
 // CollectProbes enumerates all top-level windows and resolves their
