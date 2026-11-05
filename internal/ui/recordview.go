@@ -237,26 +237,11 @@ func BuildRecordView(id string, rec *record.Recovery, live bool) *RecordView {
 		Shell:            cp.Session,
 		EvidenceRemoved:  evidenceWasRemoved(cp),
 	}
+	view.Classes = app.ClassifyItems(cp.Items)
 	for i := range cp.Items {
 		view.Rows = append(view.Rows, buildRow(&cp.Items[i]))
-		addClassCount(&view.Classes, app.ClassifyItem(cp.Items[i]))
 	}
 	return view
-}
-
-// addClassCount adds one item to the four-class partition, so a record view
-// classifies each item once without a per-row class field.
-func addClassCount(counts *app.ItemClassCounts, class app.ItemClass) {
-	switch class {
-	case app.ItemClassPendingBackfill:
-		counts.PendingBackfill++
-	case app.ItemClassPendingReview:
-		counts.PendingReview++
-	case app.ItemClassWarning:
-		counts.Warning++
-	case app.ItemClassPassed:
-		counts.Passed++
-	}
 }
 
 // evidenceWasRemoved reports that the checkpoint holds items but cites no

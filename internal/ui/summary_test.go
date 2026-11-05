@@ -3,6 +3,7 @@ package ui
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -64,6 +65,7 @@ func TestRecordSummaryConclusionTable(t *testing.T) {
 	failed := &record.Termination{Kind: record.TerminationFailed, Code: "focusLost", Phase: record.PhaseCapturing}
 	pageFault := &record.Termination{Kind: record.TerminationFailed, Code: "pageUnverified", Phase: record.PhasePreparing}
 	cancelled := &record.Termination{Kind: record.TerminationCancelled, Code: "userCancelled", Phase: record.PhaseCapturing}
+	unknownFault := &record.Termination{Kind: record.TerminationFailed, Code: "unknownFault", Phase: record.PhaseCapturing}
 	truncatedAt3 := []record.PositionConclusion{
 		{Position: 1, Complete: true},
 		{Position: 2, Complete: true},
@@ -78,6 +80,8 @@ func TestRecordSummaryConclusionTable(t *testing.T) {
 		wantPrimary    summaryActionKind
 		wantPrimaryLbl string
 		wantSupplement string
+		wantSecondary  []summaryActionKind
+		wantNotes      string
 	}{
 		{
 			name: "complete and exportable",
@@ -86,6 +90,7 @@ func TestRecordSummaryConclusionTable(t *testing.T) {
 			wantTitle:      "扫全了，可以直接导出",
 			wantPrimary:    summaryActionExport,
 			wantPrimaryLbl: "导出…",
+			wantSecondary:  []summaryActionKind{summaryActionViewItems},
 		},
 		{
 			name: "complete with one pending review",
@@ -109,6 +114,8 @@ func TestRecordSummaryConclusionTable(t *testing.T) {
 			wantTitle:      "没有扫全：3 号位、5 号位不完整；排序未验证",
 			wantPrimary:    summaryActionExport,
 			wantPrimaryLbl: "导出…",
+			wantSecondary:  []summaryActionKind{summaryActionRescan},
+			wantNotes:      "其余 4 个号位完整",
 		},
 		{
 			name: "partial coverage with unverified sort only",
@@ -117,6 +124,7 @@ func TestRecordSummaryConclusionTable(t *testing.T) {
 			wantTitle:      "没有扫全：排序未验证",
 			wantPrimary:    summaryActionExport,
 			wantPrimaryLbl: "导出…",
+			wantSecondary:  []summaryActionKind{summaryActionRescan},
 		},
 		{
 			name: "manual stop counts completed positions",
@@ -125,6 +133,7 @@ func TestRecordSummaryConclusionTable(t *testing.T) {
 			wantTitle:      "已手动停止，扫描了 2 个号位",
 			wantPrimary:    summaryActionExport,
 			wantPrimaryLbl: "导出…",
+			wantSecondary:  []summaryActionKind{summaryActionRescan},
 		},
 		{
 			name: "fault names its cause and recovery",
@@ -134,6 +143,20 @@ func TestRecordSummaryConclusionTable(t *testing.T) {
 			wantPrimary:    summaryActionRescan,
 			wantPrimaryLbl: "修正后重新扫描",
 			wantSupplement: "怎么做：扫描时请不要切换应用。",
+			wantSecondary:  []summaryActionKind{summaryActionViewItems, summaryActionCopyDiagnostics},
+			wantNotes:      "已保存：1 件（1–2 号位完整，3 号位部分）",
+		},
+		{
+			name: "fault with pending review offers review as secondary",
+			view: summaryView(1, app.ItemClassCounts{PendingReview: 1},
+				shell(failed, record.CoveragePartial, record.SortVerificationUnverified, truncatedAt3)),
+			wantTitle:      "扫描中途停止：游戏失去了焦点",
+			wantPrimary:    summaryActionRescan,
+			wantPrimaryLbl: "修正后重新扫描",
+			wantSupplement: "怎么做：扫描时请不要切换应用。",
+			wantSecondary: []summaryActionKind{
+				summaryActionReview, summaryActionViewItems, summaryActionCopyDiagnostics,
+			},
 		},
 		{
 			name: "zero captured items return to the preparation check",
@@ -143,6 +166,26 @@ func TestRecordSummaryConclusionTable(t *testing.T) {
 			wantPrimary:    summaryActionPrepare,
 			wantPrimaryLbl: "回到准备检查",
 			wantSupplement: "怎么做：请打开驱动盘仓库页后重新开始扫描。",
+			wantSecondary:  []summaryActionKind{summaryActionCopyDiagnostics},
+		},
+		{
+			name: "zero captured after a normal end does not blame the page",
+			view: summaryView(0, app.ItemClassCounts{},
+				shell(completed, record.CoverageComplete, record.SortVerificationVerified, summaryCompletePositions())),
+			wantTitle:      "没有采集到任何驱动盘",
+			wantPrimary:    summaryActionPrepare,
+			wantPrimaryLbl: "回到准备检查",
+			wantSupplement: "回到准备检查后重新开始。",
+		},
+		{
+			name: "zero captured with an unknown fault does not leave an empty action",
+			view: summaryView(0, app.ItemClassCounts{},
+				shell(unknownFault, record.CoverageUnknown, record.SortVerificationUnknown, nil)),
+			wantTitle:      "没有采集到任何驱动盘",
+			wantPrimary:    summaryActionPrepare,
+			wantPrimaryLbl: "回到准备检查",
+			wantSupplement: "回到准备检查后重新开始。",
+			wantSecondary:  []summaryActionKind{summaryActionCopyDiagnostics},
 		},
 		{
 			name: "save failure is the primary state",
@@ -156,7 +199,31 @@ func TestRecordSummaryConclusionTable(t *testing.T) {
 			wantTitle:      "扫描结果还没有保存",
 			wantPrimary:    summaryActionRetrySave,
 			wantPrimaryLbl: "重试保存",
-			wantSupplement: "保存失败：磁盘已满",
+			wantSupplement: "保存失败，请重试",
+			wantSecondary:  []summaryActionKind{summaryActionViewItems},
+		},
+		{
+			name: "save failure wins over zero captured items",
+			view: func() *RecordView {
+				view := summaryView(0, app.ItemClassCounts{},
+					shell(pageFault, record.CoverageUnknown, record.SortVerificationUnverified, nil))
+				view.Live = true
+				return view
+			}(),
+			snap:           app.Snapshot{SaveError: "磁盘已满"},
+			wantTitle:      "扫描结果还没有保存",
+			wantPrimary:    summaryActionRetrySave,
+			wantPrimaryLbl: "重试保存",
+			wantSupplement: "保存失败，请重试",
+		},
+		{
+			name: "pending review and backfill both appear",
+			view: summaryView(3, app.ItemClassCounts{PendingReview: 1, PendingBackfill: 1, Warning: 1},
+				shell(completed, record.CoverageComplete, record.SortVerificationVerified, summaryCompletePositions())),
+			wantTitle:      "扫全了，还有 1 件待校对、1 件待补录",
+			wantPrimary:    summaryActionReview,
+			wantPrimaryLbl: "校对 1 件",
+			wantSecondary:  []summaryActionKind{summaryActionBackfill, summaryActionExport},
 		},
 		{
 			name: "unknown coverage is not rounded to complete",
@@ -181,6 +248,16 @@ func TestRecordSummaryConclusionTable(t *testing.T) {
 			}
 			if !strings.Contains(got.Supplement, tc.wantSupplement) {
 				t.Errorf("supplement = %q, want it to contain %q", got.Supplement, tc.wantSupplement)
+			}
+			if tc.wantNotes != "" && !strings.Contains(strings.Join(got.Notes, "\n"), tc.wantNotes) {
+				t.Errorf("notes = %q, want them to contain %q", got.Notes, tc.wantNotes)
+			}
+			var gotSecondary []summaryActionKind
+			for _, action := range got.Secondary {
+				gotSecondary = append(gotSecondary, action.Kind)
+			}
+			if !slices.Equal(gotSecondary, tc.wantSecondary) {
+				t.Errorf("secondary = %v, want %v", gotSecondary, tc.wantSecondary)
 			}
 		})
 	}
@@ -272,6 +349,12 @@ func TestViewSummaryCountsOpenFilteredItems(t *testing.T) {
 	if !tt.HasText("扫全了，还有 1 件待校对、1 件待补录") {
 		t.Fatalf("the four-class conclusion is missing: %q", tt.Texts())
 	}
+	if !tt.HasText("覆盖：全部") {
+		t.Fatalf("the header does not use the 09 §5.2 coverage word: %q", tt.Texts())
+	}
+	if tt.HasText("失败 0 件") {
+		t.Fatalf("the summary still repeats the old export count line: %q", tt.Texts())
+	}
 	cases := []struct {
 		cell   string
 		filter resultFilter
@@ -327,6 +410,50 @@ func TestSummaryDisclosuresFollowTheOpenRecord(t *testing.T) {
 	}
 }
 
+// TestViewSummaryCountClearsItemBrowserFilters checks that a count cell does
+// not inherit a search or set/slot filter that would hide the class it
+// promises to open.
+func TestViewSummaryCountClearsItemBrowserFilters(t *testing.T) {
+	m, q, tt, _ := openSummaryRecord(t, summaryFourClassRecord(t),
+		Config{DirectExportSaver: &fakeDirectExportSaver{}}, 1180, 760)
+	m.search = "不存在的件"
+	m.setFilter = "不存在的套装"
+	m.slotFilter = "不存在的号位"
+	tt.Frame()
+
+	if err := tt.Click("待校对 ›"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
+	if m.search != "" || m.setFilter != "" || m.slotFilter != "" {
+		t.Fatalf("count click kept item filters: search=%q set=%q slot=%q", m.search, m.setFilter, m.slotFilter)
+	}
+	if m.filter != resultFilterPending || m.recordTab != recordTabItems {
+		t.Fatalf("count click opened tab %v filter %v", m.recordTab, m.filter)
+	}
+	if got := selectedSummaryClass(t, m); got != app.ItemClassPendingReview {
+		t.Fatalf("count click selected class %q", got)
+	}
+}
+
+// TestSummaryAttentionCell pins the wireframe 05 text-plus-border rule: only
+// the pending classes with a non-zero count get the strong border.
+func TestSummaryAttentionCell(t *testing.T) {
+	m := &Model{}
+	if !m.summaryCellAttention(app.ItemClassPendingReview, app.ItemClassCounts{PendingReview: 1}) {
+		t.Fatal("pending review with items is not marked")
+	}
+	if !m.summaryCellAttention(app.ItemClassPendingBackfill, app.ItemClassCounts{PendingBackfill: 1}) {
+		t.Fatal("pending backfill with items is not marked")
+	}
+	if m.summaryCellAttention(app.ItemClassWarning, app.ItemClassCounts{Warning: 1}) {
+		t.Fatal("exportable warning is marked as needing work")
+	}
+	if m.summaryCellAttention(app.ItemClassPassed, app.ItemClassCounts{Passed: 1}) {
+		t.Fatal("passed is marked as needing work")
+	}
+}
+
 // selectedSummaryClass classifies the item the item browser selected.
 func selectedSummaryClass(t *testing.T, m *Model) app.ItemClass {
 	t.Helper()
@@ -362,8 +489,11 @@ func TestViewSummarySaveFailureRetries(t *testing.T) {
 	m.openRecordWorkspace()
 	tt.Frame()
 
-	if !tt.HasText("扫描结果还没有保存") || !tt.HasText("保存失败：磁盘已满") {
+	if !tt.HasText("扫描结果还没有保存") || !tt.HasText("保存失败，请重试。若仍然失败，请检查磁盘空间和权限。") {
 		t.Fatalf("the save failure is not the summary's conclusion: %q", tt.Texts())
+	}
+	if tt.HasText("磁盘已满") {
+		t.Fatalf("the raw save error leaked into the page-level conclusion: %q", tt.Texts())
 	}
 	if err := tt.Click("重试保存"); err != nil {
 		t.Fatal(err)

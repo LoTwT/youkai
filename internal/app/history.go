@@ -188,7 +188,7 @@ func historySessionSummary(info record.RecordInfo, cp *record.Checkpoint, active
 	}
 	if ledger, known := cp.Session.PositionConclusions(); known {
 		entry.IncompletePositionsKnown = true
-		entry.PositionOutcomes = positionOutcomes(ledger.Positions)
+		entry.PositionOutcomes = PositionOutcomes(ledger.Positions)
 		for _, outcome := range entry.PositionOutcomes {
 			if outcome.State == PositionOutcomeDegraded {
 				entry.IncompletePositions++
@@ -198,11 +198,22 @@ func historySessionSummary(info record.RecordInfo, cp *record.Checkpoint, active
 	return entry
 }
 
-// positionOutcomes expands the ledger into all six positions. A missing
+// PositionOutcomesOf expands a session's position ledger into all six
+// positions. It is the one expansion used by the records list and the
+// summary, so both count incomplete positions the same way.
+func PositionOutcomesOf(shell record.SessionShell) ([]PositionOutcome, bool) {
+	ledger, known := shell.PositionConclusions()
+	if !known {
+		return nil, false
+	}
+	return PositionOutcomes(ledger.Positions), true
+}
+
+// PositionOutcomes expands the ledger into all six positions. A missing
 // entry was never reached; a present incomplete entry with a position-level
 // cause is degraded, and one without is a position the session-fatal end
 // truncated. The ledger's storage order does not matter.
-func positionOutcomes(positions []record.PositionConclusion) []PositionOutcome {
+func PositionOutcomes(positions []record.PositionConclusion) []PositionOutcome {
 	reached := make(map[int]record.PositionConclusion, len(positions))
 	for _, p := range positions {
 		reached[p.Position] = p

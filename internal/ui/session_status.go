@@ -19,7 +19,7 @@ import (
 // positions; a record without scope detail simply shows the coverage
 // conclusion.
 func incompletePositionsText(shell record.SessionShell) string {
-	outcomes, known := summaryPositionOutcomes(shell)
+	outcomes, known := app.PositionOutcomesOf(shell)
 	if !known {
 		return ""
 	}

@@ -57,8 +57,11 @@ func (a summaryAction) disabled() bool { return a.DisabledReason != "" }
 type summaryConclusion struct {
 	Title      string
 	Supplement string
-	Primary    summaryAction
-	Secondary  []summaryAction
+	// Notes carry facts the title and counts do not: the incomplete slots
+	// for a partial coverage, or how much a fault saved.
+	Notes     []string
+	Primary   summaryAction
+	Secondary []summaryAction
 }
 
 // recordSummary renders the opened record's summary view. The conclusion,
@@ -86,7 +89,7 @@ func (m *Model) recordSummary(c *ui.Context, t *ui.Theme) {
 		m.summaryCountsGrid(c, t)
 		m.summaryDetailsArea(c, t)
 		if len(m.rec.Rows) > 0 {
-			m.exportArea(c, t)
+			m.summaryExportArea(c, t)
 		}
 	}
 
@@ -132,6 +135,9 @@ func (m *Model) summaryConclusionArea(c *ui.Context, t *ui.Theme, conclusion sum
 		ui.Text(c, conclusion.Title).FontSize(t.FontSize * 1.7).FontWeight(600)
 		if conclusion.Supplement != "" {
 			ui.Text(c, conclusion.Supplement).TextColor(t.TextMuted)
+		}
+		for _, note := range conclusion.Notes {
+			ui.Text(c, note).TextColor(t.TextMuted)
 		}
 		if withActions {
 			m.summaryActions(c, t, conclusion)
@@ -214,6 +220,12 @@ func (m *Model) openSummaryClass(class app.ItemClass) {
 	}
 	m.recordTab = recordTabItems
 	m.resultsDetail = false
+	// The item browser remembers search and set/slot filters across visits.
+	// A count cell promises the class's first item, so those additional
+	// filters must not hide it.
+	m.search = ""
+	m.setFilter = ""
+	m.slotFilter = ""
 	m.setResultFilter(filter)
 	if class == "" {
 		m.settleResultSelection()
@@ -261,11 +273,11 @@ func (m *Model) selectSummaryClass(class app.ItemClass) bool {
 	return false
 }
 
-// summaryCounts is the four-class partition the count cells show. The export
-// snapshot is authoritative for the current revision. A record whose export
-// cannot be built falls back to classifying the loaded checkpoint; the
-// summary is the only caller, so that pass runs only while the export
-// snapshot is missing.
+// summaryCounts is the four-class partition the count cells and the
+// workspace header show. The export snapshot is authoritative for the
+// current revision. A record whose export cannot be built falls back to
+// classifying the loaded checkpoint, so that pass runs only while the
+// export snapshot is missing.
 func (m *Model) summaryCounts() app.ItemClassCounts {
 	if m.exportData != nil {
 		return m.exportData.Summary.Counts
@@ -299,7 +311,7 @@ func (m *Model) summaryCountsGrid(c *ui.Context, t *ui.Theme) {
 		width := m.summaryCountCellWidth(t, 4)
 		ui.Row(c).Gap(t.Space(2)).Children(func() {
 			for _, cell := range cells {
-				m.summaryCountCell(c, t, width, cell.label, cell.count, cell.class)
+				m.summaryCountCell(c, t, width, cell.label, cell.count, cell.class, m.summaryCellAttention(cell.class, counts))
 			}
 		})
 		return
@@ -308,7 +320,7 @@ func (m *Model) summaryCountsGrid(c *ui.Context, t *ui.Theme) {
 	for i := 0; i < len(cells); i += 2 {
 		ui.Row(c).Gap(t.Space(2)).Children(func() {
 			for _, cell := range cells[i:min(i+2, len(cells))] {
-				m.summaryCountCell(c, t, width, cell.label, cell.count, cell.class)
+				m.summaryCountCell(c, t, width, cell.label, cell.count, cell.class, m.summaryCellAttention(cell.class, counts))
 			}
 		})
 	}
@@ -332,15 +344,19 @@ func (m *Model) summaryCountCellWidth(t *ui.Theme, columns int) float32 {
 // non-zero count carries "›" so the cell reads as a way into the item
 // browser even without color; a zero count stays plain but still opens the
 // filtered empty view.
-func (m *Model) summaryCountCell(c *ui.Context, t *ui.Theme, width float32, label string, count int64, class app.ItemClass) {
+func (m *Model) summaryCountCell(c *ui.Context, t *ui.Theme, width float32, label string, count int64, class app.ItemClass, attention bool) {
 	_, tok := themeWithTokens(t, c.Preferences())
 	display := label
 	if count > 0 {
 		display += " ›"
 	}
+	border, borderWidth := tok.BorderDefault, float32(1)
+	if attention {
+		border, borderWidth = tok.BorderStrong, 2
+	}
 	cell := ui.Button(c, "").Label(fmt.Sprintf("%s，%s 件", label, formatCount(count))).
 		Width(width).Padding(t.Space(2), t.Space(2.5)).
-		Background(tok.SurfaceCard).Border(1, tok.BorderDefault).Radius(t.Space(1.5))
+		Background(tok.SurfaceCard).Border(borderWidth, border).Radius(t.Space(1.5))
 	cell.Children(func() {
 		ui.Column(c).FillWidth().AlignItems(ui.Start).Gap(t.Space(0.5)).Children(func() {
 			ui.Text(c, formatCount(count)).FontSize(t.FontSize * 1.5).FontWeight(600)
@@ -349,6 +365,20 @@ func (m *Model) summaryCountCell(c *ui.Context, t *ui.Theme, width float32, labe
 	})
 	if cell.Clicked() {
 		m.openSummaryClass(class)
+	}
+}
+
+// summaryCellAttention marks the classes that still need a person (待校对
+// and 待补录) with the stronger border from wireframe 05, so the distinction
+// does not rely on color alone.
+func (m *Model) summaryCellAttention(class app.ItemClass, counts app.ItemClassCounts) bool {
+	switch class {
+	case app.ItemClassPendingReview:
+		return counts.PendingReview > 0
+	case app.ItemClassPendingBackfill:
+		return counts.PendingBackfill > 0
+	default:
+		return false
 	}
 }
 
@@ -395,7 +425,7 @@ func (m *Model) summaryCoverageLine() string {
 // cannot list the slots instead of inventing six complete ones.
 func (m *Model) summaryPositions(c *ui.Context, t *ui.Theme) {
 	_, tok := themeWithTokens(t, c.Preferences())
-	outcomes, known := summaryPositionOutcomes(m.rec.Shell)
+	outcomes, known := app.PositionOutcomesOf(m.rec.Shell)
 	if !known {
 		ui.Text(c, "号位：记录没有保存号位结论，无法列出").TextColor(tok.TextMuted)
 		return
@@ -436,39 +466,6 @@ func summaryPositionText(outcome app.PositionOutcome) string {
 	default:
 		return fmt.Sprintf("%d 号位：未扫描", outcome.Position)
 	}
-}
-
-// summaryPositionOutcomes expands the session's position ledger to all six
-// slots, using the same state vocabulary as app.HistoryRecord.PositionOutcomes
-// so the summary and the records list cannot count different positions as
-// incomplete. A slot absent from the ledger was never reached.
-func summaryPositionOutcomes(shell record.SessionShell) ([]app.PositionOutcome, bool) {
-	ledger, known := shell.PositionConclusions()
-	if !known {
-		return nil, false
-	}
-	reached := make(map[int]record.PositionConclusion, len(ledger.Positions))
-	for _, p := range ledger.Positions {
-		reached[p.Position] = p
-	}
-	outcomes := make([]app.PositionOutcome, 0, record.PositionCount)
-	for position := 1; position <= record.PositionCount; position++ {
-		outcome := app.PositionOutcome{Position: position, State: app.PositionOutcomeNotReached}
-		if p, ok := reached[position]; ok {
-			switch {
-			case p.Complete:
-				outcome.State = app.PositionOutcomeComplete
-			case p.Degraded():
-				outcome.State = app.PositionOutcomeDegraded
-				outcome.Stage = p.Stage
-				outcome.ReasonCode = p.ReasonCode
-			default:
-				outcome.State = app.PositionOutcomeTruncated
-			}
-		}
-		outcomes = append(outcomes, outcome)
-	}
-	return outcomes, true
 }
 
 // summaryCountLine is the detail area's count breakdown: captured,
@@ -771,12 +768,12 @@ func (m *Model) recordSummaryConclusion() summaryConclusion {
 		if m.rec != nil && len(m.rec.Rows) > 0 {
 			secondary = append(secondary, summaryAction{
 				Kind:  summaryActionViewItems,
-				Label: fmt.Sprintf("查看已保存的 %s 件", formatCount(int64(len(m.rec.Rows)))),
+				Label: fmt.Sprintf("查看本次采集的 %s 件", formatCount(int64(len(m.rec.Rows)))),
 			})
 		}
 		return summaryConclusion{
 			Title:      "扫描结果还没有保存",
-			Supplement: "保存失败：" + m.snap.SaveError,
+			Supplement: "保存失败，请重试。若仍然失败，请检查磁盘空间和权限。",
 			Primary:    summaryAction{Kind: summaryActionRetrySave, Label: "重试保存"},
 			Secondary:  secondary,
 		}
@@ -795,7 +792,7 @@ func (m *Model) recordSummaryConclusion() summaryConclusion {
 	if term != nil {
 		switch term.Kind {
 		case record.TerminationFailed:
-			return m.faultConclusion()
+			return m.faultConclusion(counts)
 		case record.TerminationInterrupted:
 			return m.interruptedConclusion(counts)
 		case record.TerminationCancelled:
@@ -867,37 +864,45 @@ func summaryCompletePendingTitle(counts app.ItemClassCounts) string {
 // known, the unverified sort. A partial record whose slots cannot be listed
 // says "覆盖不完整" rather than inventing names.
 func (m *Model) partialCoverageConclusion(counts app.ItemClassCounts) summaryConclusion {
+	title, notes := m.partialCoverageTitleAndNotes()
 	return summaryConclusion{
-		Title:     m.partialCoverageTitle(),
+		Title:     title,
+		Notes:     notes,
 		Primary:   m.pendingPrimary(counts),
 		Secondary: append(m.pendingSecondary(counts, false), m.rescanAction()),
 	}
 }
 
-// partialCoverageTitle is "没有扫全：3 号位、5 号位不完整" plus "；排序未验证"
-// when the sort was known and not verified. It never says "排序不一致".
-func (m *Model) partialCoverageTitle() string {
-	outcomes, known := summaryPositionOutcomes(m.rec.Shell)
+// partialCoverageTitleAndNotes builds "没有扫全：3 号位、5 号位不完整" plus
+// "；排序未验证" when the sort was known and not verified, and lists the
+// incomplete slots under the title as 08 §2.1 and wireframe 06 require. A
+// record whose slots cannot be listed says "覆盖不完整" instead of inventing
+// names. It never says "排序不一致".
+func (m *Model) partialCoverageTitleAndNotes() (string, []string) {
+	outcomes, known := app.PositionOutcomesOf(m.rec.Shell)
 	var incomplete []int
+	var notes []string
+	complete := 0
 	if known {
 		for _, outcome := range outcomes {
-			if outcome.State != app.PositionOutcomeComplete {
-				incomplete = append(incomplete, outcome.Position)
+			if outcome.State == app.PositionOutcomeComplete {
+				complete++
+				continue
 			}
+			incomplete = append(incomplete, outcome.Position)
+			notes = append(notes, summaryPositionText(outcome))
+		}
+		if len(incomplete) > 0 && complete > 0 {
+			notes = append(notes, fmt.Sprintf("其余 %d 个号位完整", complete))
 		}
 	}
-	title := ""
-	switch {
-	case len(incomplete) > 0:
+	title := "没有扫全：覆盖不完整"
+	if len(incomplete) > 0 {
 		names := make([]string, len(incomplete))
 		for i, position := range incomplete {
 			names[i] = fmt.Sprintf("%d 号位", position)
 		}
 		title = "没有扫全：" + strings.Join(names, "、") + "不完整"
-	case known:
-		title = "没有扫全：覆盖不完整"
-	default:
-		title = "没有扫全：覆盖不完整"
 	}
 	if sort, sortKnown := m.rec.Shell.SortVerification(); sortKnown &&
 		sort != record.SortVerificationVerified {
@@ -907,7 +912,7 @@ func (m *Model) partialCoverageTitle() string {
 			title = "没有扫全：排序未验证"
 		}
 	}
-	return title
+	return title, notes
 }
 
 // manualStopConclusion is the user-stopped ending. The count is the number of
@@ -915,7 +920,7 @@ func (m *Model) partialCoverageTitle() string {
 // position ledger omits the number rather than claiming zero.
 func (m *Model) manualStopConclusion(counts app.ItemClassCounts) summaryConclusion {
 	title := "已手动停止"
-	if outcomes, known := summaryPositionOutcomes(m.rec.Shell); known {
+	if outcomes, known := app.PositionOutcomesOf(m.rec.Shell); known {
 		complete := 0
 		for _, outcome := range outcomes {
 			if outcome.State == app.PositionOutcomeComplete {
@@ -947,9 +952,10 @@ func (m *Model) interruptedConclusion(counts app.ItemClassCounts) summaryConclus
 }
 
 // faultConclusion names the fault's Chinese cause and its recovery action.
-// The code itself stays in the diagnostics section; "查看已采集" and "复制
-// 诊断信息" are the secondary paths of 08 §2.1.
-func (m *Model) faultConclusion() summaryConclusion {
+// The code itself stays in the diagnostics section; a fault with pending
+// items offers review as a secondary path and keeps "查看已采集" and "复制
+// 诊断信息" beside it (08 §2 ③, §2.1).
+func (m *Model) faultConclusion(counts app.ItemClassCounts) summaryConclusion {
 	term := m.rec.Shell.Termination
 	title := "扫描中途停止：原因未知"
 	supplement := ""
@@ -962,18 +968,81 @@ func (m *Model) faultConclusion() summaryConclusion {
 		}
 	}
 	secondary := []summaryAction{}
+	if counts.Pending() > 0 {
+		secondary = append(secondary, m.pendingPrimary(counts))
+	}
 	if len(m.rec.Rows) > 0 {
 		secondary = append(secondary, m.viewItemsAction())
 	}
 	if term != nil && term.Code != "" {
 		secondary = append(secondary, summaryAction{Kind: summaryActionCopyDiagnostics, Label: "复制诊断信息"})
 	}
+	notes := []string{}
+	if saved := m.faultSavedLine(); saved != "" {
+		notes = append(notes, saved)
+	}
 	return summaryConclusion{
 		Title:      title,
 		Supplement: supplement,
+		Notes:      notes,
 		Primary:    summaryAction{Kind: summaryActionRescan, Label: "修正后重新扫描"},
 		Secondary:  secondary,
 	}
+}
+
+// faultSavedLine states how much a faulted record saved and which slots the
+// saved result covers, using the same position expansion as the details.
+func (m *Model) faultSavedLine() string {
+	if len(m.rec.Rows) == 0 {
+		return ""
+	}
+	saved := "已保存：" + formatCount(int64(len(m.rec.Rows))) + " 件"
+	outcomes, known := app.PositionOutcomesOf(m.rec.Shell)
+	if !known {
+		return saved
+	}
+	var complete, partial []int
+	for _, outcome := range outcomes {
+		switch outcome.State {
+		case app.PositionOutcomeComplete:
+			complete = append(complete, outcome.Position)
+		case app.PositionOutcomeDegraded, app.PositionOutcomeTruncated:
+			partial = append(partial, outcome.Position)
+		}
+	}
+	var parts []string
+	if len(complete) > 0 {
+		parts = append(parts, summaryPositionRanges(complete)+" 号位完整")
+	}
+	if len(partial) > 0 {
+		names := make([]string, len(partial))
+		for i, position := range partial {
+			names[i] = fmt.Sprintf("%d", position)
+		}
+		parts = append(parts, strings.Join(names, "、")+" 号位部分")
+	}
+	if len(parts) > 0 {
+		saved += "（" + strings.Join(parts, "，") + "）"
+	}
+	return saved
+}
+
+// summaryPositionRanges compresses sorted positions into "1–3、5" form.
+func summaryPositionRanges(positions []int) string {
+	var parts []string
+	for i := 0; i < len(positions); {
+		j := i
+		for j+1 < len(positions) && positions[j+1] == positions[j]+1 {
+			j++
+		}
+		if i == j {
+			parts = append(parts, fmt.Sprintf("%d", positions[i]))
+		} else {
+			parts = append(parts, fmt.Sprintf("%d–%d", positions[i], positions[j]))
+		}
+		i = j + 1
+	}
+	return strings.Join(parts, "、")
 }
 
 // emptyRecordConclusion is the zero-captured-item ending. Its main action is
@@ -993,7 +1062,9 @@ func (m *Model) emptyRecordConclusion() summaryConclusion {
 	switch {
 	case term != nil && term.Kind == record.TerminationFailed && cause != "":
 		title += "：" + cause
-		supplement = "怎么做：" + action
+		if action != "" {
+			supplement = "怎么做：" + action
+		}
 	case term != nil && term.Kind == record.TerminationCancelled:
 		title = "已手动停止，没有采集到任何驱动盘"
 		supplement = "回到准备检查后重新开始。"
@@ -1001,7 +1072,7 @@ func (m *Model) emptyRecordConclusion() summaryConclusion {
 		title = "扫描中断，没有采集到任何驱动盘"
 		supplement = "请重新开始扫描。"
 	default:
-		supplement = "请打开驱动盘仓库页后重新开始。"
+		supplement = "回到准备检查后重新开始。"
 	}
 	secondary := []summaryAction{}
 	if term != nil && term.Kind == record.TerminationFailed && term.Code != "" {
