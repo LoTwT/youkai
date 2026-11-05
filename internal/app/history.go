@@ -171,7 +171,7 @@ func historySessionSummary(info record.RecordInfo, cp *record.Checkpoint, active
 		ended := *cp.Session.EndedAt
 		entry.EndedAt = &ended
 	}
-	entry.Interrupted = info.ID != activeID && interruptedSession(cp.Session.Termination)
+	entry.Interrupted = info.ID != activeID && InterruptedSession(cp.Session.Termination)
 	entry.Client = cp.Session.Client
 	entry.CapturedCount = cp.Session.CapturedCount
 	entry.Coverage = cp.Session.Coverage.Status
@@ -251,11 +251,12 @@ func (s *Service) activeRecordID() string {
 	return string(s.active.id)
 }
 
-// interruptedSession reports whether a checkpoint represents a session
+// InterruptedSession reports whether a checkpoint represents a session
 // that never recorded a clean end. An absent termination is exactly what
 // recovery marks interrupted; an explicit interrupted termination is the
-// same state written down.
-func interruptedSession(termination *record.Termination) bool {
+// same state written down. The records list and the summary share this
+// definition so the same record cannot get two endings.
+func InterruptedSession(termination *record.Termination) bool {
 	return termination == nil || termination.Kind == record.TerminationInterrupted
 }
 

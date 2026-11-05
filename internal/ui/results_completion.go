@@ -152,7 +152,7 @@ func (m *Model) completionCoverageText() string {
 	}
 	switch status {
 	case record.CoverageComplete:
-		return "覆盖：完整"
+		return "覆盖：全部"
 	case record.CoveragePartial:
 		text := "覆盖：部分覆盖"
 		if summary != nil && summary.ExpectedCount != nil && *summary.ExpectedCount > 0 {

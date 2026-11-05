@@ -83,7 +83,9 @@ type recordConclusionInput struct {
 // need. The order follows 08 §2: save failure, zero items, fault, then the
 // remaining endings. Running is not an ending, but it must precede the
 // zero-item state so a live scan that has not collected anything yet is not
-// described as empty.
+// described as empty. Save failure must precede running: when the final save
+// fails the service still reports Busy, so both facts are present and the
+// failure is the action the user needs.
 type recordOutcome struct {
 	Kind  recordOutcomeKind
 	Input recordConclusionInput
@@ -112,6 +114,14 @@ func recordOutcomeFor(in recordConclusionInput) recordOutcome {
 		kind = recordOutcomeCompleted
 	}
 	return recordOutcome{Kind: kind, Input: in}
+}
+
+// recordConclusionInterrupted applies one definition to both surfaces: a
+// non-live session with no clean termination counts as interrupted even when
+// recovery did not mark any individual item. The list and summary pass their
+// own live/item facts but cannot disagree about the ending.
+func recordConclusionInterrupted(term *record.Termination, itemInterrupted, live bool) bool {
+	return itemInterrupted || (!live && app.InterruptedSession(term))
 }
 
 // recordConclusionFor states the records list's conclusion. The list keeps
@@ -195,9 +205,6 @@ func listFaultConclusion(in recordConclusionInput) recordConclusion {
 // count that still lets the record export.
 func completedRecordConclusion(in recordConclusionInput) recordConclusion {
 	counts := in.Counts
-	if in.CapturedCount == 0 && counts.Total() == 0 {
-		return recordConclusion{text: "正常结束 · 没有采集到驱动盘", tone: recordToneWarning}
-	}
 	switch in.Coverage {
 	case record.CoverageComplete:
 		// Assessed below.
@@ -215,7 +222,7 @@ func completedRecordConclusion(in recordConclusionInput) recordConclusion {
 	if counts.Total() == 0 {
 		// A record from before the four-class counts: the ending is all it
 		// can honestly say.
-		return recordConclusion{text: "正常结束 · 覆盖：完整"}
+		return recordConclusion{text: "正常结束 · 覆盖：全部"}
 	}
 	if pending := counts.Pending(); pending > 0 {
 		switch {

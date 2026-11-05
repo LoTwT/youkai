@@ -55,6 +55,9 @@ func (a summaryAction) disabled() bool { return a.DisabledReason != "" }
 // supplement adds a cause or a recovery step the counts and buttons do not
 // carry, and Primary is the first hit of 08 §2's ①–⑤ priority.
 type summaryConclusion struct {
+	// Eyebrow is the small ending label above the title (wireframe 05's
+	// "正常结束"); it stays empty when the title already names the ending.
+	Eyebrow    string
 	Title      string
 	Supplement string
 	// Notes carry facts the title and counts do not: the incomplete slots
@@ -132,6 +135,9 @@ func (m *Model) summaryNotices(c *ui.Context, t *ui.Theme) {
 // supplement and (at full height) the action row.
 func (m *Model) summaryConclusionArea(c *ui.Context, t *ui.Theme, conclusion summaryConclusion, withActions bool) {
 	ui.Column(c).Gap(t.Space(1)).Children(func() {
+		if conclusion.Eyebrow != "" {
+			ui.Text(c, conclusion.Eyebrow).TextColor(t.TextMuted).FontSize(t.FontSize * 0.8)
+		}
 		ui.Text(c, conclusion.Title).FontSize(t.FontSize * 1.7).FontWeight(600)
 		if conclusion.Supplement != "" {
 			ui.Text(c, conclusion.Supplement).TextColor(t.TextMuted)
@@ -273,11 +279,12 @@ func (m *Model) selectSummaryClass(class app.ItemClass) bool {
 	return false
 }
 
-// summaryCounts is the four-class partition the count cells and the
-// workspace header show. The export snapshot is authoritative for the
-// current revision. A record whose export cannot be built falls back to
-// classifying the loaded checkpoint, so that pass runs only while the
-// export snapshot is missing.
+// summaryCounts is the shared four-class partition for the summary's count
+// cells, the workspace header and the pending action labels. The export
+// snapshot is authoritative for the current revision. A record whose export
+// cannot be built falls back to classifying the loaded checkpoint, so that
+// pass runs only while the export snapshot is missing. PR-14b's per-item
+// segments must read this function instead of adding a second counting rule.
 func (m *Model) summaryCounts() app.ItemClassCounts {
 	if m.exportData != nil {
 		return m.exportData.Summary.Counts
@@ -761,6 +768,7 @@ func (m *Model) summaryUnreadable(c *ui.Context, t *ui.Theme) {
 // attached. recordSummaryWording is pure so one shared table can check the
 // list and summary wording from the same classification.
 type summaryWording struct {
+	Eyebrow    string
 	Title      string
 	Supplement string
 	Notes      []string
@@ -791,7 +799,7 @@ func (m *Model) summaryConclusionInput() recordConclusionInput {
 		Termination:              m.rec.Shell.Termination,
 		FailureParams:            m.rec.Shell.FailureParams,
 		Counts:                   counts,
-		Interrupted:              m.rec.Interrupted,
+		Interrupted:              recordConclusionInterrupted(m.rec.Shell.Termination, m.rec.Interrupted, m.rec.Live),
 		IncompletePositions:      incomplete,
 		IncompletePositionsKnown: outcomesKnown,
 		PositionOutcomes:         outcomes,
@@ -813,6 +821,7 @@ func (m *Model) recordSummaryConclusion() summaryConclusion {
 	wording := recordSummaryWording(out)
 	primary, secondary := m.summaryConclusionActions(out)
 	return summaryConclusion{
+		Eyebrow:    wording.Eyebrow,
 		Title:      wording.Title,
 		Supplement: wording.Supplement,
 		Notes:      wording.Notes,
@@ -847,7 +856,22 @@ func recordSummaryWording(out recordOutcome) summaryWording {
 		return faultWording(in)
 	case recordOutcomeCancelled:
 		return manualStopWording(in)
-	case recordOutcomeCompleted, recordOutcomeUnknown:
+	case recordOutcomeCompleted:
+		switch in.Coverage {
+		case record.CoveragePartial:
+			wording := partialCoverageWording(in)
+			wording.Eyebrow = "正常结束"
+			return wording
+		case record.CoverageComplete:
+			wording := completeCoverageWording(in)
+			wording.Eyebrow = "正常结束"
+			return wording
+		default:
+			wording := summaryWording{Title: "扫描结束，无法确认是否扫全"}
+			wording.Eyebrow = "正常结束"
+			return wording
+		}
+	case recordOutcomeUnknown:
 		switch in.Coverage {
 		case record.CoveragePartial:
 			return partialCoverageWording(in)

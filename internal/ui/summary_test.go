@@ -188,6 +188,41 @@ func TestRecordSummaryConclusionTable(t *testing.T) {
 			wantSecondary:  []summaryActionKind{summaryActionCopyDiagnostics},
 		},
 		{
+			name: "zero captured after a manual stop",
+			view: summaryView(0, app.ItemClassCounts{},
+				shell(cancelled, record.CoveragePartial, record.SortVerificationUnverified, truncatedAt3)),
+			wantTitle:      "已手动停止，没有采集到任何驱动盘",
+			wantPrimary:    summaryActionPrepare,
+			wantPrimaryLbl: "回到准备检查",
+			wantSupplement: "回到准备检查后重新开始。",
+		},
+		{
+			name: "interrupted record offers rescan",
+			view: func() *RecordView {
+				view := summaryView(1, app.ItemClassCounts{Passed: 1},
+					shell(nil, record.CoveragePartial, record.SortVerificationUnverified, truncatedAt3))
+				view.Interrupted = true
+				return view
+			}(),
+			wantTitle:      "扫描中断，只保存了部分结果",
+			wantPrimary:    summaryActionExport,
+			wantPrimaryLbl: "导出…",
+			wantSecondary:  []summaryActionKind{summaryActionViewItems, summaryActionRescan},
+		},
+		{
+			name: "scan still running returns to the scan page",
+			view: func() *RecordView {
+				view := summaryView(0, app.ItemClassCounts{},
+					shell(completed, record.CoverageComplete, record.SortVerificationVerified, summaryCompletePositions()))
+				view.Live = true
+				return view
+			}(),
+			snap:           app.Snapshot{Busy: true},
+			wantTitle:      "扫描还没有结束",
+			wantPrimary:    summaryActionPrepare,
+			wantPrimaryLbl: "返回扫描页",
+		},
+		{
 			name: "save failure is the primary state",
 			view: func() *RecordView {
 				view := summaryView(1, app.ItemClassCounts{Passed: 1},
@@ -195,7 +230,7 @@ func TestRecordSummaryConclusionTable(t *testing.T) {
 				view.Live = true
 				return view
 			}(),
-			snap:           app.Snapshot{SaveError: "磁盘已满"},
+			snap:           app.Snapshot{Busy: true, SaveError: "磁盘已满"},
 			wantTitle:      "扫描结果还没有保存",
 			wantPrimary:    summaryActionRetrySave,
 			wantPrimaryLbl: "重试保存",
@@ -210,11 +245,21 @@ func TestRecordSummaryConclusionTable(t *testing.T) {
 				view.Live = true
 				return view
 			}(),
-			snap:           app.Snapshot{SaveError: "磁盘已满"},
+			snap:           app.Snapshot{Busy: true, SaveError: "磁盘已满"},
 			wantTitle:      "扫描结果还没有保存",
 			wantPrimary:    summaryActionRetrySave,
 			wantPrimaryLbl: "重试保存",
 			wantSupplement: "保存失败，请重试",
+		},
+		{
+			name: "history record ignores the previous session save error",
+			view: summaryView(1, app.ItemClassCounts{Passed: 1},
+				shell(completed, record.CoverageComplete, record.SortVerificationVerified, summaryCompletePositions())),
+			snap:           app.Snapshot{Busy: true, SaveError: "磁盘已满"},
+			wantTitle:      "扫全了，可以直接导出",
+			wantPrimary:    summaryActionExport,
+			wantPrimaryLbl: "导出…",
+			wantSecondary:  []summaryActionKind{summaryActionViewItems},
 		},
 		{
 			name: "pending review and backfill both appear",
@@ -352,6 +397,9 @@ func TestViewSummaryCountsOpenFilteredItems(t *testing.T) {
 	if !tt.HasText("覆盖：全部") {
 		t.Fatalf("the header does not use the 09 §5.2 coverage word: %q", tt.Texts())
 	}
+	if !tt.HasText("正常结束") {
+		t.Fatalf("the normal-ending eyebrow is missing: %q", tt.Texts())
+	}
 	if tt.HasText("失败 0 件") {
 		t.Fatalf("the summary still repeats the old export count line: %q", tt.Texts())
 	}
@@ -484,7 +532,7 @@ func TestViewSummarySaveFailureRetries(t *testing.T) {
 
 	applyAndSettle(t, m, q, tt, snap("s1", 1, true, scan.PhaseCapturing,
 		scan.Counts{Captured: 1, Produced: 1}, 1, false, ""))
-	applyAndSettle(t, m, q, tt, snap("s1", 2, false, scan.PhaseEnded,
+	applyAndSettle(t, m, q, tt, snap("s1", 2, true, scan.PhaseEnded,
 		scan.Counts{Captured: 1, Produced: 1}, 1, false, "磁盘已满"))
 	m.openRecordWorkspace()
 	tt.Frame()
