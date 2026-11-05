@@ -477,6 +477,7 @@ func (m *Model) startEditRow(row *Row) {
 	m.edit.refresh()
 	m.navPrompt = nil
 	m.reviewErr = ""
+	m.reviewSaveFailed = false
 	m.lastAction = reviewSave
 }
 
@@ -529,6 +530,7 @@ func (m *Model) discardEdit() {
 	m.clearEdit()
 	m.navPrompt = nil
 	m.reviewErr = ""
+	m.reviewSaveFailed = false
 	m.reviewNotice = ""
 	m.lastAction = reviewSave
 	m.catchUpLive()
@@ -563,6 +565,7 @@ func (m *Model) runNavigation(req navigationRequest) {
 		if index := m.rec.RowOf(req.seq); index >= 0 {
 			m.selected = index
 			m.reviewErr = ""
+			m.reviewSaveFailed = false
 			m.reviewNotice = ""
 			m.pointFirstReviewField()
 		}
@@ -727,6 +730,7 @@ func (m *Model) submitReview(recordID string, seq, expectedRevision int64, data 
 	m.reviewSerial++
 	serial := m.reviewSerial
 	m.reviewSaving = true
+	m.reviewSaveFailed = false
 	m.reviewErr = ""
 	m.reviewNotice = ""
 	m.lastAction = action
@@ -766,6 +770,7 @@ func (m *Model) submitReview(recordID string, seq, expectedRevision int64, data 
 			}
 			m.navPrompt = nil
 			m.reviewErr = ""
+			m.reviewSaveFailed = false
 			switch action {
 			case reviewConfirmNext:
 				// The confirmed item stays in the pending list until the
@@ -826,6 +831,7 @@ func (m *Model) submitReview(recordID string, seq, expectedRevision int64, data 
 // handleReviewError keeps the input on a save failure and discards it on
 // a revision conflict, reloading the current revision instead.
 func (m *Model) handleReviewError(recordID string, err error) {
+	m.reviewSaveFailed = true
 	if errors.Is(err, record.ErrRevisionConflict) {
 		m.edit = nil
 		m.navPrompt = nil

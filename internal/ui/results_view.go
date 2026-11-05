@@ -188,7 +188,7 @@ func (m *Model) reviewListPane(c *ui.Context, t *ui.Theme, visible []int) {
 		ui.Column(c).Padding(reviewPanePaddingY, reviewPanePaddingX).Gap(t.Space(1)).
 			Children(func() {
 				m.resultsFilterBar(c, t)
-				m.resultsFacetFilters(c, t, 96)
+				m.resultsFacetFilters(c, t, reviewListWidth-2*reviewPanePaddingX)
 			})
 		ui.Divider(c)
 		if len(visible) == 0 {
@@ -412,7 +412,7 @@ func (m *Model) compactItemPopover(c *ui.Context, t *ui.Theme, visible []int) {
 	popover := ui.Popover(c, anchor, &m.compactListOpen, func() {
 		ui.Column(c).Width(300).Height(height).Gap(t.Space(1)).
 			Padding(t.Space(1)).Children(func() {
-			m.resultsFacetFilters(c, t, 116)
+			m.resultsFacetFilters(c, t, 276)
 			ui.Divider(c)
 			if len(visible) == 0 {
 				ui.Text(c, m.filteredEmptyText()).TextColor(t.TextMuted)
@@ -778,7 +778,7 @@ func (m *Model) reviewFormPane(c *ui.Context, t *ui.Theme, visible []int) {
 	// A zero pending queue is the finished review even when the list still
 	// shows the last confirmed row for this visit. The list keeps its place;
 	// the form states the conclusion and offers the export.
-	if m.filter == resultFilterPending && m.pendingItemsCount() == 0 {
+	if m.filter == resultFilterPending && m.reviewSettled() {
 		row = nil
 	}
 	ui.Column(c).Width(reviewFormWidth).Shrink(0).FillHeight().MinHeight(0).
@@ -812,7 +812,7 @@ func (m *Model) reviewFormPane(c *ui.Context, t *ui.Theme, visible []int) {
 // reviewEmptyForm is the form pane with no chosen item. Following the
 // design, an empty pending queue is a finished review, not a blank page.
 func (m *Model) reviewEmptyForm(c *ui.Context, t *ui.Theme, visible []int) {
-	if m.filter == resultFilterPending && m.pendingItemsCount() == 0 {
+	if m.filter == resultFilterPending && m.reviewSettled() {
 		counts := m.recordCounts()
 		ui.Text(c, "都处理完了").FontWeight(600)
 		if counts.ExportKnown {
@@ -866,8 +866,6 @@ func (m *Model) reviewFormHeader(c *ui.Context, t *ui.Theme, row *Row) {
 					m.saveEdit(m.lastAction, nil)
 				}
 			})
-			ui.Text(c, "输入已保留。").FontSize(t.FontSize * reviewHeaderSizeRatio).
-				TextColor(t.TextMuted)
 		})
 	}
 	if m.loading {
@@ -1019,16 +1017,16 @@ func (m *Model) reviewFieldControl(c *ui.Context, t *ui.Theme, row *Row, field F
 		ui.Row(c).Gap(t.Space(1)).AlignItems(ui.Center).Children(func() {
 			attribute := ui.Select(c, &draft.MainAttribute,
 				attributeChoices(attributeTextValue(draft.MainAttribute))).
-				Width(148).Disabled(m.reviewActionsBlocked()).Label("主词条类型")
+				Width(132).Shrink(1).Disabled(m.reviewActionsBlocked()).Label("主词条类型")
 			m.noteTextInputFocus(attribute)
 			value := m.noteTextInputFocus(ui.TextInput(c, &draft.MainValue).
-				Width(80).Placeholder("数值").Disabled(m.reviewActionsBlocked()).Label("主词条数值"))
+				Width(76).Shrink(1).Placeholder("数值").Disabled(m.reviewActionsBlocked()).Label("主词条数值"))
 			if m.focusReviewField == field {
 				value.Focus()
 			}
 			unit := ui.Select(c, &draft.MainUnit,
 				unitChoices(attributeTextValue(draft.MainAttribute), attributeTextValue(draft.MainUnit))).
-				Width(112).Disabled(m.reviewActionsBlocked()).Label("主词条单位")
+				Width(100).Shrink(1).Disabled(m.reviewActionsBlocked()).Label("主词条单位")
 			m.noteReviewControlFocus(field, attribute.FocusWithin() || value.FocusWithin() || unit.FocusWithin())
 		})
 	case FormFieldSubstats, FormFieldSubstat1, FormFieldSubstat2, FormFieldSubstat3, FormFieldSubstat4:

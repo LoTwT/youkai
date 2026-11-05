@@ -342,8 +342,14 @@ func TestReviewSaveFailureKeepsInput(t *testing.T) {
 	if m.edit == nil || m.edit.draft.Level != "11" {
 		t.Fatal("the failed save dropped the input")
 	}
-	if !tt.HasText("输入已保留。") {
+	if !tt.HasText("输入已保留，可重试。") {
 		t.Fatalf("the failure band is missing: %q", tt.Texts())
+	}
+	if !tt.HasText("保存失败") {
+		t.Fatalf("the title bar does not show the save failure: %q", tt.Texts())
+	}
+	if got := strings.Count(strings.Join(tt.Texts(), "\n"), "输入已保留"); got != 1 {
+		t.Fatalf("the failure band repeats the preserved-input note %d times: %q", got, tt.Texts())
 	}
 }
 
@@ -468,6 +474,10 @@ func TestReviewBackfillKeepsOriginalOutcome(t *testing.T) {
 	}
 	if m.pendingItemsCount() != 0 {
 		t.Fatalf("pending after completion = %d", m.pendingItemsCount())
+	}
+	if m.exportData == nil || m.recordClassCounts() != m.exportData.Summary.Counts {
+		t.Fatalf("class counts %+v do not match export summary %+v",
+			m.recordClassCounts(), m.exportData)
 	}
 }
 
@@ -992,5 +1002,181 @@ func TestZoomModeDropsDecodedCache(t *testing.T) {
 	tt.Frame()
 	if len(m.cache.entries) != 0 {
 		t.Fatalf("fit mode reused %d pixelated cache entries", len(m.cache.entries))
+	}
+}
+
+// TestRecordClassCountsMatchExportSummary pins the one four-class source:
+// built rows and the export snapshot must agree once both are ready.
+func TestRecordClassCountsMatchExportSummary(t *testing.T) {
+	m, _, tt := openResponsiveResults(t, responsiveResultRecord(t), 1180, 760)
+	tt.Frame()
+	if m.exportData == nil {
+		t.Fatal("the export snapshot is missing")
+	}
+	if got, want := m.recordClassCounts(), m.exportData.Summary.Counts; got != want {
+		t.Fatalf("recordClassCounts = %+v, export summary = %+v", got, want)
+	}
+}
+
+// TestRecordClassCountsFallsBackToClasses checks the pre-row fallback.
+func TestRecordClassCountsFallsBackToClasses(t *testing.T) {
+	want := app.ItemClassCounts{PendingBackfill: 2, PendingReview: 1, Warning: 3, Passed: 4}
+	m := &Model{rec: &RecordView{Classes: want}}
+	if got := m.recordClassCounts(); got != want {
+		t.Fatalf("recordClassCounts = %+v, want %+v", got, want)
+	}
+}
+
+// TestReviewCountsFollowBackfillState checks the status line and export
+// summary do not call an interpreted failed item failed.
+func TestReviewCountsFollowBackfillState(t *testing.T) {
+	backfill := func(quality record.Quality) record.ItemRecord {
+		item := reviewRowItem(t, 1, 15)
+		item.Status = record.StatusFailed
+		item.Failure = "识别超时"
+		item.Quality = quality
+		item.Revision = 1
+		return item
+	}
+
+	m, _, tt := openResponsiveResults(t, recovery(backfill(record.QualityNeedsReview)), 1180, 760)
+	tt.Frame()
+	if counts := m.recordCounts(); counts.Failed != 0 || counts.Pending != 1 || counts.Exportable != 0 {
+		t.Fatalf("saved backfill counts = %+v, want pending review only", counts)
+	}
+	if got := m.pendingText(); got != "待校对 1 件" {
+		t.Fatalf("saved backfill pending text = %q", got)
+	}
+	if got := m.exportSummaryText(); strings.Contains(got, "失败 1") {
+		t.Fatalf("saved backfill export summary counts a failure: %q", got)
+	}
+
+	m, _, tt = openResponsiveResults(t, recovery(backfill(record.QualityHumanConfirmed)), 1180, 760)
+	tt.Frame()
+	if counts := m.recordCounts(); counts.Failed != 0 || counts.Pending != 0 || counts.Exportable != 1 {
+		t.Fatalf("confirmed backfill counts = %+v, want one exportable", counts)
+	}
+	if got := m.pendingText(); got != "待校对 0 · 全部可导出" {
+		t.Fatalf("confirmed backfill pending text = %q", got)
+	}
+	if got := m.exportSummaryText(); strings.Contains(got, "失败 1") {
+		t.Fatalf("confirmed backfill export summary counts a failure: %q", got)
+	}
+}
+
+// TestWorkspaceSavedStateIncludesReviewSave checks the title bar follows a
+// revision save in flight and a failed revision save.
+func TestWorkspaceSavedStateIncludesReviewSave(t *testing.T) {
+	m, _, _ := openResponsiveResults(t, recovery(reviewRowItem(t, 1, 15)), 1180, 760)
+	m.reviewSaving = true
+	if _, _, saved := m.workspaceStatusTexts(); saved != "正在保存…" {
+		t.Fatalf("saving title = %q, want 正在保存…", saved)
+	}
+	m.reviewSaving = false
+	m.reviewSaveFailed = true
+	if _, _, saved := m.workspaceStatusTexts(); saved != "保存失败" {
+		t.Fatalf("failed title = %q, want 保存失败", saved)
+	}
+}
+
+// TestLiveScanDoesNotShowFinishedReview checks the completion surface waits
+// for the live scan to end and save.
+func TestLiveScanDoesNotShowFinishedReview(t *testing.T) {
+	m, _, tt := openResponsiveResults(t, recovery(confirmedReviewItem(t, 1, 12)), 1180, 760)
+	m.rec.Live = true
+	m.snap = snap("rec", 1, true, scan.PhaseCapturing, scan.Counts{Captured: 1, Produced: 1}, 1, false, "")
+	tt.Frame()
+	if tt.HasText("都处理完了") {
+		t.Fatalf("a running scan shows the finished review: %q", tt.Texts())
+	}
+}
+
+// TestReviewFacetFilterFitsList checks the two standard facets stack inside
+// the 240-DIP list column instead of clipping the slot picker.
+func TestReviewFacetFilterFitsList(t *testing.T) {
+	_, _, tt := openResponsiveResults(t, pendingReviewRecord(t), 1180, 760)
+	tt.Frame()
+	set, ok := tt.Find("全部套装")
+	if !ok {
+		t.Fatalf("the set facet is missing: %q", tt.Texts())
+	}
+	slot, ok := tt.Find("全部槽位")
+	if !ok {
+		t.Fatalf("the slot facet is missing: %q", tt.Texts())
+	}
+	const listRight = float32(navRailWidth + reviewPagePadding + reviewListWidth)
+	if set.X+set.W > listRight || slot.X+slot.W > listRight {
+		t.Fatalf("a facet exceeds the list column: set %+v slot %+v right %.1f", set, slot, listRight)
+	}
+	if slot.Y <= set.Y {
+		t.Fatalf("the facets are not stacked: set %+v slot %+v", set, slot)
+	}
+}
+
+// TestReviewProblemsDedupeByCode checks issues are deduplicated by field
+// and code even when their prose differs; a message-keyed mutation keeps
+// both.
+func TestReviewProblemsDedupeByCode(t *testing.T) {
+	item := withStructured(t, reviewRowItem(t, 1, 15), func(s *zzz.StructuredDisc) {
+		s.Issues = []zzz.Issue{
+			{Field: "level", Code: "custom", Severity: zzz.SeverityWarning, Message: "第一条"},
+			{Field: "level", Code: "custom", Severity: zzz.SeverityWarning, Message: "第二条"},
+		}
+	})
+	row := buildRow(&item)
+	m := &Model{}
+	count := 0
+	for _, problem := range m.reviewProblems(&row) {
+		if problem.Field == "level" && problem.Code == "custom" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("same (field, code) produced %d problems, want 1", count)
+	}
+}
+
+// TestReviewSelectedRowNumberReadable checks the selected row's sequence
+// number keeps a dark foreground on the light selected background.
+func TestReviewSelectedRowNumberReadable(t *testing.T) {
+	_, _, tt := openResponsiveResults(t, manyPendingRecord(t, 5), 1180, 760)
+	tt.Frame()
+	rect, ok := tt.Find("#0001")
+	if !ok {
+		t.Fatalf("the selected row number is missing: %q", tt.Texts())
+	}
+	if dark := countDarkPixels(tt.Image(), rect); dark < 5 {
+		t.Fatalf("the selected row number has only %d dark pixels: %+v", dark, rect)
+	}
+}
+
+func countDarkPixels(img *image.RGBA, r ui.Rect) int {
+	rect := image.Rect(int(r.X), int(r.Y), int(r.X+r.W), int(r.Y+r.H)).Intersect(img.Bounds())
+	count := 0
+	for y := rect.Min.Y; y < rect.Max.Y; y++ {
+		for x := rect.Min.X; x < rect.Max.X; x++ {
+			p := img.RGBAAt(x, y)
+			if int(p.R)+int(p.G)+int(p.B) < 450 {
+				count++
+			}
+		}
+	}
+	return count
+}
+
+// TestReviewFormControlsFitMinimumWidth checks the main-stat row stays
+// inside the 400-DIP form at 960, where the third picker used to clip.
+func TestReviewFormControlsFitMinimumWidth(t *testing.T) {
+	m, _, tt := openResponsiveResults(t, recovery(reviewRowItem(t, 1, 15)), 960, 640)
+	tt.Frame()
+	m.formExtrasOpen = true
+	tt.Frame()
+	rect, ok := tt.Find("主词条单位")
+	if !ok {
+		t.Fatalf("the main-stat unit control is missing: %q", tt.Texts())
+	}
+	const formRight = 960 - reviewPagePadding
+	if rect.X+rect.W > formRight {
+		t.Fatalf("the main-stat unit control exceeds the form: %+v right %.1f", rect, float32(formRight))
 	}
 }

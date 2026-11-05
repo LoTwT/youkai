@@ -100,14 +100,11 @@ type HistoryRecord struct {
 	// session finished is reported consistently within the same run.
 	Interrupted bool
 	// ExportableCount, FailedCount, UnprocessedCount, PendingReview and
-	// OtherCount are the current history table's mutually exclusive
-	// buckets: exportable items; failed and unprocessed observations that
-	// still have no interpretation; interpreted items still waiting for
-	// review; and everything else (interpreted but unusable, or
-	// queued/running in a checkpoint saved mid-session). A backfilled item
-	// keeps its original Status, so it leaves Failed/Unprocessed and joins
-	// the bucket its current validation and quality select. The four-class
-	// view is Counts.
+	// OtherCount are legacy metadata buckets kept for compatibility; the
+	// history table now reads Counts. Failed and Unprocessed include only
+	// observations that still have no interpretation: a backfilled item
+	// keeps its original Status, leaves those buckets and joins the bucket
+	// its current validation and quality select.
 	ExportableCount  int64
 	FailedCount      int64
 	UnprocessedCount int64

@@ -157,6 +157,29 @@ func itemClassificationCorpus(t *testing.T) []record.ItemRecord {
 			}
 		}
 	}
+	// Backfilled shapes: a failed or unprocessed observation with an
+	// interpreted revision. Their current handling must not be the legacy
+	// Failed/Unprocessed bucket, while the original status stays put.
+	for _, original := range []struct {
+		status  record.Status
+		reason  record.UnprocessedReason
+		failure string
+	}{
+		{record.StatusFailed, "", "识别超时"},
+		{record.StatusUnprocessed, record.ReasonInterrupted, ""},
+	} {
+		for _, quality := range qualities {
+			candidate := reviewItem(t, seq, reviewData())
+			candidate.Status = original.status
+			candidate.Reason = original.reason
+			candidate.Failure = original.failure
+			candidate.Quality = quality
+			candidate.Revision = 1
+			seq++
+			candidate.Sequence = seq
+			items = append(items, candidate)
+		}
+	}
 	return items
 }
 
@@ -176,11 +199,17 @@ func TestUsableItemIsNeverPendingReview(t *testing.T) {
 }
 
 // TestHistoryLegacyBucketsMatchPreviousRules compares the legacy buckets
-// item by item with the pre-classification implementation, so the existing
-// history table, results page and cleanup preview keep their numbers.
+// item by item with the pre-classification implementation for shapes that
+// existed before backfill. A backfilled failed/unprocessed item deliberately
+// leaves the Failed/Unprocessed buckets, so it is excluded here and covered
+// by TestHistoryCountsBackfilledItemsByCurrentState.
 func TestHistoryLegacyBucketsMatchPreviousRules(t *testing.T) {
 	corpus := itemClassificationCorpus(t)
+	compared := 0
 	for i := range corpus {
+		if ItemInterpreted(corpus[i]) && corpus[i].Status != record.StatusProduced {
+			continue
+		}
 		one := corpus[i : i+1]
 		oldExportable, oldFailed, oldUnprocessed, oldOther := previousHistoryItemCounts(one)
 		oldPending := int64(pendingReviewCount(one))
@@ -192,8 +221,20 @@ func TestHistoryLegacyBucketsMatchPreviousRules(t *testing.T) {
 				corpus[i].Sequence, corpus[i].Status, corpus[i].Quality, corpus[i].Revision,
 				got, oldExportable, oldFailed, oldUnprocessed, oldOther, oldPending)
 		}
+		compared++
 	}
-	t.Logf("checked %d items", len(corpus))
+	t.Logf("checked %d of %d items", compared, len(corpus))
+}
+
+// TestHistoryBucketsPartitionAfterBackfill checks the five history buckets
+// still add up to the captured count once interpreted failed/unprocessed
+// items are in the corpus.
+func TestHistoryBucketsPartitionAfterBackfill(t *testing.T) {
+	corpus := itemClassificationCorpus(t)
+	totals := historyItemTotalsOf(corpus)
+	if sum := totals.Exportable + totals.Failed + totals.Unprocessed + totals.PendingReview + totals.Other; sum != int64(len(corpus)) {
+		t.Fatalf("history buckets sum to %d, want %d: %+v", sum, len(corpus), totals)
+	}
 }
 
 // TestServiceHistoryRecordsIncludesExportBreakdown checks that the history

@@ -315,13 +315,14 @@ type Model struct {
 	// in flight. reviewSerial invalidates a late response when a newer
 	// action owns the editor. navPrompt holds a navigation that waits for
 	// the dirty draft to be saved or discarded.
-	edit         *editState
-	reviewSerial int64
-	reviewSaving bool
-	reviewErr    string
-	reviewNotice string
-	lastAction   reviewAction
-	navPrompt    *navigationRequest
+	edit             *editState
+	reviewSerial     int64
+	reviewSaving     bool
+	reviewSaveFailed bool
+	reviewErr        string
+	reviewNotice     string
+	lastAction       reviewAction
+	navPrompt        *navigationRequest
 
 	exitState exitState
 	exitErr   string

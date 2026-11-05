@@ -89,6 +89,10 @@ func TestClassifyItemFollowsFixedOrder(t *testing.T) {
 	backfilledPassed.Revision = 1
 	backfilledRawOnly := backfilledReview
 	backfilledRawOnly.Data = json.RawMessage(`{"lines":[]}`)
+	failedAtRevisionZero := reviewItem(t, 18, reviewData())
+	failedAtRevisionZero.Status = record.StatusFailed
+	failedAtRevisionZero.Failure = "识别超时"
+	failedAtRevisionZero.Revision = 0
 
 	withPersistedError := zzz.ToStructuredWithState(
 		testDisc(31400, 3, "defense", "46", zzz.UnitPercent), zzz.RarityS, none, nil)
@@ -127,6 +131,7 @@ func TestClassifyItemFollowsFixedOrder(t *testing.T) {
 		{"backfilled needs-review item is pending review", backfilledReview, ItemClassPendingReview},
 		{"backfilled confirmed item is passed", backfilledPassed, ItemClassPassed},
 		{"failed item with revision but no structured payload is still backfill", backfilledRawOnly, ItemClassPendingBackfill},
+		{"failed item with structured data at revision zero is still backfill", failedAtRevisionZero, ItemClassPendingBackfill},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -104,7 +104,7 @@ func (m *Model) resultFilterCount(filter resultFilter) int {
 	if m.rec == nil {
 		return 0
 	}
-	counts := m.classCounts()
+	counts := m.recordClassCounts()
 	switch filter {
 	case resultFilterPending:
 		return int(counts.Pending())
@@ -178,7 +178,10 @@ func (m *Model) filteredEmptyText() string {
 	switch m.filter {
 	case resultFilterPending:
 		if m.pendingItemsCount() == 0 {
-			return "待处理 0 件，都处理完了。"
+			if m.reviewSettled() {
+				return "待处理 0 件，都处理完了。"
+			}
+			return "扫描尚未结束，暂无待处理条目。"
 		}
 		return "没有待处理的条目。"
 	case resultFilterWarning:
@@ -228,7 +231,7 @@ func (m *Model) resultsFilterBar(c *ui.Context, t *ui.Theme) {
 // compact popover; they never replace the three segments themselves.
 func (m *Model) resultsFacetFilters(c *ui.Context, t *ui.Theme, width float32) {
 	changed := false
-	ui.Row(c).Gap(t.Space(1)).AlignItems(ui.Center).Children(func() {
+	ui.Column(c).Gap(t.Space(1)).Children(func() {
 		setLabel := setFilterLabel(m.setFilter)
 		before := setLabel
 		ui.Select(c, &setLabel, setFilterChoices(m.rec.Rows, m.setFilter)).

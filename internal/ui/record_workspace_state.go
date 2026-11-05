@@ -152,15 +152,24 @@ func (m *Model) recentlyConfirmedNow(row *Row) bool {
 		m.recentlyConfirmed[row.Seq]
 }
 
-// classCounts is the four-class partition of the open record's items,
-// taken from the classification every row already carries.
-func (m *Model) classCounts() app.ItemClassCounts {
-	var counts app.ItemClassCounts
+// recordClassCounts is the one source of the four-class counts and the
+// pending total. Built rows are freshest because applySavedItem rebuilds
+// them after every save; Classes is the fallback before rows exist.
+func (m *Model) recordClassCounts() app.ItemClassCounts {
 	if m.rec == nil {
-		return counts
+		return app.ItemClassCounts{}
 	}
-	for i := range m.rec.Rows {
-		switch m.rec.Rows[i].ItemClass {
+	if len(m.rec.Rows) > 0 {
+		return rowClassCounts(m.rec.Rows)
+	}
+	return m.rec.Classes
+}
+
+// rowClassCounts sums the four classes of already built rows.
+func rowClassCounts(rows []Row) app.ItemClassCounts {
+	var counts app.ItemClassCounts
+	for i := range rows {
+		switch rows[i].ItemClass {
 		case app.ItemClassPendingBackfill:
 			counts.PendingBackfill++
 		case app.ItemClassPendingReview:
@@ -176,7 +185,7 @@ func (m *Model) classCounts() app.ItemClassCounts {
 
 // pendingItemsCount is the design's "待处理" total: backfill plus review.
 func (m *Model) pendingItemsCount() int {
-	return int(m.classCounts().Pending())
+	return int(m.recordClassCounts().Pending())
 }
 
 // selectReviewRegion moves the keyboard to one of the review's three
@@ -320,6 +329,7 @@ func (m *Model) showRecord(id string, live bool) {
 	m.edit = nil
 	m.navPrompt = nil
 	m.reviewErr = ""
+	m.reviewSaveFailed = false
 	m.reviewNotice = ""
 	m.lastAction = reviewSave
 }

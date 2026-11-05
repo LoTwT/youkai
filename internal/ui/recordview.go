@@ -38,6 +38,9 @@ type RecordView struct {
 	// Rows are the captured items in capture order; no item disappears
 	// for its status.
 	Rows []Row
+	// Classes is the four-class count computed while the rows are built.
+	// recordClassCounts uses it only before Rows exist.
+	Classes app.ItemClassCounts
 }
 
 // Row is one captured item of a record: its processing outcome, its field
@@ -267,6 +270,7 @@ func BuildRecordView(id string, rec *record.Recovery, live bool) *RecordView {
 	for i := range cp.Items {
 		view.Rows = append(view.Rows, buildRow(&cp.Items[i]))
 	}
+	view.Classes = app.ClassifyItems(cp.Items)
 	return view
 }
 
