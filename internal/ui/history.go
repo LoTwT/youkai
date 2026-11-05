@@ -33,7 +33,7 @@ func (m *Model) ExportHistory(recordID string, format app.ExportFormat) {
 		fail := func(err error) {
 			m.update(func() {
 				m.historyExporting = ""
-				m.finishDirectExport(format, 0, recordID, false, "", err)
+				m.finishDirectExport(format, 0, 0, recordID, false, false, "", err)
 			})
 		}
 		rec, err := m.cfg.Service.LoadRecord(recordID)
@@ -62,7 +62,7 @@ func (m *Model) ExportHistory(recordID string, format app.ExportFormat) {
 		path, err := save.SaveDirect(format, app.DefaultExportName(rec.Checkpoint.Session, format), data)
 		m.update(func() {
 			m.historyExporting = ""
-			m.finishDirectExport(format, export.Summary.Included, recordID, false, path, err)
+			m.finishDirectExport(format, export.Summary.Included, export.Summary.Counts.Pending(), recordID, false, false, path, err)
 		})
 	})
 }

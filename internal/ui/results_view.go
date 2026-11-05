@@ -119,9 +119,6 @@ func (m *Model) resultsArea(c *ui.Context, t *ui.Theme) {
 				m.completionArea(c, t)
 				return
 			}
-			if m.rec != nil {
-				m.exportArea(c, t)
-			}
 			ui.Text(c, m.emptyResultsText()).TextColor(t.TextMuted)
 			return
 		}
@@ -130,7 +127,6 @@ func (m *Model) resultsArea(c *ui.Context, t *ui.Theme) {
 			m.completionArea(c, t)
 			return
 		}
-		m.exportArea(c, t)
 		visible := m.visibleResultRows()
 		if len(visible) == 0 {
 			ui.Text(c, m.filteredEmptyText()).TextColor(t.TextMuted)

@@ -101,11 +101,10 @@ func (m *Model) completionCard(c *ui.Context, t *ui.Theme) {
 					}
 					blocked := m.exportBlockedReason()
 					ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
-						if ui.Button(c, "导出 JSON").Disabled(blocked != "").Clicked() {
-							m.ExportJSON()
-						}
-						if ui.Button(c, "导出 CSV").Disabled(blocked != "").Clicked() {
-							m.ExportCSV()
+						// The export dialog owns the format choice; the
+						// summary's entry opens it like the title bar's.
+						if ui.Button(c, "导出…").Disabled(m.exportEntryBlocked()).Clicked() {
+							m.requestExport()
 						}
 					})
 					if blocked != "" {

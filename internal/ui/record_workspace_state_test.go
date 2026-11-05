@@ -950,9 +950,7 @@ func TestFinalCheckpointLoadingBlocksConfirmation(t *testing.T) {
 		t.Fatalf("the export snapshot did not advance: %+v", m.exportData)
 	}
 
-	if err := tt.Click("导出 JSON"); err != nil {
-		t.Fatalf("click 导出 JSON: %v", err)
-	}
+	m.ExportJSON()
 	drainAll(t, m, q)
 	calls := saver.snapshot()
 	if len(calls) != 1 {

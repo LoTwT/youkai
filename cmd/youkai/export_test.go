@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"io"
 	"os"
@@ -220,6 +221,72 @@ func TestWriteDirectExportReportsUnusableDirectory(t *testing.T) {
 	}
 	if dirErr.Directory != file {
 		t.Fatalf("directory = %q, want %q", dirErr.Directory, file)
+	}
+}
+
+func TestWriteDirectExportContextCanceledWritesNothing(t *testing.T) {
+	dir := t.TempDir()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	path, err := writeDirectExportContext(ctx, dir, "out.youkai.json", []byte("data"))
+	if path != "" || !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled export returned path %q err %v", path, err)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("a canceled export left %d files", len(entries))
+	}
+}
+
+func TestWriteExportFileCancelBeforeRenameLeavesNoTarget(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "out.youkai.json")
+	if err := os.WriteFile(path, []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	canceled := errors.New("canceled")
+	renamed := false
+	removed := ""
+	ops := exportFileOps{
+		createTemp: func(string, string) (exportFile, error) {
+			return &failingExportFile{name: filepath.Join(dir, ".tmp")}, nil
+		},
+		chmod: func(string, os.FileMode) error { return nil },
+		rename: func(string, string) error {
+			renamed = true
+			return nil
+		},
+		remove: func(name string) error {
+			removed = name
+			return nil
+		},
+	}
+	checks := 0
+	err := writeExportFileWithCancel(path, []byte("new"), ops, func() error {
+		checks++
+		if checks >= 3 { // the check after close and chmod, before the rename
+			return canceled
+		}
+		return nil
+	})
+	if !errors.Is(err, canceled) {
+		t.Fatalf("error = %v, want canceled", err)
+	}
+	if renamed {
+		t.Fatal("a canceled export was renamed into place")
+	}
+	if removed == "" {
+		t.Fatal("a canceled export left its temporary file")
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "old" {
+		t.Fatalf("a canceled export changed the existing file: %q", got)
 	}
 }
 

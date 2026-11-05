@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -20,6 +21,12 @@ type fileExportSaver struct{}
 // SaveDirect implements ui.DirectExportSaver. An existing name is never
 // replaced; the writer picks the next numbered name instead.
 func (s fileExportSaver) SaveDirect(format app.ExportFormat, defaultName string, data []byte) (string, error) {
+	return s.SaveDirectContext(context.Background(), format, defaultName, data)
+}
+
+// SaveDirectContext implements ui.CancelableDirectExportSaver: a canceled
+// export leaves neither the reserved name nor a temporary file behind.
+func (s fileExportSaver) SaveDirectContext(ctx context.Context, format app.ExportFormat, defaultName string, data []byte) (string, error) {
 	dir, err := mygo.App.Path(mygo.PathDownloads)
 	if err != nil {
 		return "", &ui.ExportDirectoryError{Err: err}
@@ -27,11 +34,7 @@ func (s fileExportSaver) SaveDirect(format app.ExportFormat, defaultName string,
 	if dir == "" {
 		return "", &ui.ExportDirectoryError{Err: errors.New("系统未提供下载目录")}
 	}
-	path, err := writeDirectExport(dir, defaultName, data)
-	if err != nil {
-		return "", err
-	}
-	return path, nil
+	return writeDirectExportContext(ctx, dir, defaultName, data)
 }
 
 // directExportNameAttempts bounds the numbered-name search. Reaching it
@@ -43,12 +46,29 @@ const directExportNameAttempts = 1000
 // atomically replaces that reservation with the synced file. A failed write
 // removes the reservation and leaves every existing export untouched.
 func writeDirectExport(dir, defaultName string, data []byte) (string, error) {
+	return writeDirectExportContext(context.Background(), dir, defaultName, data)
+}
+
+// writeDirectExportContext is writeDirectExport with the export dialog's
+// cancellation. A canceled save removes its reservation and temporary
+// file, so the dialog's "已取消，没有写入文件" is true.
+func writeDirectExportContext(ctx context.Context, dir, defaultName string, data []byte) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	path, err := reserveDirectExportPath(dir, defaultName)
 	if err != nil {
 		return "", err
 	}
-	if err := writeExportFile(path, data); err != nil {
+	if err := ctx.Err(); err != nil {
 		_ = os.Remove(path)
+		return "", err
+	}
+	if err := writeExportFileContext(ctx, path, data); err != nil {
+		_ = os.Remove(path)
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return "", ctxErr
+		}
 		if errors.Is(err, os.ErrPermission) || errors.Is(err, os.ErrNotExist) {
 			return "", &ui.ExportDirectoryError{Directory: dir, Err: err}
 		}
@@ -137,7 +157,23 @@ func writeExportFile(path string, data []byte) error {
 	return writeExportFileWith(path, data, defaultExportFileOps)
 }
 
-func writeExportFileWith(path string, data []byte, ops exportFileOps) (err error) {
+// writeExportFileContext is writeExportFile for a cancellable export. The
+// check before the rename is the last point where canceling can still
+// promise that no file appeared.
+func writeExportFileContext(ctx context.Context, path string, data []byte) error {
+	return writeExportFileWithCancel(path, data, defaultExportFileOps, ctx.Err)
+}
+
+func writeExportFileWith(path string, data []byte, ops exportFileOps) error {
+	return writeExportFileWithCancel(path, data, ops, nil)
+}
+
+func writeExportFileWithCancel(path string, data []byte, ops exportFileOps, canceled func() error) (err error) {
+	if canceled != nil {
+		if err := canceled(); err != nil {
+			return err
+		}
+	}
 	dir := filepath.Dir(path)
 	tmp, err := ops.createTemp(dir, "."+filepath.Base(path)+".tmp-*")
 	if err != nil {
@@ -161,6 +197,12 @@ func writeExportFileWith(path string, data []byte, ops exportFileOps) (err error
 		_ = tmp.Close()
 		return io.ErrShortWrite
 	}
+	if canceled != nil {
+		if err := canceled(); err != nil {
+			_ = tmp.Close()
+			return err
+		}
+	}
 	if err = tmp.Sync(); err != nil {
 		_ = tmp.Close()
 		return err
@@ -171,6 +213,11 @@ func writeExportFileWith(path string, data []byte, ops exportFileOps) (err error
 	// CreateTemp uses 0600; exports are ordinary user files.
 	if err = ops.chmod(tmpName, 0o644); err != nil {
 		return err
+	}
+	if canceled != nil {
+		if err := canceled(); err != nil {
+			return err
+		}
 	}
 	if err = ops.rename(tmpName, path); err != nil {
 		return err

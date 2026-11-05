@@ -82,6 +82,7 @@ func (m *Model) viewPages(c *ui.Context) {
 			m.pageStatusBar(c, t)
 		})
 	})
+	m.exportDialogView(c, t)
 }
 
 // navRail is the three-destination rail: icon above label, the active

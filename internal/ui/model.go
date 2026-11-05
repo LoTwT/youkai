@@ -106,7 +106,9 @@ type Config struct {
 	// nil disables images (the details show their texts only).
 	Evidence EvidenceSource
 	// DirectExportSaver writes the usable-data JSON/CSV files straight into
-	// the system downloads directory; nil hides the export controls.
+	// the system downloads directory; nil hides the export controls. A
+	// saver that also implements CancelableDirectExportSaver lets the
+	// dialog stop before a file is committed.
 	DirectExportSaver DirectExportSaver
 	// OpenDownloadsDirectory reveals the direct export directory with the
 	// system file manager; nil hides the "open directory" action.
@@ -257,9 +259,13 @@ type Model struct {
 	// exporting is the shared export slot: one export runs at a time. Its
 	// frozen snapshot lives in the open record's workspace; exportOutcome
 	// carries the direct export's global status strip message so switching
-	// destinations cannot hide it.
+	// destinations cannot hide it. exportDialog owns the modal's own
+	// pre-export, running, canceled, failure and success states, and
+	// exportCancel stops the running write when the modal's 取消 is used.
 	exporting     bool
 	exportOutcome *exportOutcome
+	exportDialog  exportDialogState
+	exportCancel  func()
 
 	// page is the shell's current destination: scan, the records list or
 	// one record's workspace, or settings. It starts on scan and only
