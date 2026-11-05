@@ -106,6 +106,13 @@ type recordDeliverer struct {
 	savedGeneration int64
 	// saveErr is the unresolved save failure; nil while clean.
 	saveErr error
+	// finalSaveFailures counts the wrap-up's failed save attempts: the
+	// final generation and every retry after it. Batched saves and user
+	// retries before the kernel sealed are running-session attempts and
+	// do not count. The count keeps its history after a successful retry;
+	// notification code uses "the first failure is 1" to notify once per
+	// wrap-up.
+	finalSaveFailures int
 	// finished reports that finish ran (the kernel sealed).
 	finished bool
 	// finalRefused reports that finish refused the final generation
@@ -452,6 +459,7 @@ func (d *recordDeliverer) finish(final scan.Snapshot) error {
 			// unfinished rows.
 			d.saveErr = fmt.Errorf("app: record %s: item %d is still %s at the end of the session",
 				d.recordID, d.items[i].Sequence, d.items[i].Status)
+			d.finalSaveFailures++
 			d.finalRefused = true
 			return d.saveErr
 		}
@@ -463,6 +471,7 @@ func (d *recordDeliverer) finish(final scan.Snapshot) error {
 	d.shell.FailureParams = failureParamsFrom(final)
 	if err := d.saveLocked(); err != nil {
 		d.saveErr = err
+		d.finalSaveFailures++
 		return err
 	}
 	d.saveErr = nil
@@ -506,6 +515,12 @@ func (d *recordDeliverer) retry() error {
 	}
 	if err := d.saveLocked(); err != nil {
 		d.saveErr = err
+		// A retry before the seal belongs to the running session's batch
+		// saving, not to the wrap-up: the notification edge counts only
+		// attempts made after the kernel sealed.
+		if d.finished {
+			d.finalSaveFailures++
+		}
 		return err
 	}
 	d.saveErr = nil
@@ -518,6 +533,9 @@ type saveStatus struct {
 	saved   int
 	pending bool
 	err     error
+	// finalFailures counts the wrap-up's failed save attempts so far; see
+	// recordDeliverer.finalSaveFailures.
+	finalFailures int
 }
 
 // status reports the save state for the snapshot. Callers hold no locks
@@ -526,9 +544,10 @@ func (d *recordDeliverer) status() saveStatus {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return saveStatus{
-		saved:   d.savedItems,
-		pending: d.saveErr != nil || d.sinceSave > 0,
-		err:     d.saveErr,
+		saved:         d.savedItems,
+		pending:       d.saveErr != nil || d.sinceSave > 0,
+		err:           d.saveErr,
+		finalFailures: d.finalSaveFailures,
 	}
 }
 
