@@ -42,9 +42,10 @@ type recordConclusionInput struct {
 	IncompletePositions      int
 	IncompletePositionsKnown bool
 	Unreadable               bool
-	// Running marks the live session whose scan has not wrapped. It is
-	// model state, not record data.
-	Running bool
+	// ScanNotWrapped marks the current session the service still owns. It
+	// includes the wrap-up save after collection ends; it is model state,
+	// not record data.
+	ScanNotWrapped bool
 }
 
 // recordConclusionFor states one record's conclusion. It never shows a raw
@@ -56,7 +57,7 @@ func recordConclusionFor(in recordConclusionInput) recordConclusion {
 	if in.Interrupted || (in.Termination != nil && in.Termination.Kind == record.TerminationInterrupted) {
 		return recordConclusion{tag: "中断", text: "已恢复已保存部分", tone: recordToneWarning}
 	}
-	if in.Running {
+	if in.ScanNotWrapped {
 		return recordConclusion{text: "扫描进行中"}
 	}
 	term := in.Termination

@@ -3,6 +3,7 @@ package ui
 import (
 	"errors"
 	"fmt"
+	"image"
 	"strings"
 	"sync"
 	"testing"
@@ -241,18 +242,152 @@ func TestHistoryLoadsDoNotApplyOutOfOrder(t *testing.T) {
 }
 
 // TestHistoryNumberColumnsShowReadableValues checks the standard tier's
-// visible 件数 and 可导出 cells, not only the row's accessibility label:
-// both show the record's numbers.
+// visible 件数 and 可导出 cells, not only the row's accessibility label. The
+// two numbers differ on purpose: a column swap must fail the order check.
 func TestHistoryNumberColumnsShowReadableValues(t *testing.T) {
-	svc := &fakeService{history: historyTableRecords(1)}
+	completed := &record.Termination{
+		Kind: record.TerminationCompleted, Code: "verifiedEnd", Phase: record.PhaseCapturing,
+	}
+	svc := &fakeService{history: []app.HistoryRecord{{
+		ID: "r01", SavedAt: time.Date(2026, 10, 21, 14, 2, 0, 0, time.Local),
+		CapturedCount: 1_007, Coverage: record.CoverageComplete, Termination: completed,
+		Counts: app.ItemClassCounts{Passed: 1_006, PendingReview: 1}, TotalBytes: 1024,
+	}}}
 	m, q := newTestModel(t, Config{Service: svc})
 	m.SetContentSize(1180, 760)
 	tt := ui.NewTester(m.View, 1180, 760)
 	settle(t, m, q, tt)
 	openRecordsList(t, m, q, tt)
 
-	if got := countText(tt.Texts(), "1,008"); got != 2 {
-		t.Fatalf("visible 件数/可导出 cells show 1,008 %d times, want 2: %q", got, tt.Texts())
+	counts, countsOK := tt.Find("1,007")
+	exported, exportedOK := tt.Find("1,006")
+	if !countsOK || !exportedOK {
+		t.Fatalf("visible 件数/可导出 cells are missing: %q", tt.Texts())
+	}
+	if countText(tt.Texts(), "1,007") != 1 || countText(tt.Texts(), "1,006") != 1 {
+		t.Fatalf("visible 件数/可导出 cells are duplicated or missing: %q", tt.Texts())
+	}
+	if counts.X >= exported.X {
+		t.Fatalf("件数 and 可导出 are swapped: 1,007 at %.1f, 1,006 at %.1f",
+			counts.X, exported.X)
+	}
+}
+
+// TestHistoryStaleLoadErrorIsDropped checks the error branch of the load
+// sequence: an older load's error must not reach the list after a newer
+// load owns it.
+func TestHistoryStaleLoadErrorIsDropped(t *testing.T) {
+	initial := historyTableRecords(1)
+	fresh := historyTableRecords(3)
+
+	var mu sync.Mutex
+	calls := 0
+	started := make(chan int, 4)
+	releaseStale := make(chan struct{})
+	releaseFresh := make(chan struct{})
+	svc := &fakeService{}
+	svc.historyFn = func() ([]app.HistoryRecord, error) {
+		mu.Lock()
+		calls++
+		n := calls
+		mu.Unlock()
+		started <- n
+		switch n {
+		case 1:
+			return initial, nil
+		case 2:
+			<-releaseStale
+			return nil, errors.New("stale history read failed")
+		default:
+			<-releaseFresh
+			return fresh, nil
+		}
+	}
+	m, q := newTestModel(t, Config{Service: svc})
+	tt := ui.NewTester(m.View, 1180, 760)
+	settle(t, m, q, tt)
+	if n := <-started; n != 1 {
+		t.Fatalf("the startup load is call %d, want 1", n)
+	}
+
+	m.loadHistory()
+	if n := <-started; n != 2 {
+		t.Fatalf("the slow load is call %d, want 2", n)
+	}
+	m.loadHistory()
+	if n := <-started; n != 3 {
+		t.Fatalf("the fresh load is call %d, want 3", n)
+	}
+
+	close(releaseStale)
+	waitForHistoryUpdate(t, q)
+	if m.histErr != "" {
+		t.Fatalf("the stale load's error reached the list: %q", m.histErr)
+	}
+	if len(m.history) != 1 {
+		t.Fatalf("the stale load replaced the list: %d records", len(m.history))
+	}
+	if !m.historyLoading {
+		t.Fatal("the stale load cleared the newer load's loading state")
+	}
+
+	close(releaseFresh)
+	waitForHistoryUpdate(t, q)
+	if m.histErr != "" {
+		t.Fatalf("the fresh load reports the stale error: %q", m.histErr)
+	}
+	if len(m.history) != 3 || m.historyLoading {
+		t.Fatalf("the fresh load = %d records, loading %v", len(m.history), m.historyLoading)
+	}
+	m.Idle()
+}
+
+// minLuminanceInRect is the darkest text pixel in a rect, used to tell a
+// primary-color time from a muted one.
+func minLuminanceInRect(img *image.RGBA, r ui.Rect) int {
+	rect := image.Rect(int(r.X), int(r.Y), int(r.X+r.W), int(r.Y+r.H)).Intersect(img.Bounds())
+	darkest := 255
+	for y := rect.Min.Y; y < rect.Max.Y; y++ {
+		for x := rect.Min.X; x < rect.Max.X; x++ {
+			p := img.RGBAAt(x, y)
+			lum := (299*int(p.R) + 587*int(p.G) + 114*int(p.B)) / 1000
+			if lum < darkest {
+				darkest = lum
+			}
+		}
+	}
+	return darkest
+}
+
+// TestHistoryDamagedRowTimeIsMuted guards the wireframe's muted time on a
+// damaged row: its date recedes beside its reason (线框 10).
+func TestHistoryDamagedRowTimeIsMuted(t *testing.T) {
+	records := historyTableRecords(2)
+	records = append(records, app.HistoryRecord{
+		ID: "bad", SavedAt: time.Date(2026, 10, 19, 12, 2, 0, 0, time.Local),
+		Unreadable: true, TotalBytes: 88 * 1024 * 1024,
+	})
+	svc := &fakeService{history: records}
+	m, q := newTestModel(t, Config{Service: svc})
+	m.SetContentSize(1180, 760)
+	tt := ui.NewTester(m.View, 1180, 760)
+	settle(t, m, q, tt)
+	openRecordsList(t, m, q, tt)
+
+	normal, ok := tt.Find(historyTimeText(m.history[1]))
+	if !ok {
+		t.Fatalf("the normal row's time is missing: %q", tt.Texts())
+	}
+	damaged, ok := tt.Find(historyTimeText(m.history[2]))
+	if !ok {
+		t.Fatalf("the damaged row's time is missing: %q", tt.Texts())
+	}
+	img := tt.Image()
+	normalMin := minLuminanceInRect(img, normal)
+	damagedMin := minLuminanceInRect(img, damaged)
+	if damagedMin < normalMin+40 {
+		t.Fatalf("the damaged row's time is not muted: normal min %d, damaged min %d",
+			normalMin, damagedMin)
 	}
 }
 
@@ -697,7 +832,7 @@ func TestRecordConclusion(t *testing.T) {
 		input recordConclusionInput
 		tag   string
 		text  string
-	}{name: "scan still running", input: recordConclusionInput{Running: true}, text: "扫描进行中"})
+	}{name: "scan still running", input: recordConclusionInput{ScanNotWrapped: true}, text: "扫描进行中"})
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

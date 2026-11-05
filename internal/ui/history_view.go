@@ -250,9 +250,9 @@ func (m *Model) historyTimeCell(c *ui.Context, t *ui.Theme, tok *Tokens, entry H
 	})
 }
 
-// historyResultFor adapts one list entry to the shared conclusion. The
-// running flag is model state: the record data alone cannot say whether its
-// scan has wrapped.
+// historyResultFor adapts one list entry to the shared conclusion.
+// ScanNotWrapped is model state: the record data alone cannot say whether
+// the service still owns the session, including its wrap-up save.
 func (m *Model) historyResultFor(entry HistoryEntry) recordConclusion {
 	return recordConclusionFor(recordConclusionInput{
 		CapturedCount:            entry.CapturedCount,
@@ -263,7 +263,7 @@ func (m *Model) historyResultFor(entry HistoryEntry) recordConclusion {
 		IncompletePositions:      entry.IncompletePositions,
 		IncompletePositionsKnown: entry.IncompletePositionsKnown,
 		Unreadable:               entry.Unreadable,
-		Running:                  entry.ID != "" && entry.ID == string(m.appliedSession) && m.snap.Busy,
+		ScanNotWrapped:           entry.ID != "" && entry.ID == string(m.appliedSession) && m.snap.Busy,
 	})
 }
 
