@@ -3,17 +3,20 @@ package main
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"log"
+	"syscall"
 
 	"github.com/LoTwT/youkai/internal/app"
 )
 
 // dataRootFailureKind separates the two ways a launch can fail to take its
 // data root. 08 §10 gives them different user-visible texts because the
-// remedies differ: another youkai process (one whose single-instance
-// identity differs, so the launch got past the single-instance lock) can be
-// exited from the notification area, while an unreadable or uncreatable
-// root needs a disk and permission check.
+// remedies differ: another youkai process holds the root — usually one whose
+// single-instance identity differs, so the launch got past the
+// single-instance lock, though a failed handover can leave the same version
+// here — and can be exited from the notification area, while an unreadable
+// or uncreatable root needs a disk and permission check.
 type dataRootFailureKind int
 
 const (
@@ -44,14 +47,36 @@ func classifyDataRootFailure(err error) dataRootFailureKind {
 }
 
 // dataRootFailureMessage returns the 08 §10 text for the classified
-// failure. The unavailable case fills the "<原因>" placeholder with the
-// wrapped error, which names the failed operation and path — the detail a
-// user needs to check the disk and permissions.
+// failure. The unavailable case fills the "<原因>" placeholder with a short
+// reason rather than the wrapped error: the error chain names the user's
+// path and repeats the system's English message, neither of which belongs
+// in the notice. The full error goes to the log instead.
 func dataRootFailureMessage(kind dataRootFailureKind, err error) string {
 	if kind == dataRootHeldElsewhere {
 		return "另一个 youkai 正在使用数据目录（可能是另一个版本）。请先从通知区域退出它，再重新打开。"
 	}
-	return fmt.Sprintf("youkai 无法打开它的数据目录：%v。请检查磁盘与权限后重新打开。", err)
+	return fmt.Sprintf("youkai 无法打开它的数据目录：%s。请检查磁盘与权限后重新打开。", dataRootFailureReason(err))
+}
+
+// dataRootFailureReason condenses an acquire failure into the short reason
+// the notice shows. The cases match what a failed launch can realistically
+// encounter: a permission on the root, a full volume, a root path blocked
+// by a regular file, and a lock file another program opened without
+// sharing. Anything else stays generic, because guessing a cause would
+// misdirect the remedy.
+func dataRootFailureReason(err error) string {
+	switch {
+	case errors.Is(err, fs.ErrPermission):
+		return "没有读写权限"
+	case isDiskFull(err):
+		return "磁盘空间不足"
+	case errors.Is(err, syscall.ENOTDIR):
+		return "数据目录的位置被一个文件占用"
+	case isSharingViolation(err):
+		return "锁文件被其他程序占用"
+	default:
+		return "无法读写数据目录"
+	}
 }
 
 // reportDataRootFailure records the full error and shows the platform's
