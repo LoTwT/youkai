@@ -330,6 +330,7 @@ func DecodePositionLedger(raw json.RawMessage) (PositionLedger, bool) {
 		return PositionLedger{}, false
 	}
 	var scope struct {
+		Sort      *string         `json:"sort"`
 		Positions json.RawMessage `json:"positions"`
 	}
 	if err := json.Unmarshal(raw, &scope); err != nil || len(scope.Positions) == 0 {
@@ -339,7 +340,10 @@ func DecodePositionLedger(raw json.RawMessage) (PositionLedger, bool) {
 	if err := json.Unmarshal(scope.Positions, &positions); err != nil || positions == nil {
 		return PositionLedger{}, false
 	}
-	sort, _ := decodeObservedSort(raw)
+	sort := SortVerificationUnknown
+	if scope.Sort != nil {
+		sort = SortVerification(*scope.Sort)
+	}
 	ledger := PositionLedger{Sort: sort, Positions: positions}
 	if err := ledger.validate(); err != nil {
 		return PositionLedger{}, false
@@ -554,7 +558,8 @@ func (sh *SessionShell) PositionConclusions() (PositionLedger, bool) {
 // position is reached.
 func (sh *SessionShell) SortVerification() (SortVerification, bool) {
 	if sh.PositionLedger != nil {
-		return sh.PositionLedger.Sort, sh.PositionLedger.Sort.valid()
+		s := sh.PositionLedger.Sort
+		return s, s != SortVerificationUnknown && s.valid()
 	}
 	return decodeObservedSort(sh.ObservedScope)
 }

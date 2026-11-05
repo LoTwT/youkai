@@ -84,7 +84,11 @@ type HistoryRecord struct {
 	// SortVerified reports whether every opened panel verified the sort
 	// label. SortVerifiedKnown distinguishes "not verified" from "the
 	// record does not say": a record with neither a position ledger nor a
-	// sort member in its observed scope leaves both false.
+	// sort member in its observed scope leaves both false. The precheck
+	// always writes "unverified", so a crash that left only the precheck
+	// checkpoint, or a scan stopped before opening any panel, is also
+	// known and unverified. The summary must say "sort not verified",
+	// never "sort inconsistent".
 	SortVerified      bool
 	SortVerifiedKnown bool
 	// Interrupted reports that the newest checkpoint never recorded a

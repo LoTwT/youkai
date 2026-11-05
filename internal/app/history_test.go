@@ -382,6 +382,21 @@ func TestHistoryRecordsPositionConclusions(t *testing.T) {
 			states:       allCompleteStates,
 		},
 		{
+			// An explicitly unknown sort in a saved ledger is not "known
+			// unverified"; the summary must not claim the sort was checked.
+			id: "positions-unknown-sort",
+			shell: record.SessionShell{PositionLedger: &record.PositionLedger{
+				Sort:      record.SortVerificationUnknown,
+				Positions: []record.PositionConclusion{{Position: 1, Complete: true}},
+			}},
+			coverage: record.CoveragePartial,
+			known:    true,
+			states: states(
+				PositionOutcomeComplete, PositionOutcomeNotReached, PositionOutcomeNotReached,
+				PositionOutcomeNotReached, PositionOutcomeNotReached, PositionOutcomeNotReached,
+			),
+		},
+		{
 			// Stopping at position 3 leaves 1 and 2 complete, 3
 			// truncated and 4–6 never reached; the summary can say the
 			// scan covered two positions.

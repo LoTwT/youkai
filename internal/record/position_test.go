@@ -111,6 +111,10 @@ func TestDecodePositionLedgerValidatesStructure(t *testing.T) {
 			scope: `{"positions":[{"position":1,"complete":true,"stage":"filter"}]}`,
 		},
 		{
+			name:  "invalid sort",
+			scope: `{"sort":"sideways","positions":[{"position":1,"complete":true}]}`,
+		},
+		{
 			name:  "degraded position",
 			scope: `{"positions":[{"position":2,"complete":false,"stage":"scroll","reasonCode":"positionLost"}]}`,
 			ok:    true,

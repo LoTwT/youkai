@@ -234,6 +234,22 @@ func TestIncompletePositionsTextNamesEveryPosition(t *testing.T) {
 	}
 }
 
+// TestIncompletePositionsTextSkipsTruncatedAndNamesCodeOnly covers the
+// two predicate edges: a position cut by a session-fatal fault has no
+// position-level cause and must not appear, while a position that carries
+// only a reason code is degraded and keeps the generic "unfinished" stage.
+func TestIncompletePositionsTextSkipsTruncatedAndNamesCodeOnly(t *testing.T) {
+	truncated := json.RawMessage(`{"positions":[{"position":3,"complete":false}]}`)
+	if got := incompletePositionsText(truncated); got != "" {
+		t.Fatalf("truncated position produced a note: %q", got)
+	}
+	codeOnly := json.RawMessage(`{"positions":[{"position":4,"complete":false,"reasonCode":"navigationMismatch"}]}`)
+	want := "不完整号位：4 号位 未完成：点击或拖拽后页面没有按预期变化"
+	if got := incompletePositionsText(codeOnly); got != want {
+		t.Fatalf("code-only position = %q, want %q", got, want)
+	}
+}
+
 // TestFaultGuidanceCoversEveryCode is the table's completeness gate. It
 // reads the diagnostic-code constants from every package that defines
 // faults, so adding a code without a guidance row fails here instead of
