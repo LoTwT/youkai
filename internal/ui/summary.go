@@ -757,63 +757,107 @@ func (m *Model) summaryUnreadable(c *ui.Context, t *ui.Theme) {
 	})
 }
 
-// recordSummaryConclusion composes the summary's title, supplement and
-// actions from the current record. The order is the main-action priority of
-// 08 §2: save failure, zero captured items, a fault ending, then the pending
-// queue, then export.
-func (m *Model) recordSummaryConclusion() summaryConclusion {
+// summaryWording is the summary's text before its model-specific actions are
+// attached. recordSummaryWording is pure so one shared table can check the
+// list and summary wording from the same classification.
+type summaryWording struct {
+	Title      string
+	Supplement string
+	Notes      []string
+}
+
+// summaryConclusionInput adapts the open record to the shared conclusion
+// input. CapturedCount falls back to the rows so an older record without the
+// four-class counts still classifies as empty or non-empty correctly.
+func (m *Model) summaryConclusionInput() recordConclusionInput {
 	counts := m.summaryCounts()
-	if m.summarySaveFailed() {
-		secondary := []summaryAction{}
-		if m.rec != nil && len(m.rec.Rows) > 0 {
-			secondary = append(secondary, summaryAction{
-				Kind:  summaryActionViewItems,
-				Label: fmt.Sprintf("查看本次采集的 %s 件", formatCount(int64(len(m.rec.Rows)))),
-			})
+	captured := counts.Total()
+	if captured == 0 {
+		captured = int64(len(m.rec.Rows))
+	}
+	outcomes, outcomesKnown := app.PositionOutcomesOf(m.rec.Shell)
+	incomplete := 0
+	if outcomesKnown {
+		for _, outcome := range outcomes {
+			if outcome.State == app.PositionOutcomeDegraded {
+				incomplete++
+			}
 		}
-		return summaryConclusion{
+	}
+	sort, sortKnown := m.rec.Shell.SortVerification()
+	return recordConclusionInput{
+		CapturedCount:            captured,
+		Coverage:                 m.recordCoverage(),
+		Termination:              m.rec.Shell.Termination,
+		FailureParams:            m.rec.Shell.FailureParams,
+		Counts:                   counts,
+		Interrupted:              m.rec.Interrupted,
+		IncompletePositions:      incomplete,
+		IncompletePositionsKnown: outcomesKnown,
+		PositionOutcomes:         outcomes,
+		PositionOutcomesKnown:    outcomesKnown,
+		Sort:                     sort,
+		SortKnown:                sortKnown,
+		ScanNotWrapped:           m.rec.Live && m.snap.Busy,
+		SaveFailed:               m.summarySaveFailed(),
+	}
+}
+
+// recordSummaryConclusion composes the summary from the shared ending
+// classification: recordOutcomeFor decides the facts, recordSummaryWording
+// writes this surface's text, and summaryConclusionActions maps the facts to
+// buttons. The order is 08 §2: save failure, zero captured items, fault,
+// then the pending queue or export.
+func (m *Model) recordSummaryConclusion() summaryConclusion {
+	out := recordOutcomeFor(m.summaryConclusionInput())
+	wording := recordSummaryWording(out)
+	primary, secondary := m.summaryConclusionActions(out)
+	return summaryConclusion{
+		Title:      wording.Title,
+		Supplement: wording.Supplement,
+		Notes:      wording.Notes,
+		Primary:    primary,
+		Secondary:  secondary,
+	}
+}
+
+// recordSummaryWording writes the summary's long-form conclusion from the
+// shared outcome. The records list keeps its short wording in
+// recordListConclusion.
+func recordSummaryWording(out recordOutcome) summaryWording {
+	in := out.Input
+	switch out.Kind {
+	case recordOutcomeUnreadable:
+		return summaryWording{Title: "记录读取失败"}
+	case recordOutcomeSaveFailed:
+		return summaryWording{
 			Title:      "扫描结果还没有保存",
 			Supplement: "保存失败，请重试。若仍然失败，请检查磁盘空间和权限。",
-			Primary:    summaryAction{Kind: summaryActionRetrySave, Label: "重试保存"},
-			Secondary:  secondary,
 		}
-	}
-	if m.rec.Live && m.snap.Busy {
-		return summaryConclusion{
+	case recordOutcomeRunning:
+		return summaryWording{
 			Title:      "扫描还没有结束",
 			Supplement: "结束后这里会给出覆盖结论和可导出数量。",
-			Primary:    summaryAction{Kind: summaryActionPrepare, Label: "返回扫描页"},
 		}
-	}
-	if m.rec != nil && len(m.rec.Rows) == 0 {
-		return m.emptyRecordConclusion()
-	}
-	term := m.rec.Shell.Termination
-	if term != nil {
-		switch term.Kind {
-		case record.TerminationFailed:
-			return m.faultConclusion(counts)
-		case record.TerminationInterrupted:
-			return m.interruptedConclusion(counts)
-		case record.TerminationCancelled:
-			return m.manualStopConclusion(counts)
+	case recordOutcomeEmpty:
+		return emptyRecordWording(in)
+	case recordOutcomeInterrupted:
+		return summaryWording{Title: "扫描中断，只保存了部分结果"}
+	case recordOutcomeFault:
+		return faultWording(in)
+	case recordOutcomeCancelled:
+		return manualStopWording(in)
+	case recordOutcomeCompleted, recordOutcomeUnknown:
+		switch in.Coverage {
+		case record.CoveragePartial:
+			return partialCoverageWording(in)
+		case record.CoverageComplete:
+			return completeCoverageWording(in)
+		default:
+			return summaryWording{Title: "扫描结束，无法确认是否扫全"}
 		}
-	}
-	if m.rec.Interrupted {
-		return m.interruptedConclusion(counts)
-	}
-	switch m.recordCoverage() {
-	case record.CoveragePartial:
-		return m.partialCoverageConclusion(counts)
-	case record.CoverageComplete:
-		return m.completeCoverageConclusion(counts)
 	default:
-		return summaryConclusion{
-			Title:      "扫描结束，无法确认是否扫全",
-			Supplement: "",
-			Primary:    m.pendingPrimary(counts),
-			Secondary:  m.pendingSecondary(counts, false),
-		}
+		return summaryWording{Title: "结束状态未知"}
 	}
 }
 
@@ -824,25 +868,13 @@ func (m *Model) summarySaveFailed() bool {
 	return m.rec != nil && m.rec.Live && m.snap.SaveError != ""
 }
 
-// completeCoverageConclusion is the normal, fully covered ending: "扫全了"
-// with either the export or the pending queue as the main action.
-func (m *Model) completeCoverageConclusion(counts app.ItemClassCounts) summaryConclusion {
-	if counts.Pending() == 0 {
-		secondary := []summaryAction{}
-		if len(m.rec.Rows) > 0 {
-			secondary = append(secondary, summaryAction{Kind: summaryActionViewItems, Label: "查看全部件"})
-		}
-		return summaryConclusion{
-			Title:     "扫全了，可以直接导出",
-			Primary:   m.exportAction(),
-			Secondary: secondary,
-		}
+// completeCoverageWording is the normal, fully covered ending: "扫全了"
+// with either export or the pending queue as the main action.
+func completeCoverageWording(in recordConclusionInput) summaryWording {
+	if in.Counts.Pending() == 0 {
+		return summaryWording{Title: "扫全了，可以直接导出"}
 	}
-	return summaryConclusion{
-		Title:     summaryCompletePendingTitle(counts),
-		Primary:   m.pendingPrimary(counts),
-		Secondary: m.pendingSecondary(counts, true),
-	}
+	return summaryWording{Title: summaryCompletePendingTitle(in.Counts)}
 }
 
 // summaryCompletePendingTitle names the queue that keeps a fully covered
@@ -860,31 +892,24 @@ func summaryCompletePendingTitle(counts app.ItemClassCounts) string {
 	}
 }
 
-// partialCoverageConclusion names the slots that did not complete and, when
-// known, the unverified sort. A partial record whose slots cannot be listed
-// says "覆盖不完整" rather than inventing names.
-func (m *Model) partialCoverageConclusion(counts app.ItemClassCounts) summaryConclusion {
-	title, notes := m.partialCoverageTitleAndNotes()
-	return summaryConclusion{
-		Title:     title,
-		Notes:     notes,
-		Primary:   m.pendingPrimary(counts),
-		Secondary: append(m.pendingSecondary(counts, false), m.rescanAction()),
-	}
+// partialCoverageWording names the slots that did not complete and, when
+// known, the unverified sort. The incomplete slots and their reasons stay
+// under the title (08 §2.1, wireframe 06).
+func partialCoverageWording(in recordConclusionInput) summaryWording {
+	title, notes := partialCoverageTitleAndNotes(in)
+	return summaryWording{Title: title, Notes: notes}
 }
 
 // partialCoverageTitleAndNotes builds "没有扫全：3 号位、5 号位不完整" plus
-// "；排序未验证" when the sort was known and not verified, and lists the
-// incomplete slots under the title as 08 §2.1 and wireframe 06 require. A
-// record whose slots cannot be listed says "覆盖不完整" instead of inventing
-// names. It never says "排序不一致".
-func (m *Model) partialCoverageTitleAndNotes() (string, []string) {
-	outcomes, known := app.PositionOutcomesOf(m.rec.Shell)
+// "；排序未验证" when the sort was known and not verified. A record whose
+// slots cannot be listed says "覆盖不完整" instead of inventing names. It
+// never says "排序不一致".
+func partialCoverageTitleAndNotes(in recordConclusionInput) (string, []string) {
 	var incomplete []int
 	var notes []string
 	complete := 0
-	if known {
-		for _, outcome := range outcomes {
+	if in.PositionOutcomesKnown {
+		for _, outcome := range in.PositionOutcomes {
 			if outcome.State == app.PositionOutcomeComplete {
 				complete++
 				continue
@@ -904,8 +929,7 @@ func (m *Model) partialCoverageTitleAndNotes() (string, []string) {
 		}
 		title = "没有扫全：" + strings.Join(names, "、") + "不完整"
 	}
-	if sort, sortKnown := m.rec.Shell.SortVerification(); sortKnown &&
-		sort != record.SortVerificationVerified {
+	if in.SortKnown && in.Sort != record.SortVerificationVerified {
 		if len(incomplete) > 0 {
 			title += "；排序未验证"
 		} else {
@@ -915,94 +939,57 @@ func (m *Model) partialCoverageTitleAndNotes() (string, []string) {
 	return title, notes
 }
 
-// manualStopConclusion is the user-stopped ending. The count is the number of
+// manualStopWording is the user-stopped ending. The count is the number of
 // slots the traversal completed, not the slots it tried; a record without a
 // position ledger omits the number rather than claiming zero.
-func (m *Model) manualStopConclusion(counts app.ItemClassCounts) summaryConclusion {
+func manualStopWording(in recordConclusionInput) summaryWording {
 	title := "已手动停止"
-	if outcomes, known := app.PositionOutcomesOf(m.rec.Shell); known {
+	if in.PositionOutcomesKnown {
 		complete := 0
-		for _, outcome := range outcomes {
+		for _, outcome := range in.PositionOutcomes {
 			if outcome.State == app.PositionOutcomeComplete {
 				complete++
 			}
 		}
 		title = fmt.Sprintf("已手动停止，扫描了 %d 个号位", complete)
 	}
-	return summaryConclusion{
-		Title:     title,
-		Primary:   m.pendingPrimary(counts),
-		Secondary: append(m.pendingSecondary(counts, false), m.rescanAction()),
-	}
+	return summaryWording{Title: title}
 }
 
-// interruptedConclusion is the recovered-crash ending: the process never
-// wrote a normal termination, so the record only holds what reached disk.
-func (m *Model) interruptedConclusion(counts app.ItemClassCounts) summaryConclusion {
-	secondary := m.pendingSecondary(counts, false)
-	if len(m.rec.Rows) > 0 {
-		secondary = append(secondary, m.viewItemsAction())
-	}
-	secondary = append(secondary, m.rescanAction())
-	return summaryConclusion{
-		Title:     "扫描中断，只保存了部分结果",
-		Primary:   m.pendingPrimary(counts),
-		Secondary: secondary,
-	}
-}
-
-// faultConclusion names the fault's Chinese cause and its recovery action.
-// The code itself stays in the diagnostics section; a fault with pending
-// items offers review as a secondary path and keeps "查看已采集" and "复制
-// 诊断信息" beside it (08 §2 ③, §2.1).
-func (m *Model) faultConclusion(counts app.ItemClassCounts) summaryConclusion {
-	term := m.rec.Shell.Termination
+// faultWording names the fault's Chinese cause and its recovery action.
+// The code itself stays in the diagnostics section; the saved count and slot
+// coverage sit under the title (08 §2.1, wireframe 06 B).
+func faultWording(in recordConclusionInput) summaryWording {
+	term := in.Termination
 	title := "扫描中途停止：原因未知"
 	supplement := ""
 	if term != nil {
-		if cause := faultCauseText(term.Code, m.rec.Shell.FailureParams); cause != "" {
+		if cause := faultCauseText(term.Code, in.FailureParams); cause != "" {
 			title = "扫描中途停止：" + cause
 		}
-		if guidance, ok := faultGuidanceFor(term.Code, m.rec.Shell.FailureParams); ok && guidance.action != "" {
+		if guidance, ok := faultGuidanceFor(term.Code, in.FailureParams); ok && guidance.action != "" {
 			supplement = "怎么做：" + guidance.action
 		}
 	}
-	secondary := []summaryAction{}
-	if counts.Pending() > 0 {
-		secondary = append(secondary, m.pendingPrimary(counts))
-	}
-	if len(m.rec.Rows) > 0 {
-		secondary = append(secondary, m.viewItemsAction())
-	}
-	if term != nil && term.Code != "" {
-		secondary = append(secondary, summaryAction{Kind: summaryActionCopyDiagnostics, Label: "复制诊断信息"})
-	}
-	notes := []string{}
-	if saved := m.faultSavedLine(); saved != "" {
+	var notes []string
+	if saved := summarySavedLine(in); saved != "" {
 		notes = append(notes, saved)
 	}
-	return summaryConclusion{
-		Title:      title,
-		Supplement: supplement,
-		Notes:      notes,
-		Primary:    summaryAction{Kind: summaryActionRescan, Label: "修正后重新扫描"},
-		Secondary:  secondary,
-	}
+	return summaryWording{Title: title, Supplement: supplement, Notes: notes}
 }
 
-// faultSavedLine states how much a faulted record saved and which slots the
-// saved result covers, using the same position expansion as the details.
-func (m *Model) faultSavedLine() string {
-	if len(m.rec.Rows) == 0 {
+// summarySavedLine states how much a faulted record saved and which slots
+// the saved result covers, using the same position expansion as the details.
+func summarySavedLine(in recordConclusionInput) string {
+	if in.CapturedCount == 0 {
 		return ""
 	}
-	saved := "已保存：" + formatCount(int64(len(m.rec.Rows))) + " 件"
-	outcomes, known := app.PositionOutcomesOf(m.rec.Shell)
-	if !known {
+	saved := "已保存：" + formatCount(in.CapturedCount) + " 件"
+	if !in.PositionOutcomesKnown {
 		return saved
 	}
 	var complete, partial []int
-	for _, outcome := range outcomes {
+	for _, outcome := range in.PositionOutcomes {
 		switch outcome.State {
 		case app.PositionOutcomeComplete:
 			complete = append(complete, outcome.Position)
@@ -1045,15 +1032,15 @@ func summaryPositionRanges(positions []int) string {
 	return strings.Join(parts, "、")
 }
 
-// emptyRecordConclusion is the zero-captured-item ending. Its main action is
+// emptyRecordWording is the zero-captured-item ending. Its main action is
 // always "回到准备检查" (08 §2 ②), even when the session also failed: there is
 // nothing to review or export yet.
-func (m *Model) emptyRecordConclusion() summaryConclusion {
-	term := m.rec.Shell.Termination
+func emptyRecordWording(in recordConclusionInput) summaryWording {
+	term := in.Termination
 	cause, action := "", ""
 	if term != nil && term.Kind == record.TerminationFailed {
-		cause = faultCauseText(term.Code, m.rec.Shell.FailureParams)
-		if guidance, ok := faultGuidanceFor(term.Code, m.rec.Shell.FailureParams); ok {
+		cause = faultCauseText(term.Code, in.FailureParams)
+		if guidance, ok := faultGuidanceFor(term.Code, in.FailureParams); ok {
 			action = guidance.action
 		}
 	}
@@ -1074,15 +1061,72 @@ func (m *Model) emptyRecordConclusion() summaryConclusion {
 	default:
 		supplement = "回到准备检查后重新开始。"
 	}
-	secondary := []summaryAction{}
-	if term != nil && term.Kind == record.TerminationFailed && term.Code != "" {
-		secondary = append(secondary, summaryAction{Kind: summaryActionCopyDiagnostics, Label: "复制诊断信息"})
-	}
-	return summaryConclusion{
-		Title:      title,
-		Supplement: supplement,
-		Primary:    summaryAction{Kind: summaryActionPrepare, Label: "回到准备检查"},
-		Secondary:  secondary,
+	return summaryWording{Title: title, Supplement: supplement}
+}
+
+// summaryConclusionActions maps the shared outcome to the summary's buttons.
+// The labels are computed from the same facts as the wording, so a button
+// never lands on a different count.
+func (m *Model) summaryConclusionActions(out recordOutcome) (summaryAction, []summaryAction) {
+	in := out.Input
+	counts := in.Counts
+	switch out.Kind {
+	case recordOutcomeSaveFailed:
+		secondary := []summaryAction{}
+		if in.CapturedCount > 0 {
+			secondary = append(secondary, summaryAction{
+				Kind:  summaryActionViewItems,
+				Label: fmt.Sprintf("查看本次采集的 %s 件", formatCount(in.CapturedCount)),
+			})
+		}
+		return summaryAction{Kind: summaryActionRetrySave, Label: "重试保存"}, secondary
+	case recordOutcomeRunning:
+		return summaryAction{Kind: summaryActionPrepare, Label: "返回扫描页"}, nil
+	case recordOutcomeEmpty:
+		secondary := []summaryAction{}
+		if in.Termination != nil && in.Termination.Kind == record.TerminationFailed && in.Termination.Code != "" {
+			secondary = append(secondary, summaryAction{Kind: summaryActionCopyDiagnostics, Label: "复制诊断信息"})
+		}
+		return summaryAction{Kind: summaryActionPrepare, Label: "回到准备检查"}, secondary
+	case recordOutcomeFault:
+		secondary := []summaryAction{}
+		if counts.Pending() > 0 {
+			secondary = append(secondary, m.pendingPrimary(counts))
+		}
+		if in.CapturedCount > 0 {
+			secondary = append(secondary, m.viewItemsAction())
+		}
+		if in.Termination != nil && in.Termination.Code != "" {
+			secondary = append(secondary, summaryAction{Kind: summaryActionCopyDiagnostics, Label: "复制诊断信息"})
+		}
+		return summaryAction{Kind: summaryActionRescan, Label: "修正后重新扫描"}, secondary
+	case recordOutcomeInterrupted:
+		secondary := m.pendingSecondary(counts, false)
+		if in.CapturedCount > 0 {
+			secondary = append(secondary, m.viewItemsAction())
+		}
+		secondary = append(secondary, m.rescanAction())
+		return m.pendingPrimary(counts), secondary
+	case recordOutcomeCancelled:
+		return m.pendingPrimary(counts), append(m.pendingSecondary(counts, false), m.rescanAction())
+	case recordOutcomeCompleted, recordOutcomeUnknown:
+		switch in.Coverage {
+		case record.CoveragePartial:
+			return m.pendingPrimary(counts), append(m.pendingSecondary(counts, false), m.rescanAction())
+		case record.CoverageComplete:
+			if counts.Pending() == 0 {
+				secondary := []summaryAction{}
+				if in.CapturedCount > 0 {
+					secondary = append(secondary, summaryAction{Kind: summaryActionViewItems, Label: "查看全部件"})
+				}
+				return m.exportAction(), secondary
+			}
+			return m.pendingPrimary(counts), m.pendingSecondary(counts, true)
+		default:
+			return m.pendingPrimary(counts), m.pendingSecondary(counts, false)
+		}
+	default:
+		return summaryAction{Kind: summaryActionNone, Label: ""}, nil
 	}
 }
 

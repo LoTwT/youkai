@@ -721,23 +721,39 @@ func TestRecordConclusion(t *testing.T) {
 	completed := &record.Termination{
 		Kind: record.TerminationCompleted, Code: "verifiedEnd", Phase: record.PhaseCapturing,
 	}
+	knownPartial := []app.PositionOutcome{
+		{Position: 1, State: app.PositionOutcomeDegraded, Stage: "filter", ReasonCode: "navigationMismatch"},
+		{Position: 2, State: app.PositionOutcomeTruncated},
+		{Position: 3, State: app.PositionOutcomeComplete},
+		{Position: 4, State: app.PositionOutcomeComplete},
+		{Position: 5, State: app.PositionOutcomeComplete},
+		{Position: 6, State: app.PositionOutcomeComplete},
+	}
 	cases := []struct {
-		name  string
-		input recordConclusionInput
-		tag   string
-		text  string
+		name              string
+		input             recordConclusionInput
+		wantOutcome       recordOutcomeKind
+		tag               string
+		text              string
+		summaryTitle      string
+		summarySupplement string
+		summaryNotes      string
 	}{
 		{
-			name:  "unreadable",
-			input: recordConclusionInput{Unreadable: true},
-			tag:   "!",
-			text:  "无法打开：记录不可读",
+			name:         "unreadable",
+			input:        recordConclusionInput{Unreadable: true},
+			wantOutcome:  recordOutcomeUnreadable,
+			tag:          "!",
+			text:         "无法打开：记录不可读",
+			summaryTitle: "记录读取失败",
 		},
 		{
-			name:  "interrupted",
-			input: recordConclusionInput{Interrupted: true, CapturedCount: 3},
-			tag:   "中断",
-			text:  "已恢复已保存部分",
+			name:         "interrupted",
+			input:        recordConclusionInput{Interrupted: true, CapturedCount: 3},
+			wantOutcome:  recordOutcomeInterrupted,
+			tag:          "中断",
+			text:         "已恢复已保存部分",
+			summaryTitle: "扫描中断，只保存了部分结果",
 		},
 		{
 			name: "all pass",
@@ -745,7 +761,9 @@ func TestRecordConclusion(t *testing.T) {
 				Termination: completed, Coverage: record.CoverageComplete,
 				CapturedCount: 1_017, Counts: app.ItemClassCounts{Passed: 1_017},
 			},
-			text: "扫全了，可以直接导出",
+			wantOutcome:  recordOutcomeCompleted,
+			text:         "扫全了，可以直接导出",
+			summaryTitle: "扫全了，可以直接导出",
 		},
 		{
 			name: "one pending review",
@@ -754,7 +772,9 @@ func TestRecordConclusion(t *testing.T) {
 				CapturedCount: 1_017,
 				Counts:        app.ItemClassCounts{Passed: 1_016, PendingReview: 1},
 			},
-			text: "扫全了，1 件待校对",
+			wantOutcome:  recordOutcomeCompleted,
+			text:         "扫全了，1 件待校对",
+			summaryTitle: "扫全了，还有 1 件待校对",
 		},
 		{
 			name: "pending backfill and review",
@@ -763,7 +783,9 @@ func TestRecordConclusion(t *testing.T) {
 				CapturedCount: 8,
 				Counts:        app.ItemClassCounts{Passed: 6, PendingBackfill: 1, PendingReview: 1},
 			},
-			text: "扫全了，2 件待处理",
+			wantOutcome:  recordOutcomeCompleted,
+			text:         "扫全了，2 件待处理",
+			summaryTitle: "扫全了，还有 1 件待校对、1 件待补录",
 		},
 		{
 			name: "warnings stay exportable",
@@ -771,7 +793,9 @@ func TestRecordConclusion(t *testing.T) {
 				Termination: completed, Coverage: record.CoverageComplete,
 				CapturedCount: 8, Counts: app.ItemClassCounts{Passed: 6, Warning: 2},
 			},
-			text: "扫全了，2 件有警告",
+			wantOutcome:  recordOutcomeCompleted,
+			text:         "扫全了，2 件有警告",
+			summaryTitle: "扫全了，可以直接导出",
 		},
 		{
 			name: "partial coverage",
@@ -779,7 +803,9 @@ func TestRecordConclusion(t *testing.T) {
 				Termination: completed, Coverage: record.CoveragePartial,
 				CapturedCount: 6, Counts: app.ItemClassCounts{Passed: 6},
 			},
-			text: "没有扫全 · 覆盖：部分",
+			wantOutcome:  recordOutcomeCompleted,
+			text:         "没有扫全 · 覆盖：部分",
+			summaryTitle: "没有扫全：覆盖不完整",
 		},
 		{
 			name: "partial coverage with known positions",
@@ -787,8 +813,12 @@ func TestRecordConclusion(t *testing.T) {
 				Termination: completed, Coverage: record.CoveragePartial,
 				CapturedCount: 6, Counts: app.ItemClassCounts{Passed: 6},
 				IncompletePositions: 2, IncompletePositionsKnown: true,
+				PositionOutcomes: knownPartial, PositionOutcomesKnown: true,
 			},
-			text: "没有扫全 · 2 个号位不完整",
+			wantOutcome:  recordOutcomeCompleted,
+			text:         "没有扫全 · 2 个号位不完整",
+			summaryTitle: "没有扫全：1 号位、2 号位不完整",
+			summaryNotes: "其余 4 个号位完整",
 		},
 		{
 			name: "manual stop",
@@ -799,7 +829,9 @@ func TestRecordConclusion(t *testing.T) {
 				Coverage: record.CoveragePartial, CapturedCount: 2,
 				Counts: app.ItemClassCounts{Passed: 2},
 			},
-			text: "手动停止 · 覆盖：部分",
+			wantOutcome:  recordOutcomeCancelled,
+			text:         "手动停止 · 覆盖：部分",
+			summaryTitle: "已手动停止",
 		},
 		{
 			name: "fault while capturing",
@@ -810,8 +842,12 @@ func TestRecordConclusion(t *testing.T) {
 				Coverage: record.CoveragePartial, CapturedCount: 431,
 				Counts: app.ItemClassCounts{Passed: 429, PendingReview: 2},
 			},
-			tag:  "失败",
-			text: "中途停止：游戏失去了焦点",
+			wantOutcome:       recordOutcomeFault,
+			tag:               "失败",
+			text:              "中途停止：游戏失去了焦点",
+			summaryTitle:      "扫描中途停止：游戏失去了焦点",
+			summarySupplement: "怎么做：扫描时请不要切换应用。",
+			summaryNotes:      "已保存：431 件",
 		},
 		{
 			name: "stopped before starting",
@@ -821,24 +857,61 @@ func TestRecordConclusion(t *testing.T) {
 				},
 				Coverage: record.CoverageUnknown,
 			},
-			tag:  "失败",
-			text: "没有开始：30 秒内游戏没有就绪",
+			wantOutcome:  recordOutcomeEmpty,
+			tag:          "失败",
+			text:         "没有开始：30 秒内游戏没有就绪",
+			summaryTitle: "没有采集到任何驱动盘：30 秒内游戏没有就绪",
+		},
+		{
+			name: "save failure outranks zero items",
+			input: recordConclusionInput{
+				SaveFailed: true, CapturedCount: 0,
+			},
+			wantOutcome:       recordOutcomeSaveFailed,
+			tag:               "!",
+			text:              "保存失败",
+			summaryTitle:      "扫描结果还没有保存",
+			summarySupplement: "保存失败，请重试。",
 		},
 	}
 	// Running is model state rather than record data; the shared function
 	// still owns the wording.
 	cases = append(cases, struct {
-		name  string
-		input recordConclusionInput
-		tag   string
-		text  string
-	}{name: "scan still running", input: recordConclusionInput{ScanNotWrapped: true}, text: "扫描进行中"})
+		name              string
+		input             recordConclusionInput
+		wantOutcome       recordOutcomeKind
+		tag               string
+		text              string
+		summaryTitle      string
+		summarySupplement string
+		summaryNotes      string
+	}{
+		name:         "scan still running",
+		input:        recordConclusionInput{ScanNotWrapped: true},
+		wantOutcome:  recordOutcomeRunning,
+		text:         "扫描进行中",
+		summaryTitle: "扫描还没有结束",
+	})
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			out := recordOutcomeFor(tc.input)
+			if out.Kind != tc.wantOutcome {
+				t.Fatalf("outcome = %v, want %v", out.Kind, tc.wantOutcome)
+			}
 			got := recordConclusionFor(tc.input)
 			if got.tag != tc.tag || got.text != tc.text {
-				t.Fatalf("result = %q/%q, want %q/%q", got.tag, got.text, tc.tag, tc.text)
+				t.Fatalf("list = %q/%q, want %q/%q", got.tag, got.text, tc.tag, tc.text)
+			}
+			summary := recordSummaryWording(out)
+			if summary.Title != tc.summaryTitle {
+				t.Fatalf("summary title = %q, want %q", summary.Title, tc.summaryTitle)
+			}
+			if tc.summarySupplement != "" && !strings.Contains(summary.Supplement, tc.summarySupplement) {
+				t.Fatalf("summary supplement = %q, want it to contain %q", summary.Supplement, tc.summarySupplement)
+			}
+			if tc.summaryNotes != "" && !strings.Contains(strings.Join(summary.Notes, "\n"), tc.summaryNotes) {
+				t.Fatalf("summary notes = %q, want them to contain %q", summary.Notes, tc.summaryNotes)
 			}
 		})
 	}
