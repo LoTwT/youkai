@@ -52,10 +52,13 @@ type recordWorkspaceState struct {
 	// loaded from disk.
 	liveSavedShown int
 
-	// The browser state: segment, the chosen row and its stable capture
-	// sequence, and the first visible row. The item list is 240 DIP; the
-	// old search and set/slot filters are gone with the final design.
+	// The browser state: segment, set/slot facets, the chosen row and its
+	// stable capture sequence, and the first visible row. The item list is
+	// 240 DIP; the facets narrow the chosen segment without changing the
+	// record-wide segment counts.
 	filter           resultFilter
+	setFilter        string
+	slotFilter       string
 	selected         int
 	selectedSequence int64
 	scroll           int
@@ -76,6 +79,9 @@ type recordWorkspaceState struct {
 	formExtrasOpen     bool
 	formRawOpen        bool
 	compactListOpen    bool
+	// compactListFocusRequested asks the compact popover's list to take the
+	// keyboard once, after the anchor opens it.
+	compactListFocusRequested bool
 	// focusListRequested asks the next list build to take the keyboard;
 	// ListState.Focus must be called while its rows are being built.
 	focusListRequested bool
@@ -173,16 +179,6 @@ func (m *Model) pendingItemsCount() int {
 	return int(m.classCounts().Pending())
 }
 
-// pendingReviewCount is the review queue alone (backfill excluded): the
-// rows a confirmation settles and "下一个待校对" moves between.
-func (m *Model) pendingReviewCount() int {
-	return int(m.classCounts().PendingReview)
-}
-
-// pendingCount is the review queue's historical name used by the review
-// action tests; it never includes backfill.
-func (m *Model) pendingCount() int { return m.pendingReviewCount() }
-
 // selectReviewRegion moves the keyboard to one of the review's three
 // regions on the next frame.
 func (m *Model) selectReviewRegion(region reviewRegion) {
@@ -242,12 +238,12 @@ func (m *Model) firstReviewField() FormField {
 	problems := m.reviewProblems(row)
 	for _, problem := range problems {
 		if field := canonicalFormField(problem.Field); field != "" && problem.Blocks() {
-			return reviewFocusField(field)
+			return field
 		}
 	}
 	for _, problem := range problems {
 		if field := canonicalFormField(problem.Field); field != "" {
-			return reviewFocusField(field)
+			return field
 		}
 	}
 	return FormFieldSetID
@@ -264,8 +260,12 @@ func (m *Model) selectedRow() *Row {
 // zoomCrop steps the screenshot zoom in or out; reset returns to fitting
 // the screenshot area.
 func (m *Model) zoomCrop(delta float32) {
+	previous := m.cropZoom
 	if delta == 0 {
 		m.cropZoom = 0
+		if previous != 0 && m.cache != nil {
+			m.cache.reset()
+		}
 		return
 	}
 	zoom := m.cropZoom
@@ -282,7 +282,13 @@ func (m *Model) zoomCrop(delta float32) {
 	if zoom <= 1 {
 		zoom = 0
 	}
+	if zoom == previous {
+		return
+	}
 	m.cropZoom = zoom
+	if m.cache != nil {
+		m.cache.reset()
+	}
 }
 
 // captureResultPlace records the list's actual scroll position before the
@@ -310,6 +316,7 @@ func (m *Model) showRecord(id string, live bool) {
 	m.cropZoom = 0
 	m.formExtrasOpen = false
 	m.compactListOpen = false
+	m.compactListFocusRequested = false
 	m.edit = nil
 	m.navPrompt = nil
 	m.reviewErr = ""

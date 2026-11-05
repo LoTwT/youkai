@@ -709,7 +709,8 @@ func (m *Model) confirmCurrentAction(action reviewAction) {
 	}
 	m.lastAction = action
 	row := &m.rec.Rows[m.selected]
-	if row.Status != record.StatusProduced || row.Structured == nil || !row.PendingReview() {
+	if row.Status == record.StatusQueued || row.Status == record.StatusRunning ||
+		row.Structured == nil || !row.PendingReview() {
 		return
 	}
 	check := app.CheckDiscData(row.Structured.Data)
@@ -783,7 +784,7 @@ func (m *Model) submitReview(recordID string, seq, expectedRevision int64, data 
 						m.list.ScrollIntoView(display)
 					}
 					m.focusFirstReviewField()
-				} else if m.pendingReviewCount() > 0 {
+				} else if m.pendingItemsCount() > 0 {
 					// Pending work remains but none of it is in the
 					// current segment. Drop a confirmed row that filtered
 					// itself out instead of leaving a hidden selection.
@@ -797,7 +798,7 @@ func (m *Model) submitReview(recordID string, seq, expectedRevision int64, data 
 				case m.pendingItemsCount() == 0:
 					m.reviewNotice = m.pendingText()
 				case next < 0:
-					m.reviewNotice = "后面没有待校对项。"
+					m.reviewNotice = "后面没有待处理项。"
 				default:
 					m.reviewNotice = fmt.Sprintf("已确认并定位下一项（序号 %d）。", m.rec.Rows[next].Seq)
 				}
@@ -888,7 +889,8 @@ func (m *Model) nextPendingAfter(seq int64) int {
 		if index == start {
 			return -1
 		}
-		if m.rec.Rows[index].PendingReview() {
+		switch m.rec.Rows[index].ItemClass {
+		case app.ItemClassPendingBackfill, app.ItemClassPendingReview:
 			return index
 		}
 		return -1

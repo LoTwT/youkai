@@ -840,10 +840,10 @@ func TestNavRailRecordsRevalidatesConfirmedStaySelection(t *testing.T) {
 
 	m.confirmCurrentStay()
 	settle(t, m, q, tt)
-	if visible := m.visibleResultRows(); m.pendingCount() != 1 || len(visible) != 2 ||
+	if visible := m.visibleResultRows(); m.pendingItemsCount() != 1 || len(visible) != 2 ||
 		m.selected != 0 || m.selectedSeq() != 1 {
 		t.Fatalf("confirm-stay setup: pending %d selected %d (seq %d) visible %v",
-			m.pendingCount(), m.selected, m.selectedSeq(), visible)
+			m.pendingItemsCount(), m.selected, m.selectedSeq(), visible)
 	}
 
 	if err := tt.Click("设置"); err != nil {
@@ -934,10 +934,10 @@ func TestHistoryConfirmedStayListReopenRevalidatesSelection(t *testing.T) {
 					// segment only while the results page stays open.
 					wantVisible = 2
 				}
-				if visible := m.visibleResultRows(); m.pendingCount() != rows-1 ||
+				if visible := m.visibleResultRows(); m.pendingItemsCount() != rows-1 ||
 					len(visible) != wantVisible || m.selected != 0 || m.selectedSeq() != 1 {
 					t.Fatalf("confirm-stay setup: pending %d selected %d (seq %d) visible %v",
-						m.pendingCount(), m.selected, m.selectedSeq(), visible)
+						m.pendingItemsCount(), m.selected, m.selectedSeq(), visible)
 				}
 
 				if err := tt.Click("‹ 全部记录"); err != nil {
@@ -1327,8 +1327,8 @@ func TestNavRailSessionConfirmedStayRevisitRevalidates(t *testing.T) {
 					t.Fatalf("click 确认并下一项: %v", err)
 				}
 				settle(t, m, q, tt)
-				if m.pendingCount() != rows-1 {
-					t.Fatalf("confirm-stay left %d pending rows, want %d", m.pendingCount(), rows-1)
+				if m.pendingItemsCount() != rows-1 {
+					t.Fatalf("confirm-stay left %d pending rows, want %d", m.pendingItemsCount(), rows-1)
 				}
 
 				if err := tt.Click("设置"); err != nil {

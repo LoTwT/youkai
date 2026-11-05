@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"slices"
+	"strconv"
 
 	"github.com/LoTwT/youkai/internal/app"
 	"github.com/egoist/mygo/ui"
@@ -61,13 +62,41 @@ func (m *Model) visibleResultRows() []int {
 }
 
 // resultRowMatches reports whether one row is in the open record's current
-// segment. A just-confirmed item stays visible in the pending segment for
-// the rest of this visit, so the selection never jumps out of the list.
+// segment and matches its set/slot facets. A just-confirmed item stays
+// visible in the pending segment for the rest of this visit, so the
+// selection never jumps out of the list.
 func (m *Model) resultRowMatches(row *Row) bool {
-	if m.filter == resultFilterPending && m.recentlyConfirmedNow(row) {
-		return true
+	if !(m.filter == resultFilterPending && m.recentlyConfirmedNow(row)) {
+		if !resultRowInFilter(row, m.filter) {
+			return false
+		}
 	}
-	return resultRowInFilter(row, m.filter)
+	if m.setFilter != "" {
+		if row.Structured == nil || row.Structured.Data.SetID == nil ||
+			strconv.Itoa(*row.Structured.Data.SetID) != m.setFilter {
+			return false
+		}
+	}
+	if m.slotFilter != "" {
+		if row.Structured == nil || row.Structured.Data.Slot == nil ||
+			strconv.Itoa(*row.Structured.Data.Slot) != m.slotFilter {
+			return false
+		}
+	}
+	return true
+}
+
+// hasResultFacets reports whether a set or slot facet narrows the current
+// segment.
+func (m *Model) hasResultFacets() bool {
+	return m.setFilter != "" || m.slotFilter != ""
+}
+
+// clearResultFacets removes the set/slot narrowing and settles the list.
+func (m *Model) clearResultFacets() {
+	m.setFilter = ""
+	m.slotFilter = ""
+	m.afterResultFilterChange()
 }
 
 // resultFilterCount is the record-wide count of one segment.
@@ -143,6 +172,9 @@ func (m *Model) clampResultScroll() {
 // filteredEmptyText explains an empty segment and the way back to the
 // whole record.
 func (m *Model) filteredEmptyText() string {
+	if m.hasResultFacets() {
+		return "没有符合筛选条件的条目。"
+	}
 	switch m.filter {
 	case resultFilterPending:
 		if m.pendingItemsCount() == 0 {
@@ -169,6 +201,9 @@ func resultDisplayIndex(visible []int, full int) int {
 // afterResultFilterChange settles a segment choice made in the compact
 // strip or the list.
 func (m *Model) afterResultFilterChange() {
+	// A facet change is a new visit to the filtered list: a confirmed item
+	// that only lingered in the pending segment no longer belongs here.
+	m.clearRecentlyConfirmed()
 	m.settleResultSelection()
 	m.tableSelected = resultDisplayIndex(m.visibleResultRows(), m.selected)
 }
@@ -186,6 +221,115 @@ func (m *Model) resultsFilterBar(c *ui.Context, t *ui.Theme) {
 		m.setResultFilter(resultFilterOrder[*choice])
 		m.afterResultFilterChange()
 	}
+}
+
+// resultsFacetFilters are the set and slot narrowing controls. They sit
+// under the three segments in the standard list and at the top of the
+// compact popover; they never replace the three segments themselves.
+func (m *Model) resultsFacetFilters(c *ui.Context, t *ui.Theme, width float32) {
+	changed := false
+	ui.Row(c).Gap(t.Space(1)).AlignItems(ui.Center).Children(func() {
+		setLabel := setFilterLabel(m.setFilter)
+		before := setLabel
+		ui.Select(c, &setLabel, setFilterChoices(m.rec.Rows, m.setFilter)).
+			Width(width).Shrink(1).Label("套装筛选")
+		if setLabel != before {
+			if setLabel == "全部套装" {
+				m.setFilter = ""
+			} else {
+				m.setFilter = optionValue(setLabel)
+			}
+			changed = true
+		}
+		slotLabel := slotFilterLabel(m.slotFilter)
+		before = slotLabel
+		ui.Select(c, &slotLabel, slotFilterChoices(m.slotFilter)).
+			Width(width).Shrink(1).Label("槽位筛选")
+		if slotLabel != before {
+			if slotLabel == "全部槽位" {
+				m.slotFilter = ""
+			} else {
+				m.slotFilter = optionValue(slotLabel)
+			}
+			changed = true
+		}
+	})
+	if changed {
+		m.afterResultFilterChange()
+	}
+}
+
+// setFilterLabel is the picker's label for the current facet id.
+func parseDecimal(text string) int {
+	value, ok := parseDecimalInt(text)
+	if !ok {
+		return -1
+	}
+	return value
+}
+
+func setFilterLabel(id string) string {
+	if id == "" || parseDecimal(id) < 0 {
+		return "全部套装"
+	}
+	return describeSet(parseDecimal(id))
+}
+
+// setFilterChoices lists "all" followed by the sets the open record
+// actually carries, so the filter never offers a catalog-wide list.
+func setFilterChoices(rows []Row, current string) []string {
+	options := []string{"全部套装"}
+	ids := make(map[int]bool)
+	for i := range rows {
+		structured := rows[i].Structured
+		if structured == nil || structured.Data.SetID == nil {
+			continue
+		}
+		ids[*structured.Data.SetID] = true
+	}
+	sorted := make([]int, 0, len(ids))
+	for id := range ids {
+		sorted = append(sorted, id)
+	}
+	slices.Sort(sorted)
+	known := false
+	for _, id := range sorted {
+		label := describeSet(id)
+		options = append(options, label)
+		if current == strconv.Itoa(id) {
+			known = true
+		}
+	}
+	if current != "" && !known && parseDecimal(current) >= 0 {
+		options = append(options, describeSet(parseDecimal(current)))
+	}
+	return options
+}
+
+// slotFilterLabel is the picker's label for the current facet id.
+func slotFilterLabel(id string) string {
+	if id == "" || parseDecimal(id) < 0 {
+		return "全部槽位"
+	}
+	return id + " 号位"
+}
+
+// slotFilterChoices lists all six slots plus an unknown current id, so a
+// legacy value stays visible for correction.
+func slotFilterChoices(current string) []string {
+	options := []string{"全部槽位"}
+	known := false
+	for slot := 1; slot <= 6; slot++ {
+		id := strconv.Itoa(slot)
+		options = append(options, id+" 号位")
+		if current == id {
+			known = true
+		}
+	}
+	if current != "" && !known {
+		options = append(options, current+" 号位")
+	}
+	return options
 }
 
 // reviewFilterChoice is the segment control's index for the current
@@ -260,9 +404,6 @@ func (m *Model) selectAdjacentVisible(direction int) {
 	}
 }
 
-// resultsRowHeight is the design's 32-DIP results row at 100% text size.
-const resultsRowHeight = 32
-
 // emptyResultsText explains a record with no items.
 func (m *Model) emptyResultsText() string {
 	if m.rec == nil {
@@ -334,7 +475,7 @@ func (m *Model) resultShortcutText() string {
 	}
 	zoom := "  ·  " + shortcutZoomIn + " 放大  ·  " + shortcutZoomOut + " 缩小"
 	if m.edit != nil {
-		return shortcutConfirmNext + " 保存并确认并下一项  ·  " + shortcutSave + " 保存修改" + zoom
+		return shortcutConfirmNext + " 确认并下一项  ·  " + shortcutSave + " 保存修改" + zoom
 	}
 	if m.rec == nil || len(m.rec.Rows) == 0 {
 		return ""

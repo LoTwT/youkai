@@ -288,51 +288,61 @@ func TestSaveRevisionStampedAtSaveTime(t *testing.T) {
 	}
 }
 
-// TestSaveRevisionCompletedTurnsBackfillIntoProduced checks the one
-// revision that changes a processing outcome: completing a failed item
-// makes it produced, clears the failure, and requires its data payload.
-func TestSaveRevisionCompletedTurnsBackfillIntoProduced(t *testing.T) {
-	st, _ := newTestStore(t)
-	id := newRecord(t, st)
-	cp := Checkpoint{Session: testShell()}
-	cp.Items = []ItemRecord{{
-		Sequence: 1,
-		Status:   StatusFailed,
-		Failure:  "识别超时",
-		Quality:  QualityNotEvaluated,
-		Observed: json.RawMessage(`{"lines":[]}`),
-	}}
-	cp.Session.CapturedCount = 1
-	saveCheckpoint(t, st, id, cp)
+// TestSaveRevisionKeepsOriginalProcessingOutcome checks the backfill
+// contract at the store: a failed or unprocessed item accepts a manual
+// revision and its data, but its original Status, Failure and Reason stay
+// unchanged across repeated saves.
+func TestSaveRevisionKeepsOriginalProcessingOutcome(t *testing.T) {
+	cases := []struct {
+		name    string
+		status  Status
+		reason  UnprocessedReason
+		failure string
+	}{
+		{"failed", StatusFailed, "", "识别超时"},
+		{"unprocessed", StatusUnprocessed, ReasonInterrupted, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			st, _ := newTestStore(t)
+			id := newRecord(t, st)
+			cp := Checkpoint{Session: testShell()}
+			cp.Items = []ItemRecord{{
+				Sequence: 1,
+				Status:   tc.status,
+				Reason:   tc.reason,
+				Failure:  tc.failure,
+				Quality:  QualityNotEvaluated,
+				Observed: json.RawMessage(`{"lines":[]}`),
+			}}
+			cp.Session.CapturedCount = 1
+			saveCheckpoint(t, st, id, cp)
 
-	item, _, err := st.SaveRevision(id, 1, 0, ItemEdit{
-		Data:      json.RawMessage(`{"structured":{"data":{}}}`),
-		Confirmed: true,
-		Completed: true,
-	})
-	if err != nil {
-		t.Fatalf("complete failed item: %v", err)
-	}
-	if item.Status != StatusProduced || item.Failure != "" || item.Reason != "" {
-		t.Fatalf("completed item = %+v, want produced with no failure", item)
-	}
-	if item.Quality != QualityHumanConfirmed || string(item.Observed) != `{"lines":[]}` {
-		t.Fatalf("completed item = %+v, want humanConfirmed and the observation intact", item)
-	}
+			payload := json.RawMessage(`{"structured":{"data":{}}}`)
+			item, _, err := st.SaveRevision(id, 1, 0, ItemEdit{Data: payload, Confirmed: true})
+			if err != nil {
+				t.Fatalf("backfill %s item: %v", tc.name, err)
+			}
+			if item.Status != tc.status || item.Failure != tc.failure || item.Reason != tc.reason {
+				t.Fatalf("backfilled item = status %q failure %q reason %q, want the original outcome",
+					item.Status, item.Failure, item.Reason)
+			}
+			if item.Quality != QualityHumanConfirmed || item.Revision != 1 ||
+				len(item.Revisions) != 1 || string(item.Observed) != `{"lines":[]}` {
+				t.Fatalf("backfilled item = %+v, want humanConfirmed revision 1 with the observation intact", item)
+			}
 
-	if _, _, err := st.SaveRevision(id, 1, 1, ItemEdit{Completed: true}); err == nil {
-		t.Fatal("a completed revision without data succeeded")
-	}
-}
-
-func TestSaveRevisionCompletedNeedsData(t *testing.T) {
-	st, _ := newTestStore(t)
-	id := newRecord(t, st)
-	cp := Checkpoint{Session: testShell()}
-	cp.Items = []ItemRecord{{Sequence: 1, Status: StatusFailed, Failure: "识别超时", Quality: QualityNotEvaluated}}
-	cp.Session.CapturedCount = 1
-	saveCheckpoint(t, st, id, cp)
-	if _, _, err := st.SaveRevision(id, 1, 0, ItemEdit{Completed: true}); err == nil {
-		t.Fatal("a completed revision without data succeeded")
+			item, _, err = st.SaveRevision(id, 1, 1, ItemEdit{Data: payload, Confirmed: true})
+			if err != nil {
+				t.Fatalf("second backfill %s item: %v", tc.name, err)
+			}
+			if item.Status != tc.status || item.Failure != tc.failure || item.Reason != tc.reason {
+				t.Fatalf("second backfill = status %q failure %q reason %q, want the original outcome",
+					item.Status, item.Failure, item.Reason)
+			}
+			if item.Revision != 2 || len(item.Revisions) != 2 {
+				t.Fatalf("second backfill revisions = %d/%d, want 2/2", item.Revision, len(item.Revisions))
+			}
+		})
 	}
 }

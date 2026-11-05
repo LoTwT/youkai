@@ -720,8 +720,8 @@ func (m *Model) openRecord(id string) {
 		// Entering from the list is a new visit: the previous visit's
 		// confirmed-and-stayed rows leave the pending segment, so the
 		// selection is checked against the rows the filters still show.
-		// Everything else — filters, search, set/slot choices, a still
-		// visible selection, scroll and the unsaved edit — stays.
+		// Everything else — the segment, set/slot facets, a still visible
+		// selection, scroll and the unsaved edit — stays.
 		m.clearRecentlyConfirmed()
 		m.settleResultSelection()
 		return

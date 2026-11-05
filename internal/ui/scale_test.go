@@ -89,12 +89,12 @@ func TestScaleBuildRecordViewOneAndTenThousandRows(t *testing.T) {
 
 			m := &Model{rec: view}
 			wantPending := n - n/10
-			if got := m.pendingCount(); got != wantPending {
+			if got := m.pendingItemsCount(); got != wantPending {
 				t.Fatalf("pending count = %d, want %d", got, wantPending)
 			}
 			m.filter = resultFilterPending
 			if visible := m.visibleResultRows(); len(visible) != wantPending {
-				t.Fatalf("the pending list renders %d rows, want %d", len(visible), wantPending)
+				t.Fatalf("the pending segment contains %d rows, want %d", len(visible), wantPending)
 			}
 			// Index 0 is settled (auto-accepted); the next pending row is
 			// index 1. Index 8 (seq 9) is pending, index 9 (seq 10) is
@@ -157,7 +157,7 @@ func TestScaleContinuousReviewAdvancesThroughPendingRows(t *testing.T) {
 
 	start := time.Now()
 	for round := range rounds {
-		if got := m.pendingCount(); got != total-round {
+		if got := m.pendingItemsCount(); got != total-round {
 			t.Fatalf("round %d: pending = %d, want %d", round, got, total-round)
 		}
 		if m.selected != round {
@@ -174,7 +174,7 @@ func TestScaleContinuousReviewAdvancesThroughPendingRows(t *testing.T) {
 	}
 	elapsed := time.Since(start)
 
-	if got := m.pendingCount(); got != total-rounds {
+	if got := m.pendingItemsCount(); got != total-rounds {
 		t.Fatalf("pending after %d rounds = %d, want %d", rounds, got, total-rounds)
 	}
 	if m.selected != rounds {
@@ -337,7 +337,7 @@ func TestScalePendingNavigationHandlesTenThousandRows(t *testing.T) {
 		Checkpoint: record.Checkpoint{Items: scaleItems(t, n, 10)},
 	}, false)
 	m := &Model{rec: view}
-	if got := m.pendingCount(); got != n-n/10 {
+	if got := m.pendingItemsCount(); got != n-n/10 {
 		t.Fatalf("pending count = %d, want %d", got, n-n/10)
 	}
 	if got := m.nextPendingAfter(8); got != 8 {

@@ -25,6 +25,7 @@ const (
 // problem the item list's category classification counts.
 type reviewProblem struct {
 	Field    string
+	Code     string
 	Message  string
 	Severity zzz.Severity
 	Kind     reviewProblemKind
@@ -128,32 +129,41 @@ func (m *Model) reviewProblems(row *Row) []reviewProblem {
 	editing := m.edit != nil && m.rec != nil &&
 		m.edit.recordID == m.rec.ID && m.edit.seq == row.Seq
 	var problems []reviewProblem
+	// Problems are deduplicated by (field, code), not by their prose: a
+	// persisted old message and the current validation can describe the
+	// same issue with different wording. A problem without a code keeps
+	// its message as the identity.
 	seen := make(map[string]struct{})
-	add := func(field, message string, severity zzz.Severity, kind reviewProblemKind) {
+	add := func(field, code, message string, severity zzz.Severity, kind reviewProblemKind) {
+		message = reviewIssueMessage(code, message)
 		if message == "" {
 			return
 		}
-		key := field + "\x00" + message
+		identity := code
+		if identity == "" {
+			identity = message
+		}
+		key := field + "\x00" + identity
 		if _, ok := seen[key]; ok {
 			return
 		}
 		seen[key] = struct{}{}
 		problems = append(problems, reviewProblem{
-			Field: field, Message: message, Severity: severity, Kind: kind,
+			Field: field, Code: code, Message: message, Severity: severity, Kind: kind,
 		})
 	}
 	if editing {
 		for _, problem := range m.edit.fieldErrors {
-			add(problem.Field, problem.Message, zzz.SeverityError, reviewProblemBlocking)
+			add(problem.Field, "", problem.Message, zzz.SeverityError, reviewProblemBlocking)
 		}
 		for _, issue := range m.edit.check.Blocking {
-			add(issue.Field, issue.Message, zzz.SeverityError, reviewProblemBlocking)
+			add(issue.Field, issue.Code, issue.Message, zzz.SeverityError, reviewProblemBlocking)
 		}
 		for _, gap := range m.edit.check.Gaps {
-			add(gap.Field, gap.Message, zzz.SeverityWarning, reviewProblemGap)
+			add(gap.Field, gap.Code, gap.Message, zzz.SeverityWarning, reviewProblemGap)
 		}
 		for _, warning := range m.edit.check.Warnings {
-			add(warning.Field, warning.Message, zzz.SeverityWarning, reviewProblemWarning)
+			add(warning.Field, warning.Code, warning.Message, zzz.SeverityWarning, reviewProblemWarning)
 		}
 		if row.Structured != nil {
 			for _, issue := range row.Structured.Issues {
@@ -161,31 +171,31 @@ func (m *Model) reviewProblems(row *Row) []reviewProblem {
 				if issue.Severity == zzz.SeverityError {
 					kind = reviewProblemBlocking
 				}
-				add(issue.Field, issue.Message, issue.Severity, kind)
+				add(issue.Field, issue.Code, issue.Message, issue.Severity, kind)
 			}
 		}
 	} else if row.Structured != nil {
 		check := app.CheckDiscData(row.Structured.Data)
 		for _, issue := range check.Blocking {
-			add(issue.Field, issue.Message, zzz.SeverityError, reviewProblemBlocking)
+			add(issue.Field, issue.Code, issue.Message, zzz.SeverityError, reviewProblemBlocking)
 		}
 		for _, gap := range check.Gaps {
-			add(gap.Field, gap.Message, zzz.SeverityWarning, reviewProblemGap)
+			add(gap.Field, gap.Code, gap.Message, zzz.SeverityWarning, reviewProblemGap)
 		}
 		for _, warning := range check.Warnings {
-			add(warning.Field, warning.Message, zzz.SeverityWarning, reviewProblemWarning)
+			add(warning.Field, warning.Code, warning.Message, zzz.SeverityWarning, reviewProblemWarning)
 		}
 		for _, issue := range row.Structured.Issues {
 			kind := reviewProblemWarning
 			if issue.Severity == zzz.SeverityError {
 				kind = reviewProblemBlocking
 			}
-			add(issue.Field, issue.Message, issue.Severity, kind)
+			add(issue.Field, issue.Code, issue.Message, issue.Severity, kind)
 		}
 	} else {
 		check := app.CheckDiscData(zzz.DiscData{})
 		for _, gap := range check.Gaps {
-			add(gap.Field, gap.Message, zzz.SeverityWarning, reviewProblemGap)
+			add(gap.Field, gap.Code, gap.Message, zzz.SeverityWarning, reviewProblemGap)
 		}
 	}
 	sort.SliceStable(problems, func(i, j int) bool {
@@ -202,15 +212,47 @@ func (m *Model) reviewProblems(row *Row) []reviewProblem {
 	return problems
 }
 
-// reviewFocusField maps a field to the control that owns its input. The
-// four substat rows share one group control, so focus and highlight land
-// there instead of on a row that is never rendered alone.
-func reviewFocusField(field FormField) FormField {
+// reviewIssueMessage generates the current interface text for codes whose
+// persisted message may be stale. Unmapped codes keep the record's own
+// prose.
+func reviewIssueMessage(code, message string) string {
+	switch code {
+	case zzz.CodeRarityUnverified:
+		return "本次捕获没有已验证的 S 稀有度，稀有度保持未读取"
+	}
+	return message
+}
+
+// isSubstatField reports one of the four row fields inside the group.
+func isSubstatField(field FormField) bool {
 	switch field {
 	case FormFieldSubstat1, FormFieldSubstat2, FormFieldSubstat3, FormFieldSubstat4:
+		return true
+	}
+	return false
+}
+
+// substatFormField names the row field for a zero-based substat index.
+func substatFormField(index int) FormField {
+	switch index {
+	case 0:
+		return FormFieldSubstat1
+	case 1:
+		return FormFieldSubstat2
+	case 2:
+		return FormFieldSubstat3
+	case 3:
+		return FormFieldSubstat4
+	default:
 		return FormFieldSubstats
 	}
-	return field
+}
+
+// reviewFieldShows reports whether a built field should show the selected
+// highlight. The substat group contains the four individually selected
+// rows, so any of them highlights the group.
+func reviewFieldShows(field, selected FormField) bool {
+	return field == selected || (field == FormFieldSubstats && isSubstatField(selected))
 }
 
 // problemMatchesField reports whether a problem is shown under field. The
@@ -342,6 +384,13 @@ func (m *Model) reviewConfirmBlockedReason(row *Row) string {
 
 // backfillNotice is the form's top band for a failed or unprocessed item.
 func backfillNotice(row *Row) string {
+	if row.Backfilled {
+		notice := "已补录（原：" + row.OriginalOutcomeText() + "）；原始处理结局保持不变。"
+		if row.ItemClass == app.ItemClassPassed || row.ItemClass == app.ItemClassWarning {
+			return notice + "当前修订可导出。"
+		}
+		return notice + "仍有字段待校对。"
+	}
 	switch row.Status {
 	case record.StatusFailed:
 		return "补录：这件识别失败，补全必填字段后才能导出。"

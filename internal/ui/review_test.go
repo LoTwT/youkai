@@ -5,12 +5,14 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/LoTwT/youkai/internal/app"
 	"github.com/LoTwT/youkai/internal/game/zzz"
 	"github.com/LoTwT/youkai/internal/record"
+	"github.com/LoTwT/youkai/internal/scan"
 	"github.com/egoist/mygo/ui"
 )
 
@@ -409,9 +411,9 @@ func TestReviewMissingImagePerRow(t *testing.T) {
 	}
 }
 
-// TestReviewBackfillCompletesItem drives the failed item's form to a
+// TestReviewBackfillKeepsOriginalOutcome drives the failed item's form to a
 // confirmed completion and checks it joins the export.
-func TestReviewBackfillCompletesItem(t *testing.T) {
+func TestReviewBackfillKeepsOriginalOutcome(t *testing.T) {
 	failed := item(1, record.StatusFailed, "", "识别超时", "失败一")
 	m, q, tt, svc := openReviewableResults(t, recovery(failed), 1180, 760)
 	saves := 0
@@ -455,11 +457,14 @@ func TestReviewBackfillCompletesItem(t *testing.T) {
 		t.Fatal("the backfill was not saved")
 	}
 	row := &m.rec.Rows[0]
-	if row.Status != record.StatusProduced || row.Quality != record.QualityHumanConfirmed {
-		t.Fatalf("the completed row = status %q quality %q", row.Status, row.Quality)
+	if row.Status != record.StatusFailed || row.Failure != "识别超时" ||
+		row.Quality != record.QualityHumanConfirmed {
+		t.Fatalf("the backfilled row = status %q failure %q quality %q",
+			row.Status, row.Failure, row.Quality)
 	}
-	if row.ItemClass != app.ItemClassPassed {
-		t.Fatalf("the completed row class = %q, want passed", row.ItemClass)
+	if !row.Backfilled || row.ItemClass != app.ItemClassPassed {
+		t.Fatalf("the backfilled row = backfilled %v class %q, want true/passed",
+			row.Backfilled, row.ItemClass)
 	}
 	if m.pendingItemsCount() != 0 {
 		t.Fatalf("pending after completion = %d", m.pendingItemsCount())
@@ -657,4 +662,335 @@ func tallBitmap(seed int) *ui.Bitmap {
 		}
 	}
 	return ui.NewBitmap(img)
+}
+
+// TestReviewConfirmNextReachesBackfill checks that the keyboard and the
+// confirm button use the same pending queue: a backfill item is a valid
+// next item even though it is not a "pending review" quality row.
+func TestReviewConfirmNextReachesBackfill(t *testing.T) {
+	first := reviewRowItem(t, 1, 15)
+	failed := item(2, record.StatusFailed, "", "识别超时", "失败")
+	m, q, tt, _ := openReviewableResults(t, recovery(first, failed), 1180, 760)
+	m.saveEdit(reviewConfirmNext, nil)
+	drainAll(t, m, q)
+	tt.Frame()
+	tt.Frame()
+	if m.selected != 1 {
+		t.Fatalf("confirm-and-next selected %d, want the backfill item 1 (notice %q)", m.selected, m.reviewNotice)
+	}
+	if m.edit == nil || !m.edit.backfill {
+		t.Fatalf("the next backfill item did not open its editor: %+v", m.edit)
+	}
+	if m.reviewNotice == "后面没有待校对项。" {
+		t.Fatal("confirm-and-next claimed no next item while one pending item remains")
+	}
+}
+
+// TestReviewSubstatGroupHasCrops checks that selecting the substat group
+// highlights all four row crops and never says the field has no screenshot.
+func TestReviewSubstatGroupHasCrops(t *testing.T) {
+	roles := []string{"name", "level", "main", "sub1", "sub2", "sub3", "sub4"}
+	item := roledItem(t, 1, roles, nil, []string{"a", "b", "c", "d", "e", "f", "g"})
+	m, _, tt := openResponsiveResults(t, recovery(item), 1180, 760)
+	if got := EvidenceRolesForField(FormFieldSubstats); len(got) != 4 {
+		t.Fatalf("substat group roles = %v, want sub1..sub4", got)
+	}
+	m.selectReviewField(FormFieldSubstats)
+	tt.Frame()
+	tt.Frame()
+	if tt.HasText("这个字段没有截图。") {
+		t.Fatalf("the substat group still claims no screenshot: %q", tt.Texts())
+	}
+	highlight := m.highlightedCropRoles(m.selectedRow(), true)
+	for _, role := range []string{"sub1", "sub2", "sub3", "sub4"} {
+		if !highlight[role] {
+			t.Fatalf("the substat group does not highlight %s: %v", role, highlight)
+		}
+	}
+}
+
+// TestReviewSubstatRowFocus checks that a per-row problem focuses that row
+// and highlights only its crop.
+func TestReviewSubstatRowFocus(t *testing.T) {
+	item := withStructured(t, reviewRowItem(t, 1, 15), func(s *zzz.StructuredDisc) {
+		second := s.Data.Substats[0]
+		second.Value = stringPtr("")
+		s.Data.Substats = append(s.Data.Substats, second)
+	})
+	m, _, tt := openResponsiveResults(t, recovery(item), 1180, 760)
+	m.requestReviewFieldFocus(FormFieldSubstat2)
+	tt.Frame()
+	tt.Frame()
+	if m.reviewField != FormFieldSubstat2 {
+		t.Fatalf("substat row focus selected %q, want %q", m.reviewField, FormFieldSubstat2)
+	}
+	highlight := m.highlightedCropRoles(m.selectedRow(), true)
+	if !highlight["sub2"] || highlight["sub1"] {
+		t.Fatalf("substat row highlight = %v, want only sub2", highlight)
+	}
+}
+
+// TestReviewFacetFilters checks the set and slot facets narrow the visible
+// rows without changing the record-wide segment counts.
+func TestReviewFacetFilters(t *testing.T) {
+	m, _, tt := openResponsiveResults(t, responsiveResultRecord(t), 1180, 760)
+	if !tt.HasText("全部套装") || !tt.HasText("全部槽位") {
+		t.Fatalf("the facet controls are missing: %q", tt.Texts())
+	}
+	pending := m.resultFilterCount(resultFilterPending)
+	m.setFilter = "31100"
+	m.afterResultFilterChange()
+	tt.Frame()
+	rows := m.visibleResultRows()
+	if len(rows) == 0 {
+		t.Fatal("the set facet hid every pending row")
+	}
+	for _, index := range rows {
+		row := &m.rec.Rows[index]
+		if row.Structured == nil || row.Structured.Data.SetID == nil ||
+			*row.Structured.Data.SetID != 31100 {
+			t.Fatalf("set facet kept row %d with set %+v", row.Seq, row.Structured)
+		}
+	}
+	if got := m.resultFilterCount(resultFilterPending); got != pending {
+		t.Fatalf("the facet changed the segment count from %d to %d", pending, got)
+	}
+	m.slotFilter = "2"
+	m.afterResultFilterChange()
+	tt.Frame()
+	for _, index := range m.visibleResultRows() {
+		row := &m.rec.Rows[index]
+		if row.Structured == nil || row.Structured.Data.Slot == nil ||
+			*row.Structured.Data.Slot != 2 {
+			t.Fatalf("slot facet kept row %d with slot %+v", row.Seq, row.Structured)
+		}
+	}
+	m.setFilter = "99999"
+	m.afterResultFilterChange()
+	tt.Frame()
+	if len(m.visibleResultRows()) != 0 {
+		t.Fatal("an impossible set facet kept rows visible")
+	}
+	if !tt.HasText("没有符合筛选条件的条目。") {
+		t.Fatalf("the facet empty explanation is missing: %q", tt.Texts())
+	}
+	if err := tt.Click("清除筛选"); err != nil {
+		t.Fatalf("click clear facets: %v", err)
+	}
+	tt.Frame()
+	if m.setFilter != "" || m.slotFilter != "" {
+		t.Fatalf("clear facets left set %q slot %q", m.setFilter, m.slotFilter)
+	}
+}
+
+// TestReviewCompactPopoverVirtualizesRows checks the compact list is a
+// virtualized List: 10,000 rows must not build a button per row.
+func TestReviewCompactPopoverVirtualizesRows(t *testing.T) {
+	m, _, tt := openResponsiveResults(t, manyPendingRecord(t, 10000), 960, 640)
+	m.compactListOpen = true
+	m.compactListFocusRequested = true
+	tt.Frame()
+	start := time.Now()
+	tt.Frame()
+	elapsed := time.Since(start)
+	if elapsed > 100*time.Millisecond {
+		t.Fatalf("the 10k compact popover frame took %v", elapsed)
+	}
+	if !tt.HasText("全部套装") || !tt.HasText("全部槽位") {
+		t.Fatalf("the compact popover lacks the set/slot facets: %q", tt.Texts())
+	}
+	first, last := m.list.Visible()
+	if first < 0 || last < first {
+		t.Fatalf("the compact list shows no rows: %d..%d", first, last)
+	}
+	rows := 0
+	for _, text := range tt.Texts() {
+		if strings.HasPrefix(text, "#") {
+			rows++
+		}
+	}
+	if rows == 0 || rows > 100 {
+		t.Fatalf("the compact popover built %d row texts, want a virtualized window", rows)
+	}
+}
+
+// TestReviewRowsFollowTextScale checks the list row height and category
+// text grow with the desktop text scale instead of clipping the row.
+func TestReviewRowsFollowTextScale(t *testing.T) {
+	open := func(scale float32) (*Model, *ui.Tester) {
+		m, q, tt := openResponsiveResults(t, manyPendingRecord(t, 20), 1180, 760)
+		if scale != 1 {
+			tt.SetPreferences(ui.Preferences{TextScale: scale})
+			settle(t, m, q, tt)
+		}
+		tt.Frame()
+		return m, tt
+	}
+	_, baseTT := open(1)
+	baseBadge, ok := baseTT.Find("待校对")
+	if !ok {
+		t.Fatalf("the 100%% badge is missing: %q", baseTT.Texts())
+	}
+
+	m, tt := open(2)
+	if m.textScale != 2 {
+		t.Fatalf("text scale = %v, want 2", m.textScale)
+	}
+	first, ok := tt.Find("#0001")
+	if !ok {
+		t.Fatalf("the first scaled row is missing: %q", tt.Texts())
+	}
+	second, ok := tt.Find("#0002")
+	if !ok {
+		t.Fatalf("the second scaled row is missing: %q", tt.Texts())
+	}
+	if gap := second.Y - first.Y; gap < reviewListRowHeight*1.8 {
+		t.Fatalf("the scaled row pitch = %.1f, want about %.1f", gap, float32(reviewListRowHeight*2))
+	}
+	badge, ok := tt.Find("待校对")
+	if !ok {
+		t.Fatalf("the scaled badge is missing: %q", tt.Texts())
+	}
+	if badge.H <= baseBadge.H {
+		t.Fatalf("the scaled badge height %v is not above the 100%% height %v", badge.H, baseBadge.H)
+	}
+	if badge.Y < first.Y || badge.Y+badge.H > first.Y+reviewListRowHeight*2 {
+		t.Fatalf("the scaled badge is clipped by its row: %+v in row at %+v", badge, first)
+	}
+}
+
+// TestReviewRarityProblemsDedupeByCode checks an old persisted message is
+// replaced by the current rarity text and shown once, not beside the
+// current validation's gap for the same code.
+func TestReviewRarityProblemsDedupeByCode(t *testing.T) {
+	item := withStructured(t, reviewRowItem(t, 1, 15), func(s *zzz.StructuredDisc) {
+		s.Data.Rarity = nil
+		s.Issues = []zzz.Issue{{
+			Field: "rarity", Code: zzz.CodeRarityUnverified,
+			Severity: zzz.SeverityWarning, Message: "本次捕获没有已验证的 S 稀有度证据，rarity 保留为 null",
+		}}
+	})
+	_, _, tt := openResponsiveResults(t, recovery(item), 1180, 760)
+	texts := strings.Join(tt.Texts(), "\n")
+	if strings.Count(texts, "稀有度保持未读取") != 1 {
+		t.Fatalf("the rarity problem is not shown once: %q", texts)
+	}
+	if strings.Contains(texts, "rarity 保留为 null") || strings.Contains(texts, "null") {
+		t.Fatalf("an old rarity message leaked into the form: %q", texts)
+	}
+}
+
+// TestReviewMappedFieldWithoutCropExplains checks a field whose evidence
+// role exists but this item has no such crop gets a note instead of
+// silently doing nothing.
+func TestReviewMappedFieldWithoutCropExplains(t *testing.T) {
+	roles := []string{"name", "level", "main", "sub1", "sub2", "sub3", "sub4"}
+	item := roledItem(t, 1, roles, nil, []string{"a", "b", "c", "d", "e", "f", "g"})
+	m, _, tt := openResponsiveResults(t, recovery(item), 1180, 760)
+	m.selectReviewField(FormFieldEquipped)
+	tt.Frame()
+	tt.Frame()
+	if !tt.HasText("这个字段的截图缺失。") {
+		t.Fatalf("the missing mapped crop is not explained: %q", tt.Texts())
+	}
+}
+
+// TestReviewFilterStateBelongsToOpenRecord checks that opening another
+// record starts with the pending segment and no facets, while reopening
+// the record already on screen keeps the user's segment and facets.
+func TestReviewFilterStateBelongsToOpenRecord(t *testing.T) {
+	svc := &fakeService{
+		list: []record.RecordInfo{{
+			ID: "old", LatestRevision: 1,
+			SavedAt: time.Date(2026, 10, 20, 22, 18, 0, 0, time.UTC),
+		}},
+		loads: map[string]*record.Recovery{
+			"old": responsiveResultRecord(t),
+			"s1":  responsiveResultRecord(t),
+		},
+	}
+	m, q := newTestModel(t, Config{Service: svc})
+	m.SetContentSize(1180, 760)
+	tt := ui.NewTester(m.View, 1180, 760)
+	settle(t, m, q, tt)
+	m.Apply(snap("s1", 1, false, scan.PhaseEnded,
+		scan.Counts{Captured: 4, Produced: 2}, 4, false, ""))
+	settle(t, m, q, tt)
+
+	m.filter = resultFilterAll
+	m.setFilter = "31100"
+	m.slotFilter = "2"
+	m.selected = 1
+	m.selectedSequence = 2
+	m.histChoice = historyLabel(t, m, "old")
+	m.OpenHistory()
+	settle(t, m, q, tt)
+	showRecordItems(m)
+	tt.Frame()
+
+	if m.rec == nil || m.rec.ID != "old" || m.rec.Live {
+		t.Fatalf("the chosen history record did not open: %+v", m.rec)
+	}
+	if m.filter != resultFilterPending || m.setFilter != "" || m.slotFilter != "" {
+		t.Fatalf("the new record kept the previous filters: filter %v set %q slot %q",
+			m.filter, m.setFilter, m.slotFilter)
+	}
+
+	m.filter = resultFilterAll
+	m.setFilter = "31200"
+	m.slotFilter = "2"
+	m.selected = 1
+	m.selectedSequence = m.rec.Rows[1].Seq
+	m.OpenHistory()
+	settle(t, m, q, tt)
+	showRecordItems(m)
+	tt.Frame()
+	if m.filter != resultFilterAll || m.setFilter != "31200" || m.slotFilter != "2" {
+		t.Fatalf("reopening reset the open record's filters: filter %v set %q slot %q",
+			m.filter, m.setFilter, m.slotFilter)
+	}
+	if m.selectedSeq() != m.rec.Rows[1].Seq {
+		t.Fatalf("the reopen moved the selection to seq %d", m.selectedSeq())
+	}
+}
+
+// TestZoomModeDropsDecodedCache checks a zoom change does not reuse a
+// bitmap whose pixelated style belongs to the previous mode.
+func TestZoomModeDropsDecodedCache(t *testing.T) {
+	item := roledItem(t, 1, []string{"name", "level"}, nil, []string{"河豚电音", "15"})
+	images := map[string]*ui.Bitmap{
+		"rec/000001-line0": tallBitmap(1),
+		"rec/000001-line1": tallBitmap(2),
+	}
+	svc := &fakeService{
+		list: []record.RecordInfo{{
+			ID: "rec", LatestRevision: 1,
+			SavedAt: time.Date(2026, 10, 21, 14, 2, 0, 0, time.UTC),
+		}},
+		loads: map[string]*record.Recovery{"rec": recovery(item)},
+	}
+	m, q := newTestModel(t, Config{Service: svc, Evidence: &fakeEvidence{images: images}})
+	m.SetContentSize(1180, 760)
+	tt := ui.NewTester(m.View, 1180, 760)
+	settle(t, m, q, tt)
+	m.histChoice = historyLabel(t, m, "rec")
+	m.OpenHistory()
+	settle(t, m, q, tt)
+	showRecordItems(m)
+	settle(t, m, q, tt)
+	tt.Frame()
+	if len(m.cache.entries) == 0 {
+		t.Fatal("the initial evidence was not cached")
+	}
+	m.zoomCrop(reviewZoomStep)
+	tt.Frame()
+	settle(t, m, q, tt)
+	if len(m.cache.entries) == 0 {
+		t.Fatal("the zoomed evidence was not reloaded into the cache")
+	}
+	m.zoomCrop(0)
+	tt.Frame()
+	if len(m.cache.entries) != 0 {
+		t.Fatalf("fit mode reused %d pixelated cache entries", len(m.cache.entries))
+	}
 }

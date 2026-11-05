@@ -117,10 +117,10 @@ func TestEditConfirmShortcutSavesTheDraft(t *testing.T) {
 		tt.Frame()
 		m.edit.draft.Level = "13"
 		tt.Frame()
-		if got := m.statusShortcutText(); got != shortcutConfirmNext+" 保存并确认并下一项  ·  "+shortcutSave+" 保存修改  ·  "+shortcutZoomIn+" 放大  ·  "+shortcutZoomOut+" 缩小" {
+		if got := m.statusShortcutText(); got != shortcutConfirmNext+" 确认并下一项  ·  "+shortcutSave+" 保存修改  ·  "+shortcutZoomIn+" 放大  ·  "+shortcutZoomOut+" 缩小" {
 			t.Fatalf("the editing status bar names %q", got)
 		}
-		if !tt.HasText(shortcutConfirmNext+" 保存并确认并下一项") || !tt.HasText(shortcutSave+" 保存修改") {
+		if !tt.HasText(shortcutConfirmNext+" 确认并下一项") || !tt.HasText(shortcutSave+" 保存修改") {
 			t.Fatalf("the editing status bar does not show its keys: %q", tt.Texts())
 		}
 
@@ -298,10 +298,10 @@ func TestEditSaveShortcut(t *testing.T) {
 		tt.Frame()
 		m.edit.draft.Level = "13"
 		tt.Frame()
-		if got := m.statusShortcutText(); got != shortcutConfirmNext+" 保存并确认并下一项  ·  "+shortcutSave+" 保存修改  ·  "+shortcutZoomIn+" 放大  ·  "+shortcutZoomOut+" 缩小" {
+		if got := m.statusShortcutText(); got != shortcutConfirmNext+" 确认并下一项  ·  "+shortcutSave+" 保存修改  ·  "+shortcutZoomIn+" 放大  ·  "+shortcutZoomOut+" 缩小" {
 			t.Fatalf("the editing status bar names %q", got)
 		}
-		if !tt.HasText(shortcutConfirmNext+" 保存并确认并下一项") || !tt.HasText(shortcutSave+" 保存修改") {
+		if !tt.HasText(shortcutConfirmNext+" 确认并下一项") || !tt.HasText(shortcutSave+" 保存修改") {
 			t.Fatalf("the editing status bar does not show its keys: %q", tt.Texts())
 		}
 
@@ -630,11 +630,11 @@ func TestStatusBarNamesOnlyUsableShortcuts(t *testing.T) {
 	}
 
 	m2, _, tt2 := openResponsiveResults(t, responsiveResultRecord(t), 1024, 700)
-	if got := m2.statusShortcutText(); got != shortcutConfirmNext+" 保存并确认并下一项  ·  "+shortcutSave+" 保存修改  ·  "+shortcutZoomIn+" 放大  ·  "+shortcutZoomOut+" 缩小" {
+	if got := m2.statusShortcutText(); got != shortcutConfirmNext+" 确认并下一项  ·  "+shortcutSave+" 保存修改  ·  "+shortcutZoomIn+" 放大  ·  "+shortcutZoomOut+" 缩小" {
 		t.Fatalf("the editing status = %q", got)
 	}
-	if tt2.HasText(shortcutNextPending+" 下一个待校对") || tt2.HasText(shortcutConfirmNext+" 确认并下一项") {
-		t.Fatalf("the editing status still names review keys: %q", tt2.Texts())
+	if tt2.HasText(shortcutNextPending + " 下一个待校对") {
+		t.Fatalf("the editing status still names the pending walk keys: %q", tt2.Texts())
 	}
 
 	svc := &fakeService{history: historyTableRecords(3)}

@@ -803,12 +803,10 @@ func TestCompletionCardEmptyRecord(t *testing.T) {
 // TestCompletionCardShowsCountsExclusionsAndExports checks the positive
 // completion card: its own exportable count, the mutually exclusive
 // exclusion groups and the export actions inside the card.
-func TestCompletionCardShowsCountsExclusionsAndExports(t *testing.T) {
+func TestCompletionCardShowsCountsAndExports(t *testing.T) {
 	rec := recovery(
 		confirmedReviewItem(t, 1, 12),
-		item(2, record.StatusFailed, "", "识别超时"),
-		item(3, record.StatusUnprocessed, record.ReasonCancelled, ""),
-		excludedReviewItem(t, 4),
+		confirmedReviewItem(t, 2, 10),
 	)
 	m, q, tt := openResponsiveResults(t, rec, 1024, 700)
 	saver := &fakeDirectExportSaver{}
@@ -818,15 +816,12 @@ func TestCompletionCardShowsCountsExclusionsAndExports(t *testing.T) {
 	tt.Frame()
 
 	if !m.completionVisible() {
-		t.Fatalf("the finished record does not show the completion state: filter %v pendingReview %d loading %v recData %v dirty %v", m.filter, m.pendingReviewCount(), m.loading, m.recData != nil, m.editingDirty())
+		t.Fatalf("the finished record does not show the completion state: filter %v pendingReview %d loading %v recData %v dirty %v", m.filter, m.pendingItemsCount(), m.loading, m.recData != nil, m.editingDirty())
 	}
-	if !tt.HasText("校对完成") || !tt.HasText("可导出 1 件 · 共采集 4 件") {
+	if !tt.HasText("校对完成") || !tt.HasText("可导出 2 件 · 共采集 2 件") {
 		t.Fatalf("the completion summary is missing: %q", tt.Texts())
 	}
-	if !tt.HasText("排除：失败 1 件 · 未处理 1 件 · 其他 1 件") {
-		t.Fatalf("the exclusion groups are wrong: %q", tt.Texts())
-	}
-	if !tt.HasText("已保存 · 待校对 0 · 可导出 1 件") {
+	if !tt.HasText("已保存 · 待校对 0 · 可导出 2 件") {
 		t.Fatalf("the completion status line is missing: %q", tt.Texts())
 	}
 	if tt.HasText(shortcutConfirmNext) {
@@ -845,7 +840,7 @@ func TestCompletionCardShowsCountsExclusionsAndExports(t *testing.T) {
 // TestCompletionCardBlocksZeroExportable checks that a record with no
 // usable item states "无可导出" and disables both export actions.
 func TestCompletionCardBlocksZeroExportable(t *testing.T) {
-	rec := recovery(item(1, record.StatusFailed, "", "识别超时"))
+	rec := recovery()
 	m, q, tt := openResponsiveResults(t, rec, 1024, 700)
 	saver := &fakeDirectExportSaver{}
 	m.cfg.DirectExportSaver = saver
@@ -1023,7 +1018,7 @@ func TestCompletionUsesHistoryRecordCounts(t *testing.T) {
 	sessionRec.Checkpoint.Session.SessionID = "s1"
 	historyRec := recovery(
 		confirmedReviewItem(t, 1, 12),
-		item(2, record.StatusFailed, "", "识别超时"),
+		confirmedReviewItem(t, 2, 10),
 	)
 	historyRec.Checkpoint.Session.SessionID = "old"
 	svc := &fakeService{
@@ -1043,9 +1038,9 @@ func TestCompletionUsesHistoryRecordCounts(t *testing.T) {
 	settle(t, m, q, tt)
 	applyAndSettle(t, m, q, tt, snap("s1", 1, false, scan.PhaseEnded,
 		scan.Counts{Captured: 2, Produced: 2}, 2, false, ""))
-	if m.pendingCount() != 2 || m.completionVisible() {
+	if m.pendingItemsCount() != 2 || m.completionVisible() {
 		t.Fatalf("the session baseline is wrong: pending %d completion %v",
-			m.pendingCount(), m.completionVisible())
+			m.pendingItemsCount(), m.completionVisible())
 	}
 
 	m.histChoice = historyLabel(t, m, "old")
@@ -1056,10 +1051,10 @@ func TestCompletionUsesHistoryRecordCounts(t *testing.T) {
 	if m.rec == nil || m.rec.Live || !m.completionVisible() {
 		t.Fatalf("the finished history snapshot does not show completion: %q", tt.Texts())
 	}
-	if !tt.HasText("可导出 1 件 · 共采集 2 件") {
+	if !tt.HasText("可导出 2 件 · 共采集 2 件") {
 		t.Fatalf("the history completion borrowed the session counts: %q", tt.Texts())
 	}
-	if counts := m.recordCounts(); counts.Exportable != 1 || counts.Captured != 2 || !counts.ExportKnown {
+	if counts := m.recordCounts(); counts.Exportable != 2 || counts.Captured != 2 || !counts.ExportKnown {
 		t.Fatalf("the history completion counts = %+v", counts)
 	}
 }

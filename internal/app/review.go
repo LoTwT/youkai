@@ -49,10 +49,11 @@ func (e *RevisionInvalidError) Error() string {
 func (e *RevisionInvalidError) Unwrap() error { return ErrRevisionInvalid }
 
 // ItemRevisionEdit is one user-authored revision of an item's structured
-// drive-disc payload. A failed or unprocessed item is completed by the
-// same edit. The application service recomputes the payload's issues and
-// validation from Data, so a caller cannot assert a passed validation or
-// keep a stale confirmation.
+// drive-disc payload. A failed or unprocessed item is backfilled by the
+// same edit without changing its original processing outcome. The
+// application service recomputes the payload's issues and validation from
+// Data, so a caller cannot assert a passed validation or keep a stale
+// confirmation.
 type ItemRevisionEdit struct {
 	// Data is the complete edited data object. Explicit null parts keep
 	// their unread meaning; they are never defaulted here.
@@ -96,7 +97,7 @@ func (c DataCheck) Confirmable() bool {
 	return len(c.Blocking) == 0 && c.Validation.Status == zzz.ValidationPassed
 }
 
-// SaveItemRevision appends one manual revision to a produced item and
+// SaveItemRevision appends one manual revision to a saved item and
 // persists it through the record store. The store's revision check is
 // authoritative: a stale expected revision is returned as
 // record.ErrRevisionConflict before anything is written, so an old editor
@@ -158,10 +159,6 @@ func (s *Service) SaveItemRevision(recordID string, sequence, expectedRevision i
 		Changes:   changes,
 		Data:      payload,
 		Confirmed: edit.Confirmed,
-		// A failed or unprocessed item has no interpretation to revise;
-		// the manual revision is its completion and turns it into a
-		// produced item under the same quality and export rules.
-		Completed: item.Status != record.StatusProduced,
 	})
 	if err != nil {
 		return ItemRevisionResult{}, fmt.Errorf("app: save item revision of %q item %d: %w", recordID, sequence, err)

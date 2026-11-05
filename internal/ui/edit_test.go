@@ -143,11 +143,8 @@ func installReviewSave(svc *fakeService) {
 			}
 			updated := *current
 			updated.Revision = expectedRevision + 1
-			if current.Status != record.StatusProduced {
-				updated.Status = record.StatusProduced
-				updated.Failure = ""
-				updated.Reason = ""
-			}
+			// Keep the original processing outcome: a backfill adds the
+			// interpretation and quality, never rewrites Status/Failure/Reason.
 			if edit.Confirmed {
 				updated.Quality = record.QualityHumanConfirmed
 			} else {
@@ -417,8 +414,8 @@ func TestConfirmAndNextThroughToEmpty(t *testing.T) {
 		t.Fatal(err)
 	}
 	settle(t, m, q, tt)
-	if m.pendingCount() != 0 || m.reviewNotice != "待校对 0 · 全部可导出" {
-		t.Fatalf("after the last item: pending %d notice %q", m.pendingCount(), m.reviewNotice)
+	if m.pendingItemsCount() != 0 || m.reviewNotice != "待校对 0 · 全部可导出" {
+		t.Fatalf("after the last item: pending %d notice %q", m.pendingItemsCount(), m.reviewNotice)
 	}
 	if m.selected != 1 {
 		t.Fatalf("the last confirmation moved away from the last item: %d", m.selected)
@@ -438,8 +435,8 @@ func TestConfirmStayKeepsItemInPendingSegment(t *testing.T) {
 	if svc.saveCount() != 1 || !svc.saves[0].edit.Confirmed {
 		t.Fatalf("confirm-and-stay call = %+v, want one confirmed save", svc.saves)
 	}
-	if m.selected != 0 || m.pendingCount() != 1 {
-		t.Fatalf("confirm-and-stay moved: selected %d pending %d", m.selected, m.pendingCount())
+	if m.selected != 0 || m.pendingItemsCount() != 1 {
+		t.Fatalf("confirm-and-stay moved: selected %d pending %d", m.selected, m.pendingItemsCount())
 	}
 	if got := m.visibleResultRows(); len(got) != 2 || got[0] != 0 || got[1] != 1 {
 		t.Fatalf("the confirmed row left the pending segment: rows %v", got)
@@ -478,22 +475,22 @@ func TestConfirmStayKeepsItemInPendingSegment(t *testing.T) {
 	}
 }
 
-func TestConfirmLastItemStayEntersCompletion(t *testing.T) {
+func TestConfirmLastItemStayShowsFinishedReview(t *testing.T) {
 	m, q, tt, svc := openReviewRecordPage(t, reviewRowItem(t, 1, 12))
 	m.confirmCurrentStay()
 	settle(t, m, q, tt)
 	if svc.saveCount() != 1 || !svc.saves[0].edit.Confirmed {
 		t.Fatalf("last confirm-and-stay calls = %+v", svc.saves)
 	}
-	if m.pendingCount() != 0 || !m.completionVisible() {
+	if m.pendingItemsCount() != 0 || !m.completionVisible() {
 		t.Fatalf("the last confirm-and-stay did not complete: pending %d visible %v",
-			m.pendingCount(), m.completionVisible())
+			m.pendingItemsCount(), m.completionVisible())
 	}
-	if !tt.HasText("已确认") || !tt.HasText("待校对 0 · 全部可导出") {
-		t.Fatalf("the completed item does not show its settled state: %q", tt.Texts())
+	if !tt.HasText("都处理完了") || !tt.HasText("导出…") {
+		t.Fatalf("the finished review state is missing: %q", tt.Texts())
 	}
-	if !tt.HasText("修改") {
-		t.Fatalf("the settled item did not fall back to its read-only form: %q", tt.Texts())
+	if tt.HasText("修改") {
+		t.Fatalf("the finished review kept the item actions: %q", tt.Texts())
 	}
 }
 
@@ -515,9 +512,9 @@ func TestEditReviewActionsStayOrAdvance(t *testing.T) {
 		if svc.saveCount() != 1 || !svc.saves[0].edit.Confirmed {
 			t.Fatalf("save-and-confirm calls = %+v", svc.saves)
 		}
-		if m.selected != 0 || m.pendingCount() != 1 {
+		if m.selected != 0 || m.pendingItemsCount() != 1 {
 			t.Fatalf("save-and-confirm moved: selected %d pending %d",
-				m.selected, m.pendingCount())
+				m.selected, m.pendingItemsCount())
 		}
 		if !tt.HasText("修改") {
 			t.Fatal("the settled item lost its read-only fallback")
@@ -537,9 +534,9 @@ func TestEditReviewActionsStayOrAdvance(t *testing.T) {
 		tt.Frame()
 		clickRevealedDetailControl(t, tt, reviewPageHeight, "确认并下一项")
 		settle(t, m, q, tt)
-		if m.selected != 1 || m.pendingCount() != 1 {
+		if m.selected != 1 || m.pendingItemsCount() != 1 {
 			t.Fatalf("save-and-confirm-next did not move: selected %d pending %d",
-				m.selected, m.pendingCount())
+				m.selected, m.pendingItemsCount())
 		}
 		if m.edit == nil || m.edit.seq != 2 || m.edit.draft.Level != "10" {
 			t.Fatalf("the next item's editor did not open: %+v", m.edit)
@@ -597,9 +594,9 @@ func TestConfirmStayFailureKeepsItemAndRetries(t *testing.T) {
 	}
 	m.confirmCurrentStay()
 	settle(t, m, q, tt)
-	if m.pendingCount() != 2 || m.selected != 0 || m.recentlyConfirmedNow(&m.rec.Rows[0]) {
+	if m.pendingItemsCount() != 2 || m.selected != 0 || m.recentlyConfirmedNow(&m.rec.Rows[0]) {
 		t.Fatalf("a failed confirmation settled the row: pending %d selected %d",
-			m.pendingCount(), m.selected)
+			m.pendingItemsCount(), m.selected)
 	}
 	if !strings.Contains(m.reviewErr, "disk full") {
 		t.Fatalf("the confirmation failure = %q", m.reviewErr)
@@ -934,8 +931,8 @@ func TestSaveKeepsExplicitUnknownsPending(t *testing.T) {
 		t.Fatalf("unknowns save = %+v, want one unconfirmed save", svc.saves)
 	}
 	row := m.rec.Rows[0]
-	if row.Quality != record.QualityNeedsReview || m.pendingCount() != 1 {
-		t.Fatalf("unknowns row = quality %q pending %d", row.Quality, m.pendingCount())
+	if row.Quality != record.QualityNeedsReview || m.pendingItemsCount() != 1 {
+		t.Fatalf("unknowns row = quality %q pending %d", row.Quality, m.pendingItemsCount())
 	}
 	if row.LevelText() != "未读取" || row.ManagementStateText() != "未读取" {
 		t.Fatalf("unknowns were not preserved: level %q management %q",
@@ -1064,9 +1061,9 @@ func TestConfirmNextStaysWithinVisibleFilter(t *testing.T) {
 
 		m.confirmCurrent()
 		settle(t, m, q, tt)
-		if m.pendingCount() != 0 || !m.completionVisible() {
+		if m.pendingItemsCount() != 0 || !m.completionVisible() {
 			t.Fatalf("the last confirmation did not complete: pending %d completion %v",
-				m.pendingCount(), m.completionVisible())
+				m.pendingItemsCount(), m.completionVisible())
 		}
 	})
 

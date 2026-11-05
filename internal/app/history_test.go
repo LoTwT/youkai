@@ -741,3 +741,33 @@ func TestEstimateScanDuration(t *testing.T) {
 		}
 	})
 }
+
+// TestHistoryCountsBackfilledItemsByCurrentState keeps the legacy failed
+// bucket for uninterpreted observations only; a backfilled item joins the
+// exportable or review bucket while its original status remains failed.
+func TestHistoryCountsBackfilledItemsByCurrentState(t *testing.T) {
+	failedUninterpreted := record.ItemRecord{
+		Sequence: 1, Status: record.StatusFailed, Failure: "识别超时",
+		Quality: record.QualityNotEvaluated,
+	}
+	backfilledReview := reviewItem(t, 2, reviewData())
+	backfilledReview.Status = record.StatusFailed
+	backfilledReview.Failure = "识别超时"
+	backfilledReview.Revision = 1
+	backfilledPassed := exportStructuredItem(t, 3, record.QualityHumanConfirmed,
+		testDisc(31100, 4, "critRate", "19.2", zzz.UnitPercent),
+		zzz.CaptureState{ManagementState: zzz.ManagementNone, EquippedState: zzz.EquippedStateUnequipped})
+	backfilledPassed.Status = record.StatusFailed
+	backfilledPassed.Failure = "识别超时"
+	backfilledPassed.Revision = 1
+
+	totals := historyItemTotalsOf([]record.ItemRecord{
+		failedUninterpreted, backfilledReview, backfilledPassed,
+	})
+	if totals.Failed != 1 || totals.Unprocessed != 0 || totals.Exportable != 1 || totals.PendingReview != 1 {
+		t.Fatalf("history buckets = %+v, want one failed, one pending review and one exportable", totals)
+	}
+	if totals.Counts.PendingBackfill != 1 || totals.Counts.PendingReview != 1 || totals.Counts.Passed != 1 {
+		t.Fatalf("four classes = %+v", totals.Counts)
+	}
+}

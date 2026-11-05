@@ -655,8 +655,8 @@ func TestHistoryPendingZeroUsesItsOwnRecord(t *testing.T) {
 	drainAll(t, m, q)
 	m.Apply(snap("s1", 1, true, scan.PhaseCapturing, scan.Counts{Captured: 2, Produced: 2}, 1, true, ""))
 	drainAll(t, m, q)
-	if m.pendingCount() != 2 || m.exportData == nil || m.exportData.Summary.Included != 0 {
-		t.Fatalf("the session baseline is wrong: pending %d export %+v", m.pendingCount(), m.exportData)
+	if m.pendingItemsCount() != 2 || m.exportData == nil || m.exportData.Summary.Included != 0 {
+		t.Fatalf("the session baseline is wrong: pending %d export %+v", m.pendingItemsCount(), m.exportData)
 	}
 
 	m.histChoice = historyLabel(t, m, "old")
@@ -665,8 +665,8 @@ func TestHistoryPendingZeroUsesItsOwnRecord(t *testing.T) {
 	if m.rec == nil || m.rec.ID != "old" || m.rec.Live {
 		t.Fatalf("history did not open: %+v", m.rec)
 	}
-	if m.pendingCount() != 0 {
-		t.Fatalf("the finished history snapshot reports %d pending", m.pendingCount())
+	if m.pendingItemsCount() != 0 {
+		t.Fatalf("the finished history snapshot reports %d pending", m.pendingItemsCount())
 	}
 	if m.exportData == nil {
 		t.Fatalf("the history export snapshot is missing: %q", m.exportBuildErr)
@@ -743,9 +743,9 @@ func TestFinalCheckpointLoadingGatesCompletionAndExport(t *testing.T) {
 	if m.loading {
 		t.Fatal("the landed final checkpoint left the slot loading")
 	}
-	if m.pendingCount() != 0 || len(m.rec.Rows) != 2 {
+	if m.pendingItemsCount() != 0 || len(m.rec.Rows) != 2 {
 		t.Fatalf("the final checkpoint is not applied: pending %d rows %d",
-			m.pendingCount(), len(m.rec.Rows))
+			m.pendingItemsCount(), len(m.rec.Rows))
 	}
 	if !m.completionVisible() {
 		t.Fatal("the completion state does not show after the final checkpoint landed")
@@ -942,9 +942,9 @@ func TestFinalCheckpointLoadingBlocksConfirmation(t *testing.T) {
 	if m.loading {
 		t.Fatal("the landed final checkpoint left the slot loading")
 	}
-	if len(m.rec.Rows) != 2 || m.pendingCount() != 0 {
+	if len(m.rec.Rows) != 2 || m.pendingItemsCount() != 0 {
 		t.Fatalf("the final checkpoint is not applied: rows %d pending %d",
-			len(m.rec.Rows), m.pendingCount())
+			len(m.rec.Rows), m.pendingItemsCount())
 	}
 	if m.exportData == nil || m.exportData.Summary.Included != 2 {
 		t.Fatalf("the export snapshot did not advance: %+v", m.exportData)
@@ -1053,9 +1053,9 @@ func TestFinalCheckpointLoadingBlocksEditorSave(t *testing.T) {
 		t.Fatalf("the final checkpoint is not applied: %+v", m.rec)
 	}
 	m.discardEdit()
-	if m.rec == nil || len(m.rec.Rows) != 2 || m.pendingCount() != 2 {
+	if m.rec == nil || len(m.rec.Rows) != 2 || m.pendingItemsCount() != 2 {
 		t.Fatalf("discarding the rejected draft lost the checkpoint: rows %d pending %d",
-			len(m.rec.Rows), m.pendingCount())
+			len(m.rec.Rows), m.pendingItemsCount())
 	}
 }
 

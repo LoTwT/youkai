@@ -18,7 +18,7 @@ func (m *Model) reviewSettled() bool {
 	if m.rec == nil || m.recData == nil || m.recErr != "" || m.loading {
 		return false
 	}
-	if m.unsettledReviewCount() != 0 || m.reviewSaving || m.editingDirty() {
+	if m.pendingItemsCount() != 0 || m.reviewSaving || m.editingDirty() {
 		return false
 	}
 	if !m.rec.Live {
@@ -32,22 +32,6 @@ func (m *Model) reviewSettled() bool {
 		return false
 	}
 	return true
-}
-
-// unsettledReviewCount is the number of rows whose quality review is
-// still open (the summary's 待校对 queue). Backfill and export-excluded
-// rows are reported by the summary's exclusion groups instead.
-func (m *Model) unsettledReviewCount() int {
-	if m.rec == nil {
-		return 0
-	}
-	count := 0
-	for i := range m.rec.Rows {
-		if m.rec.Rows[i].PendingReview() {
-			count++
-		}
-	}
-	return count
 }
 
 // completionVisible reports whether the pending-zero completion surface
