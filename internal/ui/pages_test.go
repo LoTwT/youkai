@@ -56,24 +56,37 @@ func TestNavRailIsFixedWidth(t *testing.T) {
 }
 
 // TestNavRailIsTheFirstTabGroup checks the design's focus order: Tab
-// reaches the rail before any page content, in the rail's own order
-// (design 09 §4.4).
+// reaches the rail before any page content, Up and Down move between its
+// three destinations, and Enter visits the focused one (09 §4.4).
 func TestNavRailIsTheFirstTabGroup(t *testing.T) {
 	m, q := newTestModel(t, Config{Service: &fakeService{},
 		ScanSource: ScanSourceInfo{Available: true}})
 	tt := ui.NewTester(m.View, 1180, 760)
 	settle(t, m, q, tt)
 
-	for _, label := range []string{"扫描", "记录", "设置"} {
-		tt.Key(0, ui.KeyTab)
+	tt.Key(0, ui.KeyTab)
+	if !tt.Focused("扫描") {
+		t.Fatalf("Tab did not enter the rail at 扫描: %q", tt.Texts())
+	}
+	for _, label := range []string{"记录", "设置"} {
+		tt.Key(0, ui.KeyDown)
 		if !tt.Focused(label) {
-			t.Fatalf("Tab did not focus the %q destination next", label)
+			t.Fatalf("Down did not move the rail focus to %q", label)
 		}
 	}
-	// The rail is the first group; the scan page's action follows it.
+	tt.Key(0, ui.KeyUp)
+	if !tt.Focused("记录") {
+		t.Fatal("Up did not move the rail focus back to 记录")
+	}
+	tt.Key(0, ui.KeyEnter)
+	settle(t, m, q, tt)
+	if m.displayPage() != pageHistory {
+		t.Fatalf("Enter on 记录 shows page %v, want the records list", m.displayPage())
+	}
+	// The rail is one Tab stop; the page content follows it.
 	tt.Key(0, ui.KeyTab)
-	if !tt.Focused("开始扫描") {
-		t.Fatalf("Tab after the rail did not reach the scan action: %q", tt.Texts())
+	if !tt.Focused("去扫描页开始扫描") {
+		t.Fatalf("Tab after the rail did not reach the page content: %q", tt.Texts())
 	}
 }
 
@@ -217,12 +230,13 @@ func TestRecordsDestinationRoutesWithoutStageSwitch(t *testing.T) {
 		t.Fatal(err)
 	}
 	tt.Frame()
-	if !tt.HasText("搜索日期") || !tt.HasText("全部记录") {
+	if !tt.HasText("时间") || !tt.HasText("日期") {
 		t.Fatalf("the records list does not show its records: %q", tt.Texts())
 	}
-	if err := tt.Click("打开"); err != nil {
+	if err := tt.Click(historyTimeText(m.history[0])); err != nil {
 		t.Fatal(err)
 	}
+	tt.Key(0, ui.KeyEnter)
 	settle(t, m, q, tt)
 	if m.displayPage() != pageResults || m.recordTab != recordTabSummary {
 		t.Fatalf("opening a record shows page %v tab %v, want the summary", m.displayPage(), m.recordTab)
