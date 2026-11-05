@@ -352,6 +352,39 @@ func TestRecordWorkspaceShortcuts(t *testing.T) {
 	if !tt.Focused("摘要") {
 		t.Fatalf("F6 did not enter the workspace's first region: %q", tt.Texts())
 	}
+
+	// A record with no exportable item blocks the export entry, so Ctrl+E
+	// is not registered: the item view stays where it is (L-2's reverse
+	// path).
+	blockedSvc := &fakeService{
+		list: []record.RecordInfo{{
+			ID: "r2", LatestRevision: 1,
+			SavedAt: time.Date(2026, 10, 21, 10, 0, 0, 0, time.UTC),
+		}},
+		loads: map[string]*record.Recovery{
+			"r2": recovery(reviewRowItem(t, 1, 12)),
+		},
+	}
+	blockedModel, blockedQueue := newTestModel(t, Config{
+		Service:           blockedSvc,
+		DirectExportSaver: &fakeDirectExportSaver{},
+	})
+	blockedModel.SetContentSize(1180, 760)
+	blockedTester := ui.NewTester(blockedModel.View, 1180, 760)
+	settle(t, blockedModel, blockedQueue, blockedTester)
+	blockedModel.histChoice = slotHistoryLabel(t, blockedModel, "r2")
+	blockedModel.OpenHistory()
+	settle(t, blockedModel, blockedQueue, blockedTester)
+	showRecordItems(blockedModel)
+	blockedTester.Frame()
+	if blockedModel.recordTab != recordTabItems {
+		t.Fatalf("the blocked record did not show 逐件: tab %v", blockedModel.recordTab)
+	}
+	blockedTester.Key(ui.Cmd, ui.KeyE)
+	settle(t, blockedModel, blockedQueue, blockedTester)
+	if blockedModel.recordTab != recordTabItems {
+		t.Fatalf("Ctrl+E moved a blocked export to tab %v", blockedModel.recordTab)
+	}
 }
 
 // TestWorkspaceShowsTheUnsavedPromptFromTheSummary checks H-1: switching
@@ -434,8 +467,17 @@ func TestWorkspaceCoverageMatchesTheConclusion(t *testing.T) {
 	if m.recordTab != recordTabSummary {
 		t.Fatalf("the record opened on tab %v, want the summary", m.recordTab)
 	}
-	if !tt.HasText("覆盖：部分") {
-		t.Fatalf("the title bar does not show the export guard's coverage: %q", tt.Texts())
+	// HasText is a substring match, so the body's "覆盖：部分覆盖…" would
+	// also satisfy it; the title bar's slot must be the exact status.
+	coverageHeader := 0
+	for _, text := range tt.Texts() {
+		if text == "覆盖：部分" {
+			coverageHeader++
+		}
+	}
+	if coverageHeader != 1 {
+		t.Fatalf("the title bar does not show the export guard's coverage exactly once: %d in %q",
+			coverageHeader, tt.Texts())
 	}
 	if !tt.HasText("覆盖：部分覆盖（导出文件会标注“部分快照”）") {
 		t.Fatalf("the summary does not show the same coverage: %q", tt.Texts())
