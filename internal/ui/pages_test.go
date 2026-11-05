@@ -223,7 +223,7 @@ func TestRecordsDestinationRoutesWithoutStageSwitch(t *testing.T) {
 		t.Fatal(err)
 	}
 	tt.Frame()
-	if !tt.HasText("关闭窗口时停止扫描并退出应用") {
+	if !tt.HasText("停止扫描并退出") {
 		t.Fatal("the settings page does not show the close preference")
 	}
 	if err := tt.Click("记录"); err != nil {

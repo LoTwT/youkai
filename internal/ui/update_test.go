@@ -53,17 +53,32 @@ func (h *fakeUpdateHandle) Install(ctx context.Context, progress func(downloaded
 	return nil
 }
 
+// openUpdateSettings opens the settings destination at a size that shows
+// the update section without scrolling. The standard-width helper keeps the
+// in-page directory; the compact one covers the narrow band.
+func openUpdateSettings(t *testing.T, m *Model, q *queueUpdater) *ui.Tester {
+	t.Helper()
+	return openUpdateSettingsAt(t, m, q, 1020, 1200)
+}
+
+func openUpdateSettingsAt(t *testing.T, m *Model, q *queueUpdater, width, height int) *ui.Tester {
+	t.Helper()
+	m.page = pageSettings
+	m.SetContentSize(width, height)
+	tt := ui.NewTester(m.View, width, height)
+	settle(t, m, q, tt)
+	return tt
+}
+
 // TestViewUpdateDisabledBuild covers the builds without updates — the
 // Package workflow's test packages, development runs: the area explains
 // the state in plain words, treats it as no error, and offers no check.
 func TestViewUpdateDisabledBuild(t *testing.T) {
 	src := &fakeUpdates{enabled: false}
 	m, q := newTestModel(t, Config{Service: &fakeService{}, Updates: src})
-	m.page = pageSettings
-	tt := ui.NewTester(m.View, 1020, 700)
-	settle(t, m, q, tt)
+	tt := openUpdateSettings(t, m, q)
 
-	if !tt.HasText("当前构建未启用自动更新。") {
+	if !tt.HasText("这个版本不支持自动更新") {
 		t.Error("a build without updates does not say so")
 	}
 	if err := tt.Click("检查更新"); err == nil {
@@ -76,7 +91,7 @@ func TestViewUpdateDisabledBuild(t *testing.T) {
 	if src.check != nil {
 		t.Error("the disabled source was asked to check")
 	}
-	if !tt.HasText("当前构建未启用自动更新。") {
+	if !tt.HasText("这个版本不支持自动更新") {
 		t.Error("the disabled note changed after the ignored check")
 	}
 }
@@ -93,9 +108,7 @@ func TestViewUpdateCheckFlow(t *testing.T) {
 		},
 	}
 	m, q := newTestModel(t, Config{Service: &fakeService{}, Updates: src})
-	m.page = pageSettings
-	tt := ui.NewTester(m.View, 1020, 700)
-	settle(t, m, q, tt)
+	tt := openUpdateSettings(t, m, q)
 
 	// The startup check the entry point triggers.
 	m.CheckUpdates()
@@ -107,11 +120,10 @@ func TestViewUpdateCheckFlow(t *testing.T) {
 		t.Error("the found version's notes do not show")
 	}
 
-	// Up to date on the next check.
+	// Up to date on the next check. The section's only action while a
+	// version waits is 安装并重启, so this check is the scheduled kind.
 	src.check = func(ctx context.Context) (UpdateHandle, error) { return nil, nil }
-	if err := tt.Click("检查更新"); err != nil {
-		t.Fatal(err)
-	}
+	m.CheckUpdates()
 	settle(t, m, q, tt)
 	if !tt.HasText("已是最新版本。") {
 		t.Error("the up-to-date state does not show")
@@ -128,7 +140,7 @@ func TestViewUpdateCheckFlow(t *testing.T) {
 	if !tt.HasText("检查更新失败：context deadline exceeded") {
 		t.Error("the check failure does not show as it is")
 	}
-	if err := tt.Click("检查更新"); err != nil {
+	if err := tt.Click("重试检查"); err != nil {
 		t.Error("the check button disappeared after a failure")
 	}
 }
@@ -151,9 +163,7 @@ func TestViewUpdateShowsCurrentVersion(t *testing.T) {
 				Updates:    src,
 				AppVersion: "0.0.2",
 			})
-			m.page = pageSettings
-			tt := ui.NewTester(m.View, 1020, 700)
-			settle(t, m, q, tt)
+			tt := openUpdateSettings(t, m, q)
 			if !tt.HasText("当前版本 0.0.2") {
 				t.Error("the running version does not show in the update area")
 			}
@@ -266,17 +276,16 @@ func TestDevAutoInstall(t *testing.T) {
 		},
 	}
 	relaunched := 0
+	svc := &fakeService{}
 	m, q := newTestModel(t, Config{
-		Service:        &fakeService{},
+		Service:        svc,
 		Updates:        src,
 		DevAutoInstall: true,
 		OnUpdateInstalled: func() {
 			relaunched++
 		},
 	})
-	m.page = pageSettings
-	tt := ui.NewTester(m.View, 1020, 700)
-	settle(t, m, q, tt)
+	tt := openUpdateSettings(t, m, q)
 
 	// A running session forbids the automatic install no less than the
 	// button: the update is found and waits.
@@ -305,6 +314,9 @@ func TestDevAutoInstall(t *testing.T) {
 	if relaunched != 1 {
 		t.Fatalf("the restart hook fired %d times, want 1", relaunched)
 	}
+	if got := svc.updateInstallingCalls(); len(got) != 1 || !got[0] {
+		t.Fatalf("the service was told about the install %v, want [true]", got)
+	}
 	if !tt.HasText("更新已安装，正在重启应用……") {
 		t.Error("the installed state does not show")
 	}
@@ -324,14 +336,13 @@ func TestViewUpdateInstallForbiddenWhileScanning(t *testing.T) {
 		},
 	}
 	relaunched := 0
+	svc := &fakeService{}
 	m, q := newTestModel(t, Config{
-		Service:           &fakeService{},
+		Service:           svc,
 		Updates:           src,
 		OnUpdateInstalled: func() { relaunched++ },
 	})
-	m.page = pageSettings
-	tt := ui.NewTester(m.View, 1020, 700)
-	settle(t, m, q, tt)
+	tt := openUpdateSettings(t, m, q)
 	m.CheckUpdates()
 	settle(t, m, q, tt)
 
@@ -344,7 +355,7 @@ func TestViewUpdateInstallForbiddenWhileScanning(t *testing.T) {
 	if !tt.HasText("扫描会话进行中，等其结束并保存完成后再安装更新。") {
 		t.Error("the running session does not explain the refused install")
 	}
-	if err := tt.Click("安装更新"); err != nil {
+	if err := tt.Click("安装并重启"); err != nil {
 		t.Fatal(err)
 	}
 	settle(t, m, q, tt)
@@ -369,7 +380,7 @@ func TestViewUpdateInstallForbiddenWhileScanning(t *testing.T) {
 	if !tt.HasText("有保存失败的扫描结果待重试保存，先完成保存再安装更新。") {
 		t.Error("the pending save retry does not explain the refused install")
 	}
-	if err := tt.Click("安装更新"); err != nil {
+	if err := tt.Click("安装并重启"); err != nil {
 		t.Fatal(err)
 	}
 	settle(t, m, q, tt)
@@ -386,7 +397,7 @@ func TestViewUpdateInstallForbiddenWhileScanning(t *testing.T) {
 	if tt.HasText("等保存完成后再安装更新。") {
 		t.Error("a settled session still blocks the install")
 	}
-	if err := tt.Click("安装更新"); err != nil {
+	if err := tt.Click("安装并重启"); err != nil {
 		t.Fatal(err)
 	}
 	settle(t, m, q, tt)
@@ -395,6 +406,9 @@ func TestViewUpdateInstallForbiddenWhileScanning(t *testing.T) {
 	}
 	if relaunched != 1 {
 		t.Fatalf("the restart hook fired %d times, want 1", relaunched)
+	}
+	if got := svc.updateInstallingCalls(); len(got) != 1 || !got[0] {
+		t.Fatalf("the service was told about the install %v, want [true]", got)
 	}
 	if !tt.HasText("更新已安装，正在重启应用……") {
 		t.Error("the installed state does not show")
@@ -427,18 +441,17 @@ func TestViewUpdateInstallFailure(t *testing.T) {
 		},
 	}
 	relaunched := 0
+	svc := &fakeService{}
 	m, q := newTestModel(t, Config{
-		Service:           &fakeService{},
+		Service:           svc,
 		Updates:           src,
 		OnUpdateInstalled: func() { relaunched++ },
 	})
-	m.page = pageSettings
-	tt := ui.NewTester(m.View, 1020, 700)
-	settle(t, m, q, tt)
+	tt := openUpdateSettings(t, m, q)
 	m.CheckUpdates()
 	settle(t, m, q, tt)
 
-	if err := tt.Click("安装更新"); err != nil {
+	if err := tt.Click("安装并重启"); err != nil {
 		t.Fatal(err)
 	}
 	settle(t, m, q, tt)
@@ -448,13 +461,16 @@ func TestViewUpdateInstallFailure(t *testing.T) {
 	if relaunched != 0 {
 		t.Error("a failed install still restarted the application")
 	}
+	if got := svc.updateInstallingCalls(); len(got) != 2 || !got[0] || got[1] {
+		t.Fatalf("the service saw %v, want the install published then cleared", got)
+	}
 
 	// The retry succeeds: the error clears and the restart fires.
 	found.install = func(progress func(downloaded, total int64)) error {
 		progress(256, 256)
 		return nil
 	}
-	if err := tt.Click("安装更新"); err != nil {
+	if err := tt.Click("重试安装"); err != nil {
 		t.Fatal(err)
 	}
 	settle(t, m, q, tt)
@@ -464,7 +480,91 @@ func TestViewUpdateInstallFailure(t *testing.T) {
 	if relaunched != 1 {
 		t.Error("the successful retry did not restart the application")
 	}
+	if got := svc.updateInstallingCalls(); len(got) != 3 || !got[2] {
+		t.Fatalf("the service saw %v, want the retry published", got)
+	}
 	if tt.HasText("安装更新失败") {
 		t.Error("the earlier install failure outlived the successful retry")
+	}
+}
+
+// TestUpdateDotFollowsTheFoundVersion checks the design's only update cue:
+// a dot on the settings rail entry and on the in-page 更新 entry while a
+// newer version waits, gone when the check is up to date and once the
+// install starts (08 §6).
+func TestUpdateDotFollowsTheFoundVersion(t *testing.T) {
+	found := &fakeUpdateHandle{version: "0.0.2"}
+	src := &fakeUpdates{
+		enabled: true,
+		check: func(ctx context.Context) (UpdateHandle, error) {
+			return found, nil
+		},
+	}
+	m, q := newTestModel(t, Config{Service: &fakeService{}, Updates: src})
+	tt := openUpdateSettingsAt(t, m, q, 1440, 1200)
+	if got := countText(tt.Texts(), "有新版本"); got != 0 {
+		t.Fatalf("the page shows %d update dots before a check", got)
+	}
+
+	m.CheckUpdates()
+	settle(t, m, q, tt)
+	if got := countText(tt.Texts(), "有新版本"); got != 2 {
+		t.Fatalf("the page shows %d update dots after finding a version, want the rail and directory dots", got)
+	}
+
+	src.check = func(ctx context.Context) (UpdateHandle, error) { return nil, nil }
+	m.CheckUpdates()
+	settle(t, m, q, tt)
+	if got := countText(tt.Texts(), "有新版本"); got != 0 {
+		t.Fatalf("an up-to-date check left %d update dots", got)
+	}
+
+	src.check = func(ctx context.Context) (UpdateHandle, error) { return found, nil }
+	m.CheckUpdates()
+	settle(t, m, q, tt)
+	if got := countText(tt.Texts(), "有新版本"); got != 2 {
+		t.Fatalf("the found version came back with %d dots", got)
+	}
+	if err := tt.Click("安装并重启"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
+	if got := countText(tt.Texts(), "有新版本"); got != 0 {
+		t.Fatalf("the started install left %d update dots", got)
+	}
+}
+
+// TestUpdateInstallCancellationClearsTheServiceFlag pins the other half of
+// the install publication: an install that ends without a restart (an
+// updater cancellation or failure) must clear the flag, or the service
+// would refuse scans for the rest of the process.
+func TestUpdateInstallCancellationClearsTheServiceFlag(t *testing.T) {
+	found := &fakeUpdateHandle{version: "0.0.2"}
+	found.install = func(progress func(downloaded, total int64)) error {
+		return context.Canceled
+	}
+	src := &fakeUpdates{
+		enabled: true,
+		check: func(ctx context.Context) (UpdateHandle, error) {
+			return found, nil
+		},
+	}
+	svc := &fakeService{}
+	m, q := newTestModel(t, Config{Service: svc, Updates: src})
+	tt := openUpdateSettings(t, m, q)
+	m.CheckUpdates()
+	settle(t, m, q, tt)
+	if err := tt.Click("安装并重启"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
+	if got := svc.updateInstallingCalls(); len(got) != 2 || !got[0] || got[1] {
+		t.Fatalf("the service saw %v, want the install published then cleared", got)
+	}
+	if !tt.HasText("安装更新失败：context canceled。应用继续运行当前版本，可重试安装。") {
+		t.Fatalf("the cancellation does not show as a failed install: %q", tt.Texts())
+	}
+	if err := tt.Click("重试安装"); err != nil {
+		t.Fatal(err)
 	}
 }

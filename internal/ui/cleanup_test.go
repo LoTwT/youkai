@@ -272,11 +272,11 @@ func TestViewStorageBulkCleanupPreviewsAndIndependentEntries(t *testing.T) {
 	tt := ui.NewTester(m.View, 1020, 700)
 	settle(t, m, q, tt)
 
-	if !tt.HasText("历史 2 条 · 记录数据 5.8 KB · 截图 4 张 4.0 KB · 缓存 1.0 KB · 日志 2.0 KB · 磁盘可用 5.0 GB / 10.0 GB") {
+	if !tt.HasText("记录 5.8 KB（2 条） · 截图 4 张 4.0 KB · 缓存 1.0 KB · 日志 2.0 KB") {
 		t.Fatalf("the storeroom summary does not show: %q", tt.Texts())
 	}
 
-	if err := tt.Click("删除全部截图"); err != nil {
+	if err := tt.Click("删除全部截图…"); err != nil {
 		t.Fatal(err)
 	}
 	settle(t, m, q, tt)
@@ -292,7 +292,7 @@ func TestViewStorageBulkCleanupPreviewsAndIndependentEntries(t *testing.T) {
 	// The screenshot entry fails on its own without touching the record
 	// entries, and keeps a retry.
 	svc.deleteErr = errString("截图被占用")
-	if err := tt.Click("删除全部截图"); err != nil {
+	if err := tt.Click("删除全部截图…"); err != nil {
 		t.Fatal(err)
 	}
 	settle(t, m, q, tt)
@@ -308,7 +308,7 @@ func TestViewStorageBulkCleanupPreviewsAndIndependentEntries(t *testing.T) {
 	settle(t, m, q, tt)
 
 	svc.deleteErr = nil
-	if err := tt.Click("删除全部记录"); err != nil {
+	if err := tt.Click("删除全部记录…"); err != nil {
 		t.Fatal(err)
 	}
 	settle(t, m, q, tt)
@@ -366,7 +366,7 @@ func TestViewCleanupDisabledReasons(t *testing.T) {
 	if !tt2.HasText("扫描会话进行中，结束后才能清理。") {
 		t.Fatalf("the active scan does not block cleanup: %q", tt2.Texts())
 	}
-	if err := tt2.Click("删除全部记录"); err != nil {
+	if err := tt2.Click("删除全部记录…"); err != nil {
 		t.Fatal(err)
 	}
 	drainAll(t, m2, q2)
@@ -590,7 +590,7 @@ func TestViewStorageUsageFailureDoesNotShowStaleNumbers(t *testing.T) {
 	if !tt.HasText("占用读取失败：权限不足") {
 		t.Fatalf("the storage failure does not show: %q", tt.Texts())
 	}
-	if tt.HasText("历史 0 条") {
+	if tt.HasText("缓存 0 B") {
 		t.Fatalf("a failed measurement still shows numbers: %q", tt.Texts())
 	}
 }

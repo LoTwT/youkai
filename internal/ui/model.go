@@ -74,6 +74,9 @@ type Service interface {
 	ClearOldLogs() (app.StorageClearPreview, error)
 	// Quit runs the explicit-exit wrap-up; it blocks until it is done.
 	Quit() error
+	// SetUpdateInstalling publishes that an update install is in progress
+	// (or ended), so the service refuses new scans until the restart.
+	SetUpdateInstalling(installing bool)
 }
 
 // Updater runs fn on the UI thread and redraws the window. *mygo.Window
@@ -114,6 +117,16 @@ type Config struct {
 	// OpenDataDirectory opens the managed data root with the system file
 	// manager; nil hides the action.
 	OpenDataDirectory func() error
+	// DiagnosticsText assembles the copyable diagnostic summary (the
+	// application service's allowlisted text); nil disables the copy
+	// action in settings.
+	DiagnosticsText func() string
+	// OpenDiagnosticsDirectory opens the log directory the diagnostic
+	// summary points at; nil disables the action.
+	OpenDiagnosticsDirectory func() error
+	// OpenLicenses opens the bundled third-party notices; nil hides the
+	// about section's license action.
+	OpenLicenses func() error
 	// EvidenceCacheLimit bounds the decoded evidence bitmaps held at
 	// once; 0 uses evidenceCacheLimit.
 	EvidenceCacheLimit int
@@ -280,6 +293,21 @@ type Model struct {
 	workspaceTabsRef ui.Ref
 	scanActionRef    ui.Ref
 	settingsFirstRef ui.Ref
+
+	// The settings page's in-page directory and section anchors, the
+	// pending entry focus (the directory, or storage after 去清理), the
+	// "return to the prepare check" strip and the TOC's pending jump.
+	settingsSections        settingsSectionRefs
+	settingsFocusPending    bool
+	settingsFocusStorage    bool
+	settingsReturnToPrepare bool
+	settingsScrollTarget    settingsSectionID
+	settingsScroll          ui.ScrollState
+	settingsViewportRef     ui.Ref
+	// Diagnostics results and the about section's license failure.
+	diagnosticsNotice string
+	diagnosticsErr    string
+	aboutErr          string
 
 	// contentWidth/contentHeight track the page area so the shell can
 	// switch the results split orientation at narrow widths.

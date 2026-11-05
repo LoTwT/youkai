@@ -232,6 +232,26 @@ func main() {
 			return mygo.Shell.OpenPath(dir)
 		},
 		OpenDataDirectory: func() error { return mygo.Shell.OpenPath(paths.Data) },
+		// Settings › 诊断 shares the application service's allowlisted
+		// summary and the log directory with every other diagnostic
+		// surface (09 §4.6). The text is assembled when the user asks so it
+		// describes the newest session at that moment.
+		DiagnosticsText: func() string {
+			return app.DiagnosticsText(app.DiagnosticsInput{
+				Version: mygo.App.Version(),
+				Commit:  app.BuildCommit(),
+				System:  app.CurrentSystemInfo(),
+				Scan:    app.DiagnosticsScanFromSnapshot(svc.Snapshot()),
+			})
+		},
+		OpenDiagnosticsDirectory: func() error {
+			return mygo.Shell.OpenPath(app.DiagnosticsDirectory(paths))
+		},
+		// Settings › 关于 opens the third-party notices that ships beside
+		// the executable.
+		OpenLicenses: func() error {
+			return mygo.Shell.OpenPath(filepath.Join(paths.Resources, "THIRD-PARTY-NOTICES.md"))
+		},
 		// The auto-update corner: MyGo's updater behind the UI's seam. The
 		// running version shows in the area ("当前版本 …"); DevAutoInstall
 		// is the rehearsal switch (YOUKAI_DEV_AUTOUPDATE) that installs a
