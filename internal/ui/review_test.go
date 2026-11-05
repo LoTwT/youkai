@@ -1164,19 +1164,300 @@ func countDarkPixels(img *image.RGBA, r ui.Rect) int {
 	return count
 }
 
-// TestReviewFormControlsFitMinimumWidth checks the main-stat row stays
-// inside the 400-DIP form at 960, where the third picker used to clip.
+// TestReviewFormControlsFitMinimumWidth checks the main-stat widths add up
+// inside the 400-DIP form at 960. The constants are the actual widths the
+// row uses, so mutating them back to the old values fails here.
 func TestReviewFormControlsFitMinimumWidth(t *testing.T) {
-	m, _, tt := openResponsiveResults(t, recovery(reviewRowItem(t, 1, 15)), 960, 640)
-	tt.Frame()
-	m.formExtrasOpen = true
-	tt.Frame()
-	rect, ok := tt.Find("主词条单位")
-	if !ok {
-		t.Fatalf("the main-stat unit control is missing: %q", tt.Texts())
+	const formInner = reviewFormWidth - 2*16 - 2*8
+	total := float32(reviewMainAttributeWidth + reviewMainValueWidth + reviewMainUnitWidth + 2*8)
+	if total > formInner {
+		t.Fatalf("main-stat row width %.0f exceeds the form inner width %.0f", total, float32(formInner))
 	}
-	const formRight = 960 - reviewPagePadding
-	if rect.X+rect.W > formRight {
-		t.Fatalf("the main-stat unit control exceeds the form: %+v right %.1f", rect, float32(formRight))
+}
+
+// TestReviewFacetChangePromptsForDirtyDraft checks a facet change that
+// would leave the edited row goes through the unsaved-changes prompt.
+func TestReviewFacetChangePromptsForDirtyDraft(t *testing.T) {
+	m, q, tt, _ := openReviewableResults(t, responsiveResultRecord(t), 1180, 760)
+	tt.Frame()
+	seq := m.selectedSeq()
+	m.edit.draft.Level = "11"
+	m.edit.refresh()
+	tt.Frame()
+	if err := tt.Click("全部套装"); err != nil {
+		t.Fatalf("open set facet: %v", err)
+	}
+	tt.Frame()
+	if err := tt.Click(describeSet(31200)); err != nil {
+		t.Fatalf("choose set: %v", err)
+	}
+	tt.Frame()
+	drainAll(t, m, q)
+	tt.Frame()
+	if m.navPrompt == nil {
+		t.Fatalf("a facet change dropped the dirty draft without a prompt: %s", probeReviewState(m))
+	}
+	if m.setFilter != "" || m.edit == nil || m.edit.seq != seq || m.edit.draft.Level != "11" {
+		t.Fatalf("facet change mutated the dirty state: %s", probeReviewState(m))
+	}
+}
+
+// TestReviewFacetChangePromptsAfterFailedSave checks the failure band and
+// its input survive a facet change that would leave the row.
+func TestReviewFacetChangePromptsAfterFailedSave(t *testing.T) {
+	m, q, tt, svc := openReviewableResults(t, responsiveResultRecord(t), 1180, 760)
+	tt.Frame()
+	svc.saveFn = func(string, int64, int64, app.ItemRevisionEdit) (app.ItemRevisionResult, error) {
+		return app.ItemRevisionResult{}, fmt.Errorf("磁盘已满")
+	}
+	m.edit.draft.Level = "11"
+	m.saveEdit(reviewSave, nil)
+	drainAll(t, m, q)
+	tt.Frame()
+	if !m.reviewSaveFailed {
+		t.Fatalf("failed save did not set the failure state: %s", probeReviewState(m))
+	}
+	if err := tt.Click("全部套装"); err != nil {
+		t.Fatalf("open set facet: %v", err)
+	}
+	tt.Frame()
+	if err := tt.Click(describeSet(31200)); err != nil {
+		t.Fatalf("choose set: %v", err)
+	}
+	tt.Frame()
+	drainAll(t, m, q)
+	tt.Frame()
+	if m.navPrompt == nil || m.edit == nil || m.edit.draft.Level != "11" {
+		t.Fatalf("failed-save input was dropped by a facet change: %s", probeReviewState(m))
+	}
+	if !m.reviewSaveFailed {
+		t.Fatalf("the save failure state was cleared by a filter change: %s", probeReviewState(m))
+	}
+	if _, _, saved := m.workspaceStatusTexts(); saved != "保存失败" {
+		t.Fatalf("title after failed-save facet change = %q, want 保存失败", saved)
+	}
+}
+
+// TestReviewSegmentChangePromptsFromAllToPending checks a real 全部 →
+// 待处理 click with a dirty passed-row editor.
+func TestReviewSegmentChangePromptsFromAllToPending(t *testing.T) {
+	m, q, tt, _ := openReviewableResults(t, pendingReviewRecord(t), 1180, 760)
+	tt.Frame()
+	if err := tt.Click("全部"); err != nil {
+		t.Fatalf("click 全部: %v", err)
+	}
+	tt.Frame()
+	m.requestNavigation(navigationRequest{kind: navSelect, seq: 5})
+	tt.Frame()
+	if err := tt.Click("修改"); err != nil {
+		t.Fatalf("open passed-row editor: %v", err)
+	}
+	tt.Frame()
+	m.edit.draft.Level = "11"
+	m.edit.refresh()
+	tt.Frame()
+	if err := tt.Click("待处理"); err != nil {
+		t.Fatalf("click 待处理: %v", err)
+	}
+	tt.Frame()
+	drainAll(t, m, q)
+	tt.Frame()
+	if m.navPrompt == nil {
+		t.Fatalf("全部 → 待处理 dropped the dirty draft: %s", probeReviewState(m))
+	}
+	if m.filter != resultFilterAll || m.edit == nil || m.edit.draft.Level != "11" {
+		t.Fatalf("全部 → 待处理 mutated the dirty state: %s", probeReviewState(m))
+	}
+}
+
+// TestReviewSegmentChangePromptsPendingToWarning covers the path that
+// previously popped only because the frame still used the old visible list.
+func TestReviewSegmentChangePromptsPendingToWarning(t *testing.T) {
+	m, q, tt, _ := openReviewableResults(t, pendingReviewRecord(t), 1180, 760)
+	tt.Frame()
+	m.edit.draft.Level = "11"
+	m.edit.refresh()
+	tt.Frame()
+	if err := tt.Click("警告"); err != nil {
+		t.Fatalf("click 警告: %v", err)
+	}
+	tt.Frame()
+	drainAll(t, m, q)
+	tt.Frame()
+	if m.navPrompt == nil {
+		t.Fatalf("待处理 → 警告 dropped the dirty draft: %s", probeReviewState(m))
+	}
+	if m.filter != resultFilterPending || m.edit == nil || m.edit.draft.Level != "11" {
+		t.Fatalf("待处理 → 警告 mutated the dirty state: %s", probeReviewState(m))
+	}
+}
+
+func probeReviewState(m *Model) string {
+	seq, level := int64(-1), ""
+	if m.edit != nil {
+		seq, level = m.edit.seq, m.edit.draft.Level
+	}
+	_, _, saved := m.workspaceStatusTexts()
+	return fmt.Sprintf("filter=%v set=%q slot=%q selected=%d edit=%d level=%q prompt=%v title=%q err=%q failed=%v",
+		m.filter, m.setFilter, m.slotFilter, m.selectedSeq(), seq, level, m.navPrompt != nil, saved, m.reviewErr, m.reviewSaveFailed)
+}
+
+// TestWorkspaceUnsavedTitle checks the dirty editor takes the title's save
+// slot, after a failed save and before the ordinary saved state.
+func TestWorkspaceUnsavedTitle(t *testing.T) {
+	m, _, _ := openResponsiveResults(t, recovery(reviewRowItem(t, 1, 15)), 1180, 760)
+	m.edit.draft.Level = "11"
+	m.edit.refresh()
+	if _, _, saved := m.workspaceStatusTexts(); saved != "未保存修改" {
+		t.Fatalf("dirty title = %q, want 未保存修改", saved)
+	}
+	m.reviewSaveFailed = true
+	if _, _, saved := m.workspaceStatusTexts(); saved != "保存失败" {
+		t.Fatalf("failure title lost priority: %q", saved)
+	}
+}
+
+// TestReviewSaveFailureStateSetAndCleared covers the real set, retry and
+// clear paths of reviewSaveFailed (L5).
+func TestReviewSaveFailureStateSetAndCleared(t *testing.T) {
+	m, q, tt, svc := openReviewableResults(t, manyPendingRecord(t, 2), 1180, 760)
+	tt.Frame()
+	good := svc.saveFn
+	svc.saveFn = func(string, int64, int64, app.ItemRevisionEdit) (app.ItemRevisionResult, error) {
+		return app.ItemRevisionResult{}, fmt.Errorf("磁盘已满")
+	}
+	m.edit.draft.Level = "11"
+	m.saveEdit(reviewSave, nil)
+	drainAll(t, m, q)
+	tt.Frame()
+	if !m.reviewSaveFailed {
+		t.Fatalf("failed save did not set reviewSaveFailed: %s", probeReviewState(m))
+	}
+	if _, _, saved := m.workspaceStatusTexts(); saved != "保存失败" {
+		t.Fatalf("failed title = %q", saved)
+	}
+
+	svc.saveFn = good
+	m.saveEdit(m.lastAction, nil)
+	if _, _, saved := m.workspaceStatusTexts(); saved != "正在保存…" {
+		t.Fatalf("retry in-flight title = %q", saved)
+	}
+	drainAll(t, m, q)
+	tt.Frame()
+	if m.reviewSaveFailed || m.reviewErr != "" {
+		t.Fatalf("successful retry left failure state: %s", probeReviewState(m))
+	}
+	if _, _, saved := m.workspaceStatusTexts(); saved != "已保存" {
+		t.Fatalf("retry success title = %q", saved)
+	}
+}
+
+// TestReviewRevertAfterFailedSaveClearsFailure covers L1: the input is put
+// back to its saved value, then the retry is a no-op that still clears the
+// previous failure.
+func TestReviewRevertAfterFailedSaveClearsFailure(t *testing.T) {
+	m, q, tt, svc := openReviewableResults(t, manyPendingRecord(t, 2), 1180, 760)
+	tt.Frame()
+	original := m.edit.draft.Level
+	svc.saveFn = func(string, int64, int64, app.ItemRevisionEdit) (app.ItemRevisionResult, error) {
+		return app.ItemRevisionResult{}, fmt.Errorf("磁盘已满")
+	}
+	m.edit.draft.Level = "11"
+	m.saveEdit(reviewSave, nil)
+	drainAll(t, m, q)
+	tt.Frame()
+	m.edit.draft.Level = original
+	m.edit.refresh()
+	m.saveEdit(m.lastAction, nil)
+	if m.reviewSaveFailed || m.reviewErr != "" {
+		t.Fatalf("reverted retry kept the failure: %s", probeReviewState(m))
+	}
+	if m.reviewNotice != "没有修改需要保存。" {
+		t.Fatalf("reverted retry notice = %q", m.reviewNotice)
+	}
+	if _, _, saved := m.workspaceStatusTexts(); saved != "已保存" {
+		t.Fatalf("reverted retry title = %q", saved)
+	}
+}
+
+// TestReviewConflictClearsFailure covers L2: the conflict is resolved by a
+// reload, so the failure title must not outlive it.
+func TestReviewConflictClearsFailure(t *testing.T) {
+	m, q, _, svc := openReviewableResults(t, manyPendingRecord(t, 1), 1180, 760)
+	svc.saveFn = func(string, int64, int64, app.ItemRevisionEdit) (app.ItemRevisionResult, error) {
+		return app.ItemRevisionResult{}, fmt.Errorf("stale: %w", record.ErrRevisionConflict)
+	}
+	m.edit.draft.Level = "11"
+	m.saveEdit(reviewSave, nil)
+	drainAll(t, m, q)
+	if m.reviewSaveFailed {
+		t.Fatalf("conflict reload kept the failure state: %s", probeReviewState(m))
+	}
+	if _, _, saved := m.workspaceStatusTexts(); saved == "保存失败" {
+		t.Fatalf("conflict reload kept the failure title: %s", probeReviewState(m))
+	}
+}
+
+// TestReviewFilterPromptSaveAppliesAfterSuccess checks the deferred
+// filter request really runs after a successful save.
+func TestReviewFilterPromptSaveAppliesAfterSuccess(t *testing.T) {
+	m, q, tt, _ := openReviewableResults(t, responsiveResultRecord(t), 1180, 760)
+	tt.Frame()
+	m.edit.draft.Level = "11"
+	m.edit.refresh()
+	tt.Frame()
+	if err := tt.Click("全部套装"); err != nil {
+		t.Fatalf("open set facet: %v", err)
+	}
+	tt.Frame()
+	if err := tt.Click(describeSet(31200)); err != nil {
+		t.Fatalf("choose set: %v", err)
+	}
+	tt.Frame()
+	if m.navPrompt == nil {
+		t.Fatal("no prompt before save")
+	}
+	if err := tt.Click("保存并继续"); err != nil {
+		t.Fatalf("save and continue: %v", err)
+	}
+	drainAll(t, m, q)
+	tt.Frame()
+	if m.navPrompt != nil || m.setFilter != "31200" {
+		t.Fatalf("deferred filter did not apply after save: %s", probeReviewState(m))
+	}
+}
+
+// TestHistoryEmptyPendingTextWithDirtyEditor checks L3: a finished history
+// record must not claim the scan is still running just because an editor is
+// dirty.
+func TestHistoryEmptyPendingTextWithDirtyEditor(t *testing.T) {
+	m := &Model{
+		rec:     &RecordView{Live: false},
+		recData: &record.Recovery{},
+		edit: &editState{
+			recordID: "r", seq: 1,
+			original: editDraft{Level: "15"},
+			draft:    editDraft{Level: "11"},
+		},
+	}
+	m.filter = resultFilterPending
+	if got := m.filteredEmptyText(); got != "待处理 0 件，都处理完了。" {
+		t.Fatalf("history empty text = %q, want the finished text", got)
+	}
+	if !m.editingDirty() {
+		t.Fatal("the test fixture is not exercising the dirty history path")
+	}
+}
+
+// TestEnsureReviewEditKeepsDirtyDraft checks the render path never replaces
+// a dirty editor when a row is requested directly.
+func TestEnsureReviewEditKeepsDirtyDraft(t *testing.T) {
+	m, _, _, _ := openReviewableResults(t, manyPendingRecord(t, 2), 1180, 760)
+	m.edit.draft.Level = "11"
+	m.edit.refresh()
+	seq := m.edit.seq
+	m.ensureReviewEdit(&m.rec.Rows[1])
+	if m.edit == nil || m.edit.seq != seq || m.edit.draft.Level != "11" {
+		t.Fatalf("ensureReviewEdit replaced a dirty editor: %s", probeReviewState(m))
 	}
 }

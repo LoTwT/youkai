@@ -79,3 +79,13 @@ func TestCountRowsUsesItemClassForBackfilledItems(t *testing.T) {
 		t.Fatalf("counts do not add up: %+v", got)
 	}
 }
+
+// TestCountRowsQueuedRowCountsOnce checks a queued/running pending-backfill
+// row is not counted both by the row loop and by the class remainder.
+func TestCountRowsQueuedRowCountsOnce(t *testing.T) {
+	rows := []Row{{Seq: 1, Status: record.StatusQueued, ItemClass: app.ItemClassPendingBackfill}}
+	got := countRows(rows, 0)
+	if got.OtherExcluded != 1 {
+		t.Fatalf("one queued row counts as %d other-excluded: %+v", got.OtherExcluded, got)
+	}
+}

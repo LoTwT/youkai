@@ -88,6 +88,7 @@ const (
 	navPage
 	navExit
 	navStartScan
+	navResultFilter
 )
 
 // navigationRequest is a navigation deferred until unsaved input is saved
@@ -98,6 +99,10 @@ type navigationRequest struct {
 	recordID string
 	// page is the destination of a navPage request.
 	page Page
+	// The filter fields belong to navResultFilter.
+	filter     resultFilter
+	setFilter  string
+	slotFilter string
 }
 
 // cloneDraft copies a draft including its substat slice.
@@ -482,9 +487,9 @@ func (m *Model) startEditRow(row *Row) {
 }
 
 // ensureReviewEdit keeps the selected item's editor open while its row is
-// pending or needs backfill. A selection change settles an older draft
-// first (requestNavigation), so replacing the editor here can never drop
-// unsaved input.
+// pending or needs backfill. A dirty editor is never replaced here: any
+// selection or filter change that would leave it must pass through
+// requestNavigation first.
 func (m *Model) ensureReviewEdit(row *Row) {
 	if m.rec == nil || row == nil {
 		return
@@ -498,6 +503,11 @@ func (m *Model) ensureReviewEdit(row *Row) {
 		return
 	}
 	if m.edit != nil && m.edit.recordID == m.rec.ID && m.edit.seq == row.Seq {
+		return
+	}
+	if m.editingDirty() {
+		// A selection change must pass through requestNavigation first; never
+		// replace a dirty editor from the filter/render path.
 		return
 	}
 	m.startEditRow(row)
@@ -569,6 +579,8 @@ func (m *Model) runNavigation(req navigationRequest) {
 			m.reviewNotice = ""
 			m.pointFirstReviewField()
 		}
+	case navResultFilter:
+		m.applyResultFilterState(req.filter, req.setFilter, req.slotFilter)
 	case navOpenRecord:
 		m.page = pageResults
 		m.performOpenRecord(req.recordID)
@@ -664,6 +676,8 @@ func (m *Model) saveEdit(action reviewAction, after func()) {
 		return
 	}
 	if action == reviewSave && !m.edit.dirty() {
+		m.reviewErr = ""
+		m.reviewSaveFailed = false
 		m.reviewNotice = "没有修改需要保存。"
 		return
 	}
@@ -836,6 +850,7 @@ func (m *Model) handleReviewError(recordID string, err error) {
 		m.edit = nil
 		m.navPrompt = nil
 		m.reviewErr = ""
+		m.reviewSaveFailed = false
 		m.reviewNotice = "记录已被更新，正在重新加载当前修订；旧输入未保存。"
 		if m.rec != nil && m.rec.ID == recordID {
 			m.reloadRecord(recordID, m.rec.Live)

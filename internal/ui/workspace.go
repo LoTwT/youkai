@@ -102,6 +102,8 @@ func (m *Model) workspaceStatusTexts() (coverage, pending, saved string) {
 		saved = "正在保存…"
 	case m.reviewSaveFailed:
 		saved = "保存失败"
+	case m.editingDirty():
+		saved = "未保存修改"
 	case m.rec.Live && m.snap.SaveError != "":
 		saved = "保存失败"
 	case m.rec.Live && (m.snap.Busy || m.snap.SavePending):

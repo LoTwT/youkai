@@ -94,9 +94,7 @@ func (m *Model) hasResultFacets() bool {
 
 // clearResultFacets removes the set/slot narrowing and settles the list.
 func (m *Model) clearResultFacets() {
-	m.setFilter = ""
-	m.slotFilter = ""
-	m.afterResultFilterChange()
+	m.requestResultFilter(m.filter, "", "")
 }
 
 // resultFilterCount is the record-wide count of one segment.
@@ -122,9 +120,65 @@ func (m *Model) setResultFilter(filter resultFilter) {
 	if m.filter == filter {
 		return
 	}
+	m.requestResultFilter(filter, m.setFilter, m.slotFilter)
+}
+
+// requestResultFilter applies a segment/facet change unless it would move
+// away from a dirty editor, in which case the shared unsaved-changes prompt
+// owns the decision.
+func (m *Model) requestResultFilter(filter resultFilter, setFilter, slotFilter string) {
+	if m.filter == filter && m.setFilter == setFilter && m.slotFilter == slotFilter {
+		return
+	}
+	if m.reviewSaving {
+		m.reviewErr = "正在保存，完成前不能切换筛选。"
+		return
+	}
+	if m.editingDirty() && !m.resultSelectionInFilter(filter, setFilter, slotFilter) {
+		m.navPrompt = &navigationRequest{
+			kind: navResultFilter, filter: filter,
+			setFilter: setFilter, slotFilter: slotFilter,
+		}
+		return
+	}
+	m.applyResultFilterState(filter, setFilter, slotFilter)
+}
+
+// resultSelectionInFilter reports whether the chosen row would remain
+// visible after the target filter/facets are applied.
+func (m *Model) resultSelectionInFilter(filter resultFilter, setFilter, slotFilter string) bool {
+	if m.rec == nil || m.selected < 0 || m.selected >= len(m.rec.Rows) {
+		return false
+	}
+	row := &m.rec.Rows[m.selected]
+	keepConfirmed := filter == resultFilterPending && m.recentlyConfirmedNow(row)
+	if !keepConfirmed && !resultRowInFilter(row, filter) {
+		return false
+	}
+	if setFilter != "" {
+		if row.Structured == nil || row.Structured.Data.SetID == nil ||
+			strconv.Itoa(*row.Structured.Data.SetID) != setFilter {
+			return false
+		}
+	}
+	if slotFilter != "" {
+		if row.Structured == nil || row.Structured.Data.Slot == nil ||
+			strconv.Itoa(*row.Structured.Data.Slot) != slotFilter {
+			return false
+		}
+	}
+	return true
+}
+
+// applyResultFilterState is the only place a filter/facet change mutates the
+// workspace, after any dirty editor has been settled.
+func (m *Model) applyResultFilterState(filter resultFilter, setFilter, slotFilter string) {
 	m.clearRecentlyConfirmed()
 	m.filter = filter
+	m.setFilter = setFilter
+	m.slotFilter = slotFilter
 	m.settleResultSelection()
+	m.tableSelected = resultDisplayIndex(m.visibleResultRows(), m.selected)
 }
 
 // settleResultSelection keeps the selection inside the current filter.
@@ -138,6 +192,11 @@ func (m *Model) settleResultSelection() {
 	if len(visible) == 0 {
 		m.selected = -1
 		m.scroll = 0
+		return
+	}
+	if m.editingDirty() {
+		// A dirty editor may only move through requestNavigation; filter
+		// changes are deferred before they reach this point.
 		return
 	}
 	if slices.Contains(visible, m.selected) {
@@ -178,10 +237,10 @@ func (m *Model) filteredEmptyText() string {
 	switch m.filter {
 	case resultFilterPending:
 		if m.pendingItemsCount() == 0 {
-			if m.reviewSettled() {
-				return "待处理 0 件，都处理完了。"
+			if m.liveScanInProgress() {
+				return "扫描尚未结束，暂无待处理条目。"
 			}
-			return "扫描尚未结束，暂无待处理条目。"
+			return "待处理 0 件，都处理完了。"
 		}
 		return "没有待处理的条目。"
 	case resultFilterWarning:
@@ -204,11 +263,7 @@ func resultDisplayIndex(visible []int, full int) int {
 // afterResultFilterChange settles a segment choice made in the compact
 // strip or the list.
 func (m *Model) afterResultFilterChange() {
-	// A facet change is a new visit to the filtered list: a confirmed item
-	// that only lingered in the pending segment no longer belongs here.
-	m.clearRecentlyConfirmed()
-	m.settleResultSelection()
-	m.tableSelected = resultDisplayIndex(m.visibleResultRows(), m.selected)
+	m.applyResultFilterState(m.filter, m.setFilter, m.slotFilter)
 }
 
 // resultsFilterBar is the item list's segment control. The compact strip
@@ -222,7 +277,6 @@ func (m *Model) resultsFilterBar(c *ui.Context, t *ui.Theme) {
 	ui.Segmented(c, choice, labels...).Bind(&m.reviewFilterRef)
 	if *choice >= 0 && *choice < len(resultFilterOrder) && resultFilterOrder[*choice] != m.filter {
 		m.setResultFilter(resultFilterOrder[*choice])
-		m.afterResultFilterChange()
 	}
 }
 
@@ -230,7 +284,6 @@ func (m *Model) resultsFilterBar(c *ui.Context, t *ui.Theme) {
 // under the three segments in the standard list and at the top of the
 // compact popover; they never replace the three segments themselves.
 func (m *Model) resultsFacetFilters(c *ui.Context, t *ui.Theme, width float32) {
-	changed := false
 	ui.Column(c).Gap(t.Space(1)).Children(func() {
 		setLabel := setFilterLabel(m.setFilter)
 		before := setLabel
@@ -238,11 +291,10 @@ func (m *Model) resultsFacetFilters(c *ui.Context, t *ui.Theme, width float32) {
 			Width(width).Shrink(1).Label("套装筛选")
 		if setLabel != before {
 			if setLabel == "全部套装" {
-				m.setFilter = ""
+				m.requestResultFilter(m.filter, "", m.slotFilter)
 			} else {
-				m.setFilter = optionValue(setLabel)
+				m.requestResultFilter(m.filter, optionValue(setLabel), m.slotFilter)
 			}
-			changed = true
 		}
 		slotLabel := slotFilterLabel(m.slotFilter)
 		before = slotLabel
@@ -250,16 +302,12 @@ func (m *Model) resultsFacetFilters(c *ui.Context, t *ui.Theme, width float32) {
 			Width(width).Shrink(1).Label("槽位筛选")
 		if slotLabel != before {
 			if slotLabel == "全部槽位" {
-				m.slotFilter = ""
+				m.requestResultFilter(m.filter, m.setFilter, "")
 			} else {
-				m.slotFilter = optionValue(slotLabel)
+				m.requestResultFilter(m.filter, m.setFilter, optionValue(slotLabel))
 			}
-			changed = true
 		}
 	})
-	if changed {
-		m.afterResultFilterChange()
-	}
 }
 
 // setFilterLabel is the picker's label for the current facet id.

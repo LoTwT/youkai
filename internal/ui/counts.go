@@ -40,11 +40,13 @@ func countRowsWithClasses(rows []Row, classes app.ItemClassCounts, included int,
 		Pending:     int(classes.PendingReview),
 		ExportKnown: exportKnown,
 	}
+	splitBackfill := 0
 	for i := range rows {
 		row := &rows[i]
 		if row.ItemClass != app.ItemClassPendingBackfill {
 			continue
 		}
+		splitBackfill++
 		switch row.Status {
 		case record.StatusFailed:
 			c.Failed++
@@ -56,7 +58,7 @@ func countRowsWithClasses(rows []Row, classes app.ItemClassCounts, included int,
 	}
 	// Classes.PendingBackfill is split above when rows exist. A fallback
 	// class count without rows keeps the total honest as other-excluded.
-	if missing := int(classes.PendingBackfill) - c.Failed - c.Unprocessed; missing > 0 {
+	if missing := int(classes.PendingBackfill) - splitBackfill; missing > 0 {
 		c.OtherExcluded += missing
 	}
 	if exportKnown {

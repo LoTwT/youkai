@@ -16,18 +16,23 @@ import (
 // standard profile shows the list as a column; the compact profile folds it
 // into the top strip. Both keep screenshots and form side by side.
 const (
-	reviewListWidth       = 240
-	reviewFormWidth       = 400
-	reviewMinCropsWidth   = 360
-	reviewStandardWidth   = 1120
-	reviewListRowHeight   = 52
-	reviewPagePadding     = 12
-	reviewPanePaddingX    = 12
-	reviewPanePaddingY    = 10
-	reviewCropImageMin    = 120
-	reviewZoomStep        = 0.25
-	reviewZoomMax         = 4
-	reviewHeaderSizeRatio = 0.9
+	reviewListWidth     = 240
+	reviewFormWidth     = 400
+	reviewMinCropsWidth = 360
+	reviewStandardWidth = 1120
+	reviewListRowHeight = 52
+	reviewPagePadding   = 12
+	reviewPanePaddingX  = 12
+	reviewPanePaddingY  = 10
+	reviewCropImageMin  = 120
+	reviewZoomStep      = 0.25
+	reviewZoomMax       = 4
+	// Main-stat controls share one row inside the form; keep their total
+	// under the inner width at 960 (L6).
+	reviewMainAttributeWidth = 132
+	reviewMainValueWidth     = 76
+	reviewMainUnitWidth      = 100
+	reviewHeaderSizeRatio    = 0.9
 )
 
 // reviewLayoutWidths is the laid-out width of each review region, recorded
@@ -834,7 +839,6 @@ func (m *Model) reviewEmptyForm(c *ui.Context, t *ui.Theme, visible []int) {
 	}
 	if ui.Button(c, "显示全部").Clicked() {
 		m.setResultFilter(resultFilterAll)
-		m.afterResultFilterChange()
 	}
 	_ = visible
 }
@@ -1017,16 +1021,16 @@ func (m *Model) reviewFieldControl(c *ui.Context, t *ui.Theme, row *Row, field F
 		ui.Row(c).Gap(t.Space(1)).AlignItems(ui.Center).Children(func() {
 			attribute := ui.Select(c, &draft.MainAttribute,
 				attributeChoices(attributeTextValue(draft.MainAttribute))).
-				Width(132).Shrink(1).Disabled(m.reviewActionsBlocked()).Label("主词条类型")
+				Width(reviewMainAttributeWidth).Shrink(1).Disabled(m.reviewActionsBlocked()).Label("主词条类型")
 			m.noteTextInputFocus(attribute)
 			value := m.noteTextInputFocus(ui.TextInput(c, &draft.MainValue).
-				Width(76).Shrink(1).Placeholder("数值").Disabled(m.reviewActionsBlocked()).Label("主词条数值"))
+				Width(reviewMainValueWidth).Shrink(1).Placeholder("数值").Disabled(m.reviewActionsBlocked()).Label("主词条数值"))
 			if m.focusReviewField == field {
 				value.Focus()
 			}
 			unit := ui.Select(c, &draft.MainUnit,
 				unitChoices(attributeTextValue(draft.MainAttribute), attributeTextValue(draft.MainUnit))).
-				Width(100).Shrink(1).Disabled(m.reviewActionsBlocked()).Label("主词条单位")
+				Width(reviewMainUnitWidth).Shrink(1).Disabled(m.reviewActionsBlocked()).Label("主词条单位")
 			m.noteReviewControlFocus(field, attribute.FocusWithin() || value.FocusWithin() || unit.FocusWithin())
 		})
 	case FormFieldSubstats, FormFieldSubstat1, FormFieldSubstat2, FormFieldSubstat3, FormFieldSubstat4:

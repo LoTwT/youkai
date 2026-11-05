@@ -24,14 +24,20 @@ func (m *Model) reviewSettled() bool {
 	if !m.rec.Live {
 		return true
 	}
+	return !m.liveScanInProgress()
+}
+
+// liveScanInProgress reports a live record whose scan has not ended and
+// saved. A history record is never in progress, even with a dirty editor.
+func (m *Model) liveScanInProgress() bool {
+	if m.rec == nil || !m.rec.Live {
+		return false
+	}
 	if m.snap.SessionID == "" || string(m.snap.SessionID) != m.rec.ID {
-		return false
+		return true
 	}
-	if m.snap.Busy || m.snap.Scan.Phase != scan.PhaseEnded ||
-		m.snap.SavePending || m.snap.SaveError != "" {
-		return false
-	}
-	return true
+	return m.snap.Busy || m.snap.Scan.Phase != scan.PhaseEnded ||
+		m.snap.SavePending || m.snap.SaveError != ""
 }
 
 // completionVisible reports whether the pending-zero completion surface
