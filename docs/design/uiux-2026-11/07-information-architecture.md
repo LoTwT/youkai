@@ -1,6 +1,6 @@
 # 07 信息架构与导航
 
-**第二阶段草案**（2026-11-03）。本阶段回答“有哪些页面、怎样互相到达、每个对象放在哪里”。输入是第一阶段的 [06 §1 已决定的提案](06-proposals-and-phase2.md#1-功能提案)和 [06 §3 给第二阶段的输入](06-proposals-and-phase2.md#3-给第二阶段的输入)、[03 Windows 旅程](03-journeys-windows.md)、[05 状态矩阵](05-state-matrix.md)。首版只做 Windows 本地客户端，mac 只是开发平台，界面不为 mac 单独设计（[06 §1.1](06-proposals-and-phase2.md#11-首版范围调整2026-11-03-用户决定)）。
+**第二阶段（2026-11-03 起草，2026-11-05 定稿）**。本阶段回答“有哪些页面、怎样互相到达、每个对象放在哪里”。输入是第一阶段的 [06 §1 已决定的提案](06-proposals-and-phase2.md#1-功能提案)和 [06 §3 给第二阶段的输入](06-proposals-and-phase2.md#3-给第二阶段的输入)、[03 Windows 旅程](03-journeys-windows.md)、[05 状态矩阵](05-state-matrix.md)。首版只做 Windows 本地客户端，mac 只是开发平台，界面不为 mac 单独设计（[06 §1.1](06-proposals-and-phase2.md#11-首版范围调整2026-11-03-用户决定)）。
 
 每屏的规格见 [08](08-screens.md)，窗口边界与交互规则见 [09](09-window-and-interaction.md)，对服务层的需求见 [10](10-service-requirements.md)，检查点 2 的问题与决定见 [11](11-phase2-open-questions.md)，第三阶段实施拆分见 [12](12-implementation-plan.md)，线框图见 [wireframes/](wireframes/README.md)。
 

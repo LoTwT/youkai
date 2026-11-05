@@ -1,6 +1,6 @@
 # 08 每屏规格
 
-**第二阶段草案**（2026-11-03）。页面清单与导航见 [07](07-information-architecture.md)；尺寸、降级、按钮、错误、快捷键、术语等跨屏规则见 [09](09-window-and-interaction.md)，本文只写各屏特有的内容。每屏的“首要问题”沿用 [06 §3 第 12 条](06-proposals-and-phase2.md#3-给第二阶段的输入)，本阶段只在需要时修改并说明。“对应状态”指 [05 状态矩阵](05-state-matrix.md)的行。线框图见 [wireframes/](wireframes/README.md)。
+**第二阶段（2026-11-03 起草，2026-11-05 定稿）**。页面清单与导航见 [07](07-information-architecture.md)；尺寸、降级、按钮、错误、快捷键、术语等跨屏规则见 [09](09-window-and-interaction.md)，本文只写各屏特有的内容。每屏的“首要问题”沿用 [06 §3 第 12 条](06-proposals-and-phase2.md#3-给第二阶段的输入)，本阶段只在需要时修改并说明。“对应状态”指 [05 状态矩阵](05-state-matrix.md)的行。线框图见 [wireframes/](wireframes/README.md)。
 
 写法：每屏先给一张规格表，再列关键状态；键盘顺序指 Tab 的前进顺序，导航轨永远是第一组（[09 §4.4](09-window-and-interaction.md#44-键盘与焦点)）。
 
@@ -30,7 +30,7 @@
 | 游戏分辨率 | 2560×1440 → 1920×1080（窗口或无边框） | 说明到游戏设置里切换；已知未开放档位与未知尺寸文案不同（C-11） | `clientTierNotOpened`、`clientTierUnsupported` |
 | 窗口位置 | 底部被任务栏遮住 → 完整在屏幕内 | 说明移动窗口或改为无边框 | `windowOutsideWorkArea` |
 | 显示缩放（DPI） | 无法读取 → 可读取且未被虚拟化 | `dpiAwarenessMismatch` 写“这是 youkai 自身的问题”，给出诊断入口；其余两项文案待规格补（S3 待定行） | `dpiAwarenessMismatch`、`dpiVirtualized`、`dpiCheckUnavailable` |
-| 停止热键 | 标为“点开始后检查”（与“游戏页面、遮挡、独占全屏”同组）。实现状态：随 PR-11、PR-17 落地 | 开始后注册失败（`hotkeyUnavailable`）时回到清单并置顶展开；说明关闭占用热键的程序；自定义热键未实现（D-10） | `hotkeyUnavailable` |
+| 停止热键 | 标为“点开始后检查”（与“游戏页面、遮挡、独占全屏”同组）。实现状态：随 PR-11、PR-17 落地。线框 01、02 的这一项早于 Q-B，以本表为准 | 开始后注册失败（`hotkeyUnavailable`）时回到清单并置顶展开；说明关闭占用热键的程序；自定义热键未实现（D-10） | `hotkeyUnavailable` |
 | 磁盘空间 | 可用 0.4 GB → 至少 x GB | “去清理” → 设置 › 存储与清理 | 磁盘不足（C-28） |
 | 识别资源 | 模型文件缺失 → 安装完整 | 写“识别资源缺失或损坏，请重新安装 youkai”，附“复制诊断信息”；记录、导出、设置照常可用 | 识别资源缺失或损坏（F-05，S1） |
 | 游戏页面、遮挡、独占全屏 | 标为“点开始后检查”，并写“请打开驱动盘仓库页”（C-07） | — | 准备阶段的 S3 失败行 |
