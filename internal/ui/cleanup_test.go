@@ -149,6 +149,7 @@ func TestViewHistoryScreenshotCleanupPreviewsCancelAndFails(t *testing.T) {
 	m, q := newTestModel(t, Config{Service: svc, DirectExportSaver: &fakeDirectExportSaver{}})
 	tt := ui.NewTester(m.View, 1020, 700)
 	settle(t, m, q, tt)
+	openRecordsList(t, m, q, tt)
 
 	m.openHistoryMenu("r1")
 	tt.Frame()
@@ -158,6 +159,8 @@ func TestViewHistoryScreenshotCleanupPreviewsCancelAndFails(t *testing.T) {
 	m.closeHistoryMenu()
 	m.OpenHistory()
 	settle(t, m, q, tt)
+	showRecordItems(m)
+	tt.Frame()
 
 	m.RequestScreenshotCleanup("r1")
 	settle(t, m, q, tt)
@@ -343,6 +346,7 @@ func TestViewHistoryRecordDeletionClosesResults(t *testing.T) {
 	m, q := newTestModel(t, Config{Service: svc, DirectExportSaver: &fakeDirectExportSaver{}})
 	tt := ui.NewTester(m.View, 1020, 700)
 	settle(t, m, q, tt)
+	openRecordsList(t, m, q, tt)
 
 	m.openHistoryMenu("r1")
 	tt.Frame()
@@ -352,6 +356,8 @@ func TestViewHistoryRecordDeletionClosesResults(t *testing.T) {
 	m.closeHistoryMenu()
 	m.OpenHistory()
 	settle(t, m, q, tt)
+	showRecordItems(m)
+	tt.Frame()
 
 	m.RequestRecordCleanup("r1")
 	settle(t, m, q, tt)
@@ -384,6 +390,8 @@ func TestViewCleanupBlockedByExportAndUnsavedEdit(t *testing.T) {
 	settle(t, m, q, tt)
 	m.OpenHistory()
 	settle(t, m, q, tt)
+	showRecordItems(m)
+	tt.Frame()
 
 	m.exporting = true
 	m.RequestScreenshotCleanup("r1")
@@ -563,6 +571,8 @@ func TestViewMissingEvidenceAfterCleanup(t *testing.T) {
 	settle(t, m, q, tt)
 	m.OpenHistory()
 	settle(t, m, q, tt)
+	showRecordItems(m)
+	tt.Frame()
 
 	if !strings.Contains(m.resultsTitle(), "截图已删除或缺失") {
 		t.Fatalf("the record title does not mark missing screenshots: %q", m.resultsTitle())

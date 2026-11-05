@@ -444,19 +444,20 @@ func resultFilterLabel(value, allLabel string, options []resultFilterOption) str
 }
 
 // registerResultsShortcuts wires the results page's keys. In the editor
-// ⌘↵ saves the draft and confirms it, and ⌘S saves it without confirming;
-// both keep the editor open on failure. ⌘J moves to the next pending item
-// through requestNavigation, so a dirty draft holds the move behind the
-// unsaved prompt. The status bar names only the keys that are registered
-// and usable in the current layout.
+// Ctrl+Enter saves the draft and confirms it, and Ctrl+S saves it without
+// confirming; both keep the editor open on failure. Ctrl+J moves to the
+// next pending item through requestNavigation, so a dirty draft holds the
+// move behind the unsaved prompt. The status bar names only the keys that
+// are registered and usable in the current layout; every label comes from
+// shortcut_text.go.
 func (m *Model) registerResultsShortcuts(c *ui.Context) {
 	if m.reviewSaving || m.loading || m.recErr != "" || m.exportBusy() {
 		return
 	}
 	if m.edit != nil {
 		c.OnShortcut(ui.Cmd, ui.KeyEnter, func() {
-			// The editor's draft is what ⌘↵ confirms; confirming the
-			// persisted row here would silently drop the input.
+			// The editor's draft is what Ctrl+Enter confirms; confirming
+			// the persisted row here would silently drop the input.
 			m.saveEdit(reviewConfirmNext, nil)
 		})
 		c.OnShortcut(ui.Cmd, ui.KeyS, func() {
@@ -598,7 +599,7 @@ func (m *Model) evidenceDisplaySize() (float32, float32) {
 // layout: the window less the rail and page padding, then the table split
 // when both panes show.
 func (m *Model) resultsDetailWidth() float32 {
-	width := float32(m.contentWidth) - m.sidebarWidth() - 24
+	width := float32(m.contentWidth) - navRailWidth - 24
 	if resultsSideBySide(m.contentWidth) {
 		width -= m.split
 	}
@@ -623,13 +624,13 @@ func (m *Model) resultShortcutText() string {
 		return ""
 	}
 	if m.edit != nil {
-		return "⌘↵ 保存并确认并下一项  ·  ⌘S 保存修改"
+		return shortcutConfirmNext + " 保存并确认并下一项  ·  " + shortcutSave + " 保存修改"
 	}
 	if m.rec == nil || len(m.rec.Rows) == 0 || m.completionVisible() {
 		return ""
 	}
 	if m.narrowResults() && !m.resultsDetail {
-		return "↵ 查看详情  ·  ⌘J 下一个待校对"
+		return shortcutOpenRecord + " 查看详情  ·  " + shortcutNextPending + " 下一个待校对"
 	}
-	return "⌘↵ 确认并下一项  ·  ⌘J 下一个待校对"
+	return shortcutConfirmNext + " 确认并下一项  ·  " + shortcutNextPending + " 下一个待校对"
 }
