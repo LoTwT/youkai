@@ -360,6 +360,9 @@ func TestRefusedStartKeepsTheDraftOnTheReturningRecord(t *testing.T) {
 	m.Apply(snap("s1", 1, true, scan.PhaseCapturing,
 		scan.Counts{Captured: 1, Produced: 1}, 1, true, ""))
 	drainAll(t, m, q)
+	m.Apply(snap("s1", 2, false, scan.PhaseEnded,
+		scan.Counts{Captured: 1, Produced: 1}, 1, false, ""))
+	drainAll(t, m, q)
 	showRecordItems(m)
 	m.startEdit()
 	if m.edit == nil {
@@ -370,15 +373,16 @@ func TestRefusedStartKeepsTheDraftOnTheReturningRecord(t *testing.T) {
 
 	// Another scan starts behind the draft: the open record is history for
 	// now, but the editor stays.
-	m.Apply(snap("s2", 2, true, scan.PhasePreparing, scan.Counts{}, 1, true, ""))
+	m.Apply(snap("s2", 3, true, scan.PhasePreparing, scan.Counts{}, 1, true, ""))
 	drainAll(t, m, q)
 	if m.rec == nil || m.rec.ID != "s1" || m.rec.Live || m.edit == nil ||
 		m.edit.draft.Level != "13" {
 		t.Fatalf("the background scan disturbed the draft: record %+v edit %+v", m.rec, m.edit)
 	}
 
-	// The service refuses s2 and rolls back to s1.
-	m.Apply(snap("s1", 3, true, scan.PhasePreparing, scan.Counts{}, 1, true, ""))
+	// The service refuses s2 and rolls back to s1's ended snapshot.
+	m.Apply(snap("s1", 3, false, scan.PhaseEnded,
+		scan.Counts{Captured: 1, Produced: 1}, 1, false, ""))
 	drainAll(t, m, q)
 	if m.rec == nil || m.rec.ID != "s1" || !m.rec.Live {
 		t.Fatalf("the returning record is not live again: %+v", m.rec)
@@ -391,6 +395,67 @@ func TestRefusedStartKeepsTheDraftOnTheReturningRecord(t *testing.T) {
 	}
 	if got := recordLoadCount(svc, "s1"); got != loads {
 		t.Fatalf("the rollback reloaded the record (%d loads, want %d)", got, loads)
+	}
+}
+
+// TestRefusedStartClearsTheNoticeOverAHistoryDraft checks the same rollback
+// while the user edits a different record: the history record and its draft
+// stay, and the stale "a new scan has started" notice goes away because no
+// scan is running.
+func TestRefusedStartClearsTheNoticeOverAHistoryDraft(t *testing.T) {
+	live := recovery(structuredItem(1,
+		zzz.DiscRecord{SetID: intp(31100), Slot: 1, Level: intp(15)}, "本次"))
+	live.Checkpoint.Session.SessionID = "s1"
+	old := recovery(reviewRowItem(t, 1, 12))
+	old.Checkpoint.Session.SessionID = "old"
+	svc := &fakeService{
+		list: []record.RecordInfo{
+			{ID: "s1", SavedAt: time.Date(2026, 10, 21, 10, 0, 0, 0, time.UTC)},
+			{ID: "old", SavedAt: time.Date(2026, 10, 20, 10, 0, 0, 0, time.UTC)},
+		},
+		loads: map[string]*record.Recovery{"s1": live, "old": old},
+	}
+	installReviewSave(svc)
+	m, q := newTestModel(t, Config{Service: svc})
+	drainAll(t, m, q)
+	m.Apply(snap("s1", 1, true, scan.PhaseCapturing,
+		scan.Counts{Captured: 1, Produced: 1}, 1, true, ""))
+	drainAll(t, m, q)
+	m.Apply(snap("s1", 2, false, scan.PhaseEnded,
+		scan.Counts{Captured: 1, Produced: 1}, 1, false, ""))
+	drainAll(t, m, q)
+
+	m.histChoice = historyLabel(t, m, "old")
+	m.OpenHistory()
+	drainAll(t, m, q)
+	showRecordItems(m)
+	m.startEdit()
+	if m.edit == nil {
+		t.Fatal("the editor did not open on the history record")
+	}
+	m.edit.draft.Level = "13"
+
+	m.Apply(snap("s2", 3, true, scan.PhasePreparing, scan.Counts{}, 1, true, ""))
+	drainAll(t, m, q)
+	if !strings.Contains(m.reviewNotice, "新的扫描已开始") {
+		t.Fatalf("the started scan gave no notice: %q", m.reviewNotice)
+	}
+	if m.rec == nil || m.rec.ID != "old" || m.edit == nil || m.edit.draft.Level != "13" {
+		t.Fatalf("the started scan disturbed the history draft: record %+v edit %+v",
+			m.rec, m.edit)
+	}
+
+	// The service refuses s2 and returns to s1's ended snapshot.
+	m.Apply(snap("s1", 3, false, scan.PhaseEnded,
+		scan.Counts{Captured: 1, Produced: 1}, 1, false, ""))
+	drainAll(t, m, q)
+	if m.reviewNotice != "" {
+		t.Fatalf("the refused start kept the stale notice: %q", m.reviewNotice)
+	}
+	if m.rec == nil || m.rec.ID != "old" || m.rec.Live || m.edit == nil ||
+		m.edit.draft.Level != "13" {
+		t.Fatalf("the rollback disturbed the history draft: record %+v edit %+v",
+			m.rec, m.edit)
 	}
 }
 

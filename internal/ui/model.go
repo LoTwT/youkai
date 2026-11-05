@@ -191,9 +191,12 @@ type Model struct {
 	source ScanSourceInfo
 
 	// The last applied service snapshot and its identity, for discarding
-	// stale updates by session and revision.
+	// stale updates by session and revision. priorSession is the session the
+	// applied one replaced: a new session equal to it is a refused start
+	// rolling back to that already ended session.
 	snap            app.Snapshot
 	appliedSession  scan.ID
+	priorSession    scan.ID
 	appliedRevision uint64
 	prevBusy        bool
 
@@ -475,6 +478,7 @@ func (m *Model) Apply(snap app.Snapshot) {
 		return
 	}
 	prevSession, prevBusy := m.appliedSession, m.prevBusy
+	replacedSession := m.priorSession
 	m.appliedSession, m.appliedRevision = snap.SessionID, snap.Revision
 	m.snap = snap
 	m.prevBusy = snap.Busy
@@ -485,7 +489,8 @@ func (m *Model) Apply(snap app.Snapshot) {
 	// growth branch below). Unsaved review input is never thrown away by a
 	// scan starting behind the user's back.
 	if snap.SessionID != "" && snap.SessionID != prevSession {
-		m.beginSession(string(snap.SessionID))
+		m.priorSession = prevSession
+		m.beginSession(string(snap.SessionID), string(replacedSession))
 	}
 	// The live record's saved count grew: a newer generation is on disk,
 	// so reload it while it is the open record (the previous rows stay
@@ -530,9 +535,12 @@ func (m *Model) Apply(snap app.Snapshot) {
 
 // beginSession routes a newly started scan into the open record. The new
 // live record replaces the shown one unless unsaved input keeps the user
-// where they are; a background scan must not discard input.
-func (m *Model) beginSession(id string) {
+// where they are; a background scan must not discard input. replacedSession
+// is the session the previous snapshot replaced; when the new session
+// equals it, a refused start rolled the service back to that ended session.
+func (m *Model) beginSession(id, replacedSession string) {
 	busyEditing := m.reviewSaving || m.editingDirty()
+	rolledBack := replacedSession != "" && id == replacedSession
 	if m.savePrompt != nil && m.savePrompt.recordID != id {
 		// A new scan replaces the results view; the old session's prompt is
 		// settled as postponed instead of floating over unrelated content.
@@ -551,7 +559,13 @@ func (m *Model) beginSession(id string) {
 		// The open record is history now; the new session's record waits
 		// until the draft settles so a background scan never discards input.
 		m.rec.Live = false
-		m.reviewNotice = "新的扫描已开始；保存或放弃当前编辑后可查看本次扫描。"
+		if rolledBack {
+			// The refused start returned to the session that was live
+			// before it; no new scan is running, so the notice is stale.
+			m.reviewNotice = ""
+		} else {
+			m.reviewNotice = "新的扫描已开始；保存或放弃当前编辑后可查看本次扫描。"
+		}
 		return
 	}
 	m.showRecord(id, true)
