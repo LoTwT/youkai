@@ -50,6 +50,24 @@ func countColor(img *image.RGBA, c color.RGBA) int {
 	return n
 }
 
+// evidencePaneRect returns the screenshot pane below its header, where crop
+// bitmaps draw. Color checks stay inside this pane so ClearType fringes in the
+// form or item list cannot masquerade as a retained evidence image.
+func evidencePaneRect(t *testing.T, tt *ui.Tester, m *Model, img *image.RGBA) image.Rectangle {
+	t.Helper()
+	header, ok := tt.Find("截图（逐行）")
+	if !ok {
+		t.Fatalf("the screenshot pane header is missing: %q", tt.Texts())
+	}
+	width := m.reviewLayout.Crops
+	if width == 0 {
+		width = m.reviewCropsWidth()
+	}
+	x0 := int(header.X) - reviewPanePaddingX
+	y0 := int(header.Y + header.H)
+	return image.Rect(x0, y0, x0+int(width), img.Bounds().Max.Y)
+}
+
 // TestViewCloseBehaviorPreference checks that the close preference is
 // visible, toggles both ways and persists each change, and that a window
 // notice explains a missing tray entry.
@@ -391,6 +409,7 @@ func TestViewFastSelectionSwitch(t *testing.T) {
 		"r1/000002-line1": solidBitmap(item2B),
 	}}
 	m, q, tt := openTestRecord(t, ev, 0)
+	pane := evidencePaneRect(t, tt, m, tt.Image())
 
 	// The first item is chosen and its loads are scheduled. Switch to the
 	// second item before the loads land, then settle: the second item's
@@ -402,11 +421,11 @@ func TestViewFastSelectionSwitch(t *testing.T) {
 	if !tt.HasText("#0002 · 失败") {
 		t.Fatalf("the switch did not choose the second item: %q", tt.Texts())
 	}
-	if n := countColor(tt.Image(), item2A); n < 100 {
-		t.Fatalf("the second item's image does not show after the switch (%d px)", n)
+	if n := countColorInRect(tt.Image(), item2A, pane); n < 100 {
+		t.Fatalf("the second item's image does not show after the switch (%d px, pane %v)", n, pane)
 	}
-	if n := countColor(tt.Image(), item1A); n != 0 {
-		t.Fatalf("the first item's image shows for the second item (%d px)", n)
+	if n := countColorInRect(tt.Image(), item1A, pane); n != 0 {
+		t.Fatalf("the first item's image shows for the second item (%d px, pane %v)", n, pane)
 	}
 	loaded := ev.callsCount()
 	if loaded < 4 {
@@ -419,11 +438,11 @@ func TestViewFastSelectionSwitch(t *testing.T) {
 	m.tableSelected = 0
 	tt.Frame()
 	settle(t, m, q, tt)
-	if n := countColor(tt.Image(), item1A); n < 100 {
-		t.Fatalf("the first item's image does not show after switching back (%d px)", n)
+	if n := countColorInRect(tt.Image(), item1A, pane); n < 100 {
+		t.Fatalf("the first item's image does not show after switching back (%d px, pane %v)", n, pane)
 	}
-	if n := countColor(tt.Image(), item2A); n != 0 {
-		t.Fatalf("the second item's image still shows after switching back (%d px)", n)
+	if n := countColorInRect(tt.Image(), item2A, pane); n != 0 {
+		t.Fatalf("the second item's image still shows after switching back (%d px, pane %v)", n, pane)
 	}
 	if ev.callsCount() != loaded {
 		t.Fatalf("a cached image reloaded: %d then %d calls", loaded, ev.callsCount())
