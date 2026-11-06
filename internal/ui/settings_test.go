@@ -40,6 +40,7 @@ func settingsTestModel(t *testing.T) (*Model, *queueUpdater, *fakeService) {
 		DirectExportSaver:        &fakeDirectExportSaver{},
 		Updates:                  &fakeUpdates{enabled: false},
 		AppVersion:               "0.6.0 (build 1021)",
+		BuildCommit:              "83ba00c",
 		OpenDataDirectory:        func() error { return nil },
 		SystemInfo:               func() app.SystemInfo { return app.SystemInfo{OS: "Windows"} },
 		OpenDiagnosticsDirectory: func() error { return nil },
@@ -697,9 +698,13 @@ func TestSettingsFailureStaysOnSettings(t *testing.T) {
 }
 
 // TestSettingsDiagnosticsActions checks both diagnostic actions: the
-// copied allowlisted text reaches the clipboard, the directory action
+// copied text follows the newest session's allowlist, the build commit is
+// present, window titles and user paths stay out, the directory action
 // reaches the entry point, and the privacy note stays visible.
 func TestSettingsDiagnosticsActions(t *testing.T) {
+	const windowTitle = "Personal Bank - Google Chrome"
+	const userPath = `C:\Users\alice\AppData\secret.log`
+	at := time.Date(2026, 11, 5, 14, 3, 21, 0, time.Local)
 	opened := 0
 	m, q, _ := settingsTestModel(t)
 	m.cfg.OpenDiagnosticsDirectory = func() error {
@@ -710,6 +715,20 @@ func TestSettingsDiagnosticsActions(t *testing.T) {
 	settle(t, m, q, tt)
 	openSettings(t, m, q, tt)
 
+	ended := snap("s1", 1, false, scan.PhaseEnded, scan.Counts{Captured: 1}, 0, false, "")
+	ended.Scan.End = scan.EndFailed
+	ended.Scan.Trigger = &scan.Trigger{
+		Kind:    scan.TriggerFault,
+		Code:    "focusLost",
+		Message: windowTitle,
+		Params:  map[string]string{"window": windowTitle, "path": userPath},
+		Phase:   scan.PhaseCapturing,
+		At:      at,
+	}
+	applyAndSettle(t, m, q, tt, ended)
+	m.page = pageSettings
+	tt.Frame()
+
 	if !tt.HasText("复制的内容不包含窗口标题等隐私") {
 		t.Fatalf("the privacy note is missing: %q", tt.Texts())
 	}
@@ -719,13 +738,32 @@ func TestSettingsDiagnosticsActions(t *testing.T) {
 	settle(t, m, q, tt)
 	want := app.DiagnosticsText(app.DiagnosticsInput{
 		Version: "0.6.0 (build 1021)",
+		Commit:  "83ba00c",
 		System:  app.SystemInfo{OS: "Windows"},
+		Scan: &app.DiagnosticsScan{
+			End: string(scan.EndFailed),
+			Trigger: &scan.Trigger{
+				Kind:  scan.TriggerFault,
+				Code:  "focusLost",
+				Phase: scan.PhaseCapturing,
+				At:    at,
+			},
+		},
 	})
 	if got := tt.Clipboard(); got != want {
 		t.Fatalf("the clipboard holds %q, want %q", got, want)
 	}
 	if !tt.HasText("已复制诊断信息。") {
 		t.Fatalf("the copy result does not show: %q", tt.Texts())
+	}
+	if !strings.Contains(tt.Clipboard(), "（构建 83ba00c）") {
+		t.Fatalf("the copied text does not name the build commit: %q", tt.Clipboard())
+	}
+	if !strings.Contains(tt.Clipboard(), "触发码：focusLost") {
+		t.Fatalf("the copied text does not name the newest trigger: %q", tt.Clipboard())
+	}
+	if strings.Contains(tt.Clipboard(), windowTitle) || strings.Contains(tt.Clipboard(), userPath) {
+		t.Fatalf("the copied text leaked private context: %q", tt.Clipboard())
 	}
 
 	if err := tt.Click("打开诊断目录"); err != nil {

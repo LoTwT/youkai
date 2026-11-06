@@ -130,6 +130,11 @@ type Config struct {
 	// area as "当前版本 …" so the window itself names the build it runs;
 	// the entry point passes mygo.App.Version(). Empty hides the line.
 	AppVersion string
+	// BuildCommit is the VCS revision the running binary was built from,
+	// as app.BuildCommit reports it; empty for an unstamped build. It is a
+	// Config value so the diagnostic text can be exercised without a
+	// stamped binary.
+	BuildCommit string
 	// SystemInfo reads the operating-system and display context the copied
 	// diagnostic text reports. The entry point passes app.CurrentSystemInfo;
 	// nil or a zero result says unknown. It runs only when the user copies,

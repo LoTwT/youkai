@@ -252,6 +252,7 @@ func main() {
 		// 练) — development only, never a user setting.
 		Updates:        mygoUpdates{},
 		AppVersion:     mygo.App.Version(),
+		BuildCommit:    app.BuildCommit(),
 		DevAutoInstall: os.Getenv("YOUKAI_DEV_AUTOUPDATE") != "",
 		// The close preference is read at startup and persisted in the data
 		// root; the window's setting row changes it. Closing hides by

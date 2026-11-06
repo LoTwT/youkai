@@ -15,6 +15,7 @@ func (m *Model) diagnosticsText(scan *app.DiagnosticsScan) string {
 	}
 	return app.DiagnosticsText(app.DiagnosticsInput{
 		Version: m.cfg.AppVersion,
+		Commit:  m.cfg.BuildCommit,
 		System:  system,
 		Scan:    scan,
 	})
