@@ -53,10 +53,7 @@ func (m *Model) recordWorkspaceHeader(c *ui.Context, t *ui.Theme, tok *Tokens) {
 		tab := int(m.recordTab)
 		ui.Segmented(c, &tab, "摘要", "逐件").Bind(&m.workspaceTabsRef)
 		if tab >= 0 && tab < int(recordTabCount) && recordTab(tab) != m.recordTab {
-			m.recordTab = recordTab(tab)
-			if m.recordTab == recordTabItems {
-				m.enterReviewView()
-			}
+			m.requestNavigation(navigationRequest{kind: navRecordTab, recordTab: recordTab(tab)})
 		}
 		ui.Box(c).Grow(1)
 		coverage, pending, saved := m.workspaceStatusTexts()

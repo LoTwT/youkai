@@ -90,6 +90,7 @@ const (
 	navStartScan
 	navResultFilter
 	navSummaryClass
+	navRecordTab
 	navExport
 )
 
@@ -107,6 +108,7 @@ type navigationRequest struct {
 	setFilter    string
 	slotFilter   string
 	summaryClass app.ItemClass
+	recordTab    recordTab
 	// exportAfterLoad opens the export dialog once a navOpenRecord request
 	// has loaded its record: the records list's 导出… means "open this
 	// record, then export it", not "export whatever is on screen".
@@ -560,12 +562,19 @@ func (m *Model) requestNavigation(req navigationRequest) {
 	if m.exitState == exitRunning || m.exitState == exitDone {
 		return
 	}
+	if m.navPrompt != nil {
+		// The open prompt owns the decision; a render-time selection or a
+		// second navigation must not replace its target.
+		return
+	}
 	if m.reviewSaving {
 		m.reviewErr = "正在保存，完成前不能切换。"
 		return
 	}
 	if m.editingDirty() {
 		m.navPrompt = &req
+		m.compactListOpen = false
+		m.compactListFocusRequested = false
 		return
 	}
 	m.clearEdit()
@@ -597,6 +606,11 @@ func (m *Model) runNavigation(req navigationRequest) {
 		m.applyResultFilterState(req.filter, req.setFilter, req.slotFilter)
 	case navSummaryClass:
 		m.openSummaryClassState(req.filter, req.summaryClass)
+	case navRecordTab:
+		m.recordTab = req.recordTab
+		if m.recordTab == recordTabItems {
+			m.enterReviewView()
+		}
 	case navOpenRecord:
 		m.page = pageResults
 		m.performOpenRecord(req.recordID, req.exportAfterLoad)
@@ -623,6 +637,12 @@ func (m *Model) runNavigation(req navigationRequest) {
 func (m *Model) applyTableSelection(previous int) {
 	if m.rec == nil || m.selected == previous || m.selected < 0 || m.selected >= len(m.rec.Rows) {
 		m.selected = previous
+		return
+	}
+	if m.navPrompt != nil {
+		// A pending save/discard decision owns the selection.
+		m.selected = previous
+		m.tableSelected = resultDisplayIndex(m.visibleResultRows(), previous)
 		return
 	}
 	seq := m.rec.Rows[m.selected].Seq
@@ -662,13 +682,24 @@ func (m *Model) promptStay() {
 		return
 	}
 	m.navPrompt = nil
-	m.reviewErr = ""
+}
+
+// editMatchesSelection reports the binding invariant: an editor may only
+// target the row the workspace currently shows and has selected.
+func (m *Model) editMatchesSelection() bool {
+	row := m.selectedRow()
+	return m.edit != nil && m.rec != nil && row != nil &&
+		m.edit.recordID == m.rec.ID && m.edit.seq == row.Seq
 }
 
 // saveEdit validates and submits the open editor. after runs only after a
 // successful save (and after the editor settled), never on failure.
 func (m *Model) saveEdit(action reviewAction, after func()) {
 	if m.edit == nil || m.reviewSaving {
+		return
+	}
+	if !m.editMatchesSelection() {
+		m.reviewErr = "编辑内容与当前查看的条目不一致，已取消保存。"
 		return
 	}
 	if m.recErr != "" {
@@ -743,6 +774,10 @@ func (m *Model) confirmCurrentAction(action reviewAction) {
 		return
 	}
 	m.lastAction = action
+	if m.edit != nil && !m.editMatchesSelection() {
+		m.reviewErr = "编辑内容与当前查看的条目不一致，已取消确认。"
+		return
+	}
 	row := &m.rec.Rows[m.selected]
 	if row.Status == record.StatusQueued || row.Status == record.StatusRunning ||
 		row.Structured == nil || !row.PendingReview() {
@@ -759,6 +794,10 @@ func (m *Model) confirmCurrentAction(action reviewAction) {
 // submitReview schedules one save/confirmation. The captured identity and
 // serial mean a late response can only update the item it was sent for.
 func (m *Model) submitReview(recordID string, seq, expectedRevision int64, data zzz.DiscData, action reviewAction, after func()) {
+	if m.rec == nil || m.rec.ID != recordID || m.selectedSeq() != seq {
+		m.reviewErr = "编辑内容与当前查看的条目不一致，已取消写入。"
+		return
+	}
 	m.reviewSerial++
 	serial := m.reviewSerial
 	m.reviewSaving = true

@@ -130,6 +130,9 @@ func (m *Model) requestResultFilter(filter resultFilter, setFilter, slotFilter s
 	if m.filter == filter && m.setFilter == setFilter && m.slotFilter == slotFilter {
 		return
 	}
+	if m.navPrompt != nil {
+		return
+	}
 	if m.reviewSaving {
 		m.reviewErr = "正在保存，完成前不能切换筛选。"
 		return
@@ -139,6 +142,8 @@ func (m *Model) requestResultFilter(filter resultFilter, setFilter, slotFilter s
 			kind: navResultFilter, filter: filter,
 			setFilter: setFilter, slotFilter: slotFilter,
 		}
+		m.compactListOpen = false
+		m.compactListFocusRequested = false
 		return
 	}
 	m.applyResultFilterState(filter, setFilter, slotFilter)
@@ -151,8 +156,7 @@ func (m *Model) resultSelectionInFilter(filter resultFilter, setFilter, slotFilt
 		return false
 	}
 	row := &m.rec.Rows[m.selected]
-	keepConfirmed := filter == resultFilterPending && m.recentlyConfirmedNow(row)
-	if !keepConfirmed && !resultRowInFilter(row, filter) {
+	if !resultRowInFilter(row, filter) {
 		return false
 	}
 	if setFilter != "" {
@@ -208,6 +212,9 @@ func (m *Model) settleResultSelection() {
 	m.selectedSequence = m.rec.Rows[m.selected].Seq
 	m.scroll = 0
 	m.clampResultScroll()
+	if m.edit != nil && !m.editingDirty() {
+		m.clearEdit()
+	}
 	m.pointFirstReviewField()
 }
 
