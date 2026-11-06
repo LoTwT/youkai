@@ -276,9 +276,6 @@ func (m *Model) settingsGeneral(c *ui.Context, t *ui.Theme, tok *Tokens) {
 			}
 		})
 	}
-	if m.windowNotice != "" {
-		ui.Text(c, m.windowNotice).TextColor(t.TextMuted).FontSize(t.FontSize * 0.9)
-	}
 }
 
 // retryCloseBehaviorSave persists the current close-window preference again

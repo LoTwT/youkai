@@ -94,6 +94,19 @@ func TestFirstHideHintDismissalKeepsItDue(t *testing.T) {
 	}
 }
 
+// TestBeginExitClosesAnIdleExportDialog covers exit-keeps-export: an open
+// export dialog must not stay under the exit progress. A write in flight
+// keeps its dialog by the export's own rule.
+func TestBeginExitClosesAnIdleExportDialog(t *testing.T) {
+	f := newExportDialogFixture(t, testRecord(), false)
+	f.open(t)
+	f.m.beginExit()
+	if f.m.exportDialog.open {
+		t.Fatal("the exit left the export dialog open")
+	}
+	drainAll(t, f.m, f.q)
+}
+
 // TestBeginExitClosesTheFirstHideHint checks L-3: the exit progress owns
 // the window instead of stacking under the still-open hint.
 func TestBeginExitClosesTheFirstHideHint(t *testing.T) {
@@ -113,6 +126,7 @@ func TestBeginExitClosesTheFirstHideHint(t *testing.T) {
 func TestExitFailureStatusFollowsTheRetriedSave(t *testing.T) {
 	m, q := newTestModel(t, Config{Service: &fakeService{}})
 	m.exitState = exitFailed
+	m.exitFailureWasSave = true
 	failed := snap("s1", 2, true, scan.PhaseEnded,
 		scan.Counts{Captured: 3}, 2, true, "磁盘已满")
 	failed.FinalSaveFailures = 1
@@ -131,6 +145,57 @@ func TestExitFailureStatusFollowsTheRetriedSave(t *testing.T) {
 	labels := m.LifecycleStatus().TrayMenu()
 	if labels.Open != "打开 youkai" || labels.Exit != "退出 youkai" {
 		t.Fatalf("stale failed-exit menu after the retried save: %+v", labels)
+	}
+}
+
+// TestExitFailureWithoutSaveErrorKeepsAnExitFailedTrayState covers N-3: a
+// teardown error unrelated to the final save must not leave the tray
+// claiming the application is ready.
+func TestExitFailureWithoutSaveErrorKeepsAnExitFailedTrayState(t *testing.T) {
+	m, q := newTestModel(t, Config{Service: &fakeService{
+		quitFn: func() error { return errors.New("close recognizer: busy") },
+	}})
+	m.AllowClose()
+	drainAll(t, m, q)
+	if m.exitState != exitFailed {
+		t.Fatalf("the failed exit settled as %v", m.exitState)
+	}
+	status := m.LifecycleStatus()
+	if status.Text != "退出失败" {
+		t.Fatalf("tray status after a non-save exit failure = %q", status.Text)
+	}
+	labels := status.TrayMenu()
+	if labels.Status != "youkai · 退出失败" || labels.Open != "打开 youkai" ||
+		labels.Exit != "退出 youkai" {
+		t.Fatalf("tray menu after a non-save exit failure = %+v", labels)
+	}
+}
+
+// TestExitFailureRetrySucceeds covers the retry path: the failed exit keeps
+// its state until a later quit succeeds, then the tray returns to idle.
+func TestExitFailureRetrySucceeds(t *testing.T) {
+	attempts := 0
+	m, q := newTestModel(t, Config{Service: &fakeService{
+		quitFn: func() error {
+			attempts++
+			if attempts == 1 {
+				return errors.New("close recognizer: busy")
+			}
+			return nil
+		},
+	}})
+	m.AllowClose()
+	drainAll(t, m, q)
+	if got := m.LifecycleStatus().Text; got != "退出失败" {
+		t.Fatalf("first failed exit status = %q", got)
+	}
+	m.AllowClose()
+	drainAll(t, m, q)
+	if m.exitState != exitDone {
+		t.Fatalf("the retried exit settled as %v", m.exitState)
+	}
+	if got := m.LifecycleStatus().Text; got != "就绪" {
+		t.Fatalf("tray status after the successful retry = %q", got)
 	}
 }
 

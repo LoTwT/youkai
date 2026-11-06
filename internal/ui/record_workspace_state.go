@@ -194,22 +194,30 @@ func (m *Model) resetResultList() {
 func (m *Model) reloadRecord(id string, live bool) {
 	m.recLoad++
 	version := m.recLoad
+	load := newRecordLoad()
+	if m.recordReads == nil {
+		m.recordReads = make(map[int64]*recordLoad)
+	}
+	m.recordReads[version] = load
 	// A result notification waiting for this record's final generation
 	// follows a restarted load: every read after the wrap-up is final, and
 	// the old callback would otherwise never match.
 	if state := m.notifySessions[scan.ID(id)]; state != nil && state.pending != nil &&
 		state.pending.loadVersion != 0 {
 		state.pending.loadVersion = version
+		state.pending.load = load
 	}
 	m.loading = true
 	m.goAsync(func() {
 		rec, err := m.cfg.Service.LoadRecord(id)
+		load.finish(rec, err)
 		m.update(func() {
 			if version != m.recLoad || !m.recordIsOpen(id) {
 				// A newer record or load owns the workspace. The read is
 				// still a valid final generation for a notification that
 				// waits on it.
-				m.settleResultFromRecord(scan.ID(id), rec, err, version)
+				m.settleResultFromRecord(scan.ID(id), version)
+				delete(m.recordReads, version)
 				return
 			}
 			if err != nil {
@@ -218,11 +226,13 @@ func (m *Model) reloadRecord(id string, live bool) {
 				if m.exportAfterLoadID == id {
 					m.exportAfterLoadID = ""
 				}
-				m.settleResultFromRecord(scan.ID(id), nil, err, version)
+				m.settleResultFromRecord(scan.ID(id), version)
+				delete(m.recordReads, version)
 				return
 			}
 			m.applyLoadedRecord(id, rec, live)
-			m.settleResultFromRecord(scan.ID(id), rec, nil, version)
+			m.settleResultFromRecord(scan.ID(id), version)
+			delete(m.recordReads, version)
 		})
 	})
 }

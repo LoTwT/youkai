@@ -196,7 +196,7 @@ type Config struct {
 // whether an active session can still be stopped. It is read on the UI
 // thread.
 type LifecycleStatus struct {
-	// Text is one of 就绪, 扫描中, 收尾中 or 保存失败.
+	// Text is one of 就绪, 扫描中, 收尾中, 保存失败 or 退出失败.
 	Text string
 	// Busy is whether a scan session is still active and stoppable.
 	Busy bool
@@ -236,6 +236,13 @@ func (s LifecycleStatus) TrayMenu() TrayMenuLabels {
 			Open:   "打开 youkai",
 			Stop:   "停止扫描",
 			Exit:   "退出 youkai（会被拒绝并打开窗口）",
+		}
+	case "退出失败":
+		return TrayMenuLabels{
+			Status: "youkai · 退出失败",
+			Open:   "打开 youkai",
+			Stop:   "停止扫描",
+			Exit:   "退出 youkai",
 		}
 	default:
 		return TrayMenuLabels{
@@ -439,6 +446,11 @@ type Model struct {
 
 	exitState exitState
 	exitErr   string
+	// exitFailureWasSave says the failed wrap-up was blocked by its final
+	// save, not by another teardown error. A later successful retry clears
+	// that failure and returns the tray to the idle state; a non-save
+	// failure keeps its own "exit failed" state until the user retries.
+	exitFailureWasSave bool
 	// exitFailureDialogOpen shows the unsaved-result dialog once per failed
 	// wrap-up; Esc leaves the inline failure and retry on the scan page.
 	exitFailureDialogOpen bool
@@ -452,10 +464,6 @@ type Model struct {
 	// empty while the tray exists. The close option then reads as the fixed
 	// stop-and-exit behavior and the first-hide hint never appears.
 	trayUnavailable string
-	// windowNotice is the persistent lifecycle notice the settings page
-	// shows; SetWindowNotice keeps the entry-point surface main had before
-	// the tray failure gained its dedicated field.
-	windowNotice string
 
 	// First-hide hint (P-10/R-18): seen is the persisted acknowledgement,
 	// open is the dialog currently on screen, and hideOnDone remembers
@@ -474,6 +482,10 @@ type Model struct {
 	notifyPrev      app.Snapshot
 	notifyPrevKnown bool
 	notifySessions  map[scan.ID]*sessionNotifications
+	// recordReads maps a workspace load version to its in-flight read, so a
+	// result notification created after the load started can wait for the
+	// same read and the exit flush can inspect its outcome.
+	recordReads map[int64]*recordLoad
 
 	// The auto-update corner's state (update.go); updatesEnabled is cached
 	// from Updates at construction — Enabled probes the install location,
@@ -613,6 +625,16 @@ func (m *Model) Apply(snap app.Snapshot) {
 	m.appliedSession, m.appliedRevision = snap.SessionID, snap.Revision
 	m.snap = snap
 	m.prevBusy = snap.Busy
+	// A save failure that blocked the exit is resolved once the retry
+	// persisted the final generation. Return to the idle state; the failed
+	// exit is no longer a condition the tray must report.
+	if m.exitState == exitFailed && m.exitFailureWasSave &&
+		m.snap.SaveError == "" && !m.snap.Busy {
+		m.exitState = exitIdle
+		m.exitErr = ""
+		m.exitFailureWasSave = false
+		m.exitFailureDialogOpen = false
+	}
 
 	// A new session becomes the open record: the live one, an empty view
 	// until its saved generations load (a refused start rolls the service
@@ -1138,6 +1160,10 @@ func (m *Model) LifecycleStatus() LifecycleStatus {
 		// that persisted the conditional result clears the failure and the
 		// tray must stop claiming the result is unsaved.
 		return LifecycleStatus{Text: "保存失败", Busy: m.snap.Busy && !m.Exiting()}
+	case m.exitState == exitFailed:
+		// The teardown failed for a reason other than the final save; the
+		// application is still running and the user has to retry the exit.
+		return LifecycleStatus{Text: "退出失败", Busy: false}
 	case m.snap.Busy || m.startReqID != "":
 		if m.snap.Busy && wrappingUp(m.snap.Scan.Phase) {
 			return LifecycleStatus{Text: "收尾中", Busy: false}
@@ -1165,13 +1191,6 @@ func (m *Model) SetTrayUnavailable(reason string) {
 // TrayUnavailable reports the tray creation failure, empty while the entry
 // exists.
 func (m *Model) TrayUnavailable() string { return m.trayUnavailable }
-
-// SetWindowNotice sets a persistent notice about the window lifecycle, for
-// example that the tray entry is unavailable and closing will therefore
-// quit instead of hiding. Empty clears it.
-func (m *Model) SetWindowNotice(notice string) {
-	m.windowNotice = notice
-}
 
 // FirstHideHintDue reports whether closing would hide the window before
 // the first-hide hint was acknowledged.
@@ -1276,6 +1295,7 @@ func (m *Model) beginExit() {
 		m.update(func() {
 			if err != nil {
 				m.exitState = exitFailed
+				m.exitFailureWasSave = m.snap.SaveError != ""
 				m.exitErr = err.Error()
 				m.exitFailureDialogOpen = true
 				if m.cfg.OnExitFailed != nil {
@@ -1285,6 +1305,12 @@ func (m *Model) beginExit() {
 			}
 			m.exitState = exitDone
 			m.exitFailureDialogOpen = false
+			// The entry point quits the application from OnExitSettled and
+			// then stops delivering queued updates. A result notification
+			// still waiting for its record must be settled first, or the
+			// first segment stays on screen and the promise to notify again
+			// is never kept.
+			m.flushResultsBeforeExit()
 			if m.cfg.OnExitSettled != nil {
 				m.cfg.OnExitSettled()
 			}

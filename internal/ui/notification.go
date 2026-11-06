@@ -3,6 +3,8 @@ package ui
 import (
 	"fmt"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/LoTwT/youkai/internal/app"
 	"github.com/LoTwT/youkai/internal/record"
@@ -89,9 +91,16 @@ func (m *Model) OpenNotification(recordID string) {
 	// The click is a navigation of its own: dialogs left from an earlier
 	// action must not keep ownership of the window (a pending first-hide
 	// hint would otherwise hide the just-restored window on acknowledgement).
-	m.closeExportDialog()
 	m.trayHintOpen = false
 	m.trayHintHideOnDone = false
+	if m.exporting {
+		// The export dialog shows the frozen snapshot of the record being
+		// written. Switching records underneath it would pair the write
+		// progress with another record's counts; leave the dialog and its
+		// record alone, and let the user continue after the write.
+		return
+	}
+	m.closeExportDialog()
 	if m.appliedSession == scan.ID(recordID) && m.snap.Busy {
 		// A dirty editor keeps its own prompt; the notification must not
 		// discard the draft just to reveal the wrap-up.
@@ -146,6 +155,50 @@ type pendingResult struct {
 	// Zero means no such load is running and the notification starts its
 	// own read.
 	loadVersion int64
+	// load is the read this segment waits for. Its result is also read by
+	// the exit flush when the queued settle update would be dropped.
+	load *recordLoad
+}
+
+// recordLoad is one background record read. The goroutine stores its result
+// under the mutex and closes done; the UI thread reads the result only after
+// done is closed, so both the normal settle update and the exit flush can
+// use it without touching the model from another goroutine.
+type recordLoad struct {
+	mu        sync.Mutex
+	rec       *record.Recovery
+	err       error
+	done      chan struct{}
+	closeOnce sync.Once
+}
+
+func newRecordLoad() *recordLoad {
+	return &recordLoad{done: make(chan struct{})}
+}
+
+func (l *recordLoad) finish(rec *record.Recovery, err error) {
+	l.mu.Lock()
+	l.rec, l.err = rec, err
+	l.mu.Unlock()
+	l.closeOnce.Do(func() { close(l.done) })
+}
+
+// finished reports whether the read returned, including with an error.
+func (l *recordLoad) finished() bool {
+	select {
+	case <-l.done:
+		return true
+	default:
+		return false
+	}
+}
+
+// result returns the stored read outcome. Before finish it returns the zero
+// outcome, which the wording treats as the conservative fallback.
+func (l *recordLoad) result() (*record.Recovery, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.rec, l.err
 }
 
 // sessionNotificationState returns one session's announcement record,
@@ -216,44 +269,86 @@ func (m *Model) notifySnapshot(previous app.Snapshot, hadPrevious bool, snap app
 // wording.
 func (m *Model) queueResultNotification(snap app.Snapshot, finalLoadVersion int64) {
 	id := snap.SessionID
-	m.sessionNotificationState(id).pending = &pendingResult{
-		snap:        snap,
-		loadVersion: finalLoadVersion,
-	}
-	if finalLoadVersion != 0 {
+	state := m.sessionNotificationState(id)
+	if load := m.recordReads[finalLoadVersion]; finalLoadVersion != 0 && load != nil {
+		state.pending = &pendingResult{
+			snap:        snap,
+			loadVersion: finalLoadVersion,
+			load:        load,
+		}
 		return
 	}
+	load := newRecordLoad()
+	state.pending = &pendingResult{snap: snap, load: load}
 	m.goAsync(func() {
 		rec, err := m.cfg.Service.LoadRecord(string(id))
-		m.update(func() { m.settleResultNotification(id, rec, err) })
+		load.finish(rec, err)
+		m.update(func() { m.settleResultNotification(id) })
 	})
 }
 
 // settleResultNotification sends the deferred result exactly once after
 // the notification's own load. A failed load falls back to the snapshot
 // facts.
-func (m *Model) settleResultNotification(id scan.ID, rec *record.Recovery, loadErr error) {
-	m.settlePendingResult(id, rec, loadErr, 0)
+func (m *Model) settleResultNotification(id scan.ID) {
+	m.settlePendingResult(id, 0)
 }
 
 // settleResultFromRecord settles a pending result from a workspace reload.
 // The version keeps a stale read from standing in for the load the result
 // actually waits for.
-func (m *Model) settleResultFromRecord(id scan.ID, rec *record.Recovery, loadErr error, version int64) {
-	m.settlePendingResult(id, rec, loadErr, version)
+func (m *Model) settleResultFromRecord(id scan.ID, version int64) {
+	m.settlePendingResult(id, version)
 }
 
-func (m *Model) settlePendingResult(id scan.ID, rec *record.Recovery, loadErr error, version int64) {
+func (m *Model) settlePendingResult(id scan.ID, version int64) {
 	state := m.notifySessions[id]
 	if state == nil || state.pending == nil || state.pending.loadVersion != version {
 		return
 	}
-	snap := state.pending.snap
+	pending := state.pending
 	state.pending = nil
-	if loadErr != nil {
+	var rec *record.Recovery
+	var err error
+	if pending.load != nil {
+		rec, err = pending.load.result()
+	}
+	if err != nil {
 		rec = nil
 	}
-	m.emitNotification(m.resultNotification(snap, false, rec))
+	m.emitNotification(m.resultNotification(pending.snap, false, rec))
+}
+
+// resultNotificationExitWait bounds how long the explicit exit waits for a
+// pending result read before sending the conservative snapshot wording. The
+// record is local; a normal read takes tens of milliseconds. One second
+// tolerates a loaded machine without keeping the user in a closing window,
+// and the exit is never blocked longer than this.
+const resultNotificationExitWait = time.Second
+
+// flushResultsBeforeExit settles every pending result before the entry
+// point quits the application, whose event loop stops delivering the queued
+// settle updates. A read still running is given the shared budget; a timeout
+// or failure sends the conservative wording through the same once-only path.
+func (m *Model) flushResultsBeforeExit() {
+	deadline := time.Now().Add(resultNotificationExitWait)
+	for id, state := range m.notifySessions {
+		pending := state.pending
+		if pending == nil {
+			continue
+		}
+		if pending.load != nil {
+			if remaining := time.Until(deadline); remaining > 0 && !pending.load.finished() {
+				timer := time.NewTimer(remaining)
+				select {
+				case <-pending.load.done:
+				case <-timer.C:
+				}
+				timer.Stop()
+			}
+		}
+		m.settlePendingResult(id, pending.loadVersion)
+	}
 }
 
 func (m *Model) emitNotification(n Notification) {

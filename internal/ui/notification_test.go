@@ -614,12 +614,306 @@ func TestOpenNotificationDuringExitDoesNotSwitchPages(t *testing.T) {
 	m, svc, _, q := notificationModel(t)
 	svc.loads["s1"] = notificationRecord(failedItems(1), record.CoverageComplete, completePositions())
 	m.Apply(openCapturing("s1", 1, 1))
+	m.Apply(endedSession("s1", 2, 1, 1))
 	drainAll(t, m, q)
 	m.exitState = exitRunning
 	m.page = pageSettings
 	m.OpenNotification("s1")
 	if m.page != pageSettings {
 		t.Fatalf("a click during the exit moved the page to %v", m.page)
+	}
+}
+
+// waitQueued runs the FIFO updater until pred holds. It does not wait for
+// model background work, so a deliberately held load does not block it.
+func waitQueued(t *testing.T, q *queueUpdater, what string, pred func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		for _, fn := range q.take() {
+			fn()
+		}
+		if pred() {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s", what)
+}
+
+// TestResultNotificationReadsWhenAnotherRecordIsOpen covers
+// own-read-removed: with no workspace read for the ended session, the
+// notification starts its own read instead of waiting forever.
+func TestResultNotificationReadsWhenAnotherRecordIsOpen(t *testing.T) {
+	m, svc, got, q := notificationModel(t)
+	svc.loads["a"] = notificationRecord(failedItems(2), record.CoverageComplete, completePositions())
+	svc.loads["x"] = notificationRecord(failedItems(1), record.CoverageUnknown, nil)
+	m.Apply(openCapturing("a", 1, 2))
+	drainAll(t, m, q)
+	m.Apply(stoppingSession("a", 2, 2))
+	m.openRecord("x")
+	drainAll(t, m, q)
+	m.Apply(endedSession("a", 3, 2, 2))
+	drainAll(t, m, q)
+
+	results := resultNotifications(*got)
+	if len(results) != 1 {
+		t.Fatalf("results with another record open = %d, want 1: %+v", len(results), *got)
+	}
+	if results[0].Title != "扫描完成：2 件待校对" {
+		t.Fatalf("result = %q, want the ended session's counts", results[0].Title)
+	}
+	if m.rec == nil || m.rec.ID != "x" {
+		t.Fatalf("the open record changed to %+v", m.rec)
+	}
+}
+
+// TestResultNotificationReadsWithDirtyDraft covers the other
+// own-read-removed path: a dirty editor keeps the workspace on its record,
+// so the notification reads the ended session itself.
+func TestResultNotificationReadsWithDirtyDraft(t *testing.T) {
+	m, q, tt, svc := openReviewableResults(t, testRecord(), 1180, 760)
+	var got []Notification
+	m.cfg.Notify = func(n Notification) { got = append(got, n) }
+	m.startEdit()
+	if m.edit == nil {
+		t.Skip("the fixture has no editable item")
+	}
+	m.edit.draft.Level = "13"
+	if !m.editingDirty() {
+		t.Fatal("the fixture draft is not dirty")
+	}
+	svc.mu.Lock()
+	svc.loads["a"] = notificationRecord(failedItems(2), record.CoverageComplete, completePositions())
+	svc.mu.Unlock()
+
+	m.Apply(openCapturing("a", 1, 2))
+	m.Apply(stoppingSession("a", 2, 2))
+	m.Apply(endedSession("a", 3, 2, 2))
+	drainAll(t, m, q)
+	tt.Frame()
+
+	results := resultNotifications(got)
+	if len(results) != 1 {
+		t.Fatalf("results with a dirty draft = %d, want 1: %+v", len(results), got)
+	}
+	if results[0].Title != "扫描完成：2 件待校对" {
+		t.Fatalf("result = %q, want the ended session's counts", results[0].Title)
+	}
+	if m.edit == nil || !m.editingDirty() {
+		t.Fatal("the notification discarded the unsaved draft")
+	}
+	if m.rec == nil || m.rec.ID != "rec" {
+		t.Fatalf("the notification replaced the open record with %+v", m.rec)
+	}
+}
+
+// TestResultNotificationFollowsARestartedLoad covers the pending read
+// following a newer load of the same record. The older read returns a
+// stale generation; the notification must wait for the newer one and read
+// the final counts.
+func TestResultNotificationFollowsARestartedLoad(t *testing.T) {
+	var mu sync.Mutex
+	calls := 0
+	oldGate := make(chan struct{})
+	newGate := make(chan struct{})
+	stale := notificationRecord(nil, record.CoverageUnknown, nil)
+	final := notificationRecord(failedItems(2), record.CoverageComplete, completePositions())
+	svc := &fakeService{loadFn: func(string) (*record.Recovery, error) {
+		mu.Lock()
+		calls++
+		call := calls
+		mu.Unlock()
+		switch call {
+		case 1:
+			return final, nil
+		case 2:
+			<-oldGate
+			return stale, nil
+		default:
+			<-newGate
+			return final, nil
+		}
+	}}
+	var got []Notification
+	m, q := newTestModel(t, Config{
+		Service: svc,
+		Notify:  func(n Notification) { got = append(got, n) },
+	})
+	m.Apply(openCapturing("a", 1, 2))
+	drainAll(t, m, q)
+	m.Apply(stoppingSession("a", 2, 2))
+	m.Apply(endedSession("a", 3, 2, 2))
+	waitQueued(t, q, "the terminal workspace read", func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return calls >= 2
+	})
+	if pending := m.notifySessions["a"].pending; pending == nil {
+		t.Fatal("no result waits for the terminal read")
+	}
+
+	// A newer load of the same record adopts the pending result.
+	m.reloadRecord("a", true)
+	waitQueued(t, q, "the restarted workspace read", func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return calls >= 3
+	})
+	close(oldGate)
+	time.Sleep(30 * time.Millisecond)
+	for _, fn := range q.take() {
+		fn()
+	}
+	if results := resultNotifications(got); len(results) != 0 {
+		t.Fatalf("the superseded read settled the result: %+v", results)
+	}
+	close(newGate)
+	waitQueued(t, q, "the final result", func() bool {
+		return len(resultNotifications(got)) == 1
+	})
+	drainAll(t, m, q)
+	results := resultNotifications(got)
+	if len(results) != 1 || results[0].Title != "扫描完成：2 件待校对" {
+		t.Fatalf("result after the restarted read = %+v", results)
+	}
+}
+
+// TestResultNotificationSettlesASupersededWorkspaceRead covers
+// superseded-no-settle: opening another record supersedes the read the
+// result waits on, but that read still settles the result.
+func TestResultNotificationSettlesASupersededWorkspaceRead(t *testing.T) {
+	gate := make(chan struct{})
+	var mu sync.Mutex
+	block := false
+	final := notificationRecord(failedItems(2), record.CoverageComplete, completePositions())
+	other := notificationRecord(failedItems(1), record.CoverageUnknown, nil)
+	svc := &fakeService{loadFn: func(id string) (*record.Recovery, error) {
+		mu.Lock()
+		held := block && id == "a"
+		mu.Unlock()
+		if held {
+			<-gate
+		}
+		if id == "x" {
+			return other, nil
+		}
+		return final, nil
+	}}
+	var got []Notification
+	m, q := newTestModel(t, Config{
+		Service: svc,
+		Notify:  func(n Notification) { got = append(got, n) },
+	})
+	m.Apply(openCapturing("a", 1, 2))
+	drainAll(t, m, q)
+	m.Apply(stoppingSession("a", 2, 2))
+	mu.Lock()
+	block = true
+	mu.Unlock()
+	m.Apply(endedSession("a", 3, 2, 2))
+	waitQueued(t, q, "the held workspace read", func() bool {
+		return m.notifySessions["a"].pending != nil
+	})
+
+	// Another record takes the workspace; the held read is superseded but
+	// still carries A's final generation.
+	m.openRecord("x")
+	waitQueued(t, q, "record x", func() bool {
+		return m.rec != nil && m.rec.ID == "x" && !m.loading
+	})
+	close(gate)
+	waitQueued(t, q, "the superseded result", func() bool {
+		return len(resultNotifications(got)) == 1
+	})
+	drainAll(t, m, q)
+	if results := resultNotifications(got); len(results) != 1 ||
+		results[0].Title != "扫描完成：2 件待校对" {
+		t.Fatalf("superseded result = %+v", results)
+	}
+	if m.rec == nil || m.rec.ID != "x" {
+		t.Fatalf("the workspace left record x: %+v", m.rec)
+	}
+}
+
+// TestOpenNotificationDoesNotMarkTheHintSeen covers
+// open-hint-marks-seen: dismissing the close hint by clicking a
+// notification is not an acknowledgement.
+func TestOpenNotificationDoesNotMarkTheHintSeen(t *testing.T) {
+	saved := 0
+	svc := &fakeService{loads: map[string]*record.Recovery{"rec": testRecord()}}
+	m, q := newTestModel(t, Config{
+		Service:          svc,
+		SaveTrayHintSeen: func(bool) error { saved++; return nil },
+	})
+	m.showRecord("rec", true)
+	m.reloadRecord("rec", true)
+	drainAll(t, m, q)
+	m.ShowFirstHideHint()
+	m.OpenNotification("rec")
+	if !m.FirstHideHintDue() {
+		t.Fatal("a notification click acknowledged the first-hide hint")
+	}
+	if saved != 0 {
+		t.Fatalf("a notification click persisted the hint seen: %d write(s)", saved)
+	}
+}
+
+// TestOpenNotificationKeepsTheItemsTabWithADirtyDraft covers
+// open-tab-ignores-dirty: the click may not switch the view away from the
+// open editor.
+func TestOpenNotificationKeepsTheItemsTabWithADirtyDraft(t *testing.T) {
+	m, q, tt, _ := openReviewableResults(t, testRecord(), 1180, 760)
+	m.startEdit()
+	if m.edit == nil {
+		t.Skip("the fixture has no editable item")
+	}
+	m.edit.draft.Level = "13"
+	m.recordTab = recordTabItems
+	m.OpenNotification("rec")
+	settle(t, m, q, tt)
+	if m.recordTab != recordTabItems {
+		t.Fatalf("the click switched the dirty editor to tab %v", m.recordTab)
+	}
+	if m.edit == nil || !m.editingDirty() {
+		t.Fatal("the click discarded the dirty editor")
+	}
+}
+
+// TestOpenNotificationDuringExportKeepsTheExportRecord covers N-2: while
+// the frozen export is being written, a click for another record must not
+// swap the dialog's numbers.
+func TestOpenNotificationDuringExportKeepsTheExportRecord(t *testing.T) {
+	f := newExportDialogFixture(t, testRecord(), false)
+	other := testRecord()
+	other.Checkpoint.Session.SessionID = "other"
+	f.svc.mu.Lock()
+	f.svc.loads["other"] = other
+	f.svc.mu.Unlock()
+
+	hold := make(chan struct{})
+	f.saver.saveFn = func(app.ExportFormat, string, []byte) (string, error) {
+		<-hold
+		return "/tmp/export.json", nil
+	}
+	f.open(t)
+	f.m.startExport(app.ExportJSON)
+	if !f.m.exporting || !f.m.exportDialog.open {
+		t.Fatalf("the export did not start: exporting=%v open=%v", f.m.exporting, f.m.exportDialog.open)
+	}
+
+	f.m.OpenNotification("other")
+	if f.m.rec == nil || f.m.rec.ID != "rec" {
+		t.Fatalf("the click swapped the record under the export: %+v", f.m.rec)
+	}
+	if !f.m.exportDialog.open || !f.m.exporting {
+		t.Fatalf("the click closed the export: open=%v exporting=%v", f.m.exportDialog.open, f.m.exporting)
+	}
+
+	close(hold)
+	drainAll(t, f.m, f.q)
+	if f.m.exporting {
+		t.Fatal("the export did not finish")
 	}
 }
 
