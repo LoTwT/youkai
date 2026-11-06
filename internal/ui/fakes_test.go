@@ -99,6 +99,8 @@ type fakeService struct {
 	quits   int
 	quitFn  func() error
 
+	updateInstalling []bool
+
 	list      []record.RecordInfo
 	history   []app.HistoryRecord
 	historyFn func() ([]app.HistoryRecord, error)
@@ -401,6 +403,20 @@ func (f *fakeService) Quit() error {
 		return f.quitFn()
 	}
 	return nil
+}
+
+// SetUpdateInstalling records the install publication the update flow owns
+// (M-2); the sequence tells a start from a failed install's clear.
+func (f *fakeService) SetUpdateInstalling(installing bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.updateInstalling = append(f.updateInstalling, installing)
+}
+
+func (f *fakeService) updateInstallingCalls() []bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]bool(nil), f.updateInstalling...)
 }
 
 // fakeEvidence is the evidence double: every load is recorded and answers
