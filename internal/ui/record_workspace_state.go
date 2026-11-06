@@ -58,6 +58,14 @@ type recordWorkspaceState struct {
 	// The frozen export snapshot and its build error.
 	exportData     *app.UsableExport
 	exportBuildErr string
+
+	// The summary's two disclosures and the last diagnostics-open failure.
+	// Both start collapsed (09 §2, §4.6); a different record resets them with
+	// the rest of the workspace, while a reload of the same record keeps the
+	// user's state.
+	summaryDetailsOpen     bool
+	summaryDiagnosticsOpen bool
+	summaryDiagnosticsErr  string
 }
 
 // newRecordWorkspaceState is the empty workspace: no record, no selection

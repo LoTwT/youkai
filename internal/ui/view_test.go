@@ -1131,7 +1131,7 @@ func TestCompletionRequiresEndedAndSavedSession(t *testing.T) {
 	if m.rec == nil || m.recData == nil || !m.rec.Live {
 		t.Fatalf("the live record did not load: rec %+v", m.rec)
 	}
-	if m.completionVisible() || tt.HasText("校对完成") {
+	if m.completionVisible() || tt.HasText("扫全了") {
 		t.Fatal("a running, unsaved session claims completion")
 	}
 
@@ -1143,8 +1143,8 @@ func TestCompletionRequiresEndedAndSavedSession(t *testing.T) {
 
 	applyAndSettle(t, m, q, tt, snap("s1", 3, false, scan.PhaseEnded,
 		scan.Counts{Captured: 1, Produced: 1}, 1, false, ""))
-	if !m.completionVisible() || !tt.HasText("校对完成") {
-		t.Fatalf("the ended, saved session did not reach completion: %q", tt.Texts())
+	if !m.completionVisible() || !tt.HasText("扫描结束，无法确认是否扫全") {
+		t.Fatalf("the ended, saved session did not reach its summary: %q", tt.Texts())
 	}
 }
 

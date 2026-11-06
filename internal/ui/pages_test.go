@@ -493,22 +493,16 @@ func TestWorkspaceCoverageMatchesTheConclusion(t *testing.T) {
 	if m.recordTab != recordTabSummary {
 		t.Fatalf("the record opened on tab %v, want the summary", m.recordTab)
 	}
-	// HasText is a substring match, so the body's "覆盖：部分覆盖…" would
-	// also satisfy it; the title bar's slot must be the exact status.
-	coverageHeader := 0
-	for _, text := range tt.Texts() {
-		if text == "覆盖：部分" {
-			coverageHeader++
-		}
+	// The title bar's slot states the export guard's conclusion, and the
+	// summary's one-sentence title states it a second time without rounding
+	// it up.
+	if !tt.HasText("覆盖：部分") {
+		t.Fatalf("the title bar does not show the export guard's coverage: %q", tt.Texts())
 	}
-	if coverageHeader != 1 {
-		t.Fatalf("the title bar does not show the export guard's coverage exactly once: %d in %q",
-			coverageHeader, tt.Texts())
-	}
-	if !tt.HasText("覆盖：部分覆盖（导出文件会标注“部分快照”）") {
+	if !tt.HasText("没有扫全：覆盖不完整") {
 		t.Fatalf("the summary does not show the same coverage: %q", tt.Texts())
 	}
-	if tt.HasText("覆盖：全部") {
+	if tt.HasText("覆盖：全部") || tt.HasText("覆盖：完整") || tt.HasText("扫全了") {
 		t.Fatalf("a coverage the export cannot confirm is shown as complete: %q", tt.Texts())
 	}
 }

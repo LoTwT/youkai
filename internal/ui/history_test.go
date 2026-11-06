@@ -721,23 +721,40 @@ func TestRecordConclusion(t *testing.T) {
 	completed := &record.Termination{
 		Kind: record.TerminationCompleted, Code: "verifiedEnd", Phase: record.PhaseCapturing,
 	}
+	knownPartial := []app.PositionOutcome{
+		{Position: 1, State: app.PositionOutcomeDegraded, Stage: "filter", ReasonCode: "navigationMismatch"},
+		{Position: 2, State: app.PositionOutcomeTruncated},
+		{Position: 3, State: app.PositionOutcomeComplete},
+		{Position: 4, State: app.PositionOutcomeComplete},
+		{Position: 5, State: app.PositionOutcomeComplete},
+		{Position: 6, State: app.PositionOutcomeComplete},
+	}
 	cases := []struct {
-		name  string
-		input recordConclusionInput
-		tag   string
-		text  string
+		name              string
+		input             recordConclusionInput
+		wantOutcome       recordOutcomeKind
+		tag               string
+		text              string
+		summaryEyebrow    string
+		summaryTitle      string
+		summarySupplement string
+		summaryNotes      string
 	}{
 		{
-			name:  "unreadable",
-			input: recordConclusionInput{Unreadable: true},
-			tag:   "!",
-			text:  "无法打开：记录不可读",
+			name:         "unreadable",
+			input:        recordConclusionInput{Unreadable: true},
+			wantOutcome:  recordOutcomeUnreadable,
+			tag:          "!",
+			text:         "无法打开：记录不可读",
+			summaryTitle: "记录读取失败",
 		},
 		{
-			name:  "interrupted",
-			input: recordConclusionInput{Interrupted: true, CapturedCount: 3},
-			tag:   "中断",
-			text:  "已恢复已保存部分",
+			name:         "interrupted",
+			input:        recordConclusionInput{Interrupted: true, CapturedCount: 3},
+			wantOutcome:  recordOutcomeInterrupted,
+			tag:          "中断",
+			text:         "已恢复已保存部分",
+			summaryTitle: "扫描中断，只保存了部分结果",
 		},
 		{
 			name: "all pass",
@@ -745,7 +762,10 @@ func TestRecordConclusion(t *testing.T) {
 				Termination: completed, Coverage: record.CoverageComplete,
 				CapturedCount: 1_017, Counts: app.ItemClassCounts{Passed: 1_017},
 			},
-			text: "扫全了，可以直接导出",
+			wantOutcome:    recordOutcomeCompleted,
+			summaryEyebrow: "正常结束",
+			text:           "扫全了，可以直接导出",
+			summaryTitle:   "扫全了，可以直接导出",
 		},
 		{
 			name: "one pending review",
@@ -754,7 +774,10 @@ func TestRecordConclusion(t *testing.T) {
 				CapturedCount: 1_017,
 				Counts:        app.ItemClassCounts{Passed: 1_016, PendingReview: 1},
 			},
-			text: "扫全了，1 件待校对",
+			wantOutcome:    recordOutcomeCompleted,
+			summaryEyebrow: "正常结束",
+			text:           "扫全了，1 件待校对",
+			summaryTitle:   "扫全了，还有 1 件待校对",
 		},
 		{
 			name: "pending backfill and review",
@@ -763,7 +786,10 @@ func TestRecordConclusion(t *testing.T) {
 				CapturedCount: 8,
 				Counts:        app.ItemClassCounts{Passed: 6, PendingBackfill: 1, PendingReview: 1},
 			},
-			text: "扫全了，2 件待处理",
+			wantOutcome:    recordOutcomeCompleted,
+			summaryEyebrow: "正常结束",
+			text:           "扫全了，2 件待处理",
+			summaryTitle:   "扫全了，还有 1 件待校对、1 件待补录",
 		},
 		{
 			name: "warnings stay exportable",
@@ -771,7 +797,10 @@ func TestRecordConclusion(t *testing.T) {
 				Termination: completed, Coverage: record.CoverageComplete,
 				CapturedCount: 8, Counts: app.ItemClassCounts{Passed: 6, Warning: 2},
 			},
-			text: "扫全了，2 件有警告",
+			wantOutcome:    recordOutcomeCompleted,
+			summaryEyebrow: "正常结束",
+			text:           "扫全了，2 件有警告",
+			summaryTitle:   "扫全了，可以直接导出",
 		},
 		{
 			name: "partial coverage",
@@ -779,7 +808,10 @@ func TestRecordConclusion(t *testing.T) {
 				Termination: completed, Coverage: record.CoveragePartial,
 				CapturedCount: 6, Counts: app.ItemClassCounts{Passed: 6},
 			},
-			text: "没有扫全 · 覆盖：部分",
+			wantOutcome:    recordOutcomeCompleted,
+			summaryEyebrow: "正常结束",
+			text:           "没有扫全 · 覆盖：部分",
+			summaryTitle:   "没有扫全：覆盖不完整",
 		},
 		{
 			name: "partial coverage with known positions",
@@ -787,8 +819,13 @@ func TestRecordConclusion(t *testing.T) {
 				Termination: completed, Coverage: record.CoveragePartial,
 				CapturedCount: 6, Counts: app.ItemClassCounts{Passed: 6},
 				IncompletePositions: 2, IncompletePositionsKnown: true,
+				PositionOutcomes: knownPartial, PositionOutcomesKnown: true,
 			},
-			text: "没有扫全 · 2 个号位不完整",
+			wantOutcome:    recordOutcomeCompleted,
+			summaryEyebrow: "正常结束",
+			text:           "没有扫全 · 2 个号位不完整",
+			summaryTitle:   "没有扫全：1 号位、2 号位不完整",
+			summaryNotes:   "其余 4 个号位完整",
 		},
 		{
 			name: "manual stop",
@@ -799,7 +836,33 @@ func TestRecordConclusion(t *testing.T) {
 				Coverage: record.CoveragePartial, CapturedCount: 2,
 				Counts: app.ItemClassCounts{Passed: 2},
 			},
-			text: "手动停止 · 覆盖：部分",
+			wantOutcome:  recordOutcomeCancelled,
+			text:         "手动停止 · 覆盖：部分",
+			summaryTitle: "已手动停止",
+		},
+		{
+			name: "manual stop with complete coverage",
+			input: recordConclusionInput{
+				Termination: &record.Termination{
+					Kind: record.TerminationCancelled, Code: "userCancelled", Phase: record.PhaseCapturing,
+				},
+				Coverage: record.CoverageComplete, CapturedCount: 2,
+				Counts: app.ItemClassCounts{Passed: 2},
+			},
+			wantOutcome:  recordOutcomeCancelled,
+			text:         "手动停止 · 覆盖：全部",
+			summaryTitle: "已手动停止",
+		},
+		{
+			name: "completed record without four-class counts",
+			input: recordConclusionInput{
+				Termination: completed, Coverage: record.CoverageComplete,
+				CapturedCount: 5,
+			},
+			wantOutcome:    recordOutcomeCompleted,
+			text:           "正常结束 · 覆盖：全部",
+			summaryEyebrow: "正常结束",
+			summaryTitle:   "扫全了，可以直接导出",
 		},
 		{
 			name: "fault while capturing",
@@ -810,8 +873,12 @@ func TestRecordConclusion(t *testing.T) {
 				Coverage: record.CoveragePartial, CapturedCount: 431,
 				Counts: app.ItemClassCounts{Passed: 429, PendingReview: 2},
 			},
-			tag:  "失败",
-			text: "中途停止：游戏失去了焦点",
+			wantOutcome:       recordOutcomeFault,
+			tag:               "失败",
+			text:              "中途停止：游戏失去了焦点",
+			summaryTitle:      "扫描中途停止：游戏失去了焦点",
+			summarySupplement: "怎么做：扫描时请不要切换应用。",
+			summaryNotes:      "已保存：431 件",
 		},
 		{
 			name: "stopped before starting",
@@ -821,26 +888,159 @@ func TestRecordConclusion(t *testing.T) {
 				},
 				Coverage: record.CoverageUnknown,
 			},
-			tag:  "失败",
-			text: "没有开始：30 秒内游戏没有就绪",
+			wantOutcome:       recordOutcomeEmpty,
+			tag:               "失败",
+			text:              "没有开始：30 秒内游戏没有就绪",
+			summaryTitle:      "没有采集到任何驱动盘：30 秒内游戏没有就绪",
+			summarySupplement: "怎么做：请让游戏保持在前台并停在驱动盘仓库页，然后重新开始扫描。",
+		},
+		{
+			name: "zero captured after a normal end",
+			input: recordConclusionInput{
+				Termination: completed, Coverage: record.CoverageComplete,
+			},
+			wantOutcome:       recordOutcomeEmpty,
+			text:              "正常结束 · 没有采集到驱动盘",
+			summaryTitle:      "没有采集到任何驱动盘",
+			summarySupplement: "回到准备检查后重新开始。",
+		},
+		{
+			name: "zero captured after a manual stop",
+			input: recordConclusionInput{
+				Termination: &record.Termination{
+					Kind: record.TerminationCancelled, Code: "userCancelled", Phase: record.PhaseCapturing,
+				},
+				Coverage: record.CoveragePartial,
+			},
+			wantOutcome:       recordOutcomeEmpty,
+			text:              "手动停止 · 覆盖：部分",
+			summaryTitle:      "已手动停止，没有采集到任何驱动盘",
+			summarySupplement: "回到准备检查后重新开始。",
+		},
+		{
+			name: "zero captured with an interrupted termination",
+			input: recordConclusionInput{
+				Termination: &record.Termination{Kind: record.TerminationInterrupted},
+				Interrupted: true,
+			},
+			wantOutcome:       recordOutcomeEmpty,
+			tag:               "中断",
+			text:              "已恢复已保存部分",
+			summaryTitle:      "扫描中断，没有采集到任何驱动盘",
+			summarySupplement: "请重新开始扫描。",
+		},
+		{
+			name: "zero captured without a termination",
+			input: recordConclusionInput{
+				Interrupted: true,
+			},
+			wantOutcome:       recordOutcomeEmpty,
+			tag:               "中断",
+			text:              "已恢复已保存部分",
+			summaryTitle:      "没有采集到任何驱动盘",
+			summarySupplement: "回到准备检查后重新开始。",
+		},
+		{
+			name: "save failure outranks running and zero items",
+			input: recordConclusionInput{
+				SaveFailed: true, ScanNotWrapped: true, CapturedCount: 0,
+			},
+			wantOutcome:       recordOutcomeSaveFailed,
+			tag:               "!",
+			text:              "保存失败",
+			summaryTitle:      "扫描结果还没有保存",
+			summarySupplement: "保存失败，请重试。若仍然失败，请检查磁盘空间和权限。",
 		},
 	}
 	// Running is model state rather than record data; the shared function
 	// still owns the wording.
 	cases = append(cases, struct {
-		name  string
-		input recordConclusionInput
-		tag   string
-		text  string
-	}{name: "scan still running", input: recordConclusionInput{ScanNotWrapped: true}, text: "扫描进行中"})
+		name              string
+		input             recordConclusionInput
+		wantOutcome       recordOutcomeKind
+		tag               string
+		text              string
+		summaryEyebrow    string
+		summaryTitle      string
+		summarySupplement string
+		summaryNotes      string
+	}{
+		name:              "scan still running",
+		input:             recordConclusionInput{ScanNotWrapped: true},
+		wantOutcome:       recordOutcomeRunning,
+		text:              "扫描进行中",
+		summaryTitle:      "扫描还没有结束",
+		summarySupplement: "结束后这里会给出覆盖结论和可导出数量。",
+	})
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			out := recordOutcomeFor(tc.input)
+			if out.Kind != tc.wantOutcome {
+				t.Fatalf("outcome = %v, want %v", out.Kind, tc.wantOutcome)
+			}
 			got := recordConclusionFor(tc.input)
 			if got.tag != tc.tag || got.text != tc.text {
-				t.Fatalf("result = %q/%q, want %q/%q", got.tag, got.text, tc.tag, tc.text)
+				t.Fatalf("list = %q/%q, want %q/%q", got.tag, got.text, tc.tag, tc.text)
+			}
+			summary := recordSummaryWording(out)
+			if summary.Eyebrow != tc.summaryEyebrow {
+				t.Fatalf("summary eyebrow = %q, want %q", summary.Eyebrow, tc.summaryEyebrow)
+			}
+			if summary.Title != tc.summaryTitle {
+				t.Fatalf("summary title = %q, want %q", summary.Title, tc.summaryTitle)
+			}
+			if summary.Supplement != tc.summarySupplement {
+				t.Fatalf("summary supplement = %q, want %q", summary.Supplement, tc.summarySupplement)
+			}
+			if tc.summaryNotes != "" && !strings.Contains(strings.Join(summary.Notes, "\n"), tc.summaryNotes) {
+				t.Fatalf("summary notes = %q, want them to contain %q", summary.Notes, tc.summaryNotes)
 			}
 		})
+	}
+}
+
+// TestInterruptedRecordEndingIsShared checks the two adapters classify the
+// same crashed record as interrupted, even when recovery marked no item.
+func TestInterruptedRecordEndingIsShared(t *testing.T) {
+	rec := recovery(record.ItemRecord{Sequence: 1, Status: record.StatusProduced})
+	rec.Checkpoint.Session.Termination = nil
+	rec.Checkpoint.Session.Coverage = record.Coverage{Status: record.CoveragePartial}
+	rec.Checkpoint.Session.CapturedCount = 1
+	view := BuildRecordView("rec", rec, false)
+	m := summaryModel(view, app.Snapshot{})
+	history := m.historyConclusionInput(HistoryEntry{
+		ID:            "rec",
+		CapturedCount: 1,
+		Coverage:      record.CoveragePartial,
+		Counts:        app.ItemClassCounts{Passed: 1},
+	})
+
+	summaryOutcome := recordOutcomeFor(m.summaryConclusionInput())
+	listOutcome := recordOutcomeFor(history)
+	if summaryOutcome.Kind != recordOutcomeInterrupted || listOutcome.Kind != recordOutcomeInterrupted {
+		t.Fatalf("outcomes = summary %v, list %v; want interrupted", summaryOutcome.Kind, listOutcome.Kind)
+	}
+	if got := recordConclusionFor(history).text; got != "已恢复已保存部分" {
+		t.Fatalf("list wording = %q", got)
+	}
+	if got := recordSummaryWording(summaryOutcome).Title; got != "扫描中断，只保存了部分结果" {
+		t.Fatalf("summary wording = %q", got)
+	}
+}
+
+// TestHistorySaveFailureUsesTheSummaryEnding keeps the list and summary on
+// the same save-failure ending for the current session.
+func TestHistorySaveFailureUsesTheSummaryEnding(t *testing.T) {
+	m := new(Model)
+	m.snap = app.Snapshot{Busy: true, SaveError: "磁盘已满"}
+	m.appliedSession = scan.ID("rec")
+	out := recordOutcomeFor(m.historyConclusionInput(HistoryEntry{ID: "rec"}))
+	if out.Kind != recordOutcomeSaveFailed {
+		t.Fatalf("history outcome = %v, want save failure", out.Kind)
+	}
+	if got := recordListConclusion(out).text; got != "保存失败" {
+		t.Fatalf("history wording = %q", got)
 	}
 }
 
