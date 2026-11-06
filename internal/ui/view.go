@@ -20,6 +20,10 @@ const stopMeans = "停止方式：点击本窗口的“停止扫描”按钮。"
 // whenever the window needs a frame and only reads the model; every
 // interaction schedules its work through the model's actions.
 func (m *Model) View(c *ui.Context) {
+	// A browse click leaves the pointer on the position the editor's write
+	// buttons reuse. End that guard as soon as the pointer leaves it, before
+	// this frame reads any click (08 §3.4).
+	m.updateReviewBrowseGuard(c)
 	// Each build pass notes the text field that holds the keyboard, so the
 	// shell's Escape handler can leave the key to it.
 	m.textInputFocused = false

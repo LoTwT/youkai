@@ -1,8 +1,6 @@
 package ui
 
 import (
-	"time"
-
 	"github.com/LoTwT/youkai/internal/app"
 	"github.com/LoTwT/youkai/internal/record"
 	"github.com/LoTwT/youkai/internal/scan"
@@ -85,18 +83,22 @@ type recordWorkspaceState struct {
 	focusModifyRequested bool
 	focusReviewFieldSeq  int
 	focusModifySeq       int
-	// reviewBrowseGuardUntil is the frame time until the action bar's
-	// write buttons ignore input after a browse button changed the item.
-	// The read-only bar's 上一件 / 下一件 sit where the editor's
-	// 确认并下一项 / 保存修改 appear, so a second click at the same spot
-	// must not confirm or save an item the user has only just reached
-	// (08 §3.4). The guard expires after reviewBrowseGuardFor.
-	reviewBrowseGuardUntil time.Time
-	scrollToCrop           bool
-	cropZoom               float32
-	formExtrasOpen         bool
-	formRawOpen            bool
-	compactListOpen        bool
+	// reviewBrowseGuard is true after 上一件 / 下一件 changed the item:
+	// the action bar's write buttons then ignore pointer activation until
+	// the pointer leaves reviewBrowseGuardRect or a key is pressed on a
+	// write button. The read-only bar's browse buttons can sit where the
+	// editor's 确认并下一项 / 保存修改 appear, so a click repeated at the
+	// same spot must not confirm or save an item the user has only just
+	// reached (08 §3.4). The guard follows the pointer, not a timer: a
+	// stationary pointer must never turn a double click into a write, even
+	// after a pause (H1).
+	reviewBrowseGuard     bool
+	reviewBrowseGuardRect ui.Rect
+	scrollToCrop          bool
+	cropZoom              float32
+	formExtrasOpen        bool
+	formRawOpen           bool
+	compactListOpen       bool
 	// compactListFocusRequested asks the compact popover's list to take the
 	// keyboard once, after the anchor opens it.
 	compactListFocusRequested bool
@@ -258,35 +260,61 @@ func (m *Model) reviewEditing(row *Row) bool {
 		m.edit.recordID == m.rec.ID && m.edit.seq == row.Seq
 }
 
-// reviewBrowseGuardFor is how long the action bar's write buttons ignore
-// input after 上一件 / 下一件 changed the item. The read-only bar and the
-// editor bar place their first buttons at the same coordinates; without
-// the guard a second click at that spot would confirm or save the item the
-// user has only just reached (08 §3.4). 500ms covers a double click while
-// leaving deliberate follow-up actions possible.
-const reviewBrowseGuardFor = 500 * time.Millisecond
+// reviewBrowseGuardReason explains why a write button ignores the click
+// that lands where the browse button was just pressed. It promises no
+// timeout: only moving the pointer away (or pressing a key on the button,
+// which is deliberate keyboard activation) ends the guard.
+const reviewBrowseGuardReason = "按钮刚随条目切换；移动指针后可点击。"
 
-// reviewBrowseGuardReason explains the short disabled window.
-const reviewBrowseGuardReason = "刚切换条目，请稍后再确认。"
-
-// reviewBrowseGuarded reports whether a browse button moved to the current
-// item so recently that its write buttons must ignore input.
-func (m *Model) reviewBrowseGuarded(c *ui.Context) bool {
-	return !m.reviewBrowseGuardUntil.IsZero() && c.Now().Before(m.reviewBrowseGuardUntil)
+// reviewBrowseGuarded reports whether the last browse action left the
+// pointer on the reused action position, so write buttons must ignore the
+// pointer.
+func (m *Model) reviewBrowseGuarded() bool {
+	return m.reviewBrowseGuard
 }
 
-// markReviewBrowse starts the browse guard and moves the keyboard off the
-// reused action position to the item's form: 修改 for a settled item, the
-// first field for an editor. The next frame consumes the focus request.
-func (m *Model) markReviewBrowse(c *ui.Context) {
-	m.reviewBrowseGuardUntil = c.Now().Add(reviewBrowseGuardFor)
-	c.After(reviewBrowseGuardFor)
+// updateReviewBrowseGuard ends the browse guard once the pointer leaves
+// the browse button's box or the window. It runs at the start of every
+// build, so a pointer that has not moved keeps the guard indefinitely
+// while a deliberate move releases it before the next click is read.
+func (m *Model) updateReviewBrowseGuard(c *ui.Context) {
+	if !m.reviewBrowseGuard {
+		return
+	}
+	root := c.Root()
+	x, y, over := root.PointerPosition()
+	if !over {
+		m.clearReviewBrowseGuard()
+		return
+	}
+	bounds := root.Bounds()
+	if !m.reviewBrowseGuardRect.Contains(bounds.X+x, bounds.Y+y) {
+		m.clearReviewBrowseGuard()
+	}
+}
+
+// clearReviewBrowseGuard ends the browse guard.
+func (m *Model) clearReviewBrowseGuard() {
+	m.reviewBrowseGuard = false
+	m.reviewBrowseGuardRect = ui.Rect{}
+}
+
+// markReviewBrowse starts the browse guard at the button the user pressed
+// and moves the keyboard into an editor, whose first problem field is the
+// only safe place to land; a read-only item keeps the keyboard on the
+// browse button so Space / Enter continue browsing (08 §3.4). The guard
+// ignores only pointer activation at the reused position; keyboard
+// activation on a write button remains deliberate.
+func (m *Model) markReviewBrowse(button ui.Element) {
+	m.reviewBrowseGuard = true
+	m.reviewBrowseGuardRect = button.Bounds()
 	m.focusBrowsedItem()
 }
 
-// focusBrowsedItem moves the keyboard to the form after a browse action.
-// A read-only item starts on 修改; an editor starts on its first problem
-// field. A queued row has neither, so the browse button keeps the focus.
+// focusBrowsedItem moves the keyboard to the form after a selection made
+// outside the form. An editor starts on its first problem field. A
+// read-only item keeps the keyboard where it was: the browse button for
+// repeated browsing, or the list it was chosen from.
 func (m *Model) focusBrowsedItem() {
 	row := m.selectedRow()
 	if row == nil {
@@ -294,10 +322,6 @@ func (m *Model) focusBrowsedItem() {
 	}
 	if m.reviewRowEditable(row) {
 		m.requestReviewFieldFocus(m.firstReviewField())
-		return
-	}
-	if m.canModifyRow(row) {
-		m.requestModifyFocus()
 	}
 }
 
@@ -454,7 +478,8 @@ func (m *Model) showRecord(id string, live bool) {
 	m.reviewField = ""
 	m.focusReviewField = ""
 	m.focusModifyRequested = false
-	m.reviewBrowseGuardUntil = time.Time{}
+	m.reviewBrowseGuard = false
+	m.reviewBrowseGuardRect = ui.Rect{}
 	m.scrollToCrop = false
 	m.cropZoom = 0
 	m.formExtrasOpen = false

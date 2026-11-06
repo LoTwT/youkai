@@ -22,10 +22,11 @@ func browseButtonCenter(t *testing.T, tt *ui.Tester, label string) (float32, flo
 }
 
 // TestReviewBrowseDoubleClickCannotWrite covers H1: the read-only bar's
-// 上一件 / 下一件 sit at the editor bar's write buttons' position. A second
+// 上一件 / 下一件 can sit at the editor bar's first write button. A second
 // click at the same point, or Space / Enter right after the move, must not
-// confirm or save the item the user has only just reached. After the short
-// guard the deliberate action works.
+// confirm or save the item the user has only just reached. The guard
+// follows the pointer, not a clock: only moving the pointer (or pressing a
+// key on a write button) makes the action available.
 func TestReviewBrowseDoubleClickCannotWrite(t *testing.T) {
 	m, q, tt, svc := openReviewableResults(t, recovery(
 		settledReviewItem(t, 1, record.QualityAutoAccepted),
@@ -61,6 +62,8 @@ func TestReviewBrowseDoubleClickCannotWrite(t *testing.T) {
 	if got := svc.saveCount(); got != 0 {
 		t.Fatalf("a second click at the browse point wrote %d revisions", got)
 	}
+	// The keyboard is in the form, so Space / Enter are typing and editing
+	// shortcuts, not button activation of the guarded write button.
 	tt.Key(0, ui.KeySpace)
 	settle(t, m, q, tt)
 	tt.Key(0, ui.KeyEnter)
@@ -72,23 +75,23 @@ func TestReviewBrowseDoubleClickCannotWrite(t *testing.T) {
 		t.Fatalf("the guard lost the pending editor: %s", probeReviewState(m))
 	}
 
-	// The guard only delays the action; a deliberate click after it still
-	// confirms the item.
-	tt.Advance(reviewBrowseGuardFor + 100*time.Millisecond)
+	// Moving the pointer away releases the guard before the deliberate
+	// click on the confirm button.
+	tt.Move(x+300, y-300)
 	tt.Frame()
 	if err := tt.Click("确认并下一项"); err != nil {
-		t.Fatalf("click 确认并下一项 after the guard: %v", err)
+		t.Fatalf("click 确认并下一项 after moving the pointer: %v", err)
 	}
 	settle(t, m, q, tt)
 	if got := svc.saveCount(); got != 1 || !svc.saves[0].edit.Confirmed {
-		t.Fatalf("the guarded confirm after expiry = %+v, want one confirmed save", svc.saves)
+		t.Fatalf("the confirmed click after the move = %+v, want one confirmed save", svc.saves)
 	}
 }
 
 // TestReviewBrowseNextCannotSaveDirtyDraft covers the second half of H1:
 // 下一件 lands on the editor's 保存修改. Even with a dirty draft, a click at
-// the old point (or the save button itself) is ignored until the guard
-// clears; afterward the save works.
+// the old point is ignored until the pointer moves; afterward the save
+// works.
 func TestReviewBrowseNextCannotSaveDirtyDraft(t *testing.T) {
 	m, q, tt, svc := openReviewableResults(t, recovery(
 		settledReviewItem(t, 1, record.QualityAutoAccepted),
@@ -114,38 +117,213 @@ func TestReviewBrowseNextCannotSaveDirtyDraft(t *testing.T) {
 		t.Fatal("the pending draft is not dirty")
 	}
 
-	// The old 下一件 point now sits on the editor bar. Whether it lands on
-	// 确认并下一项 or 保存修改, the guard must ignore it.
+	// The old 下一件 point now sits on the editor bar. A click repeated
+	// there must be ignored, whatever the wait.
 	tt.ClickAt(x, y)
 	settle(t, m, q, tt)
 	if got := svc.saveCount(); got != 0 {
 		t.Fatalf("the same-point click saved a dirty draft %d times", got)
 	}
-	if err := tt.Click("保存修改"); err != nil {
-		t.Fatalf("click 保存修改 while guarded: %v", err)
-	}
-	settle(t, m, q, tt)
-	if got := svc.saveCount(); got != 0 {
-		t.Fatalf("the guarded save button wrote %d revisions", got)
-	}
 	if m.edit == nil || m.edit.draft.Level != "13" {
 		t.Fatalf("the guard dropped the dirty draft: %s", probeReviewState(m))
 	}
 
-	tt.Advance(reviewBrowseGuardFor + 100*time.Millisecond)
+	// A pointer that stays at the old point never releases the guard, even
+	// across the interval that used to expire.
+	tt.Advance(5 * time.Second)
+	tt.Frame()
+	tt.ClickAt(x, y)
+	settle(t, m, q, tt)
+	if got := svc.saveCount(); got != 0 {
+		t.Fatalf("the stationary pointer wrote %d revisions after 5s", got)
+	}
+
+	tt.Move(x+300, y-300)
 	tt.Frame()
 	if err := tt.Click("保存修改"); err != nil {
-		t.Fatalf("click 保存修改 after the guard: %v", err)
+		t.Fatalf("click 保存修改 after moving the pointer: %v", err)
 	}
 	settle(t, m, q, tt)
 	if got := svc.saveCount(); got != 1 || svc.saves[0].edit.Confirmed {
-		t.Fatalf("the guarded save after expiry = %+v, want one unconfirmed save", svc.saves)
+		t.Fatalf("the save after the move = %+v, want one unconfirmed save", svc.saves)
 	}
 }
 
-// TestReviewModifySaveAndContinueExplainsQueue covers M1: a modify draft
-// saved by the generic "save and continue" leaves the confirmed set, so the
-// dialog says it and the destination repeats it.
+// TestReviewBrowseGuardStationaryPointer covers H1's steady walk: repeated
+// clicks at the same point must never write, at every common double-click
+// pace, because the pointer has not moved between them.
+func TestReviewBrowseGuardStationaryPointer(t *testing.T) {
+	for _, gap := range []time.Duration{300, 450, 600, 800, 1000} {
+		gap *= time.Millisecond
+		m, q, tt, svc := openReviewableResults(t, recovery(
+			settledReviewItem(t, 1, record.QualityAutoAccepted),
+			reviewRowItem(t, 2, 12),
+			settledReviewItem(t, 3, record.QualityAutoAccepted),
+			settledReviewItem(t, 4, record.QualityAutoAccepted),
+		), 1180, 760)
+		tt.Frame()
+		m.setResultFilter(resultFilterAll)
+		tt.Frame()
+		m.requestNavigation(navigationRequest{kind: navSelect, seq: 4})
+		settle(t, m, q, tt)
+		x, y := browseButtonCenter(t, tt, "‹ 上一件")
+		for i := 0; i < 5; i++ {
+			tt.ClickAt(x, y)
+			settle(t, m, q, tt)
+			tt.Advance(gap)
+			tt.Frame()
+		}
+		if got := svc.saveCount(); got != 0 {
+			t.Fatalf("gap %v: a stationary pointer wrote %d revisions", gap, got)
+		}
+		if m.selectedSeq() != 2 || m.rec.Rows[1].Quality != record.QualityNeedsReview {
+			t.Fatalf("gap %v: the walk changed #0002: %s quality %q",
+				gap, probeReviewState(m), m.rec.Rows[1].Quality)
+		}
+		// A press held at the same point and released later is the same
+		// ignored click, not a new deliberate one.
+		tt.Press(x, y)
+		tt.Advance(400 * time.Millisecond)
+		tt.Release(x, y)
+		settle(t, m, q, tt)
+		if got := svc.saveCount(); got != 0 {
+			t.Fatalf("gap %v: the held press wrote %d revisions", gap, got)
+		}
+	}
+}
+
+// TestReviewBrowseGuardReleasesOnMove covers M6: the guard is not a timer,
+// so a long pause with no input leaves it in place (the pointer is still at
+// the browse point), and one pointer move releases it without any further
+// event to wake a timer.
+func TestReviewBrowseGuardReleasesOnMove(t *testing.T) {
+	m, q, tt, _ := openReviewableResults(t, recovery(
+		settledReviewItem(t, 1, record.QualityAutoAccepted),
+		reviewRowItem(t, 2, 12),
+		settledReviewItem(t, 3, record.QualityAutoAccepted),
+	), 1180, 760)
+	tt.Frame()
+	m.setResultFilter(resultFilterAll)
+	tt.Frame()
+	m.requestNavigation(navigationRequest{kind: navSelect, seq: 3})
+	settle(t, m, q, tt)
+	x, y := browseButtonCenter(t, tt, "‹ 上一件")
+	tt.ClickAt(x, y)
+	settle(t, m, q, tt)
+	tt.Advance(5 * time.Second)
+	tt.Frame()
+	if !tt.HasText(reviewBrowseGuardReason) {
+		t.Fatalf("the stationary pointer lost the guard: %q", tt.Texts())
+	}
+	tt.Move(x+300, y-300)
+	tt.Frame()
+	if tt.HasText(reviewBrowseGuardReason) {
+		t.Fatalf("moving the pointer did not release the guard: %q", tt.Texts())
+	}
+	if status := m.resultShortcutText(); !strings.Contains(status, shortcutConfirmNext) {
+		t.Fatalf("the released bar still hides the confirm shortcut: %q", status)
+	}
+}
+
+// TestReviewBrowseKeepsKeyboard covers M7: browsing read-only items with
+// Space keeps the keyboard on the browse button and the next Space keeps
+// browsing; reaching a pending item moves the keyboard to its first
+// problem field, never to a write button.
+func TestReviewBrowseKeepsKeyboard(t *testing.T) {
+	m, q, tt, svc := openReviewableResults(t, recovery(
+		settledReviewItem(t, 1, record.QualityAutoAccepted),
+		settledReviewItem(t, 2, record.QualityHumanConfirmed),
+		settledReviewItem(t, 3, record.QualityHumanConfirmed),
+		reviewRowItem(t, 4, 12),
+	), 1180, 760)
+	tt.Frame()
+	m.setResultFilter(resultFilterAll)
+	tt.Frame()
+	m.requestNavigation(navigationRequest{kind: navSelect, seq: 1})
+	settle(t, m, q, tt)
+	tt.Frame()
+	for i := 0; i < 40 && !tt.Focused("下一件 ›"); i++ {
+		tt.Key(0, ui.KeyTab)
+		tt.Frame()
+	}
+	if !tt.Focused("下一件 ›") {
+		t.Fatalf("the browse button did not take the keyboard: %q", tt.Texts())
+	}
+	for want := int64(2); want <= 3; want++ {
+		tt.Key(0, ui.KeySpace)
+		settle(t, m, q, tt)
+		tt.Frame()
+		if m.selectedSeq() != want {
+			t.Fatalf("Space #%d selected %d, want %d", want, m.selectedSeq(), want)
+		}
+		if !tt.Focused("下一件 ›") {
+			t.Fatalf("Space #%d left the browse button: %q", want, tt.Texts())
+		}
+		if m.edit != nil {
+			t.Fatalf("Space #%d opened the modify flow: %s", want, probeReviewState(m))
+		}
+	}
+	// The next read-only move lands on the pending item: the keyboard goes
+	// to the first problem field, not to 修改 or a write button.
+	tt.Key(0, ui.KeySpace)
+	settle(t, m, q, tt)
+	tt.Frame()
+	if m.selectedSeq() != 4 || m.edit == nil {
+		t.Fatalf("the pending arrival = %s", probeReviewState(m))
+	}
+	if tt.Focused("修改") || tt.Focused("确认并下一项") || tt.Focused("保存修改") {
+		t.Fatalf("the pending arrival focused a modify/write action: %q", tt.Texts())
+	}
+	if m.focusedReviewField != FormFieldMainStat || !tt.Focused("主词条数值") {
+		t.Fatalf("the pending arrival focused %q, want the first problem field: %q",
+			m.focusedReviewField, tt.Texts())
+	}
+	tt.Key(0, ui.KeySpace)
+	settle(t, m, q, tt)
+	if got := svc.saveCount(); got != 0 {
+		t.Fatalf("Space after the pending arrival wrote %d revisions", got)
+	}
+}
+
+// TestReviewTypingAcrossChangingProblems covers M5's residual: with several
+// missing fields, typing in a field that stops having a problem must not
+// rebuild it somewhere else and swallow the next keystroke.
+func TestReviewTypingAcrossChangingProblems(t *testing.T) {
+	it := withStructured(t, reviewRowItem(t, 1, 12), func(s *zzz.StructuredDisc) {
+		s.Data.Level = nil
+		s.Data.Rarity = nil
+	})
+	m, q, tt, svc := openReviewableResults(t, recovery(it), 1180, 760)
+	tt.Frame()
+	m.requestReviewFieldFocus(FormFieldLevel)
+	tt.Frame()
+	tt.Frame()
+	if !tt.Focused("等级") {
+		t.Fatalf("the level field did not take the keyboard: %q", tt.Texts())
+	}
+	tt.Type("1")
+	tt.Frame()
+	tt.Frame()
+	tt.Type("2")
+	tt.Frame()
+	tt.Frame()
+	if m.edit == nil || m.edit.draft.Level != "12" {
+		t.Fatalf("typing 12 stored %q", m.edit.draft.Level)
+	}
+	if !tt.Focused("等级") {
+		t.Fatalf("the edited field moved and lost the keyboard: %q", tt.Texts())
+	}
+	m.edit.draft.Rarity = "S"
+	m.edit.refresh()
+	tt.Frame()
+	tt.Key(ui.Cmd, ui.KeyEnter)
+	settle(t, m, q, tt)
+	if svc.saveCount() != 1 || svc.saves[0].edit.Data.Level == nil ||
+		*svc.saves[0].edit.Data.Level != 12 {
+		t.Fatalf("the saved revision = %+v, want level 12", svc.saves)
+	}
+}
+
 func TestReviewModifySaveAndContinueExplainsQueue(t *testing.T) {
 	m, q, tt, svc := openReviewableResults(t, recovery(
 		settledReviewItem(t, 1, record.QualityAutoAccepted),
@@ -200,6 +378,62 @@ func TestReviewModifySaveAndContinueExplainsQueue(t *testing.T) {
 	if m.exportData == nil || m.exportData.Summary.Counts != counts {
 		t.Fatalf("export counts do not follow recordClassCounts: %+v vs %+v",
 			m.exportData, counts)
+	}
+}
+
+// TestReviewModifyNoticeOnOtherDestinations covers L10: after saving a
+// modify draft and leaving the item browser, the summary, the records list
+// and settings still show the warning that the item went back to review.
+func TestReviewModifyNoticeOnOtherDestinations(t *testing.T) {
+	m, q, tt, _ := openReviewableResults(t, recovery(
+		settledReviewItem(t, 1, record.QualityAutoAccepted),
+		settledReviewItem(t, 2, record.QualityHumanConfirmed),
+	), 1180, 760)
+	tt.Frame()
+	m.setResultFilter(resultFilterAll)
+	tt.Frame()
+	if err := tt.Click("修改"); err != nil {
+		t.Fatalf("click 修改: %v", err)
+	}
+	tt.Frame()
+	m.edit.draft.Level = "13"
+	m.edit.refresh()
+	tt.Frame()
+	if err := tt.Click("#0002"); err != nil {
+		t.Fatalf("click the second row: %v", err)
+	}
+	tt.Frame()
+	if err := tt.Click("保存并继续"); err != nil {
+		t.Fatalf("click 保存并继续: %v", err)
+	}
+	settle(t, m, q, tt)
+	tt.Frame()
+	want := "已保存修改（序号 1）；这件退回待校对，确认前不会导出。"
+	if !tt.HasText(want) {
+		t.Fatalf("the item tab lost the notice: %q", tt.Texts())
+	}
+
+	m.requestNavigation(navigationRequest{kind: navRecordTab, recordTab: recordTabSummary})
+	tt.Frame()
+	if !tt.HasText(want) {
+		t.Fatalf("the summary tab lost the notice: %q", tt.Texts())
+	}
+	m.navigatePage(pageHistory)
+	tt.Frame()
+	if !tt.HasText(want) {
+		t.Fatalf("the records page lost the notice: %q", tt.Texts())
+	}
+	m.navigatePage(pageSettings)
+	tt.Frame()
+	if !tt.HasText(want) {
+		t.Fatalf("settings lost the notice: %q", tt.Texts())
+	}
+	m.navigatePage(pageResults)
+	tt.Frame()
+	m.requestNavigation(navigationRequest{kind: navRecordTab, recordTab: recordTabItems})
+	tt.Frame()
+	if !tt.HasText(want) {
+		t.Fatalf("returning to the item tab lost the notice: %q", tt.Texts())
 	}
 }
 
@@ -591,6 +825,174 @@ func TestReviewModifyNoOpDoesNotWrite(t *testing.T) {
 	}
 }
 
+// TestReviewModifyNormalizedNoOpDoesNotWrite covers L1's residual: text
+// that parses to the same values (leading zeros, surrounding spaces,
+// trailing spaces in a decimal) is not a modification and creates no
+// revision.
+func TestReviewModifyNormalizedNoOpDoesNotWrite(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		apply func(*editState)
+	}{
+		{"level-leading-zero", func(e *editState) { e.draft.Level = "015" }},
+		{"level-space", func(e *editState) { e.draft.Level = " 15" }},
+		{"main-value-space", func(e *editState) { e.draft.MainValue = "19.2 " }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, q, tt, svc := openReviewableResults(t, recovery(
+				settledReviewItem(t, 1, record.QualityAutoAccepted),
+			), 1180, 760)
+			tt.Frame()
+			m.setResultFilter(resultFilterAll)
+			tt.Frame()
+			if err := tt.Click("修改"); err != nil {
+				t.Fatalf("click 修改: %v", err)
+			}
+			tt.Frame()
+			tc.apply(m.edit)
+			m.edit.refresh()
+			tt.Frame()
+			if m.editingDirty() {
+				t.Fatalf("%s counts as a modification: %s", tc.name, probeReviewState(m))
+			}
+			tt.Key(ui.Cmd, ui.KeyEnter)
+			settle(t, m, q, tt)
+			tt.Frame()
+			if got := svc.saveCount(); got != 0 {
+				t.Fatalf("%s wrote %d revisions", tc.name, got)
+			}
+			if m.rec.Rows[0].Quality != record.QualityAutoAccepted {
+				t.Fatalf("%s changed the quality to %q", tc.name, m.rec.Rows[0].Quality)
+			}
+		})
+	}
+}
+
+// TestReviewBrowseGuardAllowsShortcut covers L7: the guard is about a
+// repeated click at the browse point, not the confirm shortcut. Ctrl+Enter
+// keeps working while the pointer stays there, so the bar must not claim
+// that confirmation needs a wait.
+func TestReviewBrowseGuardAllowsShortcut(t *testing.T) {
+	m, q, tt, svc := openReviewableResults(t, recovery(
+		settledReviewItem(t, 1, record.QualityAutoAccepted),
+		reviewRowItem(t, 2, 12),
+		settledReviewItem(t, 3, record.QualityAutoAccepted),
+	), 1180, 760)
+	tt.Frame()
+	m.setResultFilter(resultFilterAll)
+	tt.Frame()
+	m.requestNavigation(navigationRequest{kind: navSelect, seq: 3})
+	settle(t, m, q, tt)
+	x, y := browseButtonCenter(t, tt, "‹ 上一件")
+	tt.ClickAt(x, y)
+	settle(t, m, q, tt)
+	tt.Frame()
+	if !m.reviewBrowseGuarded() {
+		t.Fatalf("the browse guard did not start: %s", probeReviewState(m))
+	}
+	if tt.HasText("请稍后再确认") {
+		t.Fatalf("the guard copy promises a wait: %q", tt.Texts())
+	}
+	if status := m.resultShortcutText(); !strings.Contains(status, shortcutConfirmNext) {
+		t.Fatalf("the guarded bar hides the confirm shortcut: %q", status)
+	}
+	tt.Key(ui.Cmd, ui.KeyEnter)
+	settle(t, m, q, tt)
+	if got := svc.saveCount(); got != 1 || !svc.saves[0].edit.Confirmed {
+		t.Fatalf("Ctrl+Enter under the guard = %+v, want one confirmed save", svc.saves)
+	}
+}
+
+// TestReviewBrowseBarsAlign pins the layout the guard protects: the browse
+// button and the editor's first write button occupy the same row, so a
+// click repeated at the browse point really lands on the write button and
+// must be ignored (H1, L9).
+func TestReviewBrowseBarsAlign(t *testing.T) {
+	m, q, tt, _ := openReviewableResults(t, recovery(
+		settledReviewItem(t, 1, record.QualityAutoAccepted),
+		reviewRowItem(t, 2, 12),
+		settledReviewItem(t, 3, record.QualityAutoAccepted),
+	), 1180, 760)
+	tt.Frame()
+	m.setResultFilter(resultFilterAll)
+	tt.Frame()
+	m.requestNavigation(navigationRequest{kind: navSelect, seq: 3})
+	settle(t, m, q, tt)
+	x, y := browseButtonCenter(t, tt, "‹ 上一件")
+	tt.ClickAt(x, y)
+	settle(t, m, q, tt)
+	tt.Frame()
+	confirm, ok := tt.Find("确认并下一项")
+	if !ok {
+		t.Fatalf("确认并下一项 is missing: %q", tt.Texts())
+	}
+	if x < confirm.X || x > confirm.X+confirm.W ||
+		y < confirm.Y || y > confirm.Y+confirm.H {
+		t.Fatalf("the browse point (%.1f,%.1f) misses the write button %+v",
+			x, y, confirm)
+	}
+}
+
+// TestReviewModifyCleanReason checks L8 and L9: a clean modify disables
+// 确认修改 with a visible reason, and the reason line keeps its place so
+// clearing the browse guard does not move the button under the pointer.
+func TestReviewModifyCleanReason(t *testing.T) {
+	m, q, tt, _ := openReviewableResults(t, recovery(
+		settledReviewItem(t, 1, record.QualityAutoAccepted),
+		reviewRowItem(t, 2, 12),
+		settledReviewItem(t, 3, record.QualityAutoAccepted),
+	), 1180, 760)
+	tt.Frame()
+	m.setResultFilter(resultFilterAll)
+	tt.Frame()
+	m.requestNavigation(navigationRequest{kind: navSelect, seq: 1})
+	settle(t, m, q, tt)
+	tt.Frame()
+	if err := tt.Click("修改"); err != nil {
+		t.Fatalf("click 修改: %v", err)
+	}
+	tt.Frame()
+	if !tt.HasText("没有修改，确认修改不可用。") {
+		t.Fatalf("the clean modify has no disabled reason: %q", tt.Texts())
+	}
+	// The disabled button must not start the no-op action at all.
+	if err := tt.Click("确认修改"); err != nil {
+		t.Logf("disabled 确认修改 click: %v", err)
+	}
+	settle(t, m, q, tt)
+	tt.Frame()
+	if m.reviewNotice != "" {
+		t.Fatalf("the clean 确认修改 reacted: %q", m.reviewNotice)
+	}
+
+	// Browse from a passed item to a pending one, then release the guard
+	// with a pointer move: the action buttons must not jump.
+	m.requestNavigation(navigationRequest{kind: navSelect, seq: 3})
+	settle(t, m, q, tt)
+	tt.Frame()
+	x, y := browseButtonCenter(t, tt, "‹ 上一件")
+	tt.ClickAt(x, y)
+	settle(t, m, q, tt)
+	tt.Frame()
+	guarded, ok := tt.Find("确认并下一项")
+	if !ok {
+		t.Fatalf("the pending confirm button is missing: %q", tt.Texts())
+	}
+	if !tt.HasText(reviewBrowseGuardReason) {
+		t.Fatalf("the guarded bar does not explain itself: %q", tt.Texts())
+	}
+	tt.Move(x+300, y-300)
+	tt.Frame()
+	released, ok := tt.Find("确认并下一项")
+	if !ok {
+		t.Fatalf("the released confirm button is missing: %q", tt.Texts())
+	}
+	if guarded.Y != released.Y {
+		t.Fatalf("the action buttons moved %v -> %v when the guard cleared",
+			guarded.Y, released.Y)
+	}
+}
+
 // TestReviewQueuedRowShowsPlaceholders covers L2: a queued item has no
 // settled fields to correct, so it shows the placeholder, not blank values
 // or gap markers.
@@ -654,11 +1056,11 @@ func TestReviewClearedFieldKeepsFocus(t *testing.T) {
 	if m.edit == nil || m.edit.draft.Level != "9" {
 		t.Fatalf("typing after the move did not reach the field: %s", probeReviewState(m))
 	}
-	// Filling the gap moves the field back with the rest; the keyboard
-	// follows it there too.
+	// The field keeps its place (the edit's field order is fixed) and the
+	// keyboard stays with it.
 	tt.Frame()
 	if !tt.Focused("等级") {
-		t.Fatalf("the filled field lost the keyboard on its way back: %q", tt.Texts())
+		t.Fatalf("the filled field lost the keyboard: %q", tt.Texts())
 	}
 }
 

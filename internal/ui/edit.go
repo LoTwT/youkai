@@ -3,6 +3,7 @@ package ui
 import (
 	"errors"
 	"fmt"
+	"reflect"
 	"strconv"
 	"strings"
 
@@ -65,10 +66,10 @@ type editState struct {
 	data        zzz.DiscData
 	fieldErrors []fieldProblem
 	check       app.DataCheck
-	// firstFields is the problem-first field list the previous frame
-	// rendered. A field moving into it is rebuilt at a new position; the
-	// form uses the old list to keep the keyboard on a field that only
-	// moved because its gap appeared (M5).
+	// firstFields is the problem-first field order the edit opened with.
+	// It stays fixed for the whole edit session: a validation change while
+	// the user types must not move the edited field out from under the
+	// keyboard or into the folded group (M5).
 	firstFields []FormField
 }
 
@@ -138,24 +139,6 @@ func cloneDraft(d editDraft) editDraft {
 	out := d
 	out.Substats = append([]substatDraft(nil), d.Substats...)
 	return out
-}
-
-// equal compares two drafts by value.
-func (d editDraft) equal(other editDraft) bool {
-	if d.Rarity != other.Rarity ||
-		d.SetID != other.SetID || d.Slot != other.Slot || d.Level != other.Level ||
-		d.MainAttribute != other.MainAttribute || d.MainValue != other.MainValue ||
-		d.MainUnit != other.MainUnit || d.SubstatsKnown != other.SubstatsKnown ||
-		d.ManagementState != other.ManagementState || d.EquippedState != other.EquippedState ||
-		d.AgentID != other.AgentID || len(d.Substats) != len(other.Substats) {
-		return false
-	}
-	for i := range d.Substats {
-		if d.Substats[i] != other.Substats[i] {
-			return false
-		}
-	}
-	return true
 }
 
 // newEditDraft turns one row's structured data into editor text.
@@ -411,7 +394,12 @@ func (e *editState) refresh() {
 }
 
 func (e *editState) dirty() bool {
-	return !e.draft.equal(e.original)
+	// Compare the data the revision would persist, not the text: "015",
+	// " 15" and "19.2 " are the same values as their canonical forms and
+	// must not manufacture a zero-change revision (08 §3.4).
+	current, _ := e.draft.toData()
+	original, _ := e.original.toData()
+	return !reflect.DeepEqual(current, original)
 }
 
 func (e *editState) canSave() bool {

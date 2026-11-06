@@ -869,7 +869,6 @@ func (m *Model) reviewEmptyForm(c *ui.Context, t *ui.Theme, visible []int) {
 func (m *Model) reviewFormHeader(c *ui.Context, t *ui.Theme, row *Row, editing bool) {
 	_, tok := themeWithTokens(t, c.Preferences())
 	status := passedStatusLabel(row)
-	guarded := m.reviewBrowseGuarded(c)
 	ui.Row(c).Gap(t.Space(1)).AlignItems(ui.Center).Children(func() {
 		ui.Text(c, resultDetailTitle(row)).FontWeight(600).SingleLine().Shrink(1)
 		ui.Box(c).Grow(1)
@@ -906,7 +905,7 @@ func (m *Model) reviewFormHeader(c *ui.Context, t *ui.Theme, row *Row, editing b
 			ui.Row(c).Gap(t.Space(1)).AlignItems(ui.Center).Children(func() {
 				ui.Text(c, "没有保存："+m.reviewErr).TextColor(t.Danger).Shrink(1)
 				retry := ui.Button(c, m.retryActionLabel()).Key("review-retry").
-					Disabled(m.reviewSaving || guarded)
+					Disabled(m.reviewSaving)
 				if retry.Clicked() {
 					m.saveEdit(m.retryAction(), nil)
 				}
@@ -963,23 +962,29 @@ func (m *Model) retryActionLabel() string {
 
 // reviewEditForm is the editable form: problem fields first with their
 // reasons, the rest folded away, then the raw text and revision history.
+// The leading field list is the one the edit opened with: a problem that
+// appears or clears while the user types must not move the field out from
+// under the keyboard or into the folded group (M5).
 func (m *Model) reviewEditForm(c *ui.Context, t *ui.Theme, row *Row) {
 	if m.edit == nil {
 		return
 	}
 	m.edit.refresh()
-	draft := &m.edit.draft
-	previousFocused := m.focusedReviewField
-	wasFirst := previousFocused != "" && slices.Contains(m.edit.firstFields, previousFocused)
 	problems := m.reviewProblems(row)
-	first, rest := reviewFormFields(problems)
+	first := m.edit.firstFields
+	rest := make([]FormField, 0, len(reviewFieldOrder))
+	for _, field := range reviewFieldOrder {
+		if !slices.Contains(first, field) {
+			rest = append(rest, field)
+		}
+	}
 	for _, field := range first {
 		m.reviewEditField(c, t, row, field, problems)
 	}
 	if len(rest) > 0 {
 		if len(first) == 0 {
-			// Nothing is wrong with this item: with no problem field to
-			// lead with, the rest of the form is the form.
+			// Nothing was wrong when the edit opened: with no problem field
+			// to lead with, the rest of the form is the form.
 			for _, field := range rest {
 				m.reviewEditField(c, t, row, field, problems)
 			}
@@ -994,19 +999,7 @@ func (m *Model) reviewEditForm(c *ui.Context, t *ui.Theme, row *Row) {
 			})
 		}
 	}
-	newFirst := slices.Contains(first, previousFocused)
-	restRendered := len(first) == 0 || m.formExtrasOpen
-	if previousFocused != "" && newFirst != wasFirst && m.focusedReviewField == "" &&
-		(newFirst || (slices.Contains(rest, previousFocused) && restRendered)) {
-		// A field whose gap appears (or disappears) moves between the
-		// leading problem group and the rest; the rebuild would otherwise
-		// drop the keyboard and swallow the next keystrokes (M5). Keep the
-		// focus when the field is still rendered at its new place.
-		m.requestReviewFieldFocus(previousFocused)
-	}
-	m.edit.firstFields = first
 	m.rawTextArea(c, t, row)
-	_ = draft
 }
 
 // reviewEditField is one editable field: its label, the control, and the
@@ -1320,11 +1313,13 @@ func (m *Model) reviewActionBar(c *ui.Context, t *ui.Theme, row *Row) {
 
 // reviewEditActions is a pending item's editor bar: confirm and advance on
 // the left, a plain save next to it, and the reason a disabled action
-// cannot run.
+// cannot run. The reason line is always laid out, so a guard or a new
+// reason never moves the buttons under the pointer (L9).
 func (m *Model) reviewEditActions(c *ui.Context, t *ui.Theme, row *Row) {
-	guarded := m.reviewBrowseGuarded(c)
-	reason := m.reviewConfirmBlockedReason(row)
-	if guarded {
+	guarded := m.reviewBrowseGuarded()
+	blocked := m.reviewConfirmBlockedReason(row)
+	reason := blocked
+	if guarded && blocked == "" {
 		reason = reviewBrowseGuardReason
 	}
 	ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
@@ -1332,8 +1327,8 @@ func (m *Model) reviewEditActions(c *ui.Context, t *ui.Theme, row *Row) {
 		if m.reviewErr != "" && m.lastAction == reviewConfirmNext {
 			confirmLabel = "重试确认并下一项"
 		}
-		confirm := ui.PrimaryButton(c, confirmLabel).Key("review-confirm-next").
-			Disabled(reason != "" || m.reviewActionsBlocked())
+		confirm := m.reviewWriteButton(ui.PrimaryButton(c, confirmLabel).Key("review-confirm-next").
+			Disabled(blocked != "" || m.reviewActionsBlocked()), guarded)
 		if confirm.Clicked() && !guarded {
 			m.saveEdit(reviewConfirmNext, nil)
 		}
@@ -1341,25 +1336,27 @@ func (m *Model) reviewEditActions(c *ui.Context, t *ui.Theme, row *Row) {
 		if m.reviewErr != "" && m.lastAction == reviewSave {
 			saveLabel = "重试保存"
 		}
-		save := ui.Button(c, saveLabel).Key("review-save").
-			Disabled(!m.edit.canSave() || m.reviewActionsBlocked() || guarded)
+		save := m.reviewWriteButton(ui.Button(c, saveLabel).Key("review-save").
+			Disabled(!m.edit.canSave() || m.reviewActionsBlocked()), guarded)
 		if save.Clicked() && !guarded {
 			m.saveEdit(reviewSave, nil)
 		}
 	})
-	if reason != "" {
-		ui.Text(c, reason).FontSize(t.FontSize * 0.85).TextColor(t.TextMuted)
-	}
+	reviewActionReason(c, t, reason)
 }
 
 // reviewModifyActions is the modify flow of a settled item: 确认修改
 // re-confirms the revision (F-20), 取消修改 returns to the text form
-// without saving (08 §3.4). The write actions ignore input while the
-// browse guard from the just-left read-only bar is active.
+// without saving (08 §3.4). A clean draft cannot be confirmed, and says
+// why beside the disabled button (09 §4.1).
 func (m *Model) reviewModifyActions(c *ui.Context, t *ui.Theme, row *Row) {
-	guarded := m.reviewBrowseGuarded(c)
+	guarded := m.reviewBrowseGuarded()
 	reason := m.reviewConfirmBlockedReason(row)
-	if guarded {
+	if reason == "" && !m.edit.dirty() {
+		reason = "没有修改，确认修改不可用。"
+	}
+	disabled := reason != "" || !m.edit.dirty() || m.reviewActionsBlocked()
+	if guarded && reason == "" {
 		reason = reviewBrowseGuardReason
 	}
 	ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
@@ -1367,8 +1364,8 @@ func (m *Model) reviewModifyActions(c *ui.Context, t *ui.Theme, row *Row) {
 		if m.reviewErr != "" && m.lastAction == reviewConfirmModify {
 			confirmLabel = "重试确认修改"
 		}
-		confirm := ui.PrimaryButton(c, confirmLabel).Key("review-confirm-modify").
-			Disabled(reason != "" || !m.edit.dirty() || m.reviewActionsBlocked())
+		confirm := m.reviewWriteButton(ui.PrimaryButton(c, confirmLabel).Key("review-confirm-modify").
+			Disabled(disabled), guarded)
 		if confirm.Clicked() && !guarded {
 			m.saveEdit(reviewConfirmModify, nil)
 		}
@@ -1378,16 +1375,67 @@ func (m *Model) reviewModifyActions(c *ui.Context, t *ui.Theme, row *Row) {
 			m.cancelEdit()
 		}
 	})
-	if reason != "" {
-		ui.Text(c, reason).FontSize(t.FontSize * 0.85).TextColor(t.TextMuted)
+	reviewActionReason(c, t, reason)
+}
+
+// reviewActionReason draws the action bar's reason line, or the empty
+// space it keeps when there is none, so the buttons above never move.
+func reviewActionReason(c *ui.Context, t *ui.Theme, reason string) {
+	if reason == "" {
+		// An invisible line of the same font keeps the buttons in place.
+		ui.Text(c, "\u00a0").FontSize(t.FontSize * 0.85).Role(ui.RoleNone)
+		return
 	}
+	ui.Text(c, reason).FontSize(t.FontSize * 0.85).TextColor(t.TextMuted)
+}
+
+// reviewWriteButton makes a write button inert to the pointer while the
+// browse guard is active, without disabling it: a key pressed on the
+// focused button is deliberate and ends the guard, and the button then
+// reports the click. The pointer press is consumed so a repeated click at
+// the browse position neither writes nor moves the keyboard to the write
+// button.
+func (m *Model) reviewWriteButton(button ui.Element, guarded bool) ui.Element {
+	if !guarded {
+		return button
+	}
+	// The committed box locates a pointer event within the window without
+	// waiting for a frame: a move and click that arrive together must still
+	// count as leaving the old point.
+	bounds := button.Bounds()
+	return button.Opacity(0.55).HandleInput(func(ev ui.InputEvent) bool {
+		switch ev.Kind {
+		case ui.InputKeyDown:
+			m.clearReviewBrowseGuard()
+			return false
+		case ui.InputPointerDown:
+			if !m.reviewBrowseGuardRect.Contains(bounds.X+ev.X, bounds.Y+ev.Y) {
+				m.clearReviewBrowseGuard()
+				return false
+			}
+			// The press moved the keyboard to the muted button before this
+			// handler ran. Because the click is ignored, put it back on the
+			// form: a following Space or Enter then edits instead of
+			// confirming an item the user has only just reached.
+			field := m.focusedReviewField
+			if field == "" {
+				field = m.firstReviewField()
+			}
+			m.requestReviewFieldFocus(field)
+			return true
+		case ui.InputPointerUp:
+			return true
+		}
+		return false
+	})
 }
 
 // reviewBrowseActions is the read-only item's only action row: previous
 // and next in the current segment, both secondary (08 §3.4). Each button
-// has its own identity; after a move the keyboard leaves the reused
-// position for the new item's form, and the write buttons stay inert for
-// the browse guard.
+// has its own identity. A read-only item keeps the keyboard on the browse
+// button, so repeated Space / Enter continues browsing instead of opening
+// the next item's 修改; arriving at an editor moves it to the first
+// problem field (08 §3.4).
 func (m *Model) reviewBrowseActions(c *ui.Context, t *ui.Theme) {
 	visible := m.visibleResultRows()
 	index := resultDisplayIndex(visible, m.selected)
@@ -1395,14 +1443,17 @@ func (m *Model) reviewBrowseActions(c *ui.Context, t *ui.Theme) {
 		previous := ui.Button(c, "‹ 上一件").Key("review-prev").
 			Disabled(m.reviewSaving || index <= 0)
 		if previous.Clicked() && m.selectAdjacentVisible(-1) {
-			m.markReviewBrowse(c)
+			m.markReviewBrowse(previous)
 		}
 		next := ui.Button(c, "下一件 ›").Key("review-next").
 			Disabled(m.reviewSaving || index < 0 || index+1 >= len(visible))
 		if next.Clicked() && m.selectAdjacentVisible(1) {
-			m.markReviewBrowse(c)
+			m.markReviewBrowse(next)
 		}
 	})
+	// Keep the browse and editor bars the same height so their first
+	// buttons share the position the guard protects (08 §3.4).
+	reviewActionReason(c, t, "")
 }
 
 // rawTextArea is the per-item disclosure of the recognized text and the
