@@ -327,6 +327,7 @@ func TestViewDetailMatchesSelection(t *testing.T) {
 		"r1/000003-line0": solidBitmap(item3A),
 	}}
 	m, q, tt := openTestRecord(t, ev, 0)
+	pane := evidencePaneRect(t, tt, m, tt.Image())
 
 	// Every outcome stays in the list, and the recovery mark shows.
 	for _, want := range []string{
@@ -343,8 +344,8 @@ func TestViewDetailMatchesSelection(t *testing.T) {
 	if !tt.HasText("#0001 · 河豚电音 · 1 号位 · 15 级") {
 		t.Fatalf("the default selection does not show: %q", tt.Texts())
 	}
-	if n := countColor(tt.Image(), item1A); n < 100 {
-		t.Fatalf("the first item's first image does not show (%d px)", n)
+	if n := countColorInRect(tt.Image(), item1A, pane); n < 100 {
+		t.Fatalf("the first item's first image does not show (%d px, pane %v)", n, pane)
 	}
 
 	// The failed row: its reason shows and only its images render.
@@ -355,11 +356,11 @@ func TestViewDetailMatchesSelection(t *testing.T) {
 	if !tt.HasText("#0002 · 失败") || !tt.HasText("补录：这件识别失败，补全必填字段后才能导出。") {
 		t.Fatalf("the failed row's details do not show: %q", tt.Texts())
 	}
-	if n := countColor(tt.Image(), item2A); n < 100 {
-		t.Fatalf("the failed item's image does not show (%d px)", n)
+	if n := countColorInRect(tt.Image(), item2A, pane); n < 100 {
+		t.Fatalf("the failed item's image does not show (%d px, pane %v)", n, pane)
 	}
-	if n := countColor(tt.Image(), item1A); n != 0 {
-		t.Fatalf("another item's image shows for the failed item (%d px)", n)
+	if n := countColorInRect(tt.Image(), item1A, pane); n != 0 {
+		t.Fatalf("another item's image shows for the failed item (%d px, pane %v)", n, pane)
 	}
 
 	// The user-cancelled row shows its backfill notice and text.
@@ -370,8 +371,8 @@ func TestViewDetailMatchesSelection(t *testing.T) {
 	if !tt.HasText("补录：这件没有处理，补全必填字段后才能导出。") {
 		t.Fatalf("the cancelled reason does not show: %q", tt.Texts())
 	}
-	if n := countColor(tt.Image(), item1A); n != 0 {
-		t.Fatalf("another item's image shows for the cancelled item (%d px)", n)
+	if n := countColorInRect(tt.Image(), item1A, pane); n != 0 {
+		t.Fatalf("another item's image shows for the cancelled item (%d px, pane %v)", n, pane)
 	}
 }
 
