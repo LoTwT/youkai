@@ -65,6 +65,11 @@ type editState struct {
 	data        zzz.DiscData
 	fieldErrors []fieldProblem
 	check       app.DataCheck
+	// firstFields is the problem-first field list the previous frame
+	// rendered. A field moving into it is rebuilt at a new position; the
+	// form uses the old list to keep the keyboard on a field that only
+	// moved because its gap appeared (M5).
+	firstFields []FormField
 }
 
 // reviewAction is one save/confirmation the results page can request. A
@@ -101,6 +106,10 @@ const (
 	navSummaryClass
 	navRecordTab
 	navExport
+	// navPending switches to the pending segment, clears facets and selects
+	// one pending row. Ctrl+J uses it when the current segment shows no
+	// pending item but the record still has one (08 §3.4).
+	navPending
 )
 
 // navigationRequest is a navigation deferred until unsaved input is saved
@@ -499,6 +508,9 @@ func (m *Model) startEditRow(row *Row) {
 		backfill:     backfill,
 	}
 	m.edit.refresh()
+	if first, _ := reviewFormFields(m.reviewProblems(row)); first != nil {
+		m.edit.firstFields = first
+	}
 	m.navPrompt = nil
 	m.reviewErr = ""
 	m.reviewSaveFailed = false
@@ -660,6 +672,24 @@ func (m *Model) runNavigation(req navigationRequest) {
 		}
 	case navResultFilter:
 		m.applyResultFilterState(req.filter, req.setFilter, req.slotFilter)
+	case navPending:
+		m.applyResultFilterState(resultFilterPending, "", "")
+		if m.rec == nil {
+			return
+		}
+		if index := m.rec.RowOf(req.seq); index >= 0 {
+			m.selected = index
+			m.selectedSequence = m.rec.Rows[index].Seq
+			if display := resultDisplayIndex(m.visibleResultRows(), index); display >= 0 {
+				m.tableSelected = display
+				m.list.ScrollIntoView(display)
+			}
+			m.reviewErr = ""
+			m.reviewSaveFailed = false
+			m.reviewNotice = ""
+			m.pointFirstReviewField()
+			m.focusBrowsedItem()
+		}
 	case navSummaryClass:
 		m.openSummaryClassState(req.filter, req.summaryClass)
 	case navRecordTab:
@@ -707,6 +737,9 @@ func (m *Model) applyTableSelection(previous int) {
 }
 
 // promptSaveAndContinue saves the editor, then runs the held navigation.
+// A modify draft saves without confirmation, so the item drops back into
+// the review queue; the dialog stated that before the choice, and the
+// destination notice repeats it when the workspace stays on the record.
 func (m *Model) promptSaveAndContinue() {
 	if m.navPrompt == nil || m.reviewSaving {
 		return
@@ -717,7 +750,21 @@ func (m *Model) promptSaveAndContinue() {
 		m.runNavigation(req)
 		return
 	}
-	m.saveEdit(reviewSave, func() { m.runNavigation(req) })
+	modify := m.edit.modify
+	seq := m.edit.seq
+	m.saveEdit(reviewSave, func() {
+		m.runNavigation(req)
+		if !modify {
+			return
+		}
+		switch req.kind {
+		case navExit, navStartScan, navOpenRecord:
+			// The workspace or application leaves this record; the dialog
+			// is the only place the consequence can be shown.
+		default:
+			m.reviewNotice = fmt.Sprintf("已保存修改（序号 %d）；这件退回待校对，确认前不会导出。", seq)
+		}
+	})
 }
 
 // promptDiscardAndContinue drops the editor, then runs the held
@@ -780,6 +827,13 @@ func (m *Model) saveEdit(action reviewAction, after func()) {
 		m.reviewErr = "必需字段仍未读取或校验未通过，不能确认。"
 		return
 	}
+	if action == reviewConfirmModify && !m.edit.dirty() {
+		// 没有修改时“确认修改”不制造一个零变化的新修订（L1）。
+		m.reviewErr = ""
+		m.reviewSaveFailed = false
+		m.reviewNotice = "没有修改需要确认。"
+		return
+	}
 	if action == reviewSave && !m.edit.dirty() {
 		m.reviewErr = ""
 		m.reviewSaveFailed = false
@@ -787,6 +841,16 @@ func (m *Model) saveEdit(action reviewAction, after func()) {
 		return
 	}
 	m.submitReview(m.edit.recordID, m.edit.seq, m.edit.baseRevision, m.edit.data, action, after)
+}
+
+// retryAction resolves the action the error band retries. A modify draft
+// whose plain save failed retries as 确认修改, so the band can never write
+// an unconfirmed revision behind the modify flow's back (F-20).
+func (m *Model) retryAction() reviewAction {
+	if m.edit != nil && m.edit.modify && m.lastAction == reviewSave {
+		return reviewConfirmModify
+	}
+	return m.lastAction
 }
 
 // confirmCurrent confirms the selected row as it stands and moves to the
@@ -946,7 +1010,10 @@ func (m *Model) submitReview(recordID string, seq, expectedRevision int64, data 
 			case reviewConfirmModify:
 				// The settled item stays in place, read-only again with its
 				// re-confirmed revision. Its status tag names the new
-				// quality without leaving the item.
+				// quality without leaving the item. The visit marker keeps
+				// a fixed warning row in the 警告 segment until the filter
+				// changes (08 §3.1, §3.4).
+				m.markRecentlyConfirmed(seq)
 				m.reviewNotice = fmt.Sprintf("已确认修改（序号 %d）。", seq)
 				m.requestModifyFocus()
 			default:

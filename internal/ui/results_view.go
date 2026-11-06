@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -868,6 +869,7 @@ func (m *Model) reviewEmptyForm(c *ui.Context, t *ui.Theme, visible []int) {
 func (m *Model) reviewFormHeader(c *ui.Context, t *ui.Theme, row *Row, editing bool) {
 	_, tok := themeWithTokens(t, c.Preferences())
 	status := passedStatusLabel(row)
+	guarded := m.reviewBrowseGuarded(c)
 	ui.Row(c).Gap(t.Space(1)).AlignItems(ui.Center).Children(func() {
 		ui.Text(c, resultDetailTitle(row)).FontWeight(600).SingleLine().Shrink(1)
 		ui.Box(c).Grow(1)
@@ -877,7 +879,7 @@ func (m *Model) reviewFormHeader(c *ui.Context, t *ui.Theme, row *Row, editing b
 			m.reviewCategoryTag(c, t, tok, row, false)
 		}
 		if !editing && m.canModifyRow(row) {
-			modify := ui.Button(c, "修改").Shrink(0).Disabled(m.reviewActionsBlocked())
+			modify := ui.Button(c, "修改").Key("review-modify").Shrink(0).Disabled(m.reviewActionsBlocked())
 			if m.focusModifyRequested {
 				modify.Focus()
 			}
@@ -903,8 +905,10 @@ func (m *Model) reviewFormHeader(c *ui.Context, t *ui.Theme, row *Row, editing b
 			Background(tok.DangerSoft).Border(1, tok.DangerBorder).Radius(t.Radius).Children(func() {
 			ui.Row(c).Gap(t.Space(1)).AlignItems(ui.Center).Children(func() {
 				ui.Text(c, "没有保存："+m.reviewErr).TextColor(t.Danger).Shrink(1)
-				if ui.Button(c, m.retryActionLabel()).Disabled(m.reviewSaving).Clicked() {
-					m.saveEdit(m.lastAction, nil)
+				retry := ui.Button(c, m.retryActionLabel()).Key("review-retry").
+					Disabled(m.reviewSaving || guarded)
+				if retry.Clicked() {
+					m.saveEdit(m.retryAction(), nil)
 				}
 			})
 		})
@@ -933,7 +937,7 @@ func passedStatusLabel(row *Row) string {
 // reviewPassedTag is the passed status label: text plus a success shape,
 // never color alone.
 func (m *Model) reviewPassedTag(c *ui.Context, t *ui.Theme, tok *Tokens, label string) {
-	ui.Row(c).Shrink(0).Padding(t.Space(0.25), t.Space(1)).Gap(t.Space(0.5)).
+	ui.Row(c).Shrink(0).AlignSelf(ui.Start).Padding(t.Space(0.25), t.Space(1)).Gap(t.Space(0.5)).
 		AlignItems(ui.Center).Border(1, tok.SuccessBorder).
 		BorderStyle(ui.BorderSolid).Radius(t.Space(2)).Label("状态：" + label).Children(func() {
 		ui.Text(c, "✓").FontSize(t.FontSize * 0.8).FontWeight(600).
@@ -945,7 +949,7 @@ func (m *Model) reviewPassedTag(c *ui.Context, t *ui.Theme, tok *Tokens, label s
 
 // retryActionLabel names the failed action the error band retries.
 func (m *Model) retryActionLabel() string {
-	switch m.lastAction {
+	switch m.retryAction() {
 	case reviewConfirmStay:
 		return "重试确认"
 	case reviewConfirmNext:
@@ -965,6 +969,8 @@ func (m *Model) reviewEditForm(c *ui.Context, t *ui.Theme, row *Row) {
 	}
 	m.edit.refresh()
 	draft := &m.edit.draft
+	previousFocused := m.focusedReviewField
+	wasFirst := previousFocused != "" && slices.Contains(m.edit.firstFields, previousFocused)
 	problems := m.reviewProblems(row)
 	first, rest := reviewFormFields(problems)
 	for _, field := range first {
@@ -988,6 +994,17 @@ func (m *Model) reviewEditForm(c *ui.Context, t *ui.Theme, row *Row) {
 			})
 		}
 	}
+	newFirst := slices.Contains(first, previousFocused)
+	restRendered := len(first) == 0 || m.formExtrasOpen
+	if previousFocused != "" && newFirst != wasFirst && m.focusedReviewField == "" &&
+		(newFirst || (slices.Contains(rest, previousFocused) && restRendered)) {
+		// A field whose gap appears (or disappears) moves between the
+		// leading problem group and the rest; the rebuild would otherwise
+		// drop the keyboard and swallow the next keystrokes (M5). Keep the
+		// focus when the field is still rendered at its new place.
+		m.requestReviewFieldFocus(previousFocused)
+	}
+	m.edit.firstFields = first
 	m.rawTextArea(c, t, row)
 	_ = draft
 }
@@ -1090,9 +1107,10 @@ func (m *Model) reviewFieldControl(c *ui.Context, t *ui.Theme, row *Row, field F
 			m.noteTextInputFocus(attribute)
 			value := m.noteTextInputFocus(ui.TextInput(c, &draft.MainValue).
 				Width(reviewMainValueWidth).Shrink(1).Placeholder("数值").Disabled(m.reviewActionsBlocked()).Label("主词条数值"))
-			if m.focusReviewField == field {
-				value.Focus()
-			}
+			// The value control is the main-stat field's focus target; the
+			// one-shot request also highlights its field so the form does not
+			// ask for it again next frame.
+			value = m.reviewFocus(field, value)
 			unit := ui.Select(c, &draft.MainUnit,
 				unitChoices(attributeTextValue(draft.MainAttribute), attributeTextValue(draft.MainUnit))).
 				Width(reviewMainUnitWidth).Shrink(1).Disabled(m.reviewActionsBlocked()).Label("主词条单位")
@@ -1119,6 +1137,7 @@ func (m *Model) reviewFieldControl(c *ui.Context, t *ui.Theme, row *Row, field F
 			agent := ui.Select(c, &draft.AgentID, agentChoices(currentID(draft.AgentID))).
 				Width(170).Disabled(disabled || m.reviewSaving).Label("代理人")
 			if m.focusReviewField == field {
+				m.selectReviewField(field)
 				state.Focus()
 			}
 			m.noteReviewControlFocus(field, state.FocusWithin() || agent.FocusWithin())
@@ -1184,6 +1203,11 @@ func containsString(values []string, want string) bool {
 // with its "!" marker and says what exporting will do (08 §3.3, §3.4).
 func (m *Model) reviewReadOnlyForm(c *ui.Context, t *ui.Theme, row *Row) {
 	problems := m.reviewProblems(row)
+	if !m.canModifyRow(row) {
+		// Queued and running items have no settled revision to correct.
+		// Their placeholders are not "gaps" to fix (L2).
+		problems = nil
+	}
 	ui.Column(c).Gap(t.Space(1.5)).Children(func() {
 		for _, field := range readOnlyFormFields(problems) {
 			m.reviewReadOnlyField(c, t, row, field, problems)
@@ -1233,7 +1257,14 @@ func (m *Model) reviewReadOnlyField(c *ui.Context, t *ui.Theme, row *Row, field 
 				m.substatValue(c, t, row)
 				return
 			}
-			ui.Text(c, readOnlyFieldValue(row, field, kind, hasProblem))
+			value := readOnlyFieldValue(row, field, kind, hasProblem)
+			if value == "" {
+				// A row without structured data (queued or running) has
+				// no field text yet; keep the old placeholder instead of
+				// an unexplained blank line (L2).
+				value = "—"
+			}
+			ui.Text(c, value)
 		})
 	})
 }
@@ -1291,22 +1322,28 @@ func (m *Model) reviewActionBar(c *ui.Context, t *ui.Theme, row *Row) {
 // the left, a plain save next to it, and the reason a disabled action
 // cannot run.
 func (m *Model) reviewEditActions(c *ui.Context, t *ui.Theme, row *Row) {
+	guarded := m.reviewBrowseGuarded(c)
 	reason := m.reviewConfirmBlockedReason(row)
+	if guarded {
+		reason = reviewBrowseGuardReason
+	}
 	ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
 		confirmLabel := "确认并下一项"
 		if m.reviewErr != "" && m.lastAction == reviewConfirmNext {
 			confirmLabel = "重试确认并下一项"
 		}
-		confirm := ui.PrimaryButton(c, confirmLabel).Disabled(reason != "" || m.reviewActionsBlocked())
-		if confirm.Clicked() {
+		confirm := ui.PrimaryButton(c, confirmLabel).Key("review-confirm-next").
+			Disabled(reason != "" || m.reviewActionsBlocked())
+		if confirm.Clicked() && !guarded {
 			m.saveEdit(reviewConfirmNext, nil)
 		}
 		saveLabel := "保存修改"
 		if m.reviewErr != "" && m.lastAction == reviewSave {
 			saveLabel = "重试保存"
 		}
-		save := ui.Button(c, saveLabel).Disabled(!m.edit.canSave() || m.reviewActionsBlocked())
-		if save.Clicked() {
+		save := ui.Button(c, saveLabel).Key("review-save").
+			Disabled(!m.edit.canSave() || m.reviewActionsBlocked() || guarded)
+		if save.Clicked() && !guarded {
 			m.saveEdit(reviewSave, nil)
 		}
 	})
@@ -1317,19 +1354,27 @@ func (m *Model) reviewEditActions(c *ui.Context, t *ui.Theme, row *Row) {
 
 // reviewModifyActions is the modify flow of a settled item: 确认修改
 // re-confirms the revision (F-20), 取消修改 returns to the text form
-// without saving (08 §3.4).
+// without saving (08 §3.4). The write actions ignore input while the
+// browse guard from the just-left read-only bar is active.
 func (m *Model) reviewModifyActions(c *ui.Context, t *ui.Theme, row *Row) {
+	guarded := m.reviewBrowseGuarded(c)
 	reason := m.reviewConfirmBlockedReason(row)
+	if guarded {
+		reason = reviewBrowseGuardReason
+	}
 	ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
 		confirmLabel := "确认修改"
 		if m.reviewErr != "" && m.lastAction == reviewConfirmModify {
 			confirmLabel = "重试确认修改"
 		}
-		confirm := ui.PrimaryButton(c, confirmLabel).Disabled(reason != "" || m.reviewActionsBlocked())
-		if confirm.Clicked() {
+		confirm := ui.PrimaryButton(c, confirmLabel).Key("review-confirm-modify").
+			Disabled(reason != "" || !m.edit.dirty() || m.reviewActionsBlocked())
+		if confirm.Clicked() && !guarded {
 			m.saveEdit(reviewConfirmModify, nil)
 		}
-		if ui.Button(c, "取消修改").Disabled(m.reviewActionsBlocked()).Clicked() {
+		cancel := ui.Button(c, "取消修改").Key("review-cancel-modify").
+			Disabled(m.reviewActionsBlocked())
+		if cancel.Clicked() {
 			m.cancelEdit()
 		}
 	})
@@ -1339,19 +1384,23 @@ func (m *Model) reviewModifyActions(c *ui.Context, t *ui.Theme, row *Row) {
 }
 
 // reviewBrowseActions is the read-only item's only action row: previous
-// and next in the current segment, both secondary (08 §3.4). It is also
-// the only bar of a row that has no form to edit.
+// and next in the current segment, both secondary (08 §3.4). Each button
+// has its own identity; after a move the keyboard leaves the reused
+// position for the new item's form, and the write buttons stay inert for
+// the browse guard.
 func (m *Model) reviewBrowseActions(c *ui.Context, t *ui.Theme) {
 	visible := m.visibleResultRows()
 	index := resultDisplayIndex(visible, m.selected)
 	ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
-		previous := ui.Button(c, "‹ 上一件").Disabled(m.reviewSaving || index <= 0)
-		if previous.Clicked() {
-			m.selectAdjacentVisible(-1)
+		previous := ui.Button(c, "‹ 上一件").Key("review-prev").
+			Disabled(m.reviewSaving || index <= 0)
+		if previous.Clicked() && m.selectAdjacentVisible(-1) {
+			m.markReviewBrowse(c)
 		}
-		next := ui.Button(c, "下一件 ›").Disabled(m.reviewSaving || index < 0 || index+1 >= len(visible))
-		if next.Clicked() {
-			m.selectAdjacentVisible(1)
+		next := ui.Button(c, "下一件 ›").Key("review-next").
+			Disabled(m.reviewSaving || index < 0 || index+1 >= len(visible))
+		if next.Clicked() && m.selectAdjacentVisible(1) {
+			m.markReviewBrowse(c)
 		}
 	})
 }
@@ -1404,6 +1453,14 @@ func (m *Model) navigationPrompt(c *ui.Context, t *ui.Theme) {
 			ui.Text(c, title).FontWeight(600)
 			ui.Text(c, "保存后继续，或放弃这次修改。").TextColor(t.TextMuted).
 				FontSize(t.FontSize * 0.9)
+			if m.edit != nil && m.edit.modify {
+				// A confirmed item may only leave through a new
+				// confirmation; a plain save drops it back into the
+				// review queue. Say so before the user chooses
+				// (08 §3.4, F-20, JSON/CSV v2 §3).
+				ui.Text(c, "保存后这件退回待校对，确认前不会导出。").TextColor(t.Warning).
+					FontSize(t.FontSize * 0.9)
+			}
 			ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
 				if ui.PrimaryButton(c, "保存并继续").Disabled(m.reviewActionsBlocked()).Clicked() {
 					m.promptSaveAndContinue()

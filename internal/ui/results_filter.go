@@ -64,13 +64,11 @@ func (m *Model) visibleResultRows() []int {
 
 // resultRowMatches reports whether one row is in the open record's current
 // segment and matches its set/slot facets. A just-confirmed item stays
-// visible in the pending segment for the rest of this visit, so the
-// selection never jumps out of the list.
+// visible in the segment the visit is showing, so the selection never
+// jumps out of the list (08 §3.1, §3.4).
 func (m *Model) resultRowMatches(row *Row) bool {
-	if !(m.filter == resultFilterPending && m.recentlyConfirmedNow(row)) {
-		if !resultRowInFilter(row, m.filter) {
-			return false
-		}
+	if !m.recentlyConfirmedNow(row) && !resultRowInFilter(row, m.filter) {
+		return false
 	}
 	if m.setFilter != "" {
 		if row.Structured == nil || row.Structured.Data.SetID == nil ||
@@ -184,6 +182,12 @@ func (m *Model) applyResultFilterState(filter resultFilter, setFilter, slotFilte
 	m.slotFilter = slotFilter
 	m.settleResultSelection()
 	m.tableSelected = resultDisplayIndex(m.visibleResultRows(), m.selected)
+	if m.tableSelected >= 0 {
+		// The chosen row can move far down the new segment. Bring it into
+		// the list viewport so the filter change never leaves the
+		// selection off screen (L5).
+		m.list.ScrollIntoView(m.tableSelected)
+	}
 }
 
 // settleResultSelection keeps the selection inside the current filter.
@@ -416,7 +420,9 @@ func (m *Model) reviewFilterChoice() *int {
 // selectNextPendingResult moves the selection to the next item a person
 // still has to handle (待处理), wrapping around. The move goes through
 // requestNavigation, so an open editor with unsaved input holds it behind
-// the save/discard/stay prompt instead of dropping the draft.
+// the save/discard/stay prompt instead of dropping the draft. When the
+// current segment shows no pending item, the record-wide walk switches to
+// the pending segment (08 §3.4).
 func (m *Model) selectNextPendingResult() {
 	m.selectPendingResult(1)
 }
@@ -427,10 +433,10 @@ func (m *Model) selectPreviousPendingResult() {
 }
 
 func (m *Model) selectPendingResult(direction int) {
-	visible := m.visibleResultRows()
-	if len(visible) == 0 {
+	if m.rec == nil || len(m.rec.Rows) == 0 {
 		return
 	}
+	visible := m.visibleResultRows()
 	start := resultDisplayIndex(visible, m.selected)
 	for step := 1; step <= len(visible); step++ {
 		next := (start + direction*step) % len(visible)
@@ -448,28 +454,72 @@ func (m *Model) selectPendingResult(direction int) {
 		if m.navPrompt == nil && m.selected == visible[next] {
 			m.list.ScrollIntoView(next)
 			m.tableSelected = next
+			m.focusBrowsedItem()
 		}
 		return
 	}
+	// The current segment has no pending row. The record may still have
+	// one behind another segment or facet: switch to 待处理 and select the
+	// next pending row in record order. requestNavigation still holds this
+	// behind the unsaved dialog when the editor is dirty.
+	seq := m.nextPendingSeq(direction)
+	if seq == 0 {
+		return
+	}
+	m.requestNavigation(navigationRequest{kind: navPending, seq: seq})
+	if m.navPrompt == nil && m.selectedSeq() == seq {
+		m.focusBrowsedItem()
+	}
+}
+
+// nextPendingSeq finds the next pending row in record order from the
+// current selection, wrapping around. It searches every row, not only the
+// visible segment, so Ctrl+J works from 警告 and from facet-narrowed lists.
+func (m *Model) nextPendingSeq(direction int) int64 {
+	if m.rec == nil || len(m.rec.Rows) == 0 {
+		return 0
+	}
+	rows := m.rec.Rows
+	start := m.selected
+	if start < 0 || start >= len(rows) {
+		if direction > 0 {
+			start = -1
+		} else {
+			start = len(rows)
+		}
+	}
+	for step := 1; step <= len(rows); step++ {
+		index := (start + direction*step) % len(rows)
+		if index < 0 {
+			index += len(rows)
+		}
+		if resultRowInFilter(&rows[index], resultFilterPending) {
+			return rows[index].Seq
+		}
+	}
+	return 0
 }
 
 // selectAdjacentVisible selects the previous or next visible item, the
-// compact strip's ‹ and › buttons.
-func (m *Model) selectAdjacentVisible(direction int) {
+// compact strip's ‹ and › buttons. It reports whether the move was applied;
+// an unsaved editor holds it behind the prompt instead.
+func (m *Model) selectAdjacentVisible(direction int) bool {
 	visible := m.visibleResultRows()
 	if len(visible) == 0 {
-		return
+		return false
 	}
 	current := resultDisplayIndex(visible, m.selected)
 	next := current + direction
 	if next < 0 || next >= len(visible) {
-		return
+		return false
 	}
 	m.requestNavigation(navigationRequest{kind: navSelect, seq: m.rec.Rows[visible[next]].Seq})
 	if m.navPrompt == nil && m.selected == visible[next] {
 		m.list.ScrollIntoView(next)
 		m.tableSelected = next
+		return true
 	}
+	return false
 }
 
 // emptyResultsText explains a record with no items.
@@ -559,7 +609,10 @@ func (m *Model) resultShortcutText() string {
 	var keys []string
 	if m.edit != nil {
 		if m.edit.modify {
-			keys = append(keys, shortcutConfirmNext+" 确认修改")
+			// 没有修改时确认修改不写入，也不能称它对用户可用。
+			if m.edit.dirty() {
+				keys = append(keys, shortcutConfirmNext+" 确认修改")
+			}
 		} else {
 			keys = append(keys, shortcutConfirmNext+" 确认并下一项", shortcutSave+" 保存修改")
 		}
@@ -567,7 +620,7 @@ func (m *Model) resultShortcutText() string {
 		if row.PendingReview() {
 			keys = append(keys, shortcutConfirmNext+" 确认并下一项")
 		}
-		if m.visiblePendingCount() > 0 {
+		if m.pendingItemsCount() > 0 {
 			keys = append(keys, shortcutNextPending+" 下一个待处理",
 				shortcutPreviousPending+" 上一个待处理")
 		}
@@ -577,21 +630,6 @@ func (m *Model) resultShortcutText() string {
 	}
 	keys = append(keys, shortcutZoomIn+" 放大", shortcutZoomOut+" 缩小")
 	return strings.Join(keys, "  ·  ")
-}
-
-// visiblePendingCount counts the pending items the current segment shows.
-// It answers whether Ctrl+J can move anywhere from here.
-func (m *Model) visiblePendingCount() int {
-	if m.rec == nil {
-		return 0
-	}
-	count := 0
-	for _, index := range m.visibleResultRows() {
-		if resultRowInFilter(&m.rec.Rows[index], resultFilterPending) {
-			count++
-		}
-	}
-	return count
 }
 
 // compactPositionText is the compact strip's "待处理 1 / 3" label: the

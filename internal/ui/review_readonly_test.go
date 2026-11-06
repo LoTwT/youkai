@@ -163,6 +163,9 @@ func TestReviewReadOnlyShortcutsDoNotWrite(t *testing.T) {
 	if strings.Contains(status, shortcutConfirmNext) || strings.Contains(status, shortcutSave) {
 		t.Fatalf("the read-only status bar names a write shortcut: %q", status)
 	}
+	if strings.Contains(status, shortcutNextPending) || strings.Contains(status, shortcutPreviousPending) {
+		t.Fatalf("a record without pending items advertises the pending walk: %q", status)
+	}
 	if !strings.Contains(status, shortcutZoomIn) {
 		t.Fatalf("the read-only status bar lost the zoom keys: %q", status)
 	}
@@ -309,17 +312,20 @@ func TestReviewModifyFlow(t *testing.T) {
 			t.Fatalf("the modify bar still shows %q: %q", unwanted, tt.Texts())
 		}
 	}
-	if m.focusedReviewField != FormFieldSetID {
-		t.Fatalf("修改 did not focus the first field: %q", m.focusedReviewField)
+	if m.focusedReviewField != FormFieldMainStat {
+		t.Fatalf("修改 did not focus the form's first field: %q", m.focusedReviewField)
 	}
-	if status := m.resultShortcutText(); !strings.Contains(status, shortcutConfirmNext+" 确认修改") ||
-		strings.Contains(status, shortcutSave) {
-		t.Fatalf("the modify status bar names the wrong keys: %q", status)
+	if status := m.resultShortcutText(); strings.Contains(status, shortcutConfirmNext) {
+		t.Fatalf("the unchanged modify status bar advertises 确认修改: %q", status)
 	}
 
 	m.edit.draft.Level = "13"
 	m.edit.refresh()
 	tt.Frame()
+	if status := m.resultShortcutText(); !strings.Contains(status, shortcutConfirmNext+" 确认修改") ||
+		strings.Contains(status, shortcutSave) {
+		t.Fatalf("the modify status bar names the wrong keys: %q", status)
+	}
 	// Ctrl+S would save an unconfirmed revision, which F-20 forbids in the
 	// modify flow: it is not bound.
 	tt.Key(ui.Cmd, ui.KeyS)
