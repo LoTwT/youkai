@@ -59,6 +59,14 @@ func (m *Model) viewPages(c *ui.Context) {
 			// Entering the list puts the keyboard on its first row (08 §5).
 			m.historyFocusPending = true
 		}
+		if page == pageSettings {
+			// Entering settings puts the keyboard on the in-page directory,
+			// unless the disk-space entry asked for the storage section.
+			m.settingsFocusPending = true
+		}
+		if m.lastPage == pageSettings && page != pageSettings {
+			m.leaveSettingsPage()
+		}
 		m.lastPage = page
 	}
 	m.registerPageShortcuts(c)
@@ -101,17 +109,17 @@ func (m *Model) navRail(c *ui.Context, t *ui.Theme, tok *Tokens) {
 	onRecords := page == pageResults || page == pageHistory
 	ui.Column(c).Width(navRailWidth).FillHeight().Background(tok.SurfaceWindow).
 		Padding(t.Space(2.5), 0).Gap(t.Space(1.5)).AlignItems(ui.Center).FocusGroup(ui.Vertical).Children(func() {
-		m.navRailItem(c, t, tok, "扫描", scanIcon, page == pageScan, m.showScanDestination)
-		m.navRailItem(c, t, tok, "记录", recordsIcon, onRecords, m.showRecordsDestination)
+		m.navRailItem(c, t, tok, "扫描", scanIcon, page == pageScan, false, m.showScanDestination)
+		m.navRailItem(c, t, tok, "记录", recordsIcon, onRecords, false, m.showRecordsDestination)
 		ui.Box(c).Grow(1)
-		m.navRailItem(c, t, tok, "设置", settingsIcon, page == pageSettings, m.showSettingsDestination)
+		m.navRailItem(c, t, tok, "设置", settingsIcon, page == pageSettings, m.updateDotVisible(), m.showSettingsDestination)
 	})
 }
 
 // navRailItem is one rail destination. The active item carries the
 // accent-soft face and the accent foreground, and its ref lets F6 return
 // the keyboard to the rail.
-func (m *Model) navRailItem(c *ui.Context, t *ui.Theme, tok *Tokens, label string, icon *ui.SVG, active bool, action func()) {
+func (m *Model) navRailItem(c *ui.Context, t *ui.Theme, tok *Tokens, label string, icon *ui.SVG, active, showDot bool, action func()) {
 	bg, fg := tok.SurfaceWindow, tok.TextSecondary
 	if active {
 		bg, fg = tok.AccentSoft, tok.AccentFG
@@ -128,7 +136,12 @@ func (m *Model) navRailItem(c *ui.Context, t *ui.Theme, tok *Tokens, label strin
 	item.Children(func() {
 		ui.Column(c).Gap(t.Space(0.5)).AlignItems(ui.Center).Children(func() {
 			ui.Icon(c, icon).Size(t.Space(5), t.Space(5)).TextColor(fg)
-			ui.Text(c, label).FontSize(t.FontSize * 0.8).TextColor(fg).SingleLine()
+			ui.Row(c).Gap(t.Space(0.75)).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, label).FontSize(t.FontSize * 0.8).TextColor(fg).SingleLine()
+				if showDot {
+					updateDot(c, t, tok)
+				}
+			})
 		})
 	})
 }
@@ -195,10 +208,8 @@ func (m *Model) pageBody(c *ui.Context, t *ui.Theme) {
 			m.historyPage(c, t)
 		})
 	case pageSettings:
-		ui.Scroll(c).Grow(1).Children(func() {
-			ui.Column(c).Gap(t.Space(2)).Padding(t.Space(3), t.Space(3)).Children(func() {
-				m.settingsPage(c, t)
-			})
+		ui.Column(c).Grow(1).FillHeight().Padding(t.Space(3), t.Space(3)).Gap(t.Space(2)).Children(func() {
+			m.settingsPage(c, t)
 		})
 	default:
 		ui.Column(c).Grow(1).Padding(t.Space(3), t.Space(3)).Gap(t.Space(2)).Children(func() {

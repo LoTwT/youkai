@@ -767,6 +767,7 @@ func TestViewSummaryDiagnosticsCopyAndOpen(t *testing.T) {
 	m, q, tt, _ := openSummaryRecord(t, rec, Config{
 		DirectExportSaver: &fakeDirectExportSaver{},
 		AppVersion:        "0.4.0",
+		BuildCommit:       "83ba00c",
 		SystemInfo:        func() app.SystemInfo { return app.SystemInfo{OS: "Windows", OSVersion: "10.0"} },
 		OpenDiagnosticsDirectory: func() error {
 			opened++
@@ -797,7 +798,8 @@ func TestViewSummaryDiagnosticsCopyAndOpen(t *testing.T) {
 	}
 	settle(t, m, q, tt)
 	if got := tt.Clipboard(); !strings.Contains(got, "youkai 诊断信息") ||
-		!strings.Contains(got, "focusLost") || !strings.Contains(got, "0.4.0") {
+		!strings.Contains(got, "focusLost") || !strings.Contains(got, "0.4.0") ||
+		!strings.Contains(got, "（构建 83ba00c）") {
 		t.Fatalf("the copied diagnostics are incomplete: %q", got)
 	}
 

@@ -239,6 +239,11 @@ func main() {
 		OpenDiagnosticsDirectory: func() error {
 			return mygo.Shell.OpenPath(app.DiagnosticsDirectory(paths))
 		},
+		// Settings › 关于 opens the third-party notices that ships beside
+		// the executable.
+		OpenLicenses: func() error {
+			return mygo.Shell.OpenPath(filepath.Join(paths.Resources, "THIRD-PARTY-NOTICES.md"))
+		},
 		// The auto-update corner: MyGo's updater behind the UI's seam. The
 		// running version shows in the area ("当前版本 …"); DevAutoInstall
 		// is the rehearsal switch (YOUKAI_DEV_AUTOUPDATE) that installs a
@@ -247,6 +252,7 @@ func main() {
 		// 练) — development only, never a user setting.
 		Updates:        mygoUpdates{},
 		AppVersion:     mygo.App.Version(),
+		BuildCommit:    app.BuildCommit(),
 		DevAutoInstall: os.Getenv("YOUKAI_DEV_AUTOUPDATE") != "",
 		// The close preference is read at startup and persisted in the data
 		// root; the window's setting row changes it. Closing hides by

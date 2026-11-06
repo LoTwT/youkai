@@ -63,14 +63,12 @@ func TestViewCloseBehaviorPreference(t *testing.T) {
 	tt := ui.NewTester(m.View, 1020, 700)
 	settle(t, m, q, tt)
 
-	const label = "关闭窗口时停止扫描并退出应用"
-	if !tt.HasText(label) {
+	const exitLabel = "停止扫描并退出"
+	const hideLabel = "隐藏到通知区域（默认）"
+	if !tt.HasText(exitLabel) || !tt.HasText(hideLabel) {
 		t.Fatal("the close preference does not show")
 	}
-	if !tt.HasText("默认：关闭窗口隐藏到托盘/菜单栏，应用继续运行。") {
-		t.Fatal("the close preference does not explain the default")
-	}
-	if err := tt.Click(label); err != nil {
+	if err := tt.Click(exitLabel); err != nil {
 		t.Fatal(err)
 	}
 	drainAll(t, m, q)
@@ -82,7 +80,7 @@ func TestViewCloseBehaviorPreference(t *testing.T) {
 	}
 
 	tt.Frame()
-	if err := tt.Click(label); err != nil {
+	if err := tt.Click(hideLabel); err != nil {
 		t.Fatal(err)
 	}
 	drainAll(t, m, q)
@@ -95,8 +93,11 @@ func TestViewCloseBehaviorPreference(t *testing.T) {
 
 	m.SetTrayUnavailable("test")
 	tt.Frame()
-	if !tt.HasText("关闭窗口时停止扫描并退出") {
+	if !tt.HasText(exitLabel) {
 		t.Fatal("the fixed close option does not show")
+	}
+	if tt.HasText(hideLabel) {
+		t.Fatal("the hide option remains selectable without a tray")
 	}
 	if !tt.HasText("通知区域图标不可用") {
 		t.Fatal("the fixed close option does not state why")

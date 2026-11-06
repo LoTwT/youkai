@@ -716,24 +716,16 @@ func (m *Model) copySummaryDiagnostics(c *ui.Context) {
 	c.Toast("已复制诊断信息")
 }
 
-// summaryDiagnosticsText assembles the copyable text. It copies only the
-// fields app.DiagnosticsText allows; window titles and user paths never
-// enter it.
+// summaryDiagnosticsText assembles the copyable text for the opened record.
+// It delegates the shared version, system and allowlisted assembly to
+// diagnosticsText; this record only supplies its termination.
 func (m *Model) summaryDiagnosticsText() string {
 	term := m.rec.Shell.Termination
 	scan := app.DiagnosticsScanFromTermination(term)
 	if scan == nil && m.rec.Interrupted {
 		scan = &app.DiagnosticsScan{End: string(record.TerminationInterrupted)}
 	}
-	var system app.SystemInfo
-	if m.cfg.SystemInfo != nil {
-		system = m.cfg.SystemInfo()
-	}
-	return app.DiagnosticsText(app.DiagnosticsInput{
-		Version: m.cfg.AppVersion,
-		System:  system,
-		Scan:    scan,
-	})
+	return m.diagnosticsText(scan)
 }
 
 // summaryUnreadable is the record's page-level failure state: the reason and
