@@ -82,7 +82,7 @@ func (m *Model) focusReviewRegion(c *ui.Context, direction int) {
 	case reviewRegionCrops:
 		m.reviewCropsRef.Focus(c)
 	case reviewRegionForm:
-		m.requestReviewFieldFocus(m.firstReviewField())
+		m.focusReviewForm()
 	}
 }
 

@@ -75,11 +75,19 @@ type recordWorkspaceState struct {
 	reviewField        FormField
 	focusReviewField   FormField
 	focusedReviewField FormField
-	scrollToCrop       bool
-	cropZoom           float32
-	formExtrasOpen     bool
-	formRawOpen        bool
-	compactListOpen    bool
+	// focusModifyRequested asks the read-only form's 修改 action to take
+	// the keyboard on the next frame (08 §3.4: its initial focus). It is
+	// one-shot so later Tab moves stay the user's. The sequence numbers
+	// let the form tell a request made before the frame from one made by a
+	// click while that frame was building; only the former is consumed.
+	focusModifyRequested bool
+	focusReviewFieldSeq  int
+	focusModifySeq       int
+	scrollToCrop         bool
+	cropZoom             float32
+	formExtrasOpen       bool
+	formRawOpen          bool
+	compactListOpen      bool
 	// compactListFocusRequested asks the compact popover's list to take the
 	// keyboard once, after the anchor opens it.
 	compactListFocusRequested bool
@@ -208,9 +216,50 @@ func (m *Model) selectReviewRegion(region reviewRegion) {
 		return
 	}
 	m.reviewRegion = region
-	if region == reviewRegionForm && m.reviewField == "" {
-		m.requestReviewFieldFocus(m.firstReviewField())
+	if region == reviewRegionForm {
+		m.focusReviewForm()
 	}
+}
+
+// focusReviewForm puts the keyboard on the form's first control: the 修改
+// action of a read-only item, or the first problem field of an editor.
+func (m *Model) focusReviewForm() {
+	row := m.selectedRow()
+	if row != nil && !m.reviewEditing(row) && !m.reviewRowEditable(row) && m.canModifyRow(row) {
+		m.requestModifyFocus()
+		return
+	}
+	m.requestReviewFieldFocus(m.firstReviewField())
+}
+
+// requestModifyFocus asks the read-only form's 修改 action to take the
+// keyboard next frame.
+func (m *Model) requestModifyFocus() {
+	m.focusModifyRequested = true
+	m.focusModifySeq++
+}
+
+// reviewEditing reports whether the open editor belongs to row.
+func (m *Model) reviewEditing(row *Row) bool {
+	return row != nil && m.rec != nil && m.edit != nil &&
+		m.edit.recordID == m.rec.ID && m.edit.seq == row.Seq
+}
+
+// requestReviewFormEntryFocus is the form's initial focus when the review
+// is entered (08 §3, §3.4). A read-only item starts on 修改; a warning
+// item also highlights its warning field's crop so the user can judge it
+// from the screenshot; an editable item starts on its first problem field.
+func (m *Model) requestReviewFormEntryFocus() {
+	row := m.selectedRow()
+	if row != nil && row.ItemClass == app.ItemClassWarning {
+		m.reviewField = m.firstReviewField()
+		m.scrollToCrop = m.reviewField != ""
+	}
+	if row != nil && !m.reviewRowEditable(row) && m.canModifyRow(row) {
+		m.requestModifyFocus()
+		return
+	}
+	m.requestReviewFieldFocus("")
 }
 
 // selectReviewField highlights the screenshots that back one form field
@@ -236,7 +285,14 @@ func (m *Model) focusFirstReviewField() {
 
 // pointFirstReviewField highlights a newly chosen item's first problem
 // field without taking keyboard focus away from the list it was chosen in.
+// A passed item has no problem field, so it keeps no screenshot highlight;
+// a warning item points at its warning field (08 §3.3, §3.4).
 func (m *Model) pointFirstReviewField() {
+	if row := m.selectedRow(); row != nil && row.ItemClass == app.ItemClassPassed {
+		m.reviewField = ""
+		m.scrollToCrop = false
+		return
+	}
 	m.reviewField = m.firstReviewField()
 	m.scrollToCrop = true
 }
@@ -248,6 +304,7 @@ func (m *Model) requestReviewFieldFocus(field FormField) {
 		field = m.firstReviewField()
 	}
 	m.focusReviewField = field
+	m.focusReviewFieldSeq++
 }
 
 // firstReviewField is the field the form starts on: the first problem
@@ -337,6 +394,7 @@ func (m *Model) showRecord(id string, live bool) {
 	m.resetResultList()
 	m.reviewField = ""
 	m.focusReviewField = ""
+	m.focusModifyRequested = false
 	m.scrollToCrop = false
 	m.cropZoom = 0
 	m.formExtrasOpen = false

@@ -101,7 +101,7 @@ func formFieldLabel(field FormField) string {
 	case FormFieldManagementState:
 		return "管理状态"
 	case FormFieldEquipped:
-		return "装备"
+		return "装备者"
 	default:
 		return "整件"
 	}

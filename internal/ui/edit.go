@@ -56,6 +56,11 @@ type editState struct {
 	// a produced payload without an interpretation): saving completes the
 	// item instead of revising a produced one.
 	backfill bool
+	// modify marks an editor opened by the read-only form's 修改 action on
+	// a settled item (08 §3.4). Its only settling actions are 确认修改 and
+	// 取消修改: a plain save would drop the item's confirmation even though
+	// F-20 requires a re-confirmation of every changed, confirmed item.
+	modify bool
 
 	data        zzz.DiscData
 	fieldErrors []fieldProblem
@@ -72,11 +77,15 @@ const (
 	reviewSave reviewAction = iota
 	reviewConfirmStay
 	reviewConfirmNext
+	// reviewConfirmModify re-confirms a settled item edited through the
+	// read-only form's 修改 action (08 §3.4). It confirms like any other
+	// confirmation and leaves the item read-only in place.
+	reviewConfirmModify
 )
 
 // confirmed reports whether the action settles the item's review.
 func (a reviewAction) confirmed() bool {
-	return a == reviewConfirmStay || a == reviewConfirmNext
+	return a == reviewConfirmStay || a == reviewConfirmNext || a == reviewConfirmModify
 }
 
 // navKind is a pending navigation the editor must resolve first.
@@ -496,6 +505,45 @@ func (m *Model) startEditRow(row *Row) {
 	m.lastAction = reviewSave
 }
 
+// startModify opens the editor from the read-only form's 修改 action. The
+// action may only target the row the workspace currently shows and selects,
+// so an editor can never name an item other than the displayed one.
+func (m *Model) startModify(row *Row) {
+	if row == nil || m.rec == nil || m.reviewActionsBlocked() || !m.canModifyRow(row) {
+		return
+	}
+	if m.selectedRow() != row || !m.resultRowMatches(row) {
+		return
+	}
+	m.startEditRow(row)
+	if m.edit == nil || m.edit.seq != row.Seq {
+		return
+	}
+	m.edit.modify = true
+	m.lastAction = reviewConfirmModify
+	// 08 §3.4: 修改 moves the keyboard to the first field.
+	m.requestReviewFieldFocus(m.firstReviewField())
+}
+
+// cancelEdit closes the 修改 flow without saving and returns the keyboard
+// to the read-only form's 修改 action.
+func (m *Model) cancelEdit() {
+	if m.reviewSaving || m.edit == nil || !m.edit.modify {
+		return
+	}
+	m.discardEdit()
+	m.requestModifyFocus()
+}
+
+// canModifyRow reports whether the read-only form offers 修改 for a row.
+// A queued or running item has no settled revision to revise.
+func (m *Model) canModifyRow(row *Row) bool {
+	if row == nil {
+		return false
+	}
+	return row.Status != record.StatusQueued && row.Status != record.StatusRunning
+}
+
 // ensureReviewEdit keeps the selected item's editor open while its row is
 // pending or needs backfill. A dirty editor is never replaced here: any
 // selection or filter change that would leave it must pass through
@@ -523,17 +571,25 @@ func (m *Model) ensureReviewEdit(row *Row) {
 	m.startEditRow(row)
 }
 
-// reviewRowEditable reports whether the item's form is editable without a
-// separate "edit" step: everything a person still has to handle, plus a
-// produced payload whose interpretation could not be parsed.
+// reviewRowEditable reports whether the item's form opens as an editor
+// without a separate 修改 step. Every item a person still has to handle is
+// editable at once; a settled item — passed, or exportable with a warning —
+// stays read-only until 修改 (08 §3.4).
 func (m *Model) reviewRowEditable(row *Row) bool {
+	if row == nil {
+		return false
+	}
 	if row.Status == record.StatusQueued || row.Status == record.StatusRunning {
 		return false
 	}
-	if row.ItemClass == app.ItemClassPendingReview ||
-		row.ItemClass == app.ItemClassPendingBackfill {
+	switch row.ItemClass {
+	case app.ItemClassPendingReview, app.ItemClassPendingBackfill:
 		return true
+	case app.ItemClassWarning, app.ItemClassPassed:
+		return false
 	}
+	// Rows built without a class (some tests, and a not-yet-classified
+	// payload) keep the old structural rule.
 	if row.Status != record.StatusProduced || row.Structured == nil {
 		return true
 	}
@@ -887,6 +943,12 @@ func (m *Model) submitReview(recordID string, seq, expectedRevision int64, data 
 					break
 				}
 				m.reviewNotice = fmt.Sprintf("已确认（序号 %d），仍停留在当前项。", seq)
+			case reviewConfirmModify:
+				// The settled item stays in place, read-only again with its
+				// re-confirmed revision. Its status tag names the new
+				// quality without leaving the item.
+				m.reviewNotice = fmt.Sprintf("已确认修改（序号 %d）。", seq)
+				m.requestModifyFocus()
 			default:
 				m.forgetRecentlyConfirmed(seq)
 				m.reviewNotice = fmt.Sprintf("已保存修订 %d。", result.Item.Revision)

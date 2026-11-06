@@ -141,10 +141,13 @@ func (m *Model) resultsArea(c *ui.Context, t *ui.Theme) {
 func (m *Model) reviewArea(c *ui.Context, t *ui.Theme) {
 	visible := m.visibleResultRows()
 	m.settleResultSelection()
-	if m.reviewField == "" && m.selectedRow() != nil {
-		// Entering the review (or returning to it) starts on the first
-		// problem field (08 §3).
-		m.requestReviewFieldFocus("")
+	if m.reviewField == "" {
+		if row := m.selectedRow(); row != nil && m.reviewRowEditable(row) {
+			// Entering the review (or returning to it) starts on the first
+			// problem field (08 §3). A settled item keeps its read-only
+			// focus request, which enterReviewView already placed.
+			m.requestReviewFieldFocus("")
+		}
 	}
 	ui.Column(c).Grow(1).FillHeight().MinHeight(0).Children(func() {
 		if !m.reviewStandard() {
@@ -775,6 +778,11 @@ func (m *Model) highlightedCropRoles(row *Row, rolesComplete bool) map[string]bo
 func (m *Model) reviewFormPane(c *ui.Context, t *ui.Theme, visible []int) {
 	_, tok := themeWithTokens(t, c.Preferences())
 	row := m.selectedRow()
+	// A click inside this frame may request a new focus (修改 opens the
+	// editor with its first field focused). Only the requests that were
+	// already pending when the frame started are consumed now; a new one
+	// survives for the frame that builds its control.
+	fieldSeq, modifySeq := m.focusReviewFieldSeq, m.focusModifySeq
 	// A zero pending queue is the finished review even when the list still
 	// shows the last confirmed row for this visit. The list keeps its place;
 	// the form states the conclusion and offers the export.
@@ -790,18 +798,25 @@ func (m *Model) reviewFormPane(c *ui.Context, t *ui.Theme, visible []int) {
 					return
 				}
 				m.ensureReviewEdit(row)
-				m.reviewFormHeader(c, t, row)
-				if m.edit != nil && m.rec != nil &&
-					m.edit.recordID == m.rec.ID && m.edit.seq == row.Seq {
+				editing := m.reviewEditing(row)
+				m.reviewFormHeader(c, t, row, editing)
+				if editing {
 					m.reviewEditForm(c, t, row)
 				} else {
 					m.reviewReadOnlyForm(c, t, row)
 				}
 			})
 		})
-		// The one-shot focus request belongs to the frame that built the
-		// field it names; later Tab moves are the user's.
-		m.focusReviewField = ""
+		// The pending one-shot focus requests belong to the frame that
+		// built the control they name; a request made during this frame
+		// (by the 修改 click) waits for the next frame. Later Tab moves are
+		// the user's.
+		if m.focusReviewFieldSeq == fieldSeq {
+			m.focusReviewField = ""
+		}
+		if m.focusModifySeq == modifySeq {
+			m.focusModifyRequested = false
+		}
 		if row != nil {
 			ui.Divider(c)
 			m.reviewActionBar(c, t, row)
@@ -847,13 +862,33 @@ func (m *Model) reviewEmptyForm(c *ui.Context, t *ui.Theme, visible []int) {
 
 // reviewFormHeader names the item and its category, then the form's state
 // bands: backfill, exportable warning, save failure, loading and export.
-func (m *Model) reviewFormHeader(c *ui.Context, t *ui.Theme, row *Row) {
+// A settled item's 修改 action sits at its top right (08 §3.4); the
+// passed row's status tag names whether the revision was auto accepted or
+// human confirmed.
+func (m *Model) reviewFormHeader(c *ui.Context, t *ui.Theme, row *Row, editing bool) {
 	_, tok := themeWithTokens(t, c.Preferences())
+	status := passedStatusLabel(row)
 	ui.Row(c).Gap(t.Space(1)).AlignItems(ui.Center).Children(func() {
 		ui.Text(c, resultDetailTitle(row)).FontWeight(600).SingleLine().Shrink(1)
 		ui.Box(c).Grow(1)
-		m.reviewCategoryTag(c, t, tok, row, false)
+		// A settled item's state is its status tag or warning band; only a
+		// pending item needs the category tag here (wireframes 07, 13, 14).
+		if status == "" && row.ItemClass != app.ItemClassWarning {
+			m.reviewCategoryTag(c, t, tok, row, false)
+		}
+		if !editing && m.canModifyRow(row) {
+			modify := ui.Button(c, "修改").Shrink(0).Disabled(m.reviewActionsBlocked())
+			if m.focusModifyRequested {
+				modify.Focus()
+			}
+			if modify.Clicked() {
+				m.startModify(row)
+			}
+		}
 	})
+	if status != "" {
+		m.reviewPassedTag(c, t, tok, status)
+	}
 	if notice := backfillNotice(row); notice != "" {
 		ui.Text(c, notice).FontSize(t.FontSize * reviewHeaderSizeRatio).TextColor(t.Warning)
 	}
@@ -882,6 +917,32 @@ func (m *Model) reviewFormHeader(c *ui.Context, t *ui.Theme, row *Row) {
 	}
 }
 
+// passedStatusLabel names a passed item's confirmation quality (08 §3.4).
+// It is empty for every other class; a warning item's state is its notice
+// band instead.
+func passedStatusLabel(row *Row) string {
+	if row == nil || row.ItemClass != app.ItemClassPassed {
+		return ""
+	}
+	if row.Quality == record.QualityHumanConfirmed {
+		return "已通过 · 已人工确认"
+	}
+	return "已通过 · 自动通过"
+}
+
+// reviewPassedTag is the passed status label: text plus a success shape,
+// never color alone.
+func (m *Model) reviewPassedTag(c *ui.Context, t *ui.Theme, tok *Tokens, label string) {
+	ui.Row(c).Shrink(0).Padding(t.Space(0.25), t.Space(1)).Gap(t.Space(0.5)).
+		AlignItems(ui.Center).Border(1, tok.SuccessBorder).
+		BorderStyle(ui.BorderSolid).Radius(t.Space(2)).Label("状态：" + label).Children(func() {
+		ui.Text(c, "✓").FontSize(t.FontSize * 0.8).FontWeight(600).
+			TextColor(tok.SuccessFG).SingleLine().Role(ui.RoleNone)
+		ui.Text(c, label).FontSize(t.FontSize * 0.8).FontWeight(600).
+			TextColor(tok.SuccessFG).SingleLine().Role(ui.RoleNone)
+	})
+}
+
 // retryActionLabel names the failed action the error band retries.
 func (m *Model) retryActionLabel() string {
 	switch m.lastAction {
@@ -889,6 +950,8 @@ func (m *Model) retryActionLabel() string {
 		return "重试确认"
 	case reviewConfirmNext:
 		return "重试确认并下一项"
+	case reviewConfirmModify:
+		return "重试确认修改"
 	default:
 		return "重试保存"
 	}
@@ -1117,77 +1180,178 @@ func containsString(values []string, want string) bool {
 }
 
 // reviewReadOnlyForm is a settled item's form. Every field is text; the
-// header's 修改 action opens the editor. The full read-only design for
-// passed and warning items (08 §3.3, §3.4) is PR-19a.
+// header's 修改 action opens the editor. A warning field leads the form
+// with its "!" marker and says what exporting will do (08 §3.3, §3.4).
 func (m *Model) reviewReadOnlyForm(c *ui.Context, t *ui.Theme, row *Row) {
+	problems := m.reviewProblems(row)
 	ui.Column(c).Gap(t.Space(1.5)).Children(func() {
-		fields := []struct {
-			field FormField
-			build func()
-		}{
-			{FormFieldSetID, func() { formField(c, t, "套装", row.SetFormText()) }},
-			{FormFieldRarity, func() { formField(c, t, "稀有度", row.RarityText()) }},
-			{FormFieldSlot, func() { formField(c, t, "槽位", row.SlotText()) }},
-			{FormFieldLevel, func() { formField(c, t, "等级", row.LevelText()) }},
-			{FormFieldMainStat, func() { formField(c, t, "主词条", row.MainStatText()) }},
-			{FormFieldSubstats, func() { m.substatField(c, t, row) }},
-			{FormFieldManagementState, func() { formField(c, t, "管理状态", row.ManagementStateText()) }},
-			{FormFieldEquipped, func() { formField(c, t, "装备", row.EquippedText()) }},
-		}
-		for _, entry := range fields {
-			field := entry.field
-			block := ui.Column(c).Gap(t.Space(0.5))
-			block.OnClick(func() { m.selectReviewField(field) })
-			block.Children(entry.build)
+		for _, field := range readOnlyFormFields(problems) {
+			m.reviewReadOnlyField(c, t, row, field, problems)
 		}
 		m.rawTextArea(c, t, row)
 	})
 }
 
-// reviewActionBar is the fixed bottom bar: the primary "确认并下一项" on the
-// left, the secondary save, and the reason a disabled action cannot run.
+// readOnlyFormFields puts the fields carrying a problem first, then the
+// rest in the form's reading order (08 §3.3). Each field appears once.
+func readOnlyFormFields(problems []reviewProblem) []FormField {
+	base := []FormField{
+		FormFieldSetID, FormFieldRarity, FormFieldSlot, FormFieldLevel,
+		FormFieldMainStat, FormFieldSubstats, FormFieldManagementState,
+		FormFieldEquipped,
+	}
+	out := make([]FormField, 0, len(base))
+	seen := make(map[FormField]bool, len(base))
+	for _, field := range problemFields(problems) {
+		if !seen[field] {
+			seen[field] = true
+			out = append(out, field)
+		}
+	}
+	for _, field := range base {
+		if !seen[field] {
+			seen[field] = true
+			out = append(out, field)
+		}
+	}
+	return out
+}
+
+// reviewReadOnlyField is one label/value line of the read-only form. The
+// whole block selects the field, which highlights its screenshot crop.
+func (m *Model) reviewReadOnlyField(c *ui.Context, t *ui.Theme, row *Row, field FormField, problems []reviewProblem) {
+	kind, hasProblem := reviewProblemKindFor(problems, field)
+	block := ui.Column(c).Gap(t.Space(0.5))
+	block.OnClick(func() { m.selectReviewField(field) })
+	block.Children(func() {
+		ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Start).Children(func() {
+			ui.Text(c, formFieldLabel(field)).Width(100).TextColor(t.TextMuted)
+			if hasProblem {
+				m.reviewProblemTag(c, t, kind)
+			}
+			if field == FormFieldSubstats {
+				m.substatValue(c, t, row)
+				return
+			}
+			ui.Text(c, readOnlyFieldValue(row, field, kind, hasProblem))
+		})
+	})
+}
+
+// readOnlyFieldValue renders one persisted field as text. The equipped
+// field names the optional warning the way the design does: the item is
+// exported without an agent (08 §3.3, JSON/CSV v2 §3).
+func readOnlyFieldValue(row *Row, field FormField, kind reviewProblemKind, hasProblem bool) string {
+	switch field {
+	case FormFieldSetID:
+		return row.SetFormText()
+	case FormFieldRarity:
+		return row.RarityText()
+	case FormFieldSlot:
+		return row.SlotText()
+	case FormFieldLevel:
+		return row.LevelText()
+	case FormFieldMainStat:
+		return row.MainStatText()
+	case FormFieldManagementState:
+		return row.ManagementStateText()
+	case FormFieldEquipped:
+		if hasProblem && kind == reviewProblemWarning {
+			return "未识别（可留空导出）"
+		}
+		return row.EquippedText()
+	default:
+		return ""
+	}
+}
+
+// reviewActionBar is the fixed bottom bar. A read-only item offers only
+// browsing (上一件 / 下一件); 修改 then switches to 确认修改 / 取消修改
+// (08 §3.4). A pending item's editor keeps 确认并下一项 / 保存修改.
 func (m *Model) reviewActionBar(c *ui.Context, t *ui.Theme, row *Row) {
 	ui.Column(c).Padding(t.Space(2), t.Space(4)).Gap(t.Space(1)).Children(func() {
 		if row == nil {
 			return
 		}
-		editing := m.edit != nil && m.rec != nil &&
-			m.edit.recordID == m.rec.ID && m.edit.seq == row.Seq
-		if editing {
-			reason := m.reviewConfirmBlockedReason(row)
-			ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
-				confirmLabel := "确认并下一项"
-				if m.reviewErr != "" && m.lastAction == reviewConfirmNext {
-					confirmLabel = "重试确认并下一项"
-				}
-				confirm := ui.PrimaryButton(c, confirmLabel).Disabled(reason != "" || m.reviewActionsBlocked())
-				if confirm.Clicked() {
-					m.saveEdit(reviewConfirmNext, nil)
-				}
-				saveLabel := "保存修改"
-				if m.reviewErr != "" && m.lastAction == reviewSave {
-					saveLabel = "重试保存"
-				}
-				save := ui.Button(c, saveLabel).Disabled(!m.edit.canSave() || m.reviewActionsBlocked())
-				if save.Clicked() {
-					m.saveEdit(reviewSave, nil)
-				}
-			})
-			if reason != "" {
-				ui.Text(c, reason).FontSize(t.FontSize * 0.85).TextColor(t.TextMuted)
-			}
-		} else {
-			ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
-				if ui.Button(c, "修改").Disabled(m.reviewActionsBlocked()).Clicked() {
-					m.startEditRow(row)
-				}
-				if row.PendingReview() && ui.PrimaryButton(c, "确认并下一项").Disabled(m.reviewActionsBlocked()).Clicked() {
-					m.confirmCurrent()
-				}
-			})
+		switch {
+		case m.reviewEditing(row) && m.edit.modify:
+			m.reviewModifyActions(c, t, row)
+		case m.reviewEditing(row):
+			m.reviewEditActions(c, t, row)
+		default:
+			m.reviewBrowseActions(c, t)
 		}
 		if m.reviewNotice != "" {
 			ui.Text(c, m.reviewNotice).FontSize(t.FontSize * 0.85).TextColor(t.TextMuted)
+		}
+	})
+}
+
+// reviewEditActions is a pending item's editor bar: confirm and advance on
+// the left, a plain save next to it, and the reason a disabled action
+// cannot run.
+func (m *Model) reviewEditActions(c *ui.Context, t *ui.Theme, row *Row) {
+	reason := m.reviewConfirmBlockedReason(row)
+	ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
+		confirmLabel := "确认并下一项"
+		if m.reviewErr != "" && m.lastAction == reviewConfirmNext {
+			confirmLabel = "重试确认并下一项"
+		}
+		confirm := ui.PrimaryButton(c, confirmLabel).Disabled(reason != "" || m.reviewActionsBlocked())
+		if confirm.Clicked() {
+			m.saveEdit(reviewConfirmNext, nil)
+		}
+		saveLabel := "保存修改"
+		if m.reviewErr != "" && m.lastAction == reviewSave {
+			saveLabel = "重试保存"
+		}
+		save := ui.Button(c, saveLabel).Disabled(!m.edit.canSave() || m.reviewActionsBlocked())
+		if save.Clicked() {
+			m.saveEdit(reviewSave, nil)
+		}
+	})
+	if reason != "" {
+		ui.Text(c, reason).FontSize(t.FontSize * 0.85).TextColor(t.TextMuted)
+	}
+}
+
+// reviewModifyActions is the modify flow of a settled item: 确认修改
+// re-confirms the revision (F-20), 取消修改 returns to the text form
+// without saving (08 §3.4).
+func (m *Model) reviewModifyActions(c *ui.Context, t *ui.Theme, row *Row) {
+	reason := m.reviewConfirmBlockedReason(row)
+	ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
+		confirmLabel := "确认修改"
+		if m.reviewErr != "" && m.lastAction == reviewConfirmModify {
+			confirmLabel = "重试确认修改"
+		}
+		confirm := ui.PrimaryButton(c, confirmLabel).Disabled(reason != "" || m.reviewActionsBlocked())
+		if confirm.Clicked() {
+			m.saveEdit(reviewConfirmModify, nil)
+		}
+		if ui.Button(c, "取消修改").Disabled(m.reviewActionsBlocked()).Clicked() {
+			m.cancelEdit()
+		}
+	})
+	if reason != "" {
+		ui.Text(c, reason).FontSize(t.FontSize * 0.85).TextColor(t.TextMuted)
+	}
+}
+
+// reviewBrowseActions is the read-only item's only action row: previous
+// and next in the current segment, both secondary (08 §3.4). It is also
+// the only bar of a row that has no form to edit.
+func (m *Model) reviewBrowseActions(c *ui.Context, t *ui.Theme) {
+	visible := m.visibleResultRows()
+	index := resultDisplayIndex(visible, m.selected)
+	ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
+		previous := ui.Button(c, "‹ 上一件").Disabled(m.reviewSaving || index <= 0)
+		if previous.Clicked() {
+			m.selectAdjacentVisible(-1)
+		}
+		next := ui.Button(c, "下一件 ›").Disabled(m.reviewSaving || index < 0 || index+1 >= len(visible))
+		if next.Clicked() {
+			m.selectAdjacentVisible(1)
 		}
 	})
 }
@@ -1447,34 +1611,21 @@ func reviewFieldLabel(field string) string {
 	return field
 }
 
-// formField is one label/value line of the read-only form.
-func formField(c *ui.Context, t *ui.Theme, label, value string) {
-	if value == "" {
-		value = "—"
-	}
-	ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Start).Children(func() {
-		ui.Text(c, label).Width(100).TextColor(t.TextMuted)
-		ui.Text(c, value)
-	})
-}
-
-// substatField lists the substats in display order; a null list (unknown
-// line count) stays distinct from a confirmed empty one.
-func (m *Model) substatField(c *ui.Context, t *ui.Theme, row *Row) {
-	ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Start).Children(func() {
-		ui.Text(c, "副词条").Width(100).TextColor(t.TextMuted)
-		ui.Column(c).Grow(1).Gap(t.Space(0.5)).Children(func() {
-			texts, known := row.SubstatTexts()
-			switch {
-			case !known:
-				ui.Text(c, "未读取")
-			case len(texts) == 0:
-				ui.Text(c, "无（确认没有可见副词条）")
-			default:
-				for i, text := range texts {
-					ui.Textf(c, "%d. %s", i+1, text)
-				}
+// substatValue is the substat group's value column of the read-only form;
+// a null list (unknown line count) stays distinct from a confirmed empty
+// one.
+func (m *Model) substatValue(c *ui.Context, t *ui.Theme, row *Row) {
+	ui.Column(c).Grow(1).Gap(t.Space(0.5)).Children(func() {
+		texts, known := row.SubstatTexts()
+		switch {
+		case !known:
+			ui.Text(c, "未读取")
+		case len(texts) == 0:
+			ui.Text(c, "无（确认没有可见副词条）")
+		default:
+			for i, text := range texts {
+				ui.Textf(c, "%d. %s", i+1, text)
 			}
-		})
+		}
 	})
 }

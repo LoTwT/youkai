@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/LoTwT/youkai/internal/app"
 	"github.com/egoist/mygo/ui"
@@ -496,11 +497,14 @@ func wholeRowTableHeight(available, row, chrome float32) (float32, bool) {
 	return chrome + float32(rows)*row, true
 }
 
-// registerResultsShortcuts wires the review view's keys. Ctrl+Enter saves
-// the draft and confirms it; Ctrl+S saves without confirming; both keep
-// the editor open on failure. Ctrl+J / Ctrl+Shift+J walk the pending
-// items through requestNavigation, so a dirty draft holds the move behind
-// the unsaved prompt. Ctrl+= / Ctrl+- / Ctrl+0 zoom the screenshots.
+// registerResultsShortcuts wires the review view's keys. In a pending
+// item's editor Ctrl+Enter saves the draft and confirms it while Ctrl+S
+// saves without confirming; the read-only item's modify flow has only the
+// re-confirmation, so Ctrl+Enter is 确认修改 and Ctrl+S is not bound. A
+// read-only form has no write shortcut at all: 修改 must be chosen first
+// (08 §3.4). Ctrl+J / Ctrl+Shift+J walk the pending items through
+// requestNavigation, so a dirty draft holds the move behind the unsaved
+// prompt. Ctrl+= / Ctrl+- / Ctrl+0 zoom the screenshots.
 func (m *Model) registerResultsShortcuts(c *ui.Context) {
 	if m.exportDialog.open {
 		return
@@ -509,15 +513,21 @@ func (m *Model) registerResultsShortcuts(c *ui.Context) {
 		return
 	}
 	if m.edit != nil {
-		c.OnShortcut(ui.Cmd, ui.KeyEnter, func() {
-			// The editor's draft is what Ctrl+Enter confirms; confirming
-			// the persisted row here would silently drop the input.
-			m.saveEdit(reviewConfirmNext, nil)
-		})
-		c.OnShortcut(ui.Cmd, ui.KeyS, func() {
-			m.saveEdit(reviewSave, nil)
-		})
-	} else {
+		if m.edit.modify {
+			c.OnShortcut(ui.Cmd, ui.KeyEnter, func() {
+				m.saveEdit(reviewConfirmModify, nil)
+			})
+		} else {
+			c.OnShortcut(ui.Cmd, ui.KeyEnter, func() {
+				// The editor's draft is what Ctrl+Enter confirms; confirming
+				// the persisted row here would silently drop the input.
+				m.saveEdit(reviewConfirmNext, nil)
+			})
+			c.OnShortcut(ui.Cmd, ui.KeyS, func() {
+				m.saveEdit(reviewSave, nil)
+			})
+		}
+	} else if row := m.selectedRow(); row != nil && row.PendingReview() {
 		c.OnShortcut(ui.Cmd, ui.KeyEnter, func() {
 			m.confirmCurrent()
 		})
@@ -538,20 +548,50 @@ func (m *Model) registerResultsShortcuts(c *ui.Context) {
 	}
 }
 
-// resultShortcutText is the review page's status-bar keys.
+// resultShortcutText is the review page's status-bar keys. It names only
+// actions that currently work: a read-only item has no save or confirm
+// key, and the pending walk appears only while the segment shows a
+// pending item.
 func (m *Model) resultShortcutText() string {
 	if m.reviewSaving || m.loading || m.recErr != "" || m.exportBusy() {
 		return ""
 	}
-	zoom := "  ·  " + shortcutZoomIn + " 放大  ·  " + shortcutZoomOut + " 缩小"
+	var keys []string
 	if m.edit != nil {
-		return shortcutConfirmNext + " 确认并下一项  ·  " + shortcutSave + " 保存修改" + zoom
+		if m.edit.modify {
+			keys = append(keys, shortcutConfirmNext+" 确认修改")
+		} else {
+			keys = append(keys, shortcutConfirmNext+" 确认并下一项", shortcutSave+" 保存修改")
+		}
+	} else if row := m.selectedRow(); row != nil {
+		if row.PendingReview() {
+			keys = append(keys, shortcutConfirmNext+" 确认并下一项")
+		}
+		if m.visiblePendingCount() > 0 {
+			keys = append(keys, shortcutNextPending+" 下一个待处理",
+				shortcutPreviousPending+" 上一个待处理")
+		}
 	}
-	if m.rec == nil || len(m.rec.Rows) == 0 {
+	if len(keys) == 0 && (m.rec == nil || len(m.rec.Rows) == 0) {
 		return ""
 	}
-	return shortcutConfirmNext + " 确认并下一项  ·  " + shortcutNextPending + " 下一个待处理" +
-		"  ·  " + shortcutPreviousPending + " 上一个待处理" + zoom
+	keys = append(keys, shortcutZoomIn+" 放大", shortcutZoomOut+" 缩小")
+	return strings.Join(keys, "  ·  ")
+}
+
+// visiblePendingCount counts the pending items the current segment shows.
+// It answers whether Ctrl+J can move anywhere from here.
+func (m *Model) visiblePendingCount() int {
+	if m.rec == nil {
+		return 0
+	}
+	count := 0
+	for _, index := range m.visibleResultRows() {
+		if resultRowInFilter(&m.rec.Rows[index], resultFilterPending) {
+			count++
+		}
+	}
+	return count
 }
 
 // compactPositionText is the compact strip's "待处理 1 / 3" label: the
