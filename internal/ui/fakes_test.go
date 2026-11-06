@@ -573,4 +573,5 @@ func intp(v int) *int { return &v }
 // record; the shell's own tests cover the summary landing.
 func showRecordItems(m *Model) {
 	m.recordTab = recordTabItems
+	m.enterReviewView()
 }

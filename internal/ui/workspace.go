@@ -23,15 +23,6 @@ func (m *Model) recordWorkspace(c *ui.Context, t *ui.Theme) {
 	ui.Column(c).Grow(1).FillHeight().Children(func() {
 		m.recordWorkspaceHeader(c, t, tok)
 		ui.Divider(c)
-		// The unsaved-input prompt belongs to the whole workspace: leaving
-		// the record, switching destinations or quitting must show it from
-		// 摘要 as well as 逐件 (H-1).
-		if m.navPrompt != nil {
-			ui.Row(c).Padding(t.Space(2), t.Space(3)).Children(func() {
-				m.navigationPrompt(c, t)
-			})
-			ui.Divider(c)
-		}
 		switch m.recordTab {
 		case recordTabItems:
 			ui.Column(c).Grow(1).Padding(t.Space(3), t.Space(3)).Gap(t.Space(2)).Children(func() {
@@ -61,8 +52,8 @@ func (m *Model) recordWorkspaceHeader(c *ui.Context, t *ui.Theme, tok *Tokens) {
 		}
 		tab := int(m.recordTab)
 		ui.Segmented(c, &tab, "摘要", "逐件").Bind(&m.workspaceTabsRef)
-		if tab >= 0 && tab < int(recordTabCount) {
-			m.recordTab = recordTab(tab)
+		if tab >= 0 && tab < int(recordTabCount) && recordTab(tab) != m.recordTab {
+			m.requestNavigation(navigationRequest{kind: navRecordTab, recordTab: recordTab(tab)})
 		}
 		ui.Box(c).Grow(1)
 		coverage, pending, saved := m.workspaceStatusTexts()
@@ -76,10 +67,11 @@ func (m *Model) recordWorkspaceHeader(c *ui.Context, t *ui.Theme, tok *Tokens) {
 	})
 }
 
-// workspaceStatusTexts fills the header's three status slots: coverage and
-// pending come from the loaded record (待处理 is the four-class total, the
-// same number the summary's pending action counts), and the save slot names
-// the live record's state rather than claiming a save that has not happened.
+// workspaceStatusTexts fills the header's three status slots. The pending
+// slot is the four-class total (backfill plus review) from summaryCounts,
+// the same source the summary and item list use; the save slot names the
+// live record's or revision's state rather than claiming a save that has
+// not happened.
 func (m *Model) workspaceStatusTexts() (coverage, pending, saved string) {
 	coverage = "覆盖：—"
 	if m.recData != nil {
@@ -97,6 +89,12 @@ func (m *Model) workspaceStatusTexts() (coverage, pending, saved string) {
 		saved = "读取中…"
 	case m.rec == nil:
 		saved = "未打开"
+	case m.reviewSaving:
+		saved = "正在保存…"
+	case m.reviewSaveFailed:
+		saved = "保存失败"
+	case m.editingDirty():
+		saved = "未保存修改"
 	case m.rec.Live && m.snap.SaveError != "":
 		saved = "保存失败"
 	case m.rec.Live && (m.snap.Busy || m.snap.SavePending):
@@ -111,4 +109,13 @@ func (m *Model) workspaceStatusTexts() (coverage, pending, saved string) {
 func (m *Model) openRecordWorkspace() {
 	m.page = pageResults
 	m.recordTab = recordTabSummary
+}
+
+// enterReviewView starts a review visit on the item tab: the form region
+// and its first problem field take the focus, as 08 §3 requires.
+func (m *Model) enterReviewView() {
+	m.reviewRegion = reviewRegionForm
+	m.reviewField = ""
+	m.requestReviewFieldFocus("")
+	m.scrollToCrop = false
 }

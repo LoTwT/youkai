@@ -125,6 +125,14 @@ func (c *evidenceCache) evict(protected map[evidenceKey]struct{}) {
 	}
 }
 
+// reset drops decoded bitmaps without cancelling loads. The pixelated zoom
+// style mutates a Bitmap in place, so a new zoom mode must decode fresh
+// images rather than reuse a bitmap whose style belongs to the old mode.
+func (c *evidenceCache) reset() {
+	c.entries = make(map[evidenceKey]*evidenceEntry)
+	c.order = nil
+}
+
 // touch moves key to the most-recently-used end.
 func (c *evidenceCache) touch(key evidenceKey) {
 	for i, k := range c.order {

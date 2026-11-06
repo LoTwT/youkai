@@ -94,7 +94,10 @@ func (m *Model) viewPages(c *ui.Context) {
 			m.pageStatusBar(c, t)
 		})
 	})
+	// The export modal and the unsaved-changes dialog both cover the
+	// whole window; only one of them is open at a time.
 	m.exportDialogView(c, t)
+	m.navigationPrompt(c, t)
 	m.trayHintDialogView(c, t)
 	m.exitDialogView(c, t)
 }
@@ -215,7 +218,6 @@ func (m *Model) pageBody(c *ui.Context, t *ui.Theme) {
 		ui.Column(c).Grow(1).Padding(t.Space(3), t.Space(3)).Gap(t.Space(2)).Children(func() {
 			ui.Scroll(c).Grow(1).Children(func() {
 				ui.Column(c).Gap(t.Space(2)).Children(func() {
-					m.navigationPrompt(c, t)
 					m.prepareArea(c, t)
 					if m.snap.SessionID != "" {
 						ui.Divider(c)

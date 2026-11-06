@@ -491,7 +491,7 @@ func (m *Model) sessionTerminationShown() bool {
 	if m.rec == nil {
 		return false
 	}
-	_, _, ok := sessionTerminationNotice(m.rec.Shell.Termination, m.rec.Shell.FailureParams, m.rec.Interrupted, len(m.rec.Rows))
+	_, _, ok := sessionTerminationNotice(m.rec.Shell.Termination, m.rec.Shell.FailureParams, m.rec.Interrupted, m.rec.Live, len(m.rec.Rows))
 	return ok
 }
 
@@ -509,7 +509,7 @@ func (m *Model) incompletePositionsNote() string {
 // already say what happened. A nil termination with interrupted rows is a
 // recovery from a process that never reached a terminal checkpoint, so the
 // notice still explains why the record is incomplete.
-func sessionTerminationNotice(term *record.Termination, params map[string]string, interrupted bool, rows int) (string, record.TerminationKind, bool) {
+func sessionTerminationNotice(term *record.Termination, params map[string]string, interrupted, live bool, rows int) (string, record.TerminationKind, bool) {
 	if term != nil {
 		switch term.Kind {
 		case record.TerminationFailed:
@@ -536,7 +536,7 @@ func sessionTerminationNotice(term *record.Termination, params map[string]string
 			return "扫描中断：仅保留已完成条目", term.Kind, true
 		}
 	}
-	if interrupted {
+	if recordConclusionInterrupted(term, interrupted, live) {
 		return "扫描中断：仅保留已完成条目", record.TerminationInterrupted, true
 	}
 	return "", "", false
@@ -578,7 +578,7 @@ func (m *Model) sessionTerminationArea(c *ui.Context, t *ui.Theme) {
 	if m.rec == nil {
 		return
 	}
-	text, kind, ok := sessionTerminationNotice(m.rec.Shell.Termination, m.rec.Shell.FailureParams, m.rec.Interrupted, len(m.rec.Rows))
+	text, kind, ok := sessionTerminationNotice(m.rec.Shell.Termination, m.rec.Shell.FailureParams, m.rec.Interrupted, m.rec.Live, len(m.rec.Rows))
 	if !ok {
 		return
 	}
@@ -600,7 +600,7 @@ func (m *Model) emptyResultsTextForTermination() string {
 		return ""
 	}
 	term := m.rec.Shell.Termination
-	if term == nil && m.rec.Interrupted {
+	if recordConclusionInterrupted(term, m.rec.Interrupted, m.rec.Live) {
 		return "本次扫描中断，没有已保存的条目。"
 	}
 	if term == nil {
@@ -611,8 +611,6 @@ func (m *Model) emptyResultsTextForTermination() string {
 		return "本次扫描失败，没有已保存的条目。"
 	case record.TerminationCancelled:
 		return "本次扫描已停止，没有已保存的条目。"
-	case record.TerminationInterrupted:
-		return "本次扫描中断，没有已保存的条目。"
 	default:
 		return ""
 	}

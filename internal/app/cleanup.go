@@ -224,11 +224,11 @@ func (s *Service) cleanupBlockedLocked() error {
 	return &CleanupBlockedError{Reason: "扫描会话进行中，结束后才能清理。"}
 }
 
-// pendingReviewCount counts produced items whose field quality still
+// pendingReviewCount counts interpreted items whose field quality still
 // needs a person and whose payload has the structured interpretation the
 // review editor works on. Auto-accepted and human-confirmed items are
-// settled; failed and unprocessed items are not reviewable in this
-// revision. It mirrors the results rows' PendingReview.
+// settled; a failed or unprocessed item joins only after a manual
+// revision supplied its data. It mirrors the results rows' PendingReview.
 func pendingReviewCount(items []record.ItemRecord) int {
 	count := 0
 	for _, item := range items {
@@ -239,13 +239,14 @@ func pendingReviewCount(items []record.ItemRecord) int {
 	return count
 }
 
-// itemPendingReview reports whether one produced item still needs a
-// person. Failed and unprocessed items are not reviewable in this
-// revision, and an item without the structured interpretation has nothing
-// to review. Revision-0 records whose only persisted gap was the old
-// required equipped field are settled by the export's reclassification.
+// itemPendingReview reports whether one interpreted item still needs a
+// person. A failed or unprocessed item enters this queue only after a
+// manual revision supplied its structured data; one without it has
+// nothing to review. Revision-0 records whose only persisted gap was the
+// old required equipped field are settled by the export's
+// reclassification.
 func itemPendingReview(item record.ItemRecord) bool {
-	if item.Status != record.StatusProduced || !hasStructured(item) {
+	if !ItemInterpreted(item) || !hasStructured(item) {
 		return false
 	}
 	switch item.Quality {

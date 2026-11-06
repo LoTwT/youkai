@@ -261,7 +261,7 @@ func (m *Model) historyConclusionInput(entry HistoryEntry) recordConclusionInput
 		Coverage:                 entry.Coverage,
 		Termination:              entry.Termination,
 		Counts:                   entry.Counts,
-		Interrupted:              recordConclusionInterrupted(entry.Termination, entry.Interrupted, false),
+		Interrupted:              recordConclusionInterrupted(entry.Termination, entry.Interrupted, active),
 		IncompletePositions:      entry.IncompletePositions,
 		IncompletePositionsKnown: entry.IncompletePositionsKnown,
 		Unreadable:               entry.Unreadable,
@@ -545,8 +545,8 @@ func (m *Model) openHistoryExport(entry HistoryEntry) {
 	m.closeHistoryMenu()
 	m.historyMenuID = ""
 	m.histChoice = entry.Label
-	m.page = pageResults
 	if m.recordIsOpen(entry.ID) && m.recErr == "" {
+		m.page = pageResults
 		// The target is already the open record; the title bar's own
 		// export entry handles its draft and blocked states.
 		m.clearRecentlyConfirmed()

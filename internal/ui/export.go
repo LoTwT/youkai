@@ -123,9 +123,11 @@ func (m *Model) exportBusy() bool {
 // reviewActionsBlocked reports whether review edits and confirmations must
 // stay disabled: while a save is in flight, the latest checkpoint is still
 // loading (the visible record is an older snapshot then), the last load
-// failed (the record on screen is stale), or an export holds its snapshot.
+// failed (the record on screen is stale), an export holds its snapshot, or a
+// screenshot cleanup is running and will reload the record when it finishes.
 func (m *Model) reviewActionsBlocked() bool {
-	return m.reviewSaving || m.loading || m.recErr != "" || m.exportBusy()
+	return m.reviewSaving || m.loading || m.recErr != "" || m.exportBusy() || m.exportDialog.open ||
+		(m.cleanup != nil && m.cleanup.running)
 }
 
 // exportAvailable reports whether this build offers an export entry.
@@ -194,13 +196,15 @@ func (m *Model) exportBlockedReasonWithDraft(blockDirty bool) string {
 
 // exportEntryBlocked reports whether the workspace's export entry and its
 // Ctrl+E shortcut are unusable now. The title-bar button and the shortcut
-// share this answer, so they cannot disagree (L-2). Unsaved review input
-// does not block the entry itself: opening it first shows the ordinary
-// save/discard prompt, as the export dialog must not open over a dirty
-// draft.
+// share this answer, so they cannot disagree (L-2). A save in flight also
+// blocks the entry: the draft must stay attached to its row until the result
+// is known. Unsaved review input does not block the entry itself: opening it
+// first shows the ordinary save/discard prompt, as the export dialog must not
+// open over a dirty draft.
 func (m *Model) exportEntryBlocked() bool {
 	return !m.exportAvailable() ||
 		m.exporting ||
+		m.reviewSaving ||
 		m.exitState == exitRunning ||
 		m.exitState == exitDone ||
 		m.rec == nil
@@ -231,8 +235,20 @@ func (m *Model) openExportDialog() {
 	if m.exportEntryBlocked() {
 		return
 	}
+	m.clearCleanEditorForExport()
 	m.exportOutcome = nil
 	m.exportDialog = exportDialogState{open: true}
+}
+
+// clearCleanEditorForExport settles an editor that no longer needs a draft
+// before the export dialog opens. editingDirty hides a draft while a save is
+// in flight, so the save state must be checked separately or that draft would
+// be mistaken for a clean editor.
+func (m *Model) clearCleanEditorForExport() {
+	if m.reviewSaving || m.editingDirty() {
+		return
+	}
+	m.clearEdit()
 }
 
 // closeExportDialog hides the dialog. An export in flight keeps it open;
@@ -670,7 +686,6 @@ func (m *Model) exportDialogGoToReview() {
 	m.exportCancel = nil
 	m.page = pageResults
 	m.recordTab = recordTabItems
-	m.resultsDetail = false
 	m.setResultFilter(resultFilterPending)
 }
 

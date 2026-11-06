@@ -78,6 +78,21 @@ func TestClassifyItemFollowsFixedOrder(t *testing.T) {
 		zzz.CaptureState{EquippedState: zzz.EquippedStateEquipped})
 	notEvaluated := exportStructuredItem(t, 8, record.QualityNotEvaluated,
 		testDisc(31500, 4, "health", "2200", zzz.UnitFlat), none)
+	backfilledReview := reviewItem(t, 16, reviewData())
+	backfilledReview.Status = record.StatusFailed
+	backfilledReview.Failure = "识别超时"
+	backfilledReview.Revision = 1
+	backfilledPassed := exportStructuredItem(t, 17, record.QualityHumanConfirmed,
+		testDisc(31100, 4, "critRate", "19.2", zzz.UnitPercent), none)
+	backfilledPassed.Status = record.StatusFailed
+	backfilledPassed.Failure = "识别超时"
+	backfilledPassed.Revision = 1
+	backfilledRawOnly := backfilledReview
+	backfilledRawOnly.Data = json.RawMessage(`{"lines":[]}`)
+	failedAtRevisionZero := reviewItem(t, 18, reviewData())
+	failedAtRevisionZero.Status = record.StatusFailed
+	failedAtRevisionZero.Failure = "识别超时"
+	failedAtRevisionZero.Revision = 0
 
 	withPersistedError := zzz.ToStructuredWithState(
 		testDisc(31400, 3, "defense", "46", zzz.UnitPercent), zzz.RarityS, none, nil)
@@ -113,6 +128,10 @@ func TestClassifyItemFollowsFixedOrder(t *testing.T) {
 		{"unstructured payload is pending review", unstructuredItem(14), ItemClassPendingReview},
 		{"unevaluated quality is pending review", notEvaluated, ItemClassPendingReview},
 		{"legacy equipped-only record is warning", legacyEquippedOnlyItem(t, 15), ItemClassWarning},
+		{"backfilled needs-review item is pending review", backfilledReview, ItemClassPendingReview},
+		{"backfilled confirmed item is passed", backfilledPassed, ItemClassPassed},
+		{"failed item with revision but no structured payload is still backfill", backfilledRawOnly, ItemClassPendingBackfill},
+		{"failed item with structured data at revision zero is still backfill", failedAtRevisionZero, ItemClassPendingBackfill},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -199,5 +218,24 @@ func TestExportWarningCountsStayIncluded(t *testing.T) {
 	}
 	if export.Summary.Included != 2 || export.Summary.Excluded != 0 {
 		t.Fatalf("summary = %+v, want 2 included / 0 excluded", export.Summary)
+	}
+}
+
+// TestBackfilledItemExportsWithoutChangingOutcome pins the export rule: a
+// failed item becomes usable only through an interpreted, confirmed
+// revision, and the original status stays failed.
+func TestBackfilledItemExportsWithoutChangingOutcome(t *testing.T) {
+	backfilled := exportStructuredItem(t, 20, record.QualityHumanConfirmed,
+		testDisc(31100, 4, "critRate", "19.2", zzz.UnitPercent),
+		zzz.CaptureState{ManagementState: zzz.ManagementNone, EquippedState: zzz.EquippedStateUnequipped})
+	backfilled.Status = record.StatusFailed
+	backfilled.Failure = "识别超时"
+	backfilled.Revision = 1
+	exported, usable := usableItem(&backfilled)
+	if !usable || exported.Sequence != 20 || exported.Revision != 1 {
+		t.Fatalf("backfilled export = %+v usable %v", exported, usable)
+	}
+	if backfilled.Status != record.StatusFailed || backfilled.Failure != "识别超时" {
+		t.Fatalf("export rewrote the outcome: %+v", backfilled)
 	}
 }

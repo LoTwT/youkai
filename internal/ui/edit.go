@@ -29,6 +29,7 @@ type substatDraft struct {
 // the user sees it — a decimal string or a picker label — so a failed
 // save can keep the input byte-for-byte.
 type editDraft struct {
+	Rarity          string
 	SetID           string
 	Slot            string
 	Level           string
@@ -51,9 +52,10 @@ type editState struct {
 	baseRevision int64
 	original     editDraft
 	draft        editDraft
-	// rarity is not editable in this revision; it is carried from the
-	// row so saving preserves the verified value.
-	rarity *string
+	// backfill marks an editor opened on a failed or unprocessed item (or
+	// a produced payload without an interpretation): saving completes the
+	// item instead of revising a produced one.
+	backfill bool
 
 	data        zzz.DiscData
 	fieldErrors []fieldProblem
@@ -86,6 +88,9 @@ const (
 	navPage
 	navExit
 	navStartScan
+	navResultFilter
+	navSummaryClass
+	navRecordTab
 	navExport
 )
 
@@ -97,6 +102,13 @@ type navigationRequest struct {
 	recordID string
 	// page is the destination of a navPage request.
 	page Page
+	// The filter fields belong to navResultFilter / navSummaryClass; the
+	// summary class is also used only by navSummaryClass.
+	filter       resultFilter
+	setFilter    string
+	slotFilter   string
+	summaryClass app.ItemClass
+	recordTab    recordTab
 	// exportAfterLoad opens the export dialog once a navOpenRecord request
 	// has loaded its record: the records list's 导出… means "open this
 	// record, then export it", not "export whatever is on screen".
@@ -112,7 +124,8 @@ func cloneDraft(d editDraft) editDraft {
 
 // equal compares two drafts by value.
 func (d editDraft) equal(other editDraft) bool {
-	if d.SetID != other.SetID || d.Slot != other.Slot || d.Level != other.Level ||
+	if d.Rarity != other.Rarity ||
+		d.SetID != other.SetID || d.Slot != other.Slot || d.Level != other.Level ||
 		d.MainAttribute != other.MainAttribute || d.MainValue != other.MainValue ||
 		d.MainUnit != other.MainUnit || d.SubstatsKnown != other.SubstatsKnown ||
 		d.ManagementState != other.ManagementState || d.EquippedState != other.EquippedState ||
@@ -130,12 +143,16 @@ func (d editDraft) equal(other editDraft) bool {
 // newEditDraft turns one row's structured data into editor text.
 func newEditDraft(data zzz.DiscData) editDraft {
 	draft := editDraft{
+		Rarity:          unreadOption,
 		SetID:           unreadOption,
 		MainAttribute:   unreadOption,
 		MainUnit:        unreadOption,
 		ManagementState: unreadOption,
 		EquippedState:   unreadOption,
 		AgentID:         unreadOption,
+	}
+	if data.Rarity != nil {
+		draft.Rarity = *data.Rarity
 	}
 	if data.SetID != nil {
 		draft.SetID = describeSet(*data.SetID)
@@ -192,11 +209,19 @@ func newEditDraft(data zzz.DiscData) editDraft {
 // toData parses the editor text into the data object it represents. A
 // field problem means the save is refused until the user fixes it; an
 // empty part stays an explicit null.
-func (d editDraft) toData(rarity *string) (zzz.DiscData, []fieldProblem) {
-	data := zzz.DiscData{Rarity: cloneStringPtr(rarity)}
+func (d editDraft) toData(_ ...*string) (zzz.DiscData, []fieldProblem) {
+	data := zzz.DiscData{}
 	var problems []fieldProblem
 	add := func(field, message string) {
 		problems = append(problems, fieldProblem{Field: field, Message: message})
+	}
+
+	if value := optionValue(d.Rarity); value != "" {
+		if value != zzz.RarityS {
+			add("rarity", fmt.Sprintf("稀有度 %q 不是本修订可确认的 S", value))
+		} else {
+			data.Rarity = stringPtr(value)
+		}
 	}
 
 	if value := optionValue(d.SetID); value != "" {
@@ -357,7 +382,7 @@ func (d editDraft) toData(rarity *string) (zzz.DiscData, []fieldProblem) {
 // refresh recomputes the parsed data and its validation for the current
 // text. It runs every frame while the editor is open.
 func (e *editState) refresh() {
-	data, problems := e.draft.toData(e.rarity)
+	data, problems := e.draft.toData()
 	e.data = data
 	e.fieldErrors = problems
 	if len(problems) > 0 {
@@ -431,29 +456,88 @@ func (m *Model) editingDirty() bool {
 	return m.edit != nil && m.edit.dirty() && !m.reviewSaving
 }
 
-// startEdit opens the editable form on the selected produced row.
+// startEdit opens the editable form on the selected item. A produced item
+// with an interpretation is revised; a failed, unprocessed or unparsed
+// item starts as a backfill with every field explicitly unread.
 func (m *Model) startEdit() {
 	if m.reviewActionsBlocked() || m.rec == nil || m.selected < 0 || m.selected >= len(m.rec.Rows) {
 		return
 	}
-	row := &m.rec.Rows[m.selected]
-	if row.Status != record.StatusProduced || row.Structured == nil {
+	m.startEditRow(&m.rec.Rows[m.selected])
+}
+
+// startEditRow opens the editor for one row. The caller supplies the row
+// so the view can ensure an editor exists for the item it just selected.
+func (m *Model) startEditRow(row *Row) {
+	if m.reviewActionsBlocked() || m.rec == nil || row == nil {
 		return
 	}
-	draft := newEditDraft(row.Structured.Data)
+	if row.Status == record.StatusQueued || row.Status == record.StatusRunning {
+		return
+	}
+	backfill := row.Structured == nil
+	var data zzz.DiscData
+	if !backfill {
+		data = row.Structured.Data
+	}
+	draft := newEditDraft(data)
 	m.edit = &editState{
 		recordID:     m.rec.ID,
 		seq:          row.Seq,
 		baseRevision: row.Revision,
 		original:     cloneDraft(draft),
 		draft:        draft,
-		rarity:       cloneStringPtr(row.Structured.Data.Rarity),
+		backfill:     backfill,
 	}
 	m.edit.refresh()
 	m.navPrompt = nil
 	m.reviewErr = ""
-	m.reviewNotice = ""
+	m.reviewSaveFailed = false
 	m.lastAction = reviewSave
+}
+
+// ensureReviewEdit keeps the selected item's editor open while its row is
+// pending or needs backfill. A dirty editor is never replaced here: any
+// selection or filter change that would leave it must pass through
+// requestNavigation first.
+func (m *Model) ensureReviewEdit(row *Row) {
+	if m.rec == nil || row == nil {
+		return
+	}
+	if m.loading || m.recErr != "" {
+		// The visible row is a stale snapshot or unreadable: opening an
+		// editor on it would let a save target it.
+		return
+	}
+	if !m.reviewRowEditable(row) {
+		return
+	}
+	if m.edit != nil && m.edit.recordID == m.rec.ID && m.edit.seq == row.Seq {
+		return
+	}
+	if m.editingDirty() {
+		// A selection change must pass through requestNavigation first; never
+		// replace a dirty editor from the filter/render path.
+		return
+	}
+	m.startEditRow(row)
+}
+
+// reviewRowEditable reports whether the item's form is editable without a
+// separate "edit" step: everything a person still has to handle, plus a
+// produced payload whose interpretation could not be parsed.
+func (m *Model) reviewRowEditable(row *Row) bool {
+	if row.Status == record.StatusQueued || row.Status == record.StatusRunning {
+		return false
+	}
+	if row.ItemClass == app.ItemClassPendingReview ||
+		row.ItemClass == app.ItemClassPendingBackfill {
+		return true
+	}
+	if row.Status != record.StatusProduced || row.Structured == nil {
+		return true
+	}
+	return row.PendingReview()
 }
 
 // clearEdit closes the editor without saving.
@@ -466,6 +550,7 @@ func (m *Model) discardEdit() {
 	m.clearEdit()
 	m.navPrompt = nil
 	m.reviewErr = ""
+	m.reviewSaveFailed = false
 	m.reviewNotice = ""
 	m.lastAction = reviewSave
 	m.catchUpLive()
@@ -477,12 +562,19 @@ func (m *Model) requestNavigation(req navigationRequest) {
 	if m.exitState == exitRunning || m.exitState == exitDone {
 		return
 	}
+	if m.navPrompt != nil {
+		// The open prompt owns the decision; a render-time selection or a
+		// second navigation must not replace its target.
+		return
+	}
 	if m.reviewSaving {
 		m.reviewErr = "正在保存，完成前不能切换。"
 		return
 	}
 	if m.editingDirty() {
 		m.navPrompt = &req
+		m.compactListOpen = false
+		m.compactListFocusRequested = false
 		return
 	}
 	m.clearEdit()
@@ -506,7 +598,18 @@ func (m *Model) runNavigation(req navigationRequest) {
 		if index := m.rec.RowOf(req.seq); index >= 0 {
 			m.selected = index
 			m.reviewErr = ""
+			m.reviewSaveFailed = false
 			m.reviewNotice = ""
+			m.pointFirstReviewField()
+		}
+	case navResultFilter:
+		m.applyResultFilterState(req.filter, req.setFilter, req.slotFilter)
+	case navSummaryClass:
+		m.openSummaryClassState(req.filter, req.summaryClass)
+	case navRecordTab:
+		m.recordTab = req.recordTab
+		if m.recordTab == recordTabItems {
+			m.enterReviewView()
 		}
 	case navOpenRecord:
 		m.page = pageResults
@@ -534,6 +637,12 @@ func (m *Model) runNavigation(req navigationRequest) {
 func (m *Model) applyTableSelection(previous int) {
 	if m.rec == nil || m.selected == previous || m.selected < 0 || m.selected >= len(m.rec.Rows) {
 		m.selected = previous
+		return
+	}
+	if m.navPrompt != nil {
+		// A pending save/discard decision owns the selection.
+		m.selected = previous
+		m.tableSelected = resultDisplayIndex(m.visibleResultRows(), previous)
 		return
 	}
 	seq := m.rec.Rows[m.selected].Seq
@@ -573,13 +682,24 @@ func (m *Model) promptStay() {
 		return
 	}
 	m.navPrompt = nil
-	m.reviewErr = ""
+}
+
+// editMatchesSelection reports the binding invariant: an editor may only
+// target the row the workspace currently shows and has selected.
+func (m *Model) editMatchesSelection() bool {
+	row := m.selectedRow()
+	return m.edit != nil && m.rec != nil && row != nil &&
+		m.edit.recordID == m.rec.ID && m.edit.seq == row.Seq
 }
 
 // saveEdit validates and submits the open editor. after runs only after a
 // successful save (and after the editor settled), never on failure.
 func (m *Model) saveEdit(action reviewAction, after func()) {
 	if m.edit == nil || m.reviewSaving {
+		return
+	}
+	if !m.editMatchesSelection() {
+		m.reviewErr = "编辑内容与当前查看的条目不一致，已取消保存。"
 		return
 	}
 	if m.recErr != "" {
@@ -605,6 +725,8 @@ func (m *Model) saveEdit(action reviewAction, after func()) {
 		return
 	}
 	if action == reviewSave && !m.edit.dirty() {
+		m.reviewErr = ""
+		m.reviewSaveFailed = false
 		m.reviewNotice = "没有修改需要保存。"
 		return
 	}
@@ -652,8 +774,13 @@ func (m *Model) confirmCurrentAction(action reviewAction) {
 		return
 	}
 	m.lastAction = action
+	if m.edit != nil && !m.editMatchesSelection() {
+		m.reviewErr = "编辑内容与当前查看的条目不一致，已取消确认。"
+		return
+	}
 	row := &m.rec.Rows[m.selected]
-	if row.Status != record.StatusProduced || row.Structured == nil || !row.PendingReview() {
+	if row.Status == record.StatusQueued || row.Status == record.StatusRunning ||
+		row.Structured == nil || !row.PendingReview() {
 		return
 	}
 	check := app.CheckDiscData(row.Structured.Data)
@@ -667,9 +794,14 @@ func (m *Model) confirmCurrentAction(action reviewAction) {
 // submitReview schedules one save/confirmation. The captured identity and
 // serial mean a late response can only update the item it was sent for.
 func (m *Model) submitReview(recordID string, seq, expectedRevision int64, data zzz.DiscData, action reviewAction, after func()) {
+	if m.rec == nil || m.rec.ID != recordID || m.selectedSeq() != seq {
+		m.reviewErr = "编辑内容与当前查看的条目不一致，已取消写入。"
+		return
+	}
 	m.reviewSerial++
 	serial := m.reviewSerial
 	m.reviewSaving = true
+	m.reviewSaveFailed = false
 	m.reviewErr = ""
 	m.reviewNotice = ""
 	m.lastAction = action
@@ -709,20 +841,26 @@ func (m *Model) submitReview(recordID string, seq, expectedRevision int64, data 
 			}
 			m.navPrompt = nil
 			m.reviewErr = ""
+			m.reviewSaveFailed = false
 			switch action {
 			case reviewConfirmNext:
-				m.forgetRecentlyConfirmed(seq)
+				// The confirmed item stays in the pending list until the
+				// user switches filters (08 §3.1): it is marked 已确认 and
+				// the selection moves to the next row a person still has
+				// to handle.
+				m.markRecentlyConfirmed(seq)
 				next := m.nextPendingAfter(seq)
 				if next >= 0 {
 					m.selected = next
 					m.selectedSequence = m.rec.Rows[next].Seq
-					// Keep the table's chosen row and scroll position on
+					// Keep the list's chosen row and scroll position on
 					// the same visible row the guard chose.
 					if display := resultDisplayIndex(m.visibleResultRows(), next); display >= 0 {
 						m.tableSelected = display
 						m.list.ScrollIntoView(display)
 					}
-				} else if m.pendingCount() > 0 {
+					m.focusFirstReviewField()
+				} else if m.pendingItemsCount() > 0 {
 					// Pending work remains but none of it is in the
 					// current segment. Drop a confirmed row that filtered
 					// itself out instead of leaving a hidden selection.
@@ -733,22 +871,21 @@ func (m *Model) submitReview(recordID string, seq, expectedRevision int64, data 
 					}
 				}
 				switch {
-				case m.pendingCount() == 0:
+				case m.pendingItemsCount() == 0:
 					m.reviewNotice = m.pendingText()
 				case next < 0:
-					m.reviewNotice = "后面没有待校对项。"
+					m.reviewNotice = "后面没有待处理项。"
 				default:
 					m.reviewNotice = fmt.Sprintf("已确认并定位下一项（序号 %d）。", m.rec.Rows[next].Seq)
 				}
 			case reviewConfirmStay:
-				m.forgetRecentlyConfirmed(seq)
-				if m.pendingCount() == 0 {
+				m.markRecentlyConfirmed(seq)
+				if m.pendingItemsCount() == 0 {
 					// The last pending item completes the review even
 					// though the action asked to stay.
 					m.reviewNotice = m.pendingText()
 					break
 				}
-				m.markRecentlyConfirmed(seq)
 				m.reviewNotice = fmt.Sprintf("已确认（序号 %d），仍停留在当前项。", seq)
 			default:
 				m.forgetRecentlyConfirmed(seq)
@@ -765,10 +902,12 @@ func (m *Model) submitReview(recordID string, seq, expectedRevision int64, data 
 // handleReviewError keeps the input on a save failure and discards it on
 // a revision conflict, reloading the current revision instead.
 func (m *Model) handleReviewError(recordID string, err error) {
+	m.reviewSaveFailed = true
 	if errors.Is(err, record.ErrRevisionConflict) {
 		m.edit = nil
 		m.navPrompt = nil
 		m.reviewErr = ""
+		m.reviewSaveFailed = false
 		m.reviewNotice = "记录已被更新，正在重新加载当前修订；旧输入未保存。"
 		if m.rec != nil && m.rec.ID == recordID {
 			m.reloadRecord(recordID, m.rec.Live)
@@ -808,21 +947,6 @@ func (m *Model) applySavedItem(item record.ItemRecord, generation int64) {
 	m.rebuildExport()
 }
 
-// pendingCount counts the produced structured rows whose review is not
-// finished. Auto-accepted and human-confirmed rows are settled.
-func (m *Model) pendingCount() int {
-	if m.rec == nil {
-		return 0
-	}
-	count := 0
-	for _, row := range m.rec.Rows {
-		if row.PendingReview() {
-			count++
-		}
-	}
-	return count
-}
-
 // nextPendingAfter finds the next pending row after the given capture
 // sequence in the current filtered view. It walks the visible rows only,
 // in record order, and wraps around at the end so a confirmed row can
@@ -843,7 +967,8 @@ func (m *Model) nextPendingAfter(seq int64) int {
 		if index == start {
 			return -1
 		}
-		if m.rec.Rows[index].PendingReview() {
+		switch m.rec.Rows[index].ItemClass {
+		case app.ItemClassPendingBackfill, app.ItemClassPendingReview:
 			return index
 		}
 		return -1

@@ -527,13 +527,14 @@ func TestViewMissingEvidenceAfterCleanup(t *testing.T) {
 	if !tt.HasText("截图已删除或缺失") {
 		t.Fatalf("the missing-evidence mark does not show: %q", tt.Texts())
 	}
-	if err := tt.Click("显示证据"); err != nil {
-		t.Fatal(err)
-	}
 	settle(t, m, q, tt)
 	if !tt.HasText("该记录的截图已删除或缺失，无法显示图像；识别文本与字段数据仍保留。") {
 		t.Fatalf("the evidence area does not explain the missing screenshots: %q", tt.Texts())
 	}
+	if err := tt.Click("原始识别文字与修订（1 条）"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
 	if !tt.HasText("静听嘉音") {
 		t.Fatalf("the recognized text disappeared with the screenshots: %q", tt.Texts())
 	}

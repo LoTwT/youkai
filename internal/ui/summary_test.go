@@ -584,9 +584,9 @@ func TestViewSummaryCountsOpenFilteredItems(t *testing.T) {
 		class  app.ItemClass
 	}{
 		{"待校对 ›", resultFilterPending, app.ItemClassPendingReview},
-		{"有警告但可导出 ›", resultFilterAll, app.ItemClassWarning},
+		{"有警告但可导出 ›", resultFilterWarning, app.ItemClassWarning},
 		{"已通过 ›", resultFilterAll, app.ItemClassPassed},
-		{"待补录 ›", resultFilterUnexportable, app.ItemClassPendingBackfill},
+		{"待补录 ›", resultFilterPending, app.ItemClassPendingBackfill},
 	}
 	for _, tc := range cases {
 		t.Run(tc.cell, func(t *testing.T) {
@@ -639,17 +639,16 @@ func TestSummaryDisclosuresFollowTheOpenRecord(t *testing.T) {
 func TestViewSummaryCountClearsItemBrowserFilters(t *testing.T) {
 	m, q, tt, _ := openSummaryRecord(t, summaryFourClassRecord(t),
 		Config{DirectExportSaver: &fakeDirectExportSaver{}}, 1180, 760)
-	m.search = "不存在的件"
-	m.setFilter = "不存在的套装"
-	m.slotFilter = "不存在的号位"
+	m.setFilter = "99999"
+	m.slotFilter = "9"
 	tt.Frame()
 
 	if err := tt.Click("待校对 ›"); err != nil {
 		t.Fatal(err)
 	}
 	settle(t, m, q, tt)
-	if m.search != "" || m.setFilter != "" || m.slotFilter != "" {
-		t.Fatalf("count click kept item filters: search=%q set=%q slot=%q", m.search, m.setFilter, m.slotFilter)
+	if m.setFilter != "" || m.slotFilter != "" {
+		t.Fatalf("count click kept item filters: set=%q slot=%q", m.setFilter, m.slotFilter)
 	}
 	if m.filter != resultFilterPending || m.recordTab != recordTabItems {
 		t.Fatalf("count click opened tab %v filter %v", m.recordTab, m.filter)

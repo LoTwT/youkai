@@ -101,17 +101,23 @@ func (m *Model) OpenNotification(recordID string) {
 		return
 	}
 	m.closeExportDialog()
+	if m.exitState == exitRunning || m.exitState == exitDone {
+		return
+	}
 	if m.appliedSession == scan.ID(recordID) && m.snap.Busy {
 		// A dirty editor keeps its own prompt; the notification must not
 		// discard the draft just to reveal the wrap-up.
 		m.navigatePage(pageScan)
 		return
 	}
-	if m.recordIsOpen(recordID) && m.recErr == "" && !m.editingDirty() && !m.reviewSaving {
-		// The design sends the click to the summary even when the same
-		// record is open on the item list. A dirty draft keeps its editor
-		// until the prompt settles; performOpenRecord then selects the tab.
-		m.recordTab = recordTabSummary
+	if m.recordIsOpen(recordID) && m.recErr == "" {
+		// A notification click is a navigation even when the record is
+		// already open: requestNavigation owns the dirty/save prompt and the
+		// record-tab switch, so it cannot discard an editor that the click
+		// should have asked about.
+		m.page = pageResults
+		m.requestNavigation(navigationRequest{kind: navRecordTab, recordTab: recordTabSummary})
+		return
 	}
 	m.openRecord(recordID)
 }

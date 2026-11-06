@@ -860,8 +860,8 @@ func TestOpenNotificationDoesNotMarkTheHintSeen(t *testing.T) {
 }
 
 // TestOpenNotificationKeepsTheItemsTabWithADirtyDraft covers
-// open-tab-ignores-dirty: the click may not switch the view away from the
-// open editor.
+// open-tab-ignores-dirty: the click must ask before switching away from the
+// open editor, and staying keeps both the tab and the draft.
 func TestOpenNotificationKeepsTheItemsTabWithADirtyDraft(t *testing.T) {
 	m, q, tt, _ := openReviewableResults(t, testRecord(), 1180, 760)
 	m.startEdit()
@@ -872,11 +872,42 @@ func TestOpenNotificationKeepsTheItemsTabWithADirtyDraft(t *testing.T) {
 	m.recordTab = recordTabItems
 	m.OpenNotification("rec")
 	settle(t, m, q, tt)
+	if m.navPrompt == nil {
+		t.Fatal("the click bypassed the unsaved-input prompt")
+	}
 	if m.recordTab != recordTabItems {
 		t.Fatalf("the click switched the dirty editor to tab %v", m.recordTab)
 	}
 	if m.edit == nil || !m.editingDirty() {
 		t.Fatal("the click discarded the dirty editor")
+	}
+	if err := tt.Click("留在这里"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
+	if m.recordTab != recordTabItems || m.edit == nil || m.edit.draft.Level != "13" {
+		t.Fatalf("staying lost the editor or switched tabs: %s", probeReviewState(m))
+	}
+}
+
+// TestOpenNotificationDuringSaveDoesNotSwitchTabs covers the saving half of
+// the notification guard: requestNavigation refuses the tab switch while a
+// revision write is in flight.
+func TestOpenNotificationDuringSaveDoesNotSwitchTabs(t *testing.T) {
+	m, _, tt, _ := openReviewableResults(t, testRecord(), 1180, 760)
+	tt.Frame()
+	if m.edit == nil {
+		t.Fatal("the pending row did not open its editor")
+	}
+	m.recordTab = recordTabItems
+	m.reviewSaving = true
+	m.OpenNotification("rec")
+	tt.Frame()
+	if m.navPrompt != nil || m.recordTab != recordTabItems || m.edit == nil {
+		t.Fatalf("saving notification changed navigation: %s", probeReviewState(m))
+	}
+	if !strings.Contains(m.reviewErr, "正在保存") {
+		t.Fatalf("saving notification did not report the guard: %q", m.reviewErr)
 	}
 }
 

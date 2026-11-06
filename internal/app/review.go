@@ -48,10 +48,12 @@ func (e *RevisionInvalidError) Error() string {
 
 func (e *RevisionInvalidError) Unwrap() error { return ErrRevisionInvalid }
 
-// ItemRevisionEdit is one user-authored revision of a produced item's
-// structured drive-disc payload. The application service recomputes the
-// payload's issues and validation from Data, so a caller cannot assert a
-// passed validation or keep a stale confirmation.
+// ItemRevisionEdit is one user-authored revision of an item's structured
+// drive-disc payload. A failed or unprocessed item is backfilled by the
+// same edit without changing its original processing outcome. The
+// application service recomputes the payload's issues and validation from
+// Data, so a caller cannot assert a passed validation or keep a stale
+// confirmation.
 type ItemRevisionEdit struct {
 	// Data is the complete edited data object. Explicit null parts keep
 	// their unread meaning; they are never defaulted here.
@@ -95,7 +97,7 @@ func (c DataCheck) Confirmable() bool {
 	return len(c.Blocking) == 0 && c.Validation.Status == zzz.ValidationPassed
 }
 
-// SaveItemRevision appends one manual revision to a produced item and
+// SaveItemRevision appends one manual revision to a saved item and
 // persists it through the record store. The store's revision check is
 // authoritative: a stale expected revision is returned as
 // record.ErrRevisionConflict before anything is written, so an old editor
@@ -213,7 +215,7 @@ func CheckDiscData(data zzz.DiscData) DataCheck {
 
 	if data.Rarity == nil || *data.Rarity == "" {
 		addGap(newReviewIssue("rarity", zzz.CodeRarityUnverified,
-			"本次捕获没有已验证的 S 稀有度，rarity 保留为 null"))
+			"本次捕获没有已验证的 S 稀有度，稀有度保持未读取"))
 	} else if *data.Rarity != zzz.RarityS {
 		addBlocking(newReviewIssue("rarity", "rarityUnsupported",
 			fmt.Sprintf("稀有度 %q 不是本修订可确认的 S", *data.Rarity)))

@@ -100,13 +100,11 @@ type HistoryRecord struct {
 	// session finished is reported consistently within the same run.
 	Interrupted bool
 	// ExportableCount, FailedCount, UnprocessedCount, PendingReview and
-	// OtherCount are the current history table's mutually exclusive
-	// buckets: exportable items, failed and unprocessed observations,
-	// produced items still waiting for review, and everything else
-	// (produced but unusable, or queued/running in a checkpoint saved
-	// mid-session). They keep the pre-classification rules so the existing
-	// table, results page and cleanup preview do not change; the four-class
-	// view is Counts.
+	// OtherCount are legacy metadata buckets kept for compatibility; the
+	// history table now reads Counts. Failed and Unprocessed include only
+	// observations that still have no interpretation: a backfilled item
+	// keeps its original Status, leaves those buckets and joins the bucket
+	// its current validation and quality select.
 	ExportableCount  int64
 	FailedCount      int64
 	UnprocessedCount int64
@@ -271,30 +269,32 @@ type historyItemTotals struct {
 	Other         int64
 }
 
-// historyItemTotalsOf computes the existing history-table buckets and the
-// four-class counts in one pass. The existing buckets keep their old
-// meaning: PendingReview is only the review editor's quality queue, and
-// Other covers produced items the export cannot use plus queued/running
-// observations. The exportable decision is shared with the classifier, so
-// the item is validated only once.
+// historyItemTotalsOf computes the history-table buckets and the
+// four-class counts in one pass. Failed and Unprocessed count only
+// observations whose original outcome still has no manual interpretation;
+// a backfilled item keeps its original Status but joins Exportable,
+// PendingReview or Other by its current data. PendingReview is the review
+// queue, and Other covers interpreted items the export cannot use plus
+// queued/running observations. The exportable decision is shared with the
+// classifier, so the item is validated only once.
 func historyItemTotalsOf(items []record.ItemRecord) historyItemTotals {
 	var totals historyItemTotals
 	for i := range items {
 		item := &items[i]
-		switch item.Status {
-		case record.StatusFailed:
-			totals.Failed++
+		if !ItemInterpreted(*item) {
+			// The legacy outcome buckets count only items whose original
+			// failure or interruption still has no interpretation. A
+			// backfilled item keeps its original Status, but its current
+			// handling belongs to the four-class counts below.
 			totals.Counts.PendingBackfill++
-			continue
-		case record.StatusUnprocessed:
-			totals.Unprocessed++
-			totals.Counts.PendingBackfill++
-			continue
-		case record.StatusProduced:
-			// Assessed below.
-		default:
-			totals.Other++
-			totals.Counts.PendingBackfill++
+			switch item.Status {
+			case record.StatusFailed:
+				totals.Failed++
+			case record.StatusUnprocessed:
+				totals.Unprocessed++
+			default:
+				totals.Other++
+			}
 			continue
 		}
 		exported, usable := usableItem(item)

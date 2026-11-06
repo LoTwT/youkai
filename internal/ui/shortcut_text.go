@@ -19,6 +19,14 @@ const (
 	shortcutSave = "Ctrl+S"
 	// shortcutNextPending moves to the next pending item.
 	shortcutNextPending = "Ctrl+J"
+	// shortcutPreviousPending moves to the previous pending item.
+	shortcutPreviousPending = "Ctrl+Shift+J"
+	// shortcutZoomIn enlarges the screenshots.
+	shortcutZoomIn = "Ctrl+="
+	// shortcutZoomOut shrinks the screenshots.
+	shortcutZoomOut = "Ctrl+-"
+	// shortcutZoomFit fits the screenshots to the area.
+	shortcutZoomFit = "Ctrl+0"
 	// shortcutExport opens the record's export dialog from the record
 	// workspace.
 	shortcutExport = "Ctrl+E"

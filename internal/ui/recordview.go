@@ -60,10 +60,19 @@ type Row struct {
 	Failure string
 	// Quality is the field-quality state of the current revision.
 	Quality record.Quality
+	// ItemClass is the four-class display classification shared with the
+	// export (app.ClassifyItem): pending backfill, pending review, warning
+	// or passed. It is empty only for a row built without a record item,
+	// as some unit tests do; ClassText then falls back to the status.
+	ItemClass app.ItemClass
 	// Revision is the persisted item revision the row shows. An edit is
 	// saved against it, so a stale editor can only be rejected, never
 	// overwrite a newer revision.
 	Revision int64
+	// Backfilled marks a failed or unprocessed item whose manual revision
+	// supplied an interpretation. Its original Status, Failure and Reason
+	// stay visible; the item's current class comes from app.ClassifyItem.
+	Backfilled bool
 	// Lines are the observed text lines, in observation order.
 	Lines []Line
 	// Evidence are the item's evidence images in capture order: line crops
@@ -73,13 +82,13 @@ type Row struct {
 	// write leaves its own slot without an image instead of shifting every
 	// later image.
 	Evidence []Evidence
-	// Structured is the drive-disc interpretation of a produced item, as
-	// persisted or backfilled in memory from its raw lines. It is nil for
-	// failed and unprocessed items and for payloads without a drive-disc
-	// interpretation: those rows show no structured fields rather than
-	// fabricated empty ones. A structured row may still carry null fields
-	// (for example managementState or equipped), which keep their own
-	// "not read" meaning.
+	// Structured is the drive-disc interpretation of an item, as persisted
+	// or backfilled in memory from its raw lines. It is nil for failed and
+	// unprocessed items that have no manual interpretation and for payloads
+	// without a drive-disc interpretation: those rows show no structured
+	// fields rather than fabricated empty ones. A structured row may still
+	// carry null fields (for example managementState or equipped), which
+	// keep their own "not read" meaning.
 	Structured *zzz.StructuredDisc
 }
 
@@ -124,18 +133,35 @@ type Evidence struct {
 // same field.
 type FormField string
 
-// The form fields an evidence crop can locate (R-07a).
+// The form fields an evidence crop can locate (R-07a). The remaining
+// constants are the form's own field order.
 const (
 	FormFieldSetID           FormField = "setId"
+	FormFieldRarity          FormField = "rarity"
+	FormFieldSlot            FormField = "slot"
 	FormFieldLevel           FormField = "level"
 	FormFieldMainStat        FormField = "mainStat"
+	FormFieldSubstats        FormField = "substats"
 	FormFieldSubstat1        FormField = "substats[0]"
 	FormFieldSubstat2        FormField = "substats[1]"
 	FormFieldSubstat3        FormField = "substats[2]"
 	FormFieldSubstat4        FormField = "substats[3]"
-	FormFieldEquipped        FormField = "equipped"
 	FormFieldManagementState FormField = "managementState"
+	FormFieldEquipped        FormField = "equipped"
 )
+
+// reviewFieldOrder is the form's reading order: the same order problems
+// use, and the fallback when no problem names a field.
+var reviewFieldOrder = []FormField{
+	FormFieldMainStat,
+	FormFieldSubstats,
+	FormFieldSetID,
+	FormFieldRarity,
+	FormFieldSlot,
+	FormFieldLevel,
+	FormFieldManagementState,
+	FormFieldEquipped,
+}
 
 // formFieldEvidence is the R-07a role → form field table, written
 // field-first so a field without a crop stays explicit: the management state
@@ -149,12 +175,18 @@ var formFieldEvidence = []struct {
 	roles []string
 }{
 	{FormFieldSetID, []string{"name"}},
+	{FormFieldRarity, nil},
+	{FormFieldSlot, nil},
 	{FormFieldLevel, []string{"level"}},
 	{FormFieldMainStat, []string{"main"}},
 	{FormFieldSubstat1, []string{"sub1"}},
 	{FormFieldSubstat2, []string{"sub2"}},
 	{FormFieldSubstat3, []string{"sub3"}},
 	{FormFieldSubstat4, []string{"sub4"}},
+	// The group follows the rows so FormFieldForRole keeps returning the
+	// specific row; the group's roles are for the "does this field have a
+	// screenshot" check and the group click.
+	{FormFieldSubstats, []string{"sub1", "sub2", "sub3", "sub4"}},
 	{FormFieldEquipped, []string{"detailAvatar", "listAvatar"}},
 	{FormFieldManagementState, nil},
 }
@@ -237,10 +269,10 @@ func BuildRecordView(id string, rec *record.Recovery, live bool) *RecordView {
 		Shell:            cp.Session,
 		EvidenceRemoved:  evidenceWasRemoved(cp),
 	}
-	view.Classes = app.ClassifyItems(cp.Items)
 	for i := range cp.Items {
 		view.Rows = append(view.Rows, buildRow(&cp.Items[i]))
 	}
+	view.Classes = app.ClassifyItems(cp.Items)
 	return view
 }
 
@@ -268,17 +300,19 @@ func evidenceWasRemoved(cp *record.Checkpoint) bool {
 // the same item loaded from disk.
 func buildRow(it *record.ItemRecord) Row {
 	row := Row{
-		Seq:      it.Sequence,
-		Status:   it.Status,
-		Reason:   it.Reason,
-		Failure:  it.Failure,
-		Quality:  it.Quality,
-		Revision: it.Revision,
+		Seq:        it.Sequence,
+		Status:     it.Status,
+		Reason:     it.Reason,
+		Failure:    it.Failure,
+		Quality:    it.Quality,
+		Revision:   it.Revision,
+		Backfilled: it.Status != record.StatusProduced && app.ItemInterpreted(*it),
+		ItemClass:  app.ClassifyItem(*it),
 	}
 	res := parseResult(it.Data)
-	if it.Status == record.StatusProduced {
+	if it.Status == record.StatusProduced || row.Backfilled {
 		row.Structured = res.Structured
-		if row.Structured == nil {
+		if row.Structured == nil && it.Status == record.StatusProduced {
 			row.Structured = backfillStructured(it.Data, it.Observed)
 		}
 	}
@@ -449,6 +483,9 @@ func (v *RecordView) RowOf(seq int64) int {
 
 // StatusText renders a processing state in the interface's language.
 func (r Row) StatusText() string {
+	if r.Backfilled {
+		return "已补录（原：" + r.OriginalOutcomeLabel() + "）"
+	}
 	switch r.Status {
 	case record.StatusProduced:
 		return "已产出"
@@ -472,6 +509,42 @@ func (r Row) StatusText() string {
 	}
 }
 
+// OriginalOutcomeLabel names the preserved processing outcome without its
+// detail, for a compact list label.
+func (r Row) OriginalOutcomeLabel() string {
+	switch r.Status {
+	case record.StatusFailed:
+		return "识别失败"
+	case record.StatusUnprocessed:
+		return "未处理"
+	default:
+		return r.StatusText()
+	}
+}
+
+// OriginalOutcomeText includes the failure or interruption detail, for the
+// backfill band and the raw/revision disclosure.
+func (r Row) OriginalOutcomeText() string {
+	switch r.Status {
+	case record.StatusFailed:
+		if r.Failure != "" {
+			return "识别失败：" + r.Failure
+		}
+		return "识别失败"
+	case record.StatusUnprocessed:
+		switch r.Reason {
+		case record.ReasonCancelled:
+			return "未处理（用户取消）"
+		case record.ReasonInterrupted:
+			return "未处理（中断）"
+		default:
+			return "未处理"
+		}
+	default:
+		return r.StatusText()
+	}
+}
+
 // QualityText renders a field-quality state.
 func (r Row) QualityText() string {
 	switch r.Quality {
@@ -489,6 +562,120 @@ func (r Row) QualityText() string {
 	default:
 		return string(r.Quality)
 	}
+}
+
+// ClassText is the item list's category label: the four-class
+// classification the export and the summary counts use, with the
+// backfill reason split the way the design requires ("识别失败" or
+// "未处理"). A row built without a record item falls back to the
+// processing outcome, never to an English class value.
+func (r Row) ClassText() string {
+	text := r.classText()
+	if r.Backfilled {
+		return "已补录 · " + text
+	}
+	return text
+}
+
+func (r Row) classText() string {
+	switch r.ItemClass {
+	case app.ItemClassPendingBackfill:
+		switch r.Status {
+		case record.StatusFailed:
+			return "待补录 · 识别失败"
+		case record.StatusUnprocessed:
+			return "待补录 · 未处理"
+		default:
+			return "待补录"
+		}
+	case app.ItemClassPendingReview:
+		return "待校对"
+	case app.ItemClassWarning:
+		return "有警告"
+	case app.ItemClassPassed:
+		return "已通过"
+	}
+	switch r.Status {
+	case record.StatusFailed:
+		return "待补录 · 识别失败"
+	case record.StatusUnprocessed:
+		return "待补录 · 未处理"
+	}
+	if r.PendingReview() {
+		return "待校对"
+	}
+	return "已通过"
+}
+
+// lineRoleText names one observed line's role in the interface's language.
+// A role the interface does not know keeps its position, never the raw
+// internal identifier.
+func lineRoleText(role string, index int) string {
+	switch role {
+	case "name":
+		return "套装"
+	case "level":
+		return "等级"
+	case "main":
+		return "主词条"
+	case "sub1":
+		return "副词条 1"
+	case "sub2":
+		return "副词条 2"
+	case "sub3":
+		return "副词条 3"
+	case "sub4":
+		return "副词条 4"
+	}
+	return fmt.Sprintf("行 %d", index+1)
+}
+
+// contextRoleText names a non-text crop in the interface's language.
+func contextRoleText(role string, index int) string {
+	switch role {
+	case "qualityBadge":
+		return "稀有度"
+	case "selectedCell":
+		return "选中格"
+	case "detailAvatar":
+		return "装备者头像"
+	case "listAvatar":
+		return "列表头像"
+	}
+	return fmt.Sprintf("其他截图 %d", index+1)
+}
+
+// evidenceRoleText names any crop by its kind and role.
+func evidenceRoleText(ev *Evidence) string {
+	if ev == nil {
+		return "截图"
+	}
+	if ev.Kind == EvidenceLine {
+		return lineRoleText(ev.Role, ev.Index)
+	}
+	return contextRoleText(ev.Role, ev.Index)
+}
+
+// lineRoleRank is the game panel's reading order for the locatable line
+// roles. ok is false for a role the list cannot place.
+func lineRoleRank(role string) (int, bool) {
+	switch role {
+	case "name":
+		return 0, true
+	case "level":
+		return 1, true
+	case "main":
+		return 2, true
+	case "sub1":
+		return 3, true
+	case "sub2":
+		return 4, true
+	case "sub3":
+		return 5, true
+	case "sub4":
+		return 6, true
+	}
+	return 0, false
 }
 
 // OptionalEquippedOnly reports the v1 revision-0 shape whose only gap was
@@ -828,11 +1015,14 @@ func (r Row) MissingEvidence() bool {
 	return len(r.Evidence) == 0
 }
 
-// PendingReview reports whether the row is a produced structured item
-// whose review is not settled. Failed and unprocessed rows are not
-// reviewable in this revision, and an auto-accepted or human-confirmed
-// row needs no further confirmation.
+// PendingReview reports whether the row still belongs to the review
+// queue. The four-class classification already contains that decision, so
+// a backfilled failed item behaves like any other pending item; the
+// fallback keeps rows built without a record item working.
 func (r Row) PendingReview() bool {
+	if r.ItemClass != "" {
+		return r.ItemClass == app.ItemClassPendingReview
+	}
 	if r.Status != record.StatusProduced || r.Structured == nil {
 		return false
 	}
