@@ -409,9 +409,9 @@ func TestOpenHistoryAndReturnToLive(t *testing.T) {
 		t.Fatalf("the history record did not open with its marks: %+v", m.rec)
 	}
 
-	// The live session's saved growth updates the session slot without
-	// overwriting the open history record; returning restores that slot
-	// without another load.
+	// The live session's saved growth stays on disk while the reopened
+	// history record is on screen; returning to the live record loads the
+	// newer generation instead of mixing it into the open one.
 	svc.loads["s1"] = recovery(
 		item(1, record.StatusProduced, "", ""),
 		item(2, record.StatusProduced, "", ""),
@@ -425,10 +425,10 @@ func TestOpenHistoryAndReturnToLive(t *testing.T) {
 	m.ShowLive()
 	drainAll(t, m, q)
 	if !m.rec.Live || m.rec.ID != "s1" || len(m.rec.Rows) != 2 {
-		t.Fatalf("returning to the live scan did not restore the session: %+v", m.rec)
+		t.Fatalf("returning to the live scan did not load its newer generation: %+v", m.rec)
 	}
-	if len(svc.loadLog) != loadsBefore {
-		t.Fatalf("returning to the live scan reloaded it: %v", svc.loadLog)
+	if len(svc.loadLog) != loadsBefore+1 || svc.loadLog[len(svc.loadLog)-1] != "s1" {
+		t.Fatalf("returning to the live scan did not reload it: %v", svc.loadLog)
 	}
 
 	// A new session takes the results area back from a history record.

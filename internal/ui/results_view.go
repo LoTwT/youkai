@@ -100,7 +100,6 @@ func (m *Model) resultsArea(c *ui.Context, t *ui.Theme) {
 			}
 		}
 		m.sessionTerminationArea(c, t)
-		m.savePromptArea(c, t)
 		if m.histErr != "" {
 			ui.Text(c, "历史记录读取失败："+m.histErr).TextColor(t.Danger)
 		}
@@ -119,9 +118,6 @@ func (m *Model) resultsArea(c *ui.Context, t *ui.Theme) {
 				m.completionArea(c, t)
 				return
 			}
-			if m.rec != nil {
-				m.exportArea(c, t)
-			}
 			ui.Text(c, m.emptyResultsText()).TextColor(t.TextMuted)
 			return
 		}
@@ -130,7 +126,6 @@ func (m *Model) resultsArea(c *ui.Context, t *ui.Theme) {
 			m.completionArea(c, t)
 			return
 		}
-		m.exportArea(c, t)
 		visible := m.visibleResultRows()
 		if len(visible) == 0 {
 			ui.Text(c, m.filteredEmptyText()).TextColor(t.TextMuted)
@@ -495,7 +490,7 @@ func (m *Model) applyResultsScrollSnap(target float32) {
 // resetResultsScroll clears the composite's tracked offset before a new
 // ListState takes over, then places it on the row that list will show. A
 // stale offset would otherwise override the restored scroll of another
-// result slot.
+// record.
 func (m *Model) resetResultsScroll(row int) {
 	m.resultsScroll = ui.ScrollState{}
 	m.resultsScrollSeen = 0

@@ -70,7 +70,7 @@ func (m *Model) targetArea(c *ui.Context, t *ui.Theme) {
 		case m.targetsErr != "":
 			ui.Text(c, m.targetsErr).TextColor(t.Danger)
 		case len(m.targets) == 0 && m.targetsAccessDenied > 0:
-			ui.Text(c, targetElevatedText).TextColor(t.Danger)
+			ui.Text(c, targetElevatedText()).TextColor(t.Danger)
 		case len(m.targets) == 0 && m.targetsUnreadable > 0:
 			ui.Text(c, targetUnreadableText).TextColor(t.Danger)
 		case len(m.targets) == 0:
@@ -112,7 +112,7 @@ func (m *Model) startNote() string {
 	case m.source.TargetSelection && m.targetsErr != "":
 		return m.targetsErr
 	case m.source.TargetSelection && len(m.targets) == 0 && m.targetsAccessDenied > 0:
-		return "游戏正在以管理员身份运行，请以管理员身份重新打开 youkai。"
+		return faultCauseText("integrityMismatch", nil)
 	case m.source.TargetSelection && len(m.targets) == 0 && m.targetsUnreadable > 0:
 		return targetUnreadableText
 	case m.source.TargetSelection && len(m.targets) == 0:

@@ -2,6 +2,7 @@ package ui
 
 import (
 	"bytes"
+	"context"
 	"encoding/csv"
 	"encoding/json"
 	"errors"
@@ -25,18 +26,33 @@ type exportCall struct {
 }
 
 // fakeDirectExportSaver records direct writes. saveFn may hold the write
-// open or return an actionable directory failure.
+// open or return an actionable directory failure; saveCtxFn drives the
+// dialog's cancellation path.
 type fakeDirectExportSaver struct {
-	mu     sync.Mutex
-	calls  []exportCall
-	saveFn func(format app.ExportFormat, defaultName string, data []byte) (string, error)
+	mu        sync.Mutex
+	calls     []exportCall
+	saveFn    func(format app.ExportFormat, defaultName string, data []byte) (string, error)
+	saveCtxFn func(ctx context.Context, format app.ExportFormat, defaultName string, data []byte) (string, error)
 }
 
 func (f *fakeDirectExportSaver) SaveDirect(format app.ExportFormat, defaultName string, data []byte) (string, error) {
+	return f.save(nil, format, defaultName, data)
+}
+
+// SaveDirectContext gives the dialog a cancelable writer. A canceled save
+// returns the context error and no path, as the production saver does.
+func (f *fakeDirectExportSaver) SaveDirectContext(ctx context.Context, format app.ExportFormat, defaultName string, data []byte) (string, error) {
+	return f.save(ctx, format, defaultName, data)
+}
+
+func (f *fakeDirectExportSaver) save(ctx context.Context, format app.ExportFormat, defaultName string, data []byte) (string, error) {
 	f.mu.Lock()
 	f.calls = append(f.calls, exportCall{format: format, name: defaultName, data: append([]byte(nil), data...)})
-	fn := f.saveFn
+	fn, ctxFn := f.saveFn, f.saveCtxFn
 	f.mu.Unlock()
+	if ctx != nil && ctxFn != nil {
+		return ctxFn(ctx, format, defaultName, data)
+	}
 	if fn != nil {
 		return fn(format, defaultName, data)
 	}
@@ -82,49 +98,102 @@ func uiStructuredItem(t *testing.T, seq int64, quality record.Quality) record.It
 	return record.ItemRecord{Sequence: seq, Status: record.StatusProduced, Quality: quality, Data: payload}
 }
 
-// exportModel builds a model showing one saved history record with two
-// items: one usable and one still pending review.
-func exportModel(t *testing.T, saver *fakeDirectExportSaver) (*Model, *queueUpdater, *fakeService) {
-	t.Helper()
-	svc := &fakeService{loads: map[string]*record.Recovery{
-		"rec": recovery(uiStructuredItem(t, 1, record.QualityAutoAccepted),
-			uiStructuredItem(t, 2, record.QualityNeedsReview)),
-	}}
-	m, q := newTestModel(t, Config{Service: svc, DirectExportSaver: saver, AppVersion: "test-1"})
-	m.reloadRecord("rec", false)
-	drainAll(t, m, q)
-	m.page = pageResults
-	showRecordItems(m)
-	if m.rec == nil || m.exportData == nil {
-		t.Fatalf("the export snapshot did not load: rec=%v err=%q", m.rec, m.exportBuildErr)
-	}
-	return m, q, svc
+// exportDialogFixture loads one saved record with a direct saver and a
+// tester at the design's default window size.
+type exportDialogFixture struct {
+	m     *Model
+	q     *queueUpdater
+	tt    *ui.Tester
+	svc   *fakeService
+	saver *fakeDirectExportSaver
 }
 
-func TestExportControlsShowCountsAndSaveBothFormats(t *testing.T) {
+func newExportDialogFixture(t *testing.T, rec *record.Recovery, live bool) *exportDialogFixture {
+	t.Helper()
 	saver := &fakeDirectExportSaver{}
-	m, q, _ := exportModel(t, saver)
-	tt := ui.NewTester(m.View, 1020, 700)
+	id := rec.Checkpoint.Session.SessionID
+	svc := &fakeService{loads: map[string]*record.Recovery{id: rec}}
+	m, q := newTestModel(t, Config{
+		Service:           svc,
+		DirectExportSaver: saver,
+		AppVersion:        "test-1",
+	})
+	m.SetContentSize(1180, 760)
+	m.showRecord(id, live)
+	m.reloadRecord(id, live)
+	drainAll(t, m, q)
+	m.page = pageResults
+	tt := ui.NewTester(m.View, 1180, 760)
 	settle(t, m, q, tt)
-
-	want := "已采集 2 件 · 可导出 1 件 · 待校对 1 件 · 失败 0 件 · 未处理 0 件 · 覆盖：无法确认 · 不含截图"
-	if !tt.HasText(want) {
-		t.Fatalf("export summary missing %q: %v", want, tt.Texts())
+	if m.exportData == nil {
+		t.Fatalf("the export snapshot did not load: %v", m.exportBuildErr)
 	}
-	if !tt.HasText("导出 JSON") || !tt.HasText("导出 CSV") {
-		t.Fatalf("the two export buttons do not show: %v", tt.Texts())
+	return &exportDialogFixture{m: m, q: q, tt: tt, svc: svc, saver: saver}
+}
+
+// open shows the dialog through the model's entry and redraws.
+func (f *exportDialogFixture) open(t *testing.T) {
+	t.Helper()
+	f.m.requestExport()
+	f.tt.Frame()
+	if !f.m.exportDialog.open {
+		t.Fatalf("the export dialog did not open: %q", f.tt.Texts())
+	}
+}
+
+// TestExportDialogShowsCountsFormatDifferenceAndSuccess covers S8's
+// 可导出 and 成功 states, the equal-weight format buttons, the opening
+// focus, and the print/download actions of the success state.
+func TestExportDialogShowsCountsFormatDifferenceAndSuccess(t *testing.T) {
+	rec := recovery(
+		uiStructuredItem(t, 1, record.QualityAutoAccepted),
+		uiStructuredItem(t, 2, record.QualityAutoAccepted),
+		uiStructuredItem(t, 3, record.QualityNeedsReview),
+	)
+	f := newExportDialogFixture(t, rec, false)
+	opened := 0
+	f.m.cfg.OpenDownloadsDirectory = func() error {
+		opened++
+		return nil
+	}
+	if err := f.tt.Click("导出…"); err != nil {
+		t.Fatalf("click the title-bar entry: %v", err)
+	}
+	f.tt.Frame()
+	if !f.m.exportDialog.open {
+		t.Fatalf("the title-bar entry did not open the dialog: %q", f.tt.Texts())
 	}
 
-	if err := tt.Click("导出 JSON"); err != nil {
+	if !f.tt.HasText("导出这条记录") {
+		t.Fatalf("the dialog title is missing: %q", f.tt.Texts())
+	}
+	for _, want := range []string{
+		"纳入", "2 件", "排除", "1 件", "待处理 1",
+		"覆盖", "无法确认", "不含截图",
+		"写入位置", "系统下载目录",
+		"JSON：带来源扫描、覆盖结论、筛选方式、排除数量和目录。CSV：一行一件的表格，不含这些信息。两者来自同一已保存修订。",
+		"导出 JSON", "导出 CSV", "去校对",
+	} {
+		if !f.tt.HasText(want) {
+			t.Fatalf("the dialog is missing %q: %q", want, f.tt.Texts())
+		}
+	}
+	if !f.tt.Focused("导出 JSON") {
+		t.Fatalf("the opening focus is not 导出 JSON: %q", f.tt.Texts())
+	}
+	if calls := f.saver.snapshot(); len(calls) != 0 {
+		t.Fatalf("opening the dialog exported: %+v", calls)
+	}
+
+	if err := f.tt.Click("导出 JSON"); err != nil {
 		t.Fatalf("click 导出 JSON: %v", err)
 	}
-	drainAll(t, m, q)
-	tt.Frame()
-	calls := saver.snapshot()
+	settle(t, f.m, f.q, f.tt)
+	calls := f.saver.snapshot()
 	if len(calls) != 1 || calls[0].format != app.ExportJSON {
 		t.Fatalf("JSON export calls = %+v", calls)
 	}
-	date := m.recData.Checkpoint.Session.StartedAt.Local().Format("2006-01-02")
+	date := f.m.recData.Checkpoint.Session.StartedAt.Local().Format("2006-01-02")
 	if want := "youkai-" + date + "-rec.youkai.json"; calls[0].name != want {
 		t.Fatalf("default JSON name = %q, want %q", calls[0].name, want)
 	}
@@ -138,37 +207,750 @@ func TestExportControlsShowCountsAndSaveBothFormats(t *testing.T) {
 	if err := json.Unmarshal(calls[0].data, &doc); err != nil {
 		t.Fatalf("decode exported JSON: %v", err)
 	}
-	if doc.Format != "youkai.scan" || doc.Session.SavedRevision != 1 || len(doc.Items) != 1 {
+	if doc.Format != "youkai.scan" || doc.Session.SavedRevision != 1 || len(doc.Items) != 2 {
 		t.Fatalf("exported JSON = format %q revision %d items %d", doc.Format, doc.Session.SavedRevision, len(doc.Items))
 	}
-	if !tt.HasText("已导出 JSON（1 件，历史记录 rec）") {
-		t.Fatalf("success notice missing: %v", tt.Texts())
+	if !f.tt.HasText("已导出 2 件") || !f.tt.HasText("打开下载目录") ||
+		!f.tt.HasText("完成") || !f.tt.HasText("rec.youkai.json") {
+		t.Fatalf("the success state is incomplete: %q", f.tt.Texts())
 	}
-
-	if err := tt.Click("导出 CSV"); err != nil {
-		t.Fatalf("click 导出 CSV: %v", err)
+	if f.tt.HasText("删除这条记录的截图…") {
+		t.Fatal("a record with a pending item offered screenshot deletion")
 	}
-	drainAll(t, m, q)
-	calls = saver.snapshot()
-	if len(calls) != 2 || calls[1].format != app.ExportCSV {
-		t.Fatalf("CSV export calls = %+v", calls)
+	if err := f.tt.Click("打开下载目录"); err != nil {
+		t.Fatalf("click 打开下载目录: %v", err)
 	}
-	if want := "youkai-" + date + "-rec.youkai.csv"; calls[1].name != want {
-		t.Fatalf("default CSV name = %q, want %q", calls[1].name, want)
+	if opened != 1 {
+		t.Fatalf("open downloads calls = %d, want 1", opened)
 	}
-	if !bytes.HasPrefix(calls[1].data, []byte{0xEF, 0xBB, 0xBF}) {
-		t.Fatal("exported CSV has no BOM")
+	if err := f.tt.Click("完成"); err != nil {
+		t.Fatalf("click 完成: %v", err)
 	}
-	rows, err := csv.NewReader(bytes.NewReader(calls[1].data[3:])).ReadAll()
-	if err != nil {
-		t.Fatalf("read exported CSV: %v", err)
-	}
-	if len(rows) != 2 || len(rows[1]) != len(rows[0]) {
-		t.Fatalf("exported CSV rows = %d, width = %d", len(rows), len(rows[1]))
+	f.tt.Frame()
+	if f.m.exportDialog.open {
+		t.Fatal("完成 did not close the dialog")
 	}
 }
 
-func TestDirectExportKeepsTheSnapshotWhenTheSlotChanges(t *testing.T) {
+// TestExportDialogTabOrder checks 08 §4's forward Tab order: the two format
+// buttons, then the review link, then close. MyGo builds the close and
+// review controls last (attached to their visible places), so the layout
+// stays on the wireframe while the focus order follows the spec.
+func TestExportDialogTabOrder(t *testing.T) {
+	rec := recovery(
+		uiStructuredItem(t, 1, record.QualityAutoAccepted),
+		uiStructuredItem(t, 2, record.QualityNeedsReview),
+	)
+	f := newExportDialogFixture(t, rec, false)
+	f.open(t)
+
+	if !f.tt.Focused("导出 JSON") {
+		t.Fatalf("the dialog did not open on 导出 JSON: %q", f.tt.Texts())
+	}
+	for _, want := range []string{"导出 CSV", "去校对", "关闭导出对话框"} {
+		f.tt.Key(0, ui.KeyTab)
+		if !f.tt.Focused(want) {
+			t.Fatalf("Tab did not reach %q: %q", want, f.tt.Texts())
+		}
+	}
+	f.tt.Key(0, ui.KeyEnter)
+	f.tt.Frame()
+	if f.m.exportDialog.open {
+		t.Fatal("the attached close button did not close the dialog")
+	}
+}
+
+// TestExportDialogExcludedReasonsExpandOnDemand covers 08 §4's on-demand
+// exclusion breakdown: the reasons stay out of the way until asked for.
+func TestExportDialogExcludedReasonsExpandOnDemand(t *testing.T) {
+	rec := recovery(
+		uiStructuredItem(t, 1, record.QualityAutoAccepted),
+		uiStructuredItem(t, 2, record.QualityNeedsReview),
+	)
+	f := newExportDialogFixture(t, rec, false)
+	f.open(t)
+
+	if f.tt.HasText("待校对：1 件") {
+		t.Fatalf("the exclusion reasons start expanded: %q", f.tt.Texts())
+	}
+	if err := f.tt.Click("排除原因明细"); err != nil {
+		t.Fatal(err)
+	}
+	f.tt.Frame()
+	if !f.tt.HasText("待校对：1 件") {
+		t.Fatalf("the exclusion reasons did not expand: %q", f.tt.Texts())
+	}
+	if err := f.tt.Click("排除原因明细"); err != nil {
+		t.Fatal(err)
+	}
+	f.tt.Advance(250 * time.Millisecond)
+	if f.tt.HasText("待校对：1 件") {
+		t.Fatalf("the exclusion reasons did not collapse: %q", f.tt.Texts())
+	}
+}
+
+// TestExportDialogFitsTheNarrowWindow checks that the whole pre-export
+// content stays inside the design's minimum window, so the format choice
+// is never clipped at 960×640.
+func TestExportDialogFitsTheNarrowWindow(t *testing.T) {
+	rec := recovery(
+		uiStructuredItem(t, 1, record.QualityAutoAccepted),
+		uiStructuredItem(t, 2, record.QualityNeedsReview),
+	)
+	f := newExportDialogFixture(t, rec, false)
+	f.tt.SetSize(960, 640)
+	f.m.SetContentSize(960, 640)
+	f.tt.Frame()
+	f.open(t)
+	for _, label := range []string{
+		"导出这条记录", "纳入", "排除", "覆盖", "不含截图",
+		"写入位置", "去校对", "排除原因明细", "导出 JSON", "导出 CSV",
+		"关闭导出对话框",
+		"JSON：带来源扫描、覆盖结论、筛选方式、排除数量和目录。" +
+			"CSV：一行一件的表格，不含这些信息。两者来自同一已保存修订。",
+	} {
+		rect, ok := f.tt.Find(label)
+		if !ok {
+			t.Fatalf("%q is not visible at 960×640: %q", label, f.tt.Texts())
+		}
+		if rect.X < 0 || rect.Y < 0 || rect.X+rect.W > 960 || rect.Y+rect.H > 640 {
+			t.Fatalf("%q lies outside 960×640: %+v", label, rect)
+		}
+	}
+}
+
+// TestExportDialogEscClosesWhenIdle checks the ordinary Escape dismissal.
+func TestExportDialogEscClosesWhenIdle(t *testing.T) {
+	rec := recovery(uiStructuredItem(t, 1, record.QualityAutoAccepted))
+	f := newExportDialogFixture(t, rec, false)
+	f.open(t)
+	f.tt.Key(0, ui.KeyEscape)
+	settle(t, f.m, f.q, f.tt)
+	if f.m.exportDialog.open {
+		t.Fatalf("Esc did not close the idle dialog: %q", f.tt.Texts())
+	}
+	if f.tt.HasText("导出这条记录") {
+		t.Fatalf("the closed dialog still renders: %q", f.tt.Texts())
+	}
+}
+
+// TestExportDialogAttachedControlsStayInPlace guards the placeholder and
+// AttachTo layout: dropping either attachment moves the control to the
+// bottom of the dialog instead of its wireframe row.
+func TestExportDialogAttachedControlsStayInPlace(t *testing.T) {
+	for _, size := range []struct {
+		name string
+		w, h int
+	}{{"1180x760", 1180, 760}, {"960x640", 960, 640}} {
+		t.Run(size.name, func(t *testing.T) {
+			rec := recovery(
+				uiStructuredItem(t, 1, record.QualityAutoAccepted),
+				uiStructuredItem(t, 2, record.QualityNeedsReview),
+			)
+			f := newExportDialogFixture(t, rec, false)
+			f.tt.SetSize(size.w, size.h)
+			f.m.SetContentSize(size.w, size.h)
+			f.tt.Frame()
+			f.open(t)
+
+			review, ok := f.tt.Find("去校对")
+			if !ok {
+				t.Fatalf("去校对 is missing: %q", f.tt.Texts())
+			}
+			excluded, ok := f.tt.Find("排除")
+			if !ok {
+				t.Fatalf("排除 is missing: %q", f.tt.Texts())
+			}
+			if centerY(review)-centerY(excluded) > 2 || centerY(excluded)-centerY(review) > 2 {
+				t.Fatalf("去校对 is not on the exclusion row: review %+v, 排除 %+v", review, excluded)
+			}
+			closeRect, ok := f.tt.Find("关闭导出对话框")
+			if !ok {
+				t.Fatalf("关闭导出对话框 is missing: %q", f.tt.Texts())
+			}
+			title, ok := f.tt.Find("导出这条记录")
+			if !ok {
+				t.Fatalf("导出这条记录 is missing: %q", f.tt.Texts())
+			}
+			if centerY(closeRect)-centerY(title) > 2 || centerY(title)-centerY(closeRect) > 2 {
+				t.Fatalf("close is not on the title row: close %+v, title %+v", closeRect, title)
+			}
+			if review.X <= excluded.X || closeRect.X <= title.X {
+				t.Fatalf("attached controls are not to the right of their rows: review %+v, close %+v",
+					review, closeRect)
+			}
+		})
+	}
+}
+
+func centerY(r ui.Rect) float32 { return r.Y + r.H/2 }
+
+// TestExportDialogCloseButtonWorks checks the attached close button is
+// clickable where the wireframe draws it.
+func TestExportDialogCloseButtonWorks(t *testing.T) {
+	f := newExportDialogFixture(t, recovery(uiStructuredItem(t, 1, record.QualityAutoAccepted)), false)
+	f.open(t)
+	if err := f.tt.Click("关闭导出对话框"); err != nil {
+		t.Fatal(err)
+	}
+	f.tt.Frame()
+	if f.m.exportDialog.open {
+		t.Fatal("the clickable close button did not close the dialog")
+	}
+}
+
+// TestRowExportDoesNotFollowAPageSwitch checks that a record load started
+// by the records list opens its dialog only while the workspace is still
+// the destination.
+func TestRowExportDoesNotFollowAPageSwitch(t *testing.T) {
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+	loads := map[string]*record.Recovery{
+		"r01": recovery(uiStructuredItem(t, 1, record.QualityAutoAccepted)),
+	}
+	svc := &fakeService{history: historyTableRecords(1), loads: loads}
+	svc.loadFn = func(id string) (*record.Recovery, error) {
+		if id == "r01" {
+			started <- struct{}{}
+			<-release
+		}
+		return loads[id], nil
+	}
+	m, q := newTestModel(t, Config{
+		Service:           svc,
+		DirectExportSaver: &fakeDirectExportSaver{},
+		AppVersion:        "test",
+	})
+	tt := ui.NewTester(m.View, 1180, 760)
+	settle(t, m, q, tt)
+	openRecordsList(t, m, q, tt)
+
+	m.openHistoryMenu("r01")
+	tt.Frame()
+	if err := tt.Click("导出…"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the row export did not start loading")
+	}
+	m.navigatePage(pageSettings)
+	if m.exportAfterLoadID != "" {
+		t.Fatalf("leaving the workspace kept the deferred export: %q", m.exportAfterLoadID)
+	}
+	close(release)
+	settle(t, m, q, tt)
+	if m.page != pageSettings || m.exportDialog.open {
+		t.Fatalf("the load opened its dialog over another page: page %v open=%t",
+			m.page, m.exportDialog.open)
+	}
+}
+
+// TestExportDialogBlocksPageShortcuts checks that the modal owns the
+// keyboard while it shows: F6 must not move focus to the page behind it.
+func TestExportDialogBlocksPageShortcuts(t *testing.T) {
+	rec := recovery(
+		uiStructuredItem(t, 1, record.QualityAutoAccepted),
+		uiStructuredItem(t, 2, record.QualityNeedsReview),
+	)
+	f := newExportDialogFixture(t, rec, false)
+	f.open(t)
+	if !f.tt.Focused("导出 JSON") {
+		t.Fatalf("the dialog did not open on 导出 JSON: %q", f.tt.Texts())
+	}
+	f.tt.Key(0, ui.KeyF6)
+	if !f.tt.Focused("导出 JSON") {
+		t.Fatalf("F6 moved the focus behind the dialog: %q", f.tt.Texts())
+	}
+	selected := f.m.selected
+	f.tt.Key(ui.Cmd, ui.KeyJ)
+	if f.m.selected != selected {
+		t.Fatalf("Ctrl+J moved the result selection behind the dialog: %d -> %d",
+			selected, f.m.selected)
+	}
+}
+
+// TestCoverageTextUsesTheDesignVocabulary keeps complete coverage called
+// 全部, never 完整 (09 §5.2).
+func TestCoverageTextUsesTheDesignVocabulary(t *testing.T) {
+	if got := coverageText(record.CoverageComplete); got != "全部" {
+		t.Fatalf("complete coverage = %q, want 全部", got)
+	}
+	if got := coverageText(record.CoveragePartial); got != "部分" {
+		t.Fatalf("partial coverage = %q, want 部分", got)
+	}
+	if got := coverageText(record.CoverageUnknown); got != "无法确认" {
+		t.Fatalf("unknown coverage = %q, want 无法确认", got)
+	}
+}
+
+// TestExportDialogShowsPartialCoverageWarning covers the C-27 notice.
+func TestExportDialogShowsPartialCoverageWarning(t *testing.T) {
+	rec := recovery(uiStructuredItem(t, 1, record.QualityAutoAccepted))
+	rec.Checkpoint.Session.Coverage = record.Coverage{Status: record.CoveragePartial}
+	f := newExportDialogFixture(t, rec, false)
+	f.open(t)
+	want := "这是部分扫描的结果，不是完整库存，不能据此删除没出现的驱动盘。"
+	if !f.tt.HasText(want) {
+		t.Fatalf("the C-27 notice is missing: %q", f.tt.Texts())
+	}
+
+	complete := recovery(uiStructuredItem(t, 1, record.QualityAutoAccepted))
+	complete.Checkpoint.Session.Coverage = record.Coverage{Status: record.CoverageComplete}
+	complete.Checkpoint.Session.ObservedScope = []byte(`{"kind":"zzzInventory","sort":"verified","coverage":"complete"}`)
+	g := newExportDialogFixture(t, complete, false)
+	g.open(t)
+	if g.tt.HasText(want) {
+		t.Fatalf("a complete record showed the partial notice: %q", g.tt.Texts())
+	}
+}
+
+// TestExportDialogEmptyStateFocusesReviewAndWritesAnEmptyFile covers
+// S8's 可导出数为零 state: the title states the reason, focus starts on
+// 去校对, and both formats still write an empty file (F-22).
+func TestExportDialogEmptyStateFocusesReviewAndWritesAnEmptyFile(t *testing.T) {
+	rec := recovery(uiStructuredItem(t, 1, record.QualityNeedsReview))
+	f := newExportDialogFixture(t, rec, false)
+	f.open(t)
+
+	if !f.tt.HasText("没有可导出的件：还有 1 件待处理") {
+		t.Fatalf("the empty-state title does not state the reason: %q", f.tt.Texts())
+	}
+	if !f.tt.Focused("去校对") {
+		t.Fatalf("the zero-exportable state did not start on 去校对: %q", f.tt.Texts())
+	}
+	if !f.tt.HasText("导出 JSON") || !f.tt.HasText("导出 CSV") {
+		t.Fatalf("the empty state hid the format buttons: %q", f.tt.Texts())
+	}
+
+	if err := f.tt.Click("导出 JSON"); err != nil {
+		t.Fatalf("click 导出 JSON: %v", err)
+	}
+	settle(t, f.m, f.q, f.tt)
+	calls := f.saver.snapshot()
+	if len(calls) != 1 {
+		t.Fatalf("empty export calls = %+v", calls)
+	}
+	var doc struct {
+		Items []app.ExportItem `json:"items"`
+	}
+	if err := json.Unmarshal(calls[0].data, &doc); err != nil {
+		t.Fatalf("decode the empty export: %v", err)
+	}
+	if len(doc.Items) != 0 {
+		t.Fatalf("the empty export wrote %d items", len(doc.Items))
+	}
+	if !f.tt.HasText("已导出 0 件") {
+		t.Fatalf("the empty success state is missing: %q", f.tt.Texts())
+	}
+	if f.tt.HasText("删除这条记录的截图…") {
+		t.Fatal("a record with a pending item offered screenshot deletion")
+	}
+
+	f.tt.Click("完成")
+	f.tt.Frame()
+	f.open(t)
+	if err := f.tt.Click("去校对"); err != nil {
+		t.Fatalf("click 去校对: %v", err)
+	}
+	settle(t, f.m, f.q, f.tt)
+	if f.m.exportDialog.open || f.m.recordTab != recordTabItems ||
+		f.m.filter != resultFilterPending {
+		t.Fatalf("去校对 left dialog=%t tab=%v filter=%v",
+			f.m.exportDialog.open, f.m.recordTab, f.m.filter)
+	}
+}
+
+// TestExportDialogCountsComeFromTheExportClassification pins the warning
+// count that #123's four-class partition provides.
+func TestExportDialogCountsComeFromTheExportClassification(t *testing.T) {
+	rec := recovery(uiStructuredItem(t, 1, record.QualityAutoAccepted))
+	f := newExportDialogFixture(t, rec, false)
+	f.m.exportData.Summary.Counts.Warning = 3
+	f.open(t)
+	if !f.tt.HasText("（含 3 件有警告）") {
+		t.Fatalf("the warning count is missing: %q", f.tt.Texts())
+	}
+}
+
+// TestExportDialogAsksForUnsavedChangesFirst checks that a dirty review
+// draft keeps the dialog closed until the ordinary prompt settles it.
+func TestExportDialogAsksForUnsavedChangesFirst(t *testing.T) {
+	rec := recovery(
+		uiStructuredItem(t, 1, record.QualityAutoAccepted),
+		uiStructuredItem(t, 2, record.QualityNeedsReview),
+	)
+	f := newExportDialogFixture(t, rec, false)
+	showRecordItems(f.m)
+	f.tt.Frame()
+	f.m.selected = 0
+	f.m.startEdit()
+	if f.m.edit == nil {
+		t.Fatal("the editor did not open")
+	}
+	f.m.edit.draft.Level = "14"
+	f.tt.Frame()
+
+	if err := f.tt.Click("导出…"); err != nil {
+		t.Fatalf("click 导出…: %v", err)
+	}
+	f.tt.Frame()
+	if f.m.exportDialog.open {
+		t.Fatal("the export dialog opened over a dirty draft")
+	}
+	if f.m.navPrompt == nil || !f.tt.HasText("当前条目有未保存的修改。") {
+		t.Fatalf("the unsaved-changes prompt did not appear: %q", f.tt.Texts())
+	}
+	if err := f.tt.Click("放弃修改"); err != nil {
+		t.Fatalf("click 放弃修改: %v", err)
+	}
+	f.tt.Frame()
+	if !f.m.exportDialog.open {
+		t.Fatalf("the dialog did not open after discarding the draft: %q", f.tt.Texts())
+	}
+}
+
+// TestExportDialogShowsTheBlockedReason covers S8's 被阻止 state.
+func TestExportDialogShowsTheBlockedReason(t *testing.T) {
+	rec := recovery(uiStructuredItem(t, 1, record.QualityAutoAccepted))
+	f := newExportDialogFixture(t, rec, true)
+	f.m.snap.Busy = true
+	f.open(t)
+	if !f.tt.HasText("扫描尚未收尾，结束后可导出已保存的固定修订。") {
+		t.Fatalf("the blocked reason is missing: %q", f.tt.Texts())
+	}
+	if err := f.tt.Click("导出 JSON"); err != nil {
+		t.Fatalf("click blocked 导出 JSON: %v", err)
+	}
+	if calls := f.saver.snapshot(); len(calls) != 0 {
+		t.Fatalf("a blocked dialog exported: %+v", calls)
+	}
+
+	f.m.snap.Busy = false
+	f.tt.Frame()
+	if err := f.tt.Click("导出 JSON"); err != nil {
+		t.Fatalf("click 导出 JSON after unblocking: %v", err)
+	}
+	settle(t, f.m, f.q, f.tt)
+	if calls := f.saver.snapshot(); len(calls) != 1 {
+		t.Fatalf("the unblocked dialog exported %d files", len(calls))
+	}
+
+	// An unsaved live session is the other S8 blocked case.
+	g := newExportDialogFixture(t, recovery(uiStructuredItem(t, 1, record.QualityAutoAccepted)), true)
+	g.m.snap.SavePending = true
+	g.open(t)
+	if !g.tt.HasText("扫描结果尚未保存，保存完成后才能导出。") {
+		t.Fatalf("the unsaved-session block is missing: %q", g.tt.Texts())
+	}
+	if err := g.tt.Click("导出 JSON"); err != nil {
+		t.Fatalf("click blocked 导出 JSON: %v", err)
+	}
+	if calls := g.saver.snapshot(); len(calls) != 0 {
+		t.Fatalf("an unsaved session exported: %+v", calls)
+	}
+
+	// A review save in flight is the third S8 blocked case.
+	h := newExportDialogFixture(t, recovery(uiStructuredItem(t, 1, record.QualityAutoAccepted)), false)
+	h.m.reviewSaving = true
+	h.open(t)
+	if !h.tt.HasText("正在保存修改，完成前不能导出。") {
+		t.Fatalf("the review-save block is missing: %q", h.tt.Texts())
+	}
+	if err := h.tt.Click("导出 CSV"); err != nil {
+		t.Fatalf("click blocked 导出 CSV: %v", err)
+	}
+	if calls := h.saver.snapshot(); len(calls) != 0 {
+		t.Fatalf("a review save in flight exported: %+v", calls)
+	}
+}
+
+// TestExportDialogRunsCancelsAndReexports covers S8's 导出中 and 已取消
+// states: progress replaces the formats, Esc cannot close, 取消 leaves no
+// file, and the dialog returns to its pre-export content.
+func TestExportDialogRunsCancelsAndReexports(t *testing.T) {
+	rec := recovery(uiStructuredItem(t, 1, record.QualityAutoAccepted))
+	f := newExportDialogFixture(t, rec, false)
+	started := make(chan struct{})
+	var once sync.Once
+	f.saver.saveCtxFn = func(ctx context.Context, format app.ExportFormat, name string, data []byte) (string, error) {
+		once.Do(func() { close(started) })
+		<-ctx.Done()
+		return "", ctx.Err()
+	}
+	f.open(t)
+	if err := f.tt.Click("导出 JSON"); err != nil {
+		t.Fatalf("click 导出 JSON: %v", err)
+	}
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the export write did not start")
+	}
+	f.tt.Frame()
+	if !f.tt.HasText("正在导出 JSON……") || !f.tt.HasText("取消") {
+		t.Fatalf("the export progress is missing: %q", f.tt.Texts())
+	}
+	if reason := f.m.cleanupBlockedReason(); !strings.Contains(reason, "正在导出") {
+		t.Fatalf("cleanup during export = %q", reason)
+	}
+
+	// Esc is ignored while the write is in flight.
+	f.tt.Key(0, ui.KeyEscape)
+	f.tt.Frame()
+	if !f.m.exportDialog.open || !f.tt.HasText("正在导出 JSON……") {
+		t.Fatalf("Esc closed the exporting dialog: %q", f.tt.Texts())
+	}
+
+	if err := f.tt.Click("取消"); err != nil {
+		t.Fatalf("click 取消: %v", err)
+	}
+	settle(t, f.m, f.q, f.tt)
+	if f.m.exporting {
+		t.Fatal("the canceled export stayed busy")
+	}
+	if f.m.exportOutcome != nil {
+		t.Fatalf("a canceled export left an outcome: %+v", f.m.exportOutcome)
+	}
+	if !f.tt.HasText("已取消，没有写入文件。") {
+		t.Fatalf("the canceled state is missing: %q", f.tt.Texts())
+	}
+	if !f.tt.HasText("导出 JSON") || !f.tt.HasText("导出 CSV") {
+		t.Fatalf("the canceled dialog did not return to its formats: %q", f.tt.Texts())
+	}
+
+	// The same dialog starts over from the pre-export content.
+	f.saver.saveCtxFn = nil
+	if err := f.tt.Click("导出 CSV"); err != nil {
+		t.Fatalf("click 导出 CSV: %v", err)
+	}
+	settle(t, f.m, f.q, f.tt)
+	calls := f.saver.snapshot()
+	if len(calls) != 2 || calls[1].format != app.ExportCSV {
+		t.Fatalf("re-export calls = %+v", calls)
+	}
+	if !f.tt.HasText("已导出 1 件") {
+		t.Fatalf("the re-export did not succeed: %q", f.tt.Texts())
+	}
+}
+
+// TestExportDialogProgressLeavesNoReviewSeparator checks that the review
+// link and its separator do not leave a dangling dot while the write runs.
+func TestExportDialogProgressLeavesNoReviewSeparator(t *testing.T) {
+	rec := recovery(
+		uiStructuredItem(t, 1, record.QualityAutoAccepted),
+		uiStructuredItem(t, 2, record.QualityNeedsReview),
+	)
+	f := newExportDialogFixture(t, rec, false)
+	started := make(chan struct{})
+	var once sync.Once
+	f.saver.saveCtxFn = func(ctx context.Context, _ app.ExportFormat, _ string, _ []byte) (string, error) {
+		once.Do(func() { close(started) })
+		<-ctx.Done()
+		return "", ctx.Err()
+	}
+	f.open(t)
+	if err := f.tt.Click("导出 JSON"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the export write did not start")
+	}
+	f.tt.Frame()
+	if _, ok := f.tt.Find("待处理 1 ·"); ok {
+		t.Fatalf("the exporting dialog left a dangling separator: %q", f.tt.Texts())
+	}
+	if _, ok := f.tt.Find("待处理 1"); !ok {
+		t.Fatalf("the exporting dialog lost the pending count: %q", f.tt.Texts())
+	}
+	if _, ok := f.tt.Find("去校对"); ok {
+		t.Fatalf("the exporting dialog still shows 去校对: %q", f.tt.Texts())
+	}
+	if err := f.tt.Click("取消"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, f.m, f.q, f.tt)
+	if _, ok := f.tt.Find("待处理 1 ·"); !ok {
+		t.Fatalf("the canceled dialog did not restore the review link: %q", f.tt.Texts())
+	}
+}
+
+// TestExportDialogCancelRacingAWriteShowsSuccess covers the cancel/write
+// race: once the saver returned a path, the file exists and the dialog must
+// report success even though 取消 was pressed.
+func TestExportDialogCancelRacingAWriteShowsSuccess(t *testing.T) {
+	f := newExportDialogFixture(t, recovery(uiStructuredItem(t, 1, record.QualityAutoAccepted)), false)
+	started := make(chan struct{})
+	var once sync.Once
+	f.saver.saveCtxFn = func(ctx context.Context, _ app.ExportFormat, _ string, _ []byte) (string, error) {
+		once.Do(func() { close(started) })
+		<-ctx.Done()
+		// The write committed before the cancellation landed.
+		return "/tmp/raced.youkai.json", nil
+	}
+	f.open(t)
+	if err := f.tt.Click("导出 JSON"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the export write did not start")
+	}
+	if err := f.tt.Click("取消"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, f.m, f.q, f.tt)
+	// Canceling was requested, but the committed file owns the result.
+	if f.m.exportDialog.canceled {
+		t.Fatal("a committed write kept the canceled state")
+	}
+	if f.m.exportDialogSuccess() == nil || f.m.exportOutcome.path != "/tmp/raced.youkai.json" {
+		t.Fatalf("a committed race was not shown as success: %+v", f.m.exportOutcome)
+	}
+	if !f.tt.HasText("已导出 1 件") || f.tt.HasText("已取消，没有写入文件。") {
+		t.Fatalf("the raced result says the wrong thing: %q", f.tt.Texts())
+	}
+}
+
+// TestExportDialogCleanupFailureIsNotCancellation keeps the dialog honest
+// when a canceled write cannot remove the file it made.
+func TestExportDialogCleanupFailureIsNotCancellation(t *testing.T) {
+	f := newExportDialogFixture(t, recovery(uiStructuredItem(t, 1, record.QualityAutoAccepted)), false)
+	started := make(chan struct{})
+	var once sync.Once
+	f.saver.saveCtxFn = func(ctx context.Context, _ app.ExportFormat, _ string, _ []byte) (string, error) {
+		once.Do(func() { close(started) })
+		<-ctx.Done()
+		return "", &ExportCleanupError{
+			Detail: "临时文件未删除",
+			Err:    context.Canceled,
+		}
+	}
+	f.open(t)
+	if err := f.tt.Click("导出 JSON"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the export write did not start")
+	}
+	if err := f.tt.Click("取消"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, f.m, f.q, f.tt)
+	if f.m.exportDialog.canceled || f.m.exportDialogFailure() == nil {
+		t.Fatalf("a cleanup failure was called a cancellation: %+v", f.m.exportOutcome)
+	}
+	if !f.tt.HasText("导出失败：导出文件清理失败：临时文件未删除") ||
+		f.tt.HasText("context canceled") ||
+		f.tt.HasText("已取消，没有写入文件。") {
+		t.Fatalf("the cleanup failure is hidden or leaks English: %q", f.tt.Texts())
+	}
+}
+
+// TestExportDialogCleanupFailureKeepsWriteCause checks 08 §4's failure
+// reason survives beside the file-left-behind detail.
+func TestExportDialogCleanupFailureKeepsWriteCause(t *testing.T) {
+	f := newExportDialogFixture(t, recovery(uiStructuredItem(t, 1, record.QualityAutoAccepted)), false)
+	f.saver.saveFn = func(app.ExportFormat, string, []byte) (string, error) {
+		return "", &ExportCleanupError{
+			Detail: "临时文件未删除",
+			Err:    errors.New("no space left on device"),
+		}
+	}
+	f.open(t)
+	if err := f.tt.Click("导出 JSON"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, f.m, f.q, f.tt)
+	if !f.tt.HasText("临时文件未删除") || !f.tt.HasText("no space left on device") {
+		t.Fatalf("the cleanup failure lost the write cause: %q", f.tt.Texts())
+	}
+}
+
+// TestExportDialogFailureRetriesWithoutChangingTheRecord covers S8's
+// 失败 state and the retry action.
+func TestExportDialogFailureRetriesWithoutChangingTheRecord(t *testing.T) {
+	rec := recovery(uiStructuredItem(t, 1, record.QualityAutoAccepted))
+	f := newExportDialogFixture(t, rec, false)
+	before := f.m.recData
+	beforeItems := len(before.Checkpoint.Items)
+	beforeRevision := before.Checkpoint.SavedRevision
+	attempts := 0
+	f.saver.saveFn = func(app.ExportFormat, string, []byte) (string, error) {
+		attempts++
+		if attempts == 1 {
+			return "", errors.New("磁盘已满")
+		}
+		return "/tmp/retry.youkai.json", nil
+	}
+	f.open(t)
+	if err := f.tt.Click("导出 JSON"); err != nil {
+		t.Fatalf("click 导出 JSON: %v", err)
+	}
+	settle(t, f.m, f.q, f.tt)
+	if !f.tt.HasText("导出失败：磁盘已满") || !f.tt.HasText("内部记录未受影响。") ||
+		!f.tt.HasText("重试") {
+		t.Fatalf("the failure state is incomplete: %q", f.tt.Texts())
+	}
+	if f.m.recData != before || len(f.m.recData.Checkpoint.Items) != beforeItems ||
+		f.m.recData.Checkpoint.SavedRevision != beforeRevision {
+		t.Fatal("a failed export changed the internal record")
+	}
+	if err := f.tt.Click("重试"); err != nil {
+		t.Fatalf("click 重试: %v", err)
+	}
+	settle(t, f.m, f.q, f.tt)
+	if attempts != 2 {
+		t.Fatalf("retry attempts = %d, want 2", attempts)
+	}
+	if !f.tt.HasText("已导出 1 件") || f.tt.HasText("导出失败：磁盘已满") {
+		t.Fatalf("the retry did not replace the failure: %q", f.tt.Texts())
+	}
+}
+
+// TestExportDialogOffersScreenshotDeletionWhenNothingIsPending covers the
+// P-13 entry shown after a successful export of a fully reviewed record.
+func TestExportDialogOffersScreenshotDeletionWhenNothingIsPending(t *testing.T) {
+	rec := recovery(uiStructuredItem(t, 1, record.QualityAutoAccepted))
+	f := newExportDialogFixture(t, rec, false)
+	f.svc.previewFn = func(kind, recordID string) (app.CleanupPreview, error) {
+		return app.CleanupPreview{Records: 1, EvidenceFiles: 3, EvidenceBytes: 1024, PendingReview: 0}, nil
+	}
+	f.open(t)
+	if err := f.tt.Click("导出 JSON"); err != nil {
+		t.Fatalf("click 导出 JSON: %v", err)
+	}
+	settle(t, f.m, f.q, f.tt)
+	if !f.tt.HasText("删除这条记录的截图…") {
+		t.Fatalf("the screenshot-deletion link is missing: %q", f.tt.Texts())
+	}
+	if err := f.tt.Click("删除这条记录的截图…"); err != nil {
+		t.Fatalf("click 删除这条记录的截图…: %v", err)
+	}
+	settle(t, f.m, f.q, f.tt)
+	if f.m.exportDialog.open {
+		t.Fatal("the screenshot link left the export dialog open")
+	}
+	if f.m.page != pageResults || f.m.recordTab != recordTabSummary {
+		t.Fatalf("the screenshot link landed on page %v tab %v", f.m.page, f.m.recordTab)
+	}
+	if f.m.cleanup == nil || f.m.cleanup.recordID != "rec" || !f.m.cleanup.ready {
+		t.Fatalf("the screenshot confirmation did not open: %+v", f.m.cleanup)
+	}
+	if !f.tt.HasText("将删除记录 rec 的 3 张截图") {
+		t.Fatalf("the screenshot confirmation is missing: %q", f.tt.Texts())
+	}
+}
+
+// TestExportKeepsTheSnapshotWhenTheRecordChanges keeps the frozen
+// revision contract of the export snapshot.
+func TestExportKeepsTheSnapshotWhenTheRecordChanges(t *testing.T) {
 	sessionRec := recovery(
 		uiStructuredItem(t, 1, record.QualityAutoAccepted),
 		uiStructuredItem(t, 2, record.QualityAutoAccepted),
@@ -192,26 +974,26 @@ func TestDirectExportKeepsTheSnapshotWhenTheSlotChanges(t *testing.T) {
 		AppVersion:        "test-1",
 	})
 	m.SetContentSize(1024, 700)
+	m.showRecord("s1", true)
 	m.reloadRecord("s1", true)
 	drainAll(t, m, q)
 	if m.exportData == nil || m.exportData.Summary.Included != 2 {
 		t.Fatalf("session snapshot = %+v", m.exportData)
 	}
 
-	m.ExportJSON()
+	m.startExport(app.ExportJSON)
 	<-started
-	m.historySlot.recordID = "old"
-	m.applyLoadedRecord(&m.historySlot, "old", historyRec, false)
-	m.activateResultSlot(resultSlotHistory)
+	m.showRecord("old", false)
+	m.applyLoadedRecord("old", historyRec, false)
 	if m.rec == nil || m.rec.ID != "old" {
-		t.Fatalf("the history slot did not become active: %+v", m.rec)
+		t.Fatalf("the history record did not replace the live one: %+v", m.rec)
 	}
 	close(release)
 	drainAll(t, m, q)
 
 	calls := saver.snapshot()
 	if len(calls) != 1 {
-		t.Fatalf("direct export calls = %+v", calls)
+		t.Fatalf("export calls = %+v", calls)
 	}
 	var doc struct {
 		Items []app.ExportItem `json:"items"`
@@ -226,12 +1008,56 @@ func TestDirectExportKeepsTheSnapshotWhenTheSlotChanges(t *testing.T) {
 		t.Fatalf("in-flight name = %q, want %q", calls[0].name, want)
 	}
 	if m.exportOutcome == nil || m.exportOutcome.included != 2 ||
-		m.exportOutcome.recordID != "s1" || !strings.Contains(m.exportOutcome.text(), "本次扫描") {
+		m.exportOutcome.recordID != "s1" {
 		t.Fatalf("the switched export lost its identity: %+v", m.exportOutcome)
 	}
 }
 
-func TestDirectExportUsesTheHistorySlotsOwnSnapshot(t *testing.T) {
+// TestExportBlocksWhileEditingOrScanning keeps the shared guard the dialog
+// and the direct actions use.
+func TestExportBlocksWhileEditingOrScanning(t *testing.T) {
+	rec := recovery(
+		uiStructuredItem(t, 1, record.QualityAutoAccepted),
+		uiStructuredItem(t, 2, record.QualityNeedsReview),
+	)
+	f := newExportDialogFixture(t, rec, false)
+	showRecordItems(f.m)
+
+	f.m.selected = 0
+	f.m.startEdit()
+	if f.m.edit == nil {
+		t.Fatal("the editor did not open")
+	}
+	f.m.edit.draft.Level = "14"
+	if reason := f.m.exportBlockedReason(); !strings.Contains(reason, "未保存的修改") {
+		t.Fatalf("dirty editor reason = %q", reason)
+	}
+	f.m.startExport(app.ExportJSON)
+	drainAll(t, f.m, f.q)
+	if calls := f.saver.snapshot(); len(calls) != 0 {
+		t.Fatalf("a dirty editor exported: %+v", calls)
+	}
+	f.m.edit = nil
+
+	f.m.rec.Live = true
+	f.m.snap.Busy = true
+	if reason := f.m.exportBlockedReason(); !strings.Contains(reason, "扫描尚未收尾") {
+		t.Fatalf("busy scan reason = %q", reason)
+	}
+	f.m.startExport(app.ExportCSV)
+	drainAll(t, f.m, f.q)
+	if calls := f.saver.snapshot(); len(calls) != 0 {
+		t.Fatalf("a running scan exported: %+v", calls)
+	}
+	f.m.snap.Busy = false
+	if reason := f.m.exportBlockedReason(); reason != "" {
+		t.Fatalf("settled record still blocked: %q", reason)
+	}
+}
+
+// TestExportUsesTheOpenRecordsOwnSnapshot keeps the history/live
+// revision separation of the export snapshot.
+func TestExportUsesTheOpenRecordsOwnSnapshot(t *testing.T) {
 	sessionRec := recovery(
 		uiStructuredItem(t, 1, record.QualityAutoAccepted),
 		uiStructuredItem(t, 2, record.QualityAutoAccepted),
@@ -250,24 +1076,24 @@ func TestDirectExportUsesTheHistorySlotsOwnSnapshot(t *testing.T) {
 		AppVersion:        "test-1",
 	})
 	m.SetContentSize(1024, 700)
+	m.showRecord("s1", true)
 	m.reloadRecord("s1", true)
 	drainAll(t, m, q)
 	if m.exportData == nil || m.exportData.Summary.Included != 3 {
 		t.Fatalf("session snapshot = %+v", m.exportData)
 	}
 
-	m.historySlot.recordID = "old"
-	m.applyLoadedRecord(&m.historySlot, "old", historyRec, false)
-	m.activateResultSlot(resultSlotHistory)
+	m.showRecord("old", false)
+	m.applyLoadedRecord("old", historyRec, false)
 	if m.exportData == nil || m.exportData.Summary.Included != 1 {
 		t.Fatalf("history snapshot = %+v", m.exportData)
 	}
-	m.ExportJSON()
+	m.startExport(app.ExportJSON)
 	drainAll(t, m, q)
 
 	calls := saver.snapshot()
 	if len(calls) != 1 {
-		t.Fatalf("direct history export calls = %+v", calls)
+		t.Fatalf("export calls = %+v", calls)
 	}
 	var doc struct {
 		Items []app.ExportItem `json:"items"`
@@ -284,90 +1110,13 @@ func TestDirectExportUsesTheHistorySlotsOwnSnapshot(t *testing.T) {
 	if m.exportOutcome == nil || m.exportOutcome.included != 1 || m.exportOutcome.recordID != "old" {
 		t.Fatalf("history export outcome = %+v", m.exportOutcome)
 	}
-	if m.sessionSlot.state.exportData == nil || m.sessionSlot.state.exportData.Summary.Included != 3 {
-		t.Fatalf("the session slot lost its snapshot: %+v", m.sessionSlot.state.exportData)
+	if m.exportData == nil || m.exportData.Summary.Included != 1 {
+		t.Fatalf("the export changed the open record's snapshot: %+v", m.exportData)
 	}
 }
 
-func TestExportBlocksWhileEditingOrScanning(t *testing.T) {
-	saver := &fakeDirectExportSaver{}
-	m, q, _ := exportModel(t, saver)
-
-	m.selected = 0
-	m.startEdit()
-	if m.edit == nil {
-		t.Fatal("the editor did not open")
-	}
-	m.edit.draft.Level = "14"
-	if reason := m.exportBlockedReason(); !strings.Contains(reason, "未保存的修改") {
-		t.Fatalf("dirty editor reason = %q", reason)
-	}
-	m.ExportJSON()
-	drainAll(t, m, q)
-	if calls := saver.snapshot(); len(calls) != 0 {
-		t.Fatalf("a dirty editor exported: %+v", calls)
-	}
-	m.edit = nil
-
-	m.rec.Live = true
-	m.snap.Busy = true
-	if reason := m.exportBlockedReason(); !strings.Contains(reason, "扫描尚未收尾") {
-		t.Fatalf("busy scan reason = %q", reason)
-	}
-	m.ExportCSV()
-	drainAll(t, m, q)
-	if calls := saver.snapshot(); len(calls) != 0 {
-		t.Fatalf("a running scan exported: %+v", calls)
-	}
-	m.snap.Busy = false
-	if reason := m.exportBlockedReason(); reason != "" {
-		t.Fatalf("settled record still blocked: %q", reason)
-	}
-}
-
-func TestExportWriteFailureDoesNotChangeTheRecord(t *testing.T) {
-	saver := &fakeDirectExportSaver{}
-	m, q, _ := exportModel(t, saver)
-	before := m.recData
-	beforeItems := len(before.Checkpoint.Items)
-	beforeRevision := before.Checkpoint.SavedRevision
-
-	saver.saveFn = func(app.ExportFormat, string, []byte) (string, error) {
-		return "", errors.New("磁盘已满")
-	}
-	m.ExportCSV()
-	drainAll(t, m, q)
-	if m.exportOutcome == nil || m.exportOutcome.err == nil ||
-		!strings.Contains(m.exportOutcome.text(), "磁盘已满") {
-		t.Fatalf("write failure = %+v", m.exportOutcome)
-	}
-	if m.recData != before || len(m.recData.Checkpoint.Items) != beforeItems ||
-		m.recData.Checkpoint.SavedRevision != beforeRevision {
-		t.Fatal("write failure changed the internal record")
-	}
-}
-
-func TestExportDisablesDuplicateClicks(t *testing.T) {
-	saver := &fakeDirectExportSaver{}
-	m, q, _ := exportModel(t, saver)
-	started := make(chan struct{})
-	release := make(chan struct{})
-	saver.saveFn = func(app.ExportFormat, string, []byte) (string, error) {
-		close(started)
-		<-release
-		return "/tmp/out.youkai.json", nil
-	}
-	m.ExportJSON()
-	<-started
-	m.ExportJSON()
-	m.ExportCSV()
-	close(release)
-	drainAll(t, m, q)
-	if calls := saver.snapshot(); len(calls) != 1 {
-		t.Fatalf("duplicate clicks issued %d saves", len(calls))
-	}
-}
-
+// TestExportSnapshotReloadsTheFinalCheckpoint keeps the final-checkpoint
+// refresh contract for the export snapshot.
 func TestExportSnapshotReloadsTheFinalCheckpoint(t *testing.T) {
 	saver := &fakeDirectExportSaver{}
 	item := uiStructuredItem(t, 1, record.QualityAutoAccepted)
@@ -412,22 +1161,28 @@ func TestExportSnapshotReloadsTheFinalCheckpoint(t *testing.T) {
 	}
 }
 
+// TestExportFollowsASavedRevision keeps the saved-revision contract.
 func TestExportFollowsASavedRevision(t *testing.T) {
-	saver := &fakeDirectExportSaver{}
-	m, q, _ := exportModel(t, saver)
-
+	rec := recovery(
+		uiStructuredItem(t, 1, record.QualityAutoAccepted),
+		uiStructuredItem(t, 2, record.QualityNeedsReview),
+	)
+	f := newExportDialogFixture(t, rec, false)
 	confirmed := uiStructuredItem(t, 2, record.QualityHumanConfirmed)
 	confirmed.Revision = 1
-	m.applySavedItem(confirmed, 2)
-	if m.exportData == nil || m.exportData.Summary.Included != 2 || m.exportData.Summary.Excluded != 0 {
-		t.Fatalf("export snapshot after save = %+v", m.exportData)
+	f.m.applySavedItem(confirmed, 2)
+	if f.m.exportData == nil || f.m.exportData.Summary.Included != 2 || f.m.exportData.Summary.Excluded != 0 {
+		t.Fatalf("export snapshot after save = %+v", f.m.exportData)
 	}
-	if m.recData.Checkpoint.SavedRevision != 2 {
-		t.Fatalf("saved revision = %d, want 2", m.recData.Checkpoint.SavedRevision)
+	if f.m.recData.Checkpoint.SavedRevision != 2 {
+		t.Fatalf("saved revision = %d, want 2", f.m.recData.Checkpoint.SavedRevision)
 	}
-	m.ExportJSON()
-	drainAll(t, m, q)
-	calls := saver.snapshot()
+	f.open(t)
+	if err := f.tt.Click("导出 JSON"); err != nil {
+		t.Fatalf("click 导出 JSON: %v", err)
+	}
+	settle(t, f.m, f.q, f.tt)
+	calls := f.saver.snapshot()
 	if len(calls) != 1 {
 		t.Fatalf("export calls = %+v", calls)
 	}
@@ -445,28 +1200,35 @@ func TestExportFollowsASavedRevision(t *testing.T) {
 	}
 }
 
-func TestDirectExportIsNotLimitedByTheVisibleFilter(t *testing.T) {
-	saver := &fakeDirectExportSaver{}
-	m, q := directExportModel(t, saver, recovery(
+// TestExportIsNotLimitedByTheVisibleFilter keeps the filter-
+// independent export set.
+func TestExportIsNotLimitedByTheVisibleFilter(t *testing.T) {
+	rec := recovery(
 		uiStructuredItem(t, 1, record.QualityAutoAccepted),
 		uiStructuredItem(t, 2, record.QualityAutoAccepted),
 		uiStructuredItem(t, 3, record.QualityNeedsReview),
-	), false)
-	if m.filter != resultFilterPending {
-		t.Fatalf("default filter = %v, want pending", m.filter)
+	)
+	f := newExportDialogFixture(t, rec, false)
+	showRecordItems(f.m)
+	f.tt.Frame()
+	if f.m.filter != resultFilterPending {
+		t.Fatalf("default filter = %v, want pending", f.m.filter)
 	}
-	if visible := len(m.visibleResultRows()); visible != 1 {
+	if visible := len(f.m.visibleResultRows()); visible != 1 {
 		t.Fatalf("visible pending rows = %d, want 1", visible)
 	}
-	if m.exportData.Summary.Included != 2 {
-		t.Fatalf("exportable set = %d, want 2", m.exportData.Summary.Included)
+	if f.m.exportData.Summary.Included != 2 {
+		t.Fatalf("exportable set = %d, want 2", f.m.exportData.Summary.Included)
 	}
 
-	m.ExportCSV()
-	drainAll(t, m, q)
-	calls := saver.snapshot()
+	f.open(t)
+	if err := f.tt.Click("导出 CSV"); err != nil {
+		t.Fatalf("click 导出 CSV: %v", err)
+	}
+	settle(t, f.m, f.q, f.tt)
+	calls := f.saver.snapshot()
 	if len(calls) != 1 {
-		t.Fatalf("direct export calls = %+v", calls)
+		t.Fatalf("export calls = %+v", calls)
 	}
 	rows, err := csv.NewReader(bytes.NewReader(calls[0].data[3:])).ReadAll()
 	if err != nil {
@@ -475,181 +1237,120 @@ func TestDirectExportIsNotLimitedByTheVisibleFilter(t *testing.T) {
 	if len(rows) != 3 {
 		t.Fatalf("filtered CSV rows = %d, want header + 2 exportable items", len(rows))
 	}
-	if m.exportOutcome == nil || m.exportOutcome.included != 2 {
-		t.Fatalf("filtered export outcome = %+v", m.exportOutcome)
+	if f.m.exportOutcome == nil || f.m.exportOutcome.included != 2 {
+		t.Fatalf("filtered export outcome = %+v", f.m.exportOutcome)
 	}
 }
 
-func TestDirectExportDisablesReviewActions(t *testing.T) {
-	saver := &fakeDirectExportSaver{}
+// TestExportDialogDisablesReviewActions keeps the review lock while the
+// dialog writes.
+func TestExportDialogDisablesReviewActions(t *testing.T) {
+	rec := recovery(
+		uiStructuredItem(t, 1, record.QualityAutoAccepted),
+		uiStructuredItem(t, 2, record.QualityNeedsReview),
+	)
+	f := newExportDialogFixture(t, rec, false)
+	showRecordItems(f.m)
 	started := make(chan struct{})
 	release := make(chan struct{})
-	saver.saveFn = func(app.ExportFormat, string, []byte) (string, error) {
+	f.saver.saveFn = func(app.ExportFormat, string, []byte) (string, error) {
 		close(started)
 		<-release
 		return "/tmp/out.youkai.json", nil
 	}
-	m, q := directExportModel(t, saver, recovery(
-		uiStructuredItem(t, 1, record.QualityAutoAccepted),
-		uiStructuredItem(t, 2, record.QualityNeedsReview),
-	), true)
-	m.selected = 0
+	f.m.selected = 0
+	f.open(t)
 
-	m.ExportJSON()
-	<-started
-	m.startEdit()
-	if m.edit != nil {
+	if err := f.tt.Click("导出 JSON"); err != nil {
+		t.Fatalf("click 导出 JSON: %v", err)
+	}
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the export write did not start")
+	}
+	f.m.startEdit()
+	if f.m.edit != nil {
 		t.Fatal("an export in flight allowed the editor to open")
 	}
-	m.confirmCurrent()
-	if !strings.Contains(m.reviewErr, "正在导出") {
-		t.Fatalf("confirmation during export = %q", m.reviewErr)
+	f.m.confirmCurrent()
+	if !strings.Contains(f.m.reviewErr, "正在导出") {
+		t.Fatalf("confirmation during export = %q", f.m.reviewErr)
 	}
-	tt := ui.NewTester(m.View, 1024, 700)
-	tt.Frame()
-	if !tt.HasText("正在导出……") || !tt.HasText("正在导出，完成前不能编辑或确认。") {
-		t.Fatalf("the export busy state is not shown: %q", tt.Texts())
+	f.tt.Frame()
+	if !f.tt.HasText("正在导出 JSON……") {
+		t.Fatalf("the export busy state is not shown: %q", f.tt.Texts())
 	}
 
 	close(release)
-	drainAll(t, m, q)
-	if m.exporting {
+	drainAll(t, f.m, f.q)
+	if f.m.exporting {
 		t.Fatal("the export did not settle")
 	}
 }
 
-// directExportModel loads one record into the page shell with a direct
-// saver, ready to export.
-func directExportModel(t *testing.T, saver *fakeDirectExportSaver, rec *record.Recovery, live bool) (*Model, *queueUpdater) {
-	t.Helper()
-	id := rec.Checkpoint.Session.SessionID
-	svc := &fakeService{loads: map[string]*record.Recovery{id: rec}}
-	m, q := newTestModel(t, Config{
-		Service:           svc,
-		DirectExportSaver: saver,
-		AppVersion:        "test-1",
-	})
-	m.SetContentSize(1024, 700)
-	m.reloadRecord(id, live)
-	drainAll(t, m, q)
-	m.page = pageResults
-	showRecordItems(m)
-	if m.exportData == nil {
-		t.Fatalf("the direct export snapshot did not load: %v", m.exportBuildErr)
-	}
-	return m, q
-}
-
-func TestDirectExportDirectoryFailureOffersActions(t *testing.T) {
-	saver := &fakeDirectExportSaver{}
-	saver.saveFn = func(app.ExportFormat, string, []byte) (string, error) {
+// TestExportDialogDirectoryFailureOffersRetry checks that a directory
+// failure stays inside the dialog with its reason, the untouched-record
+// note and 重试.
+func TestExportDialogDirectoryFailureOffersRetry(t *testing.T) {
+	rec := recovery(uiStructuredItem(t, 1, record.QualityAutoAccepted))
+	f := newExportDialogFixture(t, rec, false)
+	f.saver.saveFn = func(app.ExportFormat, string, []byte) (string, error) {
 		return "", &ExportDirectoryError{Directory: "/missing/Downloads", Err: errors.New("permission denied")}
 	}
-	opened := 0
-	svc := &fakeService{loads: map[string]*record.Recovery{
-		"rec": recovery(uiStructuredItem(t, 1, record.QualityAutoAccepted)),
-	}}
-	m, q := newTestModel(t, Config{
-		Service:           svc,
-		DirectExportSaver: saver,
-		OpenDownloadsDirectory: func() error {
-			opened++
-			return nil
-		},
-	})
-	m.SetContentSize(1024, 700)
-	m.reloadRecord("rec", false)
-	drainAll(t, m, q)
-	m.page = pageResults
-	showRecordItems(m)
-	tt := ui.NewTester(m.View, 1024, 700)
-	settle(t, m, q, tt)
-
-	if err := tt.Click("导出 CSV"); err != nil {
+	f.open(t)
+	if err := f.tt.Click("导出 CSV"); err != nil {
 		t.Fatalf("click 导出 CSV: %v", err)
 	}
-	drainAll(t, m, q)
-	tt.Frame()
-	if m.exportOutcome == nil || m.exportOutcome.dirErr == nil {
-		t.Fatalf("the directory failure was not classified: %+v", m.exportOutcome)
+	settle(t, f.m, f.q, f.tt)
+	if f.m.exportOutcome == nil || f.m.exportOutcome.err == nil {
+		t.Fatalf("the directory failure was not recorded: %+v", f.m.exportOutcome)
 	}
-	if !tt.HasText("导出失败（CSV，历史记录 rec）") || !tt.HasText("打开目录") || !tt.HasText("去设置") {
-		t.Fatalf("actionable export failure missing: %q", tt.Texts())
+	var dirErr *ExportDirectoryError
+	if !errors.As(f.m.exportOutcome.err, &dirErr) {
+		t.Fatalf("the directory failure was not classified: %v", f.m.exportOutcome.err)
 	}
-	if err := tt.Click("打开目录"); err != nil {
-		t.Fatalf("click 打开目录: %v", err)
+	if !f.tt.HasText("导出失败：无法写入下载目录 /missing/Downloads") ||
+		!f.tt.HasText("内部记录未受影响。") || !f.tt.HasText("重试") {
+		t.Fatalf("the dialog failure is incomplete: %q", f.tt.Texts())
 	}
-	if opened != 1 {
-		t.Fatalf("open directory calls = %d, want 1", opened)
-	}
-	if err := tt.Click("去设置"); err != nil {
-		t.Fatalf("click 去设置: %v", err)
-	}
-	if m.page != pageSettings {
-		t.Fatalf("page after 去设置 = %v, want settings", m.page)
-	}
-	if m.recData == nil || len(m.recData.Checkpoint.Items) != 1 {
-		t.Fatal("a failed direct export changed the record")
+	if f.m.recData == nil || len(f.m.recData.Checkpoint.Items) != 1 {
+		t.Fatal("a failed export changed the record")
 	}
 }
 
-func TestDirectExportWritesBothFormatsToTheFrozenSnapshot(t *testing.T) {
-	saver := &fakeDirectExportSaver{}
-	m, q := directExportModel(t, saver, recovery(
-		uiStructuredItem(t, 1, record.QualityAutoAccepted),
-		uiStructuredItem(t, 2, record.QualityAutoAccepted),
-	), true)
-	tt := ui.NewTester(m.View, 1024, 700)
-	settle(t, m, q, tt)
-
-	if err := tt.Click("导出 JSON"); err != nil {
+// TestExportDialogEscDoesNotCloseDuringExport is part of the running-state
+// contract; it also checks that a second Ctrl+E cannot open another
+// dialog while this one is in flight.
+func TestExportDialogEscDoesNotCloseDuringExport(t *testing.T) {
+	rec := recovery(uiStructuredItem(t, 1, record.QualityAutoAccepted))
+	f := newExportDialogFixture(t, rec, false)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	f.saver.saveFn = func(app.ExportFormat, string, []byte) (string, error) {
+		close(started)
+		<-release
+		return "/tmp/out.youkai.json", nil
+	}
+	f.open(t)
+	if err := f.tt.Click("导出 JSON"); err != nil {
 		t.Fatalf("click 导出 JSON: %v", err)
 	}
-	drainAll(t, m, q)
-	tt.Frame()
-	calls := saver.snapshot()
-	if len(calls) != 1 || calls[0].format != app.ExportJSON {
-		t.Fatalf("JSON direct export calls = %+v", calls)
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the export write did not start")
 	}
-	if want := app.DefaultExportName(m.recData.Checkpoint.Session, app.ExportJSON); calls[0].name != want {
-		t.Fatalf("default JSON name = %q, want %q", calls[0].name, want)
+	f.tt.Key(ui.Cmd, ui.KeyE)
+	f.tt.Key(0, ui.KeyEscape)
+	f.tt.ClickAt(5, 5)
+	f.tt.Frame()
+	if !f.m.exportDialog.open || !f.tt.HasText("正在导出 JSON……") {
+		t.Fatalf("a second entry, Esc or the backdrop closed the running dialog: %q", f.tt.Texts())
 	}
-	var doc struct {
-		Items []app.ExportItem `json:"items"`
-	}
-	if err := json.Unmarshal(calls[0].data, &doc); err != nil {
-		t.Fatalf("decode exported JSON: %v", err)
-	}
-	if len(doc.Items) != 2 {
-		t.Fatalf("exported JSON items = %d, want 2", len(doc.Items))
-	}
-	if m.exportOutcome == nil || m.exportOutcome.err != nil ||
-		m.exportOutcome.included != 2 || m.exportOutcome.recordID != "rec" {
-		t.Fatalf("direct JSON outcome = %+v", m.exportOutcome)
-	}
-	if !tt.HasText("已导出 JSON（2 件，本次扫描）") {
-		t.Fatalf("direct export status missing: %q", tt.Texts())
-	}
-
-	if err := tt.Click("导出 CSV"); err != nil {
-		t.Fatalf("click 导出 CSV: %v", err)
-	}
-	drainAll(t, m, q)
-	calls = saver.snapshot()
-	if len(calls) != 2 || calls[1].format != app.ExportCSV {
-		t.Fatalf("CSV direct export calls = %+v", calls)
-	}
-	if want := app.DefaultExportName(m.recData.Checkpoint.Session, app.ExportCSV); calls[1].name != want {
-		t.Fatalf("default CSV name = %q, want %q", calls[1].name, want)
-	}
-	if !bytes.HasPrefix(calls[1].data, []byte{0xEF, 0xBB, 0xBF}) {
-		t.Fatal("directly exported CSV has no BOM")
-	}
-	rows, err := csv.NewReader(bytes.NewReader(calls[1].data[3:])).ReadAll()
-	if err != nil {
-		t.Fatalf("read directly exported CSV: %v", err)
-	}
-	if len(rows) != 3 {
-		t.Fatalf("direct CSV rows = %d, want header + 2 items", len(rows))
+	close(release)
+	settle(t, f.m, f.q, f.tt)
+	if !f.tt.HasText("已导出 1 件") {
+		t.Fatalf("the held export did not finish: %q", f.tt.Texts())
 	}
 }

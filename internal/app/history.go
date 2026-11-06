@@ -8,6 +8,34 @@ import (
 	"github.com/LoTwT/youkai/internal/record"
 )
 
+// PositionOutcomeState is the summary-facing state of one wheel position.
+type PositionOutcomeState string
+
+const (
+	// PositionOutcomeComplete means the position's traversal completed.
+	PositionOutcomeComplete PositionOutcomeState = "complete"
+	// PositionOutcomeDegraded means the position's own preparation or
+	// proof failed; Stage and ReasonCode explain it.
+	PositionOutcomeDegraded PositionOutcomeState = "degraded"
+	// PositionOutcomeTruncated means the traversal reached the position
+	// but a session-fatal fault, cancellation or stop cut it off; the
+	// session termination carries the cause.
+	PositionOutcomeTruncated PositionOutcomeState = "truncated"
+	// PositionOutcomeNotReached means the traversal never started the
+	// position.
+	PositionOutcomeNotReached PositionOutcomeState = "notReached"
+)
+
+// PositionOutcome is one wheel position's conclusion as the summary and
+// notification surfaces need it: all six positions are listed whenever the
+// checkpoint can report them, including the ones that were never reached.
+type PositionOutcome struct {
+	Position   int
+	State      PositionOutcomeState
+	Stage      string
+	ReasonCode string
+}
+
 // HistoryRecord is the history list's metadata. It deliberately comes
 // from Peek rather than Load: listing many records must not hash every
 // evidence file, and a record whose metadata is readable should still be
@@ -38,12 +66,31 @@ type HistoryRecord struct {
 	// table, results page and cleanup preview on their existing numbers
 	// until the UI switches to Counts.
 	Counts ItemClassCounts
-	// IncompletePositions is the number of inventory positions whose
-	// traversal conclusion was incomplete. IncompletePositionsKnown is
-	// false until the checkpoint carries per-position conclusions, so a
-	// zero count currently means "unknown", not "all six complete".
+	// IncompletePositions is the number of positions the traversal itself
+	// marked degraded: a position preparation or proof failure with its
+	// own stage and cause. A position cut by a session-fatal fault is
+	// explained by the termination instead and is not counted.
+	// IncompletePositionsKnown is false when the checkpoint carries no
+	// per-position conclusions and its observed scope cannot be read; a
+	// zero count is meaningful only when it is true.
 	IncompletePositions      int
 	IncompletePositionsKnown bool
+	// PositionOutcomes lists positions 1..record.PositionCount whenever
+	// IncompletePositionsKnown is true. It names each position's state —
+	// complete, degraded, truncated or not reached — so the summary and
+	// notification can say which positions are missing and how many the
+	// scan actually completed without re-reading the checkpoint's scope.
+	PositionOutcomes []PositionOutcome
+	// SortVerified reports whether every opened panel verified the sort
+	// label. SortVerifiedKnown distinguishes "not verified" from "the
+	// record does not say": a record with neither a position ledger nor a
+	// sort member in its observed scope leaves both false. The precheck
+	// always writes "unverified", so a crash that left only the precheck
+	// checkpoint, or a scan stopped before opening any panel, is also
+	// known and unverified. The summary must say "sort not verified",
+	// never "sort inconsistent".
+	SortVerified      bool
+	SortVerifiedKnown bool
 	// Interrupted reports that the newest checkpoint never recorded a
 	// termination (or recorded the interrupted kind) and this is not a
 	// still-running scan: the session ended by a crash or a lost process
@@ -124,7 +171,7 @@ func historySessionSummary(info record.RecordInfo, cp *record.Checkpoint, active
 		ended := *cp.Session.EndedAt
 		entry.EndedAt = &ended
 	}
-	entry.Interrupted = info.ID != activeID && interruptedSession(cp.Session.Termination)
+	entry.Interrupted = info.ID != activeID && InterruptedSession(cp.Session.Termination)
 	entry.Client = cp.Session.Client
 	entry.CapturedCount = cp.Session.CapturedCount
 	entry.Coverage = cp.Session.Coverage.Status
@@ -135,7 +182,60 @@ func historySessionSummary(info record.RecordInfo, cp *record.Checkpoint, active
 	if cp.Session.Coverage.ExpectedCount != nil {
 		entry.CoverageExpected = *cp.Session.Coverage.ExpectedCount
 	}
+	if sort, known := cp.Session.SortVerification(); known {
+		entry.SortVerified = sort == record.SortVerificationVerified
+		entry.SortVerifiedKnown = true
+	}
+	if ledger, known := cp.Session.PositionConclusions(); known {
+		entry.IncompletePositionsKnown = true
+		entry.PositionOutcomes = PositionOutcomes(ledger.Positions)
+		for _, outcome := range entry.PositionOutcomes {
+			if outcome.State == PositionOutcomeDegraded {
+				entry.IncompletePositions++
+			}
+		}
+	}
 	return entry
+}
+
+// PositionOutcomesOf expands a session's position ledger into all six
+// positions. It is the one expansion used by the records list and the
+// summary, so both count incomplete positions the same way.
+func PositionOutcomesOf(shell record.SessionShell) ([]PositionOutcome, bool) {
+	ledger, known := shell.PositionConclusions()
+	if !known {
+		return nil, false
+	}
+	return PositionOutcomes(ledger.Positions), true
+}
+
+// PositionOutcomes expands the ledger into all six positions. A missing
+// entry was never reached; a present incomplete entry with a position-level
+// cause is degraded, and one without is a position the session-fatal end
+// truncated. The ledger's storage order does not matter.
+func PositionOutcomes(positions []record.PositionConclusion) []PositionOutcome {
+	reached := make(map[int]record.PositionConclusion, len(positions))
+	for _, p := range positions {
+		reached[p.Position] = p
+	}
+	outcomes := make([]PositionOutcome, 0, record.PositionCount)
+	for position := 1; position <= record.PositionCount; position++ {
+		outcome := PositionOutcome{Position: position, State: PositionOutcomeNotReached}
+		if p, ok := reached[position]; ok {
+			switch {
+			case p.Complete:
+				outcome.State = PositionOutcomeComplete
+			case p.Degraded():
+				outcome.State = PositionOutcomeDegraded
+				outcome.Stage = p.Stage
+				outcome.ReasonCode = p.ReasonCode
+			default:
+				outcome.State = PositionOutcomeTruncated
+			}
+		}
+		outcomes = append(outcomes, outcome)
+	}
+	return outcomes
 }
 
 // activeRecordID returns the record the service is still running, or ""
@@ -151,11 +251,12 @@ func (s *Service) activeRecordID() string {
 	return string(s.active.id)
 }
 
-// interruptedSession reports whether a checkpoint represents a session
+// InterruptedSession reports whether a checkpoint represents a session
 // that never recorded a clean end. An absent termination is exactly what
 // recovery marks interrupted; an explicit interrupted termination is the
-// same state written down.
-func interruptedSession(termination *record.Termination) bool {
+// same state written down. The records list and the summary share this
+// definition so the same record cannot get two endings.
+func InterruptedSession(termination *record.Termination) bool {
 	return termination == nil || termination.Kind == record.TerminationInterrupted
 }
 

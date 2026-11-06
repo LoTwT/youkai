@@ -56,24 +56,37 @@ func TestNavRailIsFixedWidth(t *testing.T) {
 }
 
 // TestNavRailIsTheFirstTabGroup checks the design's focus order: Tab
-// reaches the rail before any page content, in the rail's own order
-// (design 09 §4.4).
+// reaches the rail before any page content, Up and Down move between its
+// three destinations, and Enter visits the focused one (09 §4.4).
 func TestNavRailIsTheFirstTabGroup(t *testing.T) {
 	m, q := newTestModel(t, Config{Service: &fakeService{},
 		ScanSource: ScanSourceInfo{Available: true}})
 	tt := ui.NewTester(m.View, 1180, 760)
 	settle(t, m, q, tt)
 
-	for _, label := range []string{"扫描", "记录", "设置"} {
-		tt.Key(0, ui.KeyTab)
+	tt.Key(0, ui.KeyTab)
+	if !tt.Focused("扫描") {
+		t.Fatalf("Tab did not enter the rail at 扫描: %q", tt.Texts())
+	}
+	for _, label := range []string{"记录", "设置"} {
+		tt.Key(0, ui.KeyDown)
 		if !tt.Focused(label) {
-			t.Fatalf("Tab did not focus the %q destination next", label)
+			t.Fatalf("Down did not move the rail focus to %q", label)
 		}
 	}
-	// The rail is the first group; the scan page's action follows it.
+	tt.Key(0, ui.KeyUp)
+	if !tt.Focused("记录") {
+		t.Fatal("Up did not move the rail focus back to 记录")
+	}
+	tt.Key(0, ui.KeyEnter)
+	settle(t, m, q, tt)
+	if m.displayPage() != pageHistory {
+		t.Fatalf("Enter on 记录 shows page %v, want the records list", m.displayPage())
+	}
+	// The rail is one Tab stop; the page content follows it.
 	tt.Key(0, ui.KeyTab)
-	if !tt.Focused("开始扫描") {
-		t.Fatalf("Tab after the rail did not reach the scan action: %q", tt.Texts())
+	if !tt.Focused("去扫描页开始扫描") {
+		t.Fatalf("Tab after the rail did not reach the page content: %q", tt.Texts())
 	}
 }
 
@@ -217,12 +230,13 @@ func TestRecordsDestinationRoutesWithoutStageSwitch(t *testing.T) {
 		t.Fatal(err)
 	}
 	tt.Frame()
-	if !tt.HasText("搜索日期") || !tt.HasText("全部记录") {
+	if !tt.HasText("时间") || !tt.HasText("日期") {
 		t.Fatalf("the records list does not show its records: %q", tt.Texts())
 	}
-	if err := tt.Click("打开"); err != nil {
+	if err := tt.Click(historyTimeText(m.history[0])); err != nil {
 		t.Fatal(err)
 	}
+	tt.Key(0, ui.KeyEnter)
 	settle(t, m, q, tt)
 	if m.displayPage() != pageResults || m.recordTab != recordTabSummary {
 		t.Fatalf("opening a record shows page %v tab %v, want the summary", m.displayPage(), m.recordTab)
@@ -302,8 +316,8 @@ func TestRecordWorkspaceSwitchesViews(t *testing.T) {
 }
 
 // TestRecordWorkspaceShortcuts checks the two registered skeletons:
-// Ctrl+E brings the export controls into view, Shift+F6 returns the
-// keyboard to the rail, and F6 moves it into the workspace's first region.
+// Ctrl+E opens the export dialog, Shift+F6 returns the keyboard to the
+// rail, and F6 moves it into the workspace's first region.
 func TestRecordWorkspaceShortcuts(t *testing.T) {
 	svc := &fakeService{
 		list: []record.RecordInfo{{
@@ -321,12 +335,12 @@ func TestRecordWorkspaceShortcuts(t *testing.T) {
 	m.SetContentSize(1180, 760)
 	tt := ui.NewTester(m.View, 1180, 760)
 	settle(t, m, q, tt)
-	m.histChoice = slotHistoryLabel(t, m, "r1")
+	m.histChoice = historyLabel(t, m, "r1")
 	m.OpenHistory()
 	settle(t, m, q, tt)
 
-	if m.recordTab != recordTabSummary || !tt.HasText("导出 JSON") {
-		t.Fatalf("the summary does not hold the export controls: tab %v %q", m.recordTab, tt.Texts())
+	if m.recordTab != recordTabSummary || !tt.HasText("导出…") {
+		t.Fatalf("the title bar does not hold the export entry: tab %v %q", m.recordTab, tt.Texts())
 	}
 	if err := tt.Click("逐件"); err != nil {
 		t.Fatal(err)
@@ -338,10 +352,19 @@ func TestRecordWorkspaceShortcuts(t *testing.T) {
 
 	tt.Key(ui.Cmd, ui.KeyE)
 	settle(t, m, q, tt)
-	if m.recordTab != recordTabSummary || !tt.HasText("导出 JSON") {
-		t.Fatalf("Ctrl+E did not reveal the export controls: tab %v %q", m.recordTab, tt.Texts())
+	if !m.exportDialog.open || !tt.HasText("导出 JSON") || !tt.Focused("导出 JSON") {
+		t.Fatalf("Ctrl+E did not open the export dialog: open=%t %q", m.exportDialog.open, tt.Texts())
+	}
+	tt.Key(0, ui.KeyEscape)
+	settle(t, m, q, tt)
+	if m.exportDialog.open || m.recordTab != recordTabItems {
+		t.Fatalf("Esc left dialog=%t tab=%v", m.exportDialog.open, m.recordTab)
 	}
 
+	if err := tt.Click("摘要"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
 	tt.Key(ui.Shift, ui.KeyF6)
 	settle(t, m, q, tt)
 	if !tt.Focused("记录") {
@@ -353,9 +376,9 @@ func TestRecordWorkspaceShortcuts(t *testing.T) {
 		t.Fatalf("F6 did not enter the workspace's first region: %q", tt.Texts())
 	}
 
-	// A record with no exportable item blocks the export entry, so Ctrl+E
-	// is not registered: the item view stays where it is (L-2's reverse
-	// path).
+	// A record with no exportable item still offers the empty export
+	// (F-22); Ctrl+E opens the dialog on its zero-exportable state with
+	// the review entry focused, and the item view stays behind it.
 	blockedSvc := &fakeService{
 		list: []record.RecordInfo{{
 			ID: "r2", LatestRevision: 1,
@@ -372,7 +395,7 @@ func TestRecordWorkspaceShortcuts(t *testing.T) {
 	blockedModel.SetContentSize(1180, 760)
 	blockedTester := ui.NewTester(blockedModel.View, 1180, 760)
 	settle(t, blockedModel, blockedQueue, blockedTester)
-	blockedModel.histChoice = slotHistoryLabel(t, blockedModel, "r2")
+	blockedModel.histChoice = historyLabel(t, blockedModel, "r2")
 	blockedModel.OpenHistory()
 	settle(t, blockedModel, blockedQueue, blockedTester)
 	showRecordItems(blockedModel)
@@ -382,8 +405,11 @@ func TestRecordWorkspaceShortcuts(t *testing.T) {
 	}
 	blockedTester.Key(ui.Cmd, ui.KeyE)
 	settle(t, blockedModel, blockedQueue, blockedTester)
-	if blockedModel.recordTab != recordTabItems {
-		t.Fatalf("Ctrl+E moved a blocked export to tab %v", blockedModel.recordTab)
+	if !blockedModel.exportDialog.open || blockedModel.recordTab != recordTabItems {
+		t.Fatalf("Ctrl+E left dialog=%t tab=%v", blockedModel.exportDialog.open, blockedModel.recordTab)
+	}
+	if !blockedTester.HasText("没有可导出的件") || !blockedTester.Focused("去校对") {
+		t.Fatalf("the zero-exportable dialog did not start on review: %q", blockedTester.Texts())
 	}
 }
 
@@ -460,29 +486,23 @@ func TestWorkspaceCoverageMatchesTheConclusion(t *testing.T) {
 	m.SetContentSize(1180, 760)
 	tt := ui.NewTester(m.View, 1180, 760)
 	settle(t, m, q, tt)
-	m.histChoice = slotHistoryLabel(t, m, "r1")
+	m.histChoice = historyLabel(t, m, "r1")
 	m.OpenHistory()
 	settle(t, m, q, tt)
 
 	if m.recordTab != recordTabSummary {
 		t.Fatalf("the record opened on tab %v, want the summary", m.recordTab)
 	}
-	// HasText is a substring match, so the body's "覆盖：部分覆盖…" would
-	// also satisfy it; the title bar's slot must be the exact status.
-	coverageHeader := 0
-	for _, text := range tt.Texts() {
-		if text == "覆盖：部分" {
-			coverageHeader++
-		}
+	// The title bar's slot states the export guard's conclusion, and the
+	// summary's one-sentence title states it a second time without rounding
+	// it up.
+	if !tt.HasText("覆盖：部分") {
+		t.Fatalf("the title bar does not show the export guard's coverage: %q", tt.Texts())
 	}
-	if coverageHeader != 1 {
-		t.Fatalf("the title bar does not show the export guard's coverage exactly once: %d in %q",
-			coverageHeader, tt.Texts())
-	}
-	if !tt.HasText("覆盖：部分覆盖（导出文件会标注“部分快照”）") {
+	if !tt.HasText("没有扫全：覆盖不完整") {
 		t.Fatalf("the summary does not show the same coverage: %q", tt.Texts())
 	}
-	if tt.HasText("覆盖：完整") {
+	if tt.HasText("覆盖：全部") || tt.HasText("覆盖：完整") || tt.HasText("扫全了") {
 		t.Fatalf("a coverage the export cannot confirm is shown as complete: %q", tt.Texts())
 	}
 }
@@ -546,10 +566,10 @@ func TestScanActionsStayOnTheScanPage(t *testing.T) {
 }
 
 // TestNavRailRestoresOpenedRecords checks the rail as a set of
-// destinations: history from settings returns to the opened snapshot,
-// the history list is reachable from results, and scan restores the live
-// session slot without loading it again. Clicking the active destination
-// is a no-op.
+// destinations: the records destination restores the one opened record
+// from settings and the scan page without reloading it, and only the
+// workspace's own back action opens the list. Clicking the active
+// destination is a no-op.
 func TestNavRailRestoresOpenedRecords(t *testing.T) {
 	svc := &fakeService{
 		list: []record.RecordInfo{{
@@ -567,18 +587,17 @@ func TestNavRailRestoresOpenedRecords(t *testing.T) {
 	m.Apply(snap("s1", 1, true, scan.PhaseCapturing,
 		scan.Counts{Captured: 2, Produced: 2}, 1, true, ""))
 	drainAll(t, m, q)
+	listLoads := recordLoadCount(svc, "s1")
 
-	// Give the session slot its own view state, then open history.
-	m.filter = resultFilterAll
-	m.search = "未评价"
-	m.selected = 1
-	m.histChoice = slotHistoryLabel(t, m, "old")
+	// Opening another record replaces the live record in the one
+	// workspace; it does not keep a second editable copy behind.
+	m.histChoice = historyLabel(t, m, "old")
 	m.OpenHistory()
 	settle(t, m, q, tt)
-	if m.activeSlot != resultSlotHistory || m.rec.ID != "old" {
-		t.Fatalf("history did not open: slot %v record %+v", m.activeSlot, m.rec)
+	if m.rec == nil || m.rec.ID != "old" || m.rec.Live {
+		t.Fatalf("history did not open: record %+v", m.rec)
 	}
-	historyLoads, sessionLoads := slotLoadCount(svc, "old"), slotLoadCount(svc, "s1")
+	historyLoads := recordLoadCount(svc, "old")
 
 	if err := tt.Click("设置"); err != nil {
 		t.Fatal(err)
@@ -591,12 +610,12 @@ func TestNavRailRestoresOpenedRecords(t *testing.T) {
 		t.Fatal(err)
 	}
 	settle(t, m, q, tt)
-	if m.displayPage() != pageResults || m.activeSlot != resultSlotHistory ||
-		m.rec == nil || m.rec.ID != "old" {
-		t.Fatalf("history from settings = page %v slot %v record %+v",
-			m.displayPage(), m.activeSlot, m.rec)
+	if m.displayPage() != pageResults || m.rec == nil || m.rec.ID != "old" ||
+		m.rec.Live {
+		t.Fatalf("history from settings = page %v record %+v",
+			m.displayPage(), m.rec)
 	}
-	if slotLoadCount(svc, "old") != historyLoads {
+	if recordLoadCount(svc, "old") != historyLoads {
 		t.Fatal("restoring the opened history reloaded it")
 	}
 
@@ -607,9 +626,9 @@ func TestNavRailRestoresOpenedRecords(t *testing.T) {
 		t.Fatal(err)
 	}
 	tt.Frame()
-	if m.displayPage() != pageResults || m.activeSlot != resultSlotHistory {
-		t.Fatalf("history from results = page %v slot %v, want the opened record",
-			m.displayPage(), m.activeSlot)
+	if m.displayPage() != pageResults || m.rec == nil || m.rec.ID != "old" {
+		t.Fatalf("history from results = page %v record %+v, want the opened record",
+			m.displayPage(), m.rec)
 	}
 	if err := tt.Click("‹ 全部记录"); err != nil {
 		t.Fatalf("click 返回历史: %v", err)
@@ -626,8 +645,8 @@ func TestNavRailRestoresOpenedRecords(t *testing.T) {
 		t.Fatalf("clicking the active records destination moved to page %v", m.displayPage())
 	}
 
-	// Scan shows the scan destination, never the live record's workspace;
-	// the session slot keeps its stored view for later.
+	// Scan shows the scan destination, never the record workspace; the
+	// opened record stays ready for the records destination.
 	if err := tt.Click("扫描"); err != nil {
 		t.Fatal(err)
 	}
@@ -635,29 +654,28 @@ func TestNavRailRestoresOpenedRecords(t *testing.T) {
 	if m.displayPage() != pageScan {
 		t.Fatalf("scan from records = page %v, want the scan page", m.displayPage())
 	}
-	if m.sessionSlot.recordID != "s1" || m.sessionSlot.state.rec == nil ||
-		m.sessionSlot.state.rec.ID != "s1" {
-		t.Fatalf("the session slot lost its record: %+v", m.sessionSlot)
+	if m.rec == nil || m.rec.ID != "old" || m.rec.Live {
+		t.Fatalf("leaving the record workspace dropped its record: %+v", m.rec)
 	}
-	if m.sessionSlot.state.filter != resultFilterAll || m.sessionSlot.state.search != "未评价" ||
-		m.sessionSlot.state.selected != 1 {
-		t.Fatalf("the session slot lost its view: filter %v search %q selected %d",
-			m.sessionSlot.state.filter, m.sessionSlot.state.search, m.sessionSlot.state.selected)
-	}
-	if slotLoadCount(svc, "s1") != sessionLoads {
-		t.Fatal("leaving the live session reloaded it")
+	if recordLoadCount(svc, "old") != historyLoads {
+		t.Fatal("leaving the record workspace reloaded it")
 	}
 
 	// The records destination restores the opened snapshot from the scan
-	// page.
+	// page without reloading it.
 	if err := tt.Click("记录"); err != nil {
 		t.Fatal(err)
 	}
 	settle(t, m, q, tt)
-	if m.displayPage() != pageResults || m.activeSlot != resultSlotHistory ||
-		m.rec == nil || m.rec.ID != "old" {
-		t.Fatalf("records from scan = page %v slot %v record %+v",
-			m.displayPage(), m.activeSlot, m.rec)
+	if m.displayPage() != pageResults || m.rec == nil || m.rec.ID != "old" {
+		t.Fatalf("records from scan = page %v record %+v",
+			m.displayPage(), m.rec)
+	}
+	if recordLoadCount(svc, "old") != historyLoads {
+		t.Fatal("records from the scan page reloaded the opened record")
+	}
+	if recordLoadCount(svc, "s1") != listLoads {
+		t.Fatal("opening a history record reloaded the live session")
 	}
 
 	// The active settings destination ignores its own clicks.
@@ -702,15 +720,15 @@ func TestNavRailRecordsRoundTripRestoresViewState(t *testing.T) {
 		scan.Counts{Captured: 2, Produced: 2}, 1, true, ""))
 	drainAll(t, m, q)
 
-	m.histChoice = slotHistoryLabel(t, m, "old")
+	m.histChoice = historyLabel(t, m, "old")
 	m.OpenHistory()
 	settle(t, m, q, tt)
 	showRecordItems(m)
 	tt.Frame()
-	if m.activeSlot != resultSlotHistory || m.rec == nil || m.rec.ID != "old" {
-		t.Fatalf("history did not open: slot %v record %+v", m.activeSlot, m.rec)
+	if m.rec == nil || m.rec.ID != "old" || m.rec.Live {
+		t.Fatalf("history did not open: %+v", m.rec)
 	}
-	loads := slotLoadCount(svc, "old")
+	loads := recordLoadCount(svc, "old")
 
 	// A segment, a search that keeps every row, a set filter, a chosen row
 	// and a first visible row well down the list.
@@ -729,10 +747,10 @@ func TestNavRailRecordsRoundTripRestoresViewState(t *testing.T) {
 
 	checkRestored := func(stage string) {
 		t.Helper()
-		if m.displayPage() != pageResults || m.activeSlot != resultSlotHistory ||
-			m.rec == nil || m.rec.ID != "old" {
-			t.Fatalf("%s: page %v slot %v record %+v", stage,
-				m.displayPage(), m.activeSlot, m.rec)
+		if m.displayPage() != pageResults ||
+			m.rec == nil || m.rec.ID != "old" || m.rec.Live {
+			t.Fatalf("%s: page %v record %+v", stage,
+				m.displayPage(), m.rec)
 		}
 		if m.filter != resultFilterAll || m.search != "待校对" || m.setFilter != "31100" {
 			t.Fatalf("%s: view state = filter %v search %q set %q",
@@ -746,12 +764,12 @@ func TestNavRailRecordsRoundTripRestoresViewState(t *testing.T) {
 		if first, _ := m.list.Visible(); first != 30 {
 			t.Fatalf("%s: the list starts at row %d, want 30", stage, first)
 		}
-		if got := slotLoadCount(svc, "old"); got != loads {
+		if got := recordLoadCount(svc, "old"); got != loads {
 			t.Fatalf("%s: restoring reloaded the record (%d loads, want %d)", stage, got, loads)
 		}
 	}
 
-	// History → scan (the live session) → history.
+	// History → scan → history. The rail keeps the opened record.
 	if err := tt.Click("扫描"); err != nil {
 		t.Fatal(err)
 	}
@@ -807,9 +825,9 @@ func TestNavRailRecordsRoundTripRestoresViewState(t *testing.T) {
 // the rail: records is active and scan is not.
 func TestNavRailHighlightsRecordsForAnOpenedRecord(t *testing.T) {
 	m, _, tt, _ := openReviewRecordPage(t, reviewRowItem(t, 1, 12))
-	if m.displayPage() != pageResults || m.activeSlot != resultSlotHistory {
-		t.Fatalf("the record is not shown by the history slot: page %v slot %v",
-			m.displayPage(), m.activeSlot)
+	if m.displayPage() != pageResults || m.rec == nil || m.rec.Live {
+		t.Fatalf("the reopened record is not shown: page %v record %+v",
+			m.displayPage(), m.rec)
 	}
 	soft := tokensFor(false).AccentSoft
 	active := color.RGBA{R: soft.R, G: soft.G, B: soft.B, A: 255}
@@ -882,10 +900,11 @@ func TestNavRailRecordsRevalidatesConfirmedStaySelection(t *testing.T) {
 	}
 
 	// A selection that the filter hides also falls back on a plain
-	// same-slot activation, not only on the navigation path above.
+	// workspace revisit, not only on the navigation path above.
 	m.selected = 0
 	m.selectedSequence = 1
-	m.activateResultSlot(resultSlotHistory)
+	m.clearRecentlyConfirmed()
+	m.settleResultSelection()
 	if m.selected != 1 || m.selectedSeq() != 2 {
 		t.Fatalf("an out-of-filter selection was kept: selected %d (seq %d)",
 			m.selected, m.selectedSeq())
@@ -924,15 +943,15 @@ func TestHistoryConfirmedStayListReopenRevalidatesSelection(t *testing.T) {
 				m.SetContentSize(width, height)
 				tt := ui.NewTester(m.View, width, height)
 				settle(t, m, q, tt)
-				m.histChoice = slotHistoryLabel(t, m, "r1")
+				m.histChoice = historyLabel(t, m, "r1")
 				m.OpenHistory()
 				settle(t, m, q, tt)
 				showRecordItems(m)
 				tt.Frame()
-				if m.activeSlot != resultSlotHistory || m.rec == nil || m.rec.ID != "r1" {
-					t.Fatalf("the history record did not open: slot %v record %+v", m.activeSlot, m.rec)
+				if m.rec == nil || m.rec.ID != "r1" || m.rec.Live {
+					t.Fatalf("the history record did not open: %+v", m.rec)
 				}
-				loads := slotLoadCount(svc, "r1")
+				loads := recordLoadCount(svc, "r1")
 				rowLabel := historyTimeText(m.history[0])
 
 				if err := tt.Click("确认"); err != nil {
@@ -963,10 +982,10 @@ func TestHistoryConfirmedStayListReopenRevalidatesSelection(t *testing.T) {
 				}
 				tt.Key(0, ui.KeyEnter)
 				settle(t, m, q, tt)
-				if m.displayPage() != pageResults || m.activeSlot != resultSlotHistory ||
-					m.rec == nil || m.rec.ID != "r1" {
-					t.Fatalf("reopening = page %v slot %v record %+v",
-						m.displayPage(), m.activeSlot, m.rec)
+				if m.displayPage() != pageResults ||
+					m.rec == nil || m.rec.ID != "r1" || m.rec.Live {
+					t.Fatalf("reopening = page %v record %+v",
+						m.displayPage(), m.rec)
 				}
 				visible := m.visibleResultRows()
 				want := -1
@@ -1005,7 +1024,7 @@ func TestHistoryConfirmedStayListReopenRevalidatesSelection(t *testing.T) {
 						t.Fatalf("the completed segment has no empty state: %q", tt.Texts())
 					}
 				}
-				if got := slotLoadCount(svc, "r1"); got != loads {
+				if got := recordLoadCount(svc, "r1"); got != loads {
 					t.Fatalf("reopening from the list reloaded the record (%d loads, want %d)", got, loads)
 				}
 			})
@@ -1032,12 +1051,12 @@ func TestHistoryListReopenSettlesSelectionAgainstFilters(t *testing.T) {
 	m.SetContentSize(1024, 700)
 	tt := ui.NewTester(m.View, 1024, 700)
 	settle(t, m, q, tt)
-	m.histChoice = slotHistoryLabel(t, m, "r1")
+	m.histChoice = historyLabel(t, m, "r1")
 	m.OpenHistory()
 	settle(t, m, q, tt)
 	showRecordItems(m)
 	tt.Frame()
-	loads := slotLoadCount(svc, "r1")
+	loads := recordLoadCount(svc, "r1")
 
 	m.filter = resultFilterAll
 	m.selected = 13
@@ -1064,8 +1083,8 @@ func TestHistoryListReopenSettlesSelectionAgainstFilters(t *testing.T) {
 	}
 
 	backToRecord()
-	if m.displayPage() != pageResults || m.activeSlot != resultSlotHistory {
-		t.Fatalf("reopening = page %v slot %v", m.displayPage(), m.activeSlot)
+	if m.displayPage() != pageResults || m.rec == nil || m.rec.ID != "r1" {
+		t.Fatalf("reopening = page %v record %+v", m.displayPage(), m.rec)
 	}
 	if m.filter != resultFilterAll || m.search != "" {
 		t.Fatalf("the reopen reset the filters: filter %v search %q", m.filter, m.search)
@@ -1095,7 +1114,7 @@ func TestHistoryListReopenSettlesSelectionAgainstFilters(t *testing.T) {
 	if !tt.HasText("2 · ") {
 		t.Fatalf("the detail does not follow the fallback row: %q", tt.Texts())
 	}
-	if got := slotLoadCount(svc, "r1"); got != loads {
+	if got := recordLoadCount(svc, "r1"); got != loads {
 		t.Fatalf("reopening from the list reloaded the record (%d loads, want %d)", got, loads)
 	}
 }
@@ -1106,7 +1125,7 @@ func TestHistoryListReopenSettlesSelectionAgainstFilters(t *testing.T) {
 // reopened.
 func TestNavRailActiveRecordsDestinationIsNoOp(t *testing.T) {
 	m, _, tt, svc := openReviewRecordPage(t, reviewRowItem(t, 1, 12), reviewRowItem(t, 2, 10))
-	loads := slotLoadCount(svc, "r1")
+	loads := recordLoadCount(svc, "r1")
 
 	m.startEdit()
 	if m.edit == nil || m.navPrompt != nil {
@@ -1120,8 +1139,8 @@ func TestNavRailActiveRecordsDestinationIsNoOp(t *testing.T) {
 		t.Fatalf("clicking the active records destination closed the editor: edit %+v prompt %+v",
 			m.edit, m.navPrompt)
 	}
-	if m.displayPage() != pageResults || m.activeSlot != resultSlotHistory {
-		t.Fatalf("the active destination moved: page %v slot %v", m.displayPage(), m.activeSlot)
+	if m.displayPage() != pageResults || m.rec == nil || m.rec.ID != "r1" {
+		t.Fatalf("the active destination moved: page %v record %+v", m.displayPage(), m.rec)
 	}
 
 	m.edit.draft.Level = "13"
@@ -1136,7 +1155,7 @@ func TestNavRailActiveRecordsDestinationIsNoOp(t *testing.T) {
 	if m.edit == nil || m.edit.draft.Level != "13" {
 		t.Fatal("clicking the active records destination lost the dirty draft")
 	}
-	if got := slotLoadCount(svc, "r1"); got != loads {
+	if got := recordLoadCount(svc, "r1"); got != loads {
 		t.Fatalf("clicking the active records destination reloaded the record: %d loads, want %d",
 			got, loads)
 	}
@@ -1164,7 +1183,7 @@ func TestNavRailDestinationsGuardDirtyDrafts(t *testing.T) {
 	m.Apply(snap("s1", 1, true, scan.PhaseCapturing,
 		scan.Counts{Captured: 1, Produced: 1}, 1, true, ""))
 	drainAll(t, m, q)
-	m.histChoice = slotHistoryLabel(t, m, "old")
+	m.histChoice = historyLabel(t, m, "old")
 	m.OpenHistory()
 	settle(t, m, q, tt)
 	showRecordItems(m)
@@ -1178,8 +1197,9 @@ func TestNavRailDestinationsGuardDirtyDrafts(t *testing.T) {
 	if m.navPrompt == nil || m.navPrompt.kind != navPage || m.navPrompt.page != pageScan {
 		t.Fatalf("dirty history did not prompt before scan: %+v", m.navPrompt)
 	}
-	if m.displayPage() != pageResults || m.activeSlot != resultSlotHistory {
-		t.Fatal("the dirty history slot switched before the prompt settled")
+	if m.displayPage() != pageResults || m.rec == nil || m.rec.ID != "old" ||
+		m.rec.Live {
+		t.Fatal("the dirty record switched before the prompt settled")
 	}
 	m.promptStay()
 	if m.edit == nil || m.edit.draft.Level != "13" {
@@ -1204,9 +1224,8 @@ func TestNavRailDestinationsGuardDirtyDrafts(t *testing.T) {
 		t.Fatal(err)
 	}
 	settle(t, m, q, tt)
-	if m.activeSlot != resultSlotHistory || m.rec == nil || m.rec.ID != "old" {
-		t.Fatalf("records from scan did not restore the opened record: slot %v record %+v",
-			m.activeSlot, m.rec)
+	if m.rec == nil || m.rec.ID != "old" || m.rec.Live {
+		t.Fatalf("records from scan did not restore the opened record: %+v", m.rec)
 	}
 
 	// A dirty record prompts before settings.
@@ -1255,13 +1274,13 @@ func TestNavRailRecordsRestoresActualScroll(t *testing.T) {
 				m.SetContentSize(width, height)
 				tt := ui.NewTester(m.View, width, height)
 				settle(t, m, q, tt)
-				m.histChoice = slotHistoryLabel(t, m, "old")
+				m.histChoice = historyLabel(t, m, "old")
 				m.OpenHistory()
 				settle(t, m, q, tt)
 				showRecordItems(m)
 				tt.Frame()
-				if m.activeSlot != resultSlotHistory || m.rec == nil || m.rec.ID != "old" {
-					t.Fatalf("history did not open: slot %v record %+v", m.activeSlot, m.rec)
+				if m.rec == nil || m.rec.ID != "old" || m.rec.Live {
+					t.Fatalf("history did not open: %+v", m.rec)
 				}
 
 				// Actual pointer scrolling: no direct m.scroll or
@@ -1274,7 +1293,7 @@ func TestNavRailRecordsRestoresActualScroll(t *testing.T) {
 					t.Fatalf("pointer input did not scroll the list: first %d", first)
 				}
 				selected, filter := m.selected, m.filter
-				loads := slotLoadCount(svc, "old")
+				loads := recordLoadCount(svc, "old")
 
 				if err := tt.Click(route); err != nil {
 					t.Fatalf("click %s: %v", route, err)
@@ -1289,10 +1308,10 @@ func TestNavRailRecordsRestoresActualScroll(t *testing.T) {
 				settle(t, m, q, tt)
 
 				after, _ := m.list.Visible()
-				if m.displayPage() != pageResults || m.activeSlot != resultSlotHistory ||
-					m.rec == nil || m.rec.ID != "old" {
-					t.Fatalf("returning from %s = page %v slot %v record %+v",
-						route, m.displayPage(), m.activeSlot, m.rec)
+				if m.displayPage() != pageResults ||
+					m.rec == nil || m.rec.ID != "old" || m.rec.Live {
+					t.Fatalf("returning from %s = page %v record %+v",
+						route, m.displayPage(), m.rec)
 				}
 				if m.filter != filter || m.selected != selected {
 					t.Fatalf("returning from %s changed the view: filter %v→%v selected %d→%d",
@@ -1302,7 +1321,7 @@ func TestNavRailRecordsRestoresActualScroll(t *testing.T) {
 					t.Fatalf("returning from %s reset the list: first %d→%d",
 						route, first, after)
 				}
-				if got := slotLoadCount(svc, "old"); got != loads {
+				if got := recordLoadCount(svc, "old"); got != loads {
 					t.Fatalf("returning from %s reloaded the record (%d loads, want %d)",
 						route, got, loads)
 				}
@@ -1347,8 +1366,8 @@ func TestNavRailSessionConfirmedStayRevisitRevalidates(t *testing.T) {
 					m.openResultDetail()
 				}
 				settle(t, m, q, tt)
-				if m.activeSlot != resultSlotSession || m.rec == nil || m.rec.ID != "s1" {
-					t.Fatalf("the live session is not active: slot %v record %+v", m.activeSlot, m.rec)
+				if m.rec == nil || m.rec.ID != "s1" || !m.rec.Live {
+					t.Fatalf("the live session is not open: %+v", m.rec)
 				}
 
 				if err := tt.Click("确认"); err != nil {
@@ -1373,9 +1392,10 @@ func TestNavRailSessionConfirmedStayRevisitRevalidates(t *testing.T) {
 				if len(visible) > 0 {
 					want = visible[0]
 				}
-				if m.displayPage() != pageResults || m.activeSlot != resultSlotSession {
-					t.Fatalf("returning through settings = page %v slot %v",
-						m.displayPage(), m.activeSlot)
+				if m.displayPage() != pageResults || m.rec == nil || m.rec.ID != "s1" ||
+					!m.rec.Live {
+					t.Fatalf("returning through settings = page %v record %+v",
+						m.displayPage(), m.rec)
 				}
 				if m.selected != want {
 					t.Fatalf("the detail keeps a row outside the filter: selected %d, want %d (visible %v)",

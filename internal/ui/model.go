@@ -11,8 +11,8 @@
 package ui
 
 import (
+	"sort"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -115,7 +115,9 @@ type Config struct {
 	// nil disables images (the details show their texts only).
 	Evidence EvidenceSource
 	// DirectExportSaver writes the usable-data JSON/CSV files straight into
-	// the system downloads directory; nil hides the export controls.
+	// the system downloads directory; nil hides the export controls. A
+	// saver that also implements CancelableDirectExportSaver lets the
+	// dialog stop before a file is committed.
 	DirectExportSaver DirectExportSaver
 	// OpenDownloadsDirectory reveals the direct export directory with the
 	// system file manager; nil hides the "open directory" action.
@@ -133,6 +135,15 @@ type Config struct {
 	// area as "当前版本 …" so the window itself names the build it runs;
 	// the entry point passes mygo.App.Version(). Empty hides the line.
 	AppVersion string
+	// SystemInfo reads the operating-system and display context the copied
+	// diagnostic text reports. The entry point passes app.CurrentSystemInfo;
+	// nil or a zero result says unknown. It runs only when the user copies,
+	// after the window has established the process's DPI awareness.
+	SystemInfo func() app.SystemInfo
+	// OpenDiagnosticsDirectory reveals the directory holding the diagnostic
+	// log and its collector subtrees, as app.DiagnosticsDirectory names it.
+	// Nil hides the action.
+	OpenDiagnosticsDirectory func() error
 	// DevAutoInstall installs an update a check found on its own, without
 	// the install button. It is a development switch (the entry point sets
 	// it from YOUKAI_DEV_AUTOUPDATE) for driving the real install and
@@ -200,20 +211,21 @@ type Model struct {
 	source ScanSourceInfo
 
 	// The last applied service snapshot and its identity, for discarding
-	// stale updates by session and revision.
+	// stale updates by session and revision. priorSession is the session the
+	// applied one replaced: a new session equal to it is a refused start
+	// rolling back to that already ended session.
 	snap            app.Snapshot
 	appliedSession  scan.ID
+	priorSession    scan.ID
 	appliedRevision uint64
 	prevBusy        bool
 
-	// Results destinations. The embedded state is the active slot's
-	// projection, so the view keeps reading one record; the two slots keep
-	// their own record, filters, selection, scroll and export snapshot.
-	// Only the active slot may hold an unsaved editor.
-	resultSlotState
-	activeSlot  resultSlotKind
-	sessionSlot resultSlot
-	historySlot resultSlot
+	// The record workspace's state: the one record currently open, its
+	// filters, selection, scroll, export snapshot and unsaved editor. The
+	// record of the current or last scan and the same record reopened from
+	// the records list share it; another record replaces it after the
+	// editor settled.
+	recordWorkspaceState
 
 	// Start requests: one request ID per attempt, reused until the
 	// service answered, so a double click cannot start two sessions.
@@ -234,53 +246,61 @@ type Model struct {
 	targetChoice        int
 	targetsSerial       int
 
-	history          []HistoryEntry
-	histChoice       string
-	histErr          string
-	historyFilter    string
-	historyExporting string
+	history        []HistoryEntry
+	histChoice     string
+	histErr        string
+	historyLoading bool
+	// historyLoadSeq identifies the newest load; a late result from an
+	// older load must not replace its list or clear its loading state.
+	historyLoadSeq uint64
+
+	// The records list's date filter (08 §5). The two dates are inclusive
+	// local days; active is false while the range still spans every record,
+	// so an untouched filter never hides a row. The DateInput fields always
+	// show a day, so an inactive range is kept at the newest and oldest
+	// record's day.
+	historyFilterActive bool
+	historyFilterStart  time.Time
+	historyFilterEnd    time.Time
 
 	// The history table's choice, place and row menu. historyRow indexes
 	// the visible (date-filtered) entries; the ListState keeps the scroll
 	// and the keyboard choice. Only one row's popover menu is open at once.
 	historyList     ui.ListState
 	historyRow      int
-	historyScroll   ui.ScrollState
 	historyMenuID   string
 	historyMenuOpen bool
-	// The composite table snaps precise scrolls to whole 52-DIP rows.
-	// historyScrollSeen is the offset the last frame observed, and the two
-	// times debounce the rest snap after the user stops moving.
-	historyScrollSeen    float32
-	historyScrollMovedAt time.Time
-	historyScrollSnapAt  time.Time
-	// The 860 composite's measured frame: the panel, its header and its
-	// footer give the whole-row list viewport once laid out.
-	historyPanel  ui.Ref
-	historyHead   ui.Ref
-	historyFooter ui.Ref
+	// historyFocusPending moves the keyboard to the first row when the
+	// records list is entered (08 §5). lastPage detects that entry.
+	historyFocusPending bool
+	lastPage            Page
 
-	// Screenshot/history cleanup. savePrompt is the post-save three-way
-	// choice; promptedSessions remembers the sessions it was settled for,
-	// so "稍后处理" never reopens it. cleanup is the preview awaiting
+	// Screenshot/history cleanup. cleanup is the preview awaiting
 	// confirmation, and storage is the storeroom view's last successful
 	// measurement (nil after a failure — old numbers are never shown as
-	// exact).
-	savePrompt       *savePrompt
-	promptedSessions map[string]bool
-	cleanup          *cleanupPrompt
-	cleanupNotice    string
-	storage          *app.StorageUsage
-	storageErr       string
-	storageLoading   bool
-	storagePrompt    *storagePrompt
+	// exact). A finished scan never asks whether to keep its screenshots
+	// (P-13); the summary's detail area and the cleanup entries are the
+	// only places screenshots are managed.
+	cleanup        *cleanupPrompt
+	cleanupNotice  string
+	storage        *app.StorageUsage
+	storageErr     string
+	storageLoading bool
+	storagePrompt  *storagePrompt
 
 	// exporting is the shared export slot: one export runs at a time. Its
-	// frozen snapshot and outcome live in the active result slot;
-	// exportOutcome carries the direct export's global status strip message
-	// so switching destinations cannot hide it.
+	// frozen snapshot lives in the open record's workspace; exportOutcome
+	// is the result the modal renders. exportDialog owns the modal's own
+	// pre-export, running, canceled, failure and success states, and
+	// exportCancel stops the running write when the modal's 取消 is used.
 	exporting     bool
 	exportOutcome *exportOutcome
+	exportDialog  exportDialogState
+	exportCancel  func()
+	// exportAfterLoadID is the record whose load should open the export
+	// dialog when it lands. The records list sets it through navOpenRecord;
+	// a normal record open or a failed load clears it.
+	exportAfterLoadID string
 
 	// page is the shell's current destination: scan, the records list or
 	// one record's workspace, or settings. It starts on scan and only
@@ -303,12 +323,12 @@ type Model struct {
 	contentWidth  int
 	contentHeight int
 
-	// The results table's place and its chosen row live in the active
-	// result slot's state; list keeps the toolkit's per-pass list state.
+	// The results table's place and its chosen row live in the record
+	// workspace state; list keeps the toolkit's per-pass list state.
 	// tableSelected is the chosen display row of the filtered table, which
-	// maps back to the slot's full-row selected index. textInputFocused is
-	// rebuilt every frame: MyGo's text inputs leave Escape to shortcuts, so
-	// the shell keeps the key with a focused field instead of taking it.
+	// maps back to the workspace's full-row selected index. textInputFocused
+	// is rebuilt every frame: MyGo's text inputs leave Escape to shortcuts,
+	// so the shell keeps the key with a focused field instead of taking it.
 	list             ui.ListState
 	tableSelected    int
 	textInputFocused bool
@@ -334,9 +354,6 @@ type Model struct {
 	resultsScrollSeen    float32
 	resultsScrollMovedAt time.Time
 	resultsScrollSnapAt  time.Time
-	// historyRowProbe measures the native history table's tallest cell, so
-	// its whole-row cap uses the platform's real line metrics.
-	historyRowProbe ui.Ref
 	// resultsDetail opens a narrow results page from its list to the
 	// chosen item's detail; it has no effect in the side-by-side split.
 	resultsDetail bool
@@ -402,18 +419,18 @@ func New(cfg Config) *Model {
 		closeBehavior = app.CloseBehaviorHide
 	}
 	m := &Model{
-		cfg:              cfg,
-		source:           cfg.ScanSource,
-		split:            420,
-		page:             pageScan,
-		recordTab:        recordTabSummary,
-		contentWidth:     1180,
-		contentHeight:    760,
-		cache:            newEvidenceCache(cfg.Evidence, limit),
-		promptedSessions: make(map[string]bool),
-		historyRow:       -1,
-		targetChoice:     -1,
-		closeBehavior:    closeBehavior,
+		cfg:            cfg,
+		source:         cfg.ScanSource,
+		split:          420,
+		page:           pageScan,
+		recordTab:      recordTabSummary,
+		contentWidth:   1180,
+		contentHeight:  760,
+		cache:          newEvidenceCache(cfg.Evidence, limit),
+		historyRow:     -1,
+		historyLoading: true,
+		targetChoice:   -1,
+		closeBehavior:  closeBehavior,
 	}
 	if cfg.Updates != nil {
 		m.updates = cfg.Updates
@@ -421,9 +438,7 @@ func New(cfg Config) *Model {
 	}
 	m.appVersion = cfg.AppVersion
 	m.devAutoInstall = cfg.DevAutoInstall
-	m.sessionSlot = resultSlot{kind: resultSlotSession, state: newResultSlotState()}
-	m.historySlot = resultSlot{kind: resultSlotHistory, state: newResultSlotState()}
-	m.resultSlotState = m.sessionSlot.state
+	m.recordWorkspaceState = newRecordWorkspaceState()
 	m.list.Selected = &m.tableSelected
 	return m
 }
@@ -508,29 +523,32 @@ func (m *Model) Apply(snap app.Snapshot) {
 		return
 	}
 	prevSession, prevBusy := m.appliedSession, m.prevBusy
+	replacedSession := m.priorSession
 	m.appliedSession, m.appliedRevision = snap.SessionID, snap.Revision
 	m.snap = snap
 	m.prevBusy = snap.Busy
 
-	// A new session becomes the session slot's record: the live one, an
-	// empty view until its saved generations load (a refused start rolls
-	// the service back to the previous session, whose saved record reloads
-	// through the growth branch below). Unsaved review input is never
-	// thrown away by a scan starting behind the user's back.
+	// A new session becomes the open record: the live one, an empty view
+	// until its saved generations load (a refused start rolls the service
+	// back to the previous session, whose saved record reloads through the
+	// growth branch below). Unsaved review input is never thrown away by a
+	// scan starting behind the user's back.
 	if snap.SessionID != "" && snap.SessionID != prevSession {
-		m.beginSession(string(snap.SessionID))
+		m.priorSession = prevSession
+		m.beginSession(string(snap.SessionID), string(replacedSession))
 	}
 	// The live record's saved count grew: a newer generation is on disk,
-	// so reload the session slot (the previous rows stay until the load
-	// lands). A dirty active session keeps its snapshot; catchUpLive
-	// reloads once it settles. History stays on screen meanwhile.
+	// so reload it while it is the open record (the previous rows stay
+	// until the load lands). A dirty live record keeps its snapshot;
+	// catchUpLive reloads once it settles. An opened history record stays
+	// on screen and loads the live record afresh when the user returns.
 	reloadedLive := false
-	if rec := m.sessionRecord(); rec != nil && rec.Live && snap.SessionID != "" &&
-		rec.ID == string(snap.SessionID) && snap.SavedCount > m.sessionLiveSavedShown() {
-		dirtyActive := m.activeSlot == resultSlotSession && (m.editingDirty() || m.reviewSaving)
+	if m.rec != nil && m.rec.Live && snap.SessionID != "" &&
+		m.rec.ID == string(snap.SessionID) && snap.SavedCount > m.liveSavedShown {
+		dirtyActive := m.editingDirty() || m.reviewSaving
 		if !dirtyActive {
-			m.setSessionLiveSavedShown(snap.SavedCount)
-			m.reloadSessionRecord(rec.ID)
+			m.liveSavedShown = snap.SavedCount
+			m.reloadRecord(m.rec.ID, true)
 			reloadedLive = true
 		}
 	}
@@ -541,104 +559,74 @@ func (m *Model) Apply(snap app.Snapshot) {
 	// at startup loads history once via Attach.
 	if prevBusy && !snap.Busy && snap.SessionID != "" {
 		if snap.SaveError == "" && snap.Scan.Phase == scan.PhaseEnded {
-			m.requestSavePrompt(string(snap.SessionID))
-			if m.activeSlot == resultSlotSession &&
-				!m.editingDirty() && !m.reviewSaving {
+			if m.liveRecordOpen() && !m.editingDirty() && !m.reviewSaving {
 				m.openRecordWorkspace()
 			}
 		}
 		m.loadHistory()
 		m.refreshStorage()
 		if !reloadedLive {
-			if rec := m.sessionRecord(); rec != nil && rec.Live && rec.ID == string(snap.SessionID) {
-				dirtyActive := m.activeSlot == resultSlotSession && (m.editingDirty() || m.reviewSaving)
+			if m.rec != nil && m.rec.Live && m.rec.ID == string(snap.SessionID) {
+				dirtyActive := m.editingDirty() || m.reviewSaving
 				if !dirtyActive {
-					m.setSessionLiveSavedShown(snap.SavedCount)
-					m.reloadSessionRecord(rec.ID)
+					m.liveSavedShown = snap.SavedCount
+					m.reloadRecord(m.rec.ID, true)
 				}
 			}
 		}
 	}
 }
 
-// beginSession routes a newly started scan into the session slot. The live
-// destination becomes active unless unsaved input on the current record
-// keeps the user where they are; a background scan must not discard input.
-func (m *Model) beginSession(id string) {
+// beginSession routes a newly started scan into the open record. The new
+// live record replaces the shown one unless unsaved input keeps the user
+// where they are; a background scan must not discard input. replacedSession
+// is the session the previous snapshot replaced; when the new session
+// equals it, a refused start rolled the service back to that ended session.
+func (m *Model) beginSession(id, replacedSession string) {
 	busyEditing := m.reviewSaving || m.editingDirty()
-	if m.savePrompt != nil && m.savePrompt.recordID != id {
-		// A new scan replaces the results view; the old session's prompt is
-		// settled as postponed instead of floating over unrelated content.
-		m.promptedSessions[m.savePrompt.recordID] = true
-		m.savePrompt = nil
-	}
-	if busyEditing && m.rec != nil && m.rec.ID != id {
-		if m.activeSlot == resultSlotSession {
-			m.rec.Live = false // the previous session's record is history now
-			m.reviewNotice = "新的扫描已开始；保存或放弃当前编辑后可查看本次扫描。"
+	rolledBack := replacedSession != "" && id == replacedSession
+	if busyEditing && m.rec != nil {
+		if m.rec.ID == id {
+			// A refused start rolled the service back to the record the
+			// draft belongs to: keep the editor and make the record live
+			// again instead of replacing it.
+			m.rec.Live = true
+			m.reviewNotice = ""
 			return
 		}
-		m.reviewNotice = "新的扫描已开始；保存或放弃当前编辑后可查看本次扫描。"
-		m.resetBackgroundSession(id)
+		// The open record is history now; the new session's record waits
+		// until the draft settles so a background scan never discards input.
+		m.rec.Live = false
+		if rolledBack {
+			// The refused start returned to the session that was live
+			// before it; no new scan is running, so the notice is stale.
+			m.reviewNotice = ""
+		} else {
+			m.reviewNotice = "新的扫描已开始；保存或放弃当前编辑后可查看本次扫描。"
+		}
 		return
 	}
-	m.showLiveSession(id)
+	m.showRecord(id, true)
 }
 
-// resetBackgroundSession points the inactive or about-to-be-shown session
-// slot at a new session without touching the active history destination.
-func (m *Model) resetBackgroundSession(id string) {
-	version := m.sessionSlot.state.recLoad + 1
-	m.sessionSlot = resultSlot{kind: resultSlotSession, recordID: id, state: newResultSlotState()}
-	m.sessionSlot.state.recLoad = version
-	m.sessionSlot.state.rec = &RecordView{ID: id, Live: true}
-	if m.activeSlot == resultSlotSession {
-		m.resultSlotState = m.sessionSlot.state
-		m.resetResultList()
-	}
-}
-
-// ShowLive switches the results area back to the current (or last) scan's
-// record, after a reopened history record replaced it. The session slot
-// keeps its loaded view, so returning does not reload or reset it.
+// ShowLive opens the current (or last) scan's record, after a reopened
+// history record replaced it. An already open live record starts a new
+// visit without reloading; otherwise the record loads from disk after any
+// draft settles.
 func (m *Model) ShowLive() {
 	if m.appliedSession == "" || m.exitState == exitRunning || m.exitState == exitDone {
 		return
 	}
-	if m.activeSlot == resultSlotSession && m.sessionSlot.recordID == string(m.appliedSession) &&
-		m.rec != nil && m.rec.Live && m.rec.ID == string(m.appliedSession) {
-		// The session slot is already the live destination; returning from
-		// settings or the history list still starts a new visit. Revalidate
-		// the same slot so a confirmed-and-stayed row leaves the pending
-		// segment and the detail follows the rows the filter shows.
-		m.page = pageResults
-		m.activateResultSlot(resultSlotSession)
-		return
-	}
 	m.page = pageResults
-	m.requestNavigation(navigationRequest{kind: navShowLive})
-}
-
-// performShowLive is the navigation action behind ShowLive.
-func (m *Model) performShowLive() {
-	id := string(m.appliedSession)
-	if session := &m.sessionSlot; session.recordID == id && session.state.rec != nil &&
-		session.state.recErr == "" {
-		m.activateResultSlot(resultSlotSession)
+	if m.liveRecordOpen() && m.recErr == "" {
+		// Returning from settings or the records list still starts a new
+		// visit: a confirmed-and-stayed row leaves the pending segment and
+		// the detail follows the rows the filter shows.
+		m.clearRecentlyConfirmed()
+		m.settleResultSelection()
 		return
 	}
-	if m.activeSlot != resultSlotSession {
-		m.activateResultSlot(resultSlotSession)
-	}
-	m.resetResultSlot(&m.sessionSlot, id, true)
-	m.resultSlotState = m.sessionSlot.state
-	m.resetResultList()
-	m.edit = nil
-	m.navPrompt = nil
-	m.reviewErr = ""
-	m.reviewNotice = ""
-	m.lastAction = reviewSave
-	m.recordTab = recordTabSummary
+	m.requestNavigation(navigationRequest{kind: navOpenRecord, recordID: string(m.appliedSession)})
 }
 
 // HistoryEntry is one saved record of the history list, as the reopen flow
@@ -646,33 +634,55 @@ func (m *Model) performShowLive() {
 type HistoryEntry struct {
 	// ID is the record identifier to reopen.
 	ID string
-	// Label is the date and record identifier used by the row actions.
+	// Label is the date and record identifier the picker and the
+	// historyID lookup use.
 	Label string
 
 	SavedAt       time.Time
 	CapturedCount int64
 	Coverage      record.CoverageStatus
 	// CoverageExpected is 0 when the record does not know the scope's
-	// expected count; the table then shows the status word instead of a
-	// percentage.
+	// expected count.
 	CoverageExpected int64
-	PendingReview    int
 	// Termination is the session's first termination trigger; nil for a
 	// record whose checkpoint predates the field or never ended.
-	Termination      *record.Termination
-	ExportableCount  int64
-	FailedCount      int64
-	UnprocessedCount int64
-	OtherCount       int64
-	TotalBytes       int64
-	Unreadable       bool
+	Termination *record.Termination
+	// Counts is the four-class partition the list's 待处理 and 可导出
+	// columns and its conclusion use (app.ItemClassCounts).
+	Counts app.ItemClassCounts
+	// Interrupted marks a record recovery finished after a crash or a
+	// lost process; it is not the still-running session.
+	Interrupted bool
+	// IncompletePositions is the number of inventory positions the
+	// traversal marked degraded. Known is false when the checkpoint carries
+	// no per-position conclusions and its scope cannot be read, so zero
+	// alone does not mean every position completed.
+	IncompletePositions      int
+	IncompletePositionsKnown bool
+	TotalBytes               int64
+	// EvidenceFiles and EvidenceBytes are the record's screenshot footprint,
+	// shown in the summary's detail area; zero means unknown or no evidence.
+	EvidenceFiles int
+	EvidenceBytes int64
+	Unreadable    bool
 }
 
-// loadHistory refreshes the history list from the service.
+// loadHistory refreshes the history list from the service off the UI
+// thread. The list is ordered newest first here as well as in the service,
+// so the first row is always the record a returning user looks for
+// (07 §4).
 func (m *Model) loadHistory() {
+	m.historyLoadSeq++
+	seq := m.historyLoadSeq
+	m.historyLoading = true
 	m.goAsync(func() {
 		records, err := m.cfg.Service.HistoryRecords()
 		m.update(func() {
+			if seq != m.historyLoadSeq {
+				// A newer load owns the list and its loading state.
+				return
+			}
+			m.historyLoading = false
 			if err != nil {
 				m.histErr = err.Error()
 				return
@@ -685,23 +695,31 @@ func (m *Model) loadHistory() {
 					label = info.SavedAt.Format("2006-01-02 15:04") + " · " + info.ID
 				}
 				entries = append(entries, HistoryEntry{
-					ID:               info.ID,
-					Label:            label,
-					SavedAt:          info.SavedAt,
-					CapturedCount:    info.CapturedCount,
-					Coverage:         info.Coverage,
-					CoverageExpected: info.CoverageExpected,
-					PendingReview:    info.PendingReview,
-					Termination:      info.Termination,
-					ExportableCount:  info.ExportableCount,
-					FailedCount:      info.FailedCount,
-					UnprocessedCount: info.UnprocessedCount,
-					OtherCount:       info.OtherCount,
-					TotalBytes:       info.TotalBytes,
-					Unreadable:       info.Unreadable,
+					ID:                       info.ID,
+					Label:                    label,
+					SavedAt:                  info.SavedAt,
+					CapturedCount:            info.CapturedCount,
+					Coverage:                 info.Coverage,
+					CoverageExpected:         info.CoverageExpected,
+					Termination:              info.Termination,
+					Counts:                   info.Counts,
+					Interrupted:              info.Interrupted,
+					IncompletePositions:      info.IncompletePositions,
+					IncompletePositionsKnown: info.IncompletePositionsKnown,
+					TotalBytes:               info.TotalBytes,
+					EvidenceFiles:            info.EvidenceFiles,
+					EvidenceBytes:            info.EvidenceBytes,
+					Unreadable:               info.Unreadable,
 				})
 			}
+			sort.SliceStable(entries, func(i, j int) bool {
+				if !entries[i].SavedAt.Equal(entries[j].SavedAt) {
+					return entries[i].SavedAt.After(entries[j].SavedAt)
+				}
+				return entries[i].ID > entries[j].ID
+			})
 			m.history = entries
+			m.settleHistoryFilterRange()
 			labels := m.HistoryLabels()
 			if m.histChoice == "" && len(labels) > 0 {
 				m.histChoice = labels[0]
@@ -713,6 +731,8 @@ func (m *Model) loadHistory() {
 	})
 }
 
+// hasHistoryLabel reports whether a visible row still carries a label,
+// so a filter change cannot leave the picker on a hidden record.
 func (m *Model) hasHistoryLabel(label string) bool {
 	for _, e := range m.history {
 		if e.Label == label && m.historyVisible(e) {
@@ -722,30 +742,81 @@ func (m *Model) hasHistoryLabel(label string) bool {
 	return false
 }
 
-// historyFilterTime returns the parsed date filter. Empty means no
-// filter; ok is false when the text is not a valid YYYY-MM-DD date.
-func (m *Model) historyFilterTime() (time.Time, bool) {
-	text := strings.TrimSpace(m.historyFilter)
-	if text == "" {
-		return time.Time{}, true
+// settleHistoryFilterRange keeps the DateInput fields on the record
+// range while the filter is inactive, and on the newest available days
+// once records start over an empty list. An active filter keeps the days
+// the user chose, even when a later scan adds records outside it.
+func (m *Model) settleHistoryFilterRange() {
+	if len(m.history) == 0 {
+		m.historyFilterActive = false
+		m.historyFilterStart, m.historyFilterEnd = time.Time{}, time.Time{}
+		return
 	}
-	date, err := time.ParseInLocation("2006-01-02", text, time.Local)
-	if err != nil {
-		return time.Time{}, false
+	if m.historyFilterActive {
+		if m.historyFilterStart.IsZero() || m.historyFilterEnd.IsZero() {
+			m.resetHistoryFilter()
+		}
+		return
 	}
-	return date, true
+	m.historyFilterStart = historyDay(m.oldestHistoryTime())
+	m.historyFilterEnd = historyDay(m.newestHistoryTime())
 }
 
-func (m *Model) historyVisible(entry HistoryEntry) bool {
-	filter, ok := m.historyFilterTime()
-	if !ok {
-		return false
+func (m *Model) newestHistoryTime() time.Time {
+	for _, entry := range m.history {
+		if !entry.SavedAt.IsZero() {
+			return entry.SavedAt
+		}
 	}
-	if filter.IsZero() {
+	return time.Time{}
+}
+
+func (m *Model) oldestHistoryTime() time.Time {
+	for i := len(m.history) - 1; i >= 0; i-- {
+		if !m.history[i].SavedAt.IsZero() {
+			return m.history[i].SavedAt
+		}
+	}
+	return time.Time{}
+}
+
+// resetHistoryFilter puts the date range back on every record.
+func (m *Model) resetHistoryFilter() {
+	m.historyFilterActive = false
+	m.settleHistoryFilterRange()
+}
+
+// clampHistoryFilter keeps the range ordered after a DateInput change; the
+// field the user just set wins over the other end.
+func (m *Model) clampHistoryFilter(startChanged bool) {
+	if !m.historyFilterStart.After(m.historyFilterEnd) {
+		return
+	}
+	if startChanged {
+		m.historyFilterEnd = m.historyFilterStart
+		return
+	}
+	m.historyFilterStart = m.historyFilterEnd
+}
+
+// historyDay is the local calendar day of t, the granularity of the list's
+// date filter.
+func historyDay(t time.Time) time.Time {
+	y, m, d := t.In(time.Local).Date()
+	return time.Date(y, m, d, 0, 0, 0, 0, time.Local)
+}
+
+// historyVisible applies the inclusive date range. An inactive filter
+// shows every record, including one whose date is unknown.
+func (m *Model) historyVisible(entry HistoryEntry) bool {
+	if !m.historyFilterActive {
 		return true
 	}
-	saved := entry.SavedAt.In(time.Local)
-	return saved.Year() == filter.Year() && saved.Month() == filter.Month() && saved.Day() == filter.Day()
+	if entry.SavedAt.IsZero() {
+		return false
+	}
+	day := historyDay(entry.SavedAt)
+	return !day.Before(m.historyFilterStart) && !day.After(m.historyFilterEnd)
 }
 
 func (m *Model) visibleHistory() []HistoryEntry {
@@ -768,80 +839,61 @@ func (m *Model) HistoryLabels() []string {
 	return labels
 }
 
-func (m *Model) historyFilterInvalid() bool {
-	_, ok := m.historyFilterTime()
-	return !ok
-}
-
-// OpenHistory opens the chosen history record in the history slot. The
-// live session slot stays untouched; the "本次" record routes back to it
-// through ShowLive so one record never has two editable copies.
+// OpenHistory opens the chosen record in the record workspace. The record
+// of the current scan and the same record reopened here are one workspace:
+// reopening it keeps its filters, selection and unsaved edit.
 func (m *Model) OpenHistory() {
 	id := m.historyID(m.histChoice)
 	if id == "" || m.exitState == exitRunning || m.exitState == exitDone {
 		return
 	}
-	if id == string(m.appliedSession) && m.appliedSession != "" {
-		m.ShowLive()
-		return
-	}
-	if m.activeSlot == resultSlotHistory && m.historySlot.recordID == id {
-		m.page = pageResults
-		if m.editingDirty() || m.reviewSaving {
-			// An explicit reopen while the editor is unsettled still walks
-			// the save/discard/stay prompt; the settled action reloads.
-			m.requestNavigation(navigationRequest{kind: navOpenHistory, recordID: id, reload: true})
-			return
-		}
-		// Entering from the list is a new visit: the previous visit's
-		// confirmed-and-stayed rows leave the pending segment, so the
-		// selection is checked against the rows the filters still show.
-		// Everything else — filter, search, set/slot choices, a still
-		// visible selection and scroll — stays where the user left it.
-		m.clearRecentlyConfirmedFor(resultSlotHistory)
-		m.settleResultSelection()
-		return // the destination is already active: no reset, no reload
-	}
-	m.page = pageResults
-	m.requestNavigation(navigationRequest{kind: navOpenHistory, recordID: id})
+	m.openRecord(id)
 }
 
-// performOpenHistory is the navigation action behind OpenHistory. A revisit
-// with no forced reload restores the stored view; otherwise a different
-// record (or an explicit reload) replaces the history slot and invalidates
-// its in-flight load.
-func (m *Model) performOpenHistory(id string, reload bool) {
+// openRecord routes the records list and the live-session entry into the
+// one record workspace. The record already on screen keeps its filters,
+// selection, scroll and unsaved edit; another record waits for the editor
+// to settle before it replaces the workspace.
+func (m *Model) openRecord(id string) {
 	if id == "" {
 		return
 	}
-	if m.appliedSession != "" && id == string(m.appliedSession) {
-		m.performShowLive()
+	m.page = pageResults
+	if m.recordIsOpen(id) && m.recErr == "" {
+		// Entering from the list is a new visit: the previous visit's
+		// confirmed-and-stayed rows leave the pending segment, so the
+		// selection is checked against the rows the filters still show.
+		// Everything else — filters, search, set/slot choices, a still
+		// visible selection, scroll and the unsaved edit — stays.
+		m.clearRecentlyConfirmed()
+		m.settleResultSelection()
 		return
 	}
-	history := &m.historySlot
-	if !reload && history.recordID == id && history.state.rec != nil && history.state.recErr == "" {
-		m.activateResultSlot(resultSlotHistory)
+	m.requestNavigation(navigationRequest{kind: navOpenRecord, recordID: id})
+}
+
+// performOpenRecord is the navigation action behind OpenHistory and
+// ShowLive. The entry checks keep a record already on screen in place, so
+// this action always replaces the workspace and loads from disk; it also
+// retries a record whose previous load failed.
+func (m *Model) performOpenRecord(id string, exportAfterLoad bool) {
+	if id == "" {
 		return
 	}
-	if m.activeSlot != resultSlotHistory {
-		m.activateResultSlot(resultSlotHistory)
+	if exportAfterLoad {
+		m.exportAfterLoadID = id
 	} else {
-		// The old history content still needs to be stored before the slot
-		// is repointed at another record.
-		m.captureActiveResult()
+		m.exportAfterLoadID = ""
 	}
-	m.resetResultSlot(history, id, false)
-	m.resultSlotState = history.state
-	m.resetResultList()
-	m.settleResultSelection()
-	m.resultsDetail = false
-	m.edit = nil
-	m.navPrompt = nil
-	m.reviewErr = ""
-	m.reviewNotice = ""
-	m.lastAction = reviewSave
+	live := m.recordIsLive(id)
+	m.showRecord(id, live)
 	m.recordTab = recordTabSummary
-	m.reloadResultRecord(history, id, false)
+	if live {
+		// The loaded generation is the latest this snapshot knows of;
+		// growth beyond it reloads through Apply or catchUpLive.
+		m.liveSavedShown = m.snap.SavedCount
+	}
+	m.reloadRecord(id, live)
 }
 
 func (m *Model) historyID(label string) string {
@@ -851,12 +903,6 @@ func (m *Model) historyID(label string) string {
 		}
 	}
 	return ""
-}
-
-// reloadRecord loads one record into the active result slot. The load
-// result lands through reloadResultRecord's slot + version guard.
-func (m *Model) reloadRecord(id string, live bool) {
-	m.reloadResultRecord(m.activeResultSlot(), id, live)
 }
 
 // selectedSeq returns the selected row's capture sequence, 0 for none.

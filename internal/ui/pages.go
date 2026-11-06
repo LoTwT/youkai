@@ -53,8 +53,16 @@ func (m *Model) displayPage() Page {
 func (m *Model) viewPages(c *ui.Context) {
 	tok := ApplyTheme(c)
 	t := c.Theme()
+	page := m.displayPage()
+	if page != m.lastPage {
+		if page == pageHistory {
+			// Entering the list puts the keyboard on its first row (08 §5).
+			m.historyFocusPending = true
+		}
+		m.lastPage = page
+	}
 	m.registerPageShortcuts(c)
-	if m.displayPage() == pageResults && m.recordTab == recordTabItems {
+	if page == pageResults && m.recordTab == recordTabItems {
 		m.registerResultsShortcuts(c)
 	} else {
 		// The pending segment's just-confirmed markers belong to the item
@@ -62,7 +70,7 @@ func (m *Model) viewPages(c *ui.Context) {
 		// refresh it.
 		m.clearRecentlyConfirmed()
 	}
-	if m.displayPage() != pageHistory {
+	if page != pageHistory {
 		// The row menu only exists on the records list; leaving it must not
 		// leave an open menu to reappear on the next visit.
 		m.historyMenuOpen = false
@@ -74,25 +82,23 @@ func (m *Model) viewPages(c *ui.Context) {
 		ui.Column(c).Grow(1).FillHeight().Children(func() {
 			m.pageBody(c, t)
 			m.pageActions(c, t, tok)
-			if m.exportStatusVisible() {
-				ui.Divider(c)
-				m.exportStatusArea(c, t)
-			}
 			ui.Divider(c)
 			m.pageStatusBar(c, t)
 		})
 	})
+	m.exportDialogView(c, t)
 }
 
 // navRail is the three-destination rail: icon above label, the active
 // destination with the accent-soft face, and settings pinned to the
 // bottom. The rail is built first, so Tab reaches it before any page
-// content (design 09 §4.4).
+// content; inside it Up and Down move the focus between the destinations
+// and Enter visits them (design 09 §4.4).
 func (m *Model) navRail(c *ui.Context, t *ui.Theme, tok *Tokens) {
 	page := m.displayPage()
 	onRecords := page == pageResults || page == pageHistory
 	ui.Column(c).Width(navRailWidth).FillHeight().Background(tok.SurfaceWindow).
-		Padding(t.Space(2.5), 0).Gap(t.Space(1.5)).AlignItems(ui.Center).Children(func() {
+		Padding(t.Space(2.5), 0).Gap(t.Space(1.5)).AlignItems(ui.Center).FocusGroup(ui.Vertical).Children(func() {
 		m.navRailItem(c, t, tok, "扫描", scanIcon, page == pageScan, m.showScanDestination)
 		m.navRailItem(c, t, tok, "记录", recordsIcon, onRecords, m.showRecordsDestination)
 		ui.Box(c).Grow(1)
@@ -137,28 +143,26 @@ func (m *Model) showScanDestination() {
 
 // showRecordsDestination opens the records destination. An already open
 // workspace stays where it is; from another destination, the record the
-// user was reading comes back with its view state — the opened history
-// record, or the session slot's record — and otherwise the whole list
-// opens.
+// user was reading comes back with its view state, and otherwise the whole
+// list opens.
 func (m *Model) showRecordsDestination() {
 	switch m.displayPage() {
 	case pageHistory, pageResults:
 		return
 	}
-	if m.activeSlot == resultSlotHistory && m.historySlot.recordID != "" {
-		m.requestNavigation(navigationRequest{
-			kind:     navOpenHistory,
-			recordID: m.historySlot.recordID,
-		})
-		return
-	}
-	if m.activeSlot == resultSlotSession && m.sessionSlot.recordID != "" &&
-		!m.snap.Busy && m.snap.Scan.Phase == scan.PhaseEnded &&
-		m.appliedSession != "" && m.exitState != exitRunning && m.exitState != exitDone {
-		// A finished session is a saved record; a running one belongs to
-		// the scan page, so the records destination opens the list.
-		m.ShowLive()
-		return
+	if m.rec != nil && m.rec.ID != "" {
+		if !m.rec.Live {
+			// A reopened history record returns to its workspace.
+			m.openRecord(m.rec.ID)
+			return
+		}
+		if !m.snap.Busy && m.snap.Scan.Phase == scan.PhaseEnded &&
+			m.appliedSession != "" && m.exitState != exitRunning && m.exitState != exitDone {
+			// A finished session is a saved record; a running one belongs to
+			// the scan page, so the records destination opens the list.
+			m.ShowLive()
+			return
+		}
 	}
 	m.navigatePage(pageHistory)
 }
@@ -267,11 +271,9 @@ func (m *Model) statusShortcutText() string {
 		if m.scanStartReady() {
 			return shortcutStartScan + " 开始扫描"
 		}
-	case pageHistory:
-		if len(m.visibleHistory()) > 0 {
-			return shortcutOpenRecord + " 打开记录"
-		}
 	}
+	// The records list names no keys: 09 §5.3 keeps shortcut hints out of
+	// the interface text.
 	return ""
 }
 

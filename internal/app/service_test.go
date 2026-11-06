@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"image"
@@ -420,6 +421,286 @@ func TestSaveFailureVisibleRetryableKeepsPreviousGeneration(t *testing.T) {
 	}
 	svc.Stop()
 	waitNotBusy(t, svc)
+}
+
+// TestFinalSaveFailuresCountPerWrapUp pins R-09's second notification
+// edge: the same wrap-up's first failed save counts 1, its next failed
+// retry counts 2, and a successful retry stops the count without erasing
+// it.
+func TestFinalSaveFailuresCountPerWrapUp(t *testing.T) {
+	paths := newTestPaths(t)
+	// One observation keeps every batch save away: the wrap-up's final
+	// generation is the first and only save attempt.
+	source := devFixtureSource(t, 1, 0)
+	store := newFlakyStore(t, paths.Data)
+	store.failOn = func(int) bool { return true }
+	svc := newServiceWithStore(t, paths, store, source, func() (Recognizer, error) { return newFakeRecognizer(), nil })
+
+	if _, err := svc.Start(StartRequest{ID: "r1"}); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	waitFor(t, 30*time.Second, "the wrap-up's first failed save", func() bool {
+		return svc.Snapshot().FinalSaveFailures == 1
+	})
+	if snap := svc.Snapshot(); snap.SaveError == "" || !snap.SavePending {
+		t.Fatalf("snapshot after the failed final save = error %q pending %v, want both visible",
+			snap.SaveError, snap.SavePending)
+	}
+	if err := svc.RetrySave(); err == nil {
+		t.Fatal("RetrySave while every save fails = nil, want the failure")
+	}
+	if snap := svc.Snapshot(); snap.FinalSaveFailures != 2 {
+		t.Fatalf("failures after the failed retry = %d, want 2", snap.FinalSaveFailures)
+	}
+	store.heal()
+	if err := svc.RetrySave(); err != nil {
+		t.Fatalf("RetrySave after healing: %v", err)
+	}
+	snap := waitNotBusy(t, svc)
+	if snap.SaveError != "" || snap.FinalSaveFailures != 2 {
+		t.Fatalf("after the successful retry = save error %q failures %d, want no error and the history 2",
+			snap.SaveError, snap.FinalSaveFailures)
+	}
+}
+
+// TestFinalSaveFailuresIgnoreRetriesBeforeTheSeal pins M-1: a retry the
+// user triggers while the session still runs (after a batch save failed)
+// is a running-session attempt, not a wrap-up one. Only the failed final
+// save counts 1.
+func TestFinalSaveFailuresIgnoreRetriesBeforeTheSeal(t *testing.T) {
+	store := newFlakyStore(t, t.TempDir())
+	store.failOn = func(int) bool { return true }
+	const id = "pre-seal-retry"
+	if err := store.CreateRecord(id); err != nil {
+		t.Fatalf("CreateRecord: %v", err)
+	}
+	deliverer := newRecordDeliverer(store, record.SessionShell{
+		SessionID: id,
+		Game:      "zzz",
+		Entity:    "driveDisc",
+		Client:    record.ClientMacOSCloud,
+		Locale:    "zh-CN",
+		Scope:     json.RawMessage(`{"kind":"pre-seal-retry"}`),
+		StartedAt: nowUTC(),
+		Coverage:  record.Coverage{Status: record.CoverageUnknown},
+	}, nil)
+	// The batch size is reached on the last admission, so the first
+	// save fails while the kernel would still be capturing.
+	for i := 0; i < checkpointBatchSize; i++ {
+		err := deliverer.Admitted(scan.Seq(i+1), "observation")
+		if want := i == checkpointBatchSize-1; (err != nil) != want {
+			t.Fatalf("admission %d error = %v, want the batched save failure only on the last", i+1, err)
+		}
+	}
+	if st := deliverer.status(); st.err == nil || st.finalFailures != 0 {
+		t.Fatalf("status before the seal = %+v, want the running-session failure and no wrap-up count", st)
+	}
+	// A retry during the running session fails again and must not count.
+	if err := deliverer.retry(); err == nil {
+		t.Fatal("retry before the seal = nil, want the failure")
+	}
+	if st := deliverer.status(); st.finalFailures != 0 {
+		t.Fatalf("wrap-up failures after a pre-seal retry = %d, want 0", st.finalFailures)
+	}
+	// The sealed session's final save is the first wrap-up attempt.
+	if err := deliverer.finish(scan.Snapshot{End: scan.EndCompleted}); err == nil {
+		t.Fatal("finish = nil, want the refusal for the non-terminal items")
+	}
+	if st := deliverer.status(); st.finalFailures != 1 {
+		t.Fatalf("wrap-up failures after the failed final save = %d, want 1", st.finalFailures)
+	}
+}
+
+// TestStartBlockedOnlyReportsSaveRetryAfterTheWrapUpFails pins L-1: a
+// batch save failure while the session still runs leaves the reason at
+// occupied; only the wrap-up's recorded final failure reports saveRetry.
+func TestStartBlockedOnlyReportsSaveRetryAfterTheWrapUpFails(t *testing.T) {
+	store := newFlakyStore(t, t.TempDir())
+	store.failOn = func(int) bool { return true }
+	const id = "pre-wrap-up-failure"
+	if err := store.CreateRecord(id); err != nil {
+		t.Fatalf("CreateRecord: %v", err)
+	}
+	deliverer := newRecordDeliverer(store, record.SessionShell{
+		SessionID: id,
+		Game:      "zzz",
+		Entity:    "driveDisc",
+		Client:    record.ClientMacOSCloud,
+		Locale:    "zh-CN",
+		Scope:     json.RawMessage(`{"kind":"pre-wrap-up-failure"}`),
+		StartedAt: nowUTC(),
+		Coverage:  record.Coverage{Status: record.CoverageUnknown},
+	}, nil)
+	for i := 0; i < checkpointBatchSize; i++ {
+		err := deliverer.Admitted(scan.Seq(i+1), "observation")
+		if i < checkpointBatchSize-1 && err != nil {
+			t.Fatalf("admission %d: %v", i+1, err)
+		}
+	}
+	svc := &Service{active: &activeSession{id: scan.ID(id), deliverer: deliverer}}
+	if got := svc.Snapshot().StartBlocked; got != StartBlockedOccupied {
+		t.Fatalf("StartBlocked before the wrap-up failure = %q, want %q", got, StartBlockedOccupied)
+	}
+	// What wrapUp records after its failed final save is the retry
+	// reason; the wrap-up also counts the attempt.
+	err := deliverer.finish(scan.Snapshot{End: scan.EndCompleted})
+	if err == nil {
+		t.Fatal("finish = nil, want the refusal for the non-terminal items")
+	}
+	svc.mu.Lock()
+	svc.active.saveErr = err
+	svc.mu.Unlock()
+	snap := svc.Snapshot()
+	if snap.StartBlocked != StartBlockedSaveRetry {
+		t.Fatalf("StartBlocked after the wrap-up failure = %q, want %q", snap.StartBlocked, StartBlockedSaveRetry)
+	}
+	if snap.FinalSaveFailures != 1 {
+		t.Fatalf("wrap-up failures = %d, want 1", snap.FinalSaveFailures)
+	}
+}
+
+// TestStartRefusedWhileInstallingUpdate pins M-2: the snapshot reason and
+// the start refusal agree, and clearing the install restores starts.
+func TestStartRefusedWhileInstallingUpdate(t *testing.T) {
+	paths := newTestPaths(t)
+	source := devFixtureSource(t, 1, 0)
+	svc, _ := newTestService(t, paths, source, func() (Recognizer, error) { return newFakeRecognizer(), nil })
+
+	svc.SetUpdateInstalling(true)
+	if _, err := svc.Start(StartRequest{ID: "r1"}); err == nil || !strings.Contains(err.Error(), "update install") {
+		t.Fatalf("start while installing = %v, want the update-install refusal", err)
+	}
+	if snap := svc.Snapshot(); snap.SessionID != "" || snap.Busy || snap.StartBlocked != StartBlockedUpdateInstall {
+		t.Fatalf("snapshot after the refused start = %+v, want no placeholder and the install reason", snap)
+	}
+	if records, err := svc.ListRecords(); err != nil || len(records) != 0 {
+		t.Fatalf("records after the refused start = %+v err %v, want none", records, err)
+	}
+	svc.SetUpdateInstalling(false)
+	if _, err := svc.Start(StartRequest{ID: "r1"}); err != nil {
+		t.Fatalf("start after the install ended: %v", err)
+	}
+	waitNotBusy(t, svc)
+}
+
+// TestStartCommitRefusedByUpdateInstallDuringPreparation pins L-1: an
+// update install published while the accepted placeholder runs its slow
+// preparation refuses the commit, and the slot rolls back cleanly.
+func TestStartCommitRefusedByUpdateInstallDuringPreparation(t *testing.T) {
+	paths := newTestPaths(t)
+	source := devFixtureSource(t, 1, 0)
+	loaded := make(chan struct{})
+	svc, _ := newTestService(t, paths, source, func() (Recognizer, error) {
+		<-loaded // stand in for the model load
+		return newFakeRecognizer(), nil
+	})
+	type result struct {
+		out StartOutcome
+		err error
+	}
+	started := make(chan result, 1)
+	go func() {
+		out, err := svc.Start(StartRequest{ID: "r1"})
+		started <- result{out: out, err: err}
+	}()
+	waitFor(t, 10*time.Second, "the accepted placeholder", func() bool {
+		return svc.Snapshot().SessionID != ""
+	})
+	// The placeholder is still in its slow preparation; the install
+	// begins before the commit re-check runs.
+	svc.SetUpdateInstalling(true)
+	if snap := svc.Snapshot(); !snap.Busy || snap.StartBlocked != StartBlockedUpdateInstall {
+		t.Fatalf("placeholder snapshot while installing = %+v, want busy with the install reason", snap)
+	}
+	close(loaded)
+	res := <-started
+	if res.err == nil || !strings.Contains(res.err.Error(), "update install") {
+		t.Fatalf("start whose commit met the install = %+v err %v, want the update-install refusal", res.out, res.err)
+	}
+	// The refusal discarded the record and released the slot and the scan
+	// occupancy.
+	snap := svc.Snapshot()
+	if snap.SessionID != "" || snap.Busy || snap.StartBlocked != StartBlockedUpdateInstall {
+		t.Fatalf("snapshot after the refused commit = %+v, want no session and the install reason", snap)
+	}
+	if records, err := svc.ListRecords(); err != nil || len(records) != 0 {
+		t.Fatalf("records after the refused commit = %+v err %v, want none", records, err)
+	}
+	// Clearing the install frees the service again, including the scan
+	// occupancy the rolled-back start held.
+	svc.SetUpdateInstalling(false)
+	if _, err := svc.Start(StartRequest{ID: "r1"}); err != nil {
+		t.Fatalf("start after the install ended: %v", err)
+	}
+	waitNotBusy(t, svc)
+}
+
+// TestStartBlockedNamesTheServiceBlock pins R-14's service half: an
+// occupied slot explains itself as occupied or waiting for a retry, and
+// an explicit exit reports quitting.
+func TestStartBlockedNamesTheServiceBlock(t *testing.T) {
+	paths := newTestPaths(t)
+	// The gated controller holds the session open deterministically, and
+	// a one-observation session makes the wrap-up's save its first save.
+	gate := newAdmitThenGateController()
+	store := newFlakyStore(t, paths.Data)
+	store.failOn = func(int) bool { return true }
+	svc := newServiceWithStore(t, paths, store, staticSource{spec: specOf(gate)},
+		func() (Recognizer, error) { return newFakeRecognizer(), nil })
+
+	if got := svc.Snapshot().StartBlocked; got != StartBlockedNone {
+		t.Fatalf("idle StartBlocked = %q, want none", got)
+	}
+	if _, err := svc.Start(StartRequest{ID: "r1"}); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	waitFor(t, 30*time.Second, "the admitted observation", func() bool {
+		return svc.Snapshot().Scan.Counts.Captured == 1
+	})
+	if got := svc.Snapshot().StartBlocked; got != StartBlockedOccupied {
+		t.Fatalf("StartBlocked while the session runs = %q, want %q", got, StartBlockedOccupied)
+	}
+	svc.Stop()
+	waitFor(t, 30*time.Second, "the failed final save", func() bool {
+		return svc.Snapshot().FinalSaveFailures == 1
+	})
+	if got := svc.Snapshot().StartBlocked; got != StartBlockedSaveRetry {
+		t.Fatalf("StartBlocked with a failed save = %q, want %q", got, StartBlockedSaveRetry)
+	}
+	// An explicit exit that cannot finish leaves the process quitting:
+	// every later start is refused, so that is the reason to report.
+	if err := svc.Quit(); err == nil {
+		t.Fatal("Quit after a failed save = nil, want the refusal")
+	}
+	if got := svc.Snapshot().StartBlocked; got != StartBlockedQuitting {
+		t.Fatalf("StartBlocked after the refused quit = %q, want %q", got, StartBlockedQuitting)
+	}
+}
+
+// TestUpdateInstallingBlocksStarts pins R-14's update-install reason: the
+// update flow publishes its install, the snapshot explains the block, and
+// only a change bumps the revision.
+func TestUpdateInstallingBlocksStarts(t *testing.T) {
+	paths := newTestPaths(t)
+	svc, _ := newTestService(t, paths, nil, func() (Recognizer, error) { return newFakeRecognizer(), nil })
+
+	before := svc.Snapshot().Revision
+	svc.SetUpdateInstalling(true)
+	snap := svc.Snapshot()
+	if snap.StartBlocked != StartBlockedUpdateInstall {
+		t.Fatalf("StartBlocked while installing = %q, want %q", snap.StartBlocked, StartBlockedUpdateInstall)
+	}
+	if snap.Revision == before {
+		t.Fatal("publishing the install did not bump the revision")
+	}
+	svc.SetUpdateInstalling(true)
+	if again := svc.Snapshot(); again.Revision != snap.Revision {
+		t.Fatalf("a repeated install report bumped the revision from %d to %d", snap.Revision, again.Revision)
+	}
+	svc.SetUpdateInstalling(false)
+	if got := svc.Snapshot().StartBlocked; got != StartBlockedNone {
+		t.Fatalf("StartBlocked after the install ended = %q, want none", got)
+	}
 }
 
 // TestEvidenceFailureAtAdmissionCutsScanKeepsItem injects one failing

@@ -637,3 +637,88 @@ func TestOnAdmitErrorIsAStorageFault(t *testing.T) {
 	}
 	reconcile(t, s, sink)
 }
+
+// TestPrepareFailureNeverOpenedInput pins the first notification edge: a
+// session that never left preparation reports that input never opened, so
+// "input stopped" is not announced for it.
+func TestPrepareFailureNeverOpenedInput(t *testing.T) {
+	ctrl := &scriptedController{prepare: func(context.Context, *scan.ControllerHandle) error {
+		return scan.NewFault("prepareTimeout", errors.New("the target never became ready"))
+	}}
+	s := newSession(t, "prepare-timeout", 2, 1, ctrl, echoRecognizer(), &recordSink{})
+	snap := waitEnded(t, s)
+	if snap.Phase != scan.PhaseEnded || snap.End != scan.EndFailed {
+		t.Fatalf("session = phase %s end %s, want ended failed", snap.Phase, snap.End)
+	}
+	assertTrigger(t, snap, scan.TriggerFault, "prepareTimeout", scan.PhasePreparing)
+	if snap.InputOpened || snap.InputPermitted {
+		t.Fatalf("input opened = %v, permitted %v; a preparation failure must never open input",
+			snap.InputOpened, snap.InputPermitted)
+	}
+}
+
+// TestInputOpenedSurvivesTheClosing checks the other side of the edge: a
+// session that captured keeps reporting that input opened after the stop
+// closed the permission.
+func TestInputOpenedSurvivesTheClosing(t *testing.T) {
+	ctrl := &scriptedController{collect: func(ctx context.Context, h *scan.ControllerHandle) error {
+		if !h.InputPermitted() {
+			return errors.New("input permission did not open for capturing")
+		}
+		<-ctx.Done()
+		return ctx.Err()
+	}}
+	s := newSession(t, "input-opened", 2, 1, ctrl, echoRecognizer(), &recordSink{})
+	waitPhase(t, s, scan.PhaseCapturing)
+	if snap := s.Snapshot(); !snap.InputOpened || !snap.InputPermitted {
+		t.Fatalf("capturing: opened %v permitted %v, want both true", snap.InputOpened, snap.InputPermitted)
+	}
+	s.Cancel()
+	snap := waitEnded(t, s)
+	if !snap.InputOpened || snap.InputPermitted {
+		t.Fatalf("ended: opened %v permitted %v, want opened true and permitted false",
+			snap.InputOpened, snap.InputPermitted)
+	}
+}
+
+// TestPrepareReportsDeadlineAndActivationOnce pins R-02's snapshot
+// contract: the controller reports the preparation deadline and the one
+// activation outcome, both fixed for the session. The countdown is the
+// UI's own calculation, so an idle preparation spends no revision per
+// tick.
+func TestPrepareReportsDeadlineAndActivationOnce(t *testing.T) {
+	deadline := time.Now().Add(time.Minute).Truncate(time.Millisecond)
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	ctrl := &scriptedController{prepare: func(_ context.Context, h *scan.ControllerHandle) error {
+		h.SetPrepareDeadline(deadline)
+		h.SetActivation(scan.ActivationRefused)
+		// Both facts are first-report-wins: a second report of either
+		// changes nothing and wakes no subscriber.
+		h.SetPrepareDeadline(deadline.Add(time.Hour))
+		h.SetActivation(scan.ActivationActivated)
+		close(entered)
+		<-release
+		return nil
+	}}
+	s := newSession(t, "prepare-report", 2, 1, ctrl, echoRecognizer(), &recordSink{})
+	<-entered
+	snap := s.Snapshot()
+	if !snap.PrepareDeadline.Equal(deadline) {
+		t.Fatalf("deadline = %v, want the first report %v", snap.PrepareDeadline, deadline)
+	}
+	if snap.Activation != scan.ActivationRefused {
+		t.Fatalf("activation = %q, want the first report %q", snap.Activation, scan.ActivationRefused)
+	}
+	first := snap.Revision
+	time.Sleep(60 * time.Millisecond)
+	again := s.Snapshot()
+	if again.Revision != first {
+		t.Fatalf("revision moved from %d to %d while preparation merely waited", first, again.Revision)
+	}
+	if !again.PrepareDeadline.Equal(deadline) {
+		t.Fatalf("deadline changed to %v while preparing, want %v", again.PrepareDeadline, deadline)
+	}
+	close(release)
+	<-s.Done()
+}

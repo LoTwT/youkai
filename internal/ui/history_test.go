@@ -3,8 +3,9 @@ package ui
 import (
 	"errors"
 	"fmt"
-	"math"
+	"image"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -13,26 +14,6 @@ import (
 	"github.com/LoTwT/youkai/internal/scan"
 	"github.com/egoist/mygo/ui"
 )
-
-func historyMetadata(r1, r2 time.Time) []app.HistoryRecord {
-	return []app.HistoryRecord{
-		{
-			ID:            "r1",
-			SavedAt:       r1,
-			Client:        record.ClientMacOSCloud,
-			CapturedCount: 995,
-			Coverage:      record.CoveragePartial,
-			PendingReview: 12,
-			TotalBytes:    1024,
-			EvidenceFiles: 4,
-		},
-		{
-			ID:         "r2",
-			SavedAt:    r2,
-			Unreadable: true,
-		},
-	}
-}
 
 // openRecordsList opens the records destination's list. Startup always
 // lands on the scan page, so tests that read the list navigate to it.
@@ -44,140 +25,25 @@ func openRecordsList(t *testing.T, m *Model, q *queueUpdater, tt *ui.Tester) {
 	settle(t, m, q, tt)
 }
 
-func TestViewHistoryShowsMetadataAndDateFilter(t *testing.T) {
-	svc := &fakeService{history: historyMetadata(
-		time.Date(2026, 10, 17, 9, 0, 0, 0, time.UTC),
-		time.Date(2026, 10, 16, 9, 0, 0, 0, time.UTC),
-	)}
-	m, q := newTestModel(t, Config{Service: svc})
-	m.SetContentSize(1440, 700)
-	tt := ui.NewTester(m.View, 1440, 1000)
-	settle(t, m, q, tt)
-	openRecordsList(t, m, q, tt)
-
-	if !tt.HasText("995") || !tt.HasText("12") || !tt.HasText("1.0 KB") || !tt.HasText("部分") {
-		t.Fatalf("history metadata does not show: %q", tt.Texts())
-	}
-	if !tt.HasText("记录不可读") || !tt.HasText("无法确认") {
-		t.Fatalf("unreadable history state does not show: %q", tt.Texts())
-	}
-
-	m.historyFilter = "2026-10-17"
-	tt.Frame()
-	if !tt.HasText("995") {
-		t.Fatalf("matching record disappeared: %q", tt.Texts())
-	}
-	if tt.HasText("记录不可读") {
-		t.Fatalf("date filter kept the unreadable record: %q", tt.Texts())
-	}
-
-	m.historyFilter = "2026-13-40"
-	tt.Frame()
-	if !tt.HasText("格式应为 YYYY-MM-DD。") {
-		t.Fatalf("invalid date hint does not show: %q", tt.Texts())
-	}
-
-	m.historyFilter = ""
-	tt.Frame()
-	if !tt.HasText("记录不可读") {
-		t.Fatalf("clearing the filter did not restore all records: %q", tt.Texts())
-	}
-}
-
-func TestViewHistoryShowsSessionTermination(t *testing.T) {
-	history := historyMetadata(
-		time.Date(2026, 10, 17, 9, 0, 0, 0, time.UTC),
-		time.Date(2026, 10, 16, 9, 0, 0, 0, time.UTC),
-	)
-	history[0].Termination = &record.Termination{
-		Kind: record.TerminationFailed, Code: "navigationMismatch", Phase: record.PhaseCapturing,
-	}
-	svc := &fakeService{history: history}
-	m, q := newTestModel(t, Config{Service: svc})
-	m.SetContentSize(1440, 700)
-	tt := ui.NewTester(m.View, 1440, 1000)
-	settle(t, m, q, tt)
-	openRecordsList(t, m, q, tt)
-
-	if !tt.HasText("失败：navigationMismatch") {
-		t.Fatalf("history does not show the failed session code: %q", tt.Texts())
-	}
-}
-
-func TestHistoryExportFailure(t *testing.T) {
-	svc := &fakeService{
-		history: historyMetadata(time.Now(), time.Now().Add(-time.Hour)),
-		loads: map[string]*record.Recovery{
-			"r1": recovery(uiStructuredItem(t, 1, record.QualityAutoAccepted)),
-		},
-	}
-	saver := &fakeDirectExportSaver{}
-	m, q := newTestModel(t, Config{Service: svc, DirectExportSaver: saver, AppVersion: "test"})
-	tt := ui.NewTester(m.View, 1020, 1000)
-	settle(t, m, q, tt)
-
-	saver.saveFn = func(app.ExportFormat, string, []byte) (string, error) {
-		return "", errors.New("no space left on device")
-	}
-	m.ExportHistory("r1", app.ExportJSON)
-	settle(t, m, q, tt)
-	if m.historyExporting != "" || m.exportOutcome == nil || m.exportOutcome.err == nil ||
-		!strings.Contains(m.exportOutcome.text(), "no space left on device") {
-		t.Fatalf("failure state = exporting %q, outcome %+v", m.historyExporting, m.exportOutcome)
-	}
-}
-
-func TestHistoryPerRowExportUsesThatRecord(t *testing.T) {
-	svc := &fakeService{
-		history: historyMetadata(
-			time.Date(2026, 10, 17, 9, 0, 0, 0, time.UTC),
-			time.Date(2026, 10, 16, 9, 0, 0, 0, time.UTC),
-		),
-		loads: map[string]*record.Recovery{
-			"r1": recovery(uiStructuredItem(t, 1, record.QualityAutoAccepted)),
-		},
-	}
-	saver := &fakeDirectExportSaver{}
-	m, q := newTestModel(t, Config{Service: svc, DirectExportSaver: saver, AppVersion: "test"})
-	tt := ui.NewTester(m.View, 1020, 1000)
-	settle(t, m, q, tt)
-
-	m.ExportHistory("r1", app.ExportJSON)
-	settle(t, m, q, tt)
-	calls := saver.snapshot()
-	if len(calls) != 1 || calls[0].format != app.ExportJSON {
-		t.Fatalf("export calls = %+v, want one JSON export", calls)
-	}
-	if m.historyExporting != "" || m.exportOutcome == nil || m.exportOutcome.err != nil {
-		t.Fatalf("export state = %q / %+v", m.historyExporting, m.exportOutcome)
-	}
-	if !tt.HasText("已导出 JSON（1 件，历史记录 r1）") {
-		t.Fatalf("history export result does not show: %q", tt.Texts())
-	}
-}
-
 // historyTableRecords builds n saved records with distinct times, each
-// carrying the four export states the table shows. The newest is 10-21
-// 14:02; every later row steps back an hour.
+// completed with complete coverage and a rotating pending count. The
+// newest is 10-21 14:02; every later row steps back 25 hours.
 func historyTableRecords(n int) []app.HistoryRecord {
 	base := time.Date(2026, 10, 21, 14, 2, 0, 0, time.Local)
 	out := make([]app.HistoryRecord, 0, n)
 	for i := 0; i < n; i++ {
 		captured := int64(1008 - i)
+		pending := int64(i % 3)
 		out = append(out, app.HistoryRecord{
-			ID:               fmt.Sprintf("r%02d", i+1),
-			SavedAt:          base.Add(-time.Duration(i) * 25 * time.Hour),
-			Client:           record.ClientMacOSCloud,
-			CapturedCount:    captured,
-			Coverage:         record.CoveragePartial,
-			CoverageExpected: captured + 2,
-			PendingReview:    i % 3,
-			ExportableCount:  int64(1005 - i),
-			FailedCount:      int64(i % 2),
-			UnprocessedCount: int64(i % 3),
-			OtherCount:       0,
-			TotalBytes:       1024 * 1024,
-			EvidenceFiles:    4,
+			ID:            fmt.Sprintf("r%02d", i+1),
+			SavedAt:       base.Add(-time.Duration(i) * 25 * time.Hour),
+			CapturedCount: captured,
+			Coverage:      record.CoverageComplete,
+			Termination: &record.Termination{
+				Kind: record.TerminationCompleted, Code: "verifiedEnd", Phase: record.PhaseCapturing,
+			},
+			Counts:     app.ItemClassCounts{Passed: captured - pending, PendingReview: pending},
+			TotalBytes: 1024 * 1024,
 		})
 	}
 	return out
@@ -191,235 +57,1059 @@ func historyHeaderTitles(columns []ui.TableColumn) []string {
 	return out
 }
 
-// TestHistoryColumnsByWidth guards the 8/7/7 split and the fact that
-// "无法导出" is a first-class column at every width while storage size and
-// source are not shown on the narrow tables.
-func TestHistoryColumnsByWidth(t *testing.T) {
-	wide := historyHeaderTitles(historyColumnsFor(1440))
-	wantWide := []string{"时间", "采集", "可导出", "待校对", "无法导出", "覆盖", "大小", "操作"}
-	if strings.Join(wide, "/") != strings.Join(wantWide, "/") {
-		t.Fatalf("1440 columns = %v, want %v", wide, wantWide)
-	}
-	var wideWidth float32
-	for _, column := range historyColumnsWide {
-		wideWidth += max(column.Width, column.MinWidth)
-	}
-	if wideWidth != 994 {
-		t.Errorf("1440 fixed width = %v, want the design's 994 minimum", wideWidth)
-	}
-
-	narrow := historyHeaderTitles(historyColumnsFor(1020))
-	wantNarrow := []string{"时间", "采集", "可导出", "待校对", "无法导出", "覆盖", "操作"}
-	if strings.Join(narrow, "/") != strings.Join(wantNarrow, "/") {
-		t.Fatalf("1020 columns = %v, want %v", narrow, wantNarrow)
-	}
-	if got := historyHeaderTitles(historyColumnsFor(860)); strings.Join(got, "/") != strings.Join(wantNarrow, "/") {
-		t.Fatalf("860 columns = %v, want %v", got, wantNarrow)
-	}
-	for _, title := range append(wide, narrow...) {
-		if title == "来源" {
-			t.Fatal("history columns still show the source")
-		}
-	}
-}
-
-// TestHistoryPageWideTable checks the 1440 table's eight columns, the
-// per-record breakdown and that the current content needs no horizontal
-// scrolling.
-func TestHistoryPageWideTable(t *testing.T) {
-	svc := &fakeService{history: historyTableRecords(12)}
-	m, q := newTestModel(t, Config{Service: svc, DirectExportSaver: &fakeDirectExportSaver{}})
-	m.SetContentSize(1440, 900)
-	tt := ui.NewTester(m.View, 1440, 900)
+// TestHistoryListNewestFirst checks the list's order and that the newest
+// row carries its conclusion: the view sorts by save time even when the
+// service hands the records back shuffled, and the first row answers
+// "what is this record" without reading counts (07 §4, 08 §5).
+func TestHistoryListNewestFirst(t *testing.T) {
+	records := historyTableRecords(3)
+	records[0], records[2] = records[2], records[0]
+	svc := &fakeService{history: records}
+	m, q := newTestModel(t, Config{Service: svc})
+	tt := ui.NewTester(m.View, 1180, 760)
 	settle(t, m, q, tt)
 	openRecordsList(t, m, q, tt)
 
-	for _, title := range []string{"时间", "采集", "可导出", "待校对", "无法导出", "覆盖", "大小", "操作"} {
-		rect, ok := tt.Find(title)
-		if !ok {
-			t.Fatalf("the wide table does not show %q", title)
-		}
-		if rect.X < navRailWidth+12 || rect.X+rect.W > 1440-12 {
-			t.Errorf("%q at %+v is outside the page", title, rect)
-		}
+	if m.history[0].ID != "r01" || m.history[2].ID != "r03" {
+		t.Fatalf("history order = %q, %q, %q, want r01, r02, r03",
+			m.history[0].ID, m.history[1].ID, m.history[2].ID)
 	}
-	if tt.HasText("来源") {
-		t.Fatal("the history table shows a source column")
+	newest, ok := tt.Find(historyTimeText(m.history[0]))
+	if !ok {
+		t.Fatalf("the newest row %q does not show: %q", historyTimeText(m.history[0]), tt.Texts())
 	}
-	for _, text := range []string{"1,008", "1,005", "失败 1 · 未处理 1 · 其他 0", "99% 部分", "全部记录"} {
-		if !tt.HasText(text) {
-			t.Errorf("the wide table does not show %q: %q", text, tt.Texts())
-		}
+	second, ok := tt.Find(historyTimeText(m.history[1]))
+	if !ok {
+		t.Fatalf("the second row %q does not show", historyTimeText(m.history[1]))
 	}
-
-	before, _ := tt.Find("操作")
-	tt.Scroll(720, 400, 240, 0)
-	after, _ := tt.Find("操作")
-	if after.X != before.X {
-		t.Errorf("1440 scrolled horizontally: 操作 %.1f -> %.1f", before.X, after.X)
+	if newest.Y >= second.Y {
+		t.Fatalf("the newest row is not first: newest Y %.1f, second Y %.1f", newest.Y, second.Y)
+	}
+	if !tt.HasText("扫全了，可以直接导出") {
+		t.Fatalf("the newest record's conclusion does not show: %q", tt.Texts())
+	}
+	if !tt.HasText("扫全了，1 件待校对") {
+		t.Fatalf("the second record's conclusion does not show: %q", tt.Texts())
 	}
 }
 
-// TestHistoryPageNarrowTableFits checks the 1020 seven-column layout: all
-// headers stay inside the panel and a horizontal wheel does not move them.
-func TestHistoryPageNarrowTableFits(t *testing.T) {
-	svc := &fakeService{history: historyTableRecords(12)}
-	m, q := newTestModel(t, Config{Service: svc, DirectExportSaver: &fakeDirectExportSaver{}})
-	m.SetContentSize(1020, 700)
-	tt := ui.NewTester(m.View, 1020, 700)
+// TestHistoryEmptyState checks the first-run empty list and its way to
+// start a scan (08 §5).
+func TestHistoryEmptyState(t *testing.T) {
+	m, q := newTestModel(t, Config{Service: &fakeService{}})
+	tt := ui.NewTester(m.View, 1180, 760)
 	settle(t, m, q, tt)
 	openRecordsList(t, m, q, tt)
 
-	if m.contentWidth != 1020 || historyUsesComposite(m.contentWidth) {
-		t.Fatalf("1020 must use the native table (width %d, composite %v)", m.contentWidth, historyUsesComposite(m.contentWidth))
+	if !tt.HasText("还没有扫描记录") || !tt.HasText("去扫描页开始扫描") {
+		t.Fatalf("the empty list does not explain itself: %q", tt.Texts())
 	}
-	for _, title := range []string{"时间", "采集", "可导出", "待校对", "无法导出", "覆盖", "操作"} {
-		rect, ok := tt.Find(title)
-		if !ok {
-			t.Fatalf("the 1020 table does not show %q", title)
-		}
-		if rect.X < navRailWidth+12 || rect.X+rect.W > 1020-12 {
-			t.Errorf("%q at %+v is outside the 1020 page", title, rect)
-		}
+	if err := tt.Click("去扫描页开始扫描"); err != nil {
+		t.Fatal(err)
 	}
-	if tt.HasText("大小") {
-		t.Fatal("the 1020 table still shows the storage-size column")
-	}
-
-	before, _ := tt.Find("操作")
-	tt.Scroll(600, 350, 240, 0)
-	after, _ := tt.Find("操作")
-	if after.X != before.X {
-		t.Errorf("1020 scrolled horizontally: 操作 %.1f -> %.1f", before.X, after.X)
+	settle(t, m, q, tt)
+	if m.displayPage() != pageScan {
+		t.Fatalf("the empty list's action shows page %v, want scan", m.displayPage())
 	}
 }
 
-// TestHistoryMinFixedActionColumn checks the 860 composite: the data
-// header and rows scroll sideways together, the action column stays at the
-// right edge and remains clickable, and vertical row scrolling leaves the
-// header where it is.
-func TestHistoryMinFixedActionColumn(t *testing.T) {
+// TestHistoryLoadingState checks the asynchronous list's loading state:
+// the page answers before HistoryRecords returns and replaces the state
+// with the rows when it does.
+func TestHistoryLoadingState(t *testing.T) {
+	release := make(chan struct{})
+	svc := &fakeService{historyFn: func() ([]app.HistoryRecord, error) {
+		<-release
+		return historyTableRecords(2), nil
+	}}
+	m, q := newTestModel(t, Config{Service: svc})
+	tt := ui.NewTester(m.View, 1180, 760)
+	tt.Frame()
+	if err := tt.Click("记录"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if !m.historyLoading {
+		t.Fatal("the list did not record its loading state")
+	}
+	if !tt.HasText("正在读取记录……") {
+		t.Fatalf("the loading list shows no state: %q", tt.Texts())
+	}
+	if tt.HasText("扫全了") {
+		t.Fatalf("the loading list shows rows before HistoryRecords returned: %q", tt.Texts())
+	}
+
+	close(release)
+	settle(t, m, q, tt)
+	if m.historyLoading || len(m.history) != 2 {
+		t.Fatalf("the loaded list = loading %v, %d rows", m.historyLoading, len(m.history))
+	}
+	if !tt.HasText(historyTimeText(m.history[0])) || tt.HasText("正在读取记录……") {
+		t.Fatalf("the loaded list does not replace its loading state: %q", tt.Texts())
+	}
+}
+
+// waitForHistoryUpdate waits until the model queued one update, then runs
+// it. Tests that keep a load blocked cannot use settle: Idle would wait for
+// the blocked load.
+func waitForHistoryUpdate(t *testing.T, q *queueUpdater) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for q.empty() {
+		if time.Now().After(deadline) {
+			t.Fatal("the model did not queue a history update")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	for _, fn := range q.take() {
+		fn()
+	}
+}
+
+// TestHistoryLoadsDoNotApplyOutOfOrder starts two loads, lets the older
+// one finish first, and checks that it neither replaces the newer list nor
+// clears the newer load's loading state.
+func TestHistoryLoadsDoNotApplyOutOfOrder(t *testing.T) {
+	initial := historyTableRecords(1)
+	stale := historyTableRecords(2)
+	fresh := historyTableRecords(3)
+
+	var mu sync.Mutex
+	calls := 0
+	started := make(chan int, 4)
+	releaseStale := make(chan struct{})
+	releaseFresh := make(chan struct{})
+	svc := &fakeService{}
+	svc.historyFn = func() ([]app.HistoryRecord, error) {
+		mu.Lock()
+		calls++
+		n := calls
+		mu.Unlock()
+		started <- n
+		switch n {
+		case 1:
+			return initial, nil
+		case 2:
+			<-releaseStale
+			return stale, nil
+		default:
+			<-releaseFresh
+			return fresh, nil
+		}
+	}
+	m, q := newTestModel(t, Config{Service: svc})
+	tt := ui.NewTester(m.View, 1180, 760)
+	settle(t, m, q, tt)
+	if n := <-started; n != 1 {
+		t.Fatalf("the startup load is call %d, want 1", n)
+	}
+	if len(m.history) != 1 {
+		t.Fatalf("the startup load shows %d records", len(m.history))
+	}
+
+	m.loadHistory()
+	if n := <-started; n != 2 {
+		t.Fatalf("the slow load is call %d, want 2", n)
+	}
+	m.loadHistory()
+	if n := <-started; n != 3 {
+		t.Fatalf("the fresh load is call %d, want 3", n)
+	}
+	if !m.historyLoading {
+		t.Fatal("two in-flight loads left the list not loading")
+	}
+
+	// The older load lands first. Its result and its loading-state change
+	// both belong to a load that no longer owns the list.
+	close(releaseStale)
+	waitForHistoryUpdate(t, q)
+	if len(m.history) != 1 {
+		t.Fatalf("the stale load replaced the list: %d records", len(m.history))
+	}
+	if !m.historyLoading {
+		t.Fatal("the stale load cleared the newer load's loading state")
+	}
+
+	close(releaseFresh)
+	waitForHistoryUpdate(t, q)
+	if len(m.history) != 3 {
+		t.Fatalf("the fresh load shows %d records, want 3", len(m.history))
+	}
+	if m.historyLoading {
+		t.Fatal("the fresh load did not clear the loading state")
+	}
+	m.Idle()
+}
+
+// TestHistoryNumberColumnsShowReadableValues checks the standard tier's
+// visible 件数 and 可导出 cells, not only the row's accessibility label. The
+// two numbers differ on purpose: a column swap must fail the order check.
+func TestHistoryNumberColumnsShowReadableValues(t *testing.T) {
+	completed := &record.Termination{
+		Kind: record.TerminationCompleted, Code: "verifiedEnd", Phase: record.PhaseCapturing,
+	}
+	svc := &fakeService{history: []app.HistoryRecord{{
+		ID: "r01", SavedAt: time.Date(2026, 10, 21, 14, 2, 0, 0, time.Local),
+		CapturedCount: 1_007, Coverage: record.CoverageComplete, Termination: completed,
+		Counts: app.ItemClassCounts{Passed: 1_006, PendingReview: 1}, TotalBytes: 1024,
+	}}}
+	m, q := newTestModel(t, Config{Service: svc})
+	m.SetContentSize(1180, 760)
+	tt := ui.NewTester(m.View, 1180, 760)
+	settle(t, m, q, tt)
+	openRecordsList(t, m, q, tt)
+
+	counts, countsOK := tt.Find("1,007")
+	exported, exportedOK := tt.Find("1,006")
+	if !countsOK || !exportedOK {
+		t.Fatalf("visible 件数/可导出 cells are missing: %q", tt.Texts())
+	}
+	if countText(tt.Texts(), "1,007") != 1 || countText(tt.Texts(), "1,006") != 1 {
+		t.Fatalf("visible 件数/可导出 cells are duplicated or missing: %q", tt.Texts())
+	}
+	if counts.X >= exported.X {
+		t.Fatalf("件数 and 可导出 are swapped: 1,007 at %.1f, 1,006 at %.1f",
+			counts.X, exported.X)
+	}
+}
+
+// TestHistoryStaleLoadErrorIsDropped checks the error branch of the load
+// sequence: an older load's error must not reach the list after a newer
+// load owns it.
+func TestHistoryStaleLoadErrorIsDropped(t *testing.T) {
+	initial := historyTableRecords(1)
+	fresh := historyTableRecords(3)
+
+	var mu sync.Mutex
+	calls := 0
+	started := make(chan int, 4)
+	releaseStale := make(chan struct{})
+	releaseFresh := make(chan struct{})
+	svc := &fakeService{}
+	svc.historyFn = func() ([]app.HistoryRecord, error) {
+		mu.Lock()
+		calls++
+		n := calls
+		mu.Unlock()
+		started <- n
+		switch n {
+		case 1:
+			return initial, nil
+		case 2:
+			<-releaseStale
+			return nil, errors.New("stale history read failed")
+		default:
+			<-releaseFresh
+			return fresh, nil
+		}
+	}
+	m, q := newTestModel(t, Config{Service: svc})
+	tt := ui.NewTester(m.View, 1180, 760)
+	settle(t, m, q, tt)
+	if n := <-started; n != 1 {
+		t.Fatalf("the startup load is call %d, want 1", n)
+	}
+
+	m.loadHistory()
+	if n := <-started; n != 2 {
+		t.Fatalf("the slow load is call %d, want 2", n)
+	}
+	m.loadHistory()
+	if n := <-started; n != 3 {
+		t.Fatalf("the fresh load is call %d, want 3", n)
+	}
+
+	close(releaseStale)
+	waitForHistoryUpdate(t, q)
+	if m.histErr != "" {
+		t.Fatalf("the stale load's error reached the list: %q", m.histErr)
+	}
+	if len(m.history) != 1 {
+		t.Fatalf("the stale load replaced the list: %d records", len(m.history))
+	}
+	if !m.historyLoading {
+		t.Fatal("the stale load cleared the newer load's loading state")
+	}
+
+	close(releaseFresh)
+	waitForHistoryUpdate(t, q)
+	if m.histErr != "" {
+		t.Fatalf("the fresh load reports the stale error: %q", m.histErr)
+	}
+	if len(m.history) != 3 || m.historyLoading {
+		t.Fatalf("the fresh load = %d records, loading %v", len(m.history), m.historyLoading)
+	}
+	m.Idle()
+}
+
+// minLuminanceInRect is the darkest text pixel in a rect, used to tell a
+// primary-color time from a muted one.
+func minLuminanceInRect(img *image.RGBA, r ui.Rect) int {
+	rect := image.Rect(int(r.X), int(r.Y), int(r.X+r.W), int(r.Y+r.H)).Intersect(img.Bounds())
+	darkest := 255
+	for y := rect.Min.Y; y < rect.Max.Y; y++ {
+		for x := rect.Min.X; x < rect.Max.X; x++ {
+			p := img.RGBAAt(x, y)
+			lum := (299*int(p.R) + 587*int(p.G) + 114*int(p.B)) / 1000
+			if lum < darkest {
+				darkest = lum
+			}
+		}
+	}
+	return darkest
+}
+
+// TestHistoryDamagedRowTimeIsMuted guards the wireframe's muted time on a
+// damaged row: its date recedes beside its reason (线框 10).
+func TestHistoryDamagedRowTimeIsMuted(t *testing.T) {
+	records := historyTableRecords(2)
+	records = append(records, app.HistoryRecord{
+		ID: "bad", SavedAt: time.Date(2026, 10, 19, 12, 2, 0, 0, time.Local),
+		Unreadable: true, TotalBytes: 88 * 1024 * 1024,
+	})
+	svc := &fakeService{history: records}
+	m, q := newTestModel(t, Config{Service: svc})
+	m.SetContentSize(1180, 760)
+	tt := ui.NewTester(m.View, 1180, 760)
+	settle(t, m, q, tt)
+	openRecordsList(t, m, q, tt)
+
+	normal, ok := tt.Find(historyTimeText(m.history[1]))
+	if !ok {
+		t.Fatalf("the normal row's time is missing: %q", tt.Texts())
+	}
+	damaged, ok := tt.Find(historyTimeText(m.history[2]))
+	if !ok {
+		t.Fatalf("the damaged row's time is missing: %q", tt.Texts())
+	}
+	img := tt.Image()
+	normalMin := minLuminanceInRect(img, normal)
+	damagedMin := minLuminanceInRect(img, damaged)
+	if damagedMin < normalMin+40 {
+		t.Fatalf("the damaged row's time is not muted: normal min %d, damaged min %d",
+			normalMin, damagedMin)
+	}
+}
+
+// TestHistoryNumberColumnsDashDamagedRow checks that a damaged row shows
+// the design's dash in 件数, 待处理 and 可导出, and invents no zero.
+func TestHistoryNumberColumnsDashDamagedRow(t *testing.T) {
+	svc := &fakeService{history: []app.HistoryRecord{{
+		ID: "bad", SavedAt: time.Date(2026, 11, 1, 23, 40, 0, 0, time.Local),
+		Unreadable: true, TotalBytes: 88 * 1024 * 1024,
+	}}}
+	m, q := newTestModel(t, Config{Service: svc})
+	m.SetContentSize(1180, 760)
+	tt := ui.NewTester(m.View, 1180, 760)
+	settle(t, m, q, tt)
+	openRecordsList(t, m, q, tt)
+
+	if got := countText(tt.Texts(), "—"); got != 3 {
+		t.Fatalf("the damaged row shows %d dashes, want 3 (件数/待处理/可导出): %q", got, tt.Texts())
+	}
+	if got := countText(tt.Texts(), "0"); got != 0 {
+		t.Fatalf("the damaged row invents a zero: %q", tt.Texts())
+	}
+}
+
+// TestHistoryDateFilter covers the DateInput filter's range and its
+// no-results state, including the single 清除筛选 action the design asks
+// for (08 §5).
+func TestHistoryDateFilter(t *testing.T) {
+	svc := &fakeService{history: historyTableRecords(4)}
+	m, q := newTestModel(t, Config{Service: svc})
+	tt := ui.NewTester(m.View, 1180, 760)
+	settle(t, m, q, tt)
+	openRecordsList(t, m, q, tt)
+
+	if _, ok := tt.Find("开始日期"); !ok {
+		t.Fatalf("the date filter is not a DateInput: %q", tt.Texts())
+	}
+	if tt.HasText("YYYY-MM-DD") || tt.HasText("格式应为") {
+		t.Fatalf("the typed date filter is still on screen: %q", tt.Texts())
+	}
+	if len(m.visibleHistory()) != 4 || m.historyFilterActive {
+		t.Fatalf("an untouched filter hides rows: active %v, %d visible",
+			m.historyFilterActive, len(m.visibleHistory()))
+	}
+
+	m.historyFilterActive = true
+	m.historyFilterStart = time.Date(2026, 12, 1, 0, 0, 0, 0, time.Local)
+	m.historyFilterEnd = m.historyFilterStart
+	tt.Frame()
+	if len(m.visibleHistory()) != 0 {
+		t.Fatalf("the gap-day filter kept %d rows", len(m.visibleHistory()))
+	}
+	if !tt.HasText("没有符合条件的记录") || !tt.HasText("清除筛选") {
+		t.Fatalf("the no-results state does not show: %q", tt.Texts())
+	}
+	if tt.HasText(historyTimeText(m.history[0])) {
+		t.Fatal("the filtered-out row still shows")
+	}
+	if count := countText(tt.Texts(), "清除筛选"); count != 1 {
+		t.Fatalf("the clear action appears %d times, want once", count)
+	}
+	if err := tt.Click("清除筛选"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if m.historyFilterActive || len(m.visibleHistory()) != 4 {
+		t.Fatalf("clearing the filter = active %v, %d visible", m.historyFilterActive, len(m.visibleHistory()))
+	}
+	if !tt.HasText(historyTimeText(m.history[0])) {
+		t.Fatalf("clearing the filter did not restore the rows: %q", tt.Texts())
+	}
+}
+
+// TestHistoryDateInputChangesFilter drives the DateInput itself: picking a
+// later start day narrows the range without a typed date (08 §5, M6).
+func TestHistoryDateInputChangesFilter(t *testing.T) {
+	svc := &fakeService{history: historyTableRecords(4)}
+	m, q := newTestModel(t, Config{Service: svc})
+	tt := ui.NewTester(m.View, 1180, 760)
+	settle(t, m, q, tt)
+	openRecordsList(t, m, q, tt)
+
+	if err := tt.Click("开始日期"); err != nil {
+		t.Fatalf("open the start date calendar: %v", err)
+	}
+	tt.Frame()
+	tt.Key(0, ui.KeyRight)
+	tt.Key(0, ui.KeyEnter)
+	tt.Frame()
+	if !m.historyFilterActive {
+		t.Fatal("choosing a date did not activate the filter")
+	}
+	if want := historyDay(m.history[0].SavedAt).AddDate(0, 0, -2); !m.historyFilterStart.Equal(want) {
+		t.Fatalf("the start date = %v, want %v", m.historyFilterStart, want)
+	}
+	if got := len(m.visibleHistory()); got != 3 {
+		t.Fatalf("the chosen range shows %d records, want 3", got)
+	}
+	if tt.HasText(historyTimeText(m.history[3])) {
+		t.Fatalf("the excluded record still shows: %q", tt.Texts())
+	}
+	if countText(tt.Texts(), "清除筛选") != 1 {
+		t.Fatalf("the active filter shows no single clear action: %q", tt.Texts())
+	}
+	if err := tt.Click("清除筛选"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if m.historyFilterActive || len(m.visibleHistory()) != 4 {
+		t.Fatalf("clearing from the header = active %v, %d visible",
+			m.historyFilterActive, len(m.visibleHistory()))
+	}
+}
+
+func countText(texts []string, want string) int {
+	n := 0
+	for _, text := range texts {
+		if text == want {
+			n++
+		}
+	}
+	return n
+}
+
+// TestHistoryDamagedRowOnlyDeletes checks a record whose newest
+// checkpoint is unreadable: it stays listed with its reason, cannot be
+// opened or exported, and its menu deletes it (F-25).
+func TestHistoryDamagedRowOnlyDeletes(t *testing.T) {
 	svc := &fakeService{
-		history: historyTableRecords(12),
-		loads: map[string]*record.Recovery{
-			"r01": testRecord(),
+		history: []app.HistoryRecord{{
+			ID: "bad", SavedAt: time.Date(2026, 11, 1, 23, 40, 0, 0, time.Local),
+			Unreadable: true, TotalBytes: 88 * 1024 * 1024,
+		}},
+		previewFn: func(kind, recordID string) (app.CleanupPreview, error) {
+			return app.CleanupPreview{Records: 1, TotalBytes: 88 * 1024 * 1024}, nil
 		},
 	}
 	m, q := newTestModel(t, Config{Service: svc, DirectExportSaver: &fakeDirectExportSaver{}})
-	m.SetContentSize(860, 560)
-	tt := ui.NewTester(m.View, 860, 560)
+	tt := ui.NewTester(m.View, 1180, 760)
 	settle(t, m, q, tt)
 	openRecordsList(t, m, q, tt)
 
-	if !historyUsesComposite(860) {
-		t.Fatal("860 must use the composite table")
+	if !tt.HasText("无法打开：记录不可读") || !tt.HasText("88.0 MB") {
+		t.Fatalf("the damaged row does not state its reason and size: %q", tt.Texts())
 	}
-	if historyMinTableWidth860 != 776 {
-		t.Fatalf("860 table minimum = %v, want 776", historyMinTableWidth860)
-	}
-	panelLeft, panelRight := float32(navRailWidth+12), float32(860-12)
-	for _, title := range []string{"时间", "采集", "可导出", "待校对", "无法导出", "覆盖", "操作"} {
-		rect, ok := tt.Find(title)
-		if !ok {
-			t.Fatalf("the 860 table does not show %q", title)
-		}
-		if rect.X < panelLeft || rect.X+rect.W > panelRight {
-			t.Errorf("%q at %+v is outside the 860 panel", title, rect)
-		}
-	}
-	if tt.HasText("大小") {
-		t.Fatal("the 860 table still shows the storage-size column")
-	}
-
-	// The data columns scroll, the action column does not.
-	dataBefore, _ := tt.Find("无法导出")
-	cellBefore, _ := tt.Find("失败 0 · 未处理 0 · 其他 0")
-	actionBefore, _ := tt.Find("操作")
-	openBefore, _ := tt.Find("打开")
-	tt.Scroll(400, 300, 200, 0)
-	dataAfter, _ := tt.Find("无法导出")
-	cellAfter, _ := tt.Find("失败 0 · 未处理 0 · 其他 0")
-	actionAfter, _ := tt.Find("操作")
-	openAfter, _ := tt.Find("打开")
-	if !(dataAfter.X < dataBefore.X-1) {
-		t.Errorf("860 data columns did not scroll: %.1f -> %.1f", dataBefore.X, dataAfter.X)
-	}
-	if dHeader, dCell := dataBefore.X-dataAfter.X, cellBefore.X-cellAfter.X; dHeader-dCell > 1 || dCell-dHeader > 1 {
-		t.Errorf("860 header and row scroll differently: header %.1f, cell %.1f", dHeader, dCell)
-	}
-	if actionAfter.X != actionBefore.X {
-		t.Errorf("860 action header moved with the scroll: %.1f -> %.1f", actionBefore.X, actionAfter.X)
-	}
-	if openAfter.X != openBefore.X || openAfter.W < 1 {
-		t.Errorf("860 action button moved or was clipped: %+v -> %+v", openBefore, openAfter)
-	}
-
-	// A click on the fixed column still opens the record.
-	if err := tt.Click("打开"); err != nil {
-		t.Fatalf("the fixed action button is not clickable: %v", err)
-	}
+	tt.Key(0, ui.KeyEnter)
 	settle(t, m, q, tt)
-	if m.displayPage() != pageResults || m.activeSlot != resultSlotHistory || m.historySlot.recordID != "r01" {
-		t.Fatalf("opening from the fixed column = page %v, slot %v, record %q",
-			m.displayPage(), m.activeSlot, m.historySlot.recordID)
-	}
-	if err := tt.Click("‹ 全部记录"); err != nil {
-		t.Fatalf("click the workspace back action: %v", err)
-	}
-	settle(t, m, q, tt)
-
-	// Vertical row scrolling is independent of the header.
-	headerBefore, _ := tt.Find("时间")
-	firstBefore, _ := m.historyList.Visible()
-	tt.Scroll(400, 300, 0, 300)
-	firstAfter, _ := m.historyList.Visible()
-	headerAfter, _ := tt.Find("时间")
-	if firstAfter == firstBefore {
-		t.Errorf("860 rows did not scroll vertically: first row %d -> %d", firstBefore, firstAfter)
-	}
-	if headerAfter.Y != headerBefore.Y {
-		t.Errorf("860 header moved vertically: %.1f -> %.1f", headerBefore.Y, headerAfter.Y)
+	if m.displayPage() != pageHistory {
+		t.Fatalf("Enter opened the damaged record: page %v", m.displayPage())
 	}
 
-	// The fixed column is still clickable after the vertical scroll: a
-	// press there opens that visible row's menu.
-	visibleTime := historyTimeText(HistoryEntry{SavedAt: historyTableTime(firstAfter)})
-	rowRect, ok := tt.Find(visibleTime)
-	if !ok {
-		t.Fatalf("the first visible row %q is missing", visibleTime)
-	}
-	actionRect, _ := tt.Find("操作")
-	tt.ClickAt(actionRect.X+actionRect.W/2, rowRect.Y+rowRect.H/2)
+	m.openHistoryMenu("bad")
 	tt.Frame()
-	if !m.historyMenuOpen || m.historyMenuID != fmt.Sprintf("r%02d", firstAfter+1) {
-		t.Fatalf("the fixed column did not open row %d's menu: open=%v id=%q",
-			firstAfter, m.historyMenuOpen, m.historyMenuID)
+	for _, text := range []string{"打开", "导出…", "删除截图…"} {
+		if countText(tt.Texts(), text) != 0 {
+			t.Errorf("the damaged row's menu offers %q: %q", text, tt.Texts())
+		}
 	}
-	if rect, ok := tt.Find("删除记录"); !ok || rect.X < 0 || rect.X+rect.W > 860 {
-		t.Fatalf("the row menu does not fit the 860 window: %+v (found %v)", rect, ok)
+	if !tt.HasText("记录不可读，只能删除。") || !tt.HasText("删除记录…") {
+		t.Fatalf("the damaged row's menu is incomplete: %q", tt.Texts())
+	}
+	if err := tt.Click("删除记录…"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
+	if m.cleanup == nil {
+		t.Fatal("the damaged row's delete action did not open the measured cleanup")
+	}
+	if !tt.HasText("将永久删除记录 bad") {
+		t.Fatalf("the deletion preview does not show: %q", tt.Texts())
 	}
 }
 
-func historyTableTime(index int) time.Time {
-	return time.Date(2026, 10, 21, 14, 2, 0, 0, time.Local).Add(-time.Duration(index) * 25 * time.Hour)
+// TestHistoryDeleteBlockedReasons checks that a blocked deletion says
+// why, both for the live session's row and while a scan owns the app
+// (C-28, 08 §5).
+func TestHistoryDeleteBlockedReasons(t *testing.T) {
+	svc := &fakeService{history: historyTableRecords(2)}
+	m, q := newTestModel(t, Config{Service: svc, DirectExportSaver: &fakeDirectExportSaver{}})
+	m.Apply(snap("r01", 1, false, scan.PhaseEnded, scan.Counts{Captured: 1}, 1, false, ""))
+	m.page = pageHistory
+	tt := ui.NewTester(m.View, 1180, 760)
+	settle(t, m, q, tt)
+
+	m.openHistoryMenu("r01")
+	tt.Frame()
+	if !tt.HasText("当前会话记录，扫描中或未转移前不能删除。") {
+		t.Fatalf("the live row's deletion reason does not show: %q", tt.Texts())
+	}
+	if err := tt.Click("删除记录…"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
+	if m.cleanup != nil {
+		t.Fatal("the disabled live-row deletion opened a cleanup prompt")
+	}
+
+	m.closeHistoryMenu()
+	m.Apply(snap("live", 1, true, scan.PhaseCapturing, scan.Counts{Captured: 1}, 0, false, ""))
+	tt.Frame()
+	m.openHistoryMenu("r02")
+	tt.Frame()
+	if !tt.HasText("扫描会话进行中，结束后才能清理。") {
+		t.Fatalf("the active scan's deletion reason does not show: %q", tt.Texts())
+	}
+	if err := tt.Click("删除截图…"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
+	if m.cleanup != nil {
+		t.Fatal("a deletion while the scan runs opened a prompt")
+	}
+}
+
+// TestHistoryKeyboard checks the list's focus order: entering puts the
+// keyboard on the first row, arrows move the choice, Enter opens it, and
+// Shift+F10 opens the chosen row's menu (08 §5, 09 §4.4).
+func TestHistoryKeyboard(t *testing.T) {
+	svc := &fakeService{
+		history: historyTableRecords(3),
+		loads:   map[string]*record.Recovery{"r01": testRecord()},
+	}
+	m, q := newTestModel(t, Config{Service: svc, DirectExportSaver: &fakeDirectExportSaver{}})
+	tt := ui.NewTester(m.View, 1180, 760)
+	settle(t, m, q, tt)
+	openRecordsList(t, m, q, tt)
+
+	if m.historyRow != 0 || !tt.Focused(historyTimeText(m.history[0])) {
+		t.Fatalf("entering the list did not focus its first row (row %d)", m.historyRow)
+	}
+	tt.Key(0, ui.KeyDown)
+	if m.historyRow != 1 {
+		t.Fatalf("Down moved the selection to %d", m.historyRow)
+	}
+	tt.Key(0, ui.KeyUp)
+	if m.historyRow != 0 {
+		t.Fatalf("Up moved the selection to %d", m.historyRow)
+	}
+	tt.Key(0, ui.KeyEnter)
+	settle(t, m, q, tt)
+	if m.displayPage() != pageResults || m.rec == nil || m.rec.ID != "r01" {
+		t.Fatalf("Enter opened page %v, record %+v", m.displayPage(), m.rec)
+	}
+
+	if err := tt.Click("‹ 全部记录"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
+	if m.displayPage() != pageHistory || !tt.Focused(historyTimeText(m.history[0])) {
+		t.Fatalf("returning to the list did not restore the table's focus")
+	}
+	tt.Key(ui.Shift, ui.KeyF10)
+	tt.Frame()
+	if !m.historyMenuOpen || m.historyMenuID != "r01" {
+		t.Fatalf("Shift+F10 did not open row r01's menu: open %v, id %q",
+			m.historyMenuOpen, m.historyMenuID)
+	}
+	if !tt.Focused("打开") {
+		t.Fatal("the row menu does not take the keyboard focus")
+	}
+	tt.Key(0, ui.KeyEscape)
+	tt.Frame()
+	if m.historyMenuOpen {
+		t.Fatal("Escape did not close the row menu")
+	}
+}
+
+// TestHistoryColumnsByWidth guards the two tiers of 09 §2: the standard
+// list shows 占用 and separate 待处理 / 可导出 columns; the compact list
+// merges the counts and drops 占用.
+func TestHistoryColumnsByWidth(t *testing.T) {
+	standard := historyHeaderTitles(historyColumnsFor(1180))
+	wantStandard := []string{"时间", "结果", "件数", "待处理", "可导出", "占用", ""}
+	if strings.Join(standard, "/") != strings.Join(wantStandard, "/") {
+		t.Fatalf("1180 columns = %v, want %v", standard, wantStandard)
+	}
+	compact := historyHeaderTitles(historyColumnsFor(960))
+	wantCompact := []string{"时间", "结果", "件数", "待处理 / 可导出", ""}
+	if strings.Join(compact, "/") != strings.Join(wantCompact, "/") {
+		t.Fatalf("960 columns = %v, want %v", compact, wantCompact)
+	}
+	if !historyCompact(960) || historyCompact(1180) {
+		t.Fatalf("compact tiers: 960 %v, 1180 %v", historyCompact(960), historyCompact(1180))
+	}
+}
+
+// TestHistoryCompactMovesStorageIntoTheMenu checks the compact tier's
+// trade: 占用 leaves the table and its number appears in the screenshot
+// deletion entry, while the standard tier keeps both (09 §2).
+func TestHistoryCompactMovesStorageIntoTheMenu(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		width   int
+		storage bool
+	}{
+		{"standard", 1180, true},
+		{"compact", 960, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := &fakeService{history: historyTableRecords(1)}
+			m, q := newTestModel(t, Config{Service: svc, DirectExportSaver: &fakeDirectExportSaver{}})
+			m.SetContentSize(tc.width, 760)
+			tt := ui.NewTester(m.View, tc.width, 760)
+			settle(t, m, q, tt)
+			openRecordsList(t, m, q, tt)
+
+			if got := tt.HasText("占用"); got != tc.storage {
+				t.Fatalf("占用 shown = %v, want %v", got, tc.storage)
+			}
+			if tt.HasText("待处理 / 可导出") == tc.storage {
+				t.Fatalf("merged counts shown = %v at %d", tt.HasText("待处理 / 可导出"), tc.width)
+			}
+			m.openHistoryMenu("r01")
+			tt.Frame()
+			want := "删除截图…"
+			if !tc.storage {
+				want += "（1.0 MB）"
+			}
+			if !tt.HasText(want) {
+				t.Fatalf("the delete entry does not show %q: %q", want, tt.Texts())
+			}
+		})
+	}
+}
+
+// TestRecordConclusion covers the shared conclusion texts: they use the
+// four-class counts and localize the termination without leaking a fault
+// code (08 §5, 09 §4.3). The records list and the summary share this
+// function.
+func TestRecordConclusion(t *testing.T) {
+	completed := &record.Termination{
+		Kind: record.TerminationCompleted, Code: "verifiedEnd", Phase: record.PhaseCapturing,
+	}
+	knownPartial := []app.PositionOutcome{
+		{Position: 1, State: app.PositionOutcomeDegraded, Stage: "filter", ReasonCode: "navigationMismatch"},
+		{Position: 2, State: app.PositionOutcomeTruncated},
+		{Position: 3, State: app.PositionOutcomeComplete},
+		{Position: 4, State: app.PositionOutcomeComplete},
+		{Position: 5, State: app.PositionOutcomeComplete},
+		{Position: 6, State: app.PositionOutcomeComplete},
+	}
+	cases := []struct {
+		name              string
+		input             recordConclusionInput
+		wantOutcome       recordOutcomeKind
+		tag               string
+		text              string
+		summaryEyebrow    string
+		summaryTitle      string
+		summarySupplement string
+		summaryNotes      string
+	}{
+		{
+			name:         "unreadable",
+			input:        recordConclusionInput{Unreadable: true},
+			wantOutcome:  recordOutcomeUnreadable,
+			tag:          "!",
+			text:         "无法打开：记录不可读",
+			summaryTitle: "记录读取失败",
+		},
+		{
+			name:         "interrupted",
+			input:        recordConclusionInput{Interrupted: true, CapturedCount: 3},
+			wantOutcome:  recordOutcomeInterrupted,
+			tag:          "中断",
+			text:         "已恢复已保存部分",
+			summaryTitle: "扫描中断，只保存了部分结果",
+		},
+		{
+			name: "all pass",
+			input: recordConclusionInput{
+				Termination: completed, Coverage: record.CoverageComplete,
+				CapturedCount: 1_017, Counts: app.ItemClassCounts{Passed: 1_017},
+			},
+			wantOutcome:    recordOutcomeCompleted,
+			summaryEyebrow: "正常结束",
+			text:           "扫全了，可以直接导出",
+			summaryTitle:   "扫全了，可以直接导出",
+		},
+		{
+			name: "one pending review",
+			input: recordConclusionInput{
+				Termination: completed, Coverage: record.CoverageComplete,
+				CapturedCount: 1_017,
+				Counts:        app.ItemClassCounts{Passed: 1_016, PendingReview: 1},
+			},
+			wantOutcome:    recordOutcomeCompleted,
+			summaryEyebrow: "正常结束",
+			text:           "扫全了，1 件待校对",
+			summaryTitle:   "扫全了，还有 1 件待校对",
+		},
+		{
+			name: "pending backfill and review",
+			input: recordConclusionInput{
+				Termination: completed, Coverage: record.CoverageComplete,
+				CapturedCount: 8,
+				Counts:        app.ItemClassCounts{Passed: 6, PendingBackfill: 1, PendingReview: 1},
+			},
+			wantOutcome:    recordOutcomeCompleted,
+			summaryEyebrow: "正常结束",
+			text:           "扫全了，2 件待处理",
+			summaryTitle:   "扫全了，还有 1 件待校对、1 件待补录",
+		},
+		{
+			name: "warnings stay exportable",
+			input: recordConclusionInput{
+				Termination: completed, Coverage: record.CoverageComplete,
+				CapturedCount: 8, Counts: app.ItemClassCounts{Passed: 6, Warning: 2},
+			},
+			wantOutcome:    recordOutcomeCompleted,
+			summaryEyebrow: "正常结束",
+			text:           "扫全了，2 件有警告",
+			summaryTitle:   "扫全了，可以直接导出",
+		},
+		{
+			name: "partial coverage",
+			input: recordConclusionInput{
+				Termination: completed, Coverage: record.CoveragePartial,
+				CapturedCount: 6, Counts: app.ItemClassCounts{Passed: 6},
+			},
+			wantOutcome:    recordOutcomeCompleted,
+			summaryEyebrow: "正常结束",
+			text:           "没有扫全 · 覆盖：部分",
+			summaryTitle:   "没有扫全：覆盖不完整",
+		},
+		{
+			name: "partial coverage with known positions",
+			input: recordConclusionInput{
+				Termination: completed, Coverage: record.CoveragePartial,
+				CapturedCount: 6, Counts: app.ItemClassCounts{Passed: 6},
+				IncompletePositions: 2, IncompletePositionsKnown: true,
+				PositionOutcomes: knownPartial, PositionOutcomesKnown: true,
+			},
+			wantOutcome:    recordOutcomeCompleted,
+			summaryEyebrow: "正常结束",
+			text:           "没有扫全 · 2 个号位不完整",
+			summaryTitle:   "没有扫全：1 号位、2 号位不完整",
+			summaryNotes:   "其余 4 个号位完整",
+		},
+		{
+			name: "manual stop",
+			input: recordConclusionInput{
+				Termination: &record.Termination{
+					Kind: record.TerminationCancelled, Code: "userCancelled", Phase: record.PhaseCapturing,
+				},
+				Coverage: record.CoveragePartial, CapturedCount: 2,
+				Counts: app.ItemClassCounts{Passed: 2},
+			},
+			wantOutcome:  recordOutcomeCancelled,
+			text:         "手动停止 · 覆盖：部分",
+			summaryTitle: "已手动停止",
+		},
+		{
+			name: "manual stop with complete coverage",
+			input: recordConclusionInput{
+				Termination: &record.Termination{
+					Kind: record.TerminationCancelled, Code: "userCancelled", Phase: record.PhaseCapturing,
+				},
+				Coverage: record.CoverageComplete, CapturedCount: 2,
+				Counts: app.ItemClassCounts{Passed: 2},
+			},
+			wantOutcome:  recordOutcomeCancelled,
+			text:         "手动停止 · 覆盖：全部",
+			summaryTitle: "已手动停止",
+		},
+		{
+			name: "completed record without four-class counts",
+			input: recordConclusionInput{
+				Termination: completed, Coverage: record.CoverageComplete,
+				CapturedCount: 5,
+			},
+			wantOutcome:    recordOutcomeCompleted,
+			text:           "正常结束 · 覆盖：全部",
+			summaryEyebrow: "正常结束",
+			summaryTitle:   "扫全了，可以直接导出",
+		},
+		{
+			name: "fault while capturing",
+			input: recordConclusionInput{
+				Termination: &record.Termination{
+					Kind: record.TerminationFailed, Code: "focusLost", Phase: record.PhaseCapturing,
+				},
+				Coverage: record.CoveragePartial, CapturedCount: 431,
+				Counts: app.ItemClassCounts{Passed: 429, PendingReview: 2},
+			},
+			wantOutcome:       recordOutcomeFault,
+			tag:               "失败",
+			text:              "中途停止：游戏失去了焦点",
+			summaryTitle:      "扫描中途停止：游戏失去了焦点",
+			summarySupplement: "怎么做：扫描时请不要切换应用。",
+			summaryNotes:      "已保存：431 件",
+		},
+		{
+			name: "stopped before starting",
+			input: recordConclusionInput{
+				Termination: &record.Termination{
+					Kind: record.TerminationFailed, Code: "prepareTimeout", Phase: record.PhasePreparing,
+				},
+				Coverage: record.CoverageUnknown,
+			},
+			wantOutcome:       recordOutcomeEmpty,
+			tag:               "失败",
+			text:              "没有开始：30 秒内游戏没有就绪",
+			summaryTitle:      "没有采集到任何驱动盘：30 秒内游戏没有就绪",
+			summarySupplement: "怎么做：请让游戏保持在前台并停在驱动盘仓库页，然后重新开始扫描。",
+		},
+		{
+			name: "zero captured after a normal end",
+			input: recordConclusionInput{
+				Termination: completed, Coverage: record.CoverageComplete,
+			},
+			wantOutcome:       recordOutcomeEmpty,
+			text:              "正常结束 · 没有采集到驱动盘",
+			summaryTitle:      "没有采集到任何驱动盘",
+			summarySupplement: "回到准备检查后重新开始。",
+		},
+		{
+			name: "zero captured after a manual stop",
+			input: recordConclusionInput{
+				Termination: &record.Termination{
+					Kind: record.TerminationCancelled, Code: "userCancelled", Phase: record.PhaseCapturing,
+				},
+				Coverage: record.CoveragePartial,
+			},
+			wantOutcome:       recordOutcomeEmpty,
+			text:              "手动停止 · 覆盖：部分",
+			summaryTitle:      "已手动停止，没有采集到任何驱动盘",
+			summarySupplement: "回到准备检查后重新开始。",
+		},
+		{
+			name: "zero captured with an interrupted termination",
+			input: recordConclusionInput{
+				Termination: &record.Termination{Kind: record.TerminationInterrupted},
+				Interrupted: true,
+			},
+			wantOutcome:       recordOutcomeEmpty,
+			tag:               "中断",
+			text:              "已恢复已保存部分",
+			summaryTitle:      "扫描中断，没有采集到任何驱动盘",
+			summarySupplement: "请重新开始扫描。",
+		},
+		{
+			name: "zero captured without a termination",
+			input: recordConclusionInput{
+				Interrupted: true,
+			},
+			wantOutcome:       recordOutcomeEmpty,
+			tag:               "中断",
+			text:              "已恢复已保存部分",
+			summaryTitle:      "没有采集到任何驱动盘",
+			summarySupplement: "回到准备检查后重新开始。",
+		},
+		{
+			name: "save failure outranks running and zero items",
+			input: recordConclusionInput{
+				SaveFailed: true, ScanNotWrapped: true, CapturedCount: 0,
+			},
+			wantOutcome:       recordOutcomeSaveFailed,
+			tag:               "!",
+			text:              "保存失败",
+			summaryTitle:      "扫描结果还没有保存",
+			summarySupplement: "保存失败，请重试。若仍然失败，请检查磁盘空间和权限。",
+		},
+	}
+	// Running is model state rather than record data; the shared function
+	// still owns the wording.
+	cases = append(cases, struct {
+		name              string
+		input             recordConclusionInput
+		wantOutcome       recordOutcomeKind
+		tag               string
+		text              string
+		summaryEyebrow    string
+		summaryTitle      string
+		summarySupplement string
+		summaryNotes      string
+	}{
+		name:              "scan still running",
+		input:             recordConclusionInput{ScanNotWrapped: true},
+		wantOutcome:       recordOutcomeRunning,
+		text:              "扫描进行中",
+		summaryTitle:      "扫描还没有结束",
+		summarySupplement: "结束后这里会给出覆盖结论和可导出数量。",
+	})
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out := recordOutcomeFor(tc.input)
+			if out.Kind != tc.wantOutcome {
+				t.Fatalf("outcome = %v, want %v", out.Kind, tc.wantOutcome)
+			}
+			got := recordConclusionFor(tc.input)
+			if got.tag != tc.tag || got.text != tc.text {
+				t.Fatalf("list = %q/%q, want %q/%q", got.tag, got.text, tc.tag, tc.text)
+			}
+			summary := recordSummaryWording(out)
+			if summary.Eyebrow != tc.summaryEyebrow {
+				t.Fatalf("summary eyebrow = %q, want %q", summary.Eyebrow, tc.summaryEyebrow)
+			}
+			if summary.Title != tc.summaryTitle {
+				t.Fatalf("summary title = %q, want %q", summary.Title, tc.summaryTitle)
+			}
+			if summary.Supplement != tc.summarySupplement {
+				t.Fatalf("summary supplement = %q, want %q", summary.Supplement, tc.summarySupplement)
+			}
+			if tc.summaryNotes != "" && !strings.Contains(strings.Join(summary.Notes, "\n"), tc.summaryNotes) {
+				t.Fatalf("summary notes = %q, want them to contain %q", summary.Notes, tc.summaryNotes)
+			}
+		})
+	}
+}
+
+// TestInterruptedRecordEndingIsShared checks the two adapters classify the
+// same crashed record as interrupted, even when recovery marked no item.
+func TestInterruptedRecordEndingIsShared(t *testing.T) {
+	rec := recovery(record.ItemRecord{Sequence: 1, Status: record.StatusProduced})
+	rec.Checkpoint.Session.Termination = nil
+	rec.Checkpoint.Session.Coverage = record.Coverage{Status: record.CoveragePartial}
+	rec.Checkpoint.Session.CapturedCount = 1
+	view := BuildRecordView("rec", rec, false)
+	m := summaryModel(view, app.Snapshot{})
+	history := m.historyConclusionInput(HistoryEntry{
+		ID:            "rec",
+		CapturedCount: 1,
+		Coverage:      record.CoveragePartial,
+		Counts:        app.ItemClassCounts{Passed: 1},
+	})
+
+	summaryOutcome := recordOutcomeFor(m.summaryConclusionInput())
+	listOutcome := recordOutcomeFor(history)
+	if summaryOutcome.Kind != recordOutcomeInterrupted || listOutcome.Kind != recordOutcomeInterrupted {
+		t.Fatalf("outcomes = summary %v, list %v; want interrupted", summaryOutcome.Kind, listOutcome.Kind)
+	}
+	if got := recordConclusionFor(history).text; got != "已恢复已保存部分" {
+		t.Fatalf("list wording = %q", got)
+	}
+	if got := recordSummaryWording(summaryOutcome).Title; got != "扫描中断，只保存了部分结果" {
+		t.Fatalf("summary wording = %q", got)
+	}
+}
+
+// TestHistorySaveFailureUsesTheSummaryEnding keeps the list and summary on
+// the same save-failure ending for the current session.
+func TestHistorySaveFailureUsesTheSummaryEnding(t *testing.T) {
+	m := new(Model)
+	m.snap = app.Snapshot{Busy: true, SaveError: "磁盘已满"}
+	m.appliedSession = scan.ID("rec")
+	out := recordOutcomeFor(m.historyConclusionInput(HistoryEntry{ID: "rec"}))
+	if out.Kind != recordOutcomeSaveFailed {
+		t.Fatalf("history outcome = %v, want save failure", out.Kind)
+	}
+	if got := recordListConclusion(out).text; got != "保存失败" {
+		t.Fatalf("history wording = %q", got)
+	}
+}
+
+// TestHistoryRowMenu checks the normal row's menu, its disabled deletion
+// reason and the export entry that opens the record's dialog.
+func TestHistoryRowMenu(t *testing.T) {
+	svc := &fakeService{
+		history: historyTableRecords(2),
+		loads:   map[string]*record.Recovery{"r01": testRecord()},
+		previewFn: func(kind, recordID string) (app.CleanupPreview, error) {
+			return app.CleanupPreview{Records: 1, EvidenceFiles: 2, EvidenceBytes: 1024, TotalBytes: 2048}, nil
+		},
+	}
+	m, q := newTestModel(t, Config{Service: svc, DirectExportSaver: &fakeDirectExportSaver{}})
+	tt := ui.NewTester(m.View, 1180, 760)
+	settle(t, m, q, tt)
+	openRecordsList(t, m, q, tt)
+
+	m.openHistoryMenu("r02")
+	tt.Frame()
+	for _, text := range []string{"打开", "导出…", "删除截图…", "删除记录…"} {
+		if !tt.HasText(text) {
+			t.Errorf("the row menu does not show %q: %q", text, tt.Texts())
+		}
+	}
+	if tt.HasText("当前会话记录") {
+		t.Fatal("a normal record's menu kept a live-session reason")
+	}
+	if got := m.historyDeleteBlockedReason(m.history[1]); got != "" {
+		t.Fatalf("a normal record's delete entries are blocked: %q", got)
+	}
+	if err := tt.Click("删除记录…"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
+	if m.cleanup == nil {
+		t.Fatal("the row's delete entry did not open the measured cleanup")
+	}
+
+	m.closeHistoryMenu()
+	m.cleanup = nil
+	m.openHistoryMenu("r01")
+	tt.Frame()
+	if err := tt.Click("导出…"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
+	if m.displayPage() != pageResults || m.rec == nil || m.rec.ID != "r01" {
+		t.Fatalf("导出… = page %v, record %+v, want the row's record opened",
+			m.displayPage(), m.rec)
+	}
+	if !m.exportDialog.open || !tt.HasText("导出 JSON") || !tt.HasText("去校对") {
+		t.Fatalf("the row's export dialog did not open: open=%t %q", m.exportDialog.open, tt.Texts())
+	}
 }
 
 // TestHistoryOpenAndReturn checks row selection, Enter opening the chosen
-// record, and returning to the same selection from the solution rail.
+// record, and returning to the same selection from the workspace.
 func TestHistoryOpenAndReturn(t *testing.T) {
 	svc := &fakeService{
 		history: historyTableRecords(4),
-		loads: map[string]*record.Recovery{
-			"r02": testRecord(),
-		},
+		loads:   map[string]*record.Recovery{"r02": testRecord()},
 	}
 	m, q := newTestModel(t, Config{Service: svc, DirectExportSaver: &fakeDirectExportSaver{}})
-	m.SetContentSize(1020, 700)
-	tt := ui.NewTester(m.View, 1020, 700)
+	tt := ui.NewTester(m.View, 1180, 760)
 	settle(t, m, q, tt)
 	openRecordsList(t, m, q, tt)
 
-	if err := tt.Click("10-20 13:02"); err != nil {
+	if err := tt.Click(historyTimeText(m.history[1])); err != nil {
 		t.Fatal(err)
 	}
 	if m.historyRow != 1 {
@@ -427,8 +1117,9 @@ func TestHistoryOpenAndReturn(t *testing.T) {
 	}
 	tt.Key(0, ui.KeyEnter)
 	settle(t, m, q, tt)
-	if m.displayPage() != pageResults || m.activeSlot != resultSlotHistory || m.historySlot.recordID != "r02" {
-		t.Fatalf("Enter opened page %v, slot %v, record %q", m.displayPage(), m.activeSlot, m.historySlot.recordID)
+	if m.displayPage() != pageResults || m.rec == nil || m.rec.ID != "r02" ||
+		m.rec.Live {
+		t.Fatalf("Enter opened page %v, record %+v", m.displayPage(), m.rec)
 	}
 
 	if err := tt.Click("‹ 全部记录"); err != nil {
@@ -438,14 +1129,55 @@ func TestHistoryOpenAndReturn(t *testing.T) {
 	if m.displayPage() != pageHistory || m.historyRow != 1 {
 		t.Fatalf("returning to history = page %v, row %d", m.displayPage(), m.historyRow)
 	}
-	if !tt.HasText("已选中 10-20 13:02") {
+	if !tt.HasText("已选中 " + historyTimeText(m.history[1])) {
 		t.Fatalf("the status bar lost the selection: %q", tt.Texts())
 	}
 }
 
-// TestHistoryCurrentRowOpensLiveSession checks that the 本次 row opens the
-// session slot and never creates a second history slot.
-func TestHistoryCurrentRowOpensLiveSession(t *testing.T) {
+// TestHistoryExportFailureShowsInDialog checks the row's export failure in
+// the same dialog the title bar uses.
+func TestHistoryExportFailureShowsInDialog(t *testing.T) {
+	svc := &fakeService{
+		history: historyTableRecords(1),
+		loads: map[string]*record.Recovery{
+			"r01": recovery(uiStructuredItem(t, 1, record.QualityAutoAccepted)),
+		},
+	}
+	saver := &fakeDirectExportSaver{}
+	saver.saveFn = func(app.ExportFormat, string, []byte) (string, error) {
+		return "", errors.New("no space left on device")
+	}
+	m, q := newTestModel(t, Config{Service: svc, DirectExportSaver: saver, AppVersion: "test"})
+	tt := ui.NewTester(m.View, 1180, 760)
+	settle(t, m, q, tt)
+	openRecordsList(t, m, q, tt)
+
+	m.openHistoryMenu("r01")
+	tt.Frame()
+	if err := tt.Click("导出…"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
+	if !m.exportDialog.open {
+		t.Fatalf("the row's export dialog did not open: %q", tt.Texts())
+	}
+	if err := tt.Click("导出 JSON"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
+	if m.exportOutcome == nil || m.exportOutcome.err == nil ||
+		!strings.Contains(m.exportOutcome.err.Error(), "no space left on device") {
+		t.Fatalf("failure outcome = %+v", m.exportOutcome)
+	}
+	if !tt.HasText("导出失败：no space left on device") || !tt.HasText("重试") {
+		t.Fatalf("the dialog failure is missing: %q", tt.Texts())
+	}
+}
+
+// TestHistoryCurrentRowOpensLiveRecord checks that the 本次 row opens the
+// current session's live record in the one record workspace, with no
+// second editable copy.
+func TestHistoryCurrentRowOpensLiveRecord(t *testing.T) {
 	svc := &fakeService{
 		history: historyTableRecords(3),
 		loads: map[string]*record.Recovery{
@@ -455,14 +1187,13 @@ func TestHistoryCurrentRowOpensLiveSession(t *testing.T) {
 	m, q := newTestModel(t, Config{Service: svc, DirectExportSaver: &fakeDirectExportSaver{}})
 	m.Apply(snap("r01", 1, false, scan.PhaseEnded, scan.Counts{Captured: 1}, 1, false, ""))
 	m.page = pageHistory
-	m.SetContentSize(1020, 700)
-	tt := ui.NewTester(m.View, 1020, 700)
+	tt := ui.NewTester(m.View, 1180, 760)
 	settle(t, m, q, tt)
 
 	if !tt.HasText("本次") {
 		t.Fatalf("the current session row has no 本次 badge: %q", tt.Texts())
 	}
-	if err := tt.Click("10-21 14:02"); err != nil {
+	if err := tt.Click(historyTimeText(m.history[0])); err != nil {
 		t.Fatal(err)
 	}
 	tt.Key(0, ui.KeyEnter)
@@ -470,493 +1201,226 @@ func TestHistoryCurrentRowOpensLiveSession(t *testing.T) {
 	if m.displayPage() != pageResults {
 		t.Fatalf("the current row opened page %v, want results", m.displayPage())
 	}
-	if m.activeSlot != resultSlotSession {
-		t.Fatalf("the current row opened slot %v, want session", m.activeSlot)
-	}
-	if m.historySlot.recordID != "" {
-		t.Fatalf("the current row created a history slot for %q", m.historySlot.recordID)
+	if m.rec == nil || m.rec.ID != "r01" || !m.rec.Live {
+		t.Fatalf("the current row opened %+v, want the live record", m.rec)
 	}
 }
 
-// TestHistoryRowMenu checks the single-row menu: the current session's
-// delete entries are disabled with a reason, a normal record's delete
-// entry works, and the menu offers no source or multi-select actions.
-func TestHistoryRowMenu(t *testing.T) {
+// TestHistoryRowExportLoadFailureDoesNotOpenDialog keeps a failed row
+// export from leaving the "open the dialog when the load lands" mark set.
+func TestHistoryRowExportLoadFailureDoesNotOpenDialog(t *testing.T) {
 	svc := &fakeService{
-		history: historyTableRecords(3),
-		loads: map[string]*record.Recovery{
-			"r01": testRecord(),
-		},
-		previewFn: func(kind, recordID string) (app.CleanupPreview, error) {
-			return app.CleanupPreview{Records: 1, EvidenceFiles: 2, EvidenceBytes: 1024, TotalBytes: 2048}, nil
-		},
+		history: historyTableRecords(1),
+		loadErr: map[string]error{"r01": errors.New("checkpoint missing")},
 	}
-	m, q := newTestModel(t, Config{Service: svc, DirectExportSaver: &fakeDirectExportSaver{}})
-	m.Apply(snap("r01", 1, false, scan.PhaseEnded, scan.Counts{Captured: 1}, 1, false, ""))
-	m.page = pageHistory
-	m.SetContentSize(1020, 700)
-	tt := ui.NewTester(m.View, 1020, 700)
+	m, q := newTestModel(t, Config{
+		Service:           svc,
+		DirectExportSaver: &fakeDirectExportSaver{},
+		AppVersion:        "test",
+	})
+	tt := ui.NewTester(m.View, 1180, 760)
 	settle(t, m, q, tt)
+	openRecordsList(t, m, q, tt)
 
 	m.openHistoryMenu("r01")
 	tt.Frame()
-	for _, text := range []string{"打开", "导出 CSV", "导出 JSON", "删除截图", "删除记录",
-		"当前会话记录，扫描中或未转移前不能删除。"} {
-		if !tt.HasText(text) {
-			t.Errorf("the current session menu does not show %q: %q", text, tt.Texts())
-		}
-	}
-	if got := m.historyDeleteBlockedReason(m.history[0]); got == "" {
-		t.Fatal("the current session row has no deletion reason")
-	}
-	if err := tt.Click("删除记录"); err != nil {
+	if err := tt.Click("导出…"); err != nil {
 		t.Fatal(err)
 	}
 	settle(t, m, q, tt)
-	if m.cleanup != nil {
-		t.Fatal("the disabled delete entry opened a cleanup prompt")
+	if m.exportAfterLoadID != "" || m.exportDialog.open {
+		t.Fatalf("a failed row load kept its deferred dialog: id=%q open=%t",
+			m.exportAfterLoadID, m.exportDialog.open)
 	}
+	if !strings.Contains(m.recErr, "checkpoint missing") {
+		t.Fatalf("the row load failure is not shown: %q", m.recErr)
+	}
+}
 
-	m.closeHistoryMenu()
+// TestHistoryRowExportForOpenRecordOpensTheDialog checks the branch where
+// the row's record is already loaded: no reload, just the same dialog.
+func TestHistoryRowExportForOpenRecordOpensTheDialog(t *testing.T) {
+	svc := &fakeService{
+		history: historyTableRecords(1),
+		loads: map[string]*record.Recovery{
+			"r01": recovery(
+				uiStructuredItem(t, 1, record.QualityAutoAccepted),
+				uiStructuredItem(t, 2, record.QualityAutoAccepted),
+			),
+		},
+	}
+	m, q := newTestModel(t, Config{
+		Service:           svc,
+		DirectExportSaver: &fakeDirectExportSaver{},
+		AppVersion:        "test",
+	})
+	tt := ui.NewTester(m.View, 1180, 760)
+	settle(t, m, q, tt)
+	openRecordsList(t, m, q, tt)
+	m.histChoice = historyLabel(t, m, "r01")
+	m.OpenHistory()
+	settle(t, m, q, tt)
+
+	m.page = pageHistory
+	tt.Frame()
+	m.openHistoryMenu("r01")
+	tt.Frame()
+	if err := tt.Click("导出…"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
+	if m.page != pageResults || m.rec == nil || m.rec.ID != "r01" || !m.exportDialog.open {
+		t.Fatalf("open-record row export = page %v record %+v dialog=%t",
+			m.page, m.rec, m.exportDialog.open)
+	}
+	if !tt.Focused("导出 JSON") {
+		t.Fatalf("the export dialog did not focus 导出 JSON: %q", tt.Texts())
+	}
+	if m.exportData == nil || m.exportData.Summary.Included != 2 {
+		t.Fatalf("the dialog did not use the open record's snapshot: %+v", m.exportData)
+	}
+}
+
+// TestHistoryRowExportSettlesDirtyDraftFirst checks that a row's 导出…
+// goes through the existing save/discard prompt before opening the target
+// record and its dialog.
+func TestHistoryRowExportSettlesDirtyDraftFirst(t *testing.T) {
+	svc := &fakeService{
+		history: historyTableRecords(2),
+		loads: map[string]*record.Recovery{
+			"r01": recovery(
+				uiStructuredItem(t, 1, record.QualityAutoAccepted),
+				uiStructuredItem(t, 2, record.QualityNeedsReview),
+			),
+			"r02": recovery(uiStructuredItem(t, 1, record.QualityAutoAccepted)),
+		},
+	}
+	m, q := newTestModel(t, Config{
+		Service:           svc,
+		DirectExportSaver: &fakeDirectExportSaver{},
+		AppVersion:        "test",
+	})
+	tt := ui.NewTester(m.View, 1180, 760)
+	settle(t, m, q, tt)
+	openRecordsList(t, m, q, tt)
+	m.histChoice = historyLabel(t, m, "r01")
+	m.OpenHistory()
+	settle(t, m, q, tt)
+	showRecordItems(m)
+	m.selected = 0
+	m.startEdit()
+	if m.edit == nil {
+		t.Fatal("the editor did not open")
+	}
+	m.edit.draft.Level = "14"
+
+	m.page = pageHistory
 	tt.Frame()
 	m.openHistoryMenu("r02")
 	tt.Frame()
-	if tt.HasText("当前会话记录，扫描中或未转移前不能删除。") {
-		t.Fatal("a normal record's menu kept the current-session reason")
+	if err := tt.Click("导出…"); err != nil {
+		t.Fatal(err)
 	}
-	if got := m.historyDeleteBlockedReason(m.history[1]); got != "" {
-		t.Fatalf("a normal record's delete entries are blocked: %q", got)
+	tt.Frame()
+	if m.exportDialog.open || m.navPrompt == nil {
+		t.Fatalf("dirty row export = dialog=%t prompt=%v", m.exportDialog.open, m.navPrompt)
 	}
-	if err := tt.Click("删除记录"); err != nil {
+	if !tt.HasText("当前条目有未保存的修改。") {
+		t.Fatalf("the unsaved-changes prompt is missing: %q", tt.Texts())
+	}
+	if err := tt.Click("放弃修改"); err != nil {
 		t.Fatal(err)
 	}
 	settle(t, m, q, tt)
-	if m.cleanup == nil {
-		t.Fatal("a normal record's delete entry did not open the measured cleanup")
+	if m.rec == nil || m.rec.ID != "r02" || !m.exportDialog.open {
+		t.Fatalf("after discarding = record %+v dialog=%t, want r02's dialog",
+			m.rec, m.exportDialog.open)
 	}
-	if !tt.HasText("将永久删除记录 r02") {
-		t.Fatalf("the cleanup preview does not show: %q", tt.Texts())
-	}
-}
-
-// TestHistoryKeyboardSelectionAndMenu checks the keyboard path: Tab
-// reaches the row's ⋯ button, Enter opens the menu, Tab walks its items,
-// and arrows keep moving the table selection.
-func TestHistoryKeyboardSelectionAndMenu(t *testing.T) {
-	svc := &fakeService{history: historyTableRecords(4)}
-	m, q := newTestModel(t, Config{Service: svc, DirectExportSaver: &fakeDirectExportSaver{}})
-	m.SetContentSize(1020, 700)
-	tt := ui.NewTester(m.View, 1020, 700)
-	settle(t, m, q, tt)
-	openRecordsList(t, m, q, tt)
-
-	if err := tt.Click("10-21 14:02"); err != nil {
-		t.Fatal(err)
-	}
-	// Arrow keys move the table's choice before any menu takes the focus.
-	tt.Key(0, ui.KeyDown)
-	if m.historyRow != 1 {
-		t.Fatalf("Down moved the selection to %d", m.historyRow)
-	}
-	tt.Key(0, ui.KeyUp)
-	if m.historyRow != 0 {
-		t.Fatalf("Up moved the selection to %d", m.historyRow)
-	}
-	reached := false
-	for i := 0; i < 6; i++ {
-		tt.Key(0, ui.KeyTab)
-		tt.Frame()
-		if tt.Focused("⋯") {
-			reached = true
-			break
-		}
-	}
-	if !reached {
-		t.Fatal("Tab never reached the row menu button")
-	}
-	tt.Key(0, ui.KeyEnter)
-	tt.Frame()
-	if !m.historyMenuOpen {
-		t.Fatal("Enter on the row menu button did not open the menu")
-	}
-	if !tt.Focused("打开") {
-		t.Fatal("the first menu item does not take the keyboard focus")
-	}
-	tt.Key(0, ui.KeyTab)
-	tt.Frame()
-	if !tt.Focused("导出 CSV") {
-		t.Fatal("Tab does not move through the menu items")
-	}
-	tt.Key(0, ui.KeyEnter)
-	settle(t, m, q, tt)
-	if m.historyMenuOpen {
-		t.Fatal("Enter on a menu item did not close the menu")
-	}
-	tt.Key(0, ui.KeyEscape)
-	tt.Frame()
-	if m.historyMenuOpen {
-		t.Fatal("Escape did not close the row menu")
+	if !tt.Focused("导出 JSON") {
+		t.Fatalf("the row export dialog did not focus 导出 JSON: %q", tt.Texts())
 	}
 }
 
-// TestHistoryDateSearch filters by the date search, in the design's wording
-// and without a source filter.
-func TestHistoryDateSearch(t *testing.T) {
-	svc := &fakeService{history: historyTableRecords(3)}
-	m, q := newTestModel(t, Config{Service: svc, DirectExportSaver: &fakeDirectExportSaver{}})
-	m.SetContentSize(1020, 700)
-	tt := ui.NewTester(m.View, 1020, 700)
-	settle(t, m, q, tt)
-	openRecordsList(t, m, q, tt)
-
-	if !tt.HasText("搜索日期") {
-		t.Fatal("the history search is not labelled 搜索日期")
-	}
-	m.historyFilter = "2026-10-21"
-	tt.Frame()
-	if !tt.HasText("10-21 14:02") || tt.HasText("10-20 13:02") {
-		t.Fatalf("the date search did not filter the rows: %q", tt.Texts())
-	}
-	if tt.HasText("来源") {
-		t.Fatal("the history page added a source filter")
-	}
-}
-
-// TestHistoryCompositeShowsWholeRowsAt860 checks the 860 table's vertical
-// viewport: its list shows only complete 52-DIP rows, the footer never
-// overlaps the last row, and the same holds at the bottom of the scroll.
-func TestHistoryCompositeShowsWholeRowsAt860(t *testing.T) {
-	svc := &fakeService{history: historyTableRecords(12)}
-	m, q := newTestModel(t, Config{Service: svc, DirectExportSaver: &fakeDirectExportSaver{}})
-	m.SetContentSize(860, 560)
-	tt := ui.NewTester(m.View, 860, 560)
-	settle(t, m, q, tt)
-	openRecordsList(t, m, q, tt)
-	if !historyUsesComposite(860) {
-		t.Fatal("860 must use the composite table")
-	}
-	entries := m.visibleHistory()
-
-	footerRect := func() (ui.Rect, string) {
-		for _, text := range tt.Texts() {
-			if strings.HasPrefix(text, "共 ") {
-				if rect, ok := tt.Find(text); ok {
-					return rect, text
-				}
-			}
-		}
-		t.Fatalf("the table footer is missing: %q", tt.Texts())
-		return ui.Rect{}, ""
-	}
-	checkWholeRows := func(stage string) {
-		t.Helper()
-		first, last := m.historyList.Visible()
-		if first < 0 || last < first {
-			t.Fatalf("%s: the table shows no rows (%d..%d)", stage, first, last)
-		}
-		if count := last - first + 1; count != 7 {
-			t.Fatalf("%s: visible rows = %d, want 7 whole rows", stage, count)
-		}
-		footer, text := footerRect()
-		if !strings.Contains(text, fmt.Sprintf("显示 %d 条", last-first+1)) {
-			t.Fatalf("%s: footer %q disagrees with rows %d..%d", stage, text, first, last)
-		}
-		for row := first; row <= last; row++ {
-			if row >= len(entries) {
-				t.Fatalf("%s: visible row %d exceeds %d entries", stage, row, len(entries))
-			}
-			rect, ok := tt.Find(historyRowLabel(entries[row]))
-			if !ok {
-				t.Fatalf("%s: row %d is not rendered", stage, row)
-			}
-			if rect.H < historyRowHeight860-0.01 || rect.H > historyRowHeight860+0.01 {
-				t.Fatalf("%s: row %d height = %.3f, want %d", stage, row, rect.H, historyRowHeight860)
-			}
-			if rect.Y+rect.H > footer.Y+0.01 {
-				t.Fatalf("%s: row %d bottom %.1f overlaps footer top %.1f",
-					stage, row, rect.Y+rect.H, footer.Y)
-			}
-		}
-		if last+1 < len(entries) {
-			if rect, ok := tt.Find(historyRowLabel(entries[last+1])); ok && rect.H > 0 {
-				t.Fatalf("%s: row %d is partially visible (height %.1f)",
-					stage, last+1, rect.H)
-			}
-		}
-	}
-
-	checkWholeRows("top")
-	tt.Scroll(400, 300, 0, 1000)
-	settle(t, m, q, tt)
-	checkWholeRows("bottom")
-}
-
-// TestHistoryNativeTableWholeRows checks the native 1440/1024/1020 table:
-// its panel leaves whole rows, so the footer never follows a clipped row.
-func TestHistoryNativeTableWholeRows(t *testing.T) {
-	for _, tc := range []struct {
-		width  int
-		height int
-	}{
-		{width: 1440, height: 900},
-		{width: 1024, height: 700},
-		{width: 1020, height: 700},
-	} {
-		t.Run(fmt.Sprintf("width-%d", tc.width), func(t *testing.T) {
-			svc := &fakeService{history: historyTableRecords(12)}
+// TestHistoryTableFitsWidths guards the two tiers' geometry: every header
+// and the row action stay inside the page at the default and minimum
+// window sizes, without horizontal scrolling.
+func TestHistoryTableFitsWidths(t *testing.T) {
+	for _, width := range []int{1180, 960} {
+		t.Run(fmt.Sprintf("%d", width), func(t *testing.T) {
+			svc := &fakeService{history: historyTableRecords(3)}
 			m, q := newTestModel(t, Config{Service: svc, DirectExportSaver: &fakeDirectExportSaver{}})
-			m.SetContentSize(tc.width, tc.height)
-			tt := ui.NewTester(m.View, tc.width, tc.height)
+			m.SetContentSize(width, 760)
+			tt := ui.NewTester(m.View, width, 760)
 			settle(t, m, q, tt)
 			openRecordsList(t, m, q, tt)
-			if historyUsesComposite(m.contentWidth) {
-				t.Fatalf("%d must use the native history table", tc.width)
-			}
-			entries := m.visibleHistory()
-			first, last := m.historyList.Visible()
-			if first < 0 || last < first || last >= len(entries) {
-				t.Fatalf("visible rows %d..%d of %d", first, last, len(entries))
-			}
-			var rowHeight float32
-			for row := first; row <= last; row++ {
-				rect, ok := tt.Find(historyRowLabel(entries[row]))
+
+			for _, title := range historyHeaderTitles(historyColumnsFor(width)) {
+				if title == "" {
+					continue
+				}
+				rect, ok := tt.Find(title)
 				if !ok {
-					t.Fatalf("row %d is not rendered", row)
+					t.Fatalf("%q is missing at %d", title, width)
 				}
-				if row == first {
-					rowHeight = rect.H
-				} else if math.Abs(float64(rect.H-rowHeight)) > 0.01 {
-					t.Fatalf("row %d height = %.2f, other rows are %.2f",
-						row, rect.H, rowHeight)
+				if rect.X < navRailWidth+12 || rect.X+rect.W > float32(width)-12 {
+					t.Errorf("%q at %+v is outside the %d page", title, rect, width)
 				}
 			}
-			if rowHeight < 40 {
-				t.Fatalf("the visible row height is %.2f, want the table's row height", rowHeight)
+			action, ok := tt.Find("⋯")
+			if !ok || action.X+action.W > float32(width)-12 {
+				t.Fatalf("the row action at %+v does not fit %d", action, width)
 			}
-			if last+1 < len(entries) {
-				if rect, ok := tt.Find(historyRowLabel(entries[last+1])); ok && rect.H > 0 {
-					t.Fatalf("row %d below the viewport is clipped into view: %+v", last+1, rect)
-				}
+			if width >= historyStandardMinWidth && tt.HasText("待处理 / 可导出") {
+				t.Fatal("the wide table still merges the counts")
+			}
+			if width < historyStandardMinWidth && tt.HasText("占用") {
+				t.Fatal("the compact table still shows the storage column")
 			}
 		})
 	}
 }
 
-// TestHistoryCompositeSnapsPreciseScrollToRowsAt860 checks a touchpad's
-// 26-DIP vertical move: the offset may not stop between two 52-DIP rows,
-// so the table shows whole rows instead of half of the first and last one.
-func TestHistoryCompositeSnapsPreciseScrollToRowsAt860(t *testing.T) {
-	svc := &fakeService{history: historyTableRecords(12)}
-	m, q := newTestModel(t, Config{Service: svc, DirectExportSaver: &fakeDirectExportSaver{}})
-	m.SetContentSize(860, 560)
-	tt := ui.NewTester(m.View, 860, 560)
-	settle(t, m, q, tt)
-	openRecordsList(t, m, q, tt)
-	entries := m.visibleHistory()
-	header, _ := tt.Find("时间")
-	action, _ := tt.Find("操作")
-
-	footerTop := func() float32 {
-		for _, text := range tt.Texts() {
-			if strings.HasPrefix(text, "共 ") {
-				if rect, ok := tt.Find(text); ok {
-					return rect.Y
-				}
-			}
-		}
-		t.Fatalf("the table footer is missing: %q", tt.Texts())
-		return 0
+// TestHistoryPerRowExportUsesThatRecord checks that a row's 导出… opens
+// that record first and exports its snapshot, not the previously open one.
+func TestHistoryPerRowExportUsesThatRecord(t *testing.T) {
+	svc := &fakeService{
+		history: historyTableRecords(2),
+		loads: map[string]*record.Recovery{
+			"r01": recovery(uiStructuredItem(t, 1, record.QualityAutoAccepted)),
+			"r02": recovery(
+				uiStructuredItem(t, 1, record.QualityAutoAccepted),
+				uiStructuredItem(t, 2, record.QualityAutoAccepted),
+			),
+		},
 	}
-	rest := func() {
-		tt.Advance(historySnapDelay + 40*time.Millisecond)
-		tt.Frame()
-	}
-	check := func(stage string, wantOffset, wantFirst int) {
-		t.Helper()
-		if got := m.historyScroll.Y; got != float32(wantOffset) {
-			t.Fatalf("%s: scroll offset = %v, want the %d-DIP row boundary",
-				stage, got, wantOffset)
-		}
-		first, last := m.historyList.Visible()
-		if first != wantFirst || last-first+1 != 7 {
-			t.Fatalf("%s: visible rows = %d..%d, want %d..%d",
-				stage, first, last, wantFirst, wantFirst+6)
-		}
-		footer := footerTop()
-		headerAfter, _ := tt.Find("时间")
-		actionAfter, _ := tt.Find("操作")
-		if headerAfter.Y != header.Y || actionAfter.X != action.X {
-			t.Fatalf("%s: header/action moved: %+v -> %+v, %+v -> %+v",
-				stage, header, headerAfter, action, actionAfter)
-		}
-		if actionAfter.W < 1 {
-			t.Fatalf("%s: the fixed action column is clipped: %+v", stage, actionAfter)
-		}
-		for row := first; row <= last; row++ {
-			rect, ok := tt.Find(historyRowLabel(entries[row]))
-			if !ok {
-				t.Fatalf("%s: row %d is not rendered", stage, row)
-			}
-			if rect.H < historyRowHeight860-0.01 || rect.H > historyRowHeight860+0.01 {
-				t.Fatalf("%s: row %d height = %.3f, want %d", stage, row, rect.H, historyRowHeight860)
-			}
-			if rect.Y+rect.H > footer+0.01 {
-				t.Fatalf("%s: row %d overlaps the footer", stage, row)
-			}
-		}
-	}
-
-	// A precise 26-DIP move leaves the tracked offset at 26 until the
-	// motion stops; the rest snap then aligns it with the next row.
-	tt.Scroll(400, 300, 0, 26)
-	tt.Frame()
-	if got := m.historyScroll.Y; got != 26 {
-		t.Fatalf("the move was snapped mid-input: offset %v", got)
-	}
-	rest()
-	check("after 26 DIP", historyRowHeight860, 1)
-
-	// Repeated moves keep snapping forward one whole row instead of
-	// accumulating half rows.
-	tt.Scroll(400, 300, 0, 26)
-	rest()
-	check("after another 26 DIP", 2*historyRowHeight860, 2)
-
-	// A single small move below half a row stays where it is, so the next
-	// one accumulates instead of being rounded away.
-	tt.Scroll(400, 300, 0, 20)
-	tt.Frame()
-	if got := m.historyScroll.Y; got != 2*historyRowHeight860+20 {
-		t.Fatalf("a small move did not accumulate: offset %v", got)
-	}
-	tt.Scroll(400, 300, 0, 20)
-	tt.Frame()
-	rest()
-	check("after two small moves", 3*historyRowHeight860, 3)
-
-	// Stopping between rows snaps to the nearest one once the debounce
-	// elapses, so a short final move cannot leave half a row showing.
-	tt.Scroll(400, 300, 0, 10)
-	tt.Frame()
-	if got := m.historyScroll.Y; got != 3*historyRowHeight860+10 {
-		t.Fatalf("the short move did not stay for the rest snap: offset %v", got)
-	}
-	rest()
-	check("after the rest snap", 3*historyRowHeight860, 3)
-}
-
-// TestHistorySnapStepRearmsAfterRepaint checks the rest debounce asks for
-// the time left after a repaint between a precise scroll and the deadline.
-// MyGo keeps only the timer the last frame armed: a frame that does not ask
-// again stops the pending After, which left the native 860 table on a half
-// row after the wheel had stopped.
-func TestHistorySnapStepRearmsAfterRepaint(t *testing.T) {
-	m := &Model{}
-	m.historyScroll.Y = 26
-	now := time.Date(2026, 10, 23, 12, 0, 0, 0, time.Local)
-
-	wait, snap := m.historyScrollSnapStep(now)
-	if snap || wait != historySnapDelay {
-		t.Fatalf("the first move: wait %v snap %v, want %v and no snap",
-			wait, snap, historySnapDelay)
-	}
-	// The native window built another frame before the deadline. That frame
-	// must ask for the time left, or MyGo stops the only pending timer and
-	// the half row stays.
-	wait, snap = m.historyScrollSnapStep(now.Add(20 * time.Millisecond))
-	if snap {
-		t.Fatal("a repaint snapped the move mid-input")
-	}
-	if want := historySnapDelay - 20*time.Millisecond; wait != want {
-		t.Fatalf("the repaint asks for %v, want the remaining %v", wait, want)
-	}
-
-	wait, snap = m.historyScrollSnapStep(now.Add(historySnapDelay))
-	if !snap || wait != 0 {
-		t.Fatalf("at the deadline: wait %v snap %v, want the snap", wait, snap)
-	}
-	if got := historyRowOffset(m.historyScroll.Y); got != historyRowHeight860 {
-		t.Fatalf("the snapped offset is %v, want %d", got, historyRowHeight860)
-	}
-}
-
-// TestHistoryCompositeSnapSurvivesRepaintAt860 checks the same rest snap in
-// the rendered 860 table: a repaint before the deadline must not leave the
-// first and last rows cut in half.
-func TestHistoryCompositeSnapSurvivesRepaintAt860(t *testing.T) {
-	svc := &fakeService{history: historyTableRecords(12)}
-	m, q := newTestModel(t, Config{Service: svc, DirectExportSaver: &fakeDirectExportSaver{}})
-	m.SetContentSize(860, 560)
-	tt := ui.NewTester(m.View, 860, 560)
+	saver := &fakeDirectExportSaver{}
+	m, q := newTestModel(t, Config{Service: svc, DirectExportSaver: saver, AppVersion: "test"})
+	tt := ui.NewTester(m.View, 1180, 760)
 	settle(t, m, q, tt)
 	openRecordsList(t, m, q, tt)
 
-	tt.Scroll(400, 300, 0, 26)
+	m.openHistoryMenu("r02")
 	tt.Frame()
-	if got := m.historyScroll.Y; got != 26 {
-		t.Fatalf("the move was snapped mid-input: offset %v", got)
+	if err := tt.Click("导出…"); err != nil {
+		t.Fatal(err)
 	}
-
-	// A repaint before the 120-ms deadline must re-arm the wait, not drop it.
-	tt.Advance(20 * time.Millisecond)
-	tt.Frame()
-	if got := m.historyScroll.Y; got != 26 {
-		t.Fatalf("the repaint moved the offset before the deadline: %v", got)
+	settle(t, m, q, tt)
+	if m.rec == nil || m.rec.ID != "r02" || !m.exportDialog.open {
+		t.Fatalf("导出… = record %+v dialog=%t, want r02's dialog", m.rec, m.exportDialog.open)
 	}
-	tt.Advance(historySnapDelay + 40*time.Millisecond)
-	tt.Frame()
-
-	if got := m.historyScroll.Y; got != historyRowHeight860 {
-		t.Fatalf("after the repaint the rest snap left offset %v, want %d",
-			got, historyRowHeight860)
+	if err := tt.Click("导出 JSON"); err != nil {
+		t.Fatal(err)
 	}
-	first, last := m.historyList.Visible()
-	if first != 1 || last-first+1 != 7 {
-		t.Fatalf("visible rows = %d..%d, want 1..7 whole rows", first, last)
+	settle(t, m, q, tt)
+	calls := saver.snapshot()
+	if len(calls) != 1 || calls[0].format != app.ExportJSON {
+		t.Fatalf("export calls = %+v, want one JSON export", calls)
 	}
-}
-
-// TestHistoryCompositeWheelKeepsFullTravelAt860 checks a mouse wheel's
-// animating scroll: the composite may only snap after the glide stops, so
-// a 120-DIP wheel moves at least two whole rows instead of being cut to
-// the first row by a mid-animation offset write. The header and the fixed
-// action column stay in place.
-func TestHistoryCompositeWheelKeepsFullTravelAt860(t *testing.T) {
-	for _, delta := range []float32{120, 600} {
-		t.Run(fmt.Sprintf("delta%d", int(delta)), func(t *testing.T) {
-			svc := &fakeService{history: historyTableRecords(40)}
-			m, q := newTestModel(t, Config{Service: svc})
-			m.SetContentSize(860, 560)
-			tt := ui.NewTester(m.View, 860, 560)
-			settle(t, m, q, tt)
-			openRecordsList(t, m, q, tt)
-			header, _ := tt.Find("时间")
-			action, _ := tt.Find("操作")
-			if m.historyScroll.Y != 0 {
-				t.Fatalf("the table does not start at the top: Y=%v", m.historyScroll.Y)
-			}
-
-			tt.Wheel(450, 300, 0, delta)
-			tt.Advance(time.Second)
-			settle(t, m, q, tt)
-
-			got := m.historyScroll.Y
-			if math.Abs(float64(got-delta)) > historyRowHeight860/2 {
-				t.Fatalf("wheel travel truncated beyond nearest-row quantization: requested=%v actual=%v",
-					delta, got)
-			}
-			if math.Mod(float64(got), historyRowHeight860) != 0 {
-				t.Fatalf("the wheel stopped between rows: Y=%v", got)
-			}
-			if first, _ := m.historyList.Visible(); first != int(math.Round(float64(got/historyRowHeight860))) {
-				t.Fatalf("the list is not at the snapped row: Y=%v first=%d", got, first)
-			}
-			headerAfter, _ := tt.Find("时间")
-			actionAfter, _ := tt.Find("操作")
-			if headerAfter.Y != header.Y || actionAfter.X != action.X {
-				t.Fatalf("the header/action column moved: %+v -> %+v, %+v -> %+v",
-					header, headerAfter, action, actionAfter)
-			}
-		})
+	if m.exportOutcome == nil || m.exportOutcome.err != nil ||
+		m.exportOutcome.recordID != "r02" || m.exportOutcome.included != 2 {
+		t.Fatalf("export outcome = %+v", m.exportOutcome)
+	}
+	if !tt.HasText("已导出 2 件") {
+		t.Fatalf("the dialog success is missing: %q", tt.Texts())
 	}
 }

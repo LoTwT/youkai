@@ -67,7 +67,7 @@ func (m *Model) resultStatusText(row *Row) string {
 }
 
 // visibleResultRows maps the rendered table to the record's rows, narrowed
-// by the slot's segment, search text and set/slot choices.
+// by the open record's segment, search text and set/slot choices.
 func (m *Model) visibleResultRows() []int {
 	if m.rec == nil {
 		return nil
@@ -81,7 +81,7 @@ func (m *Model) visibleResultRows() []int {
 	return rows
 }
 
-// resultRowMatches reports whether one row is in the slot's current
+// resultRowMatches reports whether one row is in the open record's current
 // segment and matches its search text and set/slot choices.
 func (m *Model) resultRowMatches(row *Row) bool {
 	switch m.filter {
@@ -260,7 +260,7 @@ func (m *Model) clampResultScroll() {
 }
 
 // afterResultFilterChange settles a search or set/slot choice the widgets
-// wrote directly into the slot state.
+// wrote directly into the workspace state.
 func (m *Model) afterResultFilterChange() {
 	m.settleResultSelection()
 }
@@ -362,7 +362,8 @@ func parseDecimal(text string) int {
 
 // resultsFilterBar is the results page's toolbar: the segments in their
 // confirmed order, the search field and the set/slot choices. All values
-// live in the active slot, so leaving and returning restores them.
+// live in the open record's workspace, so leaving and returning restores
+// them.
 func (m *Model) resultsFilterBar(c *ui.Context, t *ui.Theme) {
 	changed := false
 	ui.Row(c).Gap(t.Space(1)).AlignItems(ui.Center).Children(func() {
@@ -451,6 +452,9 @@ func resultFilterLabel(value, allLabel string, options []resultFilterOption) str
 // are registered and usable in the current layout; every label comes from
 // shortcut_text.go.
 func (m *Model) registerResultsShortcuts(c *ui.Context) {
+	if m.exportDialog.open {
+		return
+	}
 	if m.reviewSaving || m.loading || m.recErr != "" || m.exportBusy() {
 		return
 	}
@@ -545,7 +549,7 @@ func (m *Model) openResultDetail() {
 	if m.selected < 0 || m.selected >= len(m.rec.Rows) {
 		return
 	}
-	m.captureActiveResult()
+	m.captureResultPlace()
 	m.resultsDetail = true
 }
 

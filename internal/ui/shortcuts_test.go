@@ -91,7 +91,7 @@ func TestScanStartShortcutRequiresAPreparableScan(t *testing.T) {
 		m.SetContentSize(1024, 700)
 		tt := ui.NewTester(m.View, 1024, 700)
 		settle(t, m, q, tt)
-		m.histChoice = slotHistoryLabel(t, m, "rec")
+		m.histChoice = historyLabel(t, m, "rec")
 		m.OpenHistory()
 		settle(t, m, q, tt)
 		showRecordItems(m)
@@ -449,7 +449,7 @@ func TestEscapeCancelsTheUnsavedPrompt(t *testing.T) {
 	m.edit.draft.Level = "13"
 	tt.Frame()
 
-	m.OpenHistory()
+	m.openRecord("r2")
 	settle(t, m, q, tt)
 	showRecordItems(m)
 	tt.Frame()
@@ -472,23 +472,25 @@ func TestEscapeCancelsTheUnsavedPrompt(t *testing.T) {
 func TestEscapeReturnsTheFocusToTheTable(t *testing.T) {
 	t.Run("history", func(t *testing.T) {
 		svc := &fakeService{history: historyTableRecords(3)}
-		m, q := newTestModel(t, Config{
-			Service: svc, DirectExportSaver: &fakeDirectExportSaver{},
-			OpenDataDirectory: func() error { return nil },
-		})
-		m.SetContentSize(1020, 700)
-		tt := ui.NewTester(m.View, 1020, 700)
+		m, q := newTestModel(t, Config{Service: svc, DirectExportSaver: &fakeDirectExportSaver{}})
+		m.SetContentSize(1180, 760)
+		tt := ui.NewTester(m.View, 1180, 760)
 		settle(t, m, q, tt)
 		openRecordsList(t, m, q, tt)
 
-		if err := tt.Click("打开数据目录"); err != nil {
-			t.Fatal(err)
-		}
+		// The first Escape closes the row menu and returns the focus to the
+		// menu trigger; the next one gives the table the keyboard again.
+		m.openHistoryMenu("r01")
 		tt.Frame()
 		tt.Key(0, ui.KeyEscape)
 		tt.Frame()
+		if m.historyMenuOpen {
+			t.Fatal("Escape did not close the row menu")
+		}
+		tt.Key(0, ui.KeyEscape)
 		tt.Frame()
-		if !tt.Focused("10-21 14:02") {
+		tt.Frame()
+		if !tt.Focused(historyTimeText(m.history[0])) {
 			t.Fatalf("Escape did not give the history table the focus: %q", tt.Texts())
 		}
 	})
@@ -512,42 +514,35 @@ func TestEscapeReturnsTheFocusToTheTable(t *testing.T) {
 // pulled away to the table. MyGo's text inputs leave the key unhandled, so
 // the shell has to keep its hands off while one holds the keyboard.
 func TestEscapeStaysInATextField(t *testing.T) {
-	svc := &fakeService{history: historyTableRecords(3)}
-	m, q := newTestModel(t, Config{Service: svc, DirectExportSaver: &fakeDirectExportSaver{}})
-	m.SetContentSize(1020, 700)
-	tt := ui.NewTester(m.View, 1020, 700)
-	settle(t, m, q, tt)
-	openRecordsList(t, m, q, tt)
+	m, _, tt := openResponsiveResults(t, responsiveResultRecord(t), 1024, 700)
 
-	// Tab until the date input takes what is typed. Typing is the probe:
+	// Tab until the search field takes what is typed. Typing is the probe:
 	// every other focus stop on this page ignores text.
 	focused := false
-	for i := 0; i < 20; i++ {
+	for i := 0; i < 30; i++ {
 		tt.Key(0, ui.KeyTab)
 		tt.Frame()
 		tt.Type("2")
 		tt.Frame()
-		if m.historyFilter == "2" {
+		if m.search == "2" {
 			focused = true
 			break
 		}
+		m.search = ""
 	}
 	if !focused {
-		t.Fatal("Tab never reached the history date input")
+		t.Fatal("Tab never reached the results search field")
 	}
-	m.historyFilter = ""
+	m.search = ""
 	tt.Frame()
 
 	tt.Key(0, ui.KeyEscape)
 	tt.Frame()
 	tt.Frame()
-	if tt.Focused("10-21 14:02") {
-		t.Fatal("Escape pulled the focus out of the text field")
-	}
 	tt.Type("3")
 	tt.Frame()
-	if m.historyFilter != "3" {
-		t.Fatalf("Escape moved the keyboard out of the input: filter %q", m.historyFilter)
+	if m.search != "3" {
+		t.Fatalf("Escape moved the keyboard out of the input: search %q", m.search)
 	}
 }
 
@@ -703,8 +698,8 @@ func TestStatusBarNamesOnlyUsableShortcuts(t *testing.T) {
 	tt3 := ui.NewTester(m3.View, 1020, 700)
 	settle(t, m3, q3, tt3)
 	openRecordsList(t, m3, q3, tt3)
-	if got := m3.statusShortcutText(); got != shortcutOpenRecord+" 打开记录" {
-		t.Fatalf("the history status = %q", got)
+	if got := m3.statusShortcutText(); got != "" {
+		t.Fatalf("the history status names shortcut keys: %q", got)
 	}
 	openSettings(t, m3, q3, tt3)
 	if got := m3.statusShortcutText(); got != "" {

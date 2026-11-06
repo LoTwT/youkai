@@ -82,11 +82,11 @@ type navKind int
 
 const (
 	navSelect navKind = iota
-	navOpenHistory
-	navShowLive
+	navOpenRecord
 	navPage
 	navExit
 	navStartScan
+	navExport
 )
 
 // navigationRequest is a navigation deferred until unsaved input is saved
@@ -97,9 +97,10 @@ type navigationRequest struct {
 	recordID string
 	// page is the destination of a navPage request.
 	page Page
-	// reload forces an explicit history reopen to reload its record instead
-	// of restoring the slot's stored view after a dirty prompt settled.
-	reload bool
+	// exportAfterLoad opens the export dialog once a navOpenRecord request
+	// has loaded its record: the records list's 导出… means "open this
+	// record, then export it", not "export whatever is on screen".
+	exportAfterLoad bool
 }
 
 // cloneDraft copies a draft including its substat slice.
@@ -491,6 +492,12 @@ func (m *Model) requestNavigation(req navigationRequest) {
 // runNavigation performs a navigation whose editor, if any, is settled.
 func (m *Model) runNavigation(req navigationRequest) {
 	m.navPrompt = nil
+	if req.kind != navOpenRecord {
+		// A row export waits for only the record it asked for. Leaving the
+		// workspace (or opening the title bar's dialog) must not let that
+		// load pop the dialog over another page.
+		m.exportAfterLoadID = ""
+	}
 	switch req.kind {
 	case navSelect:
 		if m.rec == nil {
@@ -501,23 +508,23 @@ func (m *Model) runNavigation(req navigationRequest) {
 			m.reviewErr = ""
 			m.reviewNotice = ""
 		}
-	case navOpenHistory:
+	case navOpenRecord:
 		m.page = pageResults
-		m.performOpenHistory(req.recordID, req.reload)
-	case navShowLive:
-		m.performShowLive()
+		m.performOpenRecord(req.recordID, req.exportAfterLoad)
 	case navPage:
 		if m.displayPage() == pageResults {
 			// Leaving the results page stores the list's actual place, not
 			// just the last captured one: the user may have scrolled the
 			// ListState without any explicit capture.
-			m.captureActiveResult()
+			m.captureResultPlace()
 		}
 		m.page = req.page
 	case navExit:
 		m.beginExit()
 	case navStartScan:
 		m.Start()
+	case navExport:
+		m.openExportDialog()
 	}
 }
 
@@ -696,10 +703,7 @@ func (m *Model) submitReview(recordID string, seq, expectedRevision int64, data 
 			// save's applied revision is the newest view. No current load
 			// remains, so the loading guard must not outlive it.
 			m.recLoad++
-			active := m.activeResultSlot()
-			active.state.recLoad = m.recLoad
 			m.loading = false
-			active.state.loading = false
 			if m.edit != nil && m.edit.recordID == recordID && m.edit.seq == seq {
 				m.edit = nil
 			}

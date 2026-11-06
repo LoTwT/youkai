@@ -21,16 +21,12 @@ import (
 const (
 	// targetNotFoundText: no window of the game is running.
 	targetNotFoundText = "未找到《绝区零》窗口。请启动游戏并保持窗口可见，然后点“重新检查”。"
-	// targetElevatedText is the D-1 copy: the game-class window exists but
-	// its process cannot be opened, the shape of an elevated game and a
-	// non-elevated youkai.
-	targetElevatedText = "游戏正在以管理员身份运行，youkai 需要同样的权限才能操作游戏。请右键 youkai，选择“以管理员身份运行”后重新打开。youkai 只向游戏发送鼠标操作，不加载驱动、不注入、不读取游戏内存。"
 	// targetUnreadableText: the game window exists and youkai is already
 	// elevated (or its own level is unknown), so a denied process query is
 	// not an elevation mismatch. The raw failure is in the diagnostic log.
-	targetUnreadableText = "无法读取游戏进程信息，请稍后重试；若持续出现，请把诊断日志提供给开发者。"
+	targetUnreadableText = "无法读取游戏进程信息，请复制诊断信息反馈；详细信息已写入诊断日志。"
 	// targetDiscoveryFailedText: enumeration itself failed.
-	targetDiscoveryFailedText = "查找游戏窗口失败，请稍后重试；详细信息已写入诊断日志。"
+	targetDiscoveryFailedText = "查找游戏窗口失败，请复制诊断信息反馈；详细信息已写入诊断日志。"
 	// targetGoneText: the confirmed window vanished between confirmation
 	// and start.
 	targetGoneText = "确认的游戏窗口已关闭或被替换，请点“重新检查”后重新选择。"
@@ -38,6 +34,13 @@ const (
 	// refusal in the installed UI.
 	targetStartFailedText = "开始扫描失败，请稍后重试；详细信息已写入诊断日志。"
 )
+
+// targetElevatedText is the PR-09 unified integrity-mismatch copy (cause and
+// action) for the discovery-time elevation hint. It stays in the fault
+// mapping so the prepare area and the session failure never drift apart.
+func targetElevatedText() string {
+	return failureText("integrityMismatch", nil)
+}
 
 // refreshTargets begins a discovery pass. Results land through update; a
 // serial discards a pass that a later refresh superseded. The service logs

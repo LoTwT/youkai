@@ -641,14 +641,15 @@ func TestViewHistoryReopen(t *testing.T) {
 	tt := ui.NewTester(m.View, 1020, 700)
 	settle(t, m, q, tt)
 	openRecordsList(t, m, q, tt)
-	if !tt.HasText("2026-10-17 09:00 · new") {
+	if !tt.HasText(historyTimeText(m.history[0])) {
 		t.Fatalf("the history entries do not show: %q", tt.Texts())
 	}
 
 	// Open the default entry, then the older one through the picker.
-	if err := tt.Click("打开 2026-10-17 09:00 · new"); err != nil {
+	if err := tt.Click(historyTimeText(m.history[0])); err != nil {
 		t.Fatal(err)
 	}
+	tt.Key(0, ui.KeyEnter)
 	settle(t, m, q, tt)
 	showRecordItems(m)
 	tt.Frame()
@@ -873,7 +874,7 @@ func excludedReviewItem(t *testing.T, seq int64) record.ItemRecord {
 
 // TestFailedSessionExplainsTermination checks that a zero-item failure is
 // not summarized only as item-level "失败 0 件": the results page states
-// the session's termination code and phase, and the empty state says no
+// the session's termination cause and phase, and the empty state says no
 // item was saved.
 func TestFailedSessionExplainsTermination(t *testing.T) {
 	rec := recovery()
@@ -883,7 +884,7 @@ func TestFailedSessionExplainsTermination(t *testing.T) {
 	rec.Checkpoint.Session.Coverage = record.Coverage{Status: record.CoveragePartial}
 	m, _, tt := openResponsiveResults(t, rec, 1024, 700)
 
-	if !tt.HasText("扫描失败：navigationMismatch（采集阶段），未保留任何条目") {
+	if !tt.HasText("扫描失败：点击或拖拽后页面没有按预期变化。请重新开始扫描；反复出现时复制诊断信息。（采集阶段），未保留任何条目") {
 		t.Fatalf("the failed session does not name its termination: %q", tt.Texts())
 	}
 	if !tt.HasText("无可导出条目") {
@@ -943,8 +944,14 @@ func TestCompletionCardShowsCountsExclusionsAndExports(t *testing.T) {
 		t.Fatalf("the completion state keeps a review shortcut: %q", tt.Texts())
 	}
 
-	if err := tt.Click("导出 JSON"); err != nil {
+	if err := tt.Click("导出…"); err != nil {
 		t.Fatalf("click the completion card's export: %v", err)
+	}
+	if !m.exportDialog.open {
+		t.Fatalf("the completion card did not open the export dialog: %q", tt.Texts())
+	}
+	if err := tt.Click("导出 JSON"); err != nil {
+		t.Fatalf("click 导出 JSON: %v", err)
 	}
 	drainAll(t, m, q)
 	if calls := saver.snapshot(); len(calls) != 1 || calls[0].format != app.ExportJSON {
@@ -952,11 +959,12 @@ func TestCompletionCardShowsCountsExclusionsAndExports(t *testing.T) {
 	}
 }
 
-// TestCompletionCardBlocksZeroExportable checks that a record with no
-// usable item states "无可导出" and disables both export actions.
-func TestCompletionCardBlocksZeroExportable(t *testing.T) {
+// TestCompletionCardZeroExportableOpensTheEmptyDialog checks that a
+// record with no usable item states "无可导出" and still offers the empty
+// export through the dialog (F-22), starting on 去校对.
+func TestCompletionCardZeroExportableOpensTheEmptyDialog(t *testing.T) {
 	rec := recovery(item(1, record.StatusFailed, "", "识别超时"))
-	m, q, tt := openResponsiveResults(t, rec, 1024, 700)
+	m, _, tt := openResponsiveResults(t, rec, 1024, 700)
 	saver := &fakeDirectExportSaver{}
 	m.cfg.DirectExportSaver = saver
 	tt.Frame()
@@ -967,18 +975,21 @@ func TestCompletionCardBlocksZeroExportable(t *testing.T) {
 	if !tt.HasText("无可导出条目") || !tt.HasText("不可确认：无可导出的条目。") {
 		t.Fatalf("the zero-exportable state is not explained: %q", tt.Texts())
 	}
-	if !tt.HasText("没有可导出的条目，不能导出。") {
-		t.Fatalf("the disabled export reason is missing: %q", tt.Texts())
-	}
 	if tt.HasText("校对完成") {
 		t.Fatal("a zero-exportable record claims completion")
 	}
-	if err := tt.Click("导出 JSON"); err != nil {
+	if err := tt.Click("导出…"); err != nil {
 		t.Fatal(err)
 	}
-	drainAll(t, m, q)
+	tt.Frame()
+	if !m.exportDialog.open || !tt.HasText("没有可导出的件：还有 1 件待处理") {
+		t.Fatalf("the zero-exportable dialog did not open: %q", tt.Texts())
+	}
+	if !tt.Focused("去校对") {
+		t.Fatalf("the zero-exportable dialog did not start on 去校对: %q", tt.Texts())
+	}
 	if calls := saver.snapshot(); len(calls) != 0 {
-		t.Fatalf("a disabled completion export wrote %+v", calls)
+		t.Fatalf("opening the empty dialog wrote %+v", calls)
 	}
 }
 
@@ -1004,6 +1015,13 @@ func TestCompletionCardBlocksUnknownExport(t *testing.T) {
 	}
 	if tt.HasText("校对完成") {
 		t.Fatal("an unknown export claims completion")
+	}
+	if err := tt.Click("导出…"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if !m.exportDialog.open || !tt.HasText("导出清单尚未就绪，不能导出。") {
+		t.Fatalf("the unknown export dialog did not name its block: %q", tt.Texts())
 	}
 	if err := tt.Click("导出 CSV"); err != nil {
 		t.Fatal(err)
@@ -1033,22 +1051,23 @@ func TestCompletionCardShowsPartialCoverage(t *testing.T) {
 }
 
 // TestCompletionCardNamesIncompletePositions checks that a degraded
-// position's stage, cause code and reason reach the results page beside the
-// partial coverage conclusion.
+// position's stage and localized cause reach the results page beside the
+// partial coverage conclusion without leaking the diagnostic code.
 func TestCompletionCardNamesIncompletePositions(t *testing.T) {
 	rec := recovery(confirmedReviewItem(t, 1, 12))
 	rec.Checkpoint.Session.Coverage = record.Coverage{Status: record.CoveragePartial}
 	rec.Checkpoint.Session.ObservedScope = []byte(`{"kind":"zzzInventory","sort":"verified","coverage":"partial","positions":[{"position":1,"complete":true,"topVerified":true,"bottomVerified":true},{"position":2,"complete":false,"stage":"filter","reasonCode":"navigationMismatch","reason":"the filter panel never closed"}]}`)
 	_, _, tt := openResponsiveResults(t, rec, 1024, 700)
-	if !tt.HasText("不完整位置：位置 2 筛选准备失败") ||
-		!tt.HasText("navigationMismatch") ||
-		!tt.HasText("the filter panel never closed") {
+	if !tt.HasText("不完整号位：2 号位 筛选准备失败：点击或拖拽后页面没有按预期变化") {
 		t.Fatalf("the degraded position is not explained: %q", tt.Texts())
+	}
+	if tt.HasText("navigationMismatch") || tt.HasText("the filter panel never closed") {
+		t.Fatalf("the degraded position leaks English diagnostics: %q", tt.Texts())
 	}
 }
 
 // TestSessionTerminationNoticeNamesIncompletePositions checks the failed
-// session surface: the termination code and the degraded positions appear
+// session surface: the termination cause and the degraded positions appear
 // together, because a limit stop is diagnosed by both.
 func TestSessionTerminationNoticeNamesIncompletePositions(t *testing.T) {
 	rec := recovery(confirmedReviewItem(t, 1, 12))
@@ -1058,7 +1077,7 @@ func TestSessionTerminationNoticeNamesIncompletePositions(t *testing.T) {
 	}
 	rec.Checkpoint.Session.ObservedScope = []byte(`{"positions":[{"position":1,"complete":false,"stage":"filter","reasonCode":"navigationMismatch","reason":"three preparations failed"}]}`)
 	_, _, tt := openResponsiveResults(t, rec, 1024, 700)
-	if !tt.HasText("扫描失败：positionFailureLimit") || !tt.HasText("不完整位置：位置 1 筛选准备失败") {
+	if !tt.HasText("扫描失败：多个号位没有完成") || !tt.HasText("不完整号位：1 号位 筛选准备失败：点击或拖拽后页面没有按预期变化") {
 		t.Fatalf("the failed-session surface omits the degraded positions: %q", tt.Texts())
 	}
 }
@@ -1112,7 +1131,7 @@ func TestCompletionRequiresEndedAndSavedSession(t *testing.T) {
 	if m.rec == nil || m.recData == nil || !m.rec.Live {
 		t.Fatalf("the live record did not load: rec %+v", m.rec)
 	}
-	if m.completionVisible() || tt.HasText("校对完成") {
+	if m.completionVisible() || tt.HasText("扫全了") {
 		t.Fatal("a running, unsaved session claims completion")
 	}
 
@@ -1124,8 +1143,8 @@ func TestCompletionRequiresEndedAndSavedSession(t *testing.T) {
 
 	applyAndSettle(t, m, q, tt, snap("s1", 3, false, scan.PhaseEnded,
 		scan.Counts{Captured: 1, Produced: 1}, 1, false, ""))
-	if !m.completionVisible() || !tt.HasText("校对完成") {
-		t.Fatalf("the ended, saved session did not reach completion: %q", tt.Texts())
+	if !m.completionVisible() || !tt.HasText("扫描结束，无法确认是否扫全") {
+		t.Fatalf("the ended, saved session did not reach its summary: %q", tt.Texts())
 	}
 }
 
@@ -1162,12 +1181,12 @@ func TestCompletionUsesHistoryRecordCounts(t *testing.T) {
 			m.pendingCount(), m.completionVisible())
 	}
 
-	m.histChoice = slotHistoryLabel(t, m, "old")
+	m.histChoice = historyLabel(t, m, "old")
 	m.OpenHistory()
 	settle(t, m, q, tt)
 	showRecordItems(m)
 	tt.Frame()
-	if m.activeSlot != resultSlotHistory || !m.completionVisible() {
+	if m.rec == nil || m.rec.Live || !m.completionVisible() {
 		t.Fatalf("the finished history snapshot does not show completion: %q", tt.Texts())
 	}
 	if !tt.HasText("可导出 1 件 · 共采集 2 件") {
@@ -1175,9 +1194,6 @@ func TestCompletionUsesHistoryRecordCounts(t *testing.T) {
 	}
 	if counts := m.recordCounts(); counts.Exportable != 1 || counts.Captured != 2 || !counts.ExportKnown {
 		t.Fatalf("the history completion counts = %+v", counts)
-	}
-	if m.sessionSlot.state.exportData == nil || m.sessionSlot.state.exportData.Summary.Included != 0 {
-		t.Fatalf("opening history changed the session export snapshot: %+v", m.sessionSlot.state.exportData)
 	}
 }
 

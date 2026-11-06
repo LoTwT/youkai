@@ -214,13 +214,13 @@ func TestViewElevatedGameSuggestsAdmin(t *testing.T) {
 	tt := ui.NewTester(m.View, 1020, 700)
 	settle(t, m, q, tt)
 
-	if !tt.HasText(targetElevatedText) {
+	if !tt.HasText(targetElevatedText()) {
 		t.Fatalf("the elevated-game hint does not show: %q", tt.Texts())
 	}
 	if tt.HasText(targetNotFoundText) {
 		t.Fatalf("an unreadable elevated window was reported as not found: %q", tt.Texts())
 	}
-	if !tt.HasText("游戏正在以管理员身份运行，请以管理员身份重新打开 youkai。") {
+	if !tt.HasText(faultCauseText("integrityMismatch", nil)) {
 		t.Fatalf("the start's refusal reason does not show: %q", tt.Texts())
 	}
 	if err := tt.Click("开始扫描"); err != nil {
@@ -244,7 +244,7 @@ func TestViewUnreadableGameShowsGenericCopy(t *testing.T) {
 	if !tt.HasText(targetUnreadableText) {
 		t.Fatalf("the unreadable-game copy does not show: %q", tt.Texts())
 	}
-	if tt.HasText(targetElevatedText) {
+	if tt.HasText(targetElevatedText()) {
 		t.Fatalf("an elevated youkai was told to run as administrator: %q", tt.Texts())
 	}
 	if tt.HasText(targetNotFoundText) {
@@ -271,7 +271,7 @@ func TestViewReadableCandidateWinsOverAccessDenied(t *testing.T) {
 	if !tt.HasText(targetLabel(cand)) {
 		t.Fatalf("the readable candidate is not listed: %q", tt.Texts())
 	}
-	if tt.HasText(targetElevatedText) {
+	if tt.HasText(targetElevatedText()) {
 		t.Fatalf("the elevated hint replaced a usable candidate list: %q", tt.Texts())
 	}
 }

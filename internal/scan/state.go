@@ -303,12 +303,15 @@ func (s *Session) notifyLocked() {
 // snapshotLocked copies the authoritative state of the session.
 func (s *Session) snapshotLocked() Snapshot {
 	snap := Snapshot{
-		SessionID:      s.id,
-		Revision:       s.revision,
-		Phase:          s.phase,
-		End:            s.end,
-		InputPermitted: s.permit,
-		Counts:         s.counts,
+		SessionID:       s.id,
+		Revision:        s.revision,
+		Phase:           s.phase,
+		End:             s.end,
+		InputPermitted:  s.permit,
+		InputOpened:     s.permitOpened,
+		PrepareDeadline: s.prepareDeadline,
+		Activation:      s.activation,
+		Counts:          s.counts,
 	}
 	if s.firstTrigger != nil {
 		t := *s.firstTrigger

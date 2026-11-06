@@ -122,7 +122,7 @@ go build -o winprobe.exe ./tools/winprobe
 
 | 占用域 | 锁文件位置 | 说明 |
 | --- | --- | --- |
-| 数据根占用 | 数据根内的 `youkai.lock`（正式版 `%LOCALAPPDATA%\Youkai\`、开发版对应 `Youkai Dev` 根；macOS 为 `~/Library/Application Support/<应用名>/`） | 入口在 `mygo.App.Run` 之前取得、进程退出释放；同一实际目录的路径别名（符号链接、`..`、大小写变体）天然落入同一占用域。第二实例取得失败即记录日志退出。 |
+| 数据根占用 | 数据根内的 `youkai.lock`（正式版 `%LOCALAPPDATA%\Youkai\`、开发版对应 `Youkai Dev` 根；macOS 为 `~/Library/Application Support/<应用名>/`） | 入口在 `mygo.App.Run` 之前取得、进程退出释放；同一实际目录的路径别名（符号链接、`..`、大小写变体）天然落入同一占用域。取得失败即按原因显示提示并退出：Windows 用原生消息框，macOS 开发平台只写日志；两种原因（被另一进程占用 / 数据根的其他错误）见[08 §10](design/uiux-2026-11/08-screens.md#10-启动失败)。 |
 | 扫描占用 | `~/Library/Application Support/com.lotwt.youkai/scan.lock`（macOS）；`%LOCALAPPDATA%\com.lotwt.youkai\scan.lock`（Windows） | 按用户固定，目录名用基础应用标识 `com.lotwt.youkai`（不带开发版后缀、不是数据根的显示名），因此开发版与正式版在同一 OS 用户下共享同一把锁；由数据根占用持有者按需取得（先数据根后扫描）。应用服务在接纳开始请求时取得，会话结束（保存收尾完成）后释放；显式退出收尾兜底释放。 |
 
 开发者需知：锁文件为空文件，内容无意义，互斥完全来自 OS 原语；**不要删除运行中实例的锁文件**（删除后新进程会锁到新文件，占用域被拆散）。`internal/app` 的跨进程测试把扫描锁基目录注入为临时目录（Windows 的 Known Folder 无法按进程重定向，因此经测试注入而非环境变量），避免触碰真实用户目录或与正在运行的应用互相干扰。
@@ -138,10 +138,29 @@ go build -o winprobe.exe ./tools/winprobe
 | 文件 | `youkai.log` 为当前文件，跨运行追加、不截断（重启不抹掉上一次运行的证据）；`youkai.log.1`…`youkai.log.3` 为轮转备份，`.1` 最新；`youkai.crash.log` 为 Go 运行时 panic/fatal 输出的追加文件（`runtime/debug.SetCrashOutput`），不参与轮转，外部终止或 SIGKILL 不会被它捕获 |
 | 轮转与保留 | 单文件 1 MiB 上限、保留 3 份备份（`internal/app` 的常量，按实机证据调整），轮转文件上限 4 个；`youkai.crash.log` 另计且不轮转。日志只按大小轮转，属诊断数据，不按时间清理，与历史记录的删除分开（架构第 5 节） |
 
-- 打开时机在数据根占用之后：第二实例占用失败即退出，不会打开日志文件，因此两个进程不会交错或截断同一文件；代价是路径解析失败、占用失败等早期错误只在 stderr（开发期可见；安装版无从看到，但这类错误本身也意味着应用未能启动）。
+- 打开时机在数据根占用之后：第二实例占用失败即退出，不会打开日志文件，因此两个进程不会交错或截断同一文件；代价是路径解析失败、占用失败等早期错误不写入日志文件——路径解析失败只在 stderr（开发期可见，安装版无从看到），数据根占用失败在 Windows 另由启动提示告知用户，完整错误同时写到 stderr。
 - 每次运行的第一行日志写明版本、构建提交（取 `debug.ReadBuildInfo` 的 VCS 信息，工作区有本地修改时加 `-modified` 后缀；构建未打标时为 `unknown`）、平台与数据根，用户反馈附带日志即可定位构建。发布与打包 workflow 保证这个提交号干净：对 `mygo.json` 的改写（版本/渠道前缀/移除 updates）经 `git update-index --skip-worktree` 对 Git 隐藏；VCS 戳记按 `git status` 判定，未跟踪文件同样算作修改，因此构建前的其余过程文件只进被 `.gitignore` 忽略的目录（fetchdeps 产物、VC++ DLL）或 runner 的临时目录（`RUNNER_TEMP`，VC++ 步骤的说明文件）——test-v0.0.1 至 test-v0.0.4 的 Windows 构建曾因该说明文件写在仓库根而携带 `-modified`，已修复。构建产物因此携带标签或提交的干净提交号，不带 `-modified`。
 - 日志打不开（如目录不可写）不阻止启动：stderr 照常输出并提示一次原因；运行中文件写入失败同样只退回 stderr 镜像（降级逻辑在 `internal/app`，Windows 上备份文件被杀毒或备份软件占用时轮转重试而不丢行，每轮失败只提示一次）。
 - `YOUKAI_SELFTEST` 自检在路径解析之前运行，仍只写 stderr（安装布局验证按[打包与安装包](#打包与安装包)的重定向方式读取）。
+
+### 复制诊断信息的内容清单
+
+“复制诊断信息”的文本由 `internal/app` 的 `DiagnosticsText` 组装（出现位置见 [09 §4.6](design/uiux-2026-11/09-window-and-interaction.md#46-诊断信息的折叠)）。文本固定包含以下各项，缺值时写明“未知”或“无”，不省略字段：
+
+| 项 | 内容 |
+| --- | --- |
+| 版本 | youkai 版本；构建带 VCS 戳记时附 12 位提交号（与每次运行首行日志同源，见上节） |
+| 系统 | 操作系统名称与版本：Windows 的版本号（如 `10.0.22631`），macOS 的产品版本（如 `14.6`） |
+| 显示 | 主显示器的像素分辨率与有效缩放（如 `3840×2160（缩放 125%）`） |
+| 最近一次扫描 | 结束类型：`completed`、`cancelled`、`failed`、`interrupted`；没有扫描写“无”，仍在进行写“进行中” |
+| 触发码 | 首个触发的原始码（如 `windowOccluded`；用户取消时为 `userCancelled`），供反馈时对照日志；正常结束写“无” |
+| 首个触发 | 触发者（`user` / `fault`）、阶段（`preparing` / `capturing` / `finalizing`）与发生时间；没有触发时写“无” |
+
+隐私边界：文本**不含**外部窗口标题、首个触发的 message 与结构化参数、用户名与用户目录路径。真正的保证是字段白名单：组装时只取上表列出的字段，从不读取 message 与参数；路径脱敏只是兜底，覆盖常见的 home 目录写法，不承诺识别任意私有路径。版本、系统与触发码还会再做脱敏和形状校验（非标识符形状的触发码写作 `unknown`）。
+
+最近一次扫描从服务快照或已保存记录取得时，分别用 `DiagnosticsScanFromSnapshot` / `DiagnosticsScanFromTermination`，避免把 completed 记录的 `verifiedEnd` 或 interrupted 的结算码当成触发码。
+
+“打开诊断目录”不复用这段文本中的路径，而是使用 `Paths.Logs`（`internal/app.DiagnosticsDirectory`）：即本节表格里的日志目录，包含 `youkai.log`、轮转备份与 `diagnostics/`。复制文本不写该目录路径，避免带出用户名；日志格式与轮转规则不因复制功能改变。
 
 ### 扫描耗时诊断
 
