@@ -693,6 +693,23 @@ func TestExportDuringReviewSaveKeepsDraft(t *testing.T) {
 	}
 }
 
+// TestClearCleanEditorForExportKeepsSavingDraft pins the second H3 guard:
+// editingDirty returns false while a save is in flight, so the export
+// preflight must not treat that draft as clean.
+func TestClearCleanEditorForExportKeepsSavingDraft(t *testing.T) {
+	f := newExportDialogFixture(t, recovery(reviewRowItem(t, 1, 12)), false)
+	showRecordItems(f.m)
+	f.tt.Frame()
+	if f.m.edit == nil {
+		t.Fatal("the editor did not open")
+	}
+	f.m.reviewSaving = true
+	f.m.clearCleanEditorForExport()
+	if f.m.edit == nil {
+		t.Fatal("the export preflight cleared a saving draft")
+	}
+}
+
 // TestExportDialogShowsTheBlockedReason covers S8's 被阻止 state.
 func TestExportDialogShowsTheBlockedReason(t *testing.T) {
 	rec := recovery(uiStructuredItem(t, 1, record.QualityAutoAccepted))

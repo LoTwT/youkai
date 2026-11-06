@@ -235,11 +235,20 @@ func (m *Model) openExportDialog() {
 	if m.exportEntryBlocked() {
 		return
 	}
-	if !m.reviewSaving && !m.editingDirty() {
-		m.clearEdit()
-	}
+	m.clearCleanEditorForExport()
 	m.exportOutcome = nil
 	m.exportDialog = exportDialogState{open: true}
+}
+
+// clearCleanEditorForExport settles an editor that no longer needs a draft
+// before the export dialog opens. editingDirty hides a draft while a save is
+// in flight, so the save state must be checked separately or that draft would
+// be mistaken for a clean editor.
+func (m *Model) clearCleanEditorForExport() {
+	if m.reviewSaving || m.editingDirty() {
+		return
+	}
+	m.clearEdit()
 }
 
 // closeExportDialog hides the dialog. An export in flight keeps it open;
