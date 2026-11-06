@@ -91,9 +91,6 @@ func (m *Model) recordSummary(c *ui.Context, t *ui.Theme) {
 		m.summaryConclusionArea(c, t, conclusion, withActions)
 		m.summaryCountsGrid(c, t)
 		m.summaryDetailsArea(c, t)
-		if len(m.rec.Rows) > 0 {
-			m.summaryExportArea(c, t)
-		}
 	}
 
 	if m.contentHeight > 0 && m.contentHeight < summaryFixedActionsHeight {
@@ -180,14 +177,13 @@ func (m *Model) summaryActions(c *ui.Context, t *ui.Theme, conclusion summaryCon
 	})
 }
 
-// performSummaryAction routes one conclusion action to the existing surface
-// it names. The export dialog and the item browser's four-class filters
-// arrive in later PRs; until then the actions use the existing export entry
-// and the closest existing result filters.
+// performSummaryAction routes one conclusion action to the surface it
+// names. Export opens the one export dialog; item actions use the closest
+// existing result filters.
 func (m *Model) performSummaryAction(c *ui.Context, kind summaryActionKind) {
 	switch kind {
 	case summaryActionExport:
-		m.revealExports()
+		m.requestExport()
 	case summaryActionRetrySave:
 		m.RetrySave()
 	case summaryActionPrepare, summaryActionRescan:
@@ -1195,13 +1191,17 @@ func (m *Model) pendingSecondary(counts app.ItemClassCounts, offerExport bool) [
 	return secondary
 }
 
-// exportAction is the shared export conclusion action. It carries the
-// existing entry's disabled reason, so the summary and the title-bar button
-// cannot disagree about whether export is possible.
+// exportAction is the shared export conclusion action. Only a dirty draft
+// stays clickable, so the dialog can ask save/discard; every other blocked
+// state disables the action and names its reason beside it (09 §4.1). The
+// title-bar entry and the dialog's blocked state keep their own guards.
 func (m *Model) exportAction() summaryAction {
-	reason := m.exportBlockedReason()
+	reason := m.exportBlockedReasonWithDraft(false)
 	if !m.exportAvailable() {
 		reason = "当前构建未启用导出。"
+	}
+	if reason == "" && m.exportEntryBlocked() {
+		reason = "结果尚未加载，不能导出。"
 	}
 	return summaryAction{Kind: summaryActionExport, Label: "导出…", DisabledReason: reason}
 }

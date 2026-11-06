@@ -7,16 +7,22 @@ import "github.com/egoist/mygo/ui"
 // Select popovers) take it first, then a held navigation is cancelled, then
 // the focus returns to the page's table. Ctrl+R exists only while the scan
 // prepare page can actually start a scan; it is not a global key. Ctrl+E
-// reveals the record's export entry, and F6 / Shift+F6 move between the
+// opens the record's export dialog, and F6 / Shift+F6 move between the
 // rail and the page's content region (PR-14b extends F6 to the review
 // view's item list, screenshots and form).
 func (m *Model) registerPageShortcuts(c *ui.Context) {
+	if m.exportDialog.open {
+		// The modal owns the keyboard while it is open: Esc belongs to it
+		// (and is ignored during an export), and page keys must not move
+		// the focus behind the backdrop.
+		return
+	}
 	c.OnShortcut(0, ui.KeyEscape, func() { m.handleEscapeShortcut(c) })
 	if m.scanStartReady() {
 		c.OnShortcut(ui.Cmd, ui.KeyR, func() { m.requestScanStart() })
 	}
 	if m.displayPage() == pageResults && !m.exportEntryBlocked() {
-		c.OnShortcut(ui.Cmd, ui.KeyE, func() { m.revealExports() })
+		c.OnShortcut(ui.Cmd, ui.KeyE, func() { m.requestExport() })
 	}
 	c.OnShortcut(0, ui.KeyF6, func() { m.focusPageContent(c) })
 	c.OnShortcut(ui.Shift, ui.KeyF6, func() { m.focusNavRail(c) })

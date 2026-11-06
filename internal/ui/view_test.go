@@ -944,8 +944,14 @@ func TestCompletionCardShowsCountsExclusionsAndExports(t *testing.T) {
 		t.Fatalf("the completion state keeps a review shortcut: %q", tt.Texts())
 	}
 
-	if err := tt.Click("导出 JSON"); err != nil {
+	if err := tt.Click("导出…"); err != nil {
 		t.Fatalf("click the completion card's export: %v", err)
+	}
+	if !m.exportDialog.open {
+		t.Fatalf("the completion card did not open the export dialog: %q", tt.Texts())
+	}
+	if err := tt.Click("导出 JSON"); err != nil {
+		t.Fatalf("click 导出 JSON: %v", err)
 	}
 	drainAll(t, m, q)
 	if calls := saver.snapshot(); len(calls) != 1 || calls[0].format != app.ExportJSON {
@@ -953,11 +959,12 @@ func TestCompletionCardShowsCountsExclusionsAndExports(t *testing.T) {
 	}
 }
 
-// TestCompletionCardBlocksZeroExportable checks that a record with no
-// usable item states "无可导出" and disables both export actions.
-func TestCompletionCardBlocksZeroExportable(t *testing.T) {
+// TestCompletionCardZeroExportableOpensTheEmptyDialog checks that a
+// record with no usable item states "无可导出" and still offers the empty
+// export through the dialog (F-22), starting on 去校对.
+func TestCompletionCardZeroExportableOpensTheEmptyDialog(t *testing.T) {
 	rec := recovery(item(1, record.StatusFailed, "", "识别超时"))
-	m, q, tt := openResponsiveResults(t, rec, 1024, 700)
+	m, _, tt := openResponsiveResults(t, rec, 1024, 700)
 	saver := &fakeDirectExportSaver{}
 	m.cfg.DirectExportSaver = saver
 	tt.Frame()
@@ -968,18 +975,21 @@ func TestCompletionCardBlocksZeroExportable(t *testing.T) {
 	if !tt.HasText("无可导出条目") || !tt.HasText("不可确认：无可导出的条目。") {
 		t.Fatalf("the zero-exportable state is not explained: %q", tt.Texts())
 	}
-	if !tt.HasText("没有可导出的条目，不能导出。") {
-		t.Fatalf("the disabled export reason is missing: %q", tt.Texts())
-	}
 	if tt.HasText("校对完成") {
 		t.Fatal("a zero-exportable record claims completion")
 	}
-	if err := tt.Click("导出 JSON"); err != nil {
+	if err := tt.Click("导出…"); err != nil {
 		t.Fatal(err)
 	}
-	drainAll(t, m, q)
+	tt.Frame()
+	if !m.exportDialog.open || !tt.HasText("没有可导出的件：还有 1 件待处理") {
+		t.Fatalf("the zero-exportable dialog did not open: %q", tt.Texts())
+	}
+	if !tt.Focused("去校对") {
+		t.Fatalf("the zero-exportable dialog did not start on 去校对: %q", tt.Texts())
+	}
 	if calls := saver.snapshot(); len(calls) != 0 {
-		t.Fatalf("a disabled completion export wrote %+v", calls)
+		t.Fatalf("opening the empty dialog wrote %+v", calls)
 	}
 }
 
@@ -1005,6 +1015,13 @@ func TestCompletionCardBlocksUnknownExport(t *testing.T) {
 	}
 	if tt.HasText("校对完成") {
 		t.Fatal("an unknown export claims completion")
+	}
+	if err := tt.Click("导出…"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if !m.exportDialog.open || !tt.HasText("导出清单尚未就绪，不能导出。") {
+		t.Fatalf("the unknown export dialog did not name its block: %q", tt.Texts())
 	}
 	if err := tt.Click("导出 CSV"); err != nil {
 		t.Fatal(err)

@@ -45,9 +45,7 @@ func (m *Model) recordWorkspace(c *ui.Context, t *ui.Theme) {
 
 // recordWorkspaceHeader is the record's title bar: back to the whole list,
 // the record title, the 摘要 / 逐件 switch, the three status slots (coverage,
-// pending, saved) and the export entry. The export dialog arrives with
-// PR-15; until then the export entry brings the existing controls into
-// view.
+// pending, saved) and the export entry that opens the modal dialog.
 func (m *Model) recordWorkspaceHeader(c *ui.Context, t *ui.Theme, tok *Tokens) {
 	ui.Row(c).Gap(t.Space(2)).Padding(t.Space(2), t.Space(3)).
 		Background(tok.SurfaceHeader).AlignItems(ui.Center).Children(func() {
@@ -72,12 +70,9 @@ func (m *Model) recordWorkspaceHeader(c *ui.Context, t *ui.Theme, tok *Tokens) {
 			ui.Text(c, status).TextColor(tok.TextMuted).
 				FontSize(t.FontSize * 0.9).SingleLine()
 		}
-		// The export entry is part of the record's title bar even when this
-		// build cannot write files: disabled, it still shows where export
-		// lives. The export dialog replaces this entry in PR-15.
-		if ui.Button(c, "导出…").Disabled(m.exportEntryBlocked()).Clicked() {
-			m.revealExports()
-		}
+		// The title bar owns the record's one export entry; it opens the
+		// modal dialog. A build without a saver still shows it, disabled.
+		m.exportEntryArea(c)
 	})
 }
 
@@ -115,15 +110,5 @@ func (m *Model) workspaceStatusTexts() (coverage, pending, saved string) {
 // background stays in the background (C-09).
 func (m *Model) openRecordWorkspace() {
 	m.page = pageResults
-	m.recordTab = recordTabSummary
-}
-
-// revealExports brings the existing export controls into view. The export
-// dialog (PR-15) replaces this step; the header action and Ctrl+E share
-// this one entry.
-func (m *Model) revealExports() {
-	if !m.exportAvailable() {
-		return
-	}
 	m.recordTab = recordTabSummary
 }

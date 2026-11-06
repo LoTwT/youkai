@@ -479,6 +479,7 @@ func (m *Model) clearResultsLocked() {
 	m.recErr = ""
 	m.exportData = nil
 	m.exportBuildErr = ""
+	m.exportAfterLoadID = ""
 	m.selected = -1
 	m.liveSavedShown = 0
 	m.edit = nil
@@ -497,8 +498,6 @@ func (m *Model) cleanupBlockedReason() string {
 		return "当前构建未启用导出，历史清理不可用。"
 	case m.cleanup != nil && m.cleanup.running:
 		return "正在执行清理，完成前不能开始另一项。"
-	case m.historyExporting != "":
-		return "正在导出历史记录，完成前不能清理。"
 	case m.exitState == exitRunning || m.exitState == exitDone:
 		return "正在退出应用，不能清理。"
 	case m.snap.SaveError != "":
