@@ -342,6 +342,19 @@ func summaryStructuredItem(t *testing.T, seq int64, quality record.Quality, stat
 	return it
 }
 
+// summaryExportActionRecord is a complete, exportable record for the
+// summary export-action state matrix.
+func summaryExportActionRecord(t *testing.T) *record.Recovery {
+	t.Helper()
+	rec := recovery(summaryStructuredItem(t, 1, record.QualityAutoAccepted,
+		zzz.CaptureState{ManagementState: zzz.ManagementNone, EquippedState: zzz.EquippedStateUnequipped}))
+	rec.Checkpoint.Session.Coverage = record.Coverage{Status: record.CoverageComplete}
+	rec.Checkpoint.Session.ObservedScope = []byte(`{"sort":"verified"}`)
+	rec.Checkpoint.Session.PositionLedger = summaryPositionsLedger(
+		record.SortVerificationVerified, summaryCompletePositions()...)
+	return rec
+}
+
 // summaryFourClassRecord has one item of every class, so the count cells
 // and their destinations can be verified together.
 func summaryFourClassRecord(t *testing.T) *record.Recovery {
@@ -398,6 +411,133 @@ func TestSummaryExportActionOpensTheOnlyDialog(t *testing.T) {
 	}
 	if !tt.HasText("导出这条记录") || !tt.Focused("导出 JSON") {
 		t.Fatalf("the summary opened something other than the export dialog: %q", tt.Texts())
+	}
+}
+
+// TestSummaryExportActionMatrix checks 09 §4.1: only a dirty draft keeps
+// the summary's export action clickable; every other blocked state disables
+// it with a reason beside it.
+func TestSummaryExportActionMatrix(t *testing.T) {
+	cases := []struct {
+		name         string
+		live         bool
+		setup        func(*exportDialogFixture)
+		wantDisabled bool
+		wantReason   string
+	}{
+		{name: "ready"},
+		{
+			name: "dirty draft",
+			setup: func(f *exportDialogFixture) {
+				showRecordItems(f.m)
+				f.m.selected = 0
+				f.m.startEdit()
+				f.m.edit.draft.Level = "14"
+			},
+		},
+		{
+			name: "build error",
+			setup: func(f *exportDialogFixture) {
+				f.m.exportData = nil
+				f.m.exportBuildErr = "boom"
+			},
+			wantDisabled: true,
+			wantReason:   "无法生成导出：boom",
+		},
+		{
+			name: "empty manifest",
+			setup: func(f *exportDialogFixture) {
+				f.m.exportData = nil
+			},
+			wantDisabled: true,
+			wantReason:   "导出清单尚未就绪",
+		},
+		{
+			name: "loading",
+			setup: func(f *exportDialogFixture) {
+				f.m.loading = true
+			},
+			wantDisabled: true,
+			wantReason:   "正在加载最新检查点",
+		},
+		{
+			name: "review saving",
+			setup: func(f *exportDialogFixture) {
+				f.m.reviewSaving = true
+			},
+			wantDisabled: true,
+			wantReason:   "正在保存修改",
+		},
+		{
+			name: "exit running",
+			setup: func(f *exportDialogFixture) {
+				f.m.exitState = exitRunning
+			},
+			wantDisabled: true,
+			wantReason:   "正在退出应用",
+		},
+		{
+			name: "exporting",
+			setup: func(f *exportDialogFixture) {
+				f.m.exporting = true
+			},
+			wantDisabled: true,
+			wantReason:   "正在导出",
+		},
+		{
+			name: "no saver",
+			setup: func(f *exportDialogFixture) {
+				f.m.cfg.DirectExportSaver = nil
+			},
+			wantDisabled: true,
+			wantReason:   "当前构建未启用导出",
+		},
+		{
+			name: "live busy",
+			live: true,
+			setup: func(f *exportDialogFixture) {
+				f.m.snap.Busy = true
+			},
+			wantDisabled: true,
+			wantReason:   "扫描尚未收尾",
+		},
+		{
+			name: "live save pending",
+			live: true,
+			setup: func(f *exportDialogFixture) {
+				f.m.snap.SavePending = true
+			},
+			wantDisabled: true,
+			wantReason:   "扫描结果尚未保存",
+		},
+		{
+			name: "live save error",
+			live: true,
+			setup: func(f *exportDialogFixture) {
+				f.m.snap.SaveError = "disk"
+			},
+			wantDisabled: true,
+			wantReason:   "扫描结果尚未保存",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newExportDialogFixture(t, summaryExportActionRecord(t), tc.live)
+			if tc.setup != nil {
+				tc.setup(f)
+			}
+			action := f.m.exportAction()
+			if action.Kind != summaryActionExport {
+				t.Fatalf("action kind = %v, want export", action.Kind)
+			}
+			if got := action.disabled(); got != tc.wantDisabled {
+				t.Fatalf("disabled = %t (reason %q), want %t",
+					got, action.DisabledReason, tc.wantDisabled)
+			}
+			if tc.wantReason != "" && !strings.Contains(action.DisabledReason, tc.wantReason) {
+				t.Fatalf("reason = %q, want %q", action.DisabledReason, tc.wantReason)
+			}
+		})
 	}
 }
 

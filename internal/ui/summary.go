@@ -1191,19 +1191,17 @@ func (m *Model) pendingSecondary(counts app.ItemClassCounts, offerExport bool) [
 	return secondary
 }
 
-// exportAction is the shared export conclusion action. It uses the same
-// entry guard as the title-bar button, so a dirty draft stays clickable and
-// asks in the dialog; only a genuinely disabled entry names its reason.
+// exportAction is the shared export conclusion action. Only a dirty draft
+// stays clickable, so the dialog can ask save/discard; every other blocked
+// state disables the action and names its reason beside it (09 §4.1). The
+// title-bar entry and the dialog's blocked state keep their own guards.
 func (m *Model) exportAction() summaryAction {
-	reason := ""
-	if m.exportEntryBlocked() {
-		reason = m.exportBlockedReason()
-		if !m.exportAvailable() {
-			reason = "当前构建未启用导出。"
-		}
-		if reason == "" {
-			reason = "结果尚未加载，不能导出。"
-		}
+	reason := m.exportBlockedReasonWithDraft(false)
+	if !m.exportAvailable() {
+		reason = "当前构建未启用导出。"
+	}
+	if reason == "" && m.exportEntryBlocked() {
+		reason = "结果尚未加载，不能导出。"
 	}
 	return summaryAction{Kind: summaryActionExport, Label: "导出…", DisabledReason: reason}
 }

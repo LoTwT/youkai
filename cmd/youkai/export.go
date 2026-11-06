@@ -79,7 +79,17 @@ func writeDirectExportContextWith(ctx context.Context, dir, defaultName string, 
 		removeErr := ops.remove(path)
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			// Preserve any cleanup detail the writer added: the dialog's
-			// cancellation promise is only true if no file remains.
+			// cancellation promise is only true if no file remains. Return
+			// that cleanup error itself so the cancellation text never
+			// reaches the user; a real write cause stays beside it.
+			var cleanupErr *ui.ExportCleanupError
+			if errors.As(err, &cleanupErr) {
+				if removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+					err = cleanupExportError(err,
+						fmt.Sprintf("预留文件 %q 未删除: %v", path, removeErr))
+				}
+				return "", err
+			}
 			if err == ctxErr {
 				err = nil
 			} else if !errors.Is(err, ctxErr) {

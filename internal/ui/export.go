@@ -61,10 +61,30 @@ type ExportCleanupError struct {
 
 func (e *ExportCleanupError) Error() string {
 	detail := e.Detail
-	if detail == "" && e.Err != nil {
-		detail = e.Err.Error()
+	cause := exportCleanupCause(e.Err)
+	switch {
+	case detail == "":
+		detail = cause
+	case cause != "" && !strings.Contains(detail, cause):
+		// Keep a plain write failure visible alongside the file left behind
+		// (08 §4); a cancellation alone adds nothing the user can act on.
+		detail += "；" + cause
 	}
 	return "导出文件清理失败：" + detail
+}
+
+// exportCleanupCause strips the English cancellation text from a joined
+// cause while keeping a real write error beside it.
+func exportCleanupCause(err error) string {
+	if err == nil {
+		return ""
+	}
+	text := err.Error()
+	if errors.Is(err, context.Canceled) {
+		text = strings.ReplaceAll(text, context.Canceled.Error(), "")
+		text = strings.TrimSpace(strings.Trim(text, ";\n"))
+	}
+	return text
 }
 
 func (e *ExportCleanupError) Unwrap() error { return e.Err }
@@ -134,6 +154,14 @@ func (m *Model) rebuildExport() {
 // Empty means both formats may be exported, including an empty file when
 // the record has no exportable item (F-22).
 func (m *Model) exportBlockedReason() string {
+	return m.exportBlockedReasonWithDraft(true)
+}
+
+// exportBlockedReasonWithDraft is exportBlockedReason with the dirty-draft
+// case optional. The summary's action passes false: only a dirty draft stays
+// clickable, because the dialog asks save/discard; every other blocked state
+// disables the action and shows its reason (09 §4.1).
+func (m *Model) exportBlockedReasonWithDraft(blockDirty bool) string {
 	switch {
 	case !m.exportAvailable():
 		return ""
@@ -143,7 +171,7 @@ func (m *Model) exportBlockedReason() string {
 		return "正在退出应用，不能导出。"
 	case m.reviewSaving:
 		return "正在保存修改，完成前不能导出。"
-	case m.editingDirty():
+	case blockDirty && m.editingDirty():
 		return "有未保存的修改，保存或放弃后可导出。"
 	case m.loading:
 		return "正在加载最新检查点，加载完成前不能导出。"

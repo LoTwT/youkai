@@ -377,6 +377,156 @@ func TestWriteDirectExportContextWriteCleanupFailureIsClassified(t *testing.T) {
 	}
 }
 
+func TestWriteDirectExportContextReserveRemoveNotExist(t *testing.T) {
+	dir := t.TempDir()
+	ctx := &cancelAfterChecksContext{Context: context.Background(), cancelAt: 2}
+	ops := defaultExportFileOps
+	ops.remove = func(string) error {
+		return &os.PathError{Op: "remove", Path: "x", Err: syscall.ENOENT}
+	}
+	path, err := writeDirectExportContextWith(ctx, dir, "out.youkai.json", []byte("data"), ops)
+	if path != "" || !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled export returned path %q err %v", path, err)
+	}
+	var cleanupErr *ui.ExportCleanupError
+	if errors.As(err, &cleanupErr) {
+		t.Fatalf("ENOENT was called a cleanup failure: %v", err)
+	}
+}
+
+func TestWriteDirectExportContextPlainFailureReservationNotExist(t *testing.T) {
+	dir := t.TempDir()
+	ops := defaultExportFileOps
+	ops.createTemp = func(dir, _ string) (exportFile, error) {
+		return &failingExportFile{name: filepath.Join(dir, ".tmp-x"), writeErr: syscall.ENOSPC}, nil
+	}
+	ops.remove = func(name string) error {
+		if filepath.Base(name) == "out.youkai.json" {
+			return &os.PathError{Op: "remove", Path: name, Err: syscall.ENOENT}
+		}
+		return nil
+	}
+	path, err := writeDirectExportContextWith(context.Background(), dir, "out.youkai.json", []byte("data"), ops)
+	if path != "" || !errors.Is(err, syscall.ENOSPC) {
+		t.Fatalf("write failure returned path %q err %v", path, err)
+	}
+	var cleanupErr *ui.ExportCleanupError
+	if errors.As(err, &cleanupErr) {
+		t.Fatalf("an already removed reservation was called a cleanup failure: %v", err)
+	}
+}
+
+func TestWriteDirectExportContextPlainFailureTempNotExist(t *testing.T) {
+	dir := t.TempDir()
+	ops := defaultExportFileOps
+	ops.createTemp = func(dir, _ string) (exportFile, error) {
+		return &failingExportFile{name: filepath.Join(dir, ".tmp-x"), writeErr: syscall.ENOSPC}, nil
+	}
+	ops.remove = func(name string) error {
+		if strings.Contains(name, ".tmp-x") {
+			return &os.PathError{Op: "remove", Path: name, Err: syscall.ENOENT}
+		}
+		return os.Remove(name)
+	}
+	path, err := writeDirectExportContextWith(context.Background(), dir, "out.youkai.json", []byte("data"), ops)
+	if path != "" || !errors.Is(err, syscall.ENOSPC) {
+		t.Fatalf("write failure returned path %q err %v", path, err)
+	}
+	var cleanupErr *ui.ExportCleanupError
+	if errors.As(err, &cleanupErr) {
+		t.Fatalf("an already removed temporary file was called a cleanup failure: %v", err)
+	}
+}
+
+// cancelOnWriteFile cancels the export as its data write begins, so the
+// cancellation and the write failure race.
+type cancelOnWriteFile struct {
+	*failingExportFile
+	cancel context.CancelFunc
+}
+
+func (f *cancelOnWriteFile) Write(p []byte) (int, error) {
+	f.cancel()
+	return f.failingExportFile.Write(p)
+}
+
+func TestWriteDirectExportContextWriteFailureTempCleanupKeepsCause(t *testing.T) {
+	dir := t.TempDir()
+	ops := defaultExportFileOps
+	ops.createTemp = func(dir, _ string) (exportFile, error) {
+		return &failingExportFile{name: filepath.Join(dir, ".tmp-x"), writeErr: syscall.ENOSPC}, nil
+	}
+	ops.remove = func(name string) error {
+		if strings.Contains(name, ".tmp-x") {
+			return errors.New("busy")
+		}
+		return os.Remove(name)
+	}
+	_, err := writeDirectExportContextWith(context.Background(), dir, "out.youkai.json", []byte("data"), ops)
+	if !errors.Is(err, syscall.ENOSPC) {
+		t.Fatalf("write cause lost: %v", err)
+	}
+	if !strings.Contains(err.Error(), syscall.ENOSPC.Error()) || !strings.Contains(err.Error(), "busy") {
+		t.Fatalf("visible text lost a cause: %q", err)
+	}
+	var cleanupErr *ui.ExportCleanupError
+	if !errors.As(err, &cleanupErr) {
+		t.Fatalf("the cleanup failure is not classified: %v", err)
+	}
+}
+
+func TestWriteDirectExportContextWriteFailureReservationCleanupKeepsCause(t *testing.T) {
+	dir := t.TempDir()
+	ops := defaultExportFileOps
+	ops.createTemp = func(dir, _ string) (exportFile, error) {
+		return &failingExportFile{name: filepath.Join(dir, ".tmp-x"), writeErr: syscall.ENOSPC}, nil
+	}
+	ops.remove = func(name string) error {
+		if filepath.Base(name) == "out.youkai.json" {
+			return errors.New("locked")
+		}
+		return nil
+	}
+	_, err := writeDirectExportContextWith(context.Background(), dir, "out.youkai.json", []byte("data"), ops)
+	if !strings.Contains(err.Error(), syscall.ENOSPC.Error()) || !strings.Contains(err.Error(), "locked") {
+		t.Fatalf("visible text lost a cause: %q", err)
+	}
+	var cleanupErr *ui.ExportCleanupError
+	if !errors.As(err, &cleanupErr) {
+		t.Fatalf("the cleanup failure is not classified: %v", err)
+	}
+}
+
+func TestWriteDirectExportContextCancelRacingWriteFailureLeaksNoEnglish(t *testing.T) {
+	dir := t.TempDir()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ops := defaultExportFileOps
+	ops.createTemp = func(dir, _ string) (exportFile, error) {
+		return &cancelOnWriteFile{
+			failingExportFile: &failingExportFile{name: filepath.Join(dir, ".tmp-x"), writeErr: syscall.ENOSPC},
+			cancel:            cancel,
+		}, nil
+	}
+	ops.remove = func(name string) error {
+		if strings.Contains(name, ".tmp-x") {
+			return errors.New("busy")
+		}
+		return os.Remove(name)
+	}
+	_, err := writeDirectExportContextWith(ctx, dir, "out.youkai.json", []byte("data"), ops)
+	var cleanupErr *ui.ExportCleanupError
+	if !errors.As(err, &cleanupErr) {
+		t.Fatalf("the cleanup failure is not classified: %v", err)
+	}
+	if strings.Contains(err.Error(), "context canceled") {
+		t.Fatalf("the English cancellation text leaks: %q", err)
+	}
+	if !strings.Contains(err.Error(), syscall.ENOSPC.Error()) {
+		t.Fatalf("the write cause is hidden: %q", err)
+	}
+}
+
 func TestWriteDirectExportContextCancelReservationAlreadyGone(t *testing.T) {
 	dir := t.TempDir()
 	ctx, cancel := context.WithCancel(context.Background())

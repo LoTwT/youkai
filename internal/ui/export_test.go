@@ -853,6 +853,26 @@ func TestExportDialogCleanupFailureIsNotCancellation(t *testing.T) {
 	}
 }
 
+// TestExportDialogCleanupFailureKeepsWriteCause checks 08 §4's failure
+// reason survives beside the file-left-behind detail.
+func TestExportDialogCleanupFailureKeepsWriteCause(t *testing.T) {
+	f := newExportDialogFixture(t, recovery(uiStructuredItem(t, 1, record.QualityAutoAccepted)), false)
+	f.saver.saveFn = func(app.ExportFormat, string, []byte) (string, error) {
+		return "", &ExportCleanupError{
+			Detail: "临时文件未删除",
+			Err:    errors.New("no space left on device"),
+		}
+	}
+	f.open(t)
+	if err := f.tt.Click("导出 JSON"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, f.m, f.q, f.tt)
+	if !f.tt.HasText("临时文件未删除") || !f.tt.HasText("no space left on device") {
+		t.Fatalf("the cleanup failure lost the write cause: %q", f.tt.Texts())
+	}
+}
+
 // TestExportDialogFailureRetriesWithoutChangingTheRecord covers S8's
 // 失败 state and the retry action.
 func TestExportDialogFailureRetriesWithoutChangingTheRecord(t *testing.T) {
