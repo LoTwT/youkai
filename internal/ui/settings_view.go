@@ -219,16 +219,32 @@ func (m *Model) settingsTableOfContents(c *ui.Context, t *ui.Theme, tok *Tokens)
 	})
 }
 
-// settingsGeneral holds the close-window preference and the placeholder for
-// replaying the tray-icon hint (PR-18 wires it). The default hides to the
-// notification area; the explicit choice runs the stop/save/release wrap-up.
+// settingsGeneral holds the close-window preference and the tray-icon hint
+// replay. The default hides to the notification area; the explicit choice
+// runs the stop/save/release wrap-up. Without a tray entry hiding has no way
+// back, so the close option is fixed to the explicit exit and the reason is
+// stated (08 §7).
 func (m *Model) settingsGeneral(c *ui.Context, t *ui.Theme, tok *Tokens) {
 	ui.Text(c, "点击窗口的 ✕ 时").TextColor(tok.TextSecondary)
+	compactFocus := m.settingsFocusPending && !m.settingsTableOfContentsVisible()
+	if m.TrayUnavailable() != "" {
+		fixed := string(app.CloseBehaviorExit)
+		ui.RadioGroup(c, func() {
+			radio := ui.Radio(c, &fixed, string(app.CloseBehaviorExit), "停止扫描并退出").
+				Disabled(true)
+			if compactFocus {
+				radio = radio.Bind(&m.settingsFirstRef).AutoFocus()
+				m.settingsFocusPending = false
+			}
+		})
+		ui.Text(c, "通知区域图标不可用。关闭窗口会停止扫描并退出应用。").
+			TextColor(t.TextMuted).FontSize(t.FontSize * 0.9)
+		return
+	}
 	behavior := string(m.CloseBehavior())
 	if behavior != string(app.CloseBehaviorExit) {
 		behavior = string(app.CloseBehaviorHide)
 	}
-	compactFocus := m.settingsFocusPending && !m.settingsTableOfContentsVisible()
 	ui.RadioGroup(c, func() {
 		ui.Row(c).Gap(t.Space(3)).Children(func() {
 			hide := ui.Radio(c, &behavior, string(app.CloseBehaviorHide), "隐藏到通知区域（默认）")
@@ -246,7 +262,12 @@ func (m *Model) settingsGeneral(c *ui.Context, t *ui.Theme, tok *Tokens) {
 	if chosen := app.CloseBehavior(behavior); chosen != m.CloseBehavior() {
 		m.SetCloseBehavior(chosen)
 	}
-	ui.Button(c, "再看一次托盘图标位置提示").Disabled(true)
+	if ui.Button(c, "再看一次托盘图标位置提示").Clicked() {
+		m.ShowTrayHint()
+	}
+	if m.trayHintErr != "" {
+		ui.Text(c, m.trayHintErr).TextColor(t.Danger).FontSize(t.FontSize * 0.9)
+	}
 	if m.closeBehaviorErr != "" {
 		ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, m.closeBehaviorErr).TextColor(t.Danger).FontSize(t.FontSize * 0.9)
@@ -254,9 +275,6 @@ func (m *Model) settingsGeneral(c *ui.Context, t *ui.Theme, tok *Tokens) {
 				m.retryCloseBehaviorSave()
 			}
 		})
-	}
-	if m.windowNotice != "" {
-		ui.Text(c, m.windowNotice).TextColor(t.TextMuted).FontSize(t.FontSize * 0.9)
 	}
 }
 

@@ -51,6 +51,20 @@ type windowSurface interface {
 	Hide()
 	Focus()
 	Restore()
+	FlashFrame(bool)
+	// Update posts a UI-thread task that also renders a frame. The close
+	// callback and a notification click change model state after the last
+	// input event, so without it the dialog they opened would wait for the
+	// next mouse move or keystroke.
+	Update(func())
+}
+
+// notificationSurface is one native notification; *mygo.Notification
+// implements it. Tests substitute a recorder so the two-stage order is
+// observable without a notification area.
+type notificationSurface interface {
+	Show() error
+	Close()
 }
 
 // traySurface is the tray/menu bar surface the lifecycle updates;
@@ -85,23 +99,34 @@ type lifecycleModel interface {
 	Exiting() bool
 	CloseBehavior() app.CloseBehavior
 	LifecycleStatus() ui.LifecycleStatus
-	SetWindowNotice(string)
+	SetTrayUnavailable(string)
+	FirstHideHintDue() bool
+	ShowFirstHideHint()
+	OpenNotification(string)
 }
 
 // windowLifecycle owns the window lifecycle decisions the entry point
-// wires to MyGo: close-to-tray versus close-to-exit, explicit quit, restore
-// from the tray/Dock/second instance/deep links, and the tray menu. It is
-// confined to the UI thread, like the model it drives; the single-instance
+// wires to MyGo: close-to-tray versus close-to-exit, the first-hide hint,
+// explicit quit, restore from the tray/Dock/second instance/deep links, the
+// tray menu, and the two-stage scan notifications. It is confined to the UI
+// thread, like the model it drives; the single-instance, notification-click
 // and URL callbacks arrive on that thread.
 type windowLifecycle struct {
 	model  lifecycleModel
 	window windowSurface
 	tray   traySurface
 
-	// newTray and quitApp are seams: production uses MyGo's tray and quit,
-	// tests record the calls without native objects.
-	newTray func(mygo.TrayOptions) (traySurface, error)
-	quitApp func()
+	// newTray, newNotification and quitApp are seams: production uses
+	// MyGo's tray, notification and quit, tests record the calls without
+	// native objects.
+	newTray         func(mygo.TrayOptions) (traySurface, error)
+	newNotification func(mygo.NotificationOptions) notificationSurface
+	quitApp         func()
+
+	// firstNotification is the input-stop notification a result replaces.
+	// MyGo's Windows backend does not replace an ID, so the second segment
+	// must close this one before it shows.
+	firstNotification notificationSurface
 
 	// pendingRestore remembers a restore that arrived before the window
 	// was created (a launch-time deep link is delivered after ready, but a
@@ -119,6 +144,9 @@ func newWindowLifecycle(model lifecycleModel) *windowLifecycle {
 		model: model,
 		newTray: func(opts mygo.TrayOptions) (traySurface, error) {
 			return mygo.NewTray(opts)
+		},
+		newNotification: func(opts mygo.NotificationOptions) notificationSurface {
+			return mygo.NewNotification(opts)
 		},
 		quitApp: mygo.App.Quit,
 	}
@@ -153,7 +181,7 @@ func (l *windowLifecycle) CreateTray() {
 		// macOS tints a template image to match the menu bar; elsewhere the
 		// icon keeps its own colors.
 		IconIsTemplate: runtime.GOOS == "darwin",
-		ToolTip:        "Youkai · " + l.model.LifecycleStatus().Text,
+		ToolTip:        l.model.LifecycleStatus().TrayMenu().Status,
 		Menu:           l.trayMenu(),
 	})
 	if err == nil && tray == nil {
@@ -183,7 +211,7 @@ func (l *windowLifecycle) CreateTray() {
 // why.
 func (l *windowLifecycle) trayUnavailable(err error) {
 	log.Printf("youkai: tray unavailable (%s): %v; closing the window will stop the scan and quit the application", runtime.GOOS, err)
-	l.model.SetWindowNotice("托盘/菜单栏入口不可用（" + err.Error() + "）。关闭窗口将停止扫描并退出应用。")
+	l.model.SetTrayUnavailable(err.Error())
 }
 
 // logTrayBounds writes the icon's location, or why it has none, for the
@@ -245,9 +273,29 @@ func (l *windowLifecycle) OnWindowClose(e preventableEvent) {
 		e.PreventDefault()
 		return
 	}
+	if l.model.FirstHideHintDue() {
+		// The hint must be acknowledged before the first hide: once the
+		// window is gone, a message box could not be reliably shown. The
+		// close callback renders no frame of its own, so ask for one.
+		e.PreventDefault()
+		l.model.ShowFirstHideHint()
+		l.redraw()
+		return
+	}
+	l.HideToTray()
+	e.PreventDefault()
+}
+
+// HideToTray hides the window through the tray entry. It is the same action
+// the first-hide hint's acknowledgement performs and keeps the tray location
+// diagnostic at every hide.
+func (l *windowLifecycle) HideToTray() {
+	if l.window == nil || l.tray == nil {
+		return
+	}
 	l.logTrayBounds("at close")
 	l.window.Hide()
-	e.PreventDefault()
+	l.Refresh()
 }
 
 // OnBeforeQuit begins the explicit-exit wrap-up. It always runs, regardless
@@ -318,6 +366,62 @@ func (l *windowLifecycle) OnExitFailed() {
 	l.Restore()
 }
 
+// Notify sends one two-stage scan notification. The result segment closes
+// the input-stop notification first: MyGo's Windows backend never replaces
+// an existing notification with the same ID, it adds a temporary tray icon
+// and leaves the old bubble. The second segment also flashes the taskbar
+// button as the fallback when Windows suppresses the banner.
+func (l *windowLifecycle) Notify(n ui.Notification) {
+	if n.Flash && l.window != nil {
+		l.window.FlashFrame(true)
+	}
+	if n.Segment == ui.NotificationResult && l.firstNotification != nil {
+		l.firstNotification.Close()
+		l.firstNotification = nil
+	}
+	note := l.newNotification(mygo.NotificationOptions{
+		ID:    n.ID,
+		Title: n.Title,
+		Body:  n.Body,
+	})
+	if n.Segment == ui.NotificationInputStopped {
+		// Register before Show: on macOS Show waits on the main thread and
+		// keeps processing events, so the result segment can arrive while
+		// this call is still running and must find the first one here.
+		l.firstNotification = note
+	}
+	if err := note.Show(); err != nil {
+		log.Printf("youkai: show notification %q: %v", n.ID, err)
+	}
+}
+
+// OnNotificationClick opens the record a notification names. It restores
+// the window through the one restore route (which stops a live scan, never
+// starts one) and lets the model choose between the scan page's wrap-up
+// state and the record summary.
+func (l *windowLifecycle) OnNotificationClick(id string) {
+	recordID, _, ok := ui.ParseNotificationID(id)
+	if !ok {
+		log.Printf("youkai: ignoring a notification click outside this application")
+		return
+	}
+	l.Restore()
+	l.model.OpenNotification(recordID)
+	// A click on an already visible window changes the page or opens a
+	// prompt after the last native event; request the frame that shows it.
+	l.redraw()
+}
+
+// redraw requests one frame after model state changed outside an input
+// event. The close callback and a notification click both arrive with no
+// follow-up event, so the dialog or page they chose would otherwise remain
+// invisible until the user moved the mouse.
+func (l *windowLifecycle) redraw() {
+	if l.window != nil {
+		l.window.Update(func() {})
+	}
+}
+
 // Refresh reconciles the tray menu with the model's current state. The
 // subscription pump calls it after every applied snapshot; event handlers
 // call it after exit-state changes.
@@ -332,21 +436,22 @@ func (l *windowLifecycle) Refresh() {
 	l.status = status
 	l.statusKnown = true
 	l.tray.SetMenu(l.trayMenu())
-	l.tray.SetToolTip("Youkai · " + status.Text)
+	l.tray.SetToolTip(status.TrayMenu().Status)
 }
 
-// trayMenu builds the menu the icon shows: status, open, stop and exit.
-// Stopping is disabled when no session is active and is only ever the scan
-// stop — it does not quit the application.
+// trayMenu builds the menu the icon shows: the disabled status line, open,
+// stop and exit. The labels and the stop item's enabled state follow the
+// lifecycle states in 08 §7; stopping is only ever the scan stop and never
+// quits the application.
 func (l *windowLifecycle) trayMenu() *mygo.Menu {
-	status := l.model.LifecycleStatus()
+	labels := l.model.LifecycleStatus().TrayMenu()
 	return mygo.NewMenu([]*mygo.MenuItem{
-		{Label: "Youkai · " + status.Text, Disabled: true},
+		{Label: labels.Status, Disabled: true},
 		mygo.Separator(),
-		{Label: "打开主窗口", Click: func(*mygo.MenuItem, *mygo.Window) { l.Restore() }},
-		{Label: "停止扫描", Disabled: !status.Busy, Click: func(*mygo.MenuItem, *mygo.Window) { l.model.Stop() }},
+		{Label: labels.Open, Click: func(*mygo.MenuItem, *mygo.Window) { l.Restore() }},
+		{Label: labels.Stop, Disabled: !labels.StopEnabled, Click: func(*mygo.MenuItem, *mygo.Window) { l.model.Stop() }},
 		mygo.Separator(),
-		{Label: "退出", Click: func(*mygo.MenuItem, *mygo.Window) { l.quitApp() }},
+		{Label: labels.Exit, Click: func(*mygo.MenuItem, *mygo.Window) { l.quitApp() }},
 	})
 }
 

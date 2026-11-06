@@ -98,6 +98,8 @@ func (m *Model) viewPages(c *ui.Context) {
 	// whole window; only one of them is open at a time.
 	m.exportDialogView(c, t)
 	m.navigationPrompt(c, t)
+	m.trayHintDialogView(c, t)
+	m.exitDialogView(c, t)
 }
 
 // navRail is the three-destination rail: icon above label, the active

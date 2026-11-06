@@ -85,7 +85,10 @@ func (m *Model) progressArea(c *ui.Context, t *ui.Theme) {
 		ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
 			if snap.SaveError != "" {
 				ui.Text(c, "保存失败："+snap.SaveError+"（结果尚未保存）").TextColor(t.Danger)
-				if ui.Button(c, "重试保存").Clicked() {
+				// The exit-failure dialog owns the retry while it is open;
+				// a second copy behind the modal would also be the first
+				// label a keyboard or accessibility pass finds.
+				if !m.exitFailureDialogOpen && ui.Button(c, "重试保存").Clicked() {
 					m.RetrySave()
 				}
 			} else if snap.SavePending {
@@ -170,6 +173,10 @@ func (m *Model) exitArea(c *ui.Context, t *ui.Theme) {
 	case exitRunning:
 		ui.Text(c, "正在退出：停止扫描 → 保存结果 → 释放识别资源……").TextColor(t.TextMuted)
 	case exitFailed:
-		ui.Text(c, "退出未完成："+m.exitErr+"。请先“重试保存”，成功后再关闭窗口退出。").TextColor(t.Danger)
+		if m.exitFailedFromSave() {
+			ui.Text(c, "退出未完成："+m.exitErr+"。请先“重试保存”，成功后再关闭窗口退出。").TextColor(t.Danger)
+			return
+		}
+		ui.Text(c, "退出未完成："+m.exitErr+"。当前没有待保存的扫描结果；可在退出失败对话框复制诊断信息，关闭对话框后可继续查看结果。").TextColor(t.Danger)
 	}
 }
