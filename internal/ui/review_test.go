@@ -1509,6 +1509,114 @@ func reviewWarningItem(t *testing.T, seq int64) record.ItemRecord {
 	return item
 }
 
+// TestReviewReloadFailureKeepsDirtyDraft covers L11's silent-loss path: a
+// failed refresh must keep the typed draft (writes stay blocked by recErr).
+func TestReviewReloadFailureKeepsDirtyDraft(t *testing.T) {
+	m, q, tt, svc := openReviewableResults(t, recovery(reviewRowItem(t, 1, 12)), 1180, 760)
+	tt.Frame()
+	if m.edit == nil {
+		t.Fatal("the pending row did not open its editor")
+	}
+	m.edit.draft.Level = "11"
+	m.edit.refresh()
+	svc.mu.Lock()
+	svc.loadErr = map[string]error{"rec": fmt.Errorf("读取失败")}
+	svc.mu.Unlock()
+	m.reloadRecord("rec", false)
+	drainAll(t, m, q)
+	tt.Frame()
+	if m.edit == nil || m.edit.draft.Level != "11" {
+		t.Fatalf("the failed reload dropped the draft: %s", probeReviewState(m))
+	}
+	if m.recErr == "" {
+		t.Fatalf("the failed reload lost its error: %s", probeReviewState(m))
+	}
+}
+
+// TestReviewFormBlockedWhileCleanupRuns covers L11: deletion reloads the
+// open record, so the form must be read-only while that deletion runs.
+func TestReviewFormBlockedWhileCleanupRuns(t *testing.T) {
+	m, _, tt, _ := openReviewableResults(t, recovery(reviewRowItem(t, 1, 12)), 1180, 760)
+	tt.Frame()
+	if m.edit == nil {
+		t.Fatal("the pending row did not open its editor")
+	}
+	m.cleanup = &cleanupPrompt{
+		target:   cleanupOneScreenshots,
+		recordID: "rec",
+		ready:    true,
+		running:  true,
+	}
+	tt.Frame()
+	if !m.reviewActionsBlocked() {
+		t.Fatal("the review form is still editable while cleanup runs")
+	}
+}
+
+// TestReviewCleanEditorClearedWhenFilterHasNoRows covers L9: an empty
+// segment must not leave a clean editor and its save hint behind.
+func TestReviewCleanEditorClearedWhenFilterHasNoRows(t *testing.T) {
+	m, _, tt, _ := openReviewableResults(t, recovery(reviewRowItem(t, 1, 12)), 1180, 760)
+	tt.Frame()
+	if m.edit == nil {
+		m.startEdit()
+		tt.Frame()
+	}
+	if m.edit == nil {
+		t.Fatal("the pending row did not open its editor")
+	}
+	if err := tt.Click("警告"); err != nil {
+		t.Fatalf("click 警告: %v", err)
+	}
+	tt.Frame()
+	if m.edit != nil {
+		t.Fatalf("clean editor survived an empty filter: %s", probeReviewState(m))
+	}
+	if m.selected != -1 {
+		t.Fatalf("empty filter selected row %d: %s", m.selected, probeReviewState(m))
+	}
+	if strings.Contains(m.resultShortcutText(), shortcutSave+" 保存修改") {
+		t.Fatalf("the empty filter still advertises save: %q", m.resultShortcutText())
+	}
+}
+
+// TestReviewFilterClearsFailedRowFeedback covers L10: after a failed
+// confirmation, switching to a segment with another selected row must not
+// leave the old failure band and retry action on that row.
+func TestReviewFilterClearsFailedRowFeedback(t *testing.T) {
+	m, q, tt, svc := openReviewableResults(t, recovery(
+		reviewRowItem(t, 1, 12),
+		reviewWarningItem(t, 4),
+	), 960, 640)
+	tt.Frame()
+	svc.mu.Lock()
+	svc.saveFn = func(string, int64, int64, app.ItemRevisionEdit) (app.ItemRevisionResult, error) {
+		return app.ItemRevisionResult{}, fmt.Errorf("磁盘已满")
+	}
+	svc.mu.Unlock()
+	if err := tt.Click("确认并下一项"); err != nil {
+		t.Fatalf("click confirm: %v", err)
+	}
+	drainAll(t, m, q)
+	tt.Frame()
+	if m.reviewErr == "" {
+		t.Fatal("the failed confirmation did not leave a band")
+	}
+	if err := tt.Click("警告"); err != nil {
+		t.Fatalf("click 警告: %v", err)
+	}
+	tt.Frame()
+	if m.selectedSeq() != 4 {
+		t.Fatalf("warning filter selected #%d: %s", m.selectedSeq(), probeReviewState(m))
+	}
+	if m.reviewErr != "" || m.reviewSaveFailed {
+		t.Fatalf("#4 kept #1's failure: err=%q failed=%v", m.reviewErr, m.reviewSaveFailed)
+	}
+	if tt.HasText("重试确认并下一项") {
+		t.Fatalf("#4 still offers #1's retry: %q", tt.Texts())
+	}
+}
+
 // TestReviewFilterChangeClearsCleanEditor covers H2: a clean editor must
 // not survive a filter change and Ctrl+Enter must never confirm the hidden
 // old row.

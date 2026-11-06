@@ -289,10 +289,9 @@ func (m *Model) selectSummaryClass(class app.ItemClass) bool {
 }
 
 // summaryCounts is the shared four-class partition for the summary's count
-// cells, the workspace header and the pending action labels. The export
-// snapshot is authoritative for the current revision. A record whose export
-// cannot be built falls back to classifying the loaded checkpoint, so that
-// pass runs only while the export snapshot is missing. PR-14b's per-item
+// cells, the workspace header and the pending action labels. It reads the
+// loaded checkpoint's rows through recordClassCounts; the export snapshot is
+// built from that same revision, so both must agree. PR-14b's per-item
 // segments must read this function instead of adding a second counting rule.
 func (m *Model) summaryCounts() app.ItemClassCounts {
 	return m.recordClassCounts()
@@ -515,6 +514,8 @@ func (m *Model) summaryTerminationLine() string {
 	switch term.Kind {
 	case record.TerminationCompleted:
 		return "结束：正常结束"
+	case record.TerminationInterrupted:
+		return "结束：中断恢复"
 	case record.TerminationCancelled:
 		return "结束：手动停止"
 	case record.TerminationFailed:

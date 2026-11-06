@@ -797,6 +797,39 @@ func TestFailedSessionExplainsTermination(t *testing.T) {
 
 // TestCompletionCardBlocksUnknownExport checks that an unknown export
 // list is never presented as a confirmed completion and cannot export.
+func TestCompletionCardBlocksUnknownExport(t *testing.T) {
+	rec := recovery(confirmedReviewItem(t, 1, 12))
+	m, q, tt := openResponsiveResults(t, rec, 1024, 700)
+	saver := &fakeDirectExportSaver{}
+	m.cfg.DirectExportSaver = saver
+	m.exportData = nil
+	m.exportBuildErr = ""
+	tt.Frame()
+
+	if !m.completionVisible() {
+		t.Fatal("the pending-zero record without an export snapshot does not show its blocked state")
+	}
+	if !tt.HasText("不可确认完成") || !tt.HasText("不可确认：导出清单尚未就绪。") {
+		t.Fatalf("the unknown export state is not explained: %q", tt.Texts())
+	}
+	if tt.HasText("都处理完了") {
+		t.Fatal("an unknown export claims completion")
+	}
+	if err := tt.Click("导出…"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if !m.exportDialog.open || !tt.HasText("导出清单尚未就绪，不能导出。") {
+		t.Fatalf("the unknown export dialog did not name its block: %q", tt.Texts())
+	}
+	if err := tt.Click("导出 CSV"); err != nil {
+		t.Fatal(err)
+	}
+	drainAll(t, m, q)
+	if calls := saver.snapshot(); len(calls) != 0 {
+		t.Fatalf("an unknown export wrote %+v", calls)
+	}
+}
 
 // TestCompletionCardShowsPartialCoverage checks the partial coverage
 // warning and the snapshot mark the exported file will carry.

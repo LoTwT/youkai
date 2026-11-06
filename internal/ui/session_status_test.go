@@ -84,6 +84,63 @@ func TestSessionTerminationNotice(t *testing.T) {
 	}
 }
 
+func TestInterruptedEndingSurfacesAgree(t *testing.T) {
+	cases := []struct {
+		name        string
+		term        *record.Termination
+		interrupted bool
+		live        bool
+		summary     string
+		notice      string
+		empty       string
+	}{
+		{
+			name:        "cancelled ending wins over an item flag",
+			term:        &record.Termination{Kind: record.TerminationCancelled, Code: "userCancelled", Phase: record.PhaseCapturing},
+			interrupted: true,
+			summary:     "结束：手动停止",
+			notice:      "扫描已停止：结果只覆盖已采集的条目",
+			empty:       "本次扫描已停止，没有已保存的条目。",
+		},
+		{
+			name:        "failed ending wins over an item flag",
+			term:        &record.Termination{Kind: record.TerminationFailed, Code: "navigationMismatch", Phase: record.PhaseCapturing},
+			interrupted: true,
+			summary:     "结束：中途停止",
+			notice:      "扫描失败：",
+			empty:       "本次扫描失败，没有已保存的条目。",
+		},
+		{
+			name:    "live interrupted termination is still an interruption",
+			term:    &record.Termination{Kind: record.TerminationInterrupted, Code: "interrupted", Phase: record.PhaseCapturing},
+			live:    true,
+			summary: "结束：中断恢复",
+			notice:  "扫描中断：仅保留已完成条目",
+			empty:   "本次扫描中断，没有已保存的条目。",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m, _ := newTestModel(t, Config{Service: &fakeService{}})
+			m.rec = &RecordView{
+				ID: "rec", Live: tc.live, Interrupted: tc.interrupted,
+				Shell: record.SessionShell{Termination: tc.term},
+				Rows:  []Row{{Seq: 1}},
+			}
+			if got := m.summaryTerminationLine(); got != tc.summary {
+				t.Errorf("summary line = %q, want %q", got, tc.summary)
+			}
+			if got := m.emptyResultsTextForTermination(); got != tc.empty {
+				t.Errorf("empty text = %q, want %q", got, tc.empty)
+			}
+			notice, _, ok := sessionTerminationNotice(tc.term, nil, tc.interrupted, tc.live, 1)
+			if !ok || !strings.HasPrefix(notice, tc.notice) {
+				t.Errorf("notice = %q/%v, want prefix %q", notice, ok, tc.notice)
+			}
+		})
+	}
+}
+
 func TestHistoryTerminationLabel(t *testing.T) {
 	cases := []struct {
 		name string

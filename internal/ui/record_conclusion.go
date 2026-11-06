@@ -75,7 +75,8 @@ type recordConclusionInput struct {
 	// not record data.
 	ScanNotWrapped bool
 	// SaveFailed is the live record's failed final save. It is model state,
-	// not record data, and only the summary has it.
+	// not record data; the summary and the active history row both derive
+	// it from the service snapshot.
 	SaveFailed bool
 }
 
@@ -118,9 +119,18 @@ func recordOutcomeFor(in recordConclusionInput) recordOutcome {
 
 // recordConclusionInterrupted applies one definition to both surfaces: a
 // non-live session with no clean termination counts as interrupted even when
-// recovery did not mark any individual item. The list and summary pass their
-// own live/item facts but cannot disagree about the ending.
+// recovery did not mark any individual item. An explicit failed, cancelled or
+// completed termination is the session's actual ending and wins over an item
+// flag; an explicit interrupted termination is always an interruption.
 func recordConclusionInterrupted(term *record.Termination, itemInterrupted, live bool) bool {
+	if term != nil {
+		switch term.Kind {
+		case record.TerminationInterrupted:
+			return true
+		case record.TerminationFailed, record.TerminationCancelled, record.TerminationCompleted:
+			return false
+		}
+	}
 	return itemInterrupted || (!live && app.InterruptedSession(term))
 }
 

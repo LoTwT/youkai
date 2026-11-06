@@ -6,6 +6,7 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -609,6 +610,89 @@ func TestExportDialogAsksForUnsavedChangesFirst(t *testing.T) {
 	}
 }
 
+// typeReviewLevel types into the focused level field, so the save tests use
+// the same input path as a person instead of writing the draft directly.
+func typeReviewLevel(t *testing.T, f *exportDialogFixture, text string) {
+	t.Helper()
+	f.m.requestReviewFieldFocus(FormFieldLevel)
+	f.tt.Frame()
+	f.tt.Frame()
+	if active, _ := f.tt.TextInputActive(); !active {
+		t.Fatalf("the level field did not take focus: %q", f.tt.Texts())
+	}
+	f.tt.Key(ui.Cmd, ui.KeyA)
+	f.tt.Type(text)
+	f.tt.Frame()
+	if f.m.edit == nil || f.m.edit.draft.Level != text {
+		t.Fatalf("typing did not reach the draft: edit=%+v texts=%q", f.m.edit, f.tt.Texts())
+	}
+}
+
+// blockReviewSave holds the next revision save until release is called. The
+// save then fails, so the test can inspect the in-flight state and the
+// retained draft without depending on timing.
+func blockReviewSave(t *testing.T, svc *fakeService) (release func()) {
+	t.Helper()
+	gate := make(chan struct{})
+	svc.mu.Lock()
+	svc.saveFn = func(string, int64, int64, app.ItemRevisionEdit) (app.ItemRevisionResult, error) {
+		<-gate
+		return app.ItemRevisionResult{}, fmt.Errorf("磁盘已满")
+	}
+	svc.mu.Unlock()
+	return func() { close(gate) }
+}
+
+// TestExportDuringReviewSaveKeepsDraft covers H3: neither the button nor
+// Ctrl+E may open the export dialog while a save is in flight, and a failed
+// save must leave the typed draft and its retry band intact.
+func TestExportDuringReviewSaveKeepsDraft(t *testing.T) {
+	for _, entry := range []string{"click", "key"} {
+		t.Run(entry, func(t *testing.T) {
+			f := newExportDialogFixture(t, recovery(reviewRowItem(t, 1, 12)), false)
+			showRecordItems(f.m)
+			f.tt.Frame()
+			if f.m.edit == nil {
+				t.Fatal("the editor did not open")
+			}
+			typeReviewLevel(t, f, "11")
+			release := blockReviewSave(t, f.svc)
+			f.tt.Key(ui.Cmd, ui.KeyS)
+			f.tt.Frame()
+			if !f.m.reviewSaving {
+				release()
+				t.Fatal("the review save did not start")
+			}
+			if entry == "click" {
+				if err := f.tt.Click("导出…"); err != nil {
+					t.Fatalf("click export: %v", err)
+				}
+			} else {
+				f.tt.Key(ui.Cmd, ui.KeyE)
+			}
+			f.tt.Frame()
+			if f.m.exportDialog.open {
+				t.Fatalf("%s opened the export dialog during a save", entry)
+			}
+			if f.m.edit == nil || f.m.edit.draft.Level != "11" {
+				t.Fatalf("%s lost the draft during the save: %+v", entry, f.m.edit)
+			}
+			release()
+			drainAll(t, f.m, f.q)
+			f.tt.Frame()
+			if f.m.edit == nil || f.m.edit.draft.Level != "11" {
+				t.Fatalf("%s lost the draft after the failed save: %+v", entry, f.m.edit)
+			}
+			if !f.m.reviewSaveFailed || !strings.Contains(f.m.reviewErr, "磁盘已满") {
+				t.Fatalf("%s lost the failure state: err=%q failed=%v", entry, f.m.reviewErr, f.m.reviewSaveFailed)
+			}
+			if !f.tt.HasText("保存失败") {
+				t.Fatalf("%s lost the failure band: %q", entry, f.tt.Texts())
+			}
+		})
+	}
+}
+
 // TestExportDialogShowsTheBlockedReason covers S8's 被阻止 state.
 func TestExportDialogShowsTheBlockedReason(t *testing.T) {
 	rec := recovery(uiStructuredItem(t, 1, record.QualityAutoAccepted))
@@ -649,15 +733,18 @@ func TestExportDialogShowsTheBlockedReason(t *testing.T) {
 		t.Fatalf("an unsaved session exported: %+v", calls)
 	}
 
-	// A review save in flight is the third S8 blocked case.
+	// A review save in flight blocks the entry itself, so the draft cannot be
+	// detached by opening the dialog. Other blocked reasons still open the
+	// dialog to explain why the formats cannot run.
 	h := newExportDialogFixture(t, recovery(uiStructuredItem(t, 1, record.QualityAutoAccepted)), false)
 	h.m.reviewSaving = true
-	h.open(t)
+	h.m.requestExport()
+	h.tt.Frame()
+	if h.m.exportDialog.open {
+		t.Fatal("the export dialog opened while a review save was in flight")
+	}
 	if !h.tt.HasText("正在保存修改，完成前不能导出。") {
 		t.Fatalf("the review-save block is missing: %q", h.tt.Texts())
-	}
-	if err := h.tt.Click("导出 CSV"); err != nil {
-		t.Fatalf("click blocked 导出 CSV: %v", err)
 	}
 	if calls := h.saver.snapshot(); len(calls) != 0 {
 		t.Fatalf("a review save in flight exported: %+v", calls)

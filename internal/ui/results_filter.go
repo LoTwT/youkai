@@ -196,6 +196,12 @@ func (m *Model) settleResultSelection() {
 	if len(visible) == 0 {
 		m.selected = -1
 		m.scroll = 0
+		if m.edit != nil && !m.editingDirty() {
+			m.clearEdit()
+		}
+		m.reviewErr = ""
+		m.reviewSaveFailed = false
+		m.reviewNotice = ""
 		return
 	}
 	if m.editingDirty() {
@@ -212,6 +218,9 @@ func (m *Model) settleResultSelection() {
 	m.selectedSequence = m.rec.Rows[m.selected].Seq
 	m.scroll = 0
 	m.clampResultScroll()
+	m.reviewErr = ""
+	m.reviewSaveFailed = false
+	m.reviewNotice = ""
 	if m.edit != nil && !m.editingDirty() {
 		m.clearEdit()
 	}

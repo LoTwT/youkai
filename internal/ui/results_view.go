@@ -814,8 +814,15 @@ func (m *Model) reviewFormPane(c *ui.Context, t *ui.Theme, visible []int) {
 func (m *Model) reviewEmptyForm(c *ui.Context, t *ui.Theme, visible []int) {
 	if m.filter == resultFilterPending && m.reviewSettled() {
 		counts := m.recordCounts()
-		ui.Text(c, "都处理完了").FontWeight(600)
-		if counts.ExportKnown {
+		switch {
+		case !counts.ExportKnown:
+			ui.Text(c, "不可确认完成").FontWeight(600).TextColor(t.Warning)
+			ui.Text(c, "不可确认：导出清单尚未就绪。").TextColor(t.Warning)
+		case counts.Exportable == 0:
+			ui.Text(c, "无可导出条目").FontWeight(600).TextColor(t.Warning)
+			ui.Text(c, "不可确认：无可导出的条目。").TextColor(t.Warning)
+		default:
+			ui.Text(c, "都处理完了").FontWeight(600)
 			ui.Textf(c, "可导出 %d 件 · 排除 %d 件", counts.Exportable, counts.Captured-counts.Exportable)
 		}
 		if ui.PrimaryButton(c, "导出…").Disabled(m.exportEntryBlocked()).Clicked() {

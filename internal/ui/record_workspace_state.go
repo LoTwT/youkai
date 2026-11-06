@@ -397,7 +397,12 @@ func (m *Model) reloadRecord(id string, live bool) {
 			if err != nil {
 				m.loading = false
 				m.recErr = err.Error()
-				m.edit = nil
+				// A failed refresh cannot prove a draft is stale. Keep dirty
+				// input visible (writes stay blocked by recErr) instead of
+				// silently dropping what the person typed.
+				if m.edit == nil || !m.edit.dirty() {
+					m.edit = nil
+				}
 				m.navPrompt = nil
 				if m.exportAfterLoadID == id {
 					m.exportAfterLoadID = ""
