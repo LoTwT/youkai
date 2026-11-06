@@ -452,6 +452,9 @@ func resultFilterLabel(value, allLabel string, options []resultFilterOption) str
 // are registered and usable in the current layout; every label comes from
 // shortcut_text.go.
 func (m *Model) registerResultsShortcuts(c *ui.Context) {
+	if m.exportDialog.open {
+		return
+	}
 	if m.reviewSaving || m.loading || m.recErr != "" || m.exportBusy() {
 		return
 	}

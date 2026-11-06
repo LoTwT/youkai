@@ -19,8 +19,8 @@ const (
 	shortcutSave = "Ctrl+S"
 	// shortcutNextPending moves to the next pending item.
 	shortcutNextPending = "Ctrl+J"
-	// shortcutExport reveals the record's export controls until the export
-	// dialog replaces them.
+	// shortcutExport opens the record's export dialog from the record
+	// workspace.
 	shortcutExport = "Ctrl+E"
 	// shortcutFocusRegion moves the keyboard between the page's large
 	// regions.

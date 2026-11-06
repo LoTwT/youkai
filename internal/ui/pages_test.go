@@ -316,8 +316,8 @@ func TestRecordWorkspaceSwitchesViews(t *testing.T) {
 }
 
 // TestRecordWorkspaceShortcuts checks the two registered skeletons:
-// Ctrl+E brings the export controls into view, Shift+F6 returns the
-// keyboard to the rail, and F6 moves it into the workspace's first region.
+// Ctrl+E opens the export dialog, Shift+F6 returns the keyboard to the
+// rail, and F6 moves it into the workspace's first region.
 func TestRecordWorkspaceShortcuts(t *testing.T) {
 	svc := &fakeService{
 		list: []record.RecordInfo{{
@@ -339,8 +339,8 @@ func TestRecordWorkspaceShortcuts(t *testing.T) {
 	m.OpenHistory()
 	settle(t, m, q, tt)
 
-	if m.recordTab != recordTabSummary || !tt.HasText("导出 JSON") {
-		t.Fatalf("the summary does not hold the export controls: tab %v %q", m.recordTab, tt.Texts())
+	if m.recordTab != recordTabSummary || !tt.HasText("导出…") {
+		t.Fatalf("the title bar does not hold the export entry: tab %v %q", m.recordTab, tt.Texts())
 	}
 	if err := tt.Click("逐件"); err != nil {
 		t.Fatal(err)
@@ -352,10 +352,19 @@ func TestRecordWorkspaceShortcuts(t *testing.T) {
 
 	tt.Key(ui.Cmd, ui.KeyE)
 	settle(t, m, q, tt)
-	if m.recordTab != recordTabSummary || !tt.HasText("导出 JSON") {
-		t.Fatalf("Ctrl+E did not reveal the export controls: tab %v %q", m.recordTab, tt.Texts())
+	if !m.exportDialog.open || !tt.HasText("导出 JSON") || !tt.Focused("导出 JSON") {
+		t.Fatalf("Ctrl+E did not open the export dialog: open=%t %q", m.exportDialog.open, tt.Texts())
+	}
+	tt.Key(0, ui.KeyEscape)
+	settle(t, m, q, tt)
+	if m.exportDialog.open || m.recordTab != recordTabItems {
+		t.Fatalf("Esc left dialog=%t tab=%v", m.exportDialog.open, m.recordTab)
 	}
 
+	if err := tt.Click("摘要"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
 	tt.Key(ui.Shift, ui.KeyF6)
 	settle(t, m, q, tt)
 	if !tt.Focused("记录") {
@@ -367,9 +376,9 @@ func TestRecordWorkspaceShortcuts(t *testing.T) {
 		t.Fatalf("F6 did not enter the workspace's first region: %q", tt.Texts())
 	}
 
-	// A record with no exportable item blocks the export entry, so Ctrl+E
-	// is not registered: the item view stays where it is (L-2's reverse
-	// path).
+	// A record with no exportable item still offers the empty export
+	// (F-22); Ctrl+E opens the dialog on its zero-exportable state with
+	// the review entry focused, and the item view stays behind it.
 	blockedSvc := &fakeService{
 		list: []record.RecordInfo{{
 			ID: "r2", LatestRevision: 1,
@@ -396,8 +405,11 @@ func TestRecordWorkspaceShortcuts(t *testing.T) {
 	}
 	blockedTester.Key(ui.Cmd, ui.KeyE)
 	settle(t, blockedModel, blockedQueue, blockedTester)
-	if blockedModel.recordTab != recordTabItems {
-		t.Fatalf("Ctrl+E moved a blocked export to tab %v", blockedModel.recordTab)
+	if !blockedModel.exportDialog.open || blockedModel.recordTab != recordTabItems {
+		t.Fatalf("Ctrl+E left dialog=%t tab=%v", blockedModel.exportDialog.open, blockedModel.recordTab)
+	}
+	if !blockedTester.HasText("没有可导出的件") || !blockedTester.Focused("去校对") {
+		t.Fatalf("the zero-exportable dialog did not start on review: %q", blockedTester.Texts())
 	}
 }
 
@@ -490,7 +502,7 @@ func TestWorkspaceCoverageMatchesTheConclusion(t *testing.T) {
 	if !tt.HasText("没有扫全：覆盖不完整") {
 		t.Fatalf("the summary does not show the same coverage: %q", tt.Texts())
 	}
-	if tt.HasText("覆盖：完整") || tt.HasText("扫全了") {
+	if tt.HasText("覆盖：全部") || tt.HasText("覆盖：完整") || tt.HasText("扫全了") {
 		t.Fatalf("a coverage the export cannot confirm is shown as complete: %q", tt.Texts())
 	}
 }

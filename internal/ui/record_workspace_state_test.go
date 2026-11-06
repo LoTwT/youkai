@@ -733,7 +733,7 @@ func TestFinalCheckpointLoadingGatesCompletionAndExport(t *testing.T) {
 	if m.exportData == nil || m.exportData.Summary.Included != 1 {
 		t.Fatalf("the stale export snapshot changed before the load landed: %+v", m.exportData)
 	}
-	m.ExportJSON()
+	m.startExport(app.ExportJSON)
 	if calls := saver.snapshot(); len(calls) != 0 {
 		t.Fatalf("an export started from the stale snapshot: %+v", calls)
 	}
@@ -931,7 +931,7 @@ func TestFinalCheckpointLoadingBlocksConfirmation(t *testing.T) {
 
 	// Export stays blocked too: writing the stale one-row snapshot would
 	// disagree with the checkpoint on disk.
-	m.ExportJSON()
+	m.startExport(app.ExportJSON)
 	if calls := saver.snapshot(); len(calls) != 0 {
 		t.Fatalf("an export started from the stale snapshot: %+v", calls)
 	}
@@ -950,9 +950,7 @@ func TestFinalCheckpointLoadingBlocksConfirmation(t *testing.T) {
 		t.Fatalf("the export snapshot did not advance: %+v", m.exportData)
 	}
 
-	if err := tt.Click("导出 JSON"); err != nil {
-		t.Fatalf("click 导出 JSON: %v", err)
-	}
+	m.startExport(app.ExportJSON)
 	drainAll(t, m, q)
 	calls := saver.snapshot()
 	if len(calls) != 1 {

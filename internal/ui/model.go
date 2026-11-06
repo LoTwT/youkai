@@ -109,7 +109,9 @@ type Config struct {
 	// nil disables images (the details show their texts only).
 	Evidence EvidenceSource
 	// DirectExportSaver writes the usable-data JSON/CSV files straight into
-	// the system downloads directory; nil hides the export controls.
+	// the system downloads directory; nil hides the export controls. A
+	// saver that also implements CancelableDirectExportSaver lets the
+	// dialog stop before a file is committed.
 	DirectExportSaver DirectExportSaver
 	// OpenDownloadsDirectory reveals the direct export directory with the
 	// system file manager; nil hides the "open directory" action.
@@ -239,8 +241,7 @@ type Model struct {
 	historyLoading bool
 	// historyLoadSeq identifies the newest load; a late result from an
 	// older load must not replace its list or clear its loading state.
-	historyLoadSeq   uint64
-	historyExporting string
+	historyLoadSeq uint64
 
 	// The records list's date filter (08 §5). The two dates are inclusive
 	// local days; active is false while the range still spans every record,
@@ -278,10 +279,17 @@ type Model struct {
 
 	// exporting is the shared export slot: one export runs at a time. Its
 	// frozen snapshot lives in the open record's workspace; exportOutcome
-	// carries the direct export's global status strip message so switching
-	// destinations cannot hide it.
+	// is the result the modal renders. exportDialog owns the modal's own
+	// pre-export, running, canceled, failure and success states, and
+	// exportCancel stops the running write when the modal's 取消 is used.
 	exporting     bool
 	exportOutcome *exportOutcome
+	exportDialog  exportDialogState
+	exportCancel  func()
+	// exportAfterLoadID is the record whose load should open the export
+	// dialog when it lands. The records list sets it through navOpenRecord;
+	// a normal record open or a failed load clears it.
+	exportAfterLoadID string
 
 	// page is the shell's current destination: scan, the records list or
 	// one record's workspace, or settings. It starts on scan and only
@@ -865,9 +873,14 @@ func (m *Model) openRecord(id string) {
 // ShowLive. The entry checks keep a record already on screen in place, so
 // this action always replaces the workspace and loads from disk; it also
 // retries a record whose previous load failed.
-func (m *Model) performOpenRecord(id string) {
+func (m *Model) performOpenRecord(id string, exportAfterLoad bool) {
 	if id == "" {
 		return
+	}
+	if exportAfterLoad {
+		m.exportAfterLoadID = id
+	} else {
+		m.exportAfterLoadID = ""
 	}
 	live := m.recordIsLive(id)
 	m.showRecord(id, live)
