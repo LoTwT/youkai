@@ -85,7 +85,10 @@ func (m *Model) progressArea(c *ui.Context, t *ui.Theme) {
 		ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
 			if snap.SaveError != "" {
 				ui.Text(c, "保存失败："+snap.SaveError+"（结果尚未保存）").TextColor(t.Danger)
-				if ui.Button(c, "重试保存").Clicked() {
+				// The exit-failure dialog owns the retry while it is open;
+				// a second copy behind the modal would also be the first
+				// label a keyboard or accessibility pass finds.
+				if !m.exitFailureDialogOpen && ui.Button(c, "重试保存").Clicked() {
 					m.RetrySave()
 				}
 			} else if snap.SavePending {

@@ -230,7 +230,12 @@ func TestLifecycleStatusRendersTrayState(t *testing.T) {
 	if status := m.LifecycleStatus(); status.Text != "扫描中" || !status.Busy {
 		t.Fatalf("scanning status = %+v", status)
 	}
-	m.Apply(snap("s1", 2, true, scan.PhaseFinalizing, scan.Counts{Captured: 1}, 1, true, "disk full"))
+	m.Apply(snap("s1", 2, true, scan.PhaseFinalizing, scan.Counts{Captured: 1}, 1, true, ""))
+	drainAll(t, m, q)
+	if status := m.LifecycleStatus(); status.Text != "收尾中" || status.Busy {
+		t.Fatalf("wrap-up status = %+v", status)
+	}
+	m.Apply(snap("s1", 3, true, scan.PhaseFinalizing, scan.Counts{Captured: 1}, 1, true, "disk full"))
 	drainAll(t, m, q)
 	if status := m.LifecycleStatus(); status.Text != "保存失败" {
 		t.Fatalf("save-failure status = %+v", status)

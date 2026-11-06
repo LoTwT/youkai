@@ -93,10 +93,16 @@ func TestViewCloseBehaviorPreference(t *testing.T) {
 		t.Fatalf("saved preferences = %v", saved)
 	}
 
-	m.SetWindowNotice("托盘/菜单栏入口不可用（test）。关闭窗口将停止扫描并退出应用。")
+	m.SetTrayUnavailable("test")
 	tt.Frame()
-	if !tt.HasText("托盘/菜单栏入口不可用") {
-		t.Fatal("the tray-unavailable notice does not show")
+	if !tt.HasText("关闭窗口时停止扫描并退出") {
+		t.Fatal("the fixed close option does not show")
+	}
+	if !tt.HasText("通知区域图标不可用") {
+		t.Fatal("the fixed close option does not state why")
+	}
+	if tt.HasText("再看一次托盘图标位置提示") {
+		t.Fatal("the tray-hint replay is offered without a tray")
 	}
 }
 

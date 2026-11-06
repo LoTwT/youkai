@@ -250,15 +250,34 @@ func main() {
 		DevAutoInstall: os.Getenv("YOUKAI_DEV_AUTOUPDATE") != "",
 		// The close preference is read at startup and persisted in the data
 		// root; the window's setting row changes it. Closing hides by
-		// default; quitting always runs the explicit-exit wrap-up.
+		// default; quitting always runs the explicit-exit wrap-up. The
+		// settings value keeps both preferences, so saving one never erases
+		// the other.
 		CloseBehavior: settings.CloseBehavior,
 		SaveCloseBehavior: func(behavior app.CloseBehavior) error {
-			err := app.SaveSettings(paths.Data, app.Settings{CloseBehavior: behavior})
+			settings.CloseBehavior = behavior
+			err := app.SaveSettings(paths.Data, settings)
 			if err != nil {
 				log.Printf("youkai: save settings: %v", err)
 			}
 			return err
 		},
+		// The first-hide hint is acknowledged once; its persisted flag is
+		// what keeps later closes from asking again (R-18).
+		TrayHintSeen: settings.TrayHintSeen,
+		SaveTrayHintSeen: func(seen bool) error {
+			settings.TrayHintSeen = seen
+			err := app.SaveSettings(paths.Data, settings)
+			if err != nil {
+				log.Printf("youkai: save settings: %v", err)
+			}
+			return err
+		},
+		// The two-stage scan notifications and the first-hide hint's hide
+		// action belong to the native lifecycle; the model only assembles
+		// the text and decides which record a click opens.
+		Notify:     func(n ui.Notification) { life.Notify(n) },
+		HideToTray: func() { life.HideToTray() },
 		// After a successful install the application restarts into the new
 		// version: this first Relaunch only starts the exit — the close
 		// interception cancels it (see updateInstalled above) after firing
@@ -319,6 +338,10 @@ func main() {
 	mygo.App.OnBeforeQuit(func(e *mygo.QuitEvent) {
 		life.OnBeforeQuit(e)
 	})
+	// Notification clicks can arrive after this run's Notification object is
+	// gone (or from the notification center); the ID carries the record and
+	// segment, so one app-wide handler covers both segments.
+	mygo.App.OnNotificationClick(life.OnNotificationClick)
 
 	mygo.App.WhenReady(func() {
 		placement := windowPlacementFor(mygo.Screen.PrimaryDisplay().WorkArea)
