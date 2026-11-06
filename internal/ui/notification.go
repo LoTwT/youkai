@@ -86,19 +86,31 @@ func (m *Model) OpenNotification(recordID string) {
 	if recordID == "" {
 		return
 	}
+	// The click is a navigation of its own: dialogs left from an earlier
+	// action must not keep ownership of the window (a pending first-hide
+	// hint would otherwise hide the just-restored window on acknowledgement).
+	m.closeExportDialog()
+	m.trayHintOpen = false
+	m.trayHintHideOnDone = false
 	if m.appliedSession == scan.ID(recordID) && m.snap.Busy {
 		// A dirty editor keeps its own prompt; the notification must not
 		// discard the draft just to reveal the wrap-up.
 		m.navigatePage(pageScan)
 		return
 	}
+	if m.recordIsOpen(recordID) && m.recErr == "" && !m.editingDirty() && !m.reviewSaving {
+		// The design sends the click to the summary even when the same
+		// record is open on the item list. A dirty draft keeps its editor
+		// until the prompt settles; performOpenRecord then selects the tab.
+		m.recordTab = recordTabSummary
+	}
 	m.openRecord(recordID)
 }
 
 // notificationFacts is the record data the notification wording reads. The
-// live record supplies the four-class counts and position ledger; the
-// service snapshot supplies the ending and, when the record has not loaded
-// yet, the captured and saved counts.
+// final record supplies the four-class counts and position ledger; the
+// service snapshot supplies the ending and, when the record could not be
+// loaded, the captured and saved counts.
 type notificationFacts struct {
 	captured      int
 	saved         int
@@ -114,29 +126,64 @@ type notificationFacts struct {
 	saveFailed    bool
 }
 
+// sessionNotifications is one session's announced segments. It is keyed by
+// session and never replaced on a session switch: Service.abort can roll a
+// refused start back to the previous session, whose result must not repeat.
+type sessionNotifications struct {
+	inputStopped bool
+	resultQueued bool
+	seenFailures int
+	pending      *pendingResult
+}
+
+// pendingResult is a result notification waiting for the wrap-up's final
+// record. Its wording must read the same counts and coverage as the summary,
+// which only exist after that load; a failed load still sends the
+// conservative snapshot wording.
+type pendingResult struct {
+	snap app.Snapshot
+	// loadVersion is the workspace load already reading the final record.
+	// Zero means no such load is running and the notification starts its
+	// own read.
+	loadVersion int64
+}
+
+// sessionNotificationState returns one session's announcement record,
+// creating it on first sight.
+func (m *Model) sessionNotificationState(id scan.ID) *sessionNotifications {
+	if m.notifySessions == nil {
+		m.notifySessions = make(map[scan.ID]*sessionNotifications)
+	}
+	state := m.notifySessions[id]
+	if state == nil {
+		state = &sessionNotifications{}
+		m.notifySessions[id] = state
+	}
+	return state
+}
+
 // notifySnapshot derives the two notification edges from accepted service
 // snapshots. The first segment only follows an observed input permission
 // closing; a session that never opened input (prepare timeout, precheck
 // failure) produces the second segment alone. A wrap-up's first save
 // failure replaces the result notification and is sent once.
-func (m *Model) notifySnapshot(previous app.Snapshot, hadPrevious bool, snap app.Snapshot) {
+func (m *Model) notifySnapshot(previous app.Snapshot, hadPrevious bool, snap app.Snapshot, finalLoadVersion int64) {
 	if snap.SessionID == "" {
 		return
 	}
-	if snap.SessionID != m.notifySession {
-		m.notifySession = snap.SessionID
-		m.notifyInputStopped = false
-		m.notifyFinished = false
-		m.notifySaveFailure = false
-		m.notifySeenFailures = 0
+	state := m.sessionNotificationState(snap.SessionID)
+	if snap.FinalSaveFailures > state.seenFailures {
+		state.seenFailures = snap.FinalSaveFailures
+		if snap.SaveError != "" && !state.resultQueued {
+			state.resultQueued = true
+			m.emitNotification(m.resultNotification(snap, true, nil))
+		}
 	}
-	failureEdge := snap.FinalSaveFailures > m.notifySeenFailures
-	m.notifySeenFailures = snap.FinalSaveFailures
 
 	sameSession := hadPrevious && previous.SessionID == snap.SessionID
 	if sameSession && previous.Scan.InputPermitted && !snap.Scan.InputPermitted &&
-		snap.Scan.InputOpened && !m.notifyInputStopped {
-		m.notifyInputStopped = true
+		snap.Scan.InputOpened && !state.inputStopped {
+		state.inputStopped = true
 		m.emitNotification(Notification{
 			ID:       NotificationID(string(snap.SessionID), NotificationInputStopped),
 			Segment:  NotificationInputStopped,
@@ -154,18 +201,59 @@ func (m *Model) notifySnapshot(previous app.Snapshot, hadPrevious bool, snap app
 		// preparation failure) still reports its result.
 		finishEdge = !snap.Busy && snap.Scan.Phase == scan.PhaseEnded
 	}
-	if failureEdge && snap.SaveError != "" {
-		if !m.notifyFinished {
-			m.notifySaveFailure = true
-			m.notifyFinished = true
-			m.emitNotification(m.resultNotification(snap, true))
-		}
+	if !finishEdge || state.resultQueued {
 		return
 	}
-	if finishEdge && !m.notifyFinished && !m.notifySaveFailure {
-		m.notifyFinished = true
-		m.emitNotification(m.resultNotification(snap, false))
+	state.resultQueued = true
+	m.queueResultNotification(snap, finalLoadVersion)
+}
+
+// queueResultNotification defers the result segment until the session's
+// final record loaded. The wrap-up's save completed before the ended
+// snapshot, so both this read and the workspace reload named by
+// finalLoadVersion see the generation the summary shows. The segment is
+// still sent once if that load fails, with the snapshot's conservative
+// wording.
+func (m *Model) queueResultNotification(snap app.Snapshot, finalLoadVersion int64) {
+	id := snap.SessionID
+	m.sessionNotificationState(id).pending = &pendingResult{
+		snap:        snap,
+		loadVersion: finalLoadVersion,
 	}
+	if finalLoadVersion != 0 {
+		return
+	}
+	m.goAsync(func() {
+		rec, err := m.cfg.Service.LoadRecord(string(id))
+		m.update(func() { m.settleResultNotification(id, rec, err) })
+	})
+}
+
+// settleResultNotification sends the deferred result exactly once after
+// the notification's own load. A failed load falls back to the snapshot
+// facts.
+func (m *Model) settleResultNotification(id scan.ID, rec *record.Recovery, loadErr error) {
+	m.settlePendingResult(id, rec, loadErr, 0)
+}
+
+// settleResultFromRecord settles a pending result from a workspace reload.
+// The version keeps a stale read from standing in for the load the result
+// actually waits for.
+func (m *Model) settleResultFromRecord(id scan.ID, rec *record.Recovery, loadErr error, version int64) {
+	m.settlePendingResult(id, rec, loadErr, version)
+}
+
+func (m *Model) settlePendingResult(id scan.ID, rec *record.Recovery, loadErr error, version int64) {
+	state := m.notifySessions[id]
+	if state == nil || state.pending == nil || state.pending.loadVersion != version {
+		return
+	}
+	snap := state.pending.snap
+	state.pending = nil
+	if loadErr != nil {
+		rec = nil
+	}
+	m.emitNotification(m.resultNotification(snap, false, rec))
 }
 
 func (m *Model) emitNotification(n Notification) {
@@ -175,10 +263,11 @@ func (m *Model) emitNotification(n Notification) {
 }
 
 // resultNotification assembles the second segment. saveFailed selects the
-// save-failure wording; otherwise the ending, coverage and four-class counts
-// decide the title and body.
-func (m *Model) resultNotification(snap app.Snapshot, saveFailed bool) Notification {
-	facts := m.notificationFactsFor(snap)
+// save-failure wording; otherwise the final record's coverage and four-class
+// counts decide the title and body, falling back to the snapshot when the
+// record could not be read.
+func (m *Model) resultNotification(snap app.Snapshot, saveFailed bool, rec *record.Recovery) Notification {
+	facts := notificationFactsFor(snap, rec)
 	facts.saveFailed = saveFailed
 	title, body := notificationWording(facts)
 	return Notification{
@@ -191,7 +280,10 @@ func (m *Model) resultNotification(snap app.Snapshot, saveFailed bool) Notificat
 	}
 }
 
-func (m *Model) notificationFactsFor(snap app.Snapshot) notificationFacts {
+// notificationFactsFor reads the conclusion from the final record when it
+// loaded. The summary builds its four-class cells and coverage from the same
+// recovery, so both surfaces always agree.
+func notificationFactsFor(snap app.Snapshot, rec *record.Recovery) notificationFacts {
 	facts := notificationFacts{
 		captured:    snap.Scan.Counts.Captured,
 		saved:       snap.SavedCount,
@@ -199,14 +291,15 @@ func (m *Model) notificationFactsFor(snap app.Snapshot) notificationFacts {
 		end:         snap.Scan.End,
 		trigger:     snap.Scan.Trigger,
 	}
-	if m.rec != nil && m.rec.ID == string(snap.SessionID) && m.recData != nil {
-		facts.counts = m.rec.Classes
+	if rec != nil {
+		view := BuildRecordView(string(snap.SessionID), rec, false)
+		facts.counts = view.Classes
 		facts.countsKnown = true
-		facts.coverage = m.rec.Shell.Coverage.Status
-		facts.outcomes, facts.outcomesKnown = app.PositionOutcomesOf(m.rec.Shell)
-		facts.failureParams = m.rec.Shell.FailureParams
-		if len(m.rec.Rows) > facts.captured {
-			facts.captured = len(m.rec.Rows)
+		facts.coverage = view.Shell.Coverage.Status
+		facts.outcomes, facts.outcomesKnown = app.PositionOutcomesOf(view.Shell)
+		facts.failureParams = view.Shell.FailureParams
+		if len(view.Rows) > facts.captured {
+			facts.captured = len(view.Rows)
 		}
 	}
 	if facts.saved == 0 && facts.captured > 0 {
@@ -223,6 +316,11 @@ func notificationWording(facts notificationFacts) (string, string) {
 		return "扫描结果还没有保存", "保存失败，需要在 youkai 里重试。点击打开。"
 	}
 	if !facts.inputOpened {
+		// A user stop during preparation never opened input, but the
+		// precheck did not fail: report the stop, not a failed check.
+		if facts.trigger != nil && facts.trigger.Kind == scan.TriggerUser {
+			return "扫描已手动停止", "还没有开始扫描。点击查看。"
+		}
 		return "没有开始扫描", preparationNotificationBody(facts)
 	}
 	if facts.end == scan.EndFailed ||

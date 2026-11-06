@@ -94,6 +94,46 @@ func TestFirstHideHintDismissalKeepsItDue(t *testing.T) {
 	}
 }
 
+// TestBeginExitClosesTheFirstHideHint checks L-3: the exit progress owns
+// the window instead of stacking under the still-open hint.
+func TestBeginExitClosesTheFirstHideHint(t *testing.T) {
+	m, q := newTestModel(t, Config{Service: &fakeService{}})
+	m.ShowFirstHideHint()
+	m.beginExit()
+	if m.trayHintOpen || m.trayHintHideOnDone {
+		t.Fatalf("the exit left the hint open=%v hideOnDone=%v",
+			m.trayHintOpen, m.trayHintHideOnDone)
+	}
+	drainAll(t, m, q)
+}
+
+// TestExitFailureStatusFollowsTheRetriedSave checks M-3: a successful
+// retry clears the save failure, and the tray must stop claiming the
+// result is unsaved just because the exit attempt failed earlier.
+func TestExitFailureStatusFollowsTheRetriedSave(t *testing.T) {
+	m, q := newTestModel(t, Config{Service: &fakeService{}})
+	m.exitState = exitFailed
+	failed := snap("s1", 2, true, scan.PhaseEnded,
+		scan.Counts{Captured: 3}, 2, true, "磁盘已满")
+	failed.FinalSaveFailures = 1
+	m.Apply(failed)
+	if got := m.LifecycleStatus().Text; got != "保存失败" {
+		t.Fatalf("tray status with an unsaved result = %q, want 保存失败", got)
+	}
+
+	retried := snap("s1", 3, false, scan.PhaseEnded,
+		scan.Counts{Captured: 3}, 3, false, "")
+	m.Apply(retried)
+	drainAll(t, m, q)
+	if got := m.LifecycleStatus().Text; got != "就绪" {
+		t.Fatalf("tray status after the retried save = %q, want 就绪", got)
+	}
+	labels := m.LifecycleStatus().TrayMenu()
+	if labels.Open != "打开 youkai" || labels.Exit != "退出 youkai" {
+		t.Fatalf("stale failed-exit menu after the retried save: %+v", labels)
+	}
+}
+
 // TestExitDialogs checks the running and failed wrap-up dialogs.
 func TestExitDialogs(t *testing.T) {
 	release := make(chan struct{})

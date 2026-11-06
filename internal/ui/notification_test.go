@@ -1,23 +1,26 @@
 package ui
 
 import (
+	"errors"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/LoTwT/youkai/internal/app"
 	"github.com/LoTwT/youkai/internal/record"
 	"github.com/LoTwT/youkai/internal/scan"
 )
 
-func notificationModel(t *testing.T) (*Model, *fakeService, *[]Notification) {
+func notificationModel(t *testing.T) (*Model, *fakeService, *[]Notification, *queueUpdater) {
 	t.Helper()
-	svc := &fakeService{}
+	svc := &fakeService{loads: map[string]*record.Recovery{}}
 	var got []Notification
-	m, _ := newTestModel(t, Config{
+	m, q := newTestModel(t, Config{
 		Service: svc,
 		Notify:  func(n Notification) { got = append(got, n) },
 	})
-	return m, svc, &got
+	return m, svc, &got, q
 }
 
 func openCapturing(session string, rev uint64, captured int) app.Snapshot {
@@ -28,19 +31,80 @@ func openCapturing(session string, rev uint64, captured int) app.Snapshot {
 	return s
 }
 
-// TestNotificationsFollowInputStopAndWrapUp checks the two-stage order and
-// the session-derived IDs.
+func stoppingSession(session string, rev uint64, captured int) app.Snapshot {
+	s := openCapturing(session, rev, captured)
+	s.Scan.Phase = scan.PhaseFinalizing
+	s.Scan.InputPermitted = false
+	return s
+}
+
+func endedSession(session string, rev uint64, captured, saved int) app.Snapshot {
+	s := openCapturing(session, rev, captured)
+	s.Busy = false
+	s.SavePending = false
+	s.SavedCount = saved
+	s.Scan.Phase = scan.PhaseEnded
+	s.Scan.End = scan.EndCompleted
+	s.Scan.InputPermitted = false
+	return s
+}
+
+// failedItems makes n captured items whose recognition failed: each one is
+// a pending backfill, the four-class total a completed scan with unresolved
+// items reports.
+func failedItems(n int) []record.ItemRecord {
+	items := make([]record.ItemRecord, n)
+	for i := range items {
+		items[i] = record.ItemRecord{Sequence: int64(i + 1), Status: record.StatusFailed}
+	}
+	return items
+}
+
+func completePositions() []record.PositionConclusion {
+	out := make([]record.PositionConclusion, 0, record.PositionCount)
+	for position := 1; position <= record.PositionCount; position++ {
+		out = append(out, record.PositionConclusion{Position: position, Complete: true})
+	}
+	return out
+}
+
+func notificationRecord(items []record.ItemRecord, coverage record.CoverageStatus,
+	positions []record.PositionConclusion) *record.Recovery {
+	rec := &record.Recovery{Checkpoint: record.Checkpoint{
+		Session: record.SessionShell{Coverage: record.Coverage{Status: coverage}},
+		Items:   items,
+	}}
+	if positions != nil {
+		rec.Checkpoint.Session.PositionLedger = &record.PositionLedger{Positions: positions}
+	}
+	return rec
+}
+
+func waitUntil(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s", what)
+}
+
+// TestNotificationsFollowInputStopAndWrapUp checks the two-stage order, the
+// session-derived IDs, and that the result reads the loaded final record.
 func TestNotificationsFollowInputStopAndWrapUp(t *testing.T) {
-	m, _, got := notificationModel(t)
+	m, svc, got, q := notificationModel(t)
+	svc.loads["s1"] = notificationRecord(failedItems(3), record.CoverageComplete, completePositions())
+
 	m.Apply(openCapturing("s1", 1, 3))
+	drainAll(t, m, q)
 	if len(*got) != 0 {
 		t.Fatalf("a running scan notified: %+v", *got)
 	}
 
-	stopping := openCapturing("s1", 2, 3)
-	stopping.Scan.Phase = scan.PhaseFinalizing
-	stopping.Scan.InputPermitted = false
-	m.Apply(stopping)
+	m.Apply(stoppingSession("s1", 2, 3))
 	if len(*got) != 1 {
 		t.Fatalf("input stop notifications = %d, want 1: %+v", len(*got), *got)
 	}
@@ -55,23 +119,8 @@ func TestNotificationsFollowInputStopAndWrapUp(t *testing.T) {
 		t.Fatal("the input-stop notification flashes the taskbar")
 	}
 
-	// The open record supplies the four-class counts and coverage.
-	m.rec = &RecordView{
-		ID:      "s1",
-		Live:    true,
-		Classes: app.ItemClassCounts{Passed: 3},
-		Shell: record.SessionShell{
-			Coverage: record.Coverage{Status: record.CoverageComplete},
-		},
-	}
-	m.recData = &record.Recovery{}
-	ended := openCapturing("s1", 3, 3)
-	ended.Busy = false
-	ended.SavePending = false
-	ended.Scan.Phase = scan.PhaseEnded
-	ended.Scan.End = scan.EndCompleted
-	ended.Scan.InputPermitted = false
-	m.Apply(ended)
+	m.Apply(endedSession("s1", 3, 3, 3))
+	drainAll(t, m, q)
 	if len(*got) != 2 {
 		t.Fatalf("wrap-up notifications = %d, want the second segment: %+v", len(*got), *got)
 	}
@@ -82,21 +131,163 @@ func TestNotificationsFollowInputStopAndWrapUp(t *testing.T) {
 	if second.ID != NotificationID("s1", NotificationResult) {
 		t.Fatalf("second notification ID = %q", second.ID)
 	}
-	if second.Title != "扫描完成：扫全了" || second.Body != "3 件可以导出。点击查看结果。" {
+	if second.Title != "扫描完成：3 件待校对" ||
+		second.Body != "覆盖全部，其余 0 件可以导出。点击查看。" {
 		t.Fatalf("second notification text = %q / %q", second.Title, second.Body)
+	}
+}
+
+// TestResultNotificationWaitsForTheFinalRecord covers H-1 through all three
+// outcomes: a record with pending items, a partial scan, and no captured
+// item. The model's earlier load returns a stale generation, and both the
+// terminal reload and the notification's own load are held; the result must
+// wait for the final record instead of reading the stale view.
+func TestResultNotificationWaitsForTheFinalRecord(t *testing.T) {
+	cases := []struct {
+		name      string
+		captured  int
+		saved     int
+		final     *record.Recovery
+		wantTitle string
+		wantBody  string
+	}{
+		{
+			name:     "complete with pending items",
+			captured: 5,
+			saved:    5,
+			final: notificationRecord(failedItems(5), record.CoverageComplete,
+				completePositions()),
+			wantTitle: "扫描完成：5 件待校对",
+			wantBody:  "覆盖全部，其余 0 件可以导出。点击查看。",
+		},
+		{
+			name:     "partial coverage",
+			captured: 5,
+			saved:    5,
+			final: notificationRecord(failedItems(5), record.CoveragePartial,
+				[]record.PositionConclusion{
+					{Position: 1, Complete: true},
+					{Position: 2, Complete: true},
+					{Position: 3, Stage: "filter", ReasonCode: "navigationMismatch"},
+					{Position: 4, Complete: true},
+					{Position: 5, Complete: true},
+					{Position: 6, Complete: true},
+				}),
+			wantTitle: "扫描完成，但没有扫全",
+			wantBody:  "3 号位不完整，已保存 5 件。点击查看原因。",
+		},
+		{
+			name:      "nothing captured",
+			captured:  0,
+			saved:     0,
+			final:     notificationRecord(nil, record.CoverageComplete, completePositions()),
+			wantTitle: "扫描完成：没有采集到驱动盘",
+			wantBody:  "点击查看。",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gap := make(chan struct{})
+			var mu sync.Mutex
+			calls := 0
+			terminal := false
+			// Loads from the capturing phase see an early, unrelated
+			// generation; the terminal read is the final record and is held
+			// until the test releases it.
+			stale := notificationRecord(failedItems(1), record.CoverageUnknown, nil)
+			svc := &fakeService{loadFn: func(string) (*record.Recovery, error) {
+				mu.Lock()
+				calls++
+				isTerminal := terminal
+				mu.Unlock()
+				if !isTerminal {
+					return stale, nil
+				}
+				<-gap
+				return tc.final, nil
+			}}
+			var got []Notification
+			m, q := newTestModel(t, Config{
+				Service: svc,
+				Notify:  func(n Notification) { got = append(got, n) },
+			})
+
+			m.Apply(openCapturing("s1", 1, tc.captured))
+			drainAll(t, m, q)
+			m.Apply(stoppingSession("s1", 2, tc.captured))
+			if len(got) != 1 {
+				t.Fatalf("input-stop notifications = %d, want 1", len(got))
+			}
+			mu.Lock()
+			before := calls
+			terminal = true
+			mu.Unlock()
+			m.Apply(endedSession("s1", 3, tc.captured, tc.saved))
+
+			// The terminal reload starts; it may not release the result
+			// before the final record is read.
+			waitUntil(t, "the final record loads to start", func() bool {
+				mu.Lock()
+				defer mu.Unlock()
+				return calls >= before+1
+			})
+			time.Sleep(20 * time.Millisecond)
+			if len(got) != 1 {
+				t.Fatalf("the result was sent before the final record loaded: %+v", got[1:])
+			}
+			close(gap)
+			drainAll(t, m, q)
+			if len(got) != 2 {
+				t.Fatalf("result notifications = %d, want 2 total: %+v", len(got), got)
+			}
+			second := got[1]
+			if second.Segment != NotificationResult || second.Title != tc.wantTitle ||
+				second.Body != tc.wantBody {
+				t.Fatalf("result notification = %+v, want %q / %q", second, tc.wantTitle, tc.wantBody)
+			}
+		})
+	}
+}
+
+// TestResultNotificationSendsWhenTheFinalRecordCannotLoad checks the
+// notification is never lost to a failed read and is not repeated after it.
+func TestResultNotificationSendsWhenTheFinalRecordCannotLoad(t *testing.T) {
+	m, svc, got, q := notificationModel(t)
+	svc.loadErr = map[string]error{"s1": errors.New("no verifiable checkpoint")}
+	m.Apply(openCapturing("s1", 1, 3))
+	drainAll(t, m, q)
+	m.Apply(stoppingSession("s1", 2, 3))
+	m.Apply(endedSession("s1", 3, 3, 3))
+	drainAll(t, m, q)
+	if len(*got) != 2 {
+		t.Fatalf("notifications = %d, want input stop plus the conservative result: %+v", len(*got), *got)
+	}
+	second := (*got)[1]
+	if second.Title != "扫描完成" || second.Body != "已保存 3 件。点击查看。" {
+		t.Fatalf("conservative result = %q / %q", second.Title, second.Body)
+	}
+
+	// A repeated terminal snapshot and a later retry must not send it again.
+	m.Apply(endedSession("s1", 4, 3, 3))
+	m.Apply(openCapturing("s1", 5, 3))
+	m.Apply(endedSession("s1", 6, 3, 3))
+	drainAll(t, m, q)
+	if len(*got) != 2 {
+		t.Fatalf("the failed-load result repeated: %+v", *got)
 	}
 }
 
 // TestPrepareTimeoutSendsOnlyTheResult checks that a session that never
 // opened input has no input-stop segment.
 func TestPrepareTimeoutSendsOnlyTheResult(t *testing.T) {
-	m, _, got := notificationModel(t)
+	m, _, got, q := notificationModel(t)
 	preparing := snap("s1", 1, true, scan.PhasePreparing, scan.Counts{}, 0, false, "")
 	m.Apply(preparing)
 	timeout := snap("s1", 2, false, scan.PhaseEnded, scan.Counts{}, 0, false, "")
 	timeout.Scan.End = scan.EndFailed
 	timeout.Scan.Trigger = &scan.Trigger{Kind: scan.TriggerFault, Code: "prepareTimeout", Phase: scan.PhasePreparing}
 	m.Apply(timeout)
+	drainAll(t, m, q)
 	if len(*got) != 1 {
 		t.Fatalf("prepare-timeout notifications = %d, want the result only: %+v", len(*got), *got)
 	}
@@ -108,19 +299,33 @@ func TestPrepareTimeoutSendsOnlyTheResult(t *testing.T) {
 	}
 }
 
+// TestUserStopDuringPreparationReportsTheStop checks L-1: a stop before
+// input opened is a manual stop, not a failed precheck.
+func TestUserStopDuringPreparationReportsTheStop(t *testing.T) {
+	m, _, got, q := notificationModel(t)
+	m.Apply(snap("s1", 1, true, scan.PhasePreparing, scan.Counts{}, 0, false, ""))
+	stopped := snap("s1", 2, false, scan.PhaseEnded, scan.Counts{}, 0, false, "")
+	stopped.Scan.End = scan.EndCancelled
+	stopped.Scan.Trigger = &scan.Trigger{Kind: scan.TriggerUser, Code: scan.CodeUserCancelled}
+	m.Apply(stopped)
+	drainAll(t, m, q)
+	if len(*got) != 1 {
+		t.Fatalf("preparation-stop notifications = %d, want 1: %+v", len(*got), *got)
+	}
+	if n := (*got)[0]; n.Title != "扫描已手动停止" || n.Body != "还没有开始扫描。点击查看。" {
+		t.Fatalf("preparation-stop notification = %q / %q", n.Title, n.Body)
+	}
+}
+
 // TestSaveFailureNotifiesOncePerWrapUp checks the first final-save failure
 // is announced once; later failures and a successful retry stay silent.
 func TestSaveFailureNotifiesOncePerWrapUp(t *testing.T) {
-	m, _, got := notificationModel(t)
+	m, _, got, q := notificationModel(t)
 	m.Apply(openCapturing("s1", 1, 3))
-	stopping := openCapturing("s1", 2, 3)
-	stopping.Scan.Phase = scan.PhaseFinalizing
-	stopping.Scan.InputPermitted = false
-	m.Apply(stopping)
+	m.Apply(stoppingSession("s1", 2, 3))
 
-	failed := stopping
-	failed.Revision = 3
-	failed.Scan.Phase = scan.PhaseEnded
+	failed := endedSession("s1", 3, 3, 2)
+	failed.Busy = true
 	failed.Scan.End = scan.EndCancelled
 	failed.Scan.Trigger = &scan.Trigger{Kind: scan.TriggerUser, Code: scan.CodeUserCancelled, Phase: scan.PhaseCapturing}
 	failed.FinalSaveFailures = 1
@@ -142,8 +347,61 @@ func TestSaveFailureNotifiesOncePerWrapUp(t *testing.T) {
 	retried.Busy = false
 	retried.SaveError = ""
 	m.Apply(retried)
+	drainAll(t, m, q)
 	if len(*got) != 2 {
 		t.Fatalf("a retry notified again: %+v", *got)
+	}
+}
+
+// TestNotificationEdgesSurviveSessionSwitches checks M-2: each session's
+// announcements are keyed by session and a rollback to an already
+// announced session does not repeat them; a genuinely new session still
+// announces its own two segments.
+func TestNotificationEdgesSurviveSessionSwitches(t *testing.T) {
+	m, svc, got, q := notificationModel(t)
+	svc.loads["a"] = notificationRecord(failedItems(2), record.CoverageComplete, completePositions())
+	svc.loads["b"] = notificationRecord(failedItems(1), record.CoverageComplete, completePositions())
+
+	m.Apply(openCapturing("a", 1, 2))
+	drainAll(t, m, q)
+	m.Apply(stoppingSession("a", 2, 2))
+	m.Apply(endedSession("a", 3, 2, 2))
+	drainAll(t, m, q)
+	if len(*got) != 2 {
+		t.Fatalf("session A notifications = %d, want 2: %+v", len(*got), *got)
+	}
+
+	m.Apply(openCapturing("b", 1, 1))
+	drainAll(t, m, q)
+	m.Apply(stoppingSession("b", 2, 1))
+	m.Apply(endedSession("b", 3, 1, 1))
+	drainAll(t, m, q)
+	if len(*got) != 4 {
+		t.Fatalf("session B notifications = %d total, want 4: %+v", len(*got), *got)
+	}
+
+	// A refused start published its placeholder, then Service.abort rolled
+	// the service back to A. A's segments were already sent.
+	m.Apply(openCapturing("c", 1, 0))
+	m.Apply(endedSession("a", 4, 2, 2))
+	drainAll(t, m, q)
+	if len(*got) != 4 {
+		t.Fatalf("the rollback to A repeated its notifications: %+v", *got)
+	}
+}
+
+// TestFirstObservedEndedSessionReportsItsResult checks the quick-failure
+// path: a session first seen after it ended still produces the result.
+func TestFirstObservedEndedSessionReportsItsResult(t *testing.T) {
+	m, svc, got, q := notificationModel(t)
+	svc.loads["quick"] = notificationRecord(failedItems(1), record.CoverageComplete, completePositions())
+	m.Apply(endedSession("quick", 1, 1, 1))
+	drainAll(t, m, q)
+	if len(*got) != 1 {
+		t.Fatalf("quick-failure notifications = %d, want one result: %+v", len(*got), *got)
+	}
+	if n := (*got)[0]; n.Segment != NotificationResult || n.Title != "扫描完成：1 件待校对" {
+		t.Fatalf("quick-failure notification = %+v", n)
 	}
 }
 
@@ -204,6 +462,15 @@ func TestNotificationWording(t *testing.T) {
 			body:  "已保存 431 件。点击查看。",
 		},
 		{
+			name: "manual stop before input",
+			facts: notificationFacts{
+				inputOpened: false, end: scan.EndCancelled,
+				trigger: &scan.Trigger{Kind: scan.TriggerUser, Code: scan.CodeUserCancelled},
+			},
+			title: "扫描已手动停止",
+			body:  "还没有开始扫描。点击查看。",
+		},
+		{
 			name: "fault",
 			facts: notificationFacts{
 				inputOpened: true, end: scan.EndFailed, saved: 431,
@@ -252,19 +519,21 @@ func TestNotificationWording(t *testing.T) {
 // TestOpenNotificationTargetsTheWrapUpOrTheSummary checks the click target
 // and that it never starts a scan.
 func TestOpenNotificationTargetsTheWrapUpOrTheSummary(t *testing.T) {
-	m, svc, _ := notificationModel(t)
+	m, svc, _, q := notificationModel(t)
+	svc.loads["s1"] = notificationRecord(failedItems(2), record.CoverageComplete, completePositions())
 	m.Apply(openCapturing("s1", 1, 2))
+	drainAll(t, m, q)
 	m.OpenNotification("s1")
 	if m.displayPage() != pageScan {
 		t.Fatalf("a click during the wrap-up opened %v, want the scan page", m.displayPage())
 	}
 
-	ended := openCapturing("s1", 2, 2)
-	ended.Busy = false
-	ended.Scan.Phase = scan.PhaseEnded
-	ended.Scan.End = scan.EndCompleted
-	ended.Scan.InputPermitted = false
-	m.Apply(ended)
+	m.Apply(endedSession("s1", 2, 2, 2))
+	drainAll(t, m, q)
+	// The same record is open on the item list; the click still lands on
+	// the summary (L-2).
+	m.recordTab = recordTabItems
+	m.page = pageSettings
 	m.OpenNotification("s1")
 	if m.displayPage() != pageResults || m.recordTab != recordTabSummary {
 		t.Fatalf("a finished click opened page %v tab %v, want the summary", m.displayPage(), m.recordTab)
@@ -274,8 +543,88 @@ func TestOpenNotificationTargetsTheWrapUpOrTheSummary(t *testing.T) {
 	}
 }
 
+// TestOpenNotificationKeepsAnUnsavedDraft checks that the click goes
+// through the existing navigation guard instead of replacing an editor.
+func TestOpenNotificationKeepsAnUnsavedDraft(t *testing.T) {
+	m, q, tt, svc := openReviewableResults(t, testRecord(), 1180, 760)
+	m.startEdit()
+	if m.edit == nil {
+		t.Skip("the fixture has no editable item")
+	}
+	m.edit.draft.Level = "13"
+	if !m.editingDirty() {
+		t.Fatal("the fixture draft is not dirty")
+	}
+	svc.mu.Lock()
+	svc.loads["other"] = testRecord()
+	svc.mu.Unlock()
+
+	m.OpenNotification("other")
+	settle(t, m, q, tt)
+	if m.rec == nil || m.rec.ID != "rec" {
+		t.Fatalf("the click replaced the record with %+v", m.rec)
+	}
+	if m.edit == nil {
+		t.Fatal("the click discarded the unsaved draft")
+	}
+	if m.navPrompt == nil {
+		t.Fatal("the click bypassed the unsaved-input prompt")
+	}
+}
+
+// TestOpenNotificationClosesConflictingDialogs checks L-3: the hint's
+// pending hide and an open export dialog do not survive the click.
+func TestOpenNotificationClosesConflictingDialogs(t *testing.T) {
+	hides := 0
+	svc := &fakeService{loads: map[string]*record.Recovery{"rec": testRecord()}}
+	m, q := newTestModel(t, Config{
+		Service:    svc,
+		HideToTray: func() { hides++ },
+	})
+	m.SetContentSize(1180, 760)
+	m.showRecord("rec", true)
+	m.reloadRecord("rec", true)
+	drainAll(t, m, q)
+
+	m.ShowFirstHideHint()
+	if !m.trayHintOpen || !m.trayHintHideOnDone {
+		t.Fatal("the first-hide hint did not open on the close path")
+	}
+	m.OpenNotification("rec")
+	if m.trayHintOpen || m.trayHintHideOnDone {
+		t.Fatalf("the notification click left the hint open=%v hideOnDone=%v",
+			m.trayHintOpen, m.trayHintHideOnDone)
+	}
+	m.acknowledgeTrayHint()
+	if hides != 0 {
+		t.Fatalf("acknowledging the dismissed hint hid the window %d time(s)", hides)
+	}
+
+	f := newExportDialogFixture(t, testRecord(), false)
+	f.open(t)
+	f.m.OpenNotification("rec")
+	if f.m.exportDialog.open {
+		t.Fatal("the notification click left the export dialog open")
+	}
+}
+
+// TestOpenNotificationDuringExitDoesNotSwitchPages checks L-4: the click
+// restores the window but cannot move the exiting window off its page.
+func TestOpenNotificationDuringExitDoesNotSwitchPages(t *testing.T) {
+	m, svc, _, q := notificationModel(t)
+	svc.loads["s1"] = notificationRecord(failedItems(1), record.CoverageComplete, completePositions())
+	m.Apply(openCapturing("s1", 1, 1))
+	drainAll(t, m, q)
+	m.exitState = exitRunning
+	m.page = pageSettings
+	m.OpenNotification("s1")
+	if m.page != pageSettings {
+		t.Fatalf("a click during the exit moved the page to %v", m.page)
+	}
+}
+
 // TestNotificationIDRoundTrip checks the session-derived identity and its
-// rejection of other applications' IDs.
+// rejection of other applications' IDs and empty record IDs.
 func TestNotificationIDRoundTrip(t *testing.T) {
 	for _, segment := range []NotificationSegment{NotificationInputStopped, NotificationResult} {
 		id := NotificationID("abc-def", segment)
@@ -284,7 +633,10 @@ func TestNotificationIDRoundTrip(t *testing.T) {
 			t.Fatalf("parse %q = %q/%v/%v", id, recordID, got, ok)
 		}
 	}
-	for _, id := range []string{"", "other", "youkai.scan.", "youkai.scan.s1", "youkai.scan.s1.other"} {
+	for _, id := range []string{
+		"", "other", "youkai.scan.", "youkai.scan..result",
+		"youkai.scan..input-stopped", "youkai.scan.s1", "youkai.scan.s1.other",
+	} {
 		if _, _, ok := ParseNotificationID(id); ok {
 			t.Errorf("ParseNotificationID(%q) accepted a foreign ID", id)
 		}

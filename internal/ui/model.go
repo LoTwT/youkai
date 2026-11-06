@@ -437,15 +437,13 @@ type Model struct {
 	trayHintErr        string
 
 	// Notification edges, derived from the accepted service snapshots:
-	// notifyPrev is the last applied snapshot, and the flags keep one input
-	// stop and one result (or save failure) per session.
-	notifyPrev         app.Snapshot
-	notifyPrevKnown    bool
-	notifySession      scan.ID
-	notifyInputStopped bool
-	notifyFinished     bool
-	notifySaveFailure  bool
-	notifySeenFailures int
+	// notifyPrev is the last applied snapshot and notifySessions keeps each
+	// session's announcements. The map is deliberately not reset on a
+	// session switch: a refused start rolls the service back to the
+	// previous session, which must not announce its result twice.
+	notifyPrev      app.Snapshot
+	notifyPrevKnown bool
+	notifySessions  map[scan.ID]*sessionNotifications
 
 	// The auto-update corner's state (update.go); updatesEnabled is cached
 	// from Updates at construction — Enabled probes the install location,
@@ -601,6 +599,7 @@ func (m *Model) Apply(snap app.Snapshot) {
 	// catchUpLive reloads once it settles. An opened history record stays
 	// on screen and loads the live record afresh when the user returns.
 	reloadedLive := false
+	var finalLoadVersion int64
 	if m.rec != nil && m.rec.Live && snap.SessionID != "" &&
 		m.rec.ID == string(snap.SessionID) && snap.SavedCount > m.liveSavedShown {
 		dirtyActive := m.editingDirty() || m.reviewSaving
@@ -608,6 +607,7 @@ func (m *Model) Apply(snap app.Snapshot) {
 			m.liveSavedShown = snap.SavedCount
 			m.reloadRecord(m.rec.ID, true)
 			reloadedLive = true
+			finalLoadVersion = m.recLoad
 		}
 	}
 	// A session that just wrapped left a durable final record: refresh the
@@ -629,11 +629,17 @@ func (m *Model) Apply(snap app.Snapshot) {
 				if !dirtyActive {
 					m.liveSavedShown = snap.SavedCount
 					m.reloadRecord(m.rec.ID, true)
+					finalLoadVersion = m.recLoad
 				}
 			}
 		}
 	}
-	m.notifySnapshot(previous, hadPrevious, snap)
+	// finalLoadVersion names the workspace load that is already reading the
+	// final record; the result notification waits for it and reads the same
+	// generation instead of issuing a second read. Zero means no such load
+	// is running (another record or page is open), so the notification loads
+	// the record itself.
+	m.notifySnapshot(previous, hadPrevious, snap, finalLoadVersion)
 }
 
 // beginSession routes a newly started scan into the open record. The new
@@ -914,7 +920,7 @@ func (m *Model) OpenHistory() {
 // selection, scroll and unsaved edit; another record waits for the editor
 // to settle before it replaces the workspace.
 func (m *Model) openRecord(id string) {
-	if id == "" {
+	if id == "" || m.exitState == exitRunning || m.exitState == exitDone {
 		return
 	}
 	m.page = pageResults
@@ -1097,7 +1103,10 @@ func (m *Model) LifecycleStatus() LifecycleStatus {
 	switch {
 	case m.exitState == exitRunning:
 		return LifecycleStatus{Text: "收尾中", Busy: false}
-	case m.exitState == exitFailed || m.snap.SaveError != "":
+	case m.snap.SaveError != "":
+		// The authoritative snapshot, not the last exit attempt: a retry
+		// that persisted the conditional result clears the failure and the
+		// tray must stop claiming the result is unsaved.
 		return LifecycleStatus{Text: "保存失败", Busy: m.snap.Busy && !m.Exiting()}
 	case m.snap.Busy || m.startReqID != "":
 		if m.snap.Busy && wrappingUp(m.snap.Scan.Phase) {
@@ -1217,6 +1226,11 @@ func (m *Model) beginExit() {
 	}
 	m.edit = nil
 	m.navPrompt = nil
+	// The exit progress owns the window: an earlier hint or export dialog
+	// would otherwise stack under it, with buttons the user cannot reach.
+	m.trayHintOpen = false
+	m.trayHintHideOnDone = false
+	m.closeExportDialog()
 	m.exitState = exitRunning
 	m.exitErr = ""
 	m.exitFailureDialogOpen = false

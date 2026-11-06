@@ -52,6 +52,11 @@ type windowSurface interface {
 	Focus()
 	Restore()
 	FlashFrame(bool)
+	// Update posts a UI-thread task that also renders a frame. The close
+	// callback and a notification click change model state after the last
+	// input event, so without it the dialog they opened would wait for the
+	// next mouse move or keystroke.
+	Update(func())
 }
 
 // notificationSurface is one native notification; *mygo.Notification
@@ -270,9 +275,11 @@ func (l *windowLifecycle) OnWindowClose(e preventableEvent) {
 	}
 	if l.model.FirstHideHintDue() {
 		// The hint must be acknowledged before the first hide: once the
-		// window is gone, a message box could not be reliably shown.
+		// window is gone, a message box could not be reliably shown. The
+		// close callback renders no frame of its own, so ask for one.
 		e.PreventDefault()
 		l.model.ShowFirstHideHint()
+		l.redraw()
 		return
 	}
 	l.HideToTray()
@@ -377,11 +384,14 @@ func (l *windowLifecycle) Notify(n ui.Notification) {
 		Title: n.Title,
 		Body:  n.Body,
 	})
+	if n.Segment == ui.NotificationInputStopped {
+		// Register before Show: on macOS Show waits on the main thread and
+		// keeps processing events, so the result segment can arrive while
+		// this call is still running and must find the first one here.
+		l.firstNotification = note
+	}
 	if err := note.Show(); err != nil {
 		log.Printf("youkai: show notification %q: %v", n.ID, err)
-	}
-	if n.Segment == ui.NotificationInputStopped {
-		l.firstNotification = note
 	}
 }
 
@@ -397,6 +407,19 @@ func (l *windowLifecycle) OnNotificationClick(id string) {
 	}
 	l.Restore()
 	l.model.OpenNotification(recordID)
+	// A click on an already visible window changes the page or opens a
+	// prompt after the last native event; request the frame that shows it.
+	l.redraw()
+}
+
+// redraw requests one frame after model state changed outside an input
+// event. The close callback and a notification click both arrive with no
+// follow-up event, so the dialog or page they chose would otherwise remain
+// invisible until the user moved the mouse.
+func (l *windowLifecycle) redraw() {
+	if l.window != nil {
+		l.window.Update(func() {})
+	}
 }
 
 // Refresh reconciles the tray menu with the model's current state. The

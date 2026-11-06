@@ -100,6 +100,9 @@ type fakeWindow struct {
 	shows   int
 	hides   int
 	flashes int
+	// redraws counts the frames requested after a state change that had no
+	// input event of its own (the first-hide hint, a notification click).
+	redraws int
 }
 
 func (w *fakeWindow) record(event string) {
@@ -115,6 +118,10 @@ func (w *fakeWindow) FlashFrame(flash bool) {
 	if flash {
 		w.flashes++
 	}
+}
+func (w *fakeWindow) Update(func()) {
+	w.redraws++
+	w.record("update")
 }
 
 // fakeTray records the menus and tooltips the lifecycle installs and the
@@ -150,12 +157,19 @@ type fakeNotification struct {
 	shows  int
 	closes int
 	err    error
+	// onShow runs inside Show, before it returns: it models a macOS call
+	// that processes queued main-thread events (including a second
+	// notification) while showing.
+	onShow func()
 }
 
 func (n *fakeNotification) Show() error {
 	n.shows++
 	if n.events != nil {
 		*n.events = append(*n.events, "show:"+n.opts.ID)
+	}
+	if n.onShow != nil {
+		n.onShow()
 	}
 	return n.err
 }
@@ -233,6 +247,9 @@ func TestFirstCloseShowsHideHint(t *testing.T) {
 	}
 	if model.showHintCalls != 1 {
 		t.Fatalf("first-hide prompts = %d, want 1", model.showHintCalls)
+	}
+	if win.redraws != 1 {
+		t.Fatalf("frames requested after the close = %d, want 1 without further input", win.redraws)
 	}
 
 	// The hint's acknowledgement marks it seen; a later close hides
@@ -765,6 +782,54 @@ func TestNotificationTwoStageOrder(t *testing.T) {
 	}
 }
 
+// A result that arrives while the first Show is still running (macOS keeps
+// dispatching main-thread events) must still close the first segment: the
+// first notification is registered before Show, not after it returns.
+func TestNotificationShowReentrancyClosesTheFirstSegment(t *testing.T) {
+	model := &fakeLifecycleModel{behavior: app.CloseBehaviorHide}
+	life := newWindowLifecycle(model)
+	var events []string
+	var firstID, secondID string
+	first := ui.Notification{
+		ID:       ui.NotificationID("rec-1", ui.NotificationInputStopped),
+		Segment:  ui.NotificationInputStopped,
+		RecordID: "rec-1",
+		Title:    "youkai 已停止操作游戏",
+		Body:     "正在识别和保存结果。",
+	}
+	second := ui.Notification{
+		ID:       ui.NotificationID("rec-1", ui.NotificationResult),
+		Segment:  ui.NotificationResult,
+		RecordID: "rec-1",
+		Title:    "扫描完成：扫全了",
+		Body:     "3 件可以导出。",
+		Flash:    true,
+	}
+	firstID, secondID = first.ID, second.ID
+	reentered := false
+	life.newNotification = func(opts mygo.NotificationOptions) notificationSurface {
+		note := &fakeNotification{opts: opts, events: &events}
+		if opts.ID == firstID {
+			note.onShow = func() {
+				if reentered {
+					return
+				}
+				reentered = true
+				life.Notify(second)
+			}
+		}
+		return note
+	}
+	life.Notify(first)
+	want := "show:" + firstID + ",close:" + firstID + ",show:" + secondID
+	if got := strings.Join(events, ","); got != want {
+		t.Fatalf("reentrant notification order = %q, want %q", got, want)
+	}
+	if !reentered || life.firstNotification != nil {
+		t.Fatalf("reentrant result left firstNotification = %v", life.firstNotification)
+	}
+}
+
 // A session that never sent the first segment (prepare timeout) shows only
 // the result and has nothing to close.
 func TestResultNotificationWithoutFirstSegment(t *testing.T) {
@@ -809,11 +874,14 @@ func TestNotificationClickOpensTheRecord(t *testing.T) {
 	if model.stopCalls != 0 {
 		t.Fatalf("an idle notification click stopped a scan: %d", model.stopCalls)
 	}
+	if win.redraws != 1 {
+		t.Fatalf("frames requested after the click = %d, want 1", win.redraws)
+	}
 
 	life.OnNotificationClick("someone-elses-notification")
-	if win.shows != 1 || len(model.openedNotifications) != 1 {
-		t.Fatalf("a foreign notification click was handled: shows=%d opened=%v",
-			win.shows, model.openedNotifications)
+	if win.shows != 1 || len(model.openedNotifications) != 1 || win.redraws != 1 {
+		t.Fatalf("a foreign notification click was handled: shows=%d opened=%v redraws=%d",
+			win.shows, model.openedNotifications, win.redraws)
 	}
 }
 
