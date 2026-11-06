@@ -359,10 +359,13 @@ func TestSettingsGeneralClosePreference(t *testing.T) {
 		t.Fatalf("saved preferences = %v", saved)
 	}
 
-	m.SetWindowNotice("托盘/菜单栏入口不可用（test）。关闭窗口将停止扫描并退出应用。")
+	m.SetTrayUnavailable("test")
 	tt.Frame()
-	if !tt.HasText("托盘/菜单栏入口不可用") {
-		t.Fatal("the tray-unavailable notice does not show")
+	if !tt.HasText("通知区域图标不可用") {
+		t.Fatal("the tray-unavailable reason does not show")
+	}
+	if tt.HasText("隐藏到通知区域（默认）") {
+		t.Fatal("the hide option stays visible without a tray")
 	}
 }
 

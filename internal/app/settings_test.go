@@ -20,7 +20,7 @@ func TestLoadSettingsMissingFileUsesDefault(t *testing.T) {
 // The preference round-trips through the settings file.
 func TestSaveSettingsRoundTrip(t *testing.T) {
 	root := t.TempDir()
-	if err := SaveSettings(root, Settings{CloseBehavior: CloseBehaviorExit}); err != nil {
+	if err := SaveSettings(root, Settings{CloseBehavior: CloseBehaviorExit, TrayHintSeen: true}); err != nil {
 		t.Fatalf("SaveSettings: %v", err)
 	}
 	settings, err := LoadSettings(root)
@@ -29,6 +29,9 @@ func TestSaveSettingsRoundTrip(t *testing.T) {
 	}
 	if settings.CloseBehavior != CloseBehaviorExit {
 		t.Fatalf("close behavior = %q, want %q", settings.CloseBehavior, CloseBehaviorExit)
+	}
+	if !settings.TrayHintSeen {
+		t.Fatal("the acknowledged first-hide hint did not round-trip")
 	}
 
 	// A second save replaces the first value.
@@ -41,6 +44,9 @@ func TestSaveSettingsRoundTrip(t *testing.T) {
 	}
 	if settings.CloseBehavior != CloseBehaviorHide {
 		t.Fatalf("close behavior = %q, want %q", settings.CloseBehavior, CloseBehaviorHide)
+	}
+	if settings.TrayHintSeen {
+		t.Fatal("the replaced settings kept the old hint state")
 	}
 }
 
@@ -56,6 +62,9 @@ func TestLoadSettingsWithoutCloseBehaviorUsesDefault(t *testing.T) {
 	}
 	if settings.CloseBehavior != CloseBehaviorHide {
 		t.Fatalf("close behavior = %q, want %q", settings.CloseBehavior, CloseBehaviorHide)
+	}
+	if settings.TrayHintSeen {
+		t.Fatal("an older settings file hid the first-hide hint")
 	}
 }
 

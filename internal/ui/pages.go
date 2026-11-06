@@ -95,6 +95,8 @@ func (m *Model) viewPages(c *ui.Context) {
 		})
 	})
 	m.exportDialogView(c, t)
+	m.trayHintDialogView(c, t)
+	m.exitDialogView(c, t)
 }
 
 // navRail is the three-destination rail: icon above label, the active

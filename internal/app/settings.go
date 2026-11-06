@@ -48,6 +48,10 @@ type Settings struct {
 	// CloseBehavior is what closing the window does; empty loads as
 	// CloseBehaviorHide.
 	CloseBehavior CloseBehavior `json:"closeBehavior"`
+	// TrayHintSeen records that the first-hide hint was acknowledged. False
+	// on a fresh install and in files written before the hint existed
+	// (R-18).
+	TrayHintSeen bool `json:"trayHintSeen,omitempty"`
 }
 
 // DefaultSettings is the behavior of a fresh installation.
