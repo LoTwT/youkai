@@ -316,8 +316,8 @@ func TestRecordWorkspaceSwitchesViews(t *testing.T) {
 }
 
 // TestRecordWorkspaceShortcuts checks the two registered skeletons:
-// Ctrl+E brings the export controls into view, Shift+F6 returns the
-// keyboard to the rail, and F6 moves it into the workspace's first region.
+// Ctrl+E opens the export dialog, Shift+F6 returns the keyboard to the
+// rail, and F6 moves it into the workspace's first region.
 func TestRecordWorkspaceShortcuts(t *testing.T) {
 	svc := &fakeService{
 		list: []record.RecordInfo{{
@@ -339,8 +339,8 @@ func TestRecordWorkspaceShortcuts(t *testing.T) {
 	m.OpenHistory()
 	settle(t, m, q, tt)
 
-	if m.recordTab != recordTabSummary || !tt.HasText("导出 JSON") {
-		t.Fatalf("the summary does not hold the export controls: tab %v %q", m.recordTab, tt.Texts())
+	if m.recordTab != recordTabSummary || !tt.HasText("导出…") {
+		t.Fatalf("the title bar does not hold the export entry: tab %v %q", m.recordTab, tt.Texts())
 	}
 	if err := tt.Click("逐件"); err != nil {
 		t.Fatal(err)
@@ -352,10 +352,19 @@ func TestRecordWorkspaceShortcuts(t *testing.T) {
 
 	tt.Key(ui.Cmd, ui.KeyE)
 	settle(t, m, q, tt)
-	if m.recordTab != recordTabSummary || !tt.HasText("导出 JSON") {
-		t.Fatalf("Ctrl+E did not reveal the export controls: tab %v %q", m.recordTab, tt.Texts())
+	if !m.exportDialog.open || !tt.HasText("导出 JSON") || !tt.Focused("导出 JSON") {
+		t.Fatalf("Ctrl+E did not open the export dialog: open=%t %q", m.exportDialog.open, tt.Texts())
+	}
+	tt.Key(0, ui.KeyEscape)
+	settle(t, m, q, tt)
+	if m.exportDialog.open || m.recordTab != recordTabItems {
+		t.Fatalf("Esc left dialog=%t tab=%v", m.exportDialog.open, m.recordTab)
 	}
 
+	if err := tt.Click("摘要"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
 	tt.Key(ui.Shift, ui.KeyF6)
 	settle(t, m, q, tt)
 	if !tt.Focused("记录") {
@@ -367,9 +376,9 @@ func TestRecordWorkspaceShortcuts(t *testing.T) {
 		t.Fatalf("F6 did not enter the workspace's first region: %q", tt.Texts())
 	}
 
-	// A record with no exportable item blocks the export entry, so Ctrl+E
-	// is not registered: the item view stays where it is (L-2's reverse
-	// path).
+	// A record with no exportable item still offers the empty export
+	// (F-22); Ctrl+E opens the dialog on its zero-exportable state with
+	// the review entry focused, and the item view stays behind it.
 	blockedSvc := &fakeService{
 		list: []record.RecordInfo{{
 			ID: "r2", LatestRevision: 1,
@@ -396,15 +405,18 @@ func TestRecordWorkspaceShortcuts(t *testing.T) {
 	}
 	blockedTester.Key(ui.Cmd, ui.KeyE)
 	settle(t, blockedModel, blockedQueue, blockedTester)
-	if blockedModel.recordTab != recordTabItems {
-		t.Fatalf("Ctrl+E moved a blocked export to tab %v", blockedModel.recordTab)
+	if !blockedModel.exportDialog.open || blockedModel.recordTab != recordTabItems {
+		t.Fatalf("Ctrl+E left dialog=%t tab=%v", blockedModel.exportDialog.open, blockedModel.recordTab)
+	}
+	if !blockedTester.HasText("没有可导出的件") || !blockedTester.Focused("去校对") {
+		t.Fatalf("the zero-exportable dialog did not start on review: %q", blockedTester.Texts())
 	}
 }
 
-// TestWorkspaceShowsTheUnsavedPromptFromTheSummary checks H-1: switching
-// to 摘要 keeps the item editor's draft alive, so leaving the record or
-// quitting must still show the save/discard prompt from that view.
-func TestWorkspaceShowsTheUnsavedPromptFromTheSummary(t *testing.T) {
+// TestWorkspaceTabSwitchKeepsDirtyDraft checks the 摘要/逐件 switch uses
+// the same unsaved-changes prompt instead of leaving an editor from another
+// tab behind.
+func TestWorkspaceTabSwitchKeepsDirtyDraft(t *testing.T) {
 	m, q, tt, _ := openReviewRecordPage(t, reviewRowItem(t, 1, 12))
 	tt.Frame()
 	m.edit.draft.Level = "13"
@@ -412,41 +424,21 @@ func TestWorkspaceShowsTheUnsavedPromptFromTheSummary(t *testing.T) {
 		t.Fatal(err)
 	}
 	settle(t, m, q, tt)
-	if m.recordTab != recordTabSummary || m.edit == nil {
-		t.Fatalf("the summary tab did not keep the draft: tab %v edit %+v", m.recordTab, m.edit)
+	if m.recordTab != recordTabItems || m.navPrompt == nil || m.edit == nil {
+		t.Fatalf("the tab switch did not prompt: tab %v edit %v prompt %+v",
+			m.recordTab, m.edit != nil, m.navPrompt)
 	}
-
-	// Leaving for settings pauses behind the prompt, visible on 摘要.
-	if err := tt.Click("设置"); err != nil {
+	if !tt.HasText("第 1 件有未保存的修改") {
+		t.Fatalf("the unsaved-changes prompt is missing: %q", tt.Texts())
+	}
+	if err := tt.Click("留在这里"); err != nil {
 		t.Fatal(err)
 	}
 	tt.Frame()
-	if m.displayPage() != pageResults || m.navPrompt == nil ||
-		m.navPrompt.kind != navPage || m.navPrompt.page != pageSettings {
-		t.Fatalf("leaving the summary did not prompt: page %v prompt %+v", m.displayPage(), m.navPrompt)
+	if m.recordTab != recordTabItems || m.edit == nil || m.edit.draft.Level != "13" {
+		t.Fatalf("staying lost the draft: tab %v edit %+v", m.recordTab, m.edit)
 	}
-	if !tt.HasText("第 1 件有未保存的修改") || !tt.HasText("保存并继续") {
-		t.Fatalf("the summary does not show the unsaved prompt: %q", tt.Texts())
-	}
-	if !tt.HasText("留在这里") {
-		t.Fatalf("the summary prompt lost its stay action: %q", tt.Texts())
-	}
-
-	// A quit requested from the tray shows the same prompt with exit
-	// wording while the summary stays on screen.
-	m.promptStay()
-	tt.Frame()
-	if m.AllowClose() {
-		t.Fatal("the dirty summary allowed the close")
-	}
-	tt.Frame()
-	if m.navPrompt == nil || m.navPrompt.kind != navExit {
-		t.Fatalf("the close did not hold behind the exit prompt: %+v", m.navPrompt)
-	}
-	if !tt.HasText("第 1 件有未保存的修改") || !tt.HasText("保存并继续") {
-		t.Fatalf("the summary does not show the exit prompt: %q", tt.Texts())
-	}
-	m.promptStay()
+	assertReviewBinding(t, m)
 }
 
 // TestWorkspaceCoverageMatchesTheConclusion checks M-1: the title bar and
@@ -478,22 +470,16 @@ func TestWorkspaceCoverageMatchesTheConclusion(t *testing.T) {
 	if m.recordTab != recordTabSummary {
 		t.Fatalf("the record opened on tab %v, want the summary", m.recordTab)
 	}
-	// HasText is a substring match, so the body's "覆盖：部分覆盖…" would
-	// also satisfy it; the title bar's slot must be the exact status.
-	coverageHeader := 0
-	for _, text := range tt.Texts() {
-		if text == "覆盖：部分" {
-			coverageHeader++
-		}
+	// The title bar's slot states the export guard's conclusion, and the
+	// summary's one-sentence title states it a second time without rounding
+	// it up.
+	if !tt.HasText("覆盖：部分") {
+		t.Fatalf("the title bar does not show the export guard's coverage: %q", tt.Texts())
 	}
-	if coverageHeader != 1 {
-		t.Fatalf("the title bar does not show the export guard's coverage exactly once: %d in %q",
-			coverageHeader, tt.Texts())
-	}
-	if !tt.HasText("覆盖：部分覆盖（导出文件会标注“部分快照”）") {
+	if !tt.HasText("没有扫全：覆盖不完整") {
 		t.Fatalf("the summary does not show the same coverage: %q", tt.Texts())
 	}
-	if tt.HasText("覆盖：完整") {
+	if tt.HasText("覆盖：全部") || tt.HasText("覆盖：完整") || tt.HasText("扫全了") {
 		t.Fatalf("a coverage the export cannot confirm is shown as complete: %q", tt.Texts())
 	}
 }

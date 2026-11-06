@@ -733,7 +733,7 @@ func TestFinalCheckpointLoadingGatesCompletionAndExport(t *testing.T) {
 	if m.exportData == nil || m.exportData.Summary.Included != 1 {
 		t.Fatalf("the stale export snapshot changed before the load landed: %+v", m.exportData)
 	}
-	m.ExportJSON()
+	m.startExport(app.ExportJSON)
 	if calls := saver.snapshot(); len(calls) != 0 {
 		t.Fatalf("an export started from the stale snapshot: %+v", calls)
 	}
@@ -931,7 +931,7 @@ func TestFinalCheckpointLoadingBlocksConfirmation(t *testing.T) {
 
 	// Export stays blocked too: writing the stale one-row snapshot would
 	// disagree with the checkpoint on disk.
-	m.ExportJSON()
+	m.startExport(app.ExportJSON)
 	if calls := saver.snapshot(); len(calls) != 0 {
 		t.Fatalf("an export started from the stale snapshot: %+v", calls)
 	}
@@ -950,11 +950,7 @@ func TestFinalCheckpointLoadingBlocksConfirmation(t *testing.T) {
 		t.Fatalf("the export snapshot did not advance: %+v", m.exportData)
 	}
 
-	m.recordTab = recordTabSummary
-	tt.Frame()
-	if err := tt.Click("导出 JSON"); err != nil {
-		t.Fatalf("click 导出 JSON: %v", err)
-	}
+	m.startExport(app.ExportJSON)
 	drainAll(t, m, q)
 	calls := saver.snapshot()
 	if len(calls) != 1 {
@@ -1030,7 +1026,7 @@ func TestFinalCheckpointLoadingBlocksEditorSave(t *testing.T) {
 	showRecordItems(m)
 	tt.Frame()
 	if err := tt.Click("保存修改"); err != nil {
-		t.Fatalf("click 保存修改: %v", err)
+		t.Fatalf("click 保存: %v", err)
 	}
 	tt.Key(ui.Cmd, ui.KeyS)
 	m.saveEdit(reviewSave, nil)
@@ -1095,15 +1091,10 @@ func TestFailedRecordLoadBlocksReviewActions(t *testing.T) {
 		t.Fatal("a failed load does not block review actions")
 	}
 	m.startEdit()
-	tt.Frame()
 	if m.edit != nil {
-		m.edit.draft.Level = "13"
-		m.saveEdit(reviewSave, nil)
-		drainAll(t, m, q)
-		if calls := svc.saveCount(); calls != 0 {
-			t.Fatalf("a failed load still saved over the stale row: %+v", svc.saves)
-		}
+		t.Fatal("a failed load still opens the editor")
 	}
+
 	tt.Frame()
 	if !tt.HasText("记录读取失败：磁盘读取失败") {
 		t.Fatalf("the load failure is not visible: %q", tt.Texts())

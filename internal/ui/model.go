@@ -106,7 +106,9 @@ type Config struct {
 	// nil disables images (the details show their texts only).
 	Evidence EvidenceSource
 	// DirectExportSaver writes the usable-data JSON/CSV files straight into
-	// the system downloads directory; nil hides the export controls.
+	// the system downloads directory; nil hides the export controls. A
+	// saver that also implements CancelableDirectExportSaver lets the
+	// dialog stop before a file is committed.
 	DirectExportSaver DirectExportSaver
 	// OpenDownloadsDirectory reveals the direct export directory with the
 	// system file manager; nil hides the "open directory" action.
@@ -124,6 +126,15 @@ type Config struct {
 	// area as "当前版本 …" so the window itself names the build it runs;
 	// the entry point passes mygo.App.Version(). Empty hides the line.
 	AppVersion string
+	// SystemInfo reads the operating-system and display context the copied
+	// diagnostic text reports. The entry point passes app.CurrentSystemInfo;
+	// nil or a zero result says unknown. It runs only when the user copies,
+	// after the window has established the process's DPI awareness.
+	SystemInfo func() app.SystemInfo
+	// OpenDiagnosticsDirectory reveals the directory holding the diagnostic
+	// log and its collector subtrees, as app.DiagnosticsDirectory names it.
+	// Nil hides the action.
+	OpenDiagnosticsDirectory func() error
 	// DevAutoInstall installs an update a check found on its own, without
 	// the install button. It is a development switch (the entry point sets
 	// it from YOUKAI_DEV_AUTOUPDATE) for driving the real install and
@@ -219,8 +230,7 @@ type Model struct {
 	historyLoading bool
 	// historyLoadSeq identifies the newest load; a late result from an
 	// older load must not replace its list or clear its loading state.
-	historyLoadSeq   uint64
-	historyExporting string
+	historyLoadSeq uint64
 
 	// The records list's date filter (08 §5). The two dates are inclusive
 	// local days; active is false while the range still spans every record,
@@ -243,27 +253,32 @@ type Model struct {
 	historyFocusPending bool
 	lastPage            Page
 
-	// Screenshot/history cleanup. savePrompt is the post-save three-way
-	// choice; promptedSessions remembers the sessions it was settled for,
-	// so "稍后处理" never reopens it. cleanup is the preview awaiting
+	// Screenshot/history cleanup. cleanup is the preview awaiting
 	// confirmation, and storage is the storeroom view's last successful
 	// measurement (nil after a failure — old numbers are never shown as
-	// exact).
-	savePrompt       *savePrompt
-	promptedSessions map[string]bool
-	cleanup          *cleanupPrompt
-	cleanupNotice    string
-	storage          *app.StorageUsage
-	storageErr       string
-	storageLoading   bool
-	storagePrompt    *storagePrompt
+	// exact). A finished scan never asks whether to keep its screenshots
+	// (P-13); the summary's detail area and the cleanup entries are the
+	// only places screenshots are managed.
+	cleanup        *cleanupPrompt
+	cleanupNotice  string
+	storage        *app.StorageUsage
+	storageErr     string
+	storageLoading bool
+	storagePrompt  *storagePrompt
 
 	// exporting is the shared export slot: one export runs at a time. Its
 	// frozen snapshot lives in the open record's workspace; exportOutcome
-	// carries the direct export's global status strip message so switching
-	// destinations cannot hide it.
+	// is the result the modal renders. exportDialog owns the modal's own
+	// pre-export, running, canceled, failure and success states, and
+	// exportCancel stops the running write when the modal's 取消 is used.
 	exporting     bool
 	exportOutcome *exportOutcome
+	exportDialog  exportDialogState
+	exportCancel  func()
+	// exportAfterLoadID is the record whose load should open the export
+	// dialog when it lands. The records list sets it through navOpenRecord;
+	// a normal record open or a failed load clears it.
+	exportAfterLoadID string
 
 	// page is the shell's current destination: scan, the records list or
 	// one record's workspace, or settings. It starts on scan and only
@@ -304,6 +319,9 @@ type Model struct {
 	reviewCropsRef   ui.Ref
 	reviewFormRef    ui.Ref
 	reviewLayout     reviewLayoutWidths
+	// mainUnitBounds records the rendered main-stat unit control for the
+	// 960-DIP layout regression; it is layout evidence, not state.
+	mainUnitBounds ui.Rect
 	// historyRowProbe measures the native history table's tallest cell, so
 	// its whole-row cap uses the platform's real line metrics.
 	historyRowProbe ui.Ref
@@ -369,17 +387,16 @@ func New(cfg Config) *Model {
 		closeBehavior = app.CloseBehaviorHide
 	}
 	m := &Model{
-		cfg:              cfg,
-		source:           cfg.ScanSource,
-		page:             pageScan,
-		recordTab:        recordTabSummary,
-		contentWidth:     1180,
-		contentHeight:    760,
-		cache:            newEvidenceCache(cfg.Evidence, limit),
-		promptedSessions: make(map[string]bool),
-		historyRow:       -1,
-		historyLoading:   true,
-		closeBehavior:    closeBehavior,
+		cfg:            cfg,
+		source:         cfg.ScanSource,
+		page:           pageScan,
+		recordTab:      recordTabSummary,
+		contentWidth:   1180,
+		contentHeight:  760,
+		cache:          newEvidenceCache(cfg.Evidence, limit),
+		historyRow:     -1,
+		historyLoading: true,
+		closeBehavior:  closeBehavior,
 	}
 	if cfg.Updates != nil {
 		m.updates = cfg.Updates
@@ -493,7 +510,6 @@ func (m *Model) Apply(snap app.Snapshot) {
 	// at startup loads history once via Attach.
 	if prevBusy && !snap.Busy && snap.SessionID != "" {
 		if snap.SaveError == "" && snap.Scan.Phase == scan.PhaseEnded {
-			m.requestSavePrompt(string(snap.SessionID))
 			if m.liveRecordOpen() && !m.editingDirty() && !m.reviewSaving {
 				m.openRecordWorkspace()
 			}
@@ -520,12 +536,6 @@ func (m *Model) Apply(snap app.Snapshot) {
 func (m *Model) beginSession(id, replacedSession string) {
 	busyEditing := m.reviewSaving || m.editingDirty()
 	rolledBack := replacedSession != "" && id == replacedSession
-	if m.savePrompt != nil && m.savePrompt.recordID != id {
-		// A new scan replaces the results view; the old session's prompt is
-		// settled as postponed instead of floating over unrelated content.
-		m.promptedSessions[m.savePrompt.recordID] = true
-		m.savePrompt = nil
-	}
 	if busyEditing && m.rec != nil {
 		if m.rec.ID == id {
 			// A refused start rolled the service back to the record the
@@ -601,7 +611,11 @@ type HistoryEntry struct {
 	IncompletePositions      int
 	IncompletePositionsKnown bool
 	TotalBytes               int64
-	Unreadable               bool
+	// EvidenceFiles and EvidenceBytes are the record's screenshot footprint,
+	// shown in the summary's detail area; zero means unknown or no evidence.
+	EvidenceFiles int
+	EvidenceBytes int64
+	Unreadable    bool
 }
 
 // loadHistory refreshes the history list from the service off the UI
@@ -644,6 +658,8 @@ func (m *Model) loadHistory() {
 					IncompletePositions:      info.IncompletePositions,
 					IncompletePositionsKnown: info.IncompletePositionsKnown,
 					TotalBytes:               info.TotalBytes,
+					EvidenceFiles:            info.EvidenceFiles,
+					EvidenceBytes:            info.EvidenceBytes,
 					Unreadable:               info.Unreadable,
 				})
 			}
@@ -811,9 +827,14 @@ func (m *Model) openRecord(id string) {
 // ShowLive. The entry checks keep a record already on screen in place, so
 // this action always replaces the workspace and loads from disk; it also
 // retries a record whose previous load failed.
-func (m *Model) performOpenRecord(id string) {
+func (m *Model) performOpenRecord(id string, exportAfterLoad bool) {
 	if id == "" {
 		return
+	}
+	if exportAfterLoad {
+		m.exportAfterLoadID = id
+	} else {
+		m.exportAfterLoadID = ""
 	}
 	live := m.recordIsLive(id)
 	m.showRecord(id, live)

@@ -82,17 +82,19 @@ func (m *Model) completionCard(c *ui.Context, t *ui.Theme) {
 					if !m.exportAvailable() {
 						return
 					}
-					blocked := m.exportBlockedReason()
+					entryBlocked := m.exportEntryBlocked()
 					ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
-						if ui.Button(c, "导出 JSON").Disabled(blocked != "").Clicked() {
-							m.ExportJSON()
-						}
-						if ui.Button(c, "导出 CSV").Disabled(blocked != "").Clicked() {
-							m.ExportCSV()
+						// The export dialog owns the format choice; the
+						// summary's entry opens it like the title bar's.
+						if ui.Button(c, "导出…").Disabled(entryBlocked).Clicked() {
+							m.requestExport()
 						}
 					})
-					if blocked != "" {
-						ui.Text(c, blocked).TextColor(t.TextMuted).FontSize(t.FontSize * 0.9)
+					// A dirty draft leaves the entry enabled and asks in the
+					// dialog, so it must not also claim the entry is blocked.
+					if reason := m.exportBlockedReason(); reason != "" &&
+						(entryBlocked || !m.editingDirty()) {
+						ui.Text(c, reason).TextColor(t.TextMuted).FontSize(t.FontSize * 0.9)
 					}
 				})
 		})
@@ -107,15 +109,19 @@ func completionExclusionText(counts recordCounts) string {
 }
 
 // recordCoverage is the record's single coverage conclusion: the frozen
-// export snapshot when one exists, else the checkpoint. The workspace
-// title bar and the summary body both read it, so they cannot disagree
-// (M-1).
+// export snapshot when one exists, else the loaded checkpoint, else the
+// view's shell (a view built without its recovery, as in tests). The
+// workspace title bar and the summary body both read it, so they cannot
+// disagree (M-1).
 func (m *Model) recordCoverage() record.CoverageStatus {
 	if m.exportData != nil {
 		return m.exportData.Summary.Coverage
 	}
 	if m.recData != nil {
 		return m.recData.Checkpoint.Session.Coverage.Status
+	}
+	if m.rec != nil {
+		return m.rec.Shell.Coverage.Status
 	}
 	return record.CoverageUnknown
 }
@@ -131,7 +137,7 @@ func (m *Model) completionCoverageText() string {
 	}
 	switch status {
 	case record.CoverageComplete:
-		return "覆盖：完整"
+		return "覆盖：全部"
 	case record.CoveragePartial:
 		text := "覆盖：部分覆盖"
 		if summary != nil && summary.ExpectedCount != nil && *summary.ExpectedCount > 0 {

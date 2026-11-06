@@ -169,7 +169,7 @@ func historySessionSummary(info record.RecordInfo, cp *record.Checkpoint, active
 		ended := *cp.Session.EndedAt
 		entry.EndedAt = &ended
 	}
-	entry.Interrupted = info.ID != activeID && interruptedSession(cp.Session.Termination)
+	entry.Interrupted = info.ID != activeID && InterruptedSession(cp.Session.Termination)
 	entry.Client = cp.Session.Client
 	entry.CapturedCount = cp.Session.CapturedCount
 	entry.Coverage = cp.Session.Coverage.Status
@@ -186,7 +186,7 @@ func historySessionSummary(info record.RecordInfo, cp *record.Checkpoint, active
 	}
 	if ledger, known := cp.Session.PositionConclusions(); known {
 		entry.IncompletePositionsKnown = true
-		entry.PositionOutcomes = positionOutcomes(ledger.Positions)
+		entry.PositionOutcomes = PositionOutcomes(ledger.Positions)
 		for _, outcome := range entry.PositionOutcomes {
 			if outcome.State == PositionOutcomeDegraded {
 				entry.IncompletePositions++
@@ -196,11 +196,22 @@ func historySessionSummary(info record.RecordInfo, cp *record.Checkpoint, active
 	return entry
 }
 
-// positionOutcomes expands the ledger into all six positions. A missing
+// PositionOutcomesOf expands a session's position ledger into all six
+// positions. It is the one expansion used by the records list and the
+// summary, so both count incomplete positions the same way.
+func PositionOutcomesOf(shell record.SessionShell) ([]PositionOutcome, bool) {
+	ledger, known := shell.PositionConclusions()
+	if !known {
+		return nil, false
+	}
+	return PositionOutcomes(ledger.Positions), true
+}
+
+// PositionOutcomes expands the ledger into all six positions. A missing
 // entry was never reached; a present incomplete entry with a position-level
 // cause is degraded, and one without is a position the session-fatal end
 // truncated. The ledger's storage order does not matter.
-func positionOutcomes(positions []record.PositionConclusion) []PositionOutcome {
+func PositionOutcomes(positions []record.PositionConclusion) []PositionOutcome {
 	reached := make(map[int]record.PositionConclusion, len(positions))
 	for _, p := range positions {
 		reached[p.Position] = p
@@ -238,11 +249,12 @@ func (s *Service) activeRecordID() string {
 	return string(s.active.id)
 }
 
-// interruptedSession reports whether a checkpoint represents a session
+// InterruptedSession reports whether a checkpoint represents a session
 // that never recorded a clean end. An absent termination is exactly what
 // recovery marks interrupted; an explicit interrupted termination is the
-// same state written down.
-func interruptedSession(termination *record.Termination) bool {
+// same state written down. The records list and the summary share this
+// definition so the same record cannot get two endings.
+func InterruptedSession(termination *record.Termination) bool {
 	return termination == nil || termination.Kind == record.TerminationInterrupted
 }
 

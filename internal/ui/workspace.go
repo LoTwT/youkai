@@ -1,8 +1,6 @@
 package ui
 
 import (
-	"fmt"
-
 	"github.com/egoist/mygo/ui"
 )
 
@@ -18,9 +16,8 @@ const (
 )
 
 // recordWorkspace is an opened record: its title bar, the 摘要 / 逐件
-// switch and the chosen view. This PR builds only the frame around the
-// existing surfaces; the summary and the item browser keep their content
-// until their own PRs replace it.
+// switch and the chosen view. The summary is the designed conclusion; the
+// item browser keeps its existing content until PR-14b replaces it.
 func (m *Model) recordWorkspace(c *ui.Context, t *ui.Theme) {
 	_, tok := themeWithTokens(t, c.Preferences())
 	ui.Column(c).Grow(1).FillHeight().Children(func() {
@@ -39,9 +36,7 @@ func (m *Model) recordWorkspace(c *ui.Context, t *ui.Theme) {
 
 // recordWorkspaceHeader is the record's title bar: back to the whole list,
 // the record title, the 摘要 / 逐件 switch, the three status slots (coverage,
-// pending, saved) and the export entry. The export dialog arrives with
-// PR-15; until then the export entry brings the existing controls into
-// view.
+// pending, saved) and the export entry that opens the modal dialog.
 func (m *Model) recordWorkspaceHeader(c *ui.Context, t *ui.Theme, tok *Tokens) {
 	ui.Row(c).Gap(t.Space(2)).Padding(t.Space(2), t.Space(3)).
 		Background(tok.SurfaceHeader).AlignItems(ui.Center).Children(func() {
@@ -69,18 +64,17 @@ func (m *Model) recordWorkspaceHeader(c *ui.Context, t *ui.Theme, tok *Tokens) {
 			ui.Text(c, status).TextColor(tok.TextMuted).
 				FontSize(t.FontSize * 0.9).SingleLine()
 		}
-		// The export entry is part of the record's title bar even when this
-		// build cannot write files: disabled, it still shows where export
-		// lives. The export dialog replaces this entry in PR-15.
-		if ui.Button(c, "导出…").Disabled(m.exportEntryBlocked()).Clicked() {
-			m.revealExports()
-		}
+		// The title bar owns the record's one export entry; it opens the
+		// modal dialog. A build without a saver still shows it, disabled.
+		m.exportEntryArea(c)
 	})
 }
 
 // workspaceStatusTexts fills the header's three status slots. The pending
-// slot is the design's 待处理 total (backfill + review), the same number the
-// item list's pending segment counts.
+// slot is the four-class total (backfill plus review) from summaryCounts,
+// the same source the summary and item list use; the save slot names the
+// live record's or revision's state rather than claiming a save that has
+// not happened.
 func (m *Model) workspaceStatusTexts() (coverage, pending, saved string) {
 	coverage = "覆盖：—"
 	if m.recData != nil {
@@ -88,7 +82,7 @@ func (m *Model) workspaceStatusTexts() (coverage, pending, saved string) {
 	}
 	pending = "待处理 —"
 	if m.rec != nil {
-		pending = fmt.Sprintf("待处理 %d", m.pendingItemsCount())
+		pending = "待处理 " + formatCount(m.summaryCounts().Pending())
 	}
 	saved = "已保存"
 	switch {
@@ -112,68 +106,6 @@ func (m *Model) workspaceStatusTexts() (coverage, pending, saved string) {
 	return coverage, pending, saved
 }
 
-// recordSummary is the summary view's first version: the existing
-// conclusion and export controls, without the item browser. PR-13 replaces
-// it with the designed summary.
-func (m *Model) recordSummary(c *ui.Context, t *ui.Theme) {
-	ui.Scroll(c).Grow(1).Children(func() {
-		ui.Column(c).Gap(t.Space(2)).Padding(t.Space(3)).Children(func() {
-			m.sessionTerminationArea(c, t)
-			m.savePromptArea(c, t)
-			if m.histErr != "" {
-				ui.Text(c, "历史记录读取失败："+m.histErr).TextColor(t.Danger)
-			}
-			if m.cleanupNotice != "" {
-				ui.Text(c, m.cleanupNotice)
-			}
-			if m.cleanup != nil && !m.cleanup.target.all() {
-				m.cleanupPromptArea(c, t)
-			}
-			if m.recErr != "" {
-				ui.Text(c, "记录读取失败："+m.recErr).TextColor(t.Danger)
-				return
-			}
-			if m.rec == nil || len(m.rec.Rows) == 0 {
-				if m.rec != nil && m.completionVisible() {
-					m.completionCard(c, t)
-					return
-				}
-				if m.rec != nil {
-					m.exportArea(c, t)
-				}
-				ui.Text(c, m.emptyResultsText()).TextColor(t.TextMuted)
-				return
-			}
-			if m.completionVisible() {
-				m.completionCard(c, t)
-				return
-			}
-			m.resultConclusion(c, t)
-			m.exportArea(c, t)
-		})
-	})
-}
-
-// resultConclusion states the record's conclusion from the data the
-// results header already shows: the pending count, the exportable and
-// captured counts, the coverage conclusion and an incomplete-position
-// note that the termination notice does not already carry.
-func (m *Model) resultConclusion(c *ui.Context, t *ui.Theme) {
-	counts := m.recordCounts()
-	ui.Column(c).Gap(t.Space(1)).Padding(t.Space(3)).
-		Background(t.Surface).Border(1, t.Border).Radius(t.Radius).
-		Children(func() {
-			ui.Text(c, m.pendingText()).FontWeight(600)
-			if counts.ExportKnown {
-				ui.Textf(c, "可导出 %d 件 · 共采集 %d 件", counts.Exportable, counts.Captured)
-			}
-			ui.Text(c, m.completionCoverageText()).TextColor(t.TextMuted)
-			if note := m.incompletePositionsNote(); note != "" && !m.sessionTerminationShown() {
-				ui.Text(c, note).TextColor(t.Warning)
-			}
-		})
-}
-
 // openRecordWorkspace shows the opened record's summary. It switches only
 // the view: it never activates the window, so a scan that finished in the
 // background stays in the background (C-09).
@@ -189,14 +121,4 @@ func (m *Model) enterReviewView() {
 	m.reviewField = ""
 	m.requestReviewFieldFocus("")
 	m.scrollToCrop = false
-}
-
-// revealExports brings the existing export controls into view. The export
-// dialog (PR-15) replaces this step; the header action and Ctrl+E share
-// this one entry.
-func (m *Model) revealExports() {
-	if !m.exportAvailable() {
-		return
-	}
-	m.recordTab = recordTabSummary
 }

@@ -73,6 +73,7 @@ func (m *Model) reviewCropsWidth() float32 {
 	width -= reviewFormWidth + 1
 	if width < reviewMinCropsWidth {
 		width = reviewMinCropsWidth
+
 	}
 	return width
 }
@@ -113,7 +114,6 @@ func (m *Model) resultsTitle() string {
 func (m *Model) resultsArea(c *ui.Context, t *ui.Theme) {
 	ui.Column(c).Grow(1).FillHeight().MinHeight(0).Gap(t.Space(1)).Children(func() {
 		m.sessionTerminationArea(c, t)
-		m.savePromptArea(c, t)
 		if m.histErr != "" {
 			ui.Text(c, "历史记录读取失败："+m.histErr).TextColor(t.Danger)
 		}
@@ -128,12 +128,7 @@ func (m *Model) resultsArea(c *ui.Context, t *ui.Theme) {
 			return
 		}
 		if m.rec == nil || len(m.rec.Rows) == 0 {
-			ui.Column(c).Gap(t.Space(1)).Children(func() {
-				if m.rec != nil {
-					m.exportArea(c, t)
-				}
-				ui.Text(c, m.emptyResultsText()).TextColor(t.TextMuted)
-			})
+			ui.Text(c, m.emptyResultsText()).TextColor(t.TextMuted)
 			return
 		}
 		m.reviewArea(c, t)
@@ -824,7 +819,7 @@ func (m *Model) reviewEmptyForm(c *ui.Context, t *ui.Theme, visible []int) {
 			ui.Textf(c, "可导出 %d 件 · 排除 %d 件", counts.Exportable, counts.Captured-counts.Exportable)
 		}
 		if ui.PrimaryButton(c, "导出…").Disabled(m.exportEntryBlocked()).Clicked() {
-			m.revealExports()
+			m.requestExport()
 		}
 		if ui.Button(c, "删除这条记录的截图…").Clicked() {
 			m.RequestScreenshotCleanup(m.rec.ID)
@@ -1031,6 +1026,7 @@ func (m *Model) reviewFieldControl(c *ui.Context, t *ui.Theme, row *Row, field F
 			unit := ui.Select(c, &draft.MainUnit,
 				unitChoices(attributeTextValue(draft.MainAttribute), attributeTextValue(draft.MainUnit))).
 				Width(reviewMainUnitWidth).Shrink(1).Disabled(m.reviewActionsBlocked()).Label("主词条单位")
+			m.mainUnitBounds = unit.Bounds()
 			m.noteReviewControlFocus(field, attribute.FocusWithin() || value.FocusWithin() || unit.FocusWithin())
 		})
 	case FormFieldSubstats, FormFieldSubstat1, FormFieldSubstat2, FormFieldSubstat3, FormFieldSubstat4:

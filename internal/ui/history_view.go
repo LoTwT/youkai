@@ -250,21 +250,29 @@ func (m *Model) historyTimeCell(c *ui.Context, t *ui.Theme, tok *Tokens, entry H
 	})
 }
 
-// historyResultFor adapts one list entry to the shared conclusion.
-// ScanNotWrapped is model state: the record data alone cannot say whether
-// the service still owns the session, including its wrap-up save.
-func (m *Model) historyResultFor(entry HistoryEntry) recordConclusion {
-	return recordConclusionFor(recordConclusionInput{
+// historyConclusionInput adapts one list entry to the shared conclusion.
+// ScanNotWrapped and SaveFailed are model state: the record data alone
+// cannot say whether the service still owns the session, including its
+// wrap-up save.
+func (m *Model) historyConclusionInput(entry HistoryEntry) recordConclusionInput {
+	active := entry.ID != "" && entry.ID == string(m.appliedSession)
+	return recordConclusionInput{
 		CapturedCount:            entry.CapturedCount,
 		Coverage:                 entry.Coverage,
 		Termination:              entry.Termination,
 		Counts:                   entry.Counts,
-		Interrupted:              entry.Interrupted,
+		Interrupted:              recordConclusionInterrupted(entry.Termination, entry.Interrupted, active),
 		IncompletePositions:      entry.IncompletePositions,
 		IncompletePositionsKnown: entry.IncompletePositionsKnown,
 		Unreadable:               entry.Unreadable,
-		ScanNotWrapped:           entry.ID != "" && entry.ID == string(m.appliedSession) && m.snap.Busy,
-	})
+		ScanNotWrapped:           active && m.snap.Busy,
+		SaveFailed:               active && m.snap.SaveError != "",
+	}
+}
+
+// historyResultFor states one list entry's conclusion.
+func (m *Model) historyResultFor(entry HistoryEntry) recordConclusion {
+	return recordConclusionFor(m.historyConclusionInput(entry))
 }
 
 // historyResultCell draws the tag and the conclusion.
@@ -506,37 +514,51 @@ func (m *Model) historyDeleteBlockedReason(entry HistoryEntry) string {
 }
 
 // historyExportBlockedReason explains why the row's 导出… entry is
-// disabled. It mirrors historyExportsBlocked's shared guards.
+// disabled. A dirty review draft is not a blocker here: choosing 导出…
+// first opens the target record and lets the existing save/discard prompt
+// settle that draft, just as opening the record would.
 func (m *Model) historyExportBlockedReason(entry HistoryEntry) string {
 	switch {
 	case entry.Unreadable:
 		return "记录不可读，不能导出。"
 	case !m.exportAvailable():
 		return "当前构建未启用导出。"
-	case m.historyExporting != "":
-		return "正在导出历史记录，完成前不能导出。"
 	case m.exporting:
 		return "正在导出，完成前不能导出。"
 	case m.exitState == exitRunning || m.exitState == exitDone:
 		return "正在退出应用，不能导出。"
 	case m.reviewSaving:
 		return "正在保存修改，完成前不能导出。"
-	case m.editingDirty():
-		return "有未保存的修改，保存或放弃后可导出。"
 	default:
 		return ""
 	}
 }
 
-// openHistoryExport is the existing export entry this PR calls. The export
-// dialog arrives with PR-15; until then 导出… opens the record's summary,
-// where the current export controls live.
+// openHistoryExport opens the target record and then its one export
+// dialog; a different record's export never writes from the list row.
+// Opening the record through requestNavigation keeps the existing
+// save/discard prompt in front of a dirty draft.
 func (m *Model) openHistoryExport(entry HistoryEntry) {
 	if entry.Unreadable || m.historyExportBlockedReason(entry) != "" {
 		return
 	}
-	m.openHistoryEntry(entry)
-	m.revealExports()
+	m.closeHistoryMenu()
+	m.historyMenuID = ""
+	m.histChoice = entry.Label
+	if m.recordIsOpen(entry.ID) && m.recErr == "" {
+		m.page = pageResults
+		// The target is already the open record; the title bar's own
+		// export entry handles its draft and blocked states.
+		m.clearRecentlyConfirmed()
+		m.settleResultSelection()
+		m.requestExport()
+		return
+	}
+	m.requestNavigation(navigationRequest{
+		kind:            navOpenRecord,
+		recordID:        entry.ID,
+		exportAfterLoad: true,
+	})
 }
 
 // historyNotices shows the cleanup outcome and a pending per-record

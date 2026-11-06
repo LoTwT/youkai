@@ -486,6 +486,9 @@ func wholeRowTableHeight(available, row, chrome float32) (float32, bool) {
 // items through requestNavigation, so a dirty draft holds the move behind
 // the unsaved prompt. Ctrl+= / Ctrl+- / Ctrl+0 zoom the screenshots.
 func (m *Model) registerResultsShortcuts(c *ui.Context) {
+	if m.exportDialog.open {
+		return
+	}
 	if m.reviewSaving || m.loading || m.recErr != "" || m.exportBusy() {
 		return
 	}

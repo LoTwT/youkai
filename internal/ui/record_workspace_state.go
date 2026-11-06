@@ -94,6 +94,14 @@ type recordWorkspaceState struct {
 	// The frozen export snapshot and its build error.
 	exportData     *app.UsableExport
 	exportBuildErr string
+
+	// The summary's two disclosures and the last diagnostics-open failure.
+	// Both start collapsed (09 §2, §4.6); a different record resets them with
+	// the rest of the workspace, while a reload of the same record keeps the
+	// user's state.
+	summaryDetailsOpen     bool
+	summaryDiagnosticsOpen bool
+	summaryDiagnosticsErr  string
 }
 
 // newRecordWorkspaceState is the empty workspace: no record, no selection
@@ -160,7 +168,11 @@ func (m *Model) recordClassCounts() app.ItemClassCounts {
 		return app.ItemClassCounts{}
 	}
 	if len(m.rec.Rows) > 0 {
-		return rowClassCounts(m.rec.Rows)
+		for i := range m.rec.Rows {
+			if m.rec.Rows[i].ItemClass != "" {
+				return rowClassCounts(m.rec.Rows)
+			}
+		}
 	}
 	return m.rec.Classes
 }
@@ -314,6 +326,9 @@ func (m *Model) captureResultPlace() {
 // caller settles any draft before opening another record. The bumped load
 // version discards responses still in flight for the previous record.
 func (m *Model) showRecord(id string, live bool) {
+	if m.exportAfterLoadID != id {
+		m.exportAfterLoadID = ""
+	}
 	version := m.recLoad + 1
 	m.recordWorkspaceState = newRecordWorkspaceState()
 	m.recLoad = version
@@ -382,6 +397,11 @@ func (m *Model) reloadRecord(id string, live bool) {
 			if err != nil {
 				m.loading = false
 				m.recErr = err.Error()
+				m.edit = nil
+				m.navPrompt = nil
+				if m.exportAfterLoadID == id {
+					m.exportAfterLoadID = ""
+				}
 				return
 			}
 			m.applyLoadedRecord(id, rec, live)
@@ -430,6 +450,12 @@ func (m *Model) applyLoadedRecord(id string, rec *record.Recovery, live bool) {
 	m.selectedSequence = m.selectedSeq()
 	if m.scroll > 0 {
 		m.list.ScrollTo(m.scroll, ui.Start)
+	}
+	if m.exportAfterLoadID == id {
+		m.exportAfterLoadID = ""
+		if m.displayPage() == pageResults {
+			m.openExportDialog()
+		}
 	}
 }
 

@@ -232,6 +232,13 @@ func main() {
 			return mygo.Shell.OpenPath(dir)
 		},
 		OpenDataDirectory: func() error { return mygo.Shell.OpenPath(paths.Data) },
+		// Diagnostics reuse the log directory: the copy carries a
+		// privacy-bounded summary, and the directory holds youkai.log and
+		// the collector subtrees.
+		SystemInfo: app.CurrentSystemInfo,
+		OpenDiagnosticsDirectory: func() error {
+			return mygo.Shell.OpenPath(app.DiagnosticsDirectory(paths))
+		},
 		// The auto-update corner: MyGo's updater behind the UI's seam. The
 		// running version shows in the area ("当前版本 …"); DevAutoInstall
 		// is the rehearsal switch (YOUKAI_DEV_AUTOUPDATE) that installs a

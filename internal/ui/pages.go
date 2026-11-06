@@ -82,16 +82,13 @@ func (m *Model) viewPages(c *ui.Context) {
 		ui.Column(c).Grow(1).FillHeight().Children(func() {
 			m.pageBody(c, t)
 			m.pageActions(c, t, tok)
-			if m.exportStatusVisible() {
-				ui.Divider(c)
-				m.exportStatusArea(c, t)
-			}
 			ui.Divider(c)
 			m.pageStatusBar(c, t)
 		})
 	})
-	// The unsaved-changes dialog covers the whole window, whichever page
-	// triggered it (08 §9).
+	// The export modal and the unsaved-changes dialog both cover the
+	// whole window; only one of them is open at a time.
+	m.exportDialogView(c, t)
 	m.navigationPrompt(c, t)
 }
 

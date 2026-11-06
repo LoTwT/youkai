@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -1047,9 +1048,6 @@ func TestReviewCountsFollowBackfillState(t *testing.T) {
 	if got := m.pendingText(); got != "待校对 1 件" {
 		t.Fatalf("saved backfill pending text = %q", got)
 	}
-	if got := m.exportSummaryText(); strings.Contains(got, "失败 1") {
-		t.Fatalf("saved backfill export summary counts a failure: %q", got)
-	}
 
 	m, _, tt = openResponsiveResults(t, recovery(backfill(record.QualityHumanConfirmed)), 1180, 760)
 	tt.Frame()
@@ -1058,9 +1056,6 @@ func TestReviewCountsFollowBackfillState(t *testing.T) {
 	}
 	if got := m.pendingText(); got != "待校对 0 · 全部可导出" {
 		t.Fatalf("confirmed backfill pending text = %q", got)
-	}
-	if got := m.exportSummaryText(); strings.Contains(got, "失败 1") {
-		t.Fatalf("confirmed backfill export summary counts a failure: %q", got)
 	}
 }
 
@@ -1173,12 +1168,23 @@ func TestReviewFormControlsFitMinimumWidth(t *testing.T) {
 	if total > formInner {
 		t.Fatalf("main-stat row width %.0f exceeds the form inner width %.0f", total, float32(formInner))
 	}
+
+	m, _, tt := openResponsiveResults(t, recovery(reviewRowItem(t, 1, 15)), 960, 640)
+	tt.Frame()
+	m.formExtrasOpen = true
+	tt.Frame()
+	tt.Frame()
+	const formRight = 960 - reviewPagePadding
+	if m.mainUnitBounds.W <= 0 || m.mainUnitBounds.X+m.mainUnitBounds.W > formRight {
+		t.Fatalf("rendered main-stat unit bounds = %+v, form right %d", m.mainUnitBounds, formRight)
+	}
 }
 
 // TestReviewFacetChangePromptsForDirtyDraft checks a facet change that
 // would leave the edited row goes through the unsaved-changes prompt.
 func TestReviewFacetChangePromptsForDirtyDraft(t *testing.T) {
 	m, q, tt, _ := openReviewableResults(t, responsiveResultRecord(t), 1180, 760)
+	defer assertReviewBinding(t, m)
 	tt.Frame()
 	seq := m.selectedSeq()
 	m.edit.draft.Level = "11"
@@ -1206,6 +1212,7 @@ func TestReviewFacetChangePromptsForDirtyDraft(t *testing.T) {
 // its input survive a facet change that would leave the row.
 func TestReviewFacetChangePromptsAfterFailedSave(t *testing.T) {
 	m, q, tt, svc := openReviewableResults(t, responsiveResultRecord(t), 1180, 760)
+	defer assertReviewBinding(t, m)
 	tt.Frame()
 	svc.saveFn = func(string, int64, int64, app.ItemRevisionEdit) (app.ItemRevisionResult, error) {
 		return app.ItemRevisionResult{}, fmt.Errorf("磁盘已满")
@@ -1242,6 +1249,7 @@ func TestReviewFacetChangePromptsAfterFailedSave(t *testing.T) {
 // 待处理 click with a dirty passed-row editor.
 func TestReviewSegmentChangePromptsFromAllToPending(t *testing.T) {
 	m, q, tt, _ := openReviewableResults(t, pendingReviewRecord(t), 1180, 760)
+	defer assertReviewBinding(t, m)
 	tt.Frame()
 	if err := tt.Click("全部"); err != nil {
 		t.Fatalf("click 全部: %v", err)
@@ -1274,6 +1282,7 @@ func TestReviewSegmentChangePromptsFromAllToPending(t *testing.T) {
 // previously popped only because the frame still used the old visible list.
 func TestReviewSegmentChangePromptsPendingToWarning(t *testing.T) {
 	m, q, tt, _ := openReviewableResults(t, pendingReviewRecord(t), 1180, 760)
+	defer assertReviewBinding(t, m)
 	tt.Frame()
 	m.edit.draft.Level = "11"
 	m.edit.refresh()
@@ -1402,6 +1411,7 @@ func TestReviewConflictClearsFailure(t *testing.T) {
 // filter request really runs after a successful save.
 func TestReviewFilterPromptSaveAppliesAfterSuccess(t *testing.T) {
 	m, q, tt, _ := openReviewableResults(t, responsiveResultRecord(t), 1180, 760)
+	defer assertReviewBinding(t, m)
 	tt.Frame()
 	m.edit.draft.Level = "11"
 	m.edit.refresh()
@@ -1460,4 +1470,335 @@ func TestEnsureReviewEditKeepsDirtyDraft(t *testing.T) {
 	if m.edit == nil || m.edit.seq != seq || m.edit.draft.Level != "11" {
 		t.Fatalf("ensureReviewEdit replaced a dirty editor: %s", probeReviewState(m))
 	}
+}
+
+// assertReviewBinding is the invariant shared by every navigation path:
+// an editor, when open, names the selected row and that row is visible.
+func assertReviewBinding(t *testing.T, m *Model) {
+	t.Helper()
+	if m.edit == nil {
+		return
+	}
+	row := m.selectedRow()
+	if row == nil || m.edit.seq != row.Seq || m.edit.recordID != m.rec.ID {
+		t.Fatalf("editor #%d is not bound to selected #%d (%s)", m.edit.seq, rowSeq(row), probeReviewState(m))
+	}
+	if !slices.Contains(m.visibleResultRows(), m.selected) {
+		t.Fatalf("selected #%d is not visible for the editor: %s", m.edit.seq, probeReviewState(m))
+	}
+}
+
+func rowSeq(row *Row) int64 {
+	if row == nil {
+		return -1
+	}
+	return row.Seq
+}
+
+// reviewWarningItem is an exportable warning row: usable, auto accepted
+// and carrying one equipped warning.
+func reviewWarningItem(t *testing.T, seq int64) record.ItemRecord {
+	t.Helper()
+	item := withStructured(t, reviewRowItem(t, seq, 15), func(s *zzz.StructuredDisc) {
+		s.Issues = []zzz.Issue{{
+			Field: "equipped", Code: zzz.CodeEquippedStateUnavailable,
+			Severity: zzz.SeverityWarning, Message: "装备者未识别",
+		}}
+	})
+	item.Quality = record.QualityAutoAccepted
+	return item
+}
+
+// TestReviewFilterChangeClearsCleanEditor covers H2: a clean editor must
+// not survive a filter change and Ctrl+Enter must never confirm the hidden
+// old row.
+func TestReviewFilterChangeClearsCleanEditor(t *testing.T) {
+	m, q, tt, svc := openReviewableResults(t, recovery(
+		reviewRowItem(t, 1, 12),
+		reviewWarningItem(t, 2),
+	), 1180, 760)
+	tt.Frame()
+	if m.edit == nil || m.edit.seq != 1 {
+		t.Fatalf("the pending row did not open its editor: %+v", m.edit)
+	}
+	if err := tt.Click("警告"); err != nil {
+		t.Fatalf("click 警告: %v", err)
+	}
+	tt.Frame()
+	assertReviewBinding(t, m)
+	if m.selectedSeq() != 2 || m.rec.Rows[m.selected].ItemClass != app.ItemClassWarning {
+		t.Fatalf("warning filter selected row %d (%s): %s", m.selectedSeq(),
+			m.rec.Rows[m.selected].ItemClass, probeReviewState(m))
+	}
+	if m.edit != nil && m.edit.seq == 1 {
+		t.Fatalf("the old clean editor survived the filter: %s", probeReviewState(m))
+	}
+	tt.Key(ui.Cmd, ui.KeyEnter)
+	drainAll(t, m, q)
+	tt.Frame()
+	if got := svc.saveCount(); got != 0 {
+		t.Fatalf("Ctrl+Enter confirmed a hidden row: %d saves", got)
+	}
+	assertReviewBinding(t, m)
+}
+
+// TestReviewConfirmedDraftFacetPrompts covers M2: a confirmed item's dirty
+// draft must prompt, not remain attached to a list that no longer shows it.
+func TestReviewConfirmedDraftFacetPrompts(t *testing.T) {
+	m, q, tt, _ := openReviewableResults(t, pendingReviewRecord(t), 1180, 760)
+	defer assertReviewBinding(t, m)
+	tt.Frame()
+	m.confirmCurrentStay()
+	drainAll(t, m, q)
+	tt.Frame()
+	if err := tt.Click("修改"); err != nil {
+		t.Fatalf("edit confirmed row: %v", err)
+	}
+	tt.Frame()
+	if m.edit == nil {
+		t.Fatal("the confirmed row did not open its editor")
+	}
+	m.edit.draft.Level = "11"
+	m.edit.refresh()
+	tt.Frame()
+	if !m.editingDirty() {
+		t.Fatal("the confirmed-row draft is not dirty")
+	}
+	// The confirmed row is still visible through the visit's marker; the
+	// facet change must still prompt because the target pending segment
+	// excludes it.
+	m.requestResultFilter(resultFilterPending, "31100", "")
+	tt.Frame()
+	if m.navPrompt == nil || m.filter != resultFilterPending || m.setFilter != "" {
+		t.Fatalf("confirmed dirty facet did not prompt: %s", probeReviewState(m))
+	}
+	assertReviewBinding(t, m)
+	if err := tt.Click("留在这里"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if m.edit == nil || m.edit.draft.Level != "11" || m.setFilter != "" {
+		t.Fatalf("staying lost the confirmed draft or applied the facet: %s", probeReviewState(m))
+	}
+	assertReviewBinding(t, m)
+}
+
+// TestReviewEmptyFacetDoesNotStrandDraft covers M2's empty-filter trap.
+func TestReviewEmptyFacetDoesNotStrandDraft(t *testing.T) {
+	m, _, tt, _ := openReviewableResults(t, pendingReviewRecord(t), 1180, 760)
+	defer assertReviewBinding(t, m)
+	tt.Frame()
+	m.edit.draft.Level = "11"
+	m.edit.refresh()
+	tt.Frame()
+	m.requestResultFilter(m.filter, "99999", "9")
+	tt.Frame()
+	if m.navPrompt == nil {
+		t.Fatalf("empty facet dropped the draft: %s", probeReviewState(m))
+	}
+	assertReviewBinding(t, m)
+	if err := tt.Click("留在这里"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if m.edit == nil || m.edit.draft.Level != "11" || m.setFilter != "" || m.slotFilter != "" {
+		t.Fatalf("staying on the empty facet lost the draft: %s", probeReviewState(m))
+	}
+	if tt.HasText("没有符合筛选条件的条目。") {
+		t.Fatalf("the empty facet persisted after stay: %q", tt.Texts())
+	}
+	assertReviewBinding(t, m)
+}
+
+// TestReviewSummaryCountPromptsDirtyDraft checks the summary count entry
+// uses the same navigation guard.
+func TestReviewSummaryCountPromptsDirtyDraft(t *testing.T) {
+	m, _, tt, _ := openReviewableResults(t, pendingReviewRecord(t), 1180, 760)
+	defer assertReviewBinding(t, m)
+	tt.Frame()
+	m.edit.draft.Level = "11"
+	m.edit.refresh()
+	tt.Frame()
+	m.openSummaryClass(app.ItemClassPendingReview)
+	tt.Frame()
+	if m.navPrompt == nil || m.recordTab != recordTabItems {
+		t.Fatalf("summary count did not prompt: %s", probeReviewState(m))
+	}
+	assertReviewBinding(t, m)
+}
+
+// TestReviewCompactWalkPromptsDirtyDraft checks the compact ‹ › buttons
+// use requestNavigation.
+func TestReviewCompactWalkPromptsDirtyDraft(t *testing.T) {
+	m, _, tt, _ := openReviewableResults(t, manyPendingRecord(t, 3), 960, 640)
+	defer assertReviewBinding(t, m)
+	tt.Frame()
+	m.edit.draft.Level = "11"
+	m.edit.refresh()
+	tt.Frame()
+	if err := tt.Click("›"); err != nil {
+		t.Fatalf("click compact next: %v", err)
+	}
+	tt.Frame()
+	if m.navPrompt == nil || m.selected != 0 {
+		t.Fatalf("compact next did not prompt: %s", probeReviewState(m))
+	}
+	assertReviewBinding(t, m)
+}
+
+// TestSettleResultSelectionHonorsDirtyBinding is the direct guard check:
+// a dirty selection must not move even if the filter field is changed by a
+// stray caller. It catches removal of settleResultSelection's protection.
+func TestSettleResultSelectionHonorsDirtyBinding(t *testing.T) {
+	m, _, _, _ := openReviewableResults(t, pendingReviewRecord(t), 1180, 760)
+	m.edit.draft.Level = "11"
+	m.edit.refresh()
+	seq := m.selectedSeq()
+	m.filter = resultFilterWarning
+	m.settleResultSelection()
+	if m.selectedSeq() != seq || m.edit == nil || m.edit.draft.Level != "11" {
+		t.Fatalf("settle moved a dirty selection: %s", probeReviewState(m))
+	}
+}
+
+// TestReviewFilterRejectsWhileSaving checks the save-in-flight refusal.
+func TestReviewFilterRejectsWhileSaving(t *testing.T) {
+	m, _, _, _ := openReviewableResults(t, pendingReviewRecord(t), 1180, 760)
+	m.reviewSaving = true
+	m.requestResultFilter(resultFilterWarning, "", "")
+	if m.filter != resultFilterPending || m.reviewErr == "" {
+		t.Fatalf("filter change during save = filter %v err %q", m.filter, m.reviewErr)
+	}
+}
+
+// TestReviewFilterSyncsTableSelected checks the table selection pointer
+// follows every applied filter so a later click cannot target a stale row.
+func TestReviewFilterSyncsTableSelected(t *testing.T) {
+	m, _, tt, _ := openReviewableResults(t, pendingReviewRecord(t), 1180, 760)
+	tt.Frame()
+	// Choose a row that is not first in the target segment, so the sync is
+	// observable rather than accidentally already correct.
+	m.clearEdit()
+	m.selected = 4
+	m.selectedSequence = m.rec.Rows[4].Seq
+	m.tableSelected = 0
+	m.requestResultFilter(resultFilterAll, "", "")
+	want := resultDisplayIndex(m.visibleResultRows(), m.selected)
+	if want != 4 || m.tableSelected != want {
+		t.Fatalf("filter did not sync tableSelected: got %d, want %d (selected %d)",
+			m.tableSelected, want, m.selected)
+	}
+	assertReviewBinding(t, m)
+}
+
+// TestReviewStayKeepsFailureBand covers L7: choosing 留在这里 after a
+// failed save must keep the reason and retry affordance.
+func TestReviewStayKeepsFailureBand(t *testing.T) {
+	m, q, tt, svc := openReviewableResults(t, pendingReviewRecord(t), 1180, 760)
+	tt.Frame()
+	svc.saveFn = func(string, int64, int64, app.ItemRevisionEdit) (app.ItemRevisionResult, error) {
+		return app.ItemRevisionResult{}, fmt.Errorf("磁盘已满")
+	}
+	m.edit.draft.Level = "11"
+	m.saveEdit(reviewSave, nil)
+	drainAll(t, m, q)
+	tt.Frame()
+	m.requestResultFilter(resultFilterWarning, "", "")
+	tt.Frame()
+	if m.navPrompt == nil {
+		t.Fatal("no prompt after failed save")
+	}
+	if err := tt.Click("留在这里"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if !m.reviewSaveFailed || !strings.Contains(m.reviewErr, "磁盘已满") {
+		t.Fatalf("stay cleared the failure state: %s", probeReviewState(m))
+	}
+	if !tt.HasText("重试保存") {
+		t.Fatalf("stay lost the retry action: %q", tt.Texts())
+	}
+	assertReviewBinding(t, m)
+}
+
+// TestReviewCompactPromptClosesPopover covers L8: the compact list must
+// close before the unsaved dialog, so the first dialog click is not eaten.
+func TestReviewCompactPromptClosesPopover(t *testing.T) {
+	m, _, tt, _ := openReviewableResults(t, manyPendingRecord(t, 3), 960, 640)
+	tt.Frame()
+	m.compactListOpen = true
+	m.edit.draft.Level = "11"
+	m.edit.refresh()
+	tt.Frame()
+	m.requestResultFilter(resultFilterWarning, "", "")
+	tt.Frame()
+	if m.navPrompt == nil {
+		t.Fatal("no compact filter prompt")
+	}
+	if m.compactListOpen {
+		t.Fatalf("the compact popover stayed behind the dialog: %s", probeReviewState(m))
+	}
+	if !tt.HasText("留在这里") {
+		t.Fatalf("the dialog is not visible: %q", tt.Texts())
+	}
+	assertReviewBinding(t, m)
+}
+
+// TestReviewWriteRejectsDisconnectedEditor checks the write guards: a
+// stale editor cannot save or confirm another selected row.
+func TestReviewWriteRejectsDisconnectedEditor(t *testing.T) {
+	m, q, tt, svc := openReviewableResults(t, manyPendingRecord(t, 2), 1180, 760)
+	tt.Frame()
+	m.edit.draft.Level = "11"
+	m.edit.refresh()
+	m.selected = 1 // direct break for the probe; the UI paths prompt instead
+	m.saveEdit(reviewSave, nil)
+	drainAll(t, m, q)
+	if got := svc.saveCount(); got != 0 {
+		t.Fatalf("a disconnected editor wrote %d saves", got)
+	}
+	if !strings.Contains(m.reviewErr, "不一致") {
+		t.Fatalf("write guard did not explain the mismatch: %q", m.reviewErr)
+	}
+}
+
+// TestReviewFilterAppliesWhenSelectedStaysVisible checks the protection is
+// conditional: a filter that keeps the edited row visible applies without a
+// pointless prompt.
+func TestReviewFilterAppliesWhenSelectedStaysVisible(t *testing.T) {
+	m, _, tt, _ := openReviewableResults(t, pendingReviewRecord(t), 1180, 760)
+	tt.Frame()
+	m.edit.draft.Level = "11"
+	m.edit.refresh()
+	tt.Frame()
+	if err := tt.Click("全部"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if m.filter != resultFilterAll || m.navPrompt != nil {
+		t.Fatalf("visible-row filter prompted or stayed: %s", probeReviewState(m))
+	}
+	if m.edit == nil || m.edit.draft.Level != "11" {
+		t.Fatalf("visible-row filter lost the draft: %s", probeReviewState(m))
+	}
+	assertReviewBinding(t, m)
+}
+
+// TestReviewPageSwitchPromptsDirtyDraft checks destination changes use the
+// same guard as filters and selection.
+func TestReviewPageSwitchPromptsDirtyDraft(t *testing.T) {
+	m, _, tt, _ := openReviewableResults(t, pendingReviewRecord(t), 1180, 760)
+	tt.Frame()
+	m.edit.draft.Level = "11"
+	m.edit.refresh()
+	tt.Frame()
+	m.navigatePage(pageSettings)
+	tt.Frame()
+	if m.navPrompt == nil || m.displayPage() != pageResults {
+		t.Fatalf("page switch did not prompt: %s", probeReviewState(m))
+	}
+	if m.edit == nil || m.edit.draft.Level != "11" {
+		t.Fatalf("page switch lost the draft: %s", probeReviewState(m))
+	}
+	assertReviewBinding(t, m)
 }

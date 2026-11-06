@@ -721,23 +721,40 @@ func TestRecordConclusion(t *testing.T) {
 	completed := &record.Termination{
 		Kind: record.TerminationCompleted, Code: "verifiedEnd", Phase: record.PhaseCapturing,
 	}
+	knownPartial := []app.PositionOutcome{
+		{Position: 1, State: app.PositionOutcomeDegraded, Stage: "filter", ReasonCode: "navigationMismatch"},
+		{Position: 2, State: app.PositionOutcomeTruncated},
+		{Position: 3, State: app.PositionOutcomeComplete},
+		{Position: 4, State: app.PositionOutcomeComplete},
+		{Position: 5, State: app.PositionOutcomeComplete},
+		{Position: 6, State: app.PositionOutcomeComplete},
+	}
 	cases := []struct {
-		name  string
-		input recordConclusionInput
-		tag   string
-		text  string
+		name              string
+		input             recordConclusionInput
+		wantOutcome       recordOutcomeKind
+		tag               string
+		text              string
+		summaryEyebrow    string
+		summaryTitle      string
+		summarySupplement string
+		summaryNotes      string
 	}{
 		{
-			name:  "unreadable",
-			input: recordConclusionInput{Unreadable: true},
-			tag:   "!",
-			text:  "无法打开：记录不可读",
+			name:         "unreadable",
+			input:        recordConclusionInput{Unreadable: true},
+			wantOutcome:  recordOutcomeUnreadable,
+			tag:          "!",
+			text:         "无法打开：记录不可读",
+			summaryTitle: "记录读取失败",
 		},
 		{
-			name:  "interrupted",
-			input: recordConclusionInput{Interrupted: true, CapturedCount: 3},
-			tag:   "中断",
-			text:  "已恢复已保存部分",
+			name:         "interrupted",
+			input:        recordConclusionInput{Interrupted: true, CapturedCount: 3},
+			wantOutcome:  recordOutcomeInterrupted,
+			tag:          "中断",
+			text:         "已恢复已保存部分",
+			summaryTitle: "扫描中断，只保存了部分结果",
 		},
 		{
 			name: "all pass",
@@ -745,7 +762,10 @@ func TestRecordConclusion(t *testing.T) {
 				Termination: completed, Coverage: record.CoverageComplete,
 				CapturedCount: 1_017, Counts: app.ItemClassCounts{Passed: 1_017},
 			},
-			text: "扫全了，可以直接导出",
+			wantOutcome:    recordOutcomeCompleted,
+			summaryEyebrow: "正常结束",
+			text:           "扫全了，可以直接导出",
+			summaryTitle:   "扫全了，可以直接导出",
 		},
 		{
 			name: "one pending review",
@@ -754,7 +774,10 @@ func TestRecordConclusion(t *testing.T) {
 				CapturedCount: 1_017,
 				Counts:        app.ItemClassCounts{Passed: 1_016, PendingReview: 1},
 			},
-			text: "扫全了，1 件待校对",
+			wantOutcome:    recordOutcomeCompleted,
+			summaryEyebrow: "正常结束",
+			text:           "扫全了，1 件待校对",
+			summaryTitle:   "扫全了，还有 1 件待校对",
 		},
 		{
 			name: "pending backfill and review",
@@ -763,7 +786,10 @@ func TestRecordConclusion(t *testing.T) {
 				CapturedCount: 8,
 				Counts:        app.ItemClassCounts{Passed: 6, PendingBackfill: 1, PendingReview: 1},
 			},
-			text: "扫全了，2 件待处理",
+			wantOutcome:    recordOutcomeCompleted,
+			summaryEyebrow: "正常结束",
+			text:           "扫全了，2 件待处理",
+			summaryTitle:   "扫全了，还有 1 件待校对、1 件待补录",
 		},
 		{
 			name: "warnings stay exportable",
@@ -771,7 +797,10 @@ func TestRecordConclusion(t *testing.T) {
 				Termination: completed, Coverage: record.CoverageComplete,
 				CapturedCount: 8, Counts: app.ItemClassCounts{Passed: 6, Warning: 2},
 			},
-			text: "扫全了，2 件有警告",
+			wantOutcome:    recordOutcomeCompleted,
+			summaryEyebrow: "正常结束",
+			text:           "扫全了，2 件有警告",
+			summaryTitle:   "扫全了，可以直接导出",
 		},
 		{
 			name: "partial coverage",
@@ -779,7 +808,10 @@ func TestRecordConclusion(t *testing.T) {
 				Termination: completed, Coverage: record.CoveragePartial,
 				CapturedCount: 6, Counts: app.ItemClassCounts{Passed: 6},
 			},
-			text: "没有扫全 · 覆盖：部分",
+			wantOutcome:    recordOutcomeCompleted,
+			summaryEyebrow: "正常结束",
+			text:           "没有扫全 · 覆盖：部分",
+			summaryTitle:   "没有扫全：覆盖不完整",
 		},
 		{
 			name: "partial coverage with known positions",
@@ -787,8 +819,13 @@ func TestRecordConclusion(t *testing.T) {
 				Termination: completed, Coverage: record.CoveragePartial,
 				CapturedCount: 6, Counts: app.ItemClassCounts{Passed: 6},
 				IncompletePositions: 2, IncompletePositionsKnown: true,
+				PositionOutcomes: knownPartial, PositionOutcomesKnown: true,
 			},
-			text: "没有扫全 · 2 个号位不完整",
+			wantOutcome:    recordOutcomeCompleted,
+			summaryEyebrow: "正常结束",
+			text:           "没有扫全 · 2 个号位不完整",
+			summaryTitle:   "没有扫全：1 号位、2 号位不完整",
+			summaryNotes:   "其余 4 个号位完整",
 		},
 		{
 			name: "manual stop",
@@ -799,7 +836,33 @@ func TestRecordConclusion(t *testing.T) {
 				Coverage: record.CoveragePartial, CapturedCount: 2,
 				Counts: app.ItemClassCounts{Passed: 2},
 			},
-			text: "手动停止 · 覆盖：部分",
+			wantOutcome:  recordOutcomeCancelled,
+			text:         "手动停止 · 覆盖：部分",
+			summaryTitle: "已手动停止",
+		},
+		{
+			name: "manual stop with complete coverage",
+			input: recordConclusionInput{
+				Termination: &record.Termination{
+					Kind: record.TerminationCancelled, Code: "userCancelled", Phase: record.PhaseCapturing,
+				},
+				Coverage: record.CoverageComplete, CapturedCount: 2,
+				Counts: app.ItemClassCounts{Passed: 2},
+			},
+			wantOutcome:  recordOutcomeCancelled,
+			text:         "手动停止 · 覆盖：全部",
+			summaryTitle: "已手动停止",
+		},
+		{
+			name: "completed record without four-class counts",
+			input: recordConclusionInput{
+				Termination: completed, Coverage: record.CoverageComplete,
+				CapturedCount: 5,
+			},
+			wantOutcome:    recordOutcomeCompleted,
+			text:           "正常结束 · 覆盖：全部",
+			summaryEyebrow: "正常结束",
+			summaryTitle:   "扫全了，可以直接导出",
 		},
 		{
 			name: "fault while capturing",
@@ -810,8 +873,12 @@ func TestRecordConclusion(t *testing.T) {
 				Coverage: record.CoveragePartial, CapturedCount: 431,
 				Counts: app.ItemClassCounts{Passed: 429, PendingReview: 2},
 			},
-			tag:  "失败",
-			text: "中途停止：游戏失去了焦点",
+			wantOutcome:       recordOutcomeFault,
+			tag:               "失败",
+			text:              "中途停止：游戏失去了焦点",
+			summaryTitle:      "扫描中途停止：游戏失去了焦点",
+			summarySupplement: "怎么做：扫描时请不要切换应用。",
+			summaryNotes:      "已保存：431 件",
 		},
 		{
 			name: "stopped before starting",
@@ -821,32 +888,164 @@ func TestRecordConclusion(t *testing.T) {
 				},
 				Coverage: record.CoverageUnknown,
 			},
-			tag:  "失败",
-			text: "没有开始：30 秒内游戏没有就绪",
+			wantOutcome:       recordOutcomeEmpty,
+			tag:               "失败",
+			text:              "没有开始：30 秒内游戏没有就绪",
+			summaryTitle:      "没有采集到任何驱动盘：30 秒内游戏没有就绪",
+			summarySupplement: "怎么做：请让游戏保持在前台并停在驱动盘仓库页，然后重新开始扫描。",
+		},
+		{
+			name: "zero captured after a normal end",
+			input: recordConclusionInput{
+				Termination: completed, Coverage: record.CoverageComplete,
+			},
+			wantOutcome:       recordOutcomeEmpty,
+			text:              "正常结束 · 没有采集到驱动盘",
+			summaryTitle:      "没有采集到任何驱动盘",
+			summarySupplement: "回到准备检查后重新开始。",
+		},
+		{
+			name: "zero captured after a manual stop",
+			input: recordConclusionInput{
+				Termination: &record.Termination{
+					Kind: record.TerminationCancelled, Code: "userCancelled", Phase: record.PhaseCapturing,
+				},
+				Coverage: record.CoveragePartial,
+			},
+			wantOutcome:       recordOutcomeEmpty,
+			text:              "手动停止 · 覆盖：部分",
+			summaryTitle:      "已手动停止，没有采集到任何驱动盘",
+			summarySupplement: "回到准备检查后重新开始。",
+		},
+		{
+			name: "zero captured with an interrupted termination",
+			input: recordConclusionInput{
+				Termination: &record.Termination{Kind: record.TerminationInterrupted},
+				Interrupted: true,
+			},
+			wantOutcome:       recordOutcomeEmpty,
+			tag:               "中断",
+			text:              "已恢复已保存部分",
+			summaryTitle:      "扫描中断，没有采集到任何驱动盘",
+			summarySupplement: "请重新开始扫描。",
+		},
+		{
+			name: "zero captured without a termination",
+			input: recordConclusionInput{
+				Interrupted: true,
+			},
+			wantOutcome:       recordOutcomeEmpty,
+			tag:               "中断",
+			text:              "已恢复已保存部分",
+			summaryTitle:      "扫描中断，没有采集到任何驱动盘",
+			summarySupplement: "请重新开始扫描。",
+		},
+		{
+			name: "save failure outranks running and zero items",
+			input: recordConclusionInput{
+				SaveFailed: true, ScanNotWrapped: true, CapturedCount: 0,
+			},
+			wantOutcome:       recordOutcomeSaveFailed,
+			tag:               "!",
+			text:              "保存失败",
+			summaryTitle:      "扫描结果还没有保存",
+			summarySupplement: "保存失败，请重试。若仍然失败，请检查磁盘空间和权限。",
 		},
 	}
 	// Running is model state rather than record data; the shared function
 	// still owns the wording.
 	cases = append(cases, struct {
-		name  string
-		input recordConclusionInput
-		tag   string
-		text  string
-	}{name: "scan still running", input: recordConclusionInput{ScanNotWrapped: true}, text: "扫描进行中"})
+		name              string
+		input             recordConclusionInput
+		wantOutcome       recordOutcomeKind
+		tag               string
+		text              string
+		summaryEyebrow    string
+		summaryTitle      string
+		summarySupplement string
+		summaryNotes      string
+	}{
+		name:              "scan still running",
+		input:             recordConclusionInput{ScanNotWrapped: true},
+		wantOutcome:       recordOutcomeRunning,
+		text:              "扫描进行中",
+		summaryTitle:      "扫描还没有结束",
+		summarySupplement: "结束后这里会给出覆盖结论和可导出数量。",
+	})
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			out := recordOutcomeFor(tc.input)
+			if out.Kind != tc.wantOutcome {
+				t.Fatalf("outcome = %v, want %v", out.Kind, tc.wantOutcome)
+			}
 			got := recordConclusionFor(tc.input)
 			if got.tag != tc.tag || got.text != tc.text {
-				t.Fatalf("result = %q/%q, want %q/%q", got.tag, got.text, tc.tag, tc.text)
+				t.Fatalf("list = %q/%q, want %q/%q", got.tag, got.text, tc.tag, tc.text)
+			}
+			summary := recordSummaryWording(out)
+			if summary.Eyebrow != tc.summaryEyebrow {
+				t.Fatalf("summary eyebrow = %q, want %q", summary.Eyebrow, tc.summaryEyebrow)
+			}
+			if summary.Title != tc.summaryTitle {
+				t.Fatalf("summary title = %q, want %q", summary.Title, tc.summaryTitle)
+			}
+			if summary.Supplement != tc.summarySupplement {
+				t.Fatalf("summary supplement = %q, want %q", summary.Supplement, tc.summarySupplement)
+			}
+			if tc.summaryNotes != "" && !strings.Contains(strings.Join(summary.Notes, "\n"), tc.summaryNotes) {
+				t.Fatalf("summary notes = %q, want them to contain %q", summary.Notes, tc.summaryNotes)
 			}
 		})
 	}
 }
 
+// TestInterruptedRecordEndingIsShared checks the two adapters classify the
+// same crashed record as interrupted, even when recovery marked no item.
+func TestInterruptedRecordEndingIsShared(t *testing.T) {
+	rec := recovery(record.ItemRecord{Sequence: 1, Status: record.StatusProduced})
+	rec.Checkpoint.Session.Termination = nil
+	rec.Checkpoint.Session.Coverage = record.Coverage{Status: record.CoveragePartial}
+	rec.Checkpoint.Session.CapturedCount = 1
+	view := BuildRecordView("rec", rec, false)
+	m := summaryModel(view, app.Snapshot{})
+	history := m.historyConclusionInput(HistoryEntry{
+		ID:            "rec",
+		CapturedCount: 1,
+		Coverage:      record.CoveragePartial,
+		Counts:        app.ItemClassCounts{Passed: 1},
+	})
+
+	summaryOutcome := recordOutcomeFor(m.summaryConclusionInput())
+	listOutcome := recordOutcomeFor(history)
+	if summaryOutcome.Kind != recordOutcomeInterrupted || listOutcome.Kind != recordOutcomeInterrupted {
+		t.Fatalf("outcomes = summary %v, list %v; want interrupted", summaryOutcome.Kind, listOutcome.Kind)
+	}
+	if got := recordConclusionFor(history).text; got != "已恢复已保存部分" {
+		t.Fatalf("list wording = %q", got)
+	}
+	if got := recordSummaryWording(summaryOutcome).Title; got != "扫描中断，只保存了部分结果" {
+		t.Fatalf("summary wording = %q", got)
+	}
+}
+
+// TestHistorySaveFailureUsesTheSummaryEnding keeps the list and summary on
+// the same save-failure ending for the current session.
+func TestHistorySaveFailureUsesTheSummaryEnding(t *testing.T) {
+	m := new(Model)
+	m.snap = app.Snapshot{Busy: true, SaveError: "磁盘已满"}
+	m.appliedSession = scan.ID("rec")
+	out := recordOutcomeFor(m.historyConclusionInput(HistoryEntry{ID: "rec"}))
+	if out.Kind != recordOutcomeSaveFailed {
+		t.Fatalf("history outcome = %v, want save failure", out.Kind)
+	}
+	if got := recordListConclusion(out).text; got != "保存失败" {
+		t.Fatalf("history wording = %q", got)
+	}
+}
+
 // TestHistoryRowMenu checks the normal row's menu, its disabled deletion
-// reason and the existing export entry behind 导出… (PR-15 replaces it
-// with the dialog).
+// reason and the export entry that opens the record's dialog.
 func TestHistoryRowMenu(t *testing.T) {
 	svc := &fakeService{
 		history: historyTableRecords(2),
@@ -890,11 +1089,11 @@ func TestHistoryRowMenu(t *testing.T) {
 	}
 	settle(t, m, q, tt)
 	if m.displayPage() != pageResults || m.rec == nil || m.rec.ID != "r01" {
-		t.Fatalf("导出… = page %v, record %+v, want the record's existing export entry",
+		t.Fatalf("导出… = page %v, record %+v, want the row's record opened",
 			m.displayPage(), m.rec)
 	}
-	if !tt.HasText("导出 JSON") || !tt.HasText("导出 CSV") {
-		t.Fatalf("the existing export controls do not show: %q", tt.Texts())
+	if !m.exportDialog.open || !tt.HasText("导出 JSON") || !tt.HasText("去校对") {
+		t.Fatalf("the row's export dialog did not open: open=%t %q", m.exportDialog.open, tt.Texts())
 	}
 }
 
@@ -935,9 +1134,9 @@ func TestHistoryOpenAndReturn(t *testing.T) {
 	}
 }
 
-// TestHistoryExportFailure keeps the per-row export's failure state: the
-// in-flight marker clears and the error is reported globally.
-func TestHistoryExportFailure(t *testing.T) {
+// TestHistoryExportFailureShowsInDialog checks the row's export failure in
+// the same dialog the title bar uses.
+func TestHistoryExportFailureShowsInDialog(t *testing.T) {
 	svc := &fakeService{
 		history: historyTableRecords(1),
 		loads: map[string]*record.Recovery{
@@ -945,18 +1144,33 @@ func TestHistoryExportFailure(t *testing.T) {
 		},
 	}
 	saver := &fakeDirectExportSaver{}
-	m, q := newTestModel(t, Config{Service: svc, DirectExportSaver: saver, AppVersion: "test"})
-	tt := ui.NewTester(m.View, 1180, 760)
-	settle(t, m, q, tt)
-
 	saver.saveFn = func(app.ExportFormat, string, []byte) (string, error) {
 		return "", errors.New("no space left on device")
 	}
-	m.ExportHistory("r01", app.ExportJSON)
+	m, q := newTestModel(t, Config{Service: svc, DirectExportSaver: saver, AppVersion: "test"})
+	tt := ui.NewTester(m.View, 1180, 760)
 	settle(t, m, q, tt)
-	if m.historyExporting != "" || m.exportOutcome == nil || m.exportOutcome.err == nil ||
-		!strings.Contains(m.exportOutcome.text(), "no space left on device") {
-		t.Fatalf("failure state = exporting %q, outcome %+v", m.historyExporting, m.exportOutcome)
+	openRecordsList(t, m, q, tt)
+
+	m.openHistoryMenu("r01")
+	tt.Frame()
+	if err := tt.Click("导出…"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
+	if !m.exportDialog.open {
+		t.Fatalf("the row's export dialog did not open: %q", tt.Texts())
+	}
+	if err := tt.Click("导出 JSON"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
+	if m.exportOutcome == nil || m.exportOutcome.err == nil ||
+		!strings.Contains(m.exportOutcome.err.Error(), "no space left on device") {
+		t.Fatalf("failure outcome = %+v", m.exportOutcome)
+	}
+	if !tt.HasText("导出失败：no space left on device") || !tt.HasText("重试") {
+		t.Fatalf("the dialog failure is missing: %q", tt.Texts())
 	}
 }
 
@@ -989,6 +1203,148 @@ func TestHistoryCurrentRowOpensLiveRecord(t *testing.T) {
 	}
 	if m.rec == nil || m.rec.ID != "r01" || !m.rec.Live {
 		t.Fatalf("the current row opened %+v, want the live record", m.rec)
+	}
+}
+
+// TestHistoryRowExportLoadFailureDoesNotOpenDialog keeps a failed row
+// export from leaving the "open the dialog when the load lands" mark set.
+func TestHistoryRowExportLoadFailureDoesNotOpenDialog(t *testing.T) {
+	svc := &fakeService{
+		history: historyTableRecords(1),
+		loadErr: map[string]error{"r01": errors.New("checkpoint missing")},
+	}
+	m, q := newTestModel(t, Config{
+		Service:           svc,
+		DirectExportSaver: &fakeDirectExportSaver{},
+		AppVersion:        "test",
+	})
+	tt := ui.NewTester(m.View, 1180, 760)
+	settle(t, m, q, tt)
+	openRecordsList(t, m, q, tt)
+
+	m.openHistoryMenu("r01")
+	tt.Frame()
+	if err := tt.Click("导出…"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
+	if m.exportAfterLoadID != "" || m.exportDialog.open {
+		t.Fatalf("a failed row load kept its deferred dialog: id=%q open=%t",
+			m.exportAfterLoadID, m.exportDialog.open)
+	}
+	if !strings.Contains(m.recErr, "checkpoint missing") {
+		t.Fatalf("the row load failure is not shown: %q", m.recErr)
+	}
+}
+
+// TestHistoryRowExportForOpenRecordOpensTheDialog checks the branch where
+// the row's record is already loaded: no reload, just the same dialog.
+func TestHistoryRowExportForOpenRecordOpensTheDialog(t *testing.T) {
+	svc := &fakeService{
+		history: historyTableRecords(1),
+		loads: map[string]*record.Recovery{
+			"r01": recovery(
+				uiStructuredItem(t, 1, record.QualityAutoAccepted),
+				uiStructuredItem(t, 2, record.QualityAutoAccepted),
+			),
+		},
+	}
+	m, q := newTestModel(t, Config{
+		Service:           svc,
+		DirectExportSaver: &fakeDirectExportSaver{},
+		AppVersion:        "test",
+	})
+	tt := ui.NewTester(m.View, 1180, 760)
+	settle(t, m, q, tt)
+	openRecordsList(t, m, q, tt)
+	m.histChoice = historyLabel(t, m, "r01")
+	m.OpenHistory()
+	settle(t, m, q, tt)
+
+	m.page = pageHistory
+	tt.Frame()
+	m.openHistoryMenu("r01")
+	tt.Frame()
+	if err := tt.Click("导出…"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
+	if m.page != pageResults || m.rec == nil || m.rec.ID != "r01" || !m.exportDialog.open {
+		t.Fatalf("open-record row export = page %v record %+v dialog=%t",
+			m.page, m.rec, m.exportDialog.open)
+	}
+	if !tt.Focused("导出 JSON") {
+		t.Fatalf("the export dialog did not focus 导出 JSON: %q", tt.Texts())
+	}
+	if m.exportData == nil || m.exportData.Summary.Included != 2 {
+		t.Fatalf("the dialog did not use the open record's snapshot: %+v", m.exportData)
+	}
+}
+
+// TestHistoryRowExportSettlesDirtyDraftFirst checks that a row's 导出…
+// goes through the existing save/discard prompt before opening the target
+// record and its dialog.
+func TestHistoryRowExportSettlesDirtyDraftFirst(t *testing.T) {
+	svc := &fakeService{
+		history: historyTableRecords(2),
+		loads: map[string]*record.Recovery{
+			"r01": recovery(
+				uiStructuredItem(t, 1, record.QualityAutoAccepted),
+				uiStructuredItem(t, 2, record.QualityNeedsReview),
+			),
+			"r02": recovery(uiStructuredItem(t, 1, record.QualityAutoAccepted)),
+		},
+	}
+	m, q := newTestModel(t, Config{
+		Service:           svc,
+		DirectExportSaver: &fakeDirectExportSaver{},
+		AppVersion:        "test",
+	})
+	tt := ui.NewTester(m.View, 1180, 760)
+	settle(t, m, q, tt)
+	openRecordsList(t, m, q, tt)
+	m.histChoice = historyLabel(t, m, "r01")
+	m.OpenHistory()
+	settle(t, m, q, tt)
+	showRecordItems(m)
+	m.selected = 0
+	m.startEdit()
+	if m.edit == nil {
+		t.Fatal("the editor did not open")
+	}
+	m.edit.draft.Level = "14"
+
+	m.page = pageHistory
+	tt.Frame()
+	label := historyLabel(t, m, "r02")
+	var target HistoryEntry
+	for _, entry := range m.visibleHistory() {
+		if entry.Label == label {
+			target = entry
+			break
+		}
+	}
+	if target.ID == "" {
+		t.Fatal("r02 is not in the visible history")
+	}
+	m.openHistoryExport(target)
+	tt.Frame()
+	if m.exportDialog.open || m.navPrompt == nil {
+		t.Fatalf("dirty row export = dialog=%t prompt=%v", m.exportDialog.open, m.navPrompt)
+	}
+	if !tt.HasText("第 1 件有未保存的修改") {
+		t.Fatalf("the unsaved-changes prompt is missing: %q", tt.Texts())
+	}
+	if err := tt.Click("放弃修改"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
+	if m.rec == nil || m.rec.ID != "r02" || !m.exportDialog.open {
+		t.Fatalf("after discarding = record %+v dialog=%t, want r02's dialog",
+			m.rec, m.exportDialog.open)
+	}
+	if !tt.Focused("导出 JSON") {
+		t.Fatalf("the row export dialog did not focus 导出 JSON: %q", tt.Texts())
 	}
 }
 
@@ -1031,30 +1387,66 @@ func TestHistoryTableFitsWidths(t *testing.T) {
 	}
 }
 
-// TestHistoryPerRowExportUsesThatRecord keeps
-// the existing per-record export path working from the list.
+// TestHistoryPerRowExportUsesThatRecord checks that a row's 导出… opens
+// that record first and exports its snapshot, not the previously open one.
 func TestHistoryPerRowExportUsesThatRecord(t *testing.T) {
 	svc := &fakeService{
 		history: historyTableRecords(2),
 		loads: map[string]*record.Recovery{
 			"r01": recovery(uiStructuredItem(t, 1, record.QualityAutoAccepted)),
+			"r02": recovery(
+				uiStructuredItem(t, 1, record.QualityAutoAccepted),
+				uiStructuredItem(t, 2, record.QualityAutoAccepted),
+			),
 		},
 	}
 	saver := &fakeDirectExportSaver{}
 	m, q := newTestModel(t, Config{Service: svc, DirectExportSaver: saver, AppVersion: "test"})
 	tt := ui.NewTester(m.View, 1180, 760)
 	settle(t, m, q, tt)
+	openRecordsList(t, m, q, tt)
 
-	m.ExportHistory("r01", app.ExportJSON)
+	m.openHistoryMenu("r02")
+	tt.Frame()
+	if err := tt.Click("导出…"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
+	if m.rec == nil || m.rec.ID != "r02" || !m.exportDialog.open {
+		t.Fatalf("导出… = record %+v dialog=%t, want r02's dialog", m.rec, m.exportDialog.open)
+	}
+	if err := tt.Click("导出 JSON"); err != nil {
+		t.Fatal(err)
+	}
 	settle(t, m, q, tt)
 	calls := saver.snapshot()
 	if len(calls) != 1 || calls[0].format != app.ExportJSON {
 		t.Fatalf("export calls = %+v, want one JSON export", calls)
 	}
-	if m.historyExporting != "" || m.exportOutcome == nil || m.exportOutcome.err != nil {
-		t.Fatalf("export state = %q / %+v", m.historyExporting, m.exportOutcome)
+	if m.exportOutcome == nil || m.exportOutcome.err != nil ||
+		m.exportOutcome.recordID != "r02" || m.exportOutcome.included != 2 {
+		t.Fatalf("export outcome = %+v", m.exportOutcome)
 	}
-	if !tt.HasText("已导出 JSON（1 件，历史记录 r01）") {
-		t.Fatalf("history export result does not show: %q", tt.Texts())
+	if !tt.HasText("已导出 2 件") {
+		t.Fatalf("the dialog success is missing: %q", tt.Texts())
+	}
+}
+
+// TestActiveHistoryEntryIsRunningNotInterrupted checks historyConclusionInput
+// passes the existing active/live fact into the shared interruption rule.
+func TestActiveHistoryEntryIsRunningNotInterrupted(t *testing.T) {
+	m := &Model{
+		appliedSession: scan.ID("rec"),
+		snap:           app.Snapshot{Busy: true},
+	}
+	in := m.historyConclusionInput(HistoryEntry{ID: "rec", CapturedCount: 0})
+	if in.Interrupted {
+		t.Fatalf("an active unfinished session is marked interrupted: %+v", in)
+	}
+	if !in.ScanNotWrapped {
+		t.Fatalf("an active unfinished session is not marked running: %+v", in)
+	}
+	if got := recordOutcomeFor(in).Kind; got != recordOutcomeRunning {
+		t.Fatalf("active history outcome = %v, want running", got)
 	}
 }

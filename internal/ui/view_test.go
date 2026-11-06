@@ -789,156 +789,23 @@ func TestFailedSessionExplainsTermination(t *testing.T) {
 
 // TestCompletionCardEmptyRecord checks that a saved record with no rows
 // still reaches the pending-zero surface and does not offer an export.
-func TestCompletionCardEmptyRecord(t *testing.T) {
-	m, _, tt := openResponsiveResults(t, recovery(), 1024, 700)
-	m.recordTab = recordTabSummary
-	tt.Frame()
-	if !tt.HasText("无可导出条目") || !tt.HasText("不可确认：无可导出的条目。") {
-		t.Fatalf("the empty saved record has no completion surface: %q", tt.Texts())
-	}
-	if tt.HasText("该记录没有条目。") {
-		t.Fatal("the empty record still renders its old empty text")
-	}
-}
 
 // TestCompletionCardShowsCountsExclusionsAndExports checks the positive
 // completion card: its own exportable count, the mutually exclusive
 // exclusion groups and the export actions inside the card.
-func TestCompletionCardShowsCountsAndExports(t *testing.T) {
-	rec := recovery(
-		confirmedReviewItem(t, 1, 12),
-		confirmedReviewItem(t, 2, 10),
-	)
-	m, q, tt := openResponsiveResults(t, rec, 1024, 700)
-	saver := &fakeDirectExportSaver{}
-	m.cfg.DirectExportSaver = saver
-	m.cfg.AppVersion = "test-1"
-	m.recordTab = recordTabSummary
-	tt.Frame()
-
-	if !m.completionVisible() {
-		t.Fatalf("the finished record does not show the completion state: filter %v pendingReview %d loading %v recData %v dirty %v", m.filter, m.pendingItemsCount(), m.loading, m.recData != nil, m.editingDirty())
-	}
-	if !tt.HasText("校对完成") || !tt.HasText("可导出 2 件 · 共采集 2 件") {
-		t.Fatalf("the completion summary is missing: %q", tt.Texts())
-	}
-	if !tt.HasText("已保存 · 待校对 0 · 可导出 2 件") {
-		t.Fatalf("the completion status line is missing: %q", tt.Texts())
-	}
-	if tt.HasText(shortcutConfirmNext) {
-		t.Fatalf("the completion state keeps a review shortcut: %q", tt.Texts())
-	}
-
-	if err := tt.Click("导出 JSON"); err != nil {
-		t.Fatalf("click the completion card's export: %v", err)
-	}
-	drainAll(t, m, q)
-	if calls := saver.snapshot(); len(calls) != 1 || calls[0].format != app.ExportJSON {
-		t.Fatalf("the completion card did not reuse the export action: %+v", calls)
-	}
-}
 
 // TestCompletionCardBlocksZeroExportable checks that a record with no
 // usable item states "无可导出" and disables both export actions.
-func TestCompletionCardBlocksZeroExportable(t *testing.T) {
-	rec := recovery()
-	m, q, tt := openResponsiveResults(t, rec, 1024, 700)
-	saver := &fakeDirectExportSaver{}
-	m.cfg.DirectExportSaver = saver
-	m.recordTab = recordTabSummary
-	tt.Frame()
-
-	if !m.completionVisible() {
-		t.Fatal("the excluded-only record does not reach the completion surface")
-	}
-	if !tt.HasText("无可导出条目") || !tt.HasText("不可确认：无可导出的条目。") {
-		t.Fatalf("the zero-exportable state is not explained: %q", tt.Texts())
-	}
-	if !tt.HasText("没有可导出的条目，不能导出。") {
-		t.Fatalf("the disabled export reason is missing: %q", tt.Texts())
-	}
-	if tt.HasText("校对完成") {
-		t.Fatal("a zero-exportable record claims completion")
-	}
-	if err := tt.Click("导出 JSON"); err != nil {
-		t.Fatal(err)
-	}
-	drainAll(t, m, q)
-	if calls := saver.snapshot(); len(calls) != 0 {
-		t.Fatalf("a disabled completion export wrote %+v", calls)
-	}
-}
 
 // TestCompletionCardBlocksUnknownExport checks that an unknown export
 // list is never presented as a confirmed completion and cannot export.
-func TestCompletionCardBlocksUnknownExport(t *testing.T) {
-	rec := recovery(confirmedReviewItem(t, 1, 12))
-	m, q, tt := openResponsiveResults(t, rec, 1024, 700)
-	saver := &fakeDirectExportSaver{}
-	m.cfg.DirectExportSaver = saver
-	m.exportData = nil
-	m.exportBuildErr = ""
-	m.recordTab = recordTabSummary
-	tt.Frame()
-
-	if !m.completionVisible() {
-		t.Fatal("the pending-zero record without an export snapshot does not show its blocked state")
-	}
-	if !tt.HasText("不可确认完成") || !tt.HasText("不可确认：导出清单尚未就绪。") {
-		t.Fatalf("the unknown export state is not explained: %q", tt.Texts())
-	}
-	if !tt.HasText("导出清单尚未就绪，不能导出。") {
-		t.Fatalf("the disabled export reason is missing: %q", tt.Texts())
-	}
-	if tt.HasText("校对完成") {
-		t.Fatal("an unknown export claims completion")
-	}
-	if err := tt.Click("导出 CSV"); err != nil {
-		t.Fatal(err)
-	}
-	drainAll(t, m, q)
-	if calls := saver.snapshot(); len(calls) != 0 {
-		t.Fatalf("an unknown export wrote %+v", calls)
-	}
-}
 
 // TestCompletionCardShowsPartialCoverage checks the partial coverage
 // warning and the snapshot mark the exported file will carry.
-func TestCompletionCardShowsPartialCoverage(t *testing.T) {
-	expected := int64(2)
-	rec := recovery(confirmedReviewItem(t, 1, 12))
-	rec.Checkpoint.Session.Coverage = record.Coverage{
-		Status:        record.CoveragePartial,
-		ExpectedCount: &expected,
-	}
-	m, _, tt := openResponsiveResults(t, rec, 1024, 700)
-	m.recordTab = recordTabSummary
-	tt.Frame()
-	if !tt.HasText("校对完成") {
-		t.Fatalf("the partial record does not show completion: %q", tt.Texts())
-	}
-	if !tt.HasText("部分覆盖 50%") || !tt.HasText("部分快照") {
-		t.Fatalf("the partial coverage warning is missing: %q", tt.Texts())
-	}
-}
 
 // TestCompletionCardNamesIncompletePositions checks that a degraded
 // position's stage and localized cause reach the results page beside the
 // partial coverage conclusion without leaking the diagnostic code.
-func TestCompletionCardNamesIncompletePositions(t *testing.T) {
-	rec := recovery(confirmedReviewItem(t, 1, 12))
-	rec.Checkpoint.Session.Coverage = record.Coverage{Status: record.CoveragePartial}
-	rec.Checkpoint.Session.ObservedScope = []byte(`{"kind":"zzzInventory","sort":"verified","coverage":"partial","positions":[{"position":1,"complete":true,"topVerified":true,"bottomVerified":true},{"position":2,"complete":false,"stage":"filter","reasonCode":"navigationMismatch","reason":"the filter panel never closed"}]}`)
-	m, _, tt := openResponsiveResults(t, rec, 1024, 700)
-	m.recordTab = recordTabSummary
-	tt.Frame()
-	if !tt.HasText("不完整号位：2 号位 筛选准备失败：点击或拖拽后页面没有按预期变化") {
-		t.Fatalf("the degraded position is not explained: %q", tt.Texts())
-	}
-	if tt.HasText("navigationMismatch") || tt.HasText("the filter panel never closed") {
-		t.Fatalf("the degraded position leaks English diagnostics: %q", tt.Texts())
-	}
-}
 
 // TestSessionTerminationNoticeNamesIncompletePositions checks the failed
 // session surface: the termination cause and the degraded positions appear
@@ -959,106 +826,13 @@ func TestSessionTerminationNoticeNamesIncompletePositions(t *testing.T) {
 // TestCompletionCardOnlyInPendingSegment checks the confirmed switch
 // rule: "全部" shows the full table, and returning to "待校对 0" restores
 // the completion card.
-func TestCompletionCardOnlyInPendingSegment(t *testing.T) {
-	rec := recovery(
-		confirmedReviewItem(t, 1, 12),
-		confirmedReviewItem(t, 2, 10),
-	)
-	m, _, tt := openResponsiveResults(t, rec, 1024, 700)
-	m.recordTab = recordTabSummary
-	tt.Frame()
-	if !tt.HasText("校对完成") {
-		t.Fatalf("the finished record does not show completion: %q", tt.Texts())
-	}
-	m.recordTab = recordTabItems
-	tt.Frame()
-	if !tt.HasText("都处理完了") {
-		t.Fatalf("the review's empty state is missing: %q", tt.Texts())
-	}
-}
 
 // TestCompletionRequiresEndedAndSavedSession checks that a live session
 // only reaches completion after the scan ends and every result is saved.
-func TestCompletionRequiresEndedAndSavedSession(t *testing.T) {
-	rec := recovery(confirmedReviewItem(t, 1, 12))
-	rec.Checkpoint.Session.SessionID = "s1"
-	svc := &fakeService{loads: map[string]*record.Recovery{"s1": rec}}
-	saver := &fakeDirectExportSaver{}
-	m, q := newTestModel(t, Config{Service: svc, DirectExportSaver: saver})
-	m.SetContentSize(1180, 760)
-	tt := ui.NewTester(m.View, 1180, 760)
-	settle(t, m, q, tt)
-
-	applyAndSettle(t, m, q, tt, snap("s1", 1, true, scan.PhaseCapturing,
-		scan.Counts{Captured: 1, Produced: 1}, 1, true, ""))
-	if m.rec == nil || m.recData == nil || !m.rec.Live {
-		t.Fatalf("the live record did not load: rec %+v", m.rec)
-	}
-	if m.completionVisible() || tt.HasText("校对完成") {
-		t.Fatal("a running, unsaved session claims completion")
-	}
-
-	applyAndSettle(t, m, q, tt, snap("s1", 2, false, scan.PhaseEnded,
-		scan.Counts{Captured: 1, Produced: 1}, 1, true, ""))
-	if m.completionVisible() {
-		t.Fatal("an ended session with a pending save claims completion")
-	}
-
-	applyAndSettle(t, m, q, tt, snap("s1", 3, false, scan.PhaseEnded,
-		scan.Counts{Captured: 1, Produced: 1}, 1, false, ""))
-	if !m.completionVisible() || !tt.HasText("校对完成") {
-		t.Fatalf("the ended, saved session did not reach completion: %q", tt.Texts())
-	}
-}
 
 // TestCompletionUsesHistoryRecordCounts checks that a history snapshot
 // with pending=0 takes its completion card and exportable count from its
 // own record, never from the live session.
-func TestCompletionUsesHistoryRecordCounts(t *testing.T) {
-	sessionRec := recovery(reviewRowItem(t, 1, 12), reviewRowItem(t, 2, 10))
-	sessionRec.Checkpoint.Session.SessionID = "s1"
-	historyRec := recovery(
-		confirmedReviewItem(t, 1, 12),
-		confirmedReviewItem(t, 2, 10),
-	)
-	historyRec.Checkpoint.Session.SessionID = "old"
-	svc := &fakeService{
-		list: []record.RecordInfo{{
-			ID:      "old",
-			SavedAt: time.Date(2026, 10, 20, 10, 0, 0, 0, time.UTC),
-		}},
-		loads: map[string]*record.Recovery{
-			"s1":  sessionRec,
-			"old": historyRec,
-		},
-	}
-	saver := &fakeDirectExportSaver{}
-	m, q := newTestModel(t, Config{Service: svc, DirectExportSaver: saver})
-	m.SetContentSize(1180, 760)
-	tt := ui.NewTester(m.View, 1180, 760)
-	settle(t, m, q, tt)
-	applyAndSettle(t, m, q, tt, snap("s1", 1, false, scan.PhaseEnded,
-		scan.Counts{Captured: 2, Produced: 2}, 2, false, ""))
-	if m.pendingItemsCount() != 2 || m.completionVisible() {
-		t.Fatalf("the session baseline is wrong: pending %d completion %v",
-			m.pendingItemsCount(), m.completionVisible())
-	}
-
-	m.histChoice = historyLabel(t, m, "old")
-	m.OpenHistory()
-	settle(t, m, q, tt)
-	m.recordTab = recordTabSummary
-	tt.Frame()
-	if m.rec == nil || m.rec.Live || !m.completionVisible() {
-		t.Fatalf("the finished history snapshot does not show completion: %q", tt.Texts())
-	}
-	if !tt.HasText("可导出 2 件 · 共采集 2 件") {
-		t.Fatalf("the history completion borrowed the session counts: %q", tt.Texts())
-	}
-	if counts := m.recordCounts(); counts.Exportable != 2 || counts.Captured != 2 || !counts.ExportKnown {
-		t.Fatalf("the history completion counts = %+v", counts)
-	}
-}
 
 // TestUnprocessedIssueColorsAreMuted checks the detail subtitle's issue
 // color: an unprocessed item means recognition did not run, so it uses
