@@ -625,6 +625,13 @@ func (m *Model) Apply(snap app.Snapshot) {
 	m.appliedSession, m.appliedRevision = snap.SessionID, snap.Revision
 	m.snap = snap
 	m.prevBusy = snap.Busy
+	// A failed exit learns its cause from the authoritative snapshot. The
+	// error can be reported before the save-failure delivery arrives, so
+	// keep upgrading the classification while the exit is in the failed
+	// state.
+	if m.exitState == exitFailed && m.snap.SaveError != "" {
+		m.exitFailureWasSave = true
+	}
 	// A save failure that blocked the exit is resolved once the retry
 	// persisted the final generation. Return to the idle state; the failed
 	// exit is no longer a condition the tray must report.
@@ -1274,6 +1281,19 @@ func (m *Model) AllowClose() bool {
 	return false
 }
 
+// applyLatestSnapshot applies the service's authoritative snapshot before an
+// exit decision that must not depend on the subscription pump's delivery
+// order. The later delivery of the same revision is discarded. A service
+// double that reports no session must not erase the session the model
+// already shows.
+func (m *Model) applyLatestSnapshot() {
+	latest := m.cfg.Service.Snapshot()
+	if latest.SessionID == "" && m.snap.SessionID != "" {
+		return
+	}
+	m.Apply(latest)
+}
+
 // beginExit starts the explicit-exit wrap-up. It runs once the editor is
 // settled (or absent).
 func (m *Model) beginExit() {
@@ -1293,6 +1313,10 @@ func (m *Model) beginExit() {
 	m.goAsync(func() {
 		err := m.cfg.Service.Quit()
 		m.update(func() {
+			// Quit's own update can be posted before the subscription pump's
+			// final snapshot. Read the authoritative snapshot first so both
+			// the failure classification and the pending result see the end.
+			m.applyLatestSnapshot()
 			if err != nil {
 				m.exitState = exitFailed
 				m.exitFailureWasSave = m.snap.SaveError != ""

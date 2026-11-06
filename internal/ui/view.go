@@ -173,6 +173,10 @@ func (m *Model) exitArea(c *ui.Context, t *ui.Theme) {
 	case exitRunning:
 		ui.Text(c, "正在退出：停止扫描 → 保存结果 → 释放识别资源……").TextColor(t.TextMuted)
 	case exitFailed:
-		ui.Text(c, "退出未完成："+m.exitErr+"。请先“重试保存”，成功后再关闭窗口退出。").TextColor(t.Danger)
+		if m.exitFailedFromSave() {
+			ui.Text(c, "退出未完成："+m.exitErr+"。请先“重试保存”，成功后再关闭窗口退出。").TextColor(t.Danger)
+			return
+		}
+		ui.Text(c, "退出未完成："+m.exitErr+"。当前没有待保存的扫描结果；可在退出失败对话框复制诊断信息，关闭对话框后可继续查看结果。").TextColor(t.Danger)
 	}
 }

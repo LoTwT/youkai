@@ -64,23 +64,34 @@ func (m *Model) exitDialogView(c *ui.Context, t *ui.Theme) {
 			return
 		}
 		open := true
+		saveFailure := m.exitFailedFromSave()
+		title := "youkai 没有退出"
+		if saveFailure {
+			title = "结果还没有保存，youkai 没有退出"
+		}
 		ui.Modal(c, &open, func() {
 			ui.Column(c).Width(t.Space(110)).Gap(t.Space(2)).Children(func() {
-				ui.Text(c, "结果还没有保存，youkai 没有退出").FontWeight(600)
+				ui.Text(c, title).FontWeight(600)
 				ui.Text(c, m.exitFailureDetail()).TextColor(t.TextMuted)
 				ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
-					retry := ui.PrimaryButton(c, "重试保存").
-						Disabled(m.snap.SaveError == "")
-					if retry.Clicked() {
-						m.exitFailureDialogOpen = false
-						m.RetrySave()
+					if saveFailure {
+						retry := ui.PrimaryButton(c, "重试保存").
+							Disabled(m.snap.SaveError == "")
+						if retry.Clicked() {
+							m.exitFailureDialogOpen = false
+							m.RetrySave()
+						}
 					}
 					if ui.Button(c, "复制诊断信息").Clicked() {
 						m.copyCurrentDiagnostics(c)
 					}
 				})
-				if m.snap.SaveError == "" {
+				if saveFailure && m.snap.SaveError == "" {
 					ui.Text(c, "当前没有可重试的保存；请查看诊断信息。").
+						TextColor(t.TextMuted).FontSize(t.FontSize * 0.9)
+				}
+				if !saveFailure {
+					ui.Text(c, "当前没有待保存的扫描结果。关闭此对话框后可继续查看结果。").
 						TextColor(t.TextMuted).FontSize(t.FontSize * 0.9)
 				}
 			})
@@ -91,14 +102,24 @@ func (m *Model) exitDialogView(c *ui.Context, t *ui.Theme) {
 	}
 }
 
+// exitFailedFromSave reports whether the failed exit was blocked by the
+// final save. The snapshot is authoritative; exitFailureWasSave carries the
+// classification while a late snapshot is still arriving.
+func (m *Model) exitFailedFromSave() bool {
+	return m.snap.SaveError != "" || m.exitFailureWasSave
+}
+
 func (m *Model) exitFailureDetail() string {
-	if m.snap.SaveError != "" {
-		return "扫描结果还没有保存：" + m.snap.SaveError
+	if m.exitFailedFromSave() {
+		if m.snap.SaveError != "" {
+			return "扫描结果还没有保存：" + m.snap.SaveError
+		}
+		return "退出收尾没有完成：扫描结果还没有保存。"
 	}
 	if m.exitErr != "" {
-		return "退出收尾没有完成：" + m.exitErr
+		return "退出收尾没有完成：" + m.exitErr + "。当前没有待保存的扫描结果。"
 	}
-	return "退出收尾没有完成。"
+	return "退出收尾没有完成。当前没有待保存的扫描结果。"
 }
 
 // copyCurrentDiagnostics copies the same privacy-bounded summary the record

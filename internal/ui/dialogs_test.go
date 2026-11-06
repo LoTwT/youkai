@@ -2,8 +2,11 @@ package ui
 
 import (
 	"errors"
+	"sync"
 	"testing"
+	"time"
 
+	"github.com/LoTwT/youkai/internal/record"
 	"github.com/LoTwT/youkai/internal/scan"
 	"github.com/egoist/mygo/ui"
 )
@@ -196,6 +199,186 @@ func TestExitFailureRetrySucceeds(t *testing.T) {
 	}
 	if got := m.LifecycleStatus().Text; got != "就绪" {
 		t.Fatalf("tray status after the successful retry = %q", got)
+	}
+}
+
+// TestExitFailureClassifiesSaveFromTheLatestSnapshot covers
+// was-save-always: the failure classification must follow the
+// authoritative snapshot, not the last delivered one.
+func TestExitFailureClassifiesSaveFromTheLatestSnapshot(t *testing.T) {
+	failed := endedSession("s1", 3, 2, 2)
+	failed.SaveError = "disk full"
+	failed.FinalSaveFailures = 1
+	fake := &fakeService{
+		quitFn: func() error { return errors.New("scan 1 still has an unsaved result") },
+		loads:  map[string]*record.Recovery{"s1": notificationRecord(failedItems(2), record.CoverageComplete, completePositions())},
+	}
+	m, q := newTestModel(t, Config{Service: &snapshotService{fakeService: fake, snapshot: failed}})
+	m.AllowClose()
+	drainAll(t, m, q)
+	if !m.exitFailureWasSave {
+		t.Fatal("a save-blocked exit was classified as a non-save failure")
+	}
+	if got := m.LifecycleStatus().Text; got != "保存失败" {
+		t.Fatalf("tray status = %q, want 保存失败", got)
+	}
+}
+
+// TestExitFailureClassifiesNonSaveFromTheLatestSnapshot covers
+// was-save-never: an exit without an unsaved result stays a non-save
+// failure even if an earlier snapshot had no save error yet.
+func TestExitFailureClassifiesNonSaveFromTheLatestSnapshot(t *testing.T) {
+	fake := &fakeService{quitFn: func() error { return errors.New("close recognizer: busy") }}
+	m, q := newTestModel(t, Config{Service: &snapshotService{
+		fakeService: fake,
+		snapshot:    endedSession("s1", 3, 2, 2),
+	}})
+	m.AllowClose()
+	drainAll(t, m, q)
+	if m.exitFailureWasSave {
+		t.Fatal("a non-save exit failure was classified as a save failure")
+	}
+	if got := m.LifecycleStatus().Text; got != "退出失败" {
+		t.Fatalf("tray status = %q, want 退出失败", got)
+	}
+}
+
+// TestExitFailureClassifiesALateSaveSnapshot covers the delivery order the
+// exit error can beat: the save failure arrives while the exit is already
+// failed, upgrades the classification, and a successful retry returns the
+// tray to idle.
+func TestExitFailureClassifiesALateSaveSnapshot(t *testing.T) {
+	fake := &fakeService{quitFn: func() error { return errors.New("scan 1 still has an unsaved result") }}
+	m, q := newTestModel(t, Config{Service: fake})
+	m.AllowClose()
+	drainAll(t, m, q)
+	if m.exitFailureWasSave {
+		t.Fatal("the empty service snapshot classified the failure as save")
+	}
+
+	late := endedSession("s1", 3, 2, 2)
+	late.SaveError = "disk full"
+	late.FinalSaveFailures = 1
+	m.Apply(late)
+	drainAll(t, m, q)
+	if !m.exitFailureWasSave {
+		t.Fatal("the late save snapshot did not upgrade the exit failure")
+	}
+	if got := m.LifecycleStatus().Text; got != "保存失败" {
+		t.Fatalf("tray status after the late save snapshot = %q", got)
+	}
+
+	retried := late
+	retried.Revision = 4
+	retried.SaveError = ""
+	m.Apply(retried)
+	drainAll(t, m, q)
+	if m.exitState != exitIdle {
+		t.Fatalf("the successful retry left the exit in state %v", m.exitState)
+	}
+	if got := m.LifecycleStatus().Text; got != "就绪" {
+		t.Fatalf("tray status after the retried save = %q", got)
+	}
+}
+
+// TestFailedExitDoesNotFlushPendingResult covers flush-on-failed-exit: a
+// failed exit must leave the pending result to the normal settle path, not
+// spend the exit budget or send a premature conservative notification.
+func TestFailedExitDoesNotFlushPendingResult(t *testing.T) {
+	gate := make(chan struct{})
+	var mu sync.Mutex
+	block := false
+	recordRead := notificationRecord(failedItems(2), record.CoverageComplete, completePositions())
+	svc := &fakeService{
+		quitFn: func() error { return errors.New("close recognizer: busy") },
+		loadFn: func(string) (*record.Recovery, error) {
+			mu.Lock()
+			held := block
+			mu.Unlock()
+			if held {
+				<-gate
+			}
+			return recordRead, nil
+		},
+	}
+	var got []Notification
+	m := New(Config{
+		Service:    svc,
+		ScanSource: availableSource(),
+		Notify:     func(n Notification) { got = append(got, n) },
+	})
+	u := &fifoUpdater{}
+	m.Attach(u)
+	m.Apply(openCapturing("s1", 1, 2))
+	for i := 0; i < 4; i++ {
+		m.Idle()
+		for u.step() {
+		}
+	}
+	mu.Lock()
+	block = true
+	mu.Unlock()
+	m.Apply(stoppingSession("s1", 2, 2))
+	m.Apply(endedSession("s1", 3, 2, 2))
+	start := time.Now()
+	u.Update(func() { m.AllowClose() })
+	stepFIFOUntil(t, u, "the failed exit", func() bool { return m.exitState == exitFailed })
+	if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
+		t.Fatalf("the failed exit waited for the result read: %v", elapsed)
+	}
+	if results := resultNotifications(got); len(results) != 0 {
+		t.Fatalf("the failed exit flushed a result early: %+v", results)
+	}
+
+	close(gate)
+	m.Idle()
+	for u.step() {
+	}
+	if results := resultNotifications(got); len(results) != 1 {
+		t.Fatalf("the normal settle path did not send the result: %+v", results)
+	}
+}
+
+// TestNonSaveExitFailureCopyDoesNotClaimAnUnsavedResult covers R3-3: a
+// teardown failure that did not involve the final save must not tell the
+// user the result is unsaved or to retry a save that does not exist.
+func TestNonSaveExitFailureCopyDoesNotClaimAnUnsavedResult(t *testing.T) {
+	m, q := newTestModel(t, Config{Service: &fakeService{
+		quitFn: func() error { return errors.New("close recognizer: busy") },
+	}})
+	m.page = pageScan
+	tt := ui.NewTester(m.View, 1020, 700)
+	settle(t, m, q, tt)
+	m.AllowClose()
+	drainAll(t, m, q)
+	tt.Frame()
+
+	for _, bad := range []string{
+		"结果还没有保存，youkai 没有退出",
+		"请先重试保存",
+		"重试保存",
+	} {
+		if tt.HasText(bad) {
+			t.Fatalf("non-save exit failure shows %q: %q", bad, tt.Texts())
+		}
+	}
+	for _, want := range []string{
+		"youkai 没有退出",
+		"当前没有待保存的扫描结果",
+		"复制诊断信息",
+	} {
+		if !tt.HasText(want) {
+			t.Fatalf("non-save exit failure does not show %q", want)
+		}
+	}
+
+	m.exitFailureDialogOpen = false
+	tt.Frame()
+	if tt.HasText("请先重试保存") {
+		t.Fatal("the inline exit failure still asks for a save retry")
+	}
+	if !tt.HasText("当前没有待保存的扫描结果") {
+		t.Fatal("the inline exit failure does not state that the result is saved")
 	}
 }
 

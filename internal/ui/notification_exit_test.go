@@ -106,10 +106,10 @@ func resultNotifications(got []Notification) []Notification {
 	return out
 }
 
-// TestExitFlushesPendingResult covers N-1: a quit while the result record
-// is still being read must still send exactly one result notification
-// before the entry point stops the UI loop in OnExitSettled.
-func TestExitFlushesPendingResult(t *testing.T) {
+// TestExitDuringScanFlushesPendingResult covers N-1: a quit while the
+// result record is still being read must still send exactly one result
+// notification before the entry point stops the UI loop in OnExitSettled.
+func TestExitDuringScanFlushesPendingResult(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	root := t.TempDir()
@@ -194,6 +194,187 @@ func TestExitFlushesPendingResult(t *testing.T) {
 	}
 	if after := resultNotifications(got); len(after) != 1 {
 		t.Fatalf("the result repeated after the exit: %+v", after)
+	}
+}
+
+// TestExitFlushesPendingResult covers the normal exit path with a pending
+// result: the flush must send the loaded record's wording, not the
+// conservative snapshot fallback. This is what finish-on-ui-own and
+// finish-on-ui-workspace would regress.
+func TestExitFlushesPendingResult(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	root := t.TempDir()
+	paths := app.Paths{Data: filepath.Join(root, "data"), Resources: filepath.Join(root, "res")}
+	lock, err := app.AcquireDataRootLock(paths.Data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := &notificationServiceSource{controller: &notificationServiceController{
+		items: 5,
+		scope: completeScanScope(),
+	}}
+	svc, err := app.NewService(app.Config{
+		Paths:    paths,
+		DataLock: lock,
+		Source:   source,
+		NewRecognizer: func() (app.Recognizer, error) {
+			return notificationServiceRecognizer{}, nil
+		},
+		ShutdownOCR: func() error { return nil },
+	})
+	if err != nil {
+		lock.Close()
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = svc.Quit() })
+
+	delayed := &slowLoadService{Service: svc, delay: 300 * time.Millisecond}
+	var got []Notification
+	settled := make(chan struct{})
+	var settleOnce sync.Once
+	m := New(Config{
+		Service:       delayed,
+		ScanSource:    availableSource(),
+		Notify:        func(n Notification) { got = append(got, n) },
+		OnExitSettled: func() { settleOnce.Do(func() { close(settled) }) },
+	})
+	u := &fifoUpdater{}
+	m.Attach(u)
+	sub := svc.Subscribe()
+	u.Update(func() { m.Apply(sub.Initial) })
+	go func() {
+		for range sub.Changes {
+			snap := svc.Snapshot()
+			u.Update(func() { m.Apply(snap) })
+		}
+	}()
+	out, err := svc.Start(app.StartRequest{ID: "completed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		if time.Now().After(deadline) {
+			t.Fatal("the result did not become pending")
+		}
+		state := m.notifySessions[out.SessionID]
+		pending := state != nil && state.pending != nil
+		if pending && !m.snap.Busy {
+			break
+		}
+		if !u.step() {
+			time.Sleep(time.Millisecond)
+		}
+	}
+	u.Update(func() { m.AllowClose() })
+	for {
+		select {
+		case <-settled:
+		case <-time.After(time.Until(deadline)):
+			t.Fatal("the exit did not settle")
+		default:
+			if !u.step() {
+				time.Sleep(200 * time.Microsecond)
+			}
+			continue
+		}
+		break
+	}
+
+	results := resultNotifications(got)
+	if len(results) != 1 {
+		t.Fatalf("result notifications at the end of the exit = %d, want 1: %+v", len(results), got)
+	}
+	if results[0].Title != "扫描完成：5 件待校对" ||
+		results[0].Body != "覆盖全部，其余 0 件可以导出。点击查看。" {
+		t.Fatalf("exit sent the conservative wording instead of the loaded result: %+v", results[0])
+	}
+}
+
+// snapshotService is the application service double whose Snapshot answers
+// a chosen authoritative state; the rest is fakeService.
+type snapshotService struct {
+	*fakeService
+	snapshot app.Snapshot
+}
+
+func (s *snapshotService) Snapshot() app.Snapshot { return s.snapshot }
+
+// TestExitAppliesTheLatestSnapshotBeforeFlushing covers R3-1: the terminal
+// snapshot can be queued after the exit settlement, so the exit must read
+// the service's current snapshot itself and still flush one result. The
+// later delivery is discarded as a stale revision.
+func TestExitAppliesTheLatestSnapshotBeforeFlushing(t *testing.T) {
+	terminal := endedSession("s1", 3, 2, 2)
+	fake := &fakeService{loads: map[string]*record.Recovery{
+		"s1": notificationRecord(failedItems(2), record.CoverageComplete, completePositions()),
+	}}
+	svc := &snapshotService{fakeService: fake, snapshot: terminal}
+	var got []Notification
+	settled := make(chan struct{})
+	var settleOnce sync.Once
+	m := New(Config{
+		Service:       svc,
+		ScanSource:    availableSource(),
+		Notify:        func(n Notification) { got = append(got, n) },
+		OnExitSettled: func() { settleOnce.Do(func() { close(settled) }) },
+	})
+	u := &fifoUpdater{}
+	m.Attach(u)
+	m.Apply(openCapturing("s1", 1, 2))
+	for i := 0; i < 4; i++ {
+		m.Idle()
+		for u.step() {
+		}
+	}
+	m.Apply(stoppingSession("s1", 2, 2))
+	// Deliberately do not apply the terminal snapshot: it is still queued
+	// behind the exit settlement in the failing interleaving.
+	u.Update(func() { m.AllowClose() })
+	stepFIFOUntil(t, u, "the exit", func() bool {
+		select {
+		case <-settled:
+			return true
+		default:
+			return false
+		}
+	})
+
+	results := resultNotifications(got)
+	if len(results) != 1 {
+		t.Fatalf("results when the terminal snapshot was not delivered = %d, want 1: %+v", len(results), got)
+	}
+	if results[0].Title != "扫描完成：2 件待校对" {
+		t.Fatalf("result = %q, want the loaded record's wording", results[0].Title)
+	}
+
+	// The delivery that lost the race is now stale and must not repeat it;
+	// a later revision of the same ended session must not either.
+	m.Apply(terminal)
+	late := terminal
+	late.Revision = 4
+	m.Apply(late)
+	m.Idle()
+	for u.step() {
+	}
+	if after := resultNotifications(got); len(after) != 1 {
+		t.Fatalf("the late snapshot repeated the result: %+v", after)
+	}
+}
+
+// stepFIFOUntil runs the FIFO updater until pred holds.
+func stepFIFOUntil(t *testing.T, u *fifoUpdater, what string, pred func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for !pred() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+		if !u.step() {
+			time.Sleep(100 * time.Microsecond)
+		}
 	}
 }
 

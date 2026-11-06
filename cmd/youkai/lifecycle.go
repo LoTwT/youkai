@@ -441,8 +441,8 @@ func (l *windowLifecycle) Refresh() {
 
 // trayMenu builds the menu the icon shows: the disabled status line, open,
 // stop and exit. The labels and the stop item's enabled state follow the
-// four lifecycle states (08 §7); stopping is only ever the scan stop and
-// never quits the application.
+// lifecycle states in 08 §7; stopping is only ever the scan stop and never
+// quits the application.
 func (l *windowLifecycle) trayMenu() *mygo.Menu {
 	labels := l.model.LifecycleStatus().TrayMenu()
 	return mygo.NewMenu([]*mygo.MenuItem{
