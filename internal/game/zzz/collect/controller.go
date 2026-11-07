@@ -275,7 +275,7 @@ func (c *Controller) Prepare(ctx context.Context, h *scan.ControllerHandle) erro
 			// Chinese prompt. Other unresolved premises keep the historical
 			// prepareTimeout code.
 			if p := terminalStageTwoFault(lastProblems); p != nil {
-				return scan.NewFaultWithParams(p.Code, p, p.Params)
+				return scanFault(p)
 			}
 			return scan.NewFault(CodePrepareTimeout, timeoutDetail(lastProblems, lastObsErr))
 		}
@@ -455,6 +455,18 @@ func sleepCtx(ctx context.Context, d time.Duration) error {
 	}
 }
 
+// faultCause adapts a platform fault's message to the cause an outer scan
+// fault wraps. The platform's Error already prefixes its code and
+// scan.FaultError prefixes the code again, so wrapping the fault itself
+// repeated the code in the trigger message. The message alone keeps the
+// code once; class, code and parameters travel separately.
+func faultCause(f *platform.Fault) error {
+	if f == nil || f.Message == "" {
+		return nil
+	}
+	return errors.New(f.Message)
+}
+
 // scanFault carries a platform fault's code and structured parameters
 // through the kernel to the record and UI. The platform message stays a
 // diagnostic; localization happens in the UI.
@@ -462,5 +474,5 @@ func scanFault(f *platform.Fault) error {
 	if f == nil {
 		return nil
 	}
-	return scan.NewFaultWithParams(f.Code, f, f.Params)
+	return scan.NewFaultWithParams(f.Code, faultCause(f), f.Params)
 }

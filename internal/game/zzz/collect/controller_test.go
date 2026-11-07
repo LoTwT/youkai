@@ -247,6 +247,31 @@ func TestOpenFailureCarriesCode(t *testing.T) {
 	}
 }
 
+// C3b: a platform fault's code appears once in the trigger message.
+// platform.Fault.Error() already prefixes the code, so wrapping the fault
+// itself (the 2026-11-08 field log) produced "integrityMismatch:
+// integrityMismatch: …". The structured parameters must survive.
+func TestOpenFailureMessageKeepsCodeOnce(t *testing.T) {
+	sess := readySession()
+	h := newHarness(t, sess)
+	h.port.OpenFault = platform.NewFaultWithParams(platform.CodeIntegrityMismatch,
+		"the target process integrity level high is higher than youkai's medium; UIPI would drop SendInput events",
+		map[string]string{"self": "medium", "target": "high"})
+	h.start()
+	snap := h.end()
+
+	if snap.Trigger == nil || snap.Trigger.Code != platform.CodeIntegrityMismatch {
+		t.Fatalf("want failed integrityMismatch, got %+v", snap)
+	}
+	if got := strings.Count(snap.Trigger.Message, platform.CodeIntegrityMismatch); got != 1 {
+		t.Fatalf("trigger message %q repeats %s %d times, want once",
+			snap.Trigger.Message, platform.CodeIntegrityMismatch, got)
+	}
+	if snap.Trigger.Params["self"] != "medium" || snap.Trigger.Params["target"] != "high" {
+		t.Fatalf("the integrity parameters must survive: %+v", snap.Trigger.Params)
+	}
+}
+
 // kernelSession starts a real kernel around ctrl and waits for the end.
 func kernelSession(t *testing.T, ctrl *collect.Controller) scan.Snapshot {
 	t.Helper()

@@ -394,7 +394,7 @@ func (inv *Inventory) Precheck(ctx context.Context, sess platform.Session) error
 	}
 	if !obs.Ready {
 		if len(obs.Problems) > 0 {
-			return scan.NewFault(obs.Problems[0].Code, obs.Problems[0])
+			return scan.NewFault(obs.Problems[0].Code, faultCause(obs.Problems[0]))
 		}
 		return scan.NewFault(platform.CodeObservationFailed, errors.New("the observation is not ready and reports no problem"))
 	}
@@ -3673,7 +3673,7 @@ func (run *inventoryRun) observeReady(ctx context.Context) error {
 	}
 	if !obs.Ready {
 		if len(obs.Problems) > 0 {
-			return scan.NewFault(obs.Problems[0].Code, obs.Problems[0])
+			return scan.NewFault(obs.Problems[0].Code, faultCause(obs.Problems[0]))
 		}
 		return scan.NewFault(platform.CodeObservationFailed, errors.New(
 			"collect: the observation is not ready and reports no problem"))
@@ -3713,7 +3713,7 @@ func (run *inventoryRun) dispatchOutcome(ctx context.Context, res platform.Input
 		return nil
 	case platform.InputNotDispatched, platform.InputFailed:
 		if res.Denial != nil {
-			return scan.NewFault(res.Denial.Code, res.Denial)
+			return scan.NewFault(res.Denial.Code, faultCause(res.Denial))
 		}
 		return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
 			"collect: dispatch reported %s without a denial", res.Status))
@@ -3748,7 +3748,7 @@ func (run *inventoryRun) geometryChanged(f platform.Frame) error {
 func wrapObservationErr(err error) error {
 	var f *platform.Fault
 	if errors.As(err, &f) {
-		return scan.NewFault(f.Code, f)
+		return scan.NewFault(f.Code, faultCause(f))
 	}
 	return scan.NewFault(platform.CodeObservationFailed, err)
 }
