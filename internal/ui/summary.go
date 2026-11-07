@@ -246,9 +246,11 @@ func (m *Model) openSummaryClassState(filter resultFilter, class app.ItemClass) 
 	m.recordTab = recordTabItems
 	if class == "" {
 		m.settleResultSelection()
+		m.enterReviewView()
 		return
 	}
 	if m.selectSummaryClass(class) {
+		m.enterReviewView()
 		return
 	}
 	// The class may be represented by a different segment (a produced item
@@ -257,6 +259,7 @@ func (m *Model) openSummaryClassState(filter resultFilter, class app.ItemClass) 
 		m.applyResultFilterState(resultFilterAll, "", "")
 		m.selectSummaryClass(class)
 	}
+	m.enterReviewView()
 }
 
 // selectSummaryClass chooses the first row of one class among the rows the

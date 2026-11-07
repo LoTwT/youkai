@@ -75,11 +75,30 @@ type recordWorkspaceState struct {
 	reviewField        FormField
 	focusReviewField   FormField
 	focusedReviewField FormField
-	scrollToCrop       bool
-	cropZoom           float32
-	formExtrasOpen     bool
-	formRawOpen        bool
-	compactListOpen    bool
+	// focusModifyRequested asks the read-only form's 修改 action to take
+	// the keyboard on the next frame (08 §3.4: its initial focus). It is
+	// one-shot so later Tab moves stay the user's. The sequence numbers
+	// let the form tell a request made before the frame from one made by a
+	// click while that frame was building; only the former is consumed.
+	focusModifyRequested bool
+	focusReviewFieldSeq  int
+	focusModifySeq       int
+	// reviewBrowseGuard is true after 上一件 / 下一件 changed the item:
+	// the action bar's write buttons then ignore pointer activation until
+	// the pointer leaves reviewBrowseGuardRect or a key is pressed on a
+	// write button. The read-only bar's browse buttons can sit where the
+	// editor's 确认并下一项 / 保存修改 appear, so a click repeated at the
+	// same spot must not confirm or save an item the user has only just
+	// reached (08 §3.4). The guard follows the pointer, not a timer: a
+	// stationary pointer must never turn a double click into a write, even
+	// after a pause (H1).
+	reviewBrowseGuard     bool
+	reviewBrowseGuardRect ui.Rect
+	scrollToCrop          bool
+	cropZoom              float32
+	formExtrasOpen        bool
+	formRawOpen           bool
+	compactListOpen       bool
 	// compactListFocusRequested asks the compact popover's list to take the
 	// keyboard once, after the anchor opens it.
 	compactListFocusRequested bool
@@ -88,8 +107,10 @@ type recordWorkspaceState struct {
 	focusListRequested bool
 
 	// recentlyConfirmed holds items confirmed with the "confirm and stay"
-	// action. They remain visible in the pending segment, marked as
-	// confirmed, until the page is left or the record is reloaded.
+	// action or re-confirmed in the read-only form's modify flow. They
+	// remain visible in the segment the visit is showing — 待处理 or 警告 —
+	// marked as confirmed, until the page is left or the record is
+	// reloaded (08 §3.1, §3.4).
 	recentlyConfirmed map[int64]bool
 
 	// The frozen export snapshot and its build error.
@@ -155,10 +176,12 @@ func (m *Model) clearRecentlyConfirmed() {
 }
 
 // recentlyConfirmedNow reports whether row is the current visit's
-// just-confirmed item, visible in the pending segment only.
+// just-confirmed item, kept visible in the segment the visit is showing.
 func (m *Model) recentlyConfirmedNow(row *Row) bool {
-	return m.filter == resultFilterPending && m.recentlyConfirmed != nil &&
-		m.recentlyConfirmed[row.Seq]
+	if m.recentlyConfirmed == nil || !m.recentlyConfirmed[row.Seq] {
+		return false
+	}
+	return m.filter == resultFilterPending || m.filter == resultFilterWarning
 }
 
 // recordClassCounts is the one source of the four-class counts and the
@@ -208,9 +231,115 @@ func (m *Model) selectReviewRegion(region reviewRegion) {
 		return
 	}
 	m.reviewRegion = region
-	if region == reviewRegionForm && m.reviewField == "" {
+	if region == reviewRegionForm {
+		m.focusReviewForm()
+	}
+}
+
+// focusReviewForm puts the keyboard on the form's first control: the 修改
+// action of a read-only item, or the first problem field of an editor.
+func (m *Model) focusReviewForm() {
+	row := m.selectedRow()
+	if row != nil && !m.reviewEditing(row) && !m.reviewRowEditable(row) && m.canModifyRow(row) {
+		m.requestModifyFocus()
+		return
+	}
+	m.requestReviewFieldFocus(m.firstReviewField())
+}
+
+// requestModifyFocus asks the read-only form's 修改 action to take the
+// keyboard next frame.
+func (m *Model) requestModifyFocus() {
+	m.focusModifyRequested = true
+	m.focusModifySeq++
+}
+
+// reviewEditing reports whether the open editor belongs to row.
+func (m *Model) reviewEditing(row *Row) bool {
+	return row != nil && m.rec != nil && m.edit != nil &&
+		m.edit.recordID == m.rec.ID && m.edit.seq == row.Seq
+}
+
+// reviewBrowseGuardReason explains why a write button ignores the click
+// that lands where the browse button was just pressed. It promises no
+// timeout: only moving the pointer away (or pressing a key on the button,
+// which is deliberate keyboard activation) ends the guard.
+const reviewBrowseGuardReason = "按钮刚随条目切换；移动指针后可点击。"
+
+// reviewBrowseGuarded reports whether the last browse action left the
+// pointer on the reused action position, so write buttons must ignore the
+// pointer.
+func (m *Model) reviewBrowseGuarded() bool {
+	return m.reviewBrowseGuard
+}
+
+// updateReviewBrowseGuard ends the browse guard once the pointer leaves
+// the browse button's box or the window. It runs at the start of every
+// build, so a pointer that has not moved keeps the guard indefinitely
+// while a deliberate move releases it before the next click is read.
+func (m *Model) updateReviewBrowseGuard(c *ui.Context) {
+	if !m.reviewBrowseGuard {
+		return
+	}
+	root := c.Root()
+	x, y, over := root.PointerPosition()
+	if !over {
+		m.clearReviewBrowseGuard()
+		return
+	}
+	bounds := root.Bounds()
+	if !m.reviewBrowseGuardRect.Contains(bounds.X+x, bounds.Y+y) {
+		m.clearReviewBrowseGuard()
+	}
+}
+
+// clearReviewBrowseGuard ends the browse guard.
+func (m *Model) clearReviewBrowseGuard() {
+	m.reviewBrowseGuard = false
+	m.reviewBrowseGuardRect = ui.Rect{}
+}
+
+// markReviewBrowse starts the browse guard at the button the user pressed
+// and moves the keyboard into an editor, whose first problem field is the
+// only safe place to land; a read-only item keeps the keyboard on the
+// browse button so Space / Enter continue browsing (08 §3.4). The guard
+// ignores only pointer activation at the reused position; keyboard
+// activation on a write button remains deliberate.
+func (m *Model) markReviewBrowse(button ui.Element) {
+	m.reviewBrowseGuard = true
+	m.reviewBrowseGuardRect = button.Bounds()
+	m.focusBrowsedItem()
+}
+
+// focusBrowsedItem moves the keyboard to the form after a selection made
+// outside the form. An editor starts on its first problem field. A
+// read-only item keeps the keyboard where it was: the browse button for
+// repeated browsing, or the list it was chosen from.
+func (m *Model) focusBrowsedItem() {
+	row := m.selectedRow()
+	if row == nil {
+		return
+	}
+	if m.reviewRowEditable(row) {
 		m.requestReviewFieldFocus(m.firstReviewField())
 	}
+}
+
+// requestReviewFormEntryFocus is the form's initial focus when the review
+// is entered (08 §3, §3.4). A read-only item starts on 修改; a warning
+// item also highlights its warning field's crop so the user can judge it
+// from the screenshot; an editable item starts on its first problem field.
+func (m *Model) requestReviewFormEntryFocus() {
+	row := m.selectedRow()
+	if row != nil && row.ItemClass == app.ItemClassWarning {
+		m.reviewField = m.firstReviewField()
+		m.scrollToCrop = m.reviewField != ""
+	}
+	if row != nil && !m.reviewRowEditable(row) && m.canModifyRow(row) {
+		m.requestModifyFocus()
+		return
+	}
+	m.requestReviewFieldFocus("")
 }
 
 // selectReviewField highlights the screenshots that back one form field
@@ -236,7 +365,14 @@ func (m *Model) focusFirstReviewField() {
 
 // pointFirstReviewField highlights a newly chosen item's first problem
 // field without taking keyboard focus away from the list it was chosen in.
+// A passed item has no problem field, so it keeps no screenshot highlight;
+// a warning item points at its warning field (08 §3.3, §3.4).
 func (m *Model) pointFirstReviewField() {
+	if row := m.selectedRow(); row != nil && row.ItemClass == app.ItemClassPassed {
+		m.reviewField = ""
+		m.scrollToCrop = false
+		return
+	}
 	m.reviewField = m.firstReviewField()
 	m.scrollToCrop = true
 }
@@ -248,14 +384,18 @@ func (m *Model) requestReviewFieldFocus(field FormField) {
 		field = m.firstReviewField()
 	}
 	m.focusReviewField = field
+	m.focusReviewFieldSeq++
 }
 
 // firstReviewField is the field the form starts on: the first problem
-// field in form order, else the first required field.
+// field in form order, else the form's first rendered field. The editor
+// renders reviewFieldOrder when nothing is wrong, so the fallback must be
+// that first field rather than the read-only form's leading set field
+// (08 §3.4).
 func (m *Model) firstReviewField() FormField {
 	row := m.selectedRow()
 	if row == nil {
-		return FormFieldSetID
+		return reviewFieldOrder[0]
 	}
 	problems := m.reviewProblems(row)
 	for _, problem := range problems {
@@ -268,7 +408,7 @@ func (m *Model) firstReviewField() FormField {
 			return field
 		}
 	}
-	return FormFieldSetID
+	return reviewFieldOrder[0]
 }
 
 // selectedRow is the open record's chosen row, or nil.
@@ -337,6 +477,9 @@ func (m *Model) showRecord(id string, live bool) {
 	m.resetResultList()
 	m.reviewField = ""
 	m.focusReviewField = ""
+	m.focusModifyRequested = false
+	m.reviewBrowseGuard = false
+	m.reviewBrowseGuardRect = ui.Rect{}
 	m.scrollToCrop = false
 	m.cropZoom = 0
 	m.formExtrasOpen = false

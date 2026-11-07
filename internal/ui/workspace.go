@@ -112,10 +112,11 @@ func (m *Model) openRecordWorkspace() {
 }
 
 // enterReviewView starts a review visit on the item tab: the form region
-// and its first problem field take the focus, as 08 §3 requires.
+// and its first control take the focus — 修改 for a read-only item, the
+// first problem field otherwise (08 §3, §3.4).
 func (m *Model) enterReviewView() {
 	m.reviewRegion = reviewRegionForm
 	m.reviewField = ""
-	m.requestReviewFieldFocus("")
 	m.scrollToCrop = false
+	m.requestReviewFormEntryFocus()
 }

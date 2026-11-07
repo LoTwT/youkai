@@ -75,8 +75,10 @@ func (m *Model) viewPages(c *ui.Context) {
 	} else {
 		// The pending segment's just-confirmed markers belong to the item
 		// browser's current visit; the summary and other destinations
-		// refresh it.
+		// refresh it. The browse guard protects only that bar's reused
+		// position, so leaving the item browser ends it too.
 		m.clearRecentlyConfirmed()
+		m.clearReviewBrowseGuard()
 	}
 	if page != pageHistory {
 		// The row menu only exists on the records list; leaving it must not
@@ -90,6 +92,7 @@ func (m *Model) viewPages(c *ui.Context) {
 		ui.Column(c).Grow(1).FillHeight().Children(func() {
 			m.pageBody(c, t)
 			m.pageActions(c, t, tok)
+			m.reviewNoticePage(c, t)
 			ui.Divider(c)
 			m.pageStatusBar(c, t)
 		})
@@ -258,6 +261,27 @@ func (m *Model) pageActions(c *ui.Context, t *ui.Theme, tok *Tokens) {
 	})
 }
 
+// reviewNoticePage keeps the last review outcome visible when the item
+// action bar is not on screen: the summary, the records list and settings
+// must not hide that a saved modification went back to review (08 §3.4,
+// 09 §4.1). The item browser shows the same line in its action bar.
+func (m *Model) reviewNoticePage(c *ui.Context, t *ui.Theme) {
+	if m.reviewNotice == "" || m.displayPage() == pageScan {
+		return
+	}
+	// The item browser shows the same line in its action bar, which needs a
+	// row and not the finished-review empty state.
+	if m.displayPage() == pageResults && m.recordTab == recordTabItems &&
+		m.selectedRow() != nil && !(m.filter == resultFilterPending && m.reviewSettled()) {
+		return
+	}
+	ui.Row(c).Padding(t.Space(1.5), t.Space(3)).Children(func() {
+		ui.Text(c, m.reviewNotice).FontSize(t.FontSize * 0.85).TextColor(t.TextMuted)
+	})
+}
+
+// pageStatusBar is the window's bottom status line: the page's conclusion
+// on the left and the keys that work there on the right.
 func (m *Model) pageStatusBar(c *ui.Context, t *ui.Theme) {
 	ui.Row(c).Background(t.Surface).Padding(t.Space(2), t.Space(3)).Children(func() {
 		ui.Text(c, m.pageStatusText()).TextColor(t.TextMuted).FontSize(t.FontSize * 0.85)
