@@ -23,8 +23,63 @@ type TargetSpec struct {
 	// ExecutablePath is the Windows target's full executable path, the
 	// authoritative identity; class and title are screening hints only.
 	ExecutablePath string
-	ClassNameHint  string
-	TitleHint      string
+	// HandleHint is the window handle the user confirmed when the
+	// installed build enumerated candidates (P-01). It narrows selection
+	// to exactly that window; a session is never opened on another window
+	// of the same executable after the confirmed one disappeared. It is a
+	// hint, not identity: handles are recycled, so the path and process
+	// instance are still verified on every observation.
+	HandleHint uintptr
+	// PIDHint and ProcessStartedAtHint are the confirmed candidate's
+	// process instance. They are compared together with HandleHint so a
+	// handle the OS recycled into another process cannot be mistaken for
+	// the confirmed window; zero values leave the check out.
+	PIDHint              uint32
+	ProcessStartedAtHint time.Time
+	ClassNameHint        string
+	TitleHint            string
+}
+
+// TargetCandidate identifies one running game window a user can confirm
+// as the scan target (P-01). Candidate enumeration reads only the owning
+// process's image path, process instance and window class — never a
+// window title.
+type TargetCandidate struct {
+	// Handle is the platform window handle (the Windows HWND). It is a
+	// selection hint; the executable path stays the authoritative
+	// identity and handles are recycled.
+	Handle uintptr
+	// PID is the owning process instance at enumeration time.
+	PID uint32
+	// ExecutablePath is the owning process's full executable path.
+	ExecutablePath string
+	// ProcessStartedAt distinguishes a restarted process that reused the
+	// PID.
+	ProcessStartedAt time.Time
+	// ClassName is the window class recorded for display and screening
+	// only.
+	ClassName string
+}
+
+// TargetDiscoveryResult is one candidate enumeration pass. Candidates is
+// ordered stably for display. AccessDeniedWindows counts visible windows of
+// the game (window class and image name verified) whose process could not
+// be opened because youkai runs at lower integrity; the window suggests
+// running youkai as administrator. UnreadableGameWindows counts the same
+// shape when youkai is already elevated or its own integrity could not be
+// read: the window shows a generic diagnostic message instead. Neither
+// count is a candidate — their full identity is unknown.
+type TargetDiscoveryResult struct {
+	Candidates            []TargetCandidate
+	AccessDeniedWindows   int
+	UnreadableGameWindows int
+}
+
+// TargetDiscovery is the optional Port capability: enumerate the game
+// windows the user can confirm as the scan target. Ports without it
+// (macOS) scan a target selected by configuration instead.
+type TargetDiscovery interface {
+	DiscoverTargets() (TargetDiscoveryResult, error)
 }
 
 // Key is a neutral key name of the port's vocabulary: KeyA…KeyZ,

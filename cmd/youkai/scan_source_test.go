@@ -29,8 +29,8 @@ func noHost(t *testing.T) func() (platform.Port, error) {
 	}
 }
 
-// T46: no environment variable keeps the production default: no scan
-// source at all.
+// T46: on macOS no environment variable keeps the production default: no
+// scan source at all (the installed Windows default is tested below).
 func TestScanSourceUnsetHasNoSource(t *testing.T) {
 	source, label, err := scanSourceFrom(envOf(nil), "darwin", noHost(t))
 	if err != nil {
@@ -55,9 +55,35 @@ func TestScanSourceRejectsBothSwitches(t *testing.T) {
 	}
 }
 
-// T48: traverse has a calibrated client only on darwin and Windows; every
-// other platform is refused before the host or the Windows target env is
-// read.
+// The installed Windows default (D-01, P-01): with no environment variable
+// the local client is wired without a fixed target, so the window lists the
+// discovered candidates and a start must carry a confirmed one.
+func TestScanSourceWindowsDefaultDiscoversTarget(t *testing.T) {
+	host := func() (platform.Port, error) { return &platformfake.Port{}, nil }
+	source, label, err := scanSourceFrom(envOf(nil), "windows", host)
+	if err != nil {
+		t.Fatalf("scanSourceFrom: %v", err)
+	}
+	game, ok := source.(*app.GameScanSource)
+	if !ok {
+		t.Fatalf("source = %T, want *app.GameScanSource", source)
+	}
+	if !game.RequiresTargetConfirmation() {
+		t.Fatal("the installed source must require a confirmed target")
+	}
+	if game.Target.ExecutablePath != "" || game.Target.BundleID != "" {
+		t.Fatalf("the installed source has a fixed target: %+v", game.Target)
+	}
+	if game.Mode != "traverse" || game.Client != record.ClientWindowsLocal {
+		t.Fatalf("mode=%q client=%q, want traverse/windowsLocal", game.Mode, game.Client)
+	}
+	if game.TraversalForClient == nil {
+		t.Fatal("the installed source has no client-area traversal factory")
+	}
+	if !strings.Contains(label, "自动遍历") {
+		t.Fatalf("label = %q", label)
+	}
+}
 func TestScanSourceTraverseRejectedOutsideDarwinAndWindows(t *testing.T) {
 	source, _, err := scanSourceFrom(envOf(map[string]string{
 		"YOUKAI_GAME_SOURCE": "traverse",

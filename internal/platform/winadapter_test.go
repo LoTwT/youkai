@@ -36,6 +36,9 @@ type fakeWinWindow struct {
 	mu    sync.Mutex
 	wnds  []*fakeWnd
 	query int
+	// titleReads counts Title calls: discovery must never read another
+	// process's window caption.
+	titleReads int
 }
 
 func (f *fakeWinWindow) EnumTopLevel(visit func(windows.HWND)) error {
@@ -105,6 +108,7 @@ func (f *fakeWinWindow) ClassName(hwnd windows.HWND) (string, error) {
 func (f *fakeWinWindow) Title(hwnd windows.HWND) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.titleReads++
 	if w := f.lookup(hwnd); w != nil {
 		return w.title, nil
 	}
@@ -114,6 +118,10 @@ func (f *fakeWinWindow) Title(hwnd windows.HWND) (string, error) {
 type fakeProcInfo struct {
 	path    string
 	started time.Time
+	// imageName is what a Toolhelp snapshot would report; it stays readable
+	// when err models a denied OpenProcess.
+	imageName string
+	err       error
 }
 
 type fakeWinProcs struct {
@@ -125,9 +133,28 @@ func (f *fakeWinProcs) Query(pid windows.ProcessID) (string, time.Time, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if info, ok := f.byPID[pid]; ok {
+		if info.err != nil {
+			return "", time.Time{}, info.err
+		}
 		return info.path, info.started, nil
 	}
 	return "", time.Time{}, fmt.Errorf("no such process %d", pid)
+}
+
+func (f *fakeWinProcs) ImageName(pid windows.ProcessID) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	info, ok := f.byPID[pid]
+	if !ok {
+		return "", fmt.Errorf("no such process %d", pid)
+	}
+	if info.imageName != "" {
+		return info.imageName, nil
+	}
+	if i := strings.LastIndexAny(info.path, `\/`); i >= 0 {
+		return info.path[i+1:], nil
+	}
+	return info.path, nil
 }
 
 type fakeWinGeo struct {
@@ -417,6 +444,7 @@ type winWorld struct {
 	hotkey     *fakeWinHotkeyAPI
 	gate       *fakeGate
 	mgr        *windows.HotkeyManager
+	started    time.Time
 
 	faultsMu sync.Mutex
 	faults   []*Fault
@@ -446,6 +474,7 @@ func newWinWorld(t *testing.T) *winWorld {
 	t.Helper()
 	started := time.Date(2026, 10, 19, 9, 0, 0, 0, time.UTC)
 	w := &winWorld{
+		started: started,
 		win: &fakeWinWindow{wnds: []*fakeWnd{{
 			hwnd: gameHwnd, pid: gamePID, visible: true,
 			className: "UnityWndClass", title: "绝区零",
@@ -1025,5 +1054,136 @@ func TestWinWatcherReportsFaults(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 	if n := w.faultCount(CodeFocusLost); n != 1 {
 		t.Fatalf("focusLost delivered %d times, want 1", n)
+	}
+}
+
+// Discovery (P-01): the adapter enumerates the game client's visible
+// windows by process image name, lists two installations as two
+// candidates, and never reads a window title.
+func TestWinDiscoverTargets(t *testing.T) {
+	w := newWinWorld(t)
+	started := time.Date(2026, 11, 2, 8, 0, 0, 0, time.UTC)
+	w.win.mu.Lock()
+	w.win.wnds = append(w.win.wnds,
+		&fakeWnd{hwnd: 0xB0ABF, pid: gamePID, visible: false, className: "MSCTFIME UI", title: "Default IME"},
+		&fakeWnd{hwnd: 0xB0AC0, pid: 7777, visible: true, className: "UnityWndClass", title: "Second install"},
+	)
+	w.win.mu.Unlock()
+	w.procs.mu.Lock()
+	w.procs.byPID[7777] = fakeProcInfo{path: `D:\Other\ZenlessZoneZero.exe`, started: started}
+	w.procs.mu.Unlock()
+
+	result, err := w.adapter.DiscoverTargets()
+	if err != nil {
+		t.Fatalf("discover: %v", err)
+	}
+	if len(result.Candidates) != 2 {
+		t.Fatalf("want the two visible installations, got %+v", result)
+	}
+	if result.Candidates[0].Handle != uintptr(gameHwnd) || result.Candidates[0].PID != uint32(gamePID) ||
+		result.Candidates[0].ExecutablePath != gameExe || result.Candidates[0].ProcessStartedAt.IsZero() {
+		t.Fatalf("first candidate: %+v", result.Candidates[0])
+	}
+	if result.Candidates[1].ExecutablePath != `D:\Other\ZenlessZoneZero.exe` {
+		t.Fatalf("second candidate keeps its own path: %+v", result.Candidates[1])
+	}
+	if result.AccessDeniedWindows != 0 || result.UnreadableGameWindows != 0 {
+		t.Fatalf("unexpected unreadable count: %+v", result)
+	}
+	w.win.mu.Lock()
+	titles := w.win.titleReads
+	w.win.mu.Unlock()
+	if titles != 0 {
+		t.Fatalf("discovery read %d window titles; it must not read them", titles)
+	}
+}
+
+// M1/M1′ at the adapter: only a denied window whose image name is the game
+// counts, and an already-elevated youkai gets the generic unreadable count
+// instead of the administrator hint.
+func TestWinDiscoverTargetsCountsAccessDenied(t *testing.T) {
+	w := newWinWorld(t)
+	w.win.mu.Lock()
+	w.win.wnds = append(w.win.wnds,
+		&fakeWnd{hwnd: 0xB0AC0, pid: 8888, visible: true, className: "UnityWndClass", title: "绝区零"},
+		// Another elevated Unity game: the shared class alone must not count.
+		&fakeWnd{hwnd: 0xB0AC1, pid: 9999, visible: true, className: "UnityWndClass", title: "原神"},
+	)
+	w.win.mu.Unlock()
+	w.procs.mu.Lock()
+	w.procs.byPID[8888] = fakeProcInfo{err: windows.ErrProcessAccessDenied, imageName: "ZenlessZoneZero.exe"}
+	w.procs.byPID[9999] = fakeProcInfo{err: windows.ErrProcessAccessDenied, imageName: "GenshinImpact.exe"}
+	w.procs.mu.Unlock()
+
+	result, err := w.adapter.DiscoverTargets()
+	if err != nil {
+		t.Fatalf("discover: %v", err)
+	}
+	// The existing game window is still readable and remains a candidate;
+	// the unreadable game window is only a hint.
+	if len(result.Candidates) != 1 || result.Candidates[0].Handle != uintptr(gameHwnd) {
+		t.Fatalf("candidates = %+v, want the readable game window", result.Candidates)
+	}
+	if result.AccessDeniedWindows != 1 || result.UnreadableGameWindows != 0 {
+		t.Fatalf("lower-integrity denial: %+v, want one elevation hint and no unreadable", result)
+	}
+
+	// The same denial while youkai is already elevated is not an elevation
+	// mismatch: it becomes the generic unreadable count.
+	w.integrity.self = windows.IntegrityHigh
+	result, err = w.adapter.DiscoverTargets()
+	if err != nil {
+		t.Fatalf("discover while elevated: %v", err)
+	}
+	if result.AccessDeniedWindows != 0 || result.UnreadableGameWindows != 1 {
+		t.Fatalf("elevated denial: %+v, want one unreadable and no elevation hint", result)
+	}
+}
+
+// A confirmed handle locks exactly that window, and a stale handle fails
+// closed instead of locking another window of the same executable.
+func TestWinOpenConfirmedHandleHint(t *testing.T) {
+	w := newWinWorld(t)
+	const second = windows.HWND(9)
+	w.win.mu.Lock()
+	w.win.wnds = append(w.win.wnds, &fakeWnd{
+		hwnd: second, pid: gamePID, visible: true, className: "UnityWndClass", title: "绝区零",
+	})
+	w.win.mu.Unlock()
+	w.fg.set(second)
+
+	cfg := w.config()
+	cfg.Target.HandleHint = uintptr(second)
+	cfg.Target.PIDHint = uint32(gamePID)
+	cfg.Target.ProcessStartedAtHint = w.started
+	sess, err := w.adapter.Open(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("open with the confirmed handle: %v", err)
+	}
+	if info := sess.Target(); info.HWND != uintptr(second) {
+		t.Fatalf("locked hwnd %d, want the confirmed %d", info.HWND, second)
+	}
+	sess.Close()
+
+	stale := w.config()
+	stale.Target.HandleHint = 0xDEAD
+	_, err = w.adapter.Open(context.Background(), stale)
+	var f *Fault
+	if !errors.As(err, &f) || f.Code != CodeTargetNotFound || f.Class != ClassSetup {
+		t.Fatalf("a vanished confirmed window must report targetNotFound, got %v", err)
+	}
+	if w.hotkey.registered() {
+		t.Fatal("the hotkey must be unregistered on rollback")
+	}
+
+	// L2: a handle whose process instance changed is stale too, even
+	// though the handle and path still match.
+	recycled := w.config()
+	recycled.Target.HandleHint = uintptr(second)
+	recycled.Target.PIDHint = uint32(gamePID) + 1
+	recycled.Target.ProcessStartedAtHint = w.started
+	_, err = w.adapter.Open(context.Background(), recycled)
+	if !errors.As(err, &f) || f.Code != CodeTargetNotFound {
+		t.Fatalf("a recycled handle must report targetNotFound, got %v", err)
 	}
 }

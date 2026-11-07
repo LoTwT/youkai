@@ -133,6 +133,59 @@ func (a *WinAdapter) Preflight() Preflight {
 	}}}
 }
 
+var (
+	_ Port            = (*WinAdapter)(nil)
+	_ TargetDiscovery = (*WinAdapter)(nil)
+)
+
+// DiscoverTargets implements TargetDiscovery: enumerate the visible
+// top-level windows of the Windows local client by the process image name
+// recorded in the 2026-11-02 field acceptance, with the client's window
+// class as a screening hint when several windows remain. Window titles are
+// never read. The user confirms exactly one candidate before a session
+// starts (P-01). A denied game window is named through the process
+// snapshot (no process handle needed): a denial while youkai is not
+// elevated becomes the administrator hint, a denial while it is already
+// elevated (or its own level is unknown) becomes the generic unreadable
+// count, and windows of other executables are never counted.
+func (a *WinAdapter) DiscoverTargets() (TargetDiscoveryResult, error) {
+	selfLevel, selfErr := a.natives.Integrity.SelfIntegrity()
+	selfKnown := selfErr == nil
+	selfElevated := selfKnown && selfLevel >= windows.IntegrityHigh
+	if selfErr != nil {
+		a.logf("discovery: youkai self integrity unreadable: %v", selfErr)
+	}
+	found, err := windows.DiscoverTargets(a.natives.Win, a.natives.Procs, windows.DiscoverySpec{
+		ImageName:          windows.DefaultGameImageName,
+		ClassNameHint:      windows.DefaultGameWindowClass,
+		SelfElevated:       selfElevated,
+		SelfElevationKnown: selfKnown,
+	})
+	if err != nil {
+		return TargetDiscoveryResult{}, err
+	}
+	if found.AccessDeniedWindows > 0 || found.UnreadableGameWindows > 0 {
+		a.logf("discovery: unreadable game windows: elevation-hint=%d generic=%d self=%s",
+			found.AccessDeniedWindows, found.UnreadableGameWindows,
+			windows.IntegrityLabel(selfLevel, selfErr))
+	}
+	result := TargetDiscoveryResult{
+		AccessDeniedWindows:   found.AccessDeniedWindows,
+		UnreadableGameWindows: found.UnreadableGameWindows,
+	}
+	result.Candidates = make([]TargetCandidate, 0, len(found.Candidates))
+	for _, c := range found.Candidates {
+		result.Candidates = append(result.Candidates, TargetCandidate{
+			Handle:           uintptr(c.HWND),
+			PID:              uint32(c.PID),
+			ExecutablePath:   c.ImagePath,
+			ProcessStartedAt: c.ProcessStartedAt,
+			ClassName:        c.ClassName,
+		})
+	}
+	return result, nil
+}
+
 // Open implements Port. Sequence: stop hotkey on its message-loop
 // thread, probe collection and target selection, identity lock, client
 // measurement with DPI verification, a probe capture, the gated actor.
@@ -175,10 +228,13 @@ func (a *WinAdapter) Open(ctx context.Context, cfg SessionConfig) (Session, erro
 		return nil, NewFault(CodeObservationFailed, "window enumeration failed: "+err.Error())
 	}
 	spec := windows.TargetSpec{
-		ExecutablePath: cfg.Target.ExecutablePath,
-		ClassNameHint:  cfg.Target.ClassNameHint,
-		TitleHint:      cfg.Target.TitleHint,
-		RequireVisible: true,
+		ExecutablePath:       cfg.Target.ExecutablePath,
+		HWNDHint:             windows.HWND(cfg.Target.HandleHint),
+		PIDHint:              windows.ProcessID(cfg.Target.PIDHint),
+		ProcessStartedAtHint: cfg.Target.ProcessStartedAtHint,
+		ClassNameHint:        cfg.Target.ClassNameHint,
+		TitleHint:            cfg.Target.TitleHint,
+		RequireVisible:       true,
 	}
 	probe, err := windows.SelectTarget(probes, spec)
 	if err != nil {
@@ -189,14 +245,19 @@ func (a *WinAdapter) Open(ctx context.Context, cfg SessionConfig) (Session, erro
 			case windows.SelectionNoWindow:
 				return nil, NewFault(CodeTargetNotFound,
 					fmt.Sprintf("no top-level window of %q; the game must be running", sel.Executable))
+			case windows.SelectionHintGone:
+				return nil, NewFault(CodeTargetNotFound,
+					fmt.Sprintf("the confirmed window of %q is gone or was replaced; check the target again", sel.Executable))
 			case windows.SelectionNotReady:
 				return nil, NewFault(CodeTargetHidden,
 					fmt.Sprintf("the target window of %q is %s; make it visible and retry", sel.Executable, sel.HintDetail))
 			case windows.SelectionAmbiguous:
 				a.logf("target resolution: %d candidate windows of %s:", len(sel.Candidates), sel.Executable)
 				for _, c := range sel.Candidates {
-					a.logf("  hwnd %d class %q title %q visible=%v minimized=%v",
-						c.HWND, c.ClassName, c.Title, c.Visible, c.Minimized)
+					// The title is user data and never reaches the log
+					// (T2 §3.2).
+					a.logf("  hwnd %d class %q visible=%v minimized=%v",
+						c.HWND, c.ClassName, c.Visible, c.Minimized)
 				}
 				return nil, NewFault(CodeTargetAmbiguous,
 					fmt.Sprintf("%d windows of %q remain candidates; hints must disambiguate the launcher, login and same-name windows", len(sel.Candidates), sel.Executable))

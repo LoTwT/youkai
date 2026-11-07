@@ -35,10 +35,15 @@ func (m *Model) View(c *ui.Context) {
 	m.viewPages(c)
 }
 
-// prepareArea is the always-present start area: the confirmed hint, the
-// stop means and the start button with its state.
+// prepareArea is the always-present start area: the target choice (when
+// the source discovers windows), the confirmed hint, the stop means and the
+// start button with its state.
 func (m *Model) prepareArea(c *ui.Context, t *ui.Theme) {
 	ui.Column(c).Gap(t.Space(1)).Children(func() {
+		if m.source.TargetSelection {
+			m.targetArea(c, t)
+			ui.Divider(c)
+		}
 		ui.Text(c, scanHint)
 		ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
 			if note := m.startNote(); note != "" {
@@ -49,14 +54,54 @@ func (m *Model) prepareArea(c *ui.Context, t *ui.Theme) {
 	})
 }
 
+// targetArea is the temporary target selection: the game windows the
+// source discovered as a minimal radio list (P-01). A single candidate is
+// shown for confirmation too; the user never starts on an unconfirmed
+// window. The scan page redesign (PR-17) replaces this with the
+// preparation checklist.
+func (m *Model) targetArea(c *ui.Context, t *ui.Theme) {
+	ui.Column(c).Gap(t.Space(1)).Children(func() {
+		ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, "目标客户端").FontWeight(600)
+			ui.Box(c).Grow(1)
+			if ui.Button(c, "重新检查").Clicked() {
+				m.refreshTargets()
+			}
+		})
+		switch {
+		case m.targetsLoading:
+			ui.Text(c, "正在查找游戏窗口……").TextColor(t.TextMuted)
+		case m.targetsErr != "":
+			ui.Text(c, m.targetsErr).TextColor(t.Danger)
+		case len(m.targets) == 0 && m.targetsAccessDenied > 0:
+			ui.Text(c, targetElevatedText()).TextColor(t.Danger)
+		case len(m.targets) == 0 && m.targetsUnreadable > 0:
+			ui.Text(c, targetUnreadableText).TextColor(t.Danger)
+		case len(m.targets) == 0:
+			ui.Text(c, targetNotFoundText).TextColor(t.TextMuted)
+		default:
+			ui.Textf(c, "已找到 %d 个窗口，请选择要扫描的一个。", len(m.targets)).TextColor(t.TextMuted)
+			ui.RadioGroup(c, func() {
+				for i, candidate := range m.targets {
+					ui.Radio(c, &m.targetChoice, i, targetLabel(candidate))
+				}
+			}).Label("目标客户端")
+		}
+	})
+}
+
 // startNote explains the start button's state beside it: the wired source,
-// the refusal while a session holds the active slot, the failure of the
-// last attempt, or the exit in progress.
+// the target choice when the source discovers windows, the refusal while a
+// session holds the active slot, the failure of the last attempt, or the
+// exit in progress.
 func (m *Model) startNote() string {
 	switch {
 	case m.exitState == exitRunning:
 		return "正在退出，不能再开始扫描。"
 	case m.startErr != "":
+		if m.source.TargetSelection {
+			return m.startErr
+		}
 		return "开始失败：" + m.startErr
 	case m.snap.Busy:
 		return fmt.Sprintf("扫描进行中（会话 %s），结束后可再次开始。", m.snap.SessionID)
@@ -66,6 +111,18 @@ func (m *Model) startNote() string {
 		return "正在开始扫描……"
 	case !m.source.Available:
 		return "暂无可用扫描源：" + m.source.Reason
+	case m.source.TargetSelection && m.targetsLoading:
+		return "正在查找游戏窗口……"
+	case m.source.TargetSelection && m.targetsErr != "":
+		return m.targetsErr
+	case m.source.TargetSelection && len(m.targets) == 0 && m.targetsAccessDenied > 0:
+		return faultCauseText("integrityMismatch", nil)
+	case m.source.TargetSelection && len(m.targets) == 0 && m.targetsUnreadable > 0:
+		return targetUnreadableText
+	case m.source.TargetSelection && len(m.targets) == 0:
+		return "未找到《绝区零》窗口，请启动游戏后点“重新检查”。"
+	case m.source.TargetSelection && m.chosenTarget() == nil:
+		return "请选择要扫描的游戏窗口。"
 	case m.source.Label != "":
 		return "扫描源：" + m.source.Label
 	default:

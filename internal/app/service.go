@@ -171,6 +171,12 @@ type StartRequest struct {
 	// active session with a busy marker. Nothing persists request IDs:
 	// a restarted process never replays a start.
 	ID string
+	// Target is the game window the user confirmed from the discovered
+	// candidates (P-01). A discovery source refuses a request without it,
+	// even when only one window is running. A source with a fixed target
+	// ignores it and starts its configured target. The source re-checks
+	// that the window instance still exists before accepting.
+	Target *TargetCandidate
 }
 
 // StartOutcome is what Start returns: the session the request produced
@@ -226,6 +232,24 @@ func NewService(cfg Config) (*Service, error) {
 	return svc, nil
 }
 
+// DiscoverTargets enumerates the game windows the wired source offers for
+// user confirmation (P-01). The window calls it only when its source
+// reports TargetSelection; a source without the capability reports why.
+// The raw failure is logged for diagnostics while the window shows
+// user-facing copy.
+func (s *Service) DiscoverTargets() (TargetDiscoveryResult, error) {
+	discovery, ok := s.cfg.Source.(TargetDiscoverer)
+	if !ok {
+		return TargetDiscoveryResult{}, errors.New("app: the wired scan source cannot discover target windows")
+	}
+	result, err := discovery.DiscoverTargets()
+	if err != nil {
+		log.Printf("youkai: discover game windows: %v", err)
+		return TargetDiscoveryResult{}, err
+	}
+	return result, nil
+}
+
 // Start accepts a start request into the single active slot: it takes
 // the scan occupancy, creates the session's record, creates the
 // process-lifetime recognizer if this is the first start, and starts the
@@ -242,16 +266,21 @@ func NewService(cfg Config) (*Service, error) {
 // rolls the placeholder back on any refusal.
 func (s *Service) Start(req StartRequest) (StartOutcome, error) {
 	if req.ID == "" {
-		return StartOutcome{}, errors.New("app: start: request id is empty")
+		cause := errors.New("app: start: request id is empty")
+		log.Printf("youkai: start refused: %v", cause)
+		return StartOutcome{}, cause
 	}
 	recordID, err := record.NewRecordID()
 	if err != nil {
+		log.Printf("youkai: start refused: %v", err)
 		return StartOutcome{}, fmt.Errorf("app: start: %w", err)
 	}
 	s.mu.Lock()
 	if s.quitting {
 		s.mu.Unlock()
-		return StartOutcome{}, errors.New("app: start: the service is quitting")
+		cause := errors.New("app: start: the service is quitting")
+		log.Printf("youkai: start refused: %v", cause)
+		return StartOutcome{}, cause
 	}
 	if s.updateInstalling {
 		// The install ends in a restart; a scan begun now would be cut
@@ -304,7 +333,16 @@ func (s *Service) Start(req StartRequest) (StartOutcome, error) {
 	if s.cfg.Source == nil {
 		return abort(errors.New("no scan source is wired"))
 	}
-	spec, err := s.cfg.Source.NewScan()
+	var spec ScanSpec
+	if req.Target != nil {
+		targeted, ok := s.cfg.Source.(TargetScanSource)
+		if !ok {
+			return abort(errors.New("the wired scan source does not accept a confirmed target"))
+		}
+		spec, err = targeted.NewScanForTarget(*req.Target)
+	} else {
+		spec, err = s.cfg.Source.NewScan()
+	}
 	if err != nil {
 		return abort(err)
 	}
