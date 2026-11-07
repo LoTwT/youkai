@@ -367,6 +367,89 @@ func TestReviewNewBlockingProblemStaysVisible(t *testing.T) {
 	}
 }
 
+// TestReviewTypingIntoFoldedFieldKeepsFocus covers the M-A regression: a
+// field in the folded group must keep the caret while typing an invalid
+// value, and the new blocking problem must become visible without moving
+// that field.
+func TestReviewTypingIntoFoldedFieldKeepsFocus(t *testing.T) {
+	it := withStructured(t, reviewRowItem(t, 1, 12), func(s *zzz.StructuredDisc) {
+		s.Data.Slot = nil
+	})
+	m, _, tt := openResponsiveResults(t, recovery(it), 1180, 760)
+	tt.Frame()
+	if m.edit == nil || m.edit.firstFields[0] != FormFieldSlot || !tt.HasText("其余 7 个字段") {
+		t.Fatalf("the edit is not in the expected folded state: %s", probeReviewState(m))
+	}
+	if err := tt.Click("其余 7 个字段"); err != nil {
+		t.Fatalf("open the folded group: %v", err)
+	}
+	tt.Frame()
+	m.requestReviewFieldFocus(FormFieldLevel)
+	tt.Frame()
+	tt.Frame()
+	if !tt.Focused("等级") {
+		t.Fatalf("the level field did not take the keyboard: %q", tt.Texts())
+	}
+
+	tt.Key(ui.Cmd, ui.KeyA)
+	tt.Key(0, ui.KeyBackspace)
+	tt.Type("129")
+	tt.Frame()
+	tt.Frame()
+	if m.edit == nil || m.edit.draft.Level != "129" {
+		t.Fatalf("typing 129 stored %q", probeReviewState(m))
+	}
+	if !tt.Focused("等级") {
+		t.Fatalf("typing a blocking value moved the field and lost the keyboard: %q", tt.Texts())
+	}
+	if !tt.HasText("等级 129 越界") {
+		t.Fatalf("the new blocking problem is hidden: %q", tt.Texts())
+	}
+	tt.Key(0, ui.KeyBackspace)
+	tt.Frame()
+	tt.Frame()
+	if m.edit == nil || m.edit.draft.Level != "12" {
+		t.Fatalf("Backspace after the blocking value stored %q", probeReviewState(m))
+	}
+	if !tt.Focused("等级") {
+		t.Fatalf("the field lost the keyboard after Backspace: %q", tt.Texts())
+	}
+}
+
+// TestReviewFocusSkipsTextOnlyRarityToNextProblem covers the L-A follow-up:
+// with rarity (text only) and slot (a control) both unsolved, arriving at
+// the item focuses the slot, not a field inside the folded group.
+func TestReviewFocusSkipsTextOnlyRarityToNextProblem(t *testing.T) {
+	it := withStructured(t, reviewRowItem(t, 2, 12), func(s *zzz.StructuredDisc) {
+		s.Data.Rarity = nil
+		s.Data.Slot = nil
+	})
+	m, q, tt, _ := openReviewableResults(t, recovery(
+		settledReviewItem(t, 1, record.QualityAutoAccepted),
+		it,
+	), 1180, 760)
+	tt.Frame()
+	m.setResultFilter(resultFilterAll)
+	tt.Frame()
+	m.requestNavigation(navigationRequest{kind: navSelect, seq: 1})
+	settle(t, m, q, tt)
+	tt.Frame()
+	x, y := browseButtonCenter(t, tt, "下一件 ›")
+	tt.ClickAt(x, y)
+	settle(t, m, q, tt)
+	tt.Frame()
+	if m.focusedReviewField != FormFieldSlot {
+		t.Fatalf("the arrival focused %q, want the next focusable problem field (slot)",
+			m.focusedReviewField)
+	}
+	if !tt.Focused("槽位：" + m.edit.draft.Slot) {
+		t.Fatalf("the slot control did not take the keyboard: %q", tt.Texts())
+	}
+	if m.formExtrasOpen {
+		t.Fatal("the arrival expanded the folded group unnecessarily")
+	}
+}
+
 // TestReviewRarityProblemFocusLandsOnControl covers L-A: rarity is text for
 // an item with structured data, so requesting the first problem field must
 // not leave the keyboard on 保存修改 where Space would write.

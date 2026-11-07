@@ -234,6 +234,32 @@ func TestReviewResultNoticeStaysOnItsPage(t *testing.T) {
 	}
 }
 
+// TestReviewResultNoticeDoesNotFollowTheTab covers L-D's remaining path:
+// 逐件 and 摘要 are separate screens, so an ordinary save result does not
+// appear after switching to the summary tab.
+func TestReviewResultNoticeDoesNotFollowTheTab(t *testing.T) {
+	m, q, tt, _ := openReviewRecordPage(t, reviewRowItem(t, 1, 12))
+	tt.Frame()
+	m.edit.draft.Level = "13"
+	tt.Frame()
+	if err := tt.Click("保存修改"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
+	const notice = "已保存修订 1。"
+	if !tt.HasText(notice) {
+		t.Fatalf("the save result is missing on the item tab: %q", tt.Texts())
+	}
+	m.requestNavigation(navigationRequest{kind: navRecordTab, recordTab: recordTabSummary})
+	tt.Frame()
+	if m.reviewNotice != "" {
+		t.Fatalf("the item result survived the tab switch: %q", m.reviewNotice)
+	}
+	if tt.HasText(notice) {
+		t.Fatalf("the summary repeats the item tab's save result: %q", tt.Texts())
+	}
+}
+
 // TestInvalidInputIsStillUnsaved covers L-B: an invalid value with no data
 // representation is a real change, so leaving the item prompts instead of
 // silently discarding it.
@@ -261,6 +287,45 @@ func TestInvalidInputIsStillUnsaved(t *testing.T) {
 	tt.Frame()
 	if m.edit == nil || m.edit.draft.Level != "99" {
 		t.Fatalf("staying lost the invalid input: %s", probeReviewState(m))
+	}
+}
+
+// TestSavedInvalidValueIsNotDirtyUntilEdited covers the L-B regression: an
+// invalid persisted value is unchanged until the user actually edits it.
+func TestSavedInvalidValueIsNotDirtyUntilEdited(t *testing.T) {
+	it := withStructured(t, reviewRowItem(t, 1, 12), func(s *zzz.StructuredDisc) {
+		level := 99
+		s.Data.Level = &level
+	})
+	m, _, tt, _ := openReviewableResults(t, recovery(it), 1180, 760)
+	tt.Frame()
+	if m.edit == nil || m.edit.draft.Level != "99" {
+		t.Fatalf("the saved invalid level did not open: %s", probeReviewState(m))
+	}
+	if m.editingDirty() {
+		t.Fatal("the untouched saved invalid value is dirty")
+	}
+	m.requestNavigation(navigationRequest{kind: navPage, page: pageSettings})
+	tt.Frame()
+	if m.navPrompt != nil {
+		t.Fatalf("leaving with an untouched invalid value prompted: %s", probeReviewState(m))
+	}
+	if m.displayPage() != pageSettings {
+		t.Fatalf("the navigation did not run: %s", probeReviewState(m))
+	}
+
+	// A real edit to the invalid value is still unsaved input.
+	m.navigatePage(pageResults)
+	tt.Frame()
+	tt.Frame()
+	if m.edit == nil {
+		t.Fatalf("the editor did not reopen: %s", probeReviewState(m))
+	}
+	m.edit.draft.Level = "98"
+	m.edit.refresh()
+	tt.Frame()
+	if !m.editingDirty() {
+		t.Fatal("editing the invalid value did not mark it dirty")
 	}
 }
 
@@ -834,8 +899,8 @@ func TestRevisionConflictNoticeSurvivesLeavingFilter(t *testing.T) {
 	if m.selectedSeq() != 2 {
 		t.Fatalf("the reloaded conflict did not leave the filter: selected %d", m.selectedSeq())
 	}
-	if !strings.Contains(m.reviewNotice, "记录已被更新") {
-		t.Fatalf("the conflict notice was cleared: %q", m.reviewNotice)
+	if !strings.Contains(m.reviewNotice, "记录已被更新，已重新加载当前修订") {
+		t.Fatalf("the settled conflict notice = %q", m.reviewNotice)
 	}
 	if !tt.HasText("记录已被更新") {
 		t.Fatalf("the conflict notice is not visible: %q", tt.Texts())
@@ -869,8 +934,8 @@ func TestRevisionConflictNoticeSurvivesEmptyFilter(t *testing.T) {
 	if len(m.visibleResultRows()) != 0 {
 		t.Fatalf("the reloaded row is still in the pending filter: %v", m.visibleResultRows())
 	}
-	if !strings.Contains(m.reviewNotice, "记录已被更新") {
-		t.Fatalf("the conflict notice was cleared from the empty filter: %q", m.reviewNotice)
+	if !strings.Contains(m.reviewNotice, "记录已被更新，已重新加载当前修订") {
+		t.Fatalf("the settled conflict notice = %q", m.reviewNotice)
 	}
 	if !tt.HasText("记录已被更新") {
 		t.Fatalf("the conflict notice is not visible: %q", tt.Texts())

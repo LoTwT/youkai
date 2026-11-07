@@ -398,13 +398,13 @@ func (e *editState) dirty() bool {
 	// " 15" and "19.2 " are the same values as their canonical forms and
 	// must not manufacture a zero-change revision (08 §3.4).
 	current, problems := e.draft.toData()
-	if len(problems) > 0 {
-		// An invalid value has no data representation, so comparing data
-		// alone would turn "99" in an empty level field back into "unchanged"
-		// and discard the typed input on navigation without a prompt (L-B).
-		return true
+	original, originalProblems := e.original.toData()
+	if len(problems) > 0 || len(originalProblems) > 0 {
+		// An invalid value has no data representation. Compare the texts
+		// instead, but only while an invalid value exists: a saved invalid
+		// value that the user did not touch is still unchanged (L-B).
+		return !reflect.DeepEqual(e.draft, e.original)
 	}
-	original, _ := e.original.toData()
 	return !reflect.DeepEqual(current, original)
 }
 
@@ -711,6 +711,12 @@ func (m *Model) runNavigation(req navigationRequest) {
 	case navSummaryClass:
 		m.openSummaryClassState(req.filter, req.summaryClass)
 	case navRecordTab:
+		if req.recordTab != m.recordTab && !m.reviewNoticeAcrossPages {
+			// 摘要 and 逐件 are separate screens (08 §2, §3): an ordinary
+			// action result from the item browser does not follow the user
+			// into the summary (L-D).
+			m.clearReviewNotice()
+		}
 		m.recordTab = req.recordTab
 		if m.recordTab == recordTabItems {
 			m.enterReviewView()
@@ -1084,6 +1090,22 @@ func (m *Model) handleReviewError(recordID string, err error) {
 		return
 	}
 	m.reviewErr = "保存失败：" + err.Error() + "。输入已保留，可重试。"
+}
+
+// settleConflictNotice replaces the in-progress conflict explanation once
+// the reload it announced has settled. The notice stays pinned for the next
+// navigation, but it must not keep claiming a load is still running (PR-19b
+// review).
+func (m *Model) settleConflictNotice(reloaded bool) {
+	if !m.reviewNoticeKeep ||
+		!strings.HasPrefix(m.reviewNotice, "记录已被更新，正在重新加载当前修订") {
+		return
+	}
+	if reloaded {
+		m.reviewNotice = "记录已被更新，已重新加载当前修订；旧输入未保存。"
+		return
+	}
+	m.reviewNotice = "记录已被更新，重新加载失败；旧输入未保存。"
 }
 
 // applySavedItem replaces the saved item's row in place, locating it by

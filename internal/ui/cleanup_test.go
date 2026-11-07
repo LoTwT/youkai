@@ -88,6 +88,42 @@ func TestScanEndDoesNotPromptScreenshotRetention(t *testing.T) {
 	}
 }
 
+// TestRunningCleanupCannotBeReopened covers PR-19b: clicking the completion
+// form's screenshot link during a running deletion must keep the running
+// prompt (and the write/export gates that depend on it).
+func TestRunningCleanupCannotBeReopened(t *testing.T) {
+	m, _, tt := openResponsiveResults(t, recovery(confirmedReviewItem(t, 1, 12)), 1180, 760)
+	tt.Frame()
+	saver := &fakeDirectExportSaver{}
+	m.cfg.DirectExportSaver = saver
+	p := &cleanupPrompt{target: cleanupOneScreenshots, recordID: m.rec.ID, ready: true, running: true}
+	m.cleanup = p
+	tt.Frame()
+
+	// The visible entry is disabled; its click must not replace the prompt.
+	if err := tt.Click("删除这条记录的截图…"); err != nil {
+		t.Logf("disabled cleanup link click: %v", err)
+	}
+	tt.Frame()
+	if m.cleanup != p || !m.cleanup.running {
+		t.Fatalf("the entry replaced the running cleanup: %+v", m.cleanup)
+	}
+	// The programmatic entry keeps the same guard for every other caller.
+	m.RequestScreenshotCleanup(m.rec.ID)
+	if m.cleanup != p || !m.cleanup.running {
+		t.Fatalf("a second request dropped the running cleanup state: %+v", m.cleanup)
+	}
+
+	tt.Key(ui.Cmd, ui.KeyE)
+	tt.Frame()
+	if m.exportDialog.open {
+		t.Fatal("Ctrl+E opened the export dialog while the deletion was running")
+	}
+	if len(saver.snapshot()) != 0 {
+		t.Fatalf("the blocked export wrote %d files", len(saver.snapshot()))
+	}
+}
+
 func TestViewHistoryScreenshotCleanupPreviewsCancelAndFails(t *testing.T) {
 	svc := cleanupPreviewService(
 		[]record.RecordInfo{{ID: "r1", LatestRevision: 2, SavedAt: time.Now()}},

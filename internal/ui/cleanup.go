@@ -92,7 +92,10 @@ func (m *Model) RequestAllRecordCleanup() {
 }
 
 func (m *Model) requestCleanup(target cleanupTarget, recordID string) {
-	if target == cleanupNone {
+	if target == cleanupNone || m.cleanupRunning() {
+		// A running deletion owns the prompt. Reopening the flow would drop
+		// the running state (and the finish notice that still needs it), and
+		// would re-enable the write/export gates keyed to it (PR-19b review).
 		return
 	}
 	m.cleanupNotice = ""

@@ -204,13 +204,29 @@ func (m *Model) exportBlockedReasonWithDraft(blockDirty bool) string {
 // first shows the ordinary save/discard prompt, as the export dialog must not
 // open over a dirty draft.
 func (m *Model) exportEntryBlocked() bool {
-	return !m.exportAvailable() ||
-		m.exporting ||
-		m.reviewSaving ||
-		m.cleanupRunning() ||
-		m.exitState == exitRunning ||
-		m.exitState == exitDone ||
-		m.rec == nil
+	return m.exportEntryBlockedReason() != ""
+}
+
+// exportEntryBlockedReason names why the export entry is disabled, so the
+// title bar and the completion form can show the reason beside the disabled
+// button (09 §4.1).
+func (m *Model) exportEntryBlockedReason() string {
+	switch {
+	case !m.exportAvailable():
+		return "当前构建未启用导出。"
+	case m.exporting:
+		return "正在导出，完成前不能导出。"
+	case m.reviewSaving:
+		return "正在保存修改，完成前不能导出。"
+	case m.cleanupRunning():
+		return "正在清理，完成前不能导出。"
+	case m.exitState == exitRunning || m.exitState == exitDone:
+		return "正在退出应用，不能导出。"
+	case m.rec == nil:
+		return "结果尚未加载，不能导出。"
+	default:
+		return ""
+	}
 }
 
 // exportDialogJSON starts the JSON export from the dialog.
@@ -426,8 +442,16 @@ func (m *Model) exportDialogTitle() string {
 // exportEntryArea is the record workspace's title-bar entry. A build
 // without a saver still shows where export lives, disabled.
 func (m *Model) exportEntryArea(c *ui.Context) {
-	if ui.Button(c, "导出…").Disabled(m.exportEntryBlocked()).Clicked() {
+	blocked := m.exportEntryBlocked()
+	if ui.Button(c, "导出…").Disabled(blocked).Clicked() {
 		m.requestExport()
+	}
+	if blocked {
+		if reason := m.exportEntryBlockedReason(); reason != "" {
+			t := c.Theme()
+			ui.Text(c, reason).FontSize(t.FontSize * 0.85).
+				TextColor(t.TextMuted).SingleLine()
+		}
 	}
 }
 

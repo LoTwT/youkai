@@ -841,10 +841,19 @@ func (m *Model) reviewEmptyForm(c *ui.Context, t *ui.Theme, visible []int) {
 			ui.Text(c, "都处理完了").FontWeight(600)
 			ui.Textf(c, "可导出 %d 件 · 排除 %d 件", counts.Exportable, counts.Captured-counts.Exportable)
 		}
-		if ui.PrimaryButton(c, "导出…").Disabled(m.exportEntryBlocked()).Clicked() {
-			m.requestExport()
-		}
-		if ui.Button(c, "删除这条记录的截图…").Clicked() {
+		blocked := m.exportEntryBlocked()
+		ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
+			if ui.PrimaryButton(c, "导出…").Disabled(blocked).Clicked() {
+				m.requestExport()
+			}
+			if blocked {
+				if reason := m.exportEntryBlockedReason(); reason != "" {
+					ui.Text(c, reason).FontSize(t.FontSize * 0.85).
+						TextColor(t.TextMuted).SingleLine()
+				}
+			}
+		})
+		if ui.Button(c, "删除这条记录的截图…").Disabled(m.cleanupRunning()).Clicked() {
 			m.RequestScreenshotCleanup(m.rec.ID)
 		}
 		return
@@ -971,18 +980,20 @@ func (m *Model) reviewEditForm(c *ui.Context, t *ui.Theme, row *Row) {
 	}
 	m.edit.refresh()
 	problems := m.reviewProblems(row)
-	first := slices.Clone(m.edit.firstFields)
-	if len(first) > 0 {
-		// A problem that appears while the user types still has to be
-		// visible: append its field to the frozen leading group without
-		// reordering the fields that were already there. Leaving it in the
-		// folded group would hide a blocking error and let F6 request a
-		// control that is not rendered (PR-19b M-A). When the edit opened
-		// with nothing wrong, the whole form is already visible and must
-		// keep its order (M5).
-		for _, field := range problemFields(problems) {
-			if !slices.Contains(first, field) {
-				first = append(first, field)
+	first := m.edit.firstFields
+	// A blocking problem that appears while the user types stays in its
+	// folded group: moving the field would remove the caret mid-input (M-A).
+	// Open the group instead, so the error is visible and F6 can focus the
+	// rendered control (PR-19b review).
+	if len(first) > 0 && !m.formExtrasOpen {
+		for _, problem := range problems {
+			if problem.Kind != reviewProblemBlocking {
+				continue
+			}
+			field := canonicalFormField(problem.Field)
+			if field != "" && !reviewFieldInLeading(first, field) {
+				m.formExtrasOpen = true
+				break
 			}
 		}
 	}
@@ -1014,6 +1025,16 @@ func (m *Model) reviewEditForm(c *ui.Context, t *ui.Theme, row *Row) {
 		}
 	}
 	m.rawTextArea(c, t, row)
+}
+
+// reviewFieldInLeading reports whether field is rendered in the frozen
+// leading group. The substat group renders every row field, so a row field
+// belongs to the group's position.
+func reviewFieldInLeading(first []FormField, field FormField) bool {
+	if slices.Contains(first, field) {
+		return true
+	}
+	return isSubstatField(field) && slices.Contains(first, FormFieldSubstats)
 }
 
 // reviewEditField is one editable field: its label, the control, and the

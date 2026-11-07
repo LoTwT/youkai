@@ -161,6 +161,27 @@ func TestExportEntryBlockedDuringCleanup(t *testing.T) {
 	}
 }
 
+// TestCleanupReasonBesideBothExportEntries covers PR-19b item 7: the title
+// bar and the completion form both explain the disabled export while a
+// deletion runs.
+func TestCleanupReasonBesideBothExportEntries(t *testing.T) {
+	m, _, tt := openResponsiveResults(t, recovery(confirmedReviewItem(t, 1, 12)), 1180, 760)
+	m.cfg.DirectExportSaver = &fakeDirectExportSaver{}
+	m.cleanup = &cleanupPrompt{target: cleanupOneScreenshots, recordID: m.rec.ID, ready: true, running: true}
+	tt.Frame()
+	const reason = "正在清理，完成前不能导出。"
+	count := 0
+	for _, text := range tt.Texts() {
+		if text == reason {
+			count++
+		}
+	}
+	if count != 2 {
+		t.Fatalf("the cleanup reason appears %d times, want title bar and completion form: %q",
+			count, tt.Texts())
+	}
+}
+
 // TestExportDialogShowsCountsFormatDifferenceAndSuccess covers S8's
 // 可导出 and 成功 states, the equal-weight format buttons, the opening
 // focus, and the print/download actions of the success state.
