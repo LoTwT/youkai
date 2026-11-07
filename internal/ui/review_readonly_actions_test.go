@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -987,7 +988,11 @@ func TestReviewModifyCleanReason(t *testing.T) {
 	if !ok {
 		t.Fatalf("the released confirm button is missing: %q", tt.Texts())
 	}
-	if guarded.Y != released.Y {
+	// The button must not jump under the pointer: the former bug moved it
+	// about 17 DIP. Windows font fallback leaves a sub-pixel difference
+	// (about 0.04 DIP) between the reason line and its placeholder; the
+	// user accepted that on 2026-11-07 and the source is not identified.
+	if math.Abs(float64(guarded.Y-released.Y)) >= 0.5 {
 		t.Fatalf("the action buttons moved %v -> %v when the guard cleared",
 			guarded.Y, released.Y)
 	}

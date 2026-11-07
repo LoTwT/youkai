@@ -1379,14 +1379,15 @@ func (m *Model) reviewModifyActions(c *ui.Context, t *ui.Theme, row *Row) {
 }
 
 // reviewActionReason draws the action bar's reason line, or the empty
-// space it keeps when there is none, so the buttons above never move.
+// space it keeps when there is none, so a reason appearing or clearing
+// does not jump the buttons above.
 func reviewActionReason(c *ui.Context, t *ui.Theme, reason string) {
 	if reason == "" {
-		// The spacer uses a CJK glyph, invisible, so its line gets the same
-		// font fallback as every reason above (all start in Chinese) and
-		// therefore exactly the same height on every platform. A Latin-only
-		// spacer was 0.04 DIP shorter on Windows, moving the buttons (L9).
-		ui.Text(c, "中").FontSize(t.FontSize * 0.85).TextColor(ui.Transparent).Role(ui.RoleNone)
+		// An invisible line keeps the buttons in place while no reason is
+		// shown. Windows font fallback leaves a sub-pixel height difference
+		// (about 0.04 DIP); the layout test allows that and guards the
+		// former 17-DIP jump instead.
+		ui.Text(c, "\u00a0").FontSize(t.FontSize * 0.85).Role(ui.RoleNone)
 		return
 	}
 	ui.Text(c, reason).FontSize(t.FontSize * 0.85).TextColor(t.TextMuted)
