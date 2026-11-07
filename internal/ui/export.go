@@ -173,6 +173,8 @@ func (m *Model) exportBlockedReasonWithDraft(blockDirty bool) string {
 		return "正在退出应用，不能导出。"
 	case m.reviewSaving:
 		return "正在保存修改，完成前不能导出。"
+	case m.cleanupRunning():
+		return "正在清理，完成前不能导出。"
 	case blockDirty && m.editingDirty():
 		return "有未保存的修改，保存或放弃后可导出。"
 	case m.loading:
@@ -205,6 +207,7 @@ func (m *Model) exportEntryBlocked() bool {
 	return !m.exportAvailable() ||
 		m.exporting ||
 		m.reviewSaving ||
+		m.cleanupRunning() ||
 		m.exitState == exitRunning ||
 		m.exitState == exitDone ||
 		m.rec == nil

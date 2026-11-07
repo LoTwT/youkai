@@ -1451,8 +1451,8 @@ func TestHistoryEmptyPendingTextWithDirtyEditor(t *testing.T) {
 		},
 	}
 	m.filter = resultFilterPending
-	if got := m.filteredEmptyText(); got != "待处理 0 件，都处理完了。" {
-		t.Fatalf("history empty text = %q, want the finished text", got)
+	if got := m.filteredEmptyText(); got != "待处理 0 件，导出清单尚未就绪。" {
+		t.Fatalf("history empty text = %q, want a finished-state text", got)
 	}
 	if !m.editingDirty() {
 		t.Fatal("the test fixture is not exercising the dirty history path")

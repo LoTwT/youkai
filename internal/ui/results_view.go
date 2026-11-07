@@ -971,7 +971,21 @@ func (m *Model) reviewEditForm(c *ui.Context, t *ui.Theme, row *Row) {
 	}
 	m.edit.refresh()
 	problems := m.reviewProblems(row)
-	first := m.edit.firstFields
+	first := slices.Clone(m.edit.firstFields)
+	if len(first) > 0 {
+		// A problem that appears while the user types still has to be
+		// visible: append its field to the frozen leading group without
+		// reordering the fields that were already there. Leaving it in the
+		// folded group would hide a blocking error and let F6 request a
+		// control that is not rendered (PR-19b M-A). When the edit opened
+		// with nothing wrong, the whole form is already visible and must
+		// keep its order (M5).
+		for _, field := range problemFields(problems) {
+			if !slices.Contains(first, field) {
+				first = append(first, field)
+			}
+		}
+	}
 	rest := make([]FormField, 0, len(reviewFieldOrder))
 	for _, field := range reviewFieldOrder {
 		if !slices.Contains(first, field) {
@@ -1322,6 +1336,10 @@ func (m *Model) reviewEditActions(c *ui.Context, t *ui.Theme, row *Row) {
 	if guarded && blocked == "" {
 		reason = reviewBrowseGuardReason
 	}
+	// The reason sits above the action row. The action bar is bottom-anchored,
+	// so a reason that wraps at a larger text size grows upward instead of
+	// moving the buttons (PR-19b, 09 §1).
+	reviewActionReason(c, t, reason)
 	ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
 		confirmLabel := "确认并下一项"
 		if m.reviewErr != "" && m.lastAction == reviewConfirmNext {
@@ -1342,7 +1360,6 @@ func (m *Model) reviewEditActions(c *ui.Context, t *ui.Theme, row *Row) {
 			m.saveEdit(reviewSave, nil)
 		}
 	})
-	reviewActionReason(c, t, reason)
 }
 
 // reviewModifyActions is the modify flow of a settled item: 确认修改
@@ -1359,6 +1376,7 @@ func (m *Model) reviewModifyActions(c *ui.Context, t *ui.Theme, row *Row) {
 	if guarded && reason == "" {
 		reason = reviewBrowseGuardReason
 	}
+	reviewActionReason(c, t, reason)
 	ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
 		confirmLabel := "确认修改"
 		if m.reviewErr != "" && m.lastAction == reviewConfirmModify {
@@ -1375,18 +1393,16 @@ func (m *Model) reviewModifyActions(c *ui.Context, t *ui.Theme, row *Row) {
 			m.cancelEdit()
 		}
 	})
-	reviewActionReason(c, t, reason)
 }
 
 // reviewActionReason draws the action bar's reason line, or the empty
-// space it keeps when there is none, so a reason appearing or clearing
-// does not jump the buttons above.
+// space it keeps when there is none. The line sits above the bottom-anchored
+// buttons, so a reason appearing, clearing or wrapping does not move them.
 func reviewActionReason(c *ui.Context, t *ui.Theme, reason string) {
 	if reason == "" {
-		// An invisible line keeps the buttons in place while no reason is
-		// shown. Windows font fallback leaves a sub-pixel height difference
-		// (about 0.04 DIP); the layout test allows that and guards the
-		// former 17-DIP jump instead.
+		// The invisible line keeps the bar's height stable while no reason is
+		// shown. Its exact height may differ from a real line by a sub-pixel
+		// amount; the source of that difference is not identified.
 		ui.Text(c, "\u00a0").FontSize(t.FontSize * 0.85).Role(ui.RoleNone)
 		return
 	}
@@ -1410,7 +1426,12 @@ func (m *Model) reviewWriteButton(button ui.Element, guarded bool) ui.Element {
 	return button.Opacity(0.55).HandleInput(func(ev ui.InputEvent) bool {
 		switch ev.Kind {
 		case ui.InputKeyDown:
-			m.clearReviewBrowseGuard()
+			// Only the button's own activation keys are deliberate. Tab and
+			// other navigation keys must not retire the guard while the
+			// pointer still sits on the reused position (L-C).
+			if ev.Key == ui.KeySpace || ev.Key == ui.KeyEnter {
+				m.clearReviewBrowseGuard()
+			}
 			return false
 		case ui.InputPointerDown:
 			if !m.reviewBrowseGuardRect.Contains(bounds.X+ev.X, bounds.Y+ev.Y) {
@@ -1443,6 +1464,11 @@ func (m *Model) reviewWriteButton(button ui.Element, guarded bool) ui.Element {
 func (m *Model) reviewBrowseActions(c *ui.Context, t *ui.Theme) {
 	visible := m.visibleResultRows()
 	index := resultDisplayIndex(visible, m.selected)
+	// Keep the browse and editor bars the same height so their first
+	// buttons share the position the guard protects (08 §3.4). The reserved
+	// reason line is above the buttons for the same bottom-anchored layout
+	// as the editor bars.
+	reviewActionReason(c, t, "")
 	ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
 		previous := ui.Button(c, "‹ 上一件").Key("review-prev").
 			Disabled(m.reviewSaving || index <= 0)
@@ -1455,9 +1481,6 @@ func (m *Model) reviewBrowseActions(c *ui.Context, t *ui.Theme) {
 			m.markReviewBrowse(next)
 		}
 	})
-	// Keep the browse and editor bars the same height so their first
-	// buttons share the position the guard protects (08 §3.4).
-	reviewActionReason(c, t, "")
 }
 
 // rawTextArea is the per-item disclosure of the recognized text and the

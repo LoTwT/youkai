@@ -529,6 +529,8 @@ func (m *Model) historyExportBlockedReason(entry HistoryEntry) string {
 		return "正在退出应用，不能导出。"
 	case m.reviewSaving:
 		return "正在保存修改，完成前不能导出。"
+	case m.cleanupRunning():
+		return "正在清理，完成前不能导出。"
 	default:
 		return ""
 	}

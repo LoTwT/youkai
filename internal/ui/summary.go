@@ -814,6 +814,13 @@ func (m *Model) recordSummaryConclusion() summaryConclusion {
 	out := recordOutcomeFor(m.summaryConclusionInput())
 	wording := recordSummaryWording(out)
 	primary, secondary := m.summaryConclusionActions(out)
+	if primary.Kind == summaryActionExport && primary.disabled() {
+		// A disabled export action may be transient (loading, writing,
+		// saving, finishing) or caused by a failed snapshot. The title must
+		// not promise "可以直接导出" while the button beside it is disabled
+		// (PR-15).
+		wording.Title = strings.TrimSuffix(wording.Title, "，可以直接导出")
+	}
 	return summaryConclusion{
 		Eyebrow:    wording.Eyebrow,
 		Title:      wording.Title,

@@ -142,6 +142,25 @@ func (f *exportDialogFixture) open(t *testing.T) {
 	}
 }
 
+// TestExportEntryBlockedDuringCleanup covers PR-13: a running record
+// deletion must not let the export dialog open over the cleanup.
+func TestExportEntryBlockedDuringCleanup(t *testing.T) {
+	f := newExportDialogFixture(t, testRecord(), false)
+	f.m.cleanup = &cleanupPrompt{target: cleanupOneRecord, recordID: f.m.rec.ID, running: true}
+	f.tt.Frame()
+	if !f.m.exportEntryBlocked() {
+		t.Fatal("the export entry stayed enabled during cleanup")
+	}
+	if got := f.m.exportBlockedReasonWithDraft(false); got != "正在清理，完成前不能导出。" {
+		t.Fatalf("the export block reason = %q", got)
+	}
+	f.m.requestExport()
+	f.tt.Frame()
+	if f.m.exportDialog.open {
+		t.Fatalf("the export dialog opened during cleanup: %q", f.tt.Texts())
+	}
+}
+
 // TestExportDialogShowsCountsFormatDifferenceAndSuccess covers S8's
 // 可导出 and 成功 states, the equal-weight format buttons, the opening
 // focus, and the print/download actions of the success state.

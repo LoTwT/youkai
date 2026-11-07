@@ -383,6 +383,17 @@ func (m *Model) requestReviewFieldFocus(field FormField) {
 	if field == "" {
 		field = m.firstReviewField()
 	}
+	// An item with structured data shows its rarity as text, not a control.
+	// Rarity is often the first problem (this capture verified no S rarity),
+	// so requesting it would leave the keyboard on the write button the
+	// pointer just pressed. Land on the form's first control instead and
+	// open the folded group when that control is inside it (PR-19b L-A).
+	if field == FormFieldRarity {
+		if row := m.selectedRow(); row != nil && row.Structured != nil {
+			field = reviewFieldOrder[0]
+			m.formExtrasOpen = true
+		}
+	}
 	m.focusReviewField = field
 	m.focusReviewFieldSeq++
 }
@@ -489,7 +500,7 @@ func (m *Model) showRecord(id string, live bool) {
 	m.navPrompt = nil
 	m.reviewErr = ""
 	m.reviewSaveFailed = false
-	m.reviewNotice = ""
+	m.clearReviewNotice()
 	m.lastAction = reviewSave
 }
 

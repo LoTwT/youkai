@@ -177,6 +177,9 @@ func (m *Model) resultSelectionInFilter(filter resultFilter, setFilter, slotFilt
 // workspace, after any dirty editor has been settled.
 func (m *Model) applyResultFilterState(filter resultFilter, setFilter, slotFilter string) {
 	m.clearRecentlyConfirmed()
+	// A filter change is a user action: the previous result notice stays
+	// behind, including a revision-conflict explanation (PR-14b L-D).
+	m.clearReviewNotice()
 	m.filter = filter
 	m.setFilter = setFilter
 	m.slotFilter = slotFilter
@@ -206,7 +209,7 @@ func (m *Model) settleResultSelection() {
 		}
 		m.reviewErr = ""
 		m.reviewSaveFailed = false
-		m.reviewNotice = ""
+		m.clearReviewNoticeForSettledSelection()
 		return
 	}
 	if m.editingDirty() {
@@ -225,11 +228,22 @@ func (m *Model) settleResultSelection() {
 	m.clampResultScroll()
 	m.reviewErr = ""
 	m.reviewSaveFailed = false
-	m.reviewNotice = ""
+	m.clearReviewNoticeForSettledSelection()
 	if m.edit != nil && !m.editingDirty() {
 		m.clearEdit()
 	}
 	m.pointFirstReviewField()
+}
+
+// clearReviewNoticeForSettledSelection drops an ordinary notice when the
+// selection moves, except the conflict explanation that the reload itself
+// caused: the reloaded row may leave the filter, but the reason its input
+// was discarded must stay on screen (PR-14b).
+func (m *Model) clearReviewNoticeForSettledSelection() {
+	if m.reviewNoticeKeep {
+		return
+	}
+	m.clearReviewNotice()
 }
 
 // clampResultScroll keeps the list's remembered place inside the filtered
@@ -261,7 +275,18 @@ func (m *Model) filteredEmptyText() string {
 			if m.liveScanInProgress() {
 				return "扫描尚未结束，暂无待处理条目。"
 			}
-			return "待处理 0 件，都处理完了。"
+			// An unknown or failed export snapshot cannot prove that the
+			// review is done. The list and the form must give the same
+			// conclusion (PR-14b).
+			counts := m.recordCounts()
+			switch {
+			case !counts.ExportKnown:
+				return "待处理 0 件，导出清单尚未就绪。"
+			case counts.Exportable == 0:
+				return "待处理 0 件，无可导出条目。"
+			default:
+				return "待处理 0 件，都处理完了。"
+			}
 		}
 		return "没有待处理的条目。"
 	case resultFilterWarning:
@@ -559,7 +584,7 @@ func (m *Model) registerResultsShortcuts(c *ui.Context) {
 	if m.exportDialog.open {
 		return
 	}
-	if m.reviewSaving || m.loading || m.recErr != "" || m.exportBusy() {
+	if m.reviewSaving || m.loading || m.recErr != "" || m.exportBusy() || m.cleanupRunning() {
 		return
 	}
 	if m.edit != nil {
@@ -603,7 +628,7 @@ func (m *Model) registerResultsShortcuts(c *ui.Context) {
 // key, and the pending walk appears only while the segment shows a
 // pending item.
 func (m *Model) resultShortcutText() string {
-	if m.reviewSaving || m.loading || m.recErr != "" || m.exportBusy() {
+	if m.reviewSaving || m.loading || m.recErr != "" || m.exportBusy() || m.cleanupRunning() {
 		return ""
 	}
 	var keys []string

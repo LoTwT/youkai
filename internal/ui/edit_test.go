@@ -209,6 +209,61 @@ func openReviewRecordPage(t *testing.T, items ...record.ItemRecord) (*Model, *qu
 	return m, q, tt, svc
 }
 
+// TestReviewResultNoticeStaysOnItsPage covers L-D: an ordinary save result
+// is not repeated on settings after leaving the item browser.
+func TestReviewResultNoticeStaysOnItsPage(t *testing.T) {
+	m, q, tt, _ := openReviewRecordPage(t, reviewRowItem(t, 1, 12))
+	tt.Frame()
+	m.edit.draft.Level = "13"
+	tt.Frame()
+	if err := tt.Click("保存修改"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
+	const notice = "已保存修订 1。"
+	if !tt.HasText(notice) {
+		t.Fatalf("the save result is missing on its own page: %q", tt.Texts())
+	}
+	m.navigatePage(pageSettings)
+	tt.Frame()
+	if m.reviewNotice != "" {
+		t.Fatalf("the save result survived the page change: %q", m.reviewNotice)
+	}
+	if tt.HasText(notice) {
+		t.Fatalf("settings repeats the item browser's save result: %q", tt.Texts())
+	}
+}
+
+// TestInvalidInputIsStillUnsaved covers L-B: an invalid value with no data
+// representation is a real change, so leaving the item prompts instead of
+// silently discarding it.
+func TestInvalidInputIsStillUnsaved(t *testing.T) {
+	m, _, tt, _ := openReviewRecordPage(t, reviewRowItem(t, 1, 12))
+	tt.Frame()
+	m.edit.draft.Level = "99"
+	m.edit.refresh()
+	tt.Frame()
+	if !m.edit.dirty() {
+		t.Fatal("the out-of-range level was treated as unchanged")
+	}
+	if m.edit.canSave() {
+		t.Fatal("the invalid level was offered for saving")
+	}
+	m.requestNavigation(navigationRequest{kind: navPage, page: pageSettings})
+	tt.Frame()
+	if m.navPrompt == nil {
+		t.Fatal("leaving with the invalid input did not prompt")
+	}
+	if !tt.HasText("有未保存的修改") {
+		t.Fatalf("the unsaved prompt does not show: %q", tt.Texts())
+	}
+	m.promptStay()
+	tt.Frame()
+	if m.edit == nil || m.edit.draft.Level != "99" {
+		t.Fatalf("staying lost the invalid input: %s", probeReviewState(m))
+	}
+}
+
 func TestDraftKeepsExplicitUnknownSubstats(t *testing.T) {
 	draft := editDraft{
 		SetID:           describeSet(31100),
@@ -414,7 +469,7 @@ func TestConfirmAndNextThroughToEmpty(t *testing.T) {
 		t.Fatal(err)
 	}
 	settle(t, m, q, tt)
-	if m.pendingItemsCount() != 0 || m.reviewNotice != "待校对 0 · 全部可导出" {
+	if m.pendingItemsCount() != 0 || m.reviewNotice != "" {
 		t.Fatalf("after the last item: pending %d notice %q", m.pendingItemsCount(), m.reviewNotice)
 	}
 	if m.selected != 1 {
@@ -422,6 +477,9 @@ func TestConfirmAndNextThroughToEmpty(t *testing.T) {
 	}
 	if !tt.HasText("待校对 0") {
 		t.Fatalf("the empty pending state does not show: %q", tt.Texts())
+	}
+	if tt.HasText("待校对 0 · 全部可导出") {
+		t.Fatalf("the completed form repeats its own conclusion: %q", tt.Texts())
 	}
 }
 
@@ -741,6 +799,81 @@ func TestRevisionConflictReloadsCurrentRevision(t *testing.T) {
 	}
 	if !loaded {
 		t.Fatalf("the conflict did not reload the record: %v", svc.loadLog)
+	}
+}
+
+// TestRevisionConflictNoticeSurvivesLeavingFilter covers PR-14b: the
+// reloaded row may move out of the pending segment, but the explanation
+// for the discarded input must stay visible.
+func TestRevisionConflictNoticeSurvivesLeavingFilter(t *testing.T) {
+	m, q, tt, svc := openReviewableResults(t, recovery(
+		reviewRowItem(t, 1, 12),
+		reviewRowItem(t, 2, 10),
+	), 1180, 760)
+	tt.Frame()
+	if m.selectedSeq() != 1 {
+		t.Fatalf("the first pending item is not selected: %d", m.selectedSeq())
+	}
+	m.edit.draft.Level = "14"
+	m.edit.refresh()
+
+	newer := reviewRowItem(t, 1, 11)
+	newer.Revision = 2
+	newer.Quality = record.QualityHumanConfirmed
+	svc.mu.Lock()
+	svc.loads["rec"].Checkpoint.Items[0] = newer
+	svc.mu.Unlock()
+	svc.saveFn = func(string, int64, int64, app.ItemRevisionEdit) (app.ItemRevisionResult, error) {
+		return app.ItemRevisionResult{}, fmt.Errorf("stale: %w", record.ErrRevisionConflict)
+	}
+
+	tt.Frame()
+	m.saveEdit(reviewSave, nil)
+	drainAll(t, m, q)
+	tt.Frame()
+	if m.selectedSeq() != 2 {
+		t.Fatalf("the reloaded conflict did not leave the filter: selected %d", m.selectedSeq())
+	}
+	if !strings.Contains(m.reviewNotice, "记录已被更新") {
+		t.Fatalf("the conflict notice was cleared: %q", m.reviewNotice)
+	}
+	if !tt.HasText("记录已被更新") {
+		t.Fatalf("the conflict notice is not visible: %q", tt.Texts())
+	}
+}
+
+// TestRevisionConflictNoticeSurvivesEmptyFilter covers the same conflict
+// when the reloaded row was the only pending item: the empty completion
+// surface must not drop the explanation on a later frame.
+func TestRevisionConflictNoticeSurvivesEmptyFilter(t *testing.T) {
+	m, q, tt, svc := openReviewableResults(t, recovery(reviewRowItem(t, 1, 12)), 1180, 760)
+	tt.Frame()
+	m.edit.draft.Level = "14"
+	m.edit.refresh()
+
+	newer := reviewRowItem(t, 1, 11)
+	newer.Revision = 2
+	newer.Quality = record.QualityHumanConfirmed
+	svc.mu.Lock()
+	svc.loads["rec"].Checkpoint.Items[0] = newer
+	svc.mu.Unlock()
+	svc.saveFn = func(string, int64, int64, app.ItemRevisionEdit) (app.ItemRevisionResult, error) {
+		return app.ItemRevisionResult{}, fmt.Errorf("stale: %w", record.ErrRevisionConflict)
+	}
+
+	tt.Frame()
+	m.saveEdit(reviewSave, nil)
+	drainAll(t, m, q)
+	tt.Frame()
+	tt.Frame()
+	if len(m.visibleResultRows()) != 0 {
+		t.Fatalf("the reloaded row is still in the pending filter: %v", m.visibleResultRows())
+	}
+	if !strings.Contains(m.reviewNotice, "记录已被更新") {
+		t.Fatalf("the conflict notice was cleared from the empty filter: %q", m.reviewNotice)
+	}
+	if !tt.HasText("记录已被更新") {
+		t.Fatalf("the conflict notice is not visible: %q", tt.Texts())
 	}
 }
 

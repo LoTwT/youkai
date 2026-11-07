@@ -876,6 +876,17 @@ type traversalHarness struct {
 	Capacity   int
 }
 
+// frameClock advances one step per served frame. The scroll wait's budget
+// then counts observations rather than matcher wall time, so a slow CI host
+// cannot change which candidate the scripted inertia test observes.
+type frameClock struct {
+	now time.Time
+}
+
+func (c *frameClock) Now() time.Time { return c.now }
+
+func (c *frameClock) Advance(step time.Duration) { c.now = c.now.Add(step) }
+
 func newTraversalHarness(t *testing.T, game *scriptedGame) *traversalHarness {
 	t.Helper()
 	l := collect.MacCloudLayout()
@@ -1456,11 +1467,20 @@ func TestSinglePageScrollCandidateFollowsInertia(t *testing.T) {
 	game.scrollExtraRows = 1
 	game.scrollExtraDelay = 2
 	h := newTraversalHarness(t, game)
-	// The staged displacement needs several matcher passes; the race
-	// detector multiplies each full-list correspondence search.
+	// Advance the scroll budget by frames, not wall time: a slow matcher
+	// pass must not cut the inertia observation short. Twenty-four frames
+	// cover the staged displacement and its settle (T6b, F7).
+	clock := &frameClock{now: time.Now()}
+	h.inv.ScrollNow = clock.Now
 	h.inv.ScrollBudget = 1200 * time.Millisecond
-	if testRace {
-		h.inv.ScrollBudget = 3 * time.Second
+	baseFrame := game.frame
+	h.session.FrameFn = func(ctx context.Context, req platform.FrameRequest) (platform.Frame, error) {
+		clock.Advance(50 * time.Millisecond)
+		f, err := baseFrame(ctx, req)
+		if err == nil {
+			f.ArrivedAt = clock.Now()
+		}
+		return f, err
 	}
 	h.start()
 	h.endCompleted()

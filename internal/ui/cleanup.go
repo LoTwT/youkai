@@ -60,6 +60,13 @@ type storagePrompt struct {
 	err        string
 }
 
+// cleanupRunning reports an executed deletion in flight. While it runs the
+// record workspace stays visible but must not start another write or export
+// against the record being deleted.
+func (m *Model) cleanupRunning() bool {
+	return m.cleanup != nil && m.cleanup.running
+}
+
 // RequestScreenshotCleanup opens the measured confirmation for one
 // record's screenshots.
 func (m *Model) RequestScreenshotCleanup(recordID string) {
@@ -490,7 +497,7 @@ func (m *Model) clearResultsLocked() {
 	m.edit = nil
 	m.navPrompt = nil
 	m.reviewErr = ""
-	m.reviewNotice = ""
+	m.clearReviewNotice()
 }
 
 // cleanupBlockedReason explains why cleanup is refused now; empty means

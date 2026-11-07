@@ -11,6 +11,42 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
+// TestTrayHintAcknowledgementKeepsUnsavedExitPrompt covers PR-18: a quit
+// request arriving while the first-hide hint is open leaves the unsaved
+// dialog waiting; acknowledging the hint must not hide that dialog.
+func TestTrayHintAcknowledgementKeepsUnsavedExitPrompt(t *testing.T) {
+	hides := 0
+	m, _, tt, _ := openReviewableResults(t, recovery(reviewRowItem(t, 1, 12)), 1180, 760)
+	m.cfg.HideToTray = func() { hides++ }
+	tt.Frame()
+	m.edit.draft.Level = "13"
+	m.edit.refresh()
+	tt.Frame()
+
+	m.ShowFirstHideHint()
+	m.AllowClose()
+	tt.Frame()
+	if m.navPrompt == nil {
+		t.Fatalf("AllowClose did not keep the unsaved prompt: %s", probeReviewState(m))
+	}
+	if err := tt.Click("知道了"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if hides != 0 {
+		t.Fatalf("acknowledging the hint hid the window with an unsaved prompt open")
+	}
+	if m.navPrompt == nil {
+		t.Fatal("acknowledging the hint discarded the pending exit prompt")
+	}
+	if m.exitState != exitIdle {
+		t.Fatalf("the exit state = %v, want idle until the prompt settles", m.exitState)
+	}
+	if !tt.HasText("有未保存的修改") {
+		t.Fatalf("the unsaved prompt is not visible: %q", tt.Texts())
+	}
+}
+
 // TestFirstHideHintOnceAndReplay checks the first close's hint, its
 // persistence, the second close's silence, and the settings replay.
 func TestFirstHideHintOnceAndReplay(t *testing.T) {

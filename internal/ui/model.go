@@ -431,6 +431,17 @@ type Model struct {
 	reviewSaveFailed bool
 	reviewErr        string
 	reviewNotice     string
+	// reviewNoticeAcrossPages marks the one review outcome that must stay
+	// visible after leaving the item browser: saving a modify draft with
+	// 保存并继续 sends the item back to review, and the destination notice
+	// repeats that consequence on every destination (08 §3.4, 09 §4.1).
+	// Ordinary action results stay on the page that produced them (L-D).
+	reviewNoticeAcrossPages bool
+	// reviewNoticeKeep survives the selection settlement of the reload that
+	// resolves a revision conflict: the reloaded row may leave the current
+	// filter and move the selection, but the explanation must stay visible
+	// (PR-14b review).
+	reviewNoticeKeep bool
 	lastAction       reviewAction
 	navPrompt        *navigationRequest
 
@@ -695,7 +706,7 @@ func (m *Model) beginSession(id, replacedSession string) {
 			// draft belongs to: keep the editor and make the record live
 			// again instead of replacing it.
 			m.rec.Live = true
-			m.reviewNotice = ""
+			m.clearReviewNotice()
 			return
 		}
 		// The open record is history now; the new session's record waits
@@ -704,9 +715,9 @@ func (m *Model) beginSession(id, replacedSession string) {
 		if rolledBack {
 			// The refused start returned to the session that was live
 			// before it; no new scan is running, so the notice is stale.
-			m.reviewNotice = ""
+			m.clearReviewNotice()
 		} else {
-			m.reviewNotice = "新的扫描已开始；保存或放弃当前编辑后可查看本次扫描。"
+			m.setReviewNotice("新的扫描已开始；保存或放弃当前编辑后可查看本次扫描。")
 		}
 		return
 	}
@@ -1224,7 +1235,11 @@ func (m *Model) acknowledgeTrayHint() {
 			}
 		}
 	}
-	if hide && m.cfg.HideToTray != nil {
+	// A quit request can arrive while the hint is open and leave its unsaved
+	// dialog waiting. Hiding now would put that prompt behind the tray icon
+	// and swallow the exit; keep the window so the user can answer it
+	// (PR-18, 09 §4.1).
+	if hide && m.navPrompt == nil && m.exitState == exitIdle && m.cfg.HideToTray != nil {
 		m.cfg.HideToTray()
 	}
 }
