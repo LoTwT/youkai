@@ -367,6 +367,9 @@ func TestExitFlow(t *testing.T) {
 	if m2.exitErr == "" || m2.exitState != exitFailed {
 		t.Fatalf("the wrap-up failure was not kept: %+v", m2)
 	}
+	// Classify it as the save-blocked retry path this test covers.
+	m2.exitFailureWasSave = true
+	m2.snap.SaveError = "disk full"
 	failed.quitFn = nil // the retry succeeded
 	if m2.AllowClose() {
 		t.Fatal("a failed wrap-up allowed the close")

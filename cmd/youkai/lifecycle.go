@@ -94,6 +94,7 @@ type preventableEvent interface {
 // drives; *ui.Model implements it. Tests substitute a recorder.
 type lifecycleModel interface {
 	AllowClose() bool
+	ExitAnyway()
 	Stop()
 	PrepareRestore()
 	Exiting() bool
@@ -445,13 +446,28 @@ func (l *windowLifecycle) Refresh() {
 // quits the application.
 func (l *windowLifecycle) trayMenu() *mygo.Menu {
 	labels := l.model.LifecycleStatus().TrayMenu()
+	exit := func(*mygo.MenuItem, *mygo.Window) { l.quitApp() }
+	if labels.Exit == "仍然退出" {
+		// Only this tray item takes the forced settled-exit path. Ctrl+Q and
+		// a close under 关窗即退出 keep reopening the failure dialog; a
+		// close-to-tray close still only hides (PR-19b, decision 2 and
+		// round 5). A required unsaved prompt must be visible even when the
+		// window is hidden.
+		exit = func(*mygo.MenuItem, *mygo.Window) {
+			l.model.ExitAnyway()
+			if !l.model.Exiting() {
+				l.Restore()
+			}
+			l.redraw()
+		}
+	}
 	return mygo.NewMenu([]*mygo.MenuItem{
 		{Label: labels.Status, Disabled: true},
 		mygo.Separator(),
 		{Label: labels.Open, Click: func(*mygo.MenuItem, *mygo.Window) { l.Restore() }},
 		{Label: labels.Stop, Disabled: !labels.StopEnabled, Click: func(*mygo.MenuItem, *mygo.Window) { l.model.Stop() }},
 		mygo.Separator(),
-		{Label: labels.Exit, Click: func(*mygo.MenuItem, *mygo.Window) { l.quitApp() }},
+		{Label: labels.Exit, Click: exit},
 	})
 }
 

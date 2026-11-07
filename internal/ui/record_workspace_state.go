@@ -383,8 +383,80 @@ func (m *Model) requestReviewFieldFocus(field FormField) {
 	if field == "" {
 		field = m.firstReviewField()
 	}
+	field = m.focusableReviewField(field)
 	m.focusReviewField = field
 	m.focusReviewFieldSeq++
+}
+
+// focusableReviewField resolves a requested field to a real control. An
+// item with structured data shows rarity as text, so a request for the
+// first rarity problem moves to the next focusable problem field, and only
+// then to the form's first control. A target inside the folded group opens
+// the group before the frame that renders it (PR-19b L-A).
+func (m *Model) focusableReviewField(requested FormField) FormField {
+	row := m.selectedRow()
+	if row == nil {
+		return requested
+	}
+	if m.reviewFieldFocusable(row, requested) {
+		m.ensureReviewFieldRendered(requested)
+		return requested
+	}
+	problems := m.reviewProblems(row)
+	// Prefer a focusable problem field after the requested one, then any
+	// focusable problem field, and only then the form's first control.
+	requestedRank := reviewFieldRank(requested)
+	for _, problem := range problems {
+		field := canonicalFormField(problem.Field)
+		if field == "" || !m.reviewFieldFocusable(row, field) ||
+			reviewFieldRank(field) <= requestedRank {
+			continue
+		}
+		m.ensureReviewFieldRendered(field)
+		return field
+	}
+	for _, problem := range problems {
+		field := canonicalFormField(problem.Field)
+		if field == "" || !m.reviewFieldFocusable(row, field) {
+			continue
+		}
+		m.ensureReviewFieldRendered(field)
+		return field
+	}
+	for _, field := range reviewFieldOrder {
+		if m.reviewFieldFocusable(row, field) {
+			m.ensureReviewFieldRendered(field)
+			return field
+		}
+	}
+	return ""
+}
+
+// reviewFieldRank orders a focus target by the form's reading order. A
+// substat row belongs to the group that renders it.
+func reviewFieldRank(field FormField) int {
+	if isSubstatField(field) {
+		field = FormFieldSubstats
+	}
+	return formFieldRank(field)
+}
+
+// reviewFieldFocusable reports whether the field has a focusable control in
+// the editable form.
+func (m *Model) reviewFieldFocusable(row *Row, field FormField) bool {
+	return !(field == FormFieldRarity && row != nil && row.Structured != nil)
+}
+
+// ensureReviewFieldRendered opens the folded group when the target control
+// lives inside it. An editor with no leading problem renders the whole form,
+// so nothing is folded then.
+func (m *Model) ensureReviewFieldRendered(field FormField) {
+	if m.edit == nil || len(m.edit.firstFields) == 0 || m.formExtrasOpen {
+		return
+	}
+	if !reviewFieldInLeading(m.edit.firstFields, field) {
+		m.formExtrasOpen = true
+	}
 }
 
 // firstReviewField is the field the form starts on: the first problem
@@ -489,7 +561,7 @@ func (m *Model) showRecord(id string, live bool) {
 	m.navPrompt = nil
 	m.reviewErr = ""
 	m.reviewSaveFailed = false
-	m.reviewNotice = ""
+	m.clearReviewNotice()
 	m.lastAction = reviewSave
 }
 
@@ -560,6 +632,7 @@ func (m *Model) reloadRecord(id string, live bool) {
 			if err != nil {
 				m.loading = false
 				m.recErr = err.Error()
+				m.settleConflictNotice(false)
 				// A failed refresh cannot prove a draft is stale. Keep dirty
 				// input visible (writes stay blocked by recErr) instead of
 				// silently dropping what the person typed.
@@ -575,6 +648,7 @@ func (m *Model) reloadRecord(id string, live bool) {
 				return
 			}
 			m.applyLoadedRecord(id, rec, live)
+			m.settleConflictNotice(true)
 			m.settleResultFromRecord(scan.ID(id), version)
 			delete(m.recordReads, version)
 		})

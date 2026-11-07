@@ -6,10 +6,47 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LoTwT/youkai/internal/app"
 	"github.com/LoTwT/youkai/internal/record"
 	"github.com/LoTwT/youkai/internal/scan"
 	"github.com/egoist/mygo/ui"
 )
+
+// TestTrayHintAcknowledgementKeepsUnsavedExitPrompt covers PR-18: a quit
+// request arriving while the first-hide hint is open leaves the unsaved
+// dialog waiting; acknowledging the hint must not hide that dialog.
+func TestTrayHintAcknowledgementKeepsUnsavedExitPrompt(t *testing.T) {
+	hides := 0
+	m, _, tt, _ := openReviewableResults(t, recovery(reviewRowItem(t, 1, 12)), 1180, 760)
+	m.cfg.HideToTray = func() { hides++ }
+	tt.Frame()
+	m.edit.draft.Level = "13"
+	m.edit.refresh()
+	tt.Frame()
+
+	m.ShowFirstHideHint()
+	m.AllowClose()
+	tt.Frame()
+	if m.navPrompt == nil {
+		t.Fatalf("AllowClose did not keep the unsaved prompt: %s", probeReviewState(m))
+	}
+	if err := tt.Click("知道了"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if hides != 0 {
+		t.Fatalf("acknowledging the hint hid the window with an unsaved prompt open")
+	}
+	if m.navPrompt == nil {
+		t.Fatal("acknowledging the hint discarded the pending exit prompt")
+	}
+	if m.exitState != exitIdle {
+		t.Fatalf("the exit state = %v, want idle until the prompt settles", m.exitState)
+	}
+	if !tt.HasText("有未保存的修改") {
+		t.Fatalf("the unsaved prompt is not visible: %q", tt.Texts())
+	}
+}
 
 // TestFirstHideHintOnceAndReplay checks the first close's hint, its
 // persistence, the second close's silence, and the settings replay.
@@ -79,6 +116,41 @@ func TestFirstHideHintOnceAndReplay(t *testing.T) {
 	}
 	if tt.HasText("youkai 会继续在后台运行") {
 		t.Fatal("the replayed hint stayed visible")
+	}
+}
+
+// TestFirstHideHintHidesAfterCleanupFailure covers the close-to-tray
+// preference after a failed cleanup: acknowledging the hint must hide the
+// window even though the exit state is failed, because closing did not
+// reopen the failure dialog.
+func TestFirstHideHintHidesAfterCleanupFailure(t *testing.T) {
+	hides := 0
+	m, q := newTestModel(t, Config{
+		Service:    &fakeService{quitFn: func() error { return errors.New("close recognizer: busy") }},
+		HideToTray: func() { hides++ },
+	})
+	tt := ui.NewTester(m.View, 1020, 700)
+	settle(t, m, q, tt)
+	m.AllowClose()
+	drainAll(t, m, q)
+	tt.Frame()
+	if m.exitState != exitFailed {
+		t.Fatalf("the fixture did not fail the exit: %v", m.exitState)
+	}
+	m.exitFailureDialogOpen = false
+	tt.Frame()
+
+	m.ShowFirstHideHint()
+	tt.Frame()
+	if err := tt.Click("知道了"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if hides != 1 {
+		t.Fatalf("acknowledging the hint after a failed cleanup hid %d times", hides)
+	}
+	if m.navPrompt != nil {
+		t.Fatalf("hiding left a prompt behind the window: %s", probeReviewState(m))
 	}
 }
 
@@ -164,41 +236,261 @@ func TestExitFailureWithoutSaveErrorKeepsAnExitFailedTrayState(t *testing.T) {
 		t.Fatalf("the failed exit settled as %v", m.exitState)
 	}
 	status := m.LifecycleStatus()
-	if status.Text != "退出失败" {
-		t.Fatalf("tray status after a non-save exit failure = %q", status.Text)
+	if status.Text != "退出失败" || !status.ExitCleanupFailed {
+		t.Fatalf("tray status after a non-save exit failure = %+v", status)
 	}
 	labels := status.TrayMenu()
-	if labels.Status != "youkai · 退出失败" || labels.Open != "打开 youkai" ||
-		labels.Exit != "退出 youkai" {
+	if labels.Status != "youkai · 退出清理未完成" || labels.Open != "打开 youkai" ||
+		labels.Exit != "仍然退出" {
 		t.Fatalf("tray menu after a non-save exit failure = %+v", labels)
 	}
 }
 
-// TestExitFailureRetrySucceeds covers the retry path: the failed exit keeps
-// its state until a later quit succeeds, then the tray returns to idle.
-func TestExitFailureRetrySucceeds(t *testing.T) {
+// TestExitCleanupFailureGenericAndForcedExits covers decision 2: a generic
+// quit reopens the failure dialog without another doomed Quit, while the
+// tray's 仍然退出 settles directly.
+func TestExitCleanupFailureGenericAndForcedExits(t *testing.T) {
 	attempts := 0
-	m, q := newTestModel(t, Config{Service: &fakeService{
-		quitFn: func() error {
+	settled := 0
+	m, q := newTestModel(t, Config{
+		Service: &fakeService{quitFn: func() error {
 			attempts++
-			if attempts == 1 {
-				return errors.New("close recognizer: busy")
-			}
-			return nil
-		},
-	}})
+			return errors.New("close recognizer: busy")
+		}},
+		OnExitSettled: func() { settled++ },
+	})
 	m.AllowClose()
 	drainAll(t, m, q)
-	if got := m.LifecycleStatus().Text; got != "退出失败" {
-		t.Fatalf("first failed exit status = %q", got)
+	if attempts != 1 || m.exitState != exitFailed {
+		t.Fatalf("first exit: attempts %d state %v", attempts, m.exitState)
+	}
+	if !m.exitFailureDialogOpen {
+		t.Fatal("the first failure did not open its dialog")
 	}
 	m.AllowClose()
 	drainAll(t, m, q)
-	if m.exitState != exitDone {
-		t.Fatalf("the retried exit settled as %v", m.exitState)
+	if attempts != 1 || m.exitState != exitFailed || !m.exitFailureDialogOpen {
+		t.Fatalf("generic exit with the dialog open: attempts %d state %v dialog %v",
+			attempts, m.exitState, m.exitFailureDialogOpen)
 	}
-	if got := m.LifecycleStatus().Text; got != "就绪" {
-		t.Fatalf("tray status after the successful retry = %q", got)
+	m.exitFailureDialogOpen = false
+	m.AllowClose()
+	drainAll(t, m, q)
+	if attempts != 1 || m.exitState != exitFailed || !m.exitFailureDialogOpen {
+		t.Fatalf("generic exit: attempts %d state %v dialog %v",
+			attempts, m.exitState, m.exitFailureDialogOpen)
+	}
+	m.ExitAnyway()
+	drainAll(t, m, q)
+	if attempts != 1 {
+		t.Fatalf("仍然退出 retried cleanup %d times", attempts)
+	}
+	if m.exitState != exitDone || settled != 1 {
+		t.Fatalf("仍然退出 did not settle: state %v settled %d", m.exitState, settled)
+	}
+}
+
+// TestExitCleanupFailureOffersExitAnyway covers the dialog: only a non-save
+// failure offers 仍然退出, and the button uses the settled exit path.
+func TestExitCleanupFailureOffersExitAnyway(t *testing.T) {
+	settled := 0
+	m, q := newTestModel(t, Config{
+		Service:       &fakeService{quitFn: func() error { return errors.New("close recognizer: busy") }},
+		OnExitSettled: func() { settled++ },
+	})
+	m.snap.SessionID = "s1"
+	m.snap.SavedCount = 1
+	m.SetContentSize(1020, 700)
+	tt := ui.NewTester(m.View, 1020, 700)
+	settle(t, m, q, tt)
+	m.AllowClose()
+	drainAll(t, m, q)
+	tt.Frame()
+	if !tt.HasText("仍然退出") || !tt.HasText("扫描结果已保存") {
+		t.Fatalf("the cleanup failure dialog is incomplete: %q", tt.Texts())
+	}
+	if labels := m.LifecycleStatus().TrayMenu(); labels.Status != "youkai · 退出清理未完成，结果已保存" {
+		t.Fatalf("the session tray status = %q", labels.Status)
+	}
+	if err := tt.Click("仍然退出"); err != nil {
+		t.Fatal(err)
+	}
+	drainAll(t, m, q)
+	if m.exitState != exitDone || settled != 1 {
+		t.Fatalf("仍然退出 did not settle: state %v settled %d", m.exitState, settled)
+	}
+}
+
+// TestExitSaveFailureCannotExitAnyway covers the other side: a failed final
+// save keeps its retry path and never offers a bypass.
+func TestExitSaveFailureCannotExitAnyway(t *testing.T) {
+	settled := 0
+	m := &Model{snap: app.Snapshot{SaveError: "磁盘已满"}}
+	m.exitState = exitFailed
+	m.exitFailureWasSave = true
+	m.exitFailureDialogOpen = true
+	m.cfg.OnExitSettled = func() { settled++ }
+	m.SetContentSize(1020, 700)
+	tt := ui.NewTester(m.View, 1020, 700)
+	tt.Frame()
+	if tt.HasText("仍然退出") {
+		t.Fatalf("a save failure offered 仍然退出: %q", tt.Texts())
+	}
+	if !tt.HasText("重试保存") {
+		t.Fatalf("a save failure lost its retry path: %q", tt.Texts())
+	}
+	m.exitAnyway()
+	if m.exitState != exitFailed || settled != 0 {
+		t.Fatalf("exitAnyway bypassed the save failure: state %v settled %d",
+			m.exitState, settled)
+	}
+}
+
+// TestExitFailureDialogEscThenExitReopens covers decision 2 with a real
+// key: Escape dismisses the dialog, and the next generic exit reopens it
+// without another Quit attempt.
+func TestExitFailureDialogEscThenExitReopens(t *testing.T) {
+	attempts := 0
+	m, q := newTestModel(t, Config{Service: &fakeService{quitFn: func() error {
+		attempts++
+		return errors.New("close recognizer: busy")
+	}}})
+	m.SetContentSize(1020, 700)
+	tt := ui.NewTester(m.View, 1020, 700)
+	settle(t, m, q, tt)
+	m.AllowClose()
+	drainAll(t, m, q)
+	tt.Frame()
+	if !m.exitFailureDialogOpen || !tt.HasText("仍然退出") {
+		t.Fatalf("the failure dialog did not open: %s", probeReviewState(m))
+	}
+	tt.Key(0, ui.KeyEscape)
+	tt.Frame()
+	if m.exitFailureDialogOpen {
+		t.Fatal("Escape did not close the failure dialog")
+	}
+	m.AllowClose()
+	tt.Frame()
+	if !m.exitFailureDialogOpen {
+		t.Fatalf("the next exit did not reopen the failure dialog: %s", probeReviewState(m))
+	}
+	if attempts != 1 {
+		t.Fatalf("reopening retried cleanup: attempts %d", attempts)
+	}
+}
+
+// TestExitCleanupFailureGenericExitPromptsDirty covers the held generic
+// exit: after 放弃修改 it reopens the dialog instead of force-exiting.
+func TestExitCleanupFailureGenericExitPromptsDirty(t *testing.T) {
+	settled := 0
+	m, q := newTestModel(t, Config{
+		Service:       &fakeService{quitFn: func() error { return errors.New("close recognizer: busy") }},
+		OnExitSettled: func() { settled++ },
+	})
+	m.AllowClose()
+	drainAll(t, m, q)
+	m.edit = &editState{
+		recordID: "rec",
+		seq:      1,
+		original: editDraft{Level: "15"},
+		draft:    editDraft{Level: "14"},
+	}
+	m.AllowClose()
+	if m.navPrompt == nil || m.exitState != exitFailed {
+		t.Fatalf("generic exit bypassed the dirty draft: %s", probeReviewState(m))
+	}
+	m.promptDiscardAndContinue()
+	drainAll(t, m, q)
+	if m.exitState != exitFailed || !m.exitFailureDialogOpen || settled != 0 {
+		t.Fatalf("after 放弃修改: state %v dialog %v settled %d",
+			m.exitState, m.exitFailureDialogOpen, settled)
+	}
+}
+
+// TestExitCleanupFailureExitAnywayPromptsDirty covers the tray/dialog
+// 仍然退出 path: it waits for the unsaved decision and exits after 放弃.
+func TestExitCleanupFailureExitAnywayPromptsDirty(t *testing.T) {
+	settled := 0
+	m, q := newTestModel(t, Config{
+		Service:       &fakeService{quitFn: func() error { return errors.New("close recognizer: busy") }},
+		OnExitSettled: func() { settled++ },
+	})
+	m.AllowClose()
+	drainAll(t, m, q)
+	m.edit = &editState{
+		recordID: "rec",
+		seq:      1,
+		original: editDraft{Level: "15"},
+		draft:    editDraft{Level: "14"},
+	}
+	m.ExitAnyway()
+	if m.navPrompt == nil || m.exitState != exitFailed || settled != 0 {
+		t.Fatalf("仍然退出 bypassed the dirty draft: %s", probeReviewState(m))
+	}
+	m.promptDiscardAndContinue()
+	drainAll(t, m, q)
+	if m.exitState != exitDone || settled != 1 {
+		t.Fatalf("放弃修改 did not finish the forced exit: state %v settled %d",
+			m.exitState, settled)
+	}
+}
+
+// TestExitCleanupFailureExitAnywayWaitsForSave covers the in-flight save
+// through the real save callback: no exit may settle until the save
+// finishes, and its success then continues the forced exit.
+func TestExitCleanupFailureExitAnywayWaitsForSave(t *testing.T) {
+	f := newExitMatrixFixture(t)
+	f.dirty(t)
+	release := f.blockedSave(t, nil)
+
+	f.m.ExitAnyway()
+	f.tt.Frame()
+	if f.m.navPrompt == nil || f.m.exitState != exitFailed || f.settled != 0 {
+		t.Fatalf("仍然退出 settled during a save: %s", probeReviewState(f.m))
+	}
+	release()
+	drainAll(t, f.m, f.q)
+	if f.m.exitState != exitDone || f.settled != 1 {
+		t.Fatalf("the settled save did not allow the forced exit: state %v settled %d",
+			f.m.exitState, f.settled)
+	}
+}
+
+// TestExitCleanupDialogExitAnywayCannotBypassDirty covers the button: the
+// dialog's 仍然退出 shows the ordinary unsaved prompt before exiting.
+func TestExitCleanupDialogExitAnywayCannotBypassDirty(t *testing.T) {
+	settled := 0
+	m, q := newTestModel(t, Config{
+		Service:       &fakeService{quitFn: func() error { return errors.New("close recognizer: busy") }},
+		OnExitSettled: func() { settled++ },
+	})
+	m.SetContentSize(1020, 700)
+	tt := ui.NewTester(m.View, 1020, 700)
+	settle(t, m, q, tt)
+	m.AllowClose()
+	drainAll(t, m, q)
+	tt.Frame()
+	m.edit = &editState{
+		recordID: "rec",
+		seq:      1,
+		original: editDraft{Level: "15"},
+		draft:    editDraft{Level: "14"},
+	}
+	tt.Frame()
+	if err := tt.Click("仍然退出"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if m.navPrompt == nil || !tt.HasText("有未保存的修改") || settled != 0 {
+		t.Fatalf("the dialog bypassed the dirty draft: %s", probeReviewState(m))
+	}
+	if err := tt.Click("放弃修改"); err != nil {
+		t.Fatal(err)
+	}
+	drainAll(t, m, q)
+	if m.exitState != exitDone || settled != 1 {
+		t.Fatalf("放弃修改 did not finish the dialog's exit: state %v settled %d",
+			m.exitState, settled)
 	}
 }
 
@@ -371,6 +663,9 @@ func TestNonSaveExitFailureCopyDoesNotClaimAnUnsavedResult(t *testing.T) {
 			t.Fatalf("non-save exit failure does not show %q", want)
 		}
 	}
+	if tt.HasText("扫描结果已保存") {
+		t.Fatalf("an empty session claims a saved scan result: %q", tt.Texts())
+	}
 
 	m.exitFailureDialogOpen = false
 	tt.Frame()
@@ -378,7 +673,60 @@ func TestNonSaveExitFailureCopyDoesNotClaimAnUnsavedResult(t *testing.T) {
 		t.Fatal("the inline exit failure still asks for a save retry")
 	}
 	if !tt.HasText("当前没有待保存的扫描结果") {
-		t.Fatal("the inline exit failure does not state that the result is saved")
+		t.Fatal("the inline exit failure does not state that no result is pending")
+	}
+	if !tt.HasText("再次退出可重新打开退出失败对话框") {
+		t.Fatalf("the inline exit failure does not explain how to reopen the dialog: %q", tt.Texts())
+	}
+}
+
+// TestSnapshotHasSavedResultsUsesNotificationFacts covers R5-3: the exit
+// copy reuses the notification's saved-result decision, including its
+// saved-to-captured fallback for a lagging snapshot.
+func TestSnapshotHasSavedResultsUsesNotificationFacts(t *testing.T) {
+	cases := []struct {
+		name string
+		snap app.Snapshot
+		rec  *record.Recovery
+		want bool
+	}{
+		{"no session", snap("", 1, false, scan.PhaseEnded, scan.Counts{}, 0, false, ""), nil, false},
+		{"session without a result", snap("s1", 1, false, scan.PhaseEnded, scan.Counts{}, 0, false, ""), nil, false},
+		{"saved result", snap("s1", 1, false, scan.PhaseEnded, scan.Counts{Captured: 1, Produced: 1}, 1, false, ""), nil, true},
+		{"captured fallback", snap("s1", 1, false, scan.PhaseEnded, scan.Counts{Captured: 2}, 0, false, ""), nil, true},
+		{"record fallback", snap("s1", 1, false, scan.PhaseEnded, scan.Counts{}, 0, false, ""), recovery(reviewRowItem(t, 1, 12)), true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := snapshotHasSavedResults(tc.snap, tc.rec); got != tc.want {
+				t.Fatalf("snapshotHasSavedResults = %v, want %v for %+v", got, tc.want, tc.snap)
+			}
+		})
+	}
+}
+
+// TestExitFailureWithSessionButNoResultDoesNotClaimSavedResults covers the
+// preparation-failure and stopped-before-capture case: a session identity
+// alone is not a saved scan result.
+func TestExitFailureWithSessionButNoResultDoesNotClaimSavedResults(t *testing.T) {
+	m, q := newTestModel(t, Config{Service: &fakeService{
+		quitFn: func() error { return errors.New("close recognizer: busy") },
+	}})
+	m.snap = snap("s1", 1, false, scan.PhaseEnded, scan.Counts{}, 0, false, "")
+	tt := ui.NewTester(m.View, 1020, 700)
+	settle(t, m, q, tt)
+	m.AllowClose()
+	drainAll(t, m, q)
+	tt.Frame()
+
+	if tt.HasText("扫描结果已保存") {
+		t.Fatalf("a session without results claims a saved scan result: %q", tt.Texts())
+	}
+	if !tt.HasText("当前没有待保存的扫描结果") {
+		t.Fatalf("the failure does not state that no result is pending: %q", tt.Texts())
+	}
+	if got := m.LifecycleStatus().TrayMenu().Status; got != "youkai · 退出清理未完成" {
+		t.Fatalf("tray status for a session without results = %q", got)
 	}
 }
 

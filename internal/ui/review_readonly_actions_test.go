@@ -325,6 +325,206 @@ func TestReviewTypingAcrossChangingProblems(t *testing.T) {
 	}
 }
 
+// TestReviewNewBlockingProblemStaysVisible covers M-A: a blocking problem
+// that appears after the edit opened joins the leading group instead of
+// staying in the folded group, and F6 can focus its control.
+func TestReviewNewBlockingProblemStaysVisible(t *testing.T) {
+	it := withStructured(t, reviewRowItem(t, 1, 12), func(s *zzz.StructuredDisc) {
+		s.Data.Slot = nil
+	})
+	m, _, tt := openResponsiveResults(t, recovery(it), 1180, 760)
+	tt.Frame()
+	if m.edit == nil || len(m.edit.firstFields) != 1 || m.edit.firstFields[0] != FormFieldSlot {
+		t.Fatalf("the edit did not open with the missing slot leading: %s", probeReviewState(m))
+	}
+	if m.edit.draft.Level != "12" {
+		t.Fatalf("unexpected level draft %q", m.edit.draft.Level)
+	}
+
+	m.edit.draft.Slot = "1"
+	m.edit.refresh()
+	tt.Frame()
+	tt.Frame()
+	if !tt.HasText("槽位 1 不允许主词条") {
+		t.Fatalf("the new blocking problem stayed hidden: %q", tt.Texts())
+	}
+	if m.firstReviewField() != FormFieldMainStat {
+		t.Fatalf("the first problem field = %q, want mainStat", m.firstReviewField())
+	}
+
+	m.reviewRegion = reviewRegionList
+	tt.Frame()
+	tt.Key(0, ui.KeyF6)
+	tt.Frame()
+	tt.Key(0, ui.KeyF6)
+	tt.Frame()
+	tt.Frame()
+	if m.reviewRegion != reviewRegionForm {
+		t.Fatalf("F6 ended in region %v, want form", m.reviewRegion)
+	}
+	if !tt.Focused("主词条数值") {
+		t.Fatalf("F6 did not focus the rendered main-stat control: %q", tt.Texts())
+	}
+}
+
+// TestReviewTypingIntoFoldedFieldKeepsFocus covers the M-A regression: a
+// field in the folded group must keep the caret while typing an invalid
+// value, and the new blocking problem must become visible without moving
+// that field.
+func TestReviewTypingIntoFoldedFieldKeepsFocus(t *testing.T) {
+	it := withStructured(t, reviewRowItem(t, 1, 12), func(s *zzz.StructuredDisc) {
+		s.Data.Slot = nil
+	})
+	m, _, tt := openResponsiveResults(t, recovery(it), 1180, 760)
+	tt.Frame()
+	if m.edit == nil || m.edit.firstFields[0] != FormFieldSlot || !tt.HasText("其余 7 个字段") {
+		t.Fatalf("the edit is not in the expected folded state: %s", probeReviewState(m))
+	}
+	if err := tt.Click("其余 7 个字段"); err != nil {
+		t.Fatalf("open the folded group: %v", err)
+	}
+	tt.Frame()
+	m.requestReviewFieldFocus(FormFieldLevel)
+	tt.Frame()
+	tt.Frame()
+	if !tt.Focused("等级") {
+		t.Fatalf("the level field did not take the keyboard: %q", tt.Texts())
+	}
+
+	tt.Key(ui.Cmd, ui.KeyA)
+	tt.Key(0, ui.KeyBackspace)
+	tt.Type("129")
+	tt.Frame()
+	tt.Frame()
+	if m.edit == nil || m.edit.draft.Level != "129" {
+		t.Fatalf("typing 129 stored %q", probeReviewState(m))
+	}
+	if !tt.Focused("等级") {
+		t.Fatalf("typing a blocking value moved the field and lost the keyboard: %q", tt.Texts())
+	}
+	if !tt.HasText("等级 129 越界") {
+		t.Fatalf("the new blocking problem is hidden: %q", tt.Texts())
+	}
+	tt.Key(0, ui.KeyBackspace)
+	tt.Frame()
+	tt.Frame()
+	if m.edit == nil || m.edit.draft.Level != "12" {
+		t.Fatalf("Backspace after the blocking value stored %q", probeReviewState(m))
+	}
+	if !tt.Focused("等级") {
+		t.Fatalf("the field lost the keyboard after Backspace: %q", tt.Texts())
+	}
+}
+
+// TestReviewFocusSkipsTextOnlyRarityToNextProblem covers the L-A follow-up:
+// with rarity (text only) and slot (a control) both unsolved, arriving at
+// the item focuses the slot, not a field inside the folded group.
+func TestReviewFocusSkipsTextOnlyRarityToNextProblem(t *testing.T) {
+	it := withStructured(t, reviewRowItem(t, 2, 12), func(s *zzz.StructuredDisc) {
+		s.Data.Rarity = nil
+		s.Data.Slot = nil
+	})
+	m, q, tt, _ := openReviewableResults(t, recovery(
+		settledReviewItem(t, 1, record.QualityAutoAccepted),
+		it,
+	), 1180, 760)
+	tt.Frame()
+	m.setResultFilter(resultFilterAll)
+	tt.Frame()
+	m.requestNavigation(navigationRequest{kind: navSelect, seq: 1})
+	settle(t, m, q, tt)
+	tt.Frame()
+	x, y := browseButtonCenter(t, tt, "下一件 ›")
+	tt.ClickAt(x, y)
+	settle(t, m, q, tt)
+	tt.Frame()
+	if m.focusedReviewField != FormFieldSlot {
+		t.Fatalf("the arrival focused %q, want the next focusable problem field (slot)",
+			m.focusedReviewField)
+	}
+	if !tt.Focused("槽位：" + m.edit.draft.Slot) {
+		t.Fatalf("the slot control did not take the keyboard: %q", tt.Texts())
+	}
+	if m.formExtrasOpen {
+		t.Fatal("the arrival expanded the folded group unnecessarily")
+	}
+}
+
+// TestReviewRarityProblemFocusLandsOnControl covers L-A: rarity is text for
+// an item with structured data, so requesting the first problem field must
+// not leave the keyboard on 保存修改 where Space would write.
+func TestReviewRarityProblemFocusLandsOnControl(t *testing.T) {
+	it := withStructured(t, reviewRowItem(t, 2, 12), func(s *zzz.StructuredDisc) {
+		s.Data.Rarity = nil
+	})
+	m, q, tt, svc := openReviewableResults(t, recovery(
+		settledReviewItem(t, 1, record.QualityAutoAccepted),
+		it,
+	), 1180, 760)
+	tt.Frame()
+	m.setResultFilter(resultFilterAll)
+	tt.Frame()
+	m.requestNavigation(navigationRequest{kind: navSelect, seq: 1})
+	settle(t, m, q, tt)
+	tt.Frame()
+	x, y := browseButtonCenter(t, tt, "下一件 ›")
+	tt.ClickAt(x, y)
+	settle(t, m, q, tt)
+	tt.Frame()
+	if m.selectedSeq() != 2 || m.edit == nil {
+		t.Fatalf("下一件 did not reach the rarity problem: %s", probeReviewState(m))
+	}
+	if m.firstReviewField() != FormFieldRarity {
+		t.Fatalf("the first problem field = %q, want rarity", m.firstReviewField())
+	}
+	if tt.Focused("保存修改") || tt.Focused("确认并下一项") {
+		t.Fatalf("the rarity problem left the keyboard on a write button: %q", tt.Texts())
+	}
+	if m.focusedReviewField != FormFieldMainStat || !tt.Focused("主词条数值") {
+		t.Fatalf("the rarity problem did not focus a control: field %q, %q",
+			m.focusedReviewField, tt.Texts())
+	}
+	tt.Key(0, ui.KeySpace)
+	settle(t, m, q, tt)
+	if got := svc.saveCount(); got != 0 {
+		t.Fatalf("Space after the rarity problem wrote %d revisions", got)
+	}
+}
+
+// TestReviewBrowseGuardIgnoresTab covers L-C: only Space / Enter on the
+// guarded write button ends the browse shield, not Tab (or any other key).
+func TestReviewBrowseGuardIgnoresTab(t *testing.T) {
+	m, q, tt, _ := openReviewableResults(t, recovery(
+		settledReviewItem(t, 1, record.QualityAutoAccepted),
+		reviewRowItem(t, 2, 12),
+	), 1180, 760)
+	tt.Frame()
+	m.setResultFilter(resultFilterAll)
+	tt.Frame()
+	m.requestNavigation(navigationRequest{kind: navSelect, seq: 1})
+	settle(t, m, q, tt)
+	tt.Frame()
+	x, y := browseButtonCenter(t, tt, "下一件 ›")
+	tt.ClickAt(x, y)
+	settle(t, m, q, tt)
+	tt.Frame()
+	if !m.reviewBrowseGuarded() {
+		t.Fatalf("the browse guard did not start: %s", probeReviewState(m))
+	}
+	for i := 0; i < 40 && !tt.Focused("确认并下一项"); i++ {
+		tt.Key(0, ui.KeyTab)
+		tt.Frame()
+	}
+	if !tt.Focused("确认并下一项") {
+		t.Fatalf("the guarded write button did not take the keyboard: %q", tt.Texts())
+	}
+	tt.Key(0, ui.KeyTab)
+	tt.Frame()
+	if !m.reviewBrowseGuarded() {
+		t.Fatal("Tab on the guarded write button released the browse shield")
+	}
+}
+
 func TestReviewModifySaveAndContinueExplainsQueue(t *testing.T) {
 	m, q, tt, svc := openReviewableResults(t, recovery(
 		settledReviewItem(t, 1, record.QualityAutoAccepted),
@@ -435,6 +635,71 @@ func TestReviewModifyNoticeOnOtherDestinations(t *testing.T) {
 	tt.Frame()
 	if !tt.HasText(want) {
 		t.Fatalf("returning to the item tab lost the notice: %q", tt.Texts())
+	}
+}
+
+// TestReviewActionReasonKeepsButtonsAnchoredAtLargeText covers the large
+// text-size regression: a wrapping reason line must not move the action
+// buttons when the browse guard clears.
+func TestReviewActionReasonKeepsButtonsAnchoredAtLargeText(t *testing.T) {
+	for _, scale := range []float32{1.75, 2} {
+		m, q, tt, _ := openReviewableResults(t, recovery(
+			settledReviewItem(t, 1, record.QualityAutoAccepted),
+			reviewRowItem(t, 2, 12),
+			settledReviewItem(t, 3, record.QualityAutoAccepted),
+		), 1180, 760)
+		tt.SetPreferences(ui.Preferences{TextScale: scale})
+		settle(t, m, q, tt)
+		tt.Frame()
+		m.setResultFilter(resultFilterAll)
+		tt.Frame()
+		m.requestNavigation(navigationRequest{kind: navSelect, seq: 3})
+		settle(t, m, q, tt)
+		tt.Frame()
+		x, y := browseButtonCenter(t, tt, "‹ 上一件")
+		tt.ClickAt(x, y)
+		settle(t, m, q, tt)
+		tt.Frame()
+		guarded, ok := tt.Find("确认并下一项")
+		if !ok {
+			t.Fatalf("scale %v: the guarded confirm button is missing: %q", scale, tt.Texts())
+		}
+		if !tt.HasText(reviewBrowseGuardReason) {
+			t.Fatalf("scale %v: the reason line is missing: %q", scale, tt.Texts())
+		}
+		tt.Move(x+300, y-300)
+		tt.Frame()
+		released, ok := tt.Find("确认并下一项")
+		if !ok {
+			t.Fatalf("scale %v: the released confirm button is missing: %q", scale, tt.Texts())
+		}
+		if math.Abs(float64(guarded.Y-released.Y)) >= 0.5 {
+			t.Fatalf("scale %v: the buttons moved %v -> %v when the reason cleared",
+				scale, guarded.Y, released.Y)
+		}
+	}
+}
+
+// TestReviewCleanupBlocksWriteShortcuts covers PR-14b: a running screenshot
+// cleanup disables the write actions, and their shortcuts must not bypass
+// that state.
+func TestReviewCleanupBlocksWriteShortcuts(t *testing.T) {
+	m, q, tt, svc := openReviewableResults(t, recovery(reviewRowItem(t, 1, 12)), 1180, 760)
+	tt.Frame()
+	m.edit.draft.Level = "13"
+	m.edit.refresh()
+	tt.Frame()
+	m.cleanup = &cleanupPrompt{running: true}
+	tt.Frame()
+	if strings.Contains(m.resultShortcutText(), shortcutConfirmNext) {
+		t.Fatalf("cleanup still advertises the write shortcut: %q", m.resultShortcutText())
+	}
+	tt.Key(ui.Cmd, ui.KeyEnter)
+	settle(t, m, q, tt)
+	tt.Key(ui.Cmd, ui.KeyS)
+	settle(t, m, q, tt)
+	if got := svc.saveCount(); got != 0 {
+		t.Fatalf("cleanup let a shortcut write %d revisions", got)
 	}
 }
 
@@ -989,9 +1254,10 @@ func TestReviewModifyCleanReason(t *testing.T) {
 		t.Fatalf("the released confirm button is missing: %q", tt.Texts())
 	}
 	// The button must not jump under the pointer: the former bug moved it
-	// about 17 DIP. Windows font fallback leaves a sub-pixel difference
-	// (about 0.04 DIP) between the reason line and its placeholder; the
-	// user accepted that on 2026-11-07 and the source is not identified.
+	// about 17 DIP. A sub-pixel difference (about 0.04 DIP) was observed
+	// between the reason line and its placeholder, but its source was not
+	// identified (changing the placeholder to a CJK glyph did not move it).
+	// The user accepted that tolerance on 2026-11-07.
 	if math.Abs(float64(guarded.Y-released.Y)) >= 0.5 {
 		t.Fatalf("the action buttons moved %v -> %v when the guard cleared",
 			guarded.Y, released.Y)

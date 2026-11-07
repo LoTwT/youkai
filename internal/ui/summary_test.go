@@ -283,6 +283,14 @@ func TestRecordSummaryConclusionTable(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			m := summaryModel(tc.view, tc.snap)
 			m.cfg.DirectExportSaver = &fakeDirectExportSaver{}
+			// Give the table a loaded, frozen export snapshot so the export
+			// action is enabled: these cases check the wording, not the
+			// transient blocked states. The snapshot carries the same
+			// coverage the view shell names.
+			m.recData = &record.Recovery{}
+			m.exportData = &app.UsableExport{Summary: app.ExportSummary{
+				Coverage: tc.view.Shell.Coverage.Status,
+			}}
 			got := m.recordSummaryConclusion()
 			if got.Title != tc.wantTitle {
 				t.Errorf("title = %q, want %q", got.Title, tc.wantTitle)
@@ -394,6 +402,39 @@ func openSummaryRecord(t *testing.T, rec *record.Recovery, cfg Config, width, he
 	m.OpenHistory()
 	settle(t, m, q, tt)
 	return m, q, tt, svc
+}
+
+// TestSummaryTitleDoesNotPromiseBlockedExport covers PR-15: the complete
+// coverage title must not say "可以直接导出" while the export action is
+// disabled by a transient state or a failed snapshot.
+func TestSummaryTitleDoesNotPromiseBlockedExport(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		set    func(*Model)
+		reason string
+	}{
+		{name: "failed snapshot", set: func(m *Model) {
+			m.exportData = nil
+			m.exportBuildErr = "boom"
+		}, reason: "无法生成导出：boom"},
+		{name: "writing", set: func(m *Model) { m.exporting = true }, reason: "正在导出……"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, _, tt, _ := openSummaryRecord(t, summaryExportActionRecord(t),
+				Config{DirectExportSaver: &fakeDirectExportSaver{}}, 1180, 900)
+			tc.set(m)
+			tt.Frame()
+			if tt.HasText("扫全了，可以直接导出") || tt.HasText("可以直接导出") {
+				t.Fatalf("the title promises an export the button cannot run: %q", tt.Texts())
+			}
+			if !tt.HasText("扫全了") {
+				t.Fatalf("the coverage conclusion disappeared: %q", tt.Texts())
+			}
+			if !tt.HasText(tc.reason) {
+				t.Fatalf("the disabled reason %q is missing: %q", tc.reason, tt.Texts())
+			}
+		})
+	}
 }
 
 // TestSummaryExportActionOpensTheOnlyDialog checks the summary's export

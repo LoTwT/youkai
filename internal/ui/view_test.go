@@ -860,6 +860,36 @@ func TestCompletionCardBlocksUnknownExport(t *testing.T) {
 	}
 }
 
+// TestCompletionListDoesNotClaimDoneWithoutExportSnapshot covers PR-14b:
+// at the standard width the item list and the form must give the same
+// conclusion when the export snapshot is unknown or failed.
+func TestCompletionListDoesNotClaimDoneWithoutExportSnapshot(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		set  func(*Model)
+	}{
+		{name: "unknown", set: func(m *Model) { m.exportData = nil; m.exportBuildErr = "" }},
+		{name: "failed", set: func(m *Model) { m.exportData = nil; m.exportBuildErr = "boom" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := recovery(confirmedReviewItem(t, 1, 12))
+			m, q, tt := openResponsiveResults(t, rec, 1180, 760)
+			m.cfg.DirectExportSaver = &fakeDirectExportSaver{}
+			tc.set(m)
+			settle(t, m, q, tt)
+			if tt.HasText("都处理完了") {
+				t.Fatalf("the list claims completion without an export snapshot: %q", tt.Texts())
+			}
+			if !tt.HasText("待处理 0 件，导出清单尚未就绪。") {
+				t.Fatalf("the list does not state the export state: %q", tt.Texts())
+			}
+			if !tt.HasText("不可确认完成") {
+				t.Fatalf("the form does not state the blocked completion: %q", tt.Texts())
+			}
+		})
+	}
+}
+
 // TestCompletionCardShowsPartialCoverage checks the partial coverage
 // warning and the snapshot mark the exported file will carry.
 

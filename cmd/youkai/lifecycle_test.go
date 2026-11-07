@@ -25,6 +25,7 @@ type fakeLifecycleModel struct {
 	allowResults []bool
 	allow        bool
 	allowCalls   int
+	exitAnyCalls int
 	stopCalls    int
 	notice       string
 	// hintDue answers FirstHideHintDue; showHintCalls counts the prompt
@@ -54,6 +55,8 @@ func (f *fakeLifecycleModel) AllowClose() bool {
 	}
 	return f.allow
 }
+
+func (f *fakeLifecycleModel) ExitAnyway() { f.exitAnyCalls++ }
 
 func (f *fakeLifecycleModel) Stop() {
 	f.stopCalls++
@@ -309,6 +312,31 @@ func TestWindowCloseHidesByDefault(t *testing.T) {
 	}
 	if model.allowCalls != 0 || model.stopCalls != 0 {
 		t.Fatalf("hiding started the exit path: allowCalls=%d stopCalls=%d", model.allowCalls, model.stopCalls)
+	}
+}
+
+// A close after a failed cleanup still hides under the close-to-tray
+// preference; it does not reopen the failure dialog or run the exit path.
+func TestWindowCloseHidesAfterCleanupFailure(t *testing.T) {
+	model := &fakeLifecycleModel{
+		behavior: app.CloseBehaviorHide,
+		status: ui.LifecycleStatus{
+			Text: "退出失败", ExitCleanupFailed: true,
+		},
+	}
+	life := newWindowLifecycle(model)
+	installFakeTray(t, life)
+	win := &fakeWindow{}
+	life.AttachWindow(win)
+
+	event := &fakeEvent{}
+	life.OnWindowClose(event)
+	if !event.prevented || win.hides != 1 {
+		t.Fatalf("cleanup-failed close: prevented=%v hides=%d, want one hide", event.prevented, win.hides)
+	}
+	if model.allowCalls != 0 || model.showHintCalls != 0 {
+		t.Fatalf("cleanup-failed close reopened the failure path: allowCalls=%d hints=%d",
+			model.allowCalls, model.showHintCalls)
 	}
 }
 
@@ -716,6 +744,22 @@ func TestTrayMenuStates(t *testing.T) {
 			open:        "打开 youkai",
 			exit:        "退出 youkai（会被拒绝并打开窗口）",
 		},
+		{
+			status: ui.LifecycleStatus{
+				Text: "退出失败", ExitCleanupFailed: true,
+			},
+			statusLabel: "youkai · 退出清理未完成",
+			open:        "打开 youkai",
+			exit:        "仍然退出",
+		},
+		{
+			status: ui.LifecycleStatus{
+				Text: "退出失败", ExitCleanupFailed: true, ExitResultsSaved: true,
+			},
+			statusLabel: "youkai · 退出清理未完成，结果已保存",
+			open:        "打开 youkai",
+			exit:        "仍然退出",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.status.Text, func(t *testing.T) {
@@ -733,6 +777,36 @@ func TestTrayMenuStates(t *testing.T) {
 			}
 			menuItem(t, menu, tc.exit)
 		})
+	}
+}
+
+// TestTrayExitAnywayUsesForcedExit checks decision 2: the tray's 仍然退出
+// calls the model's forced-exit path instead of the generic quit event.
+func TestTrayExitAnywayUsesForcedExit(t *testing.T) {
+	model := &fakeLifecycleModel{
+		behavior: app.CloseBehaviorHide,
+		status: ui.LifecycleStatus{
+			Text: "退出失败", ExitCleanupFailed: true,
+		},
+	}
+	life := newWindowLifecycle(model)
+	quits := 0
+	life.quitApp = func() { quits++ }
+	tray, _ := installFakeTray(t, life)
+	win := &fakeWindow{}
+	life.AttachWindow(win)
+
+	item := menuItem(t, tray.menu, "仍然退出")
+	item.Click(item, nil)
+	if model.exitAnyCalls != 1 || quits != 0 {
+		t.Fatalf("tray 仍然退出: forced=%d quits=%d, want one forced and no quit",
+			model.exitAnyCalls, quits)
+	}
+	if win.redraws != 1 {
+		t.Fatalf("tray 仍然退出 requested %d frames, want 1", win.redraws)
+	}
+	if win.shows != 1 {
+		t.Fatalf("tray 仍然退出 left a possible unsaved prompt hidden: shows=%d", win.shows)
 	}
 }
 

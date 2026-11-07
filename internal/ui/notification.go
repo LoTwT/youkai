@@ -93,13 +93,17 @@ func (m *Model) OpenNotification(recordID string) {
 	// hint would otherwise hide the just-restored window on acknowledgement).
 	m.trayHintOpen = false
 	m.trayHintHideOnDone = false
-	if m.exporting {
+	if m.exporting || (m.exportDialog.open && m.exportDialog.attempted) {
 		// The export dialog shows the frozen snapshot of the record being
-		// written. Switching records underneath it would pair the write
-		// progress with another record's counts; leave the dialog and its
-		// record alone, and let the user continue after the write.
+		// written. Switching records underneath it would pair the dialog with
+		// another record's counts or outcome. Keep only the latest click and
+		// replay it after the user closes the dialog; a settled success,
+		// canceled or failure dialog is still the user's to dismiss
+		// (PR-19b, decisions 3 and 4).
+		m.pendingNotificationRecordID = recordID
 		return
 	}
+	m.pendingNotificationRecordID = ""
 	m.closeExportDialog()
 	if m.exitState == exitRunning || m.exitState == exitDone {
 		return
@@ -379,6 +383,15 @@ func (m *Model) resultNotification(snap app.Snapshot, saveFailed bool, rec *reco
 		Body:     body,
 		Flash:    true,
 	}
+}
+
+// snapshotHasSavedResults reports whether the session has a result to call
+// saved. It reuses the notification facts, including the saved-to-captured
+// fallback for a snapshot whose saved counter lags the final record, so the
+// exit failure copy cannot claim a result the result notification says never
+// started.
+func snapshotHasSavedResults(snap app.Snapshot, rec *record.Recovery) bool {
+	return notificationFactsFor(snap, rec).saved > 0
 }
 
 // notificationFactsFor reads the conclusion from the final record when it

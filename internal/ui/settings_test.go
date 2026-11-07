@@ -144,13 +144,13 @@ func TestSettingsPageShortcuts(t *testing.T) {
 	openSettings(t, m, q, tt)
 
 	rows := m.settingsShortcutRows()
-	if len(rows) != 9 {
-		t.Fatalf("the shortcut list has %d rows, want 9: %+v", len(rows), rows)
+	if len(rows) != 11 {
+		t.Fatalf("the shortcut list has %d rows, want 11: %+v", len(rows), rows)
 	}
 	if got, want := rows[0], (settingsShortcut{action: "停止扫描", context: "开始扫描时注册", keys: shortcutStopScan}); got != want {
 		t.Errorf("the first shortcut row = %+v, want %+v", got, want)
 	}
-	if got, want := rows[8], (settingsShortcut{action: "关闭浮层/返回表格", context: "任意", keys: shortcutCloseOverlay}); got != want {
+	if got, want := rows[10], (settingsShortcut{action: "关闭浮层/返回表格", context: "任意", keys: shortcutCloseOverlay}); got != want {
 		t.Errorf("the last shortcut row = %+v, want %+v", got, want)
 	}
 	for _, registered := range []string{
@@ -159,7 +159,9 @@ func TestSettingsPageShortcuts(t *testing.T) {
 		"确认并下一项", shortcutConfirmNext,
 		"保存修改", shortcutSave,
 		"下一个待处理件", shortcutNextPending,
+		"上一个待处理件", shortcutPreviousPending,
 		"导出…", "记录工作区", shortcutExport,
+		"截图放大 / 缩小 / 适合窗口", shortcutZoomIn, shortcutZoomOut, shortcutZoomFit,
 		"在大区域间跳转", shortcutFocusRegion, shortcutFocusRegionBack,
 		"打开选中的记录", shortcutOpenRecord,
 		"关闭浮层/返回表格", shortcutCloseOverlay,
