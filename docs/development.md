@@ -1,6 +1,6 @@
 # 开发指南
 
-更新日期：2026-11-02。本文维护环境要求与本仓库当前实际可用的开发命令；范围与里程碑安排见[实施清单](specs/scanner-implementation-plan.md)，构建与分发决策见 [T7](specs/t7-public-release-acceptance.md)。
+更新日期：2026-11-07。本文维护环境要求与本仓库当前实际可用的开发命令；范围与里程碑安排见[实施清单](specs/scanner-implementation-plan.md)，构建与分发决策见 [T7](specs/t7-public-release-acceptance.md)。
 
 ## 环境要求
 
@@ -71,6 +71,19 @@ M2 平台会话集成后可用另一组开关接入真实游戏窗口做仅观�
 应用服务层的行为（开始请求幂等与忙碌、保存失败可见可重试、重开读取中断记录等）由 `go test ./internal/app` 的服务层测试用假识别器覆盖，不依赖原生库；`internal/app` 的集成测试在 OCR 资源缺失时自动 `t.Skip`。
 
 主界面（`internal/ui`）由 `cmd/youkai` 组装：准备区持续显示前台扫描提示与停止方式，进度区显示阶段、可证实的五类计数与终止原因，结果区按采集序号列出全部条目（失败与未处理不消失）并展示证据图片、识别文本与模型分数，历史记录可重开已保存记录。界面只经订阅泵渲染服务快照（按会话与修订号丢弃旧更新），状态与视图行为由 `go test ./internal/ui` 用 `ui.NewTester` 覆盖。
+
+## 只读准备检查（PR-11）
+
+扫描页的检查清单在 PR-17 接线前有一个无窗口入口，供真机核对每项的结论、当前值、需要值、故障码与检查时间：设置 `YOUKAI_READINESS_CHECK=1` 运行一次；设置一个正时长（如 `60s`）则每秒重查一次并持续该时长。入口不建立会话、不取得扫描占用、不注册停止热键、不发送输入、不截图，也不创建窗口，因此不会抢游戏焦点。
+
+```sh
+go run ./tools/fetchdeps -platform windows/amd64
+CGO_ENABLED=1 YOUKAI_READINESS_CHECK=1 go tool mygo dev
+# 连续重查 1 分钟：
+CGO_ENABLED=1 YOUKAI_READINESS_CHECK=60s go tool mygo dev
+```
+
+输出走日志（`mygo dev` 的控制台，或已构建 EXE 的 stderr；Windows 无控制台时重定向到文件）。每行 `item=… verdict=… current=… required=… code=…` 由服务层给出；有故障码时另起一行 `copy=…` 打印界面将使用的同一份中文文案。`verdict` 的四个值对应“满足 / 不满足 / 无法判断 / 点开始后检查”。入口不取得数据根或扫描占用，可以和已运行的 youkai 并存。
 
 ## Windows 只读截图探针（winprobe）
 

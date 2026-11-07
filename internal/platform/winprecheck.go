@@ -21,6 +21,16 @@ import (
 // and the client must lie inside the monitor's work area or be exactly the
 // whole monitor (borderless full screen).
 func displayFault(geo windows.ClientGeometry, policy *WindowDisplayPolicy) *Fault {
+	if fault := resolutionFault(geo, policy); fault != nil {
+		return fault
+	}
+	return positionFault(geo, policy)
+}
+
+// resolutionFault applies the tier half of displayFault. It is a separate
+// function because the read-only preparation check reports the tier and the
+// position as different checklist rows while reusing exactly this decision.
+func resolutionFault(geo windows.ClientGeometry, policy *WindowDisplayPolicy) *Fault {
 	if policy == nil {
 		return NewFaultWithParams(CodeInvalidOperation,
 			"the windows session has no display policy; the game adapter must supply the reference tiers and probes",
@@ -48,20 +58,32 @@ func displayFault(geo windows.ClientGeometry, policy *WindowDisplayPolicy) *Faul
 				"allowed": tierNames(policy.OpenTiers),
 			})
 	}
+	return nil
+}
+
+// positionFault applies the work-area half of displayFault: the client must
+// be fully inside the monitor's work area or exactly the whole monitor
+// (borderless full screen). A nil policy is allowed here because window
+// containment does not depend on the tier contract; the fault then omits
+// the allowed-tier hint.
+func positionFault(geo windows.ClientGeometry, policy *WindowDisplayPolicy) *Fault {
 	inWorkArea := geo.WorkArea.ContainsRect(geo.Client)
 	fillsMonitor := geo.Client == geo.Monitor
-	if !inWorkArea && !fillsMonitor {
-		return NewFaultWithParams(CodeWindowOutsideWorkArea,
-			fmt.Sprintf("client area %s is neither inside the monitor work area %s nor exactly the monitor %s",
-				pixelRectString(geo.Client), pixelRectString(geo.WorkArea), pixelRectString(geo.Monitor)),
-			map[string]string{
-				"client":   pixelRectString(geo.Client),
-				"monitor":  pixelRectString(geo.Monitor),
-				"workArea": pixelRectString(geo.WorkArea),
-				"allowed":  tierNames(policy.OpenTiers),
-			})
+	if inWorkArea || fillsMonitor {
+		return nil
 	}
-	return nil
+	params := map[string]string{
+		"client":   pixelRectString(geo.Client),
+		"monitor":  pixelRectString(geo.Monitor),
+		"workArea": pixelRectString(geo.WorkArea),
+	}
+	if policy != nil {
+		params["allowed"] = tierNames(policy.OpenTiers)
+	}
+	return NewFaultWithParams(CodeWindowOutsideWorkArea,
+		fmt.Sprintf("client area %s is neither inside the monitor work area %s nor exactly the monitor %s",
+			pixelRectString(geo.Client), pixelRectString(geo.WorkArea), pixelRectString(geo.Monitor)),
+		params)
 }
 
 // occlusionFault hit-tests every configured sample point of the client's

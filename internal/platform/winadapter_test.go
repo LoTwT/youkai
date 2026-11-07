@@ -624,7 +624,7 @@ func TestWinOpenResolution(t *testing.T) {
 			t.Fatalf("want windowOutsideWorkArea, got %v", err)
 		}
 	})
-	t.Run("DPI-virtualized target reports geometryInvalid", func(t *testing.T) {
+	t.Run("DPI-virtualized target reports dpiVirtualized", func(t *testing.T) {
 		w := newWinWorld(t)
 		w.geo.mu.Lock()
 		w.geo.windowDPI = 96
@@ -632,8 +632,30 @@ func TestWinOpenResolution(t *testing.T) {
 		w.geo.mu.Unlock()
 		_, err := w.adapter.Open(context.Background(), w.config())
 		var f *Fault
-		if !errors.As(err, &f) || f.Code != CodeGeometryInvalid || f.Class != ClassBroken {
-			t.Fatalf("want geometryInvalid, got %v", err)
+		if !errors.As(err, &f) || f.Code != CodeDpiVirtualized || f.Class != ClassSetup {
+			t.Fatalf("want dpiVirtualized, got %v", err)
+		}
+	})
+	t.Run("unreadable DPI facts report dpiCheckUnavailable", func(t *testing.T) {
+		w := newWinWorld(t)
+		w.geo.mu.Lock()
+		w.geo.windowDPI = 0
+		w.geo.mu.Unlock()
+		_, err := w.adapter.Open(context.Background(), w.config())
+		var f *Fault
+		if !errors.As(err, &f) || f.Code != CodeDpiCheckUnavailable || f.Class != ClassSetup {
+			t.Fatalf("want dpiCheckUnavailable, got %v", err)
+		}
+	})
+	t.Run("non-PMv2 youkai reports dpiAwarenessMismatch", func(t *testing.T) {
+		w := newWinWorld(t)
+		w.geo.mu.Lock()
+		w.geo.self = windows.DpiAwarenessSystem
+		w.geo.mu.Unlock()
+		_, err := w.adapter.Open(context.Background(), w.config())
+		var f *Fault
+		if !errors.As(err, &f) || f.Code != CodeDpiAwarenessMismatch || f.Class != ClassSetup {
+			t.Fatalf("want dpiAwarenessMismatch, got %v", err)
 		}
 	})
 	t.Run("preflight demands per-monitor-v2", func(t *testing.T) {

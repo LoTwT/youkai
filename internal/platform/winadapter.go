@@ -134,8 +134,9 @@ func (a *WinAdapter) Preflight() Preflight {
 }
 
 var (
-	_ Port            = (*WinAdapter)(nil)
-	_ TargetDiscovery = (*WinAdapter)(nil)
+	_ Port             = (*WinAdapter)(nil)
+	_ TargetDiscovery  = (*WinAdapter)(nil)
+	_ ReadinessChecker = (*WinAdapter)(nil)
 )
 
 // DiscoverTargets implements TargetDiscovery: enumerate the visible
@@ -233,7 +234,6 @@ func (a *WinAdapter) Open(ctx context.Context, cfg SessionConfig) (Session, erro
 		PIDHint:              windows.ProcessID(cfg.Target.PIDHint),
 		ProcessStartedAtHint: cfg.Target.ProcessStartedAtHint,
 		ClassNameHint:        cfg.Target.ClassNameHint,
-		TitleHint:            cfg.Target.TitleHint,
 		RequireVisible:       true,
 	}
 	probe, err := windows.SelectTarget(probes, spec)
@@ -281,7 +281,6 @@ func (a *WinAdapter) Open(ctx context.Context, cfg SessionConfig) (Session, erro
 			HWND:           uintptr(locked.HWND),
 			ExecutablePath: locked.ImagePath,
 			ClassName:      locked.ClassName,
-			Title:          locked.Title,
 		},
 	}
 	s.precheck = windows.InputPrecheck(a.natives.Win, a.natives.FG, s.tracker, locked)
@@ -337,9 +336,12 @@ type winObservation struct {
 }
 
 // mapWinFault translates the windows base's fault codes into the port's
-// vocabulary: identity loss is targetLost; measurement and DPI-target
-// inconsistencies void the geometry (geometryInvalid); the process's own
-// DPI awareness is a process capability (permissionMissing).
+// vocabulary: identity loss is targetLost; an untrustworthy measurement
+// voids the geometry (geometryInvalid); capture failure stops capture.
+// The three DPI codes pass through unchanged: the preparation checklist
+// needs the distinct cause (youkai's own DPI awareness vs. a virtualized
+// target vs. an unreadable fact), and the UI's fault table already maps
+// them.
 func mapWinFault(f *windows.PlatformFault) *Fault {
 	withParams := func(code string, class FaultClass, message string) *Fault {
 		return &Fault{Code: code, Class: class, Message: message, Params: copyParams(f.Params), At: f.At}
@@ -348,7 +350,11 @@ func mapWinFault(f *windows.PlatformFault) *Fault {
 	case windows.CodeTargetLost:
 		return withParams(CodeTargetLost, ClassBroken, f.Message+rawSuffix(f))
 	case windows.CodeDpiAwarenessMismatch:
-		return withParams(CodePermissionMissing, ClassSetup, f.Message+rawSuffix(f))
+		return withParams(CodeDpiAwarenessMismatch, ClassSetup, f.Message+rawSuffix(f))
+	case windows.CodeDpiVirtualized:
+		return withParams(CodeDpiVirtualized, ClassSetup, f.Message+rawSuffix(f))
+	case windows.CodeDpiCheckUnavailable:
+		return withParams(CodeDpiCheckUnavailable, ClassSetup, f.Message+rawSuffix(f))
 	case windows.CodeIntegrityMismatch:
 		return withParams(CodeIntegrityMismatch, ClassSetup, f.Message+rawSuffix(f))
 	case windows.CodeIntegrityUnverifiable:
@@ -358,8 +364,7 @@ func mapWinFault(f *windows.PlatformFault) *Fault {
 	case windows.CodeFrameContentBlank:
 		return withParams(CodeFrameContentBlank, ClassPremise, f.Message+rawSuffix(f))
 	default:
-		// CodeGeometryUnavailable, CodeDpiVirtualized,
-		// CodeDpiCheckUnavailable, CodeCaptureFailed: the geometry or
+		// CodeGeometryUnavailable and CodeCaptureFailed: the geometry or
 		// capture path cannot be trusted.
 		code := CodeGeometryInvalid
 		if f.Code == windows.CodeCaptureFailed {

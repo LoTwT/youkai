@@ -46,8 +46,8 @@ func TestSelectTargetHintsNarrow(t *testing.T) {
 	probes := []WindowProbe{
 		// Same process: a launcher-style top-level window and the game
 		// window.
-		{HWND: 20, PID: 300, ImagePath: `C:\game.exe`, ProcessStartedAt: started, Visible: true, ClassName: "LaunchWnd", Title: "Launcher"},
-		{HWND: 21, PID: 300, ImagePath: `C:\game.exe`, ProcessStartedAt: started, Visible: true, ClassName: "GameWnd", Title: "ZZZ"},
+		{HWND: 20, PID: 300, ImagePath: `C:\game.exe`, ProcessStartedAt: started, Visible: true, ClassName: "LaunchWnd"},
+		{HWND: 21, PID: 300, ImagePath: `C:\game.exe`, ProcessStartedAt: started, Visible: true, ClassName: "GameWnd"},
 	}
 	got, err := SelectTarget(probes, TargetSpec{ExecutablePath: `C:\game.exe`, ClassNameHint: "GameWnd"})
 	if err != nil {
@@ -62,17 +62,6 @@ func TestSelectTargetHintsNarrow(t *testing.T) {
 	var selErr *SelectionError
 	if !errors.As(err, &selErr) || selErr.Kind != SelectionAmbiguous {
 		t.Fatalf("non-matching hint should leave ambiguity, got %v", err)
-	}
-}
-
-func TestSelectTargetTitleHintNarrows(t *testing.T) {
-	probes := []WindowProbe{
-		{HWND: 30, PID: 1, ImagePath: `C:\game.exe`, Visible: true, ClassName: "GameWnd", Title: "ZZZ Login"},
-		{HWND: 31, PID: 1, ImagePath: `C:\game.exe`, Visible: true, ClassName: "GameWnd", Title: "Zenless Zone Zero"},
-	}
-	got, err := SelectTarget(probes, TargetSpec{ExecutablePath: `C:\game.exe`, ClassNameHint: "GameWnd", TitleHint: "Zenless"})
-	if err != nil || got.HWND != 31 {
-		t.Fatalf("title hint should narrow to 31: %v, %+v", err, got)
 	}
 }
 
@@ -175,9 +164,9 @@ func TestSelectTargetVisibleGameWithHiddenIMEHelpers(t *testing.T) {
 	started := time.Date(2026, 11, 1, 8, 0, 0, 0, time.UTC)
 	const exe = `C:\Games\ZZZ\ZenlessZoneZero.exe`
 	probes := []WindowProbe{
-		{HWND: 0xB0ABE, PID: 4242, ImagePath: exe, ProcessStartedAt: started, Visible: true, ClassName: "UnityWndClass", Title: "绝区零"},
-		{HWND: 0xB0ABF, PID: 4242, ImagePath: exe, ProcessStartedAt: started, Visible: false, ClassName: "MSCTFIME UI", Title: "Default IME"},
-		{HWND: 0xB0AC0, PID: 4242, ImagePath: exe, ProcessStartedAt: started, Visible: false, ClassName: "Default IME", Title: "Default IME"},
+		{HWND: 0xB0ABE, PID: 4242, ImagePath: exe, ProcessStartedAt: started, Visible: true, ClassName: "UnityWndClass"},
+		{HWND: 0xB0ABF, PID: 4242, ImagePath: exe, ProcessStartedAt: started, Visible: false, ClassName: "MSCTFIME UI"},
+		{HWND: 0xB0AC0, PID: 4242, ImagePath: exe, ProcessStartedAt: started, Visible: false, ClassName: "Default IME"},
 	}
 	got, err := SelectTarget(probes, TargetSpec{ExecutablePath: exe, RequireVisible: true})
 	if err != nil {
@@ -235,19 +224,19 @@ func TestSelectTargetMinimizedStillSelected(t *testing.T) {
 	}
 }
 
-func TestVerifyLockedIgnoresClassAndTitle(t *testing.T) {
+func TestVerifyLockedIgnoresClass(t *testing.T) {
 	locked := WindowIdentity{
 		HWND: 1, PID: 2, ImagePath: `C:\game.exe`,
 		ProcessStartedAt: time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC),
-		ClassName:        "GameWnd", Title: "Old Title",
+		ClassName:        "GameWnd",
 	}
-	sameWindowNewTitles := WindowProbe{
+	sameWindowNewClass := WindowProbe{
 		HWND: 1, PID: 2, ImagePath: `c:\GAME.exe`,
 		ProcessStartedAt: locked.ProcessStartedAt,
-		ClassName:        "SomethingElse", Title: "Totally Different",
+		ClassName:        "SomethingElse",
 	}
-	if err := VerifyLocked(locked, sameWindowNewTitles); err != nil {
-		t.Fatalf("hints are not identity; changed class/title must still match: %v", err)
+	if err := VerifyLocked(locked, sameWindowNewClass); err != nil {
+		t.Fatalf("hints are not identity; a changed class must still match: %v", err)
 	}
 }
 
@@ -296,11 +285,11 @@ func TestVerifyLockedMismatches(t *testing.T) {
 func TestCollectProbes(t *testing.T) {
 	started := time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC)
 	win := newFakeWindows()
-	win.add(1, &fakeWnd{pid: 100, visible: true, iconic: false, class: "A", title: "One"})
+	win.add(1, &fakeWnd{pid: 100, visible: true, iconic: false, class: "A"})
 	win.add(2, &fakeWnd{pid: 0})                                       // no owner: skipped
 	win.add(3, &fakeWnd{pid: 300, cloaked: true})                      // cloaked: still collected, flagged
 	win.add(4, &fakeWnd{pid: 400, pidErr: errors.New("query failed")}) // pid query fails: skipped
-	win.add(5, &fakeWnd{pid: 500, visible: false, iconic: true, class: "B", title: "Minimized"})
+	win.add(5, &fakeWnd{pid: 500, visible: false, iconic: true, class: "B"})
 
 	procs := newFakeProcesses()
 	procs.byPID[100] = fakeProc{path: `C:\a.exe`, started: started}
@@ -329,6 +318,25 @@ func TestCollectProbes(t *testing.T) {
 	}
 	if p := byHandle[1]; p.ImagePath != `C:\a.exe` || !p.ProcessStartedAt.Equal(started) {
 		t.Fatalf("handle 1 should carry the process identity: %+v", p)
+	}
+}
+
+// TestCollectProbesNeverReadsWindowTitles guards the privacy rule that made
+// the probe collector stop reading captions: a game or bystander title is
+// user data the scan never needs. titleGuard's Title method is deliberately
+// outside WindowAPI today; if the interface or the collector reintroduces a
+// title read, the guard fails here.
+func TestCollectProbesNeverReadsWindowTitles(t *testing.T) {
+	win := newFakeWindows()
+	win.add(1, &fakeWnd{pid: 100, visible: true, class: "GameWnd", title: "绝区零"})
+	procs := newFakeProcesses()
+	procs.byPID[100] = fakeProc{path: `C:\game.exe`, started: time.Now()}
+	probes, err := CollectProbes(titleGuard{win, t}, procs)
+	if err != nil {
+		t.Fatalf("collect: %v", err)
+	}
+	if len(probes) != 1 {
+		t.Fatalf("want one probe, got %+v", probes)
 	}
 }
 

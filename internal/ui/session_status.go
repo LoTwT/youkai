@@ -444,6 +444,14 @@ func faultCauseText(code string, params map[string]string) string {
 	return guidance.cause
 }
 
+// ReadinessFailureText exposes the shared fault copy to the headless
+// readiness entry (YOUKAI_READINESS_CHECK), so a real-machine round can
+// inspect the same sentences PR-17 will render without opening a window.
+// The scanning page itself uses failureText internally.
+func ReadinessFailureText(code string, params map[string]string) string {
+	return failureText(code, params)
+}
+
 // failureText renders a code's cause and action as one Chinese sentence
 // pair. It returns "" for an unknown code, so callers keep the diagnostic
 // code as the fallback.

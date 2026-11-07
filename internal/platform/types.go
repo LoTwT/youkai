@@ -37,7 +37,6 @@ type TargetSpec struct {
 	PIDHint              uint32
 	ProcessStartedAtHint time.Time
 	ClassNameHint        string
-	TitleHint            string
 }
 
 // TargetCandidate identifies one running game window a user can confirm
@@ -80,6 +79,84 @@ type TargetDiscoveryResult struct {
 // (macOS) scan a target selected by configuration instead.
 type TargetDiscovery interface {
 	DiscoverTargets() (TargetDiscoveryResult, error)
+}
+
+// ReadinessItem names one platform-owned row of the read-only preparation
+// check (R-01). The names are stable identifiers shared with the
+// application layer, never user-facing text.
+type ReadinessItem string
+
+const (
+	// ReadinessTargetClient is the game window candidate row.
+	ReadinessTargetClient ReadinessItem = "targetClient"
+	// ReadinessAdministrator is the mandatory-integrity comparison between
+	// youkai and the game.
+	ReadinessAdministrator ReadinessItem = "administrator"
+	// ReadinessGameResolution is the client-area tier row.
+	ReadinessGameResolution ReadinessItem = "gameResolution"
+	// ReadinessWindowPosition is the work-area containment row.
+	ReadinessWindowPosition ReadinessItem = "windowPosition"
+	// ReadinessDisplayScale is the DPI awareness and virtualization row.
+	ReadinessDisplayScale ReadinessItem = "displayScale"
+)
+
+// ReadinessVerdict is one row's read-only conclusion. "After start" is not
+// a platform verdict: the application layer adds it for rows the platform
+// deliberately never probes before a session exists.
+type ReadinessVerdict string
+
+const (
+	// ReadinessSatisfied: the row's premise holds now.
+	ReadinessSatisfied ReadinessVerdict = "satisfied"
+	// ReadinessUnsatisfied: the row's premise is known not to hold.
+	ReadinessUnsatisfied ReadinessVerdict = "unsatisfied"
+	// ReadinessUnknown: the premise could not be judged; never treat this
+	// as a pass.
+	ReadinessUnknown ReadinessVerdict = "unknown"
+)
+
+// ReadinessCheck is one platform row of the read-only preparation check.
+// Current and Required are stable diagnostic values (tier sizes,
+// integrity levels, rectangles, counts), never localized prose.
+type ReadinessCheck struct {
+	Item     ReadinessItem
+	Verdict  ReadinessVerdict
+	Current  string
+	Required string
+	// Fault explains an unsatisfied or unknown verdict; nil when the
+	// verdict needs no cause.
+	Fault *Fault
+	// At is when this row was checked.
+	At time.Time
+}
+
+// ReadinessReport is one read-only preparation-check pass of a platform.
+// It never establishes a session, takes the scan occupancy, registers the
+// stop hotkey, dispatches input or captures a frame.
+type ReadinessReport struct {
+	At                    time.Time
+	Candidates            []TargetCandidate
+	AccessDeniedWindows   int
+	UnreadableGameWindows int
+	Checks                []ReadinessCheck
+}
+
+// ReadinessRequest configures one read-only check. Target narrows the
+// checks to the window the user confirmed; an empty Target asks a
+// discovery source to use its candidates. Display is the game adapter's
+// tier contract; a Windows local-client check needs it for the resolution
+// row, while a nil policy leaves that row unknown.
+type ReadinessRequest struct {
+	Target  TargetSpec
+	Display *WindowDisplayPolicy
+}
+
+// ReadinessChecker is the optional Port capability for the read-only
+// preparation check (R-01). Ports without it (macOS) leave the
+// platform-owned rows unknown in the application layer rather than
+// pretending they hold.
+type ReadinessChecker interface {
+	CheckReadiness(req ReadinessRequest) (ReadinessReport, error)
 }
 
 // Key is a neutral key name of the port's vocabulary: KeyA…KeyZ,
@@ -360,9 +437,9 @@ type TargetInfo struct {
 	BundleID string
 	PID      int32
 	WindowID uint32
-	// Windows identity: handle and process instance.
+	// Windows identity: handle and process instance. The window title is
+	// deliberately absent: it is user data the scanner never reads.
 	HWND           uintptr
 	ExecutablePath string
 	ClassName      string
-	Title          string
 }
