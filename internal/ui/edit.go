@@ -119,6 +119,10 @@ type navigationRequest struct {
 	kind     navKind
 	seq      int64
 	recordID string
+	// exitAnyway marks the tray's 仍然退出 path. A generic quit or window
+	// close after a non-save teardown failure reopens the failure dialog
+	// instead (PR-19b, decision 2).
+	exitAnyway bool
 	// page is the destination of a navPage request.
 	page Page
 	// The filter fields belong to navResultFilter / navSummaryClass; the
@@ -745,6 +749,17 @@ func (m *Model) runNavigation(req navigationRequest) {
 		}
 		m.page = req.page
 	case navExit:
+		if req.exitAnyway {
+			m.exitAnyway()
+			return
+		}
+		if m.exitState == exitFailed && !m.exitFailedFromSave() {
+			// A generic quit or close after the teardown failed reopens the
+			// dialog; only the tray's 仍然退出 settles directly (PR-19b,
+			// decision 2).
+			m.exitFailureDialogOpen = true
+			return
+		}
 		m.beginExit()
 	case navStartScan:
 		m.Start()

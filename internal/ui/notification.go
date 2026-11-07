@@ -93,11 +93,13 @@ func (m *Model) OpenNotification(recordID string) {
 	// hint would otherwise hide the just-restored window on acknowledgement).
 	m.trayHintOpen = false
 	m.trayHintHideOnDone = false
-	if m.exporting {
+	if m.exporting || (m.exportDialog.open && m.exportDialog.attempted) {
 		// The export dialog shows the frozen snapshot of the record being
-		// written. Switching records underneath it would pair the write
-		// progress with another record's counts. Keep only the latest click
-		// and replay it after the user closes the dialog (PR-19b, item 14).
+		// written. Switching records underneath it would pair the dialog with
+		// another record's counts or outcome. Keep only the latest click and
+		// replay it after the user closes the dialog; a settled success,
+		// canceled or failure dialog is still the user's to dismiss
+		// (PR-19b, decisions 3 and 4).
 		m.pendingNotificationRecordID = recordID
 		return
 	}

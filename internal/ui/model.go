@@ -200,10 +200,13 @@ type LifecycleStatus struct {
 	Text string
 	// Busy is whether a scan session is still active and stoppable.
 	Busy bool
-	// ExitCleanupFailed marks an explicit exit whose results were saved but
-	// whose teardown did not finish. The tray then offers 仍然退出 instead of
-	// implying the failed cleanup can be retried (PR-19b, item 13).
+	// ExitCleanupFailed marks an explicit exit whose teardown did not finish.
+	// The tray then offers 仍然退出 instead of implying the failed cleanup can
+	// be retried (PR-19b, item 13).
 	ExitCleanupFailed bool
+	// ExitResultsSaved says the application had a scan session when the exit
+	// failed, so the saved-results wording is true.
+	ExitResultsSaved bool
 }
 
 // TrayMenuLabels is the tray menu text for one lifecycle state (08 §7).
@@ -243,8 +246,12 @@ func (s LifecycleStatus) TrayMenu() TrayMenuLabels {
 		}
 	case "退出失败":
 		if s.ExitCleanupFailed {
+			status := "youkai · 退出清理未完成"
+			if s.ExitResultsSaved {
+				status += "，结果已保存"
+			}
 			return TrayMenuLabels{
-				Status: "youkai · 退出清理未完成，结果已保存",
+				Status: status,
 				Open:   "打开 youkai",
 				Stop:   "停止扫描",
 				Exit:   "仍然退出",
@@ -1181,6 +1188,7 @@ func (m *Model) LifecycleStatus() LifecycleStatus {
 			Text:              "退出失败",
 			Busy:              false,
 			ExitCleanupFailed: !m.exitFailedFromSave(),
+			ExitResultsSaved:  m.snap.SessionID != "",
 		}
 	case m.snap.Busy || m.startReqID != "":
 		if m.snap.Busy && wrappingUp(m.snap.Scan.Phase) {
@@ -1264,12 +1272,13 @@ func (m *Model) acknowledgeTrayHint() {
 	}
 }
 
-// AllowClose reports whether the window may close now. The first ask
-// starts the explicit-exit wrap-up asynchronously and refuses the close;
-// the wrap-up shows its progress in the window. A failed wrap-up (an
-// unsaved result) keeps the window with the save failure and its retry;
-// once the save settled, the next ask runs the wrap-up again. A completed
-// wrap-up allows every later ask.
+// AllowClose reports whether the window may close now. Every explicit-exit
+// ask starts or joins the wrap-up and refuses the close; a dirty editor or
+// an in-flight review save is settled through the ordinary prompt first.
+// A failed final save keeps the window with its retry; after a non-save
+// teardown failure the ask reopens the failure dialog, except for the tray's
+// 仍然退出 path, which settles directly after the same editor guards. A
+// completed wrap-up allows every later ask.
 //
 // This is the explicit-exit path, used by the window close when the user
 // chose close-to-exit, and by every quit event regardless of the close
@@ -1280,28 +1289,46 @@ func (m *Model) AllowClose() bool {
 		return true
 	case exitRunning:
 		return false
-	case exitFailed:
-		if !m.exitFailedFromSave() {
-			// The results are saved; the teardown error is cached and a
-			// retry cannot clear it. A close or tray quit after this state
-			// is the user's 仍然退出 choice (PR-19b, item 13).
-			m.exitAnyway()
-			return false
-		}
 	}
+	m.requestExit(false)
+	return false
+}
+
+// ExitAnyway is the tray's 仍然退出 action: it takes the settled exit path
+// after the ordinary unsaved-input and save-in-flight guards. The failure
+// dialog's 仍然退出 button uses the same method (PR-19b, decision 2).
+func (m *Model) ExitAnyway() {
+	if m.exitState != exitFailed || m.exitFailedFromSave() {
+		return
+	}
+	m.requestExit(true)
+}
+
+// requestExit runs one explicit-exit request. force selects the tray/dialog
+// 仍然退出 path after a non-save teardown failure; every other entry reopens
+// the failure dialog instead. Both paths settle the editor first.
+func (m *Model) requestExit(force bool) {
+	if m.exitState == exitRunning || m.exitState == exitDone {
+		return
+	}
+	if m.navPrompt != nil {
+		// The open prompt owns the decision; a repeated quit must not replace
+		// its save/discard target or bypass it.
+		return
+	}
+	req := navigationRequest{kind: navExit, exitAnyway: force}
 	if m.reviewSaving {
-		m.navPrompt = &navigationRequest{kind: navExit}
 		m.reviewErr = "正在保存，完成前不能退出。"
-		return false
+		m.navPrompt = &req
+		m.exitFailureDialogOpen = false
+		return
 	}
 	if m.editingDirty() {
-		// The close is refused until the editor's input is saved or
-		// discarded; the prompt offers both and a way to stay.
-		m.navPrompt = &navigationRequest{kind: navExit}
-		return false
+		m.navPrompt = &req
+		m.exitFailureDialogOpen = false
+		return
 	}
-	m.beginExit()
-	return false
+	m.runNavigation(req)
 }
 
 // applyLatestSnapshot applies the service's authoritative snapshot before an
@@ -1376,7 +1403,7 @@ func (m *Model) finishExit() {
 // failed exit was not a final-save failure; a save failure must keep the
 // retry path and never allow bypassing the unsaved result.
 func (m *Model) exitAnyway() {
-	if m.exitState != exitFailed || m.exitFailedFromSave() {
+	if m.exitState != exitFailed || m.exitFailedFromSave() || m.reviewSaving || m.editingDirty() {
 		return
 	}
 	m.finishExit()

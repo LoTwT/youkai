@@ -86,7 +86,7 @@ func (m *Model) exitDialogView(c *ui.Context, t *ui.Theme) {
 						// and Service.Quit caches that error, so this is the
 						// explicit way out (PR-19b, item 13).
 						if ui.PrimaryButton(c, "仍然退出").Clicked() {
-							m.exitAnyway()
+							m.ExitAnyway()
 						}
 					}
 					if ui.Button(c, "复制诊断信息").Clicked() {
@@ -98,8 +98,13 @@ func (m *Model) exitDialogView(c *ui.Context, t *ui.Theme) {
 						TextColor(t.TextMuted).FontSize(t.FontSize * 0.9)
 				}
 				if !saveFailure {
-					ui.Text(c, "扫描结果已保存；退出清理没有完成，重试不会改变结果。可以仍然退出，或关闭对话框继续查看结果。").
-						TextColor(t.TextMuted).FontSize(t.FontSize * 0.9)
+					if m.snap.SessionID != "" {
+						ui.Text(c, "扫描结果已保存；退出清理没有完成，重试不会改变结果。可以仍然退出，或关闭对话框继续查看结果。").
+							TextColor(t.TextMuted).FontSize(t.FontSize * 0.9)
+					} else {
+						ui.Text(c, "当前没有待保存的扫描结果；退出清理没有完成，重试不会改变结果。可以仍然退出，或关闭对话框继续查看结果。").
+							TextColor(t.TextMuted).FontSize(t.FontSize * 0.9)
+					}
 				}
 			})
 		})
@@ -124,9 +129,15 @@ func (m *Model) exitFailureDetail() string {
 		return "退出收尾没有完成：扫描结果还没有保存。"
 	}
 	if m.exitErr != "" {
-		return "扫描结果已保存，退出清理没有完成：" + m.exitErr + "。"
+		if m.snap.SessionID != "" {
+			return "扫描结果已保存，退出清理没有完成：" + m.exitErr + "。"
+		}
+		return "退出清理没有完成：" + m.exitErr + "。当前没有待保存的扫描结果。"
 	}
-	return "扫描结果已保存，退出清理没有完成。"
+	if m.snap.SessionID != "" {
+		return "扫描结果已保存，退出清理没有完成。"
+	}
+	return "退出清理没有完成。当前没有待保存的扫描结果。"
 }
 
 // copyCurrentDiagnostics copies the same privacy-bounded summary the record

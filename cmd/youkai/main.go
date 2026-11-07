@@ -300,8 +300,8 @@ func main() {
 		// quit goroutine already waited for the wrap-up, so quitting re-
 		// enters the allowed path (the model allows the close) and the
 		// event loop ends — relaunching instead when an update is
-		// installed. A failed wrap-up never reaches here — the window
-		// stays with the save failure instead.
+		// installed. A failed final save never reaches here; a failed
+		// teardown reaches it only through the explicit 仍然退出 path.
 		OnExitSettled: func() {
 			life.Refresh()
 			if updateInstalled {
