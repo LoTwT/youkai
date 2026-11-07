@@ -1545,14 +1545,27 @@ func (m *Model) navigationPrompt(c *ui.Context, t *ui.Theme) {
 		ui.Column(c).Width(420).Gap(t.Space(2)).Padding(t.Space(4)).
 			Background(t.Background).Border(1, t.Border).Radius(t.Radius).Children(func() {
 			seq := m.editSeqForPrompt()
+			_, failedConfirm := m.failedConfirmationAction()
 			title := "有未保存的修改"
+			if failedConfirm {
+				title = "确认没有完成"
+			}
 			if seq > 0 {
-				title = fmt.Sprintf("第 %d 件有未保存的修改", seq)
+				if failedConfirm {
+					title = fmt.Sprintf("第 %d 件还没有确认", seq)
+				} else {
+					title = fmt.Sprintf("第 %d 件有未保存的修改", seq)
+				}
 			}
 			ui.Text(c, title).FontWeight(600)
-			ui.Text(c, "保存后继续，或放弃这次修改。").TextColor(t.TextMuted).
-				FontSize(t.FontSize * 0.9)
-			if m.edit != nil && m.edit.modify {
+			if failedConfirm {
+				ui.Text(c, "上次确认没有完成。重试确认后继续，或放弃这次确认。").TextColor(t.TextMuted).
+					FontSize(t.FontSize * 0.9)
+			} else {
+				ui.Text(c, "保存后继续，或放弃这次修改。").TextColor(t.TextMuted).
+					FontSize(t.FontSize * 0.9)
+			}
+			if !failedConfirm && m.edit != nil && m.edit.modify {
 				// A confirmed item may only leave through a new
 				// confirmation; a plain save drops it back into the
 				// review queue. Say so before the user chooses

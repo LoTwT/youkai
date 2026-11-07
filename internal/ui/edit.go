@@ -777,16 +777,38 @@ func (m *Model) applyTableSelection(previous int) {
 	m.requestNavigation(navigationRequest{kind: navSelect, seq: seq})
 }
 
+// failedConfirmationAction reports a confirmation whose write failed while
+// the draft itself has no unsaved changes. The save-and-continue prompt must
+// retry this action, not treat the absence of edits as success and run the
+// navigation. Only row confirmations qualify: a failed modify remains dirty
+// and a plain save has no confirmation semantics to replay.
+func (m *Model) failedConfirmationAction() (reviewAction, bool) {
+	if !m.reviewSaveFailed || m.edit == nil || m.edit.dirty() {
+		return reviewSave, false
+	}
+	switch m.lastAction {
+	case reviewConfirmNext, reviewConfirmStay:
+		return m.lastAction, true
+	}
+	return reviewSave, false
+}
+
 // promptSaveAndContinue saves the editor, then runs the held navigation.
-// A modify draft saves without confirmation, so the item drops back into
-// the review queue; the dialog stated that before the choice, and the
-// destination notice repeats it when the workspace stays on the record.
+// A clean editor may still hold a failed confirmation: retry that exact
+// action so 保存并继续 cannot skip the confirmation and continue as if it
+// succeeded. A modify draft saves without confirmation, so the item drops
+// back into the review queue; the dialog stated that before the choice, and
+// the destination notice repeats it when the workspace stays on the record.
 func (m *Model) promptSaveAndContinue() {
 	if m.navPrompt == nil || m.reviewSaving {
 		return
 	}
 	req := *m.navPrompt
 	if m.edit == nil || !m.edit.dirty() {
+		if action, ok := m.failedConfirmationAction(); ok {
+			m.saveEdit(action, func() { m.runNavigation(req) })
+			return
+		}
 		m.navPrompt = nil
 		m.runNavigation(req)
 		return
