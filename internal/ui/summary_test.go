@@ -283,6 +283,14 @@ func TestRecordSummaryConclusionTable(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			m := summaryModel(tc.view, tc.snap)
 			m.cfg.DirectExportSaver = &fakeDirectExportSaver{}
+			// Give the table a loaded, frozen export snapshot so the export
+			// action is enabled: these cases check the wording, not the
+			// transient blocked states. The snapshot carries the same
+			// coverage the view shell names.
+			m.recData = &record.Recovery{}
+			m.exportData = &app.UsableExport{Summary: app.ExportSummary{
+				Coverage: tc.view.Shell.Coverage.Status,
+			}}
 			got := m.recordSummaryConclusion()
 			if got.Title != tc.wantTitle {
 				t.Errorf("title = %q, want %q", got.Title, tc.wantTitle)
@@ -394,6 +402,39 @@ func openSummaryRecord(t *testing.T, rec *record.Recovery, cfg Config, width, he
 	m.OpenHistory()
 	settle(t, m, q, tt)
 	return m, q, tt, svc
+}
+
+// TestSummaryTitleDoesNotPromiseBlockedExport covers PR-15: the complete
+// coverage title must not say "可以直接导出" while the export action is
+// disabled by a transient state or a failed snapshot.
+func TestSummaryTitleDoesNotPromiseBlockedExport(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		set    func(*Model)
+		reason string
+	}{
+		{name: "failed snapshot", set: func(m *Model) {
+			m.exportData = nil
+			m.exportBuildErr = "boom"
+		}, reason: "无法生成导出：boom"},
+		{name: "writing", set: func(m *Model) { m.exporting = true }, reason: "正在导出……"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, _, tt, _ := openSummaryRecord(t, summaryExportActionRecord(t),
+				Config{DirectExportSaver: &fakeDirectExportSaver{}}, 1180, 900)
+			tc.set(m)
+			tt.Frame()
+			if tt.HasText("扫全了，可以直接导出") || tt.HasText("可以直接导出") {
+				t.Fatalf("the title promises an export the button cannot run: %q", tt.Texts())
+			}
+			if !tt.HasText("扫全了") {
+				t.Fatalf("the coverage conclusion disappeared: %q", tt.Texts())
+			}
+			if !tt.HasText(tc.reason) {
+				t.Fatalf("the disabled reason %q is missing: %q", tc.reason, tt.Texts())
+			}
+		})
+	}
 }
 
 // TestSummaryExportActionOpensTheOnlyDialog checks the summary's export
@@ -584,9 +625,9 @@ func TestViewSummaryCountsOpenFilteredItems(t *testing.T) {
 		class  app.ItemClass
 	}{
 		{"待校对 ›", resultFilterPending, app.ItemClassPendingReview},
-		{"有警告但可导出 ›", resultFilterAll, app.ItemClassWarning},
+		{"有警告但可导出 ›", resultFilterWarning, app.ItemClassWarning},
 		{"已通过 ›", resultFilterAll, app.ItemClassPassed},
-		{"待补录 ›", resultFilterUnexportable, app.ItemClassPendingBackfill},
+		{"待补录 ›", resultFilterPending, app.ItemClassPendingBackfill},
 	}
 	for _, tc := range cases {
 		t.Run(tc.cell, func(t *testing.T) {
@@ -639,17 +680,16 @@ func TestSummaryDisclosuresFollowTheOpenRecord(t *testing.T) {
 func TestViewSummaryCountClearsItemBrowserFilters(t *testing.T) {
 	m, q, tt, _ := openSummaryRecord(t, summaryFourClassRecord(t),
 		Config{DirectExportSaver: &fakeDirectExportSaver{}}, 1180, 760)
-	m.search = "不存在的件"
-	m.setFilter = "不存在的套装"
-	m.slotFilter = "不存在的号位"
+	m.setFilter = "99999"
+	m.slotFilter = "9"
 	tt.Frame()
 
 	if err := tt.Click("待校对 ›"); err != nil {
 		t.Fatal(err)
 	}
 	settle(t, m, q, tt)
-	if m.search != "" || m.setFilter != "" || m.slotFilter != "" {
-		t.Fatalf("count click kept item filters: search=%q set=%q slot=%q", m.search, m.setFilter, m.slotFilter)
+	if m.setFilter != "" || m.slotFilter != "" {
+		t.Fatalf("count click kept item filters: set=%q slot=%q", m.setFilter, m.slotFilter)
 	}
 	if m.filter != resultFilterPending || m.recordTab != recordTabItems {
 		t.Fatalf("count click opened tab %v filter %v", m.recordTab, m.filter)
@@ -767,6 +807,7 @@ func TestViewSummaryDiagnosticsCopyAndOpen(t *testing.T) {
 	m, q, tt, _ := openSummaryRecord(t, rec, Config{
 		DirectExportSaver: &fakeDirectExportSaver{},
 		AppVersion:        "0.4.0",
+		BuildCommit:       "83ba00c",
 		SystemInfo:        func() app.SystemInfo { return app.SystemInfo{OS: "Windows", OSVersion: "10.0"} },
 		OpenDiagnosticsDirectory: func() error {
 			opened++
@@ -797,7 +838,8 @@ func TestViewSummaryDiagnosticsCopyAndOpen(t *testing.T) {
 	}
 	settle(t, m, q, tt)
 	if got := tt.Clipboard(); !strings.Contains(got, "youkai 诊断信息") ||
-		!strings.Contains(got, "focusLost") || !strings.Contains(got, "0.4.0") {
+		!strings.Contains(got, "focusLost") || !strings.Contains(got, "0.4.0") ||
+		!strings.Contains(got, "（构建 83ba00c）") {
 		t.Fatalf("the copied diagnostics are incomplete: %q", got)
 	}
 

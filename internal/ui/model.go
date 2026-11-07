@@ -78,6 +78,9 @@ type Service interface {
 	ClearOldLogs() (app.StorageClearPreview, error)
 	// Quit runs the explicit-exit wrap-up; it blocks until it is done.
 	Quit() error
+	// SetUpdateInstalling publishes that an update install is in progress
+	// (or ended), so the service refuses new scans until the restart.
+	SetUpdateInstalling(installing bool)
 }
 
 // Updater runs fn on the UI thread and redraws the window. *mygo.Window
@@ -125,6 +128,9 @@ type Config struct {
 	// OpenDataDirectory opens the managed data root with the system file
 	// manager; nil hides the action.
 	OpenDataDirectory func() error
+	// OpenLicenses opens the bundled third-party notices; nil hides the
+	// about section's license action.
+	OpenLicenses func() error
 	// EvidenceCacheLimit bounds the decoded evidence bitmaps held at
 	// once; 0 uses evidenceCacheLimit.
 	EvidenceCacheLimit int
@@ -135,6 +141,11 @@ type Config struct {
 	// area as "当前版本 …" so the window itself names the build it runs;
 	// the entry point passes mygo.App.Version(). Empty hides the line.
 	AppVersion string
+	// BuildCommit is the VCS revision the running binary was built from,
+	// as app.BuildCommit reports it; empty for an unstamped build. It is a
+	// Config value so the diagnostic text can be exercised without a
+	// stamped binary.
+	BuildCommit string
 	// SystemInfo reads the operating-system and display context the copied
 	// diagnostic text reports. The entry point passes app.CurrentSystemInfo;
 	// nil or a zero result says unknown. It runs only when the user copies,
@@ -174,16 +185,102 @@ type Config struct {
 	// SaveCloseBehavior persists a preference change from the window. Nil
 	// keeps changes in memory only (tests and builds without a data root).
 	SaveCloseBehavior func(app.CloseBehavior) error
+	// Notify delivers one finished notification description to the entry
+	// point, which owns the native notification and its click. Nil disables
+	// notifications (tests and builds without a native notification area).
+	Notify func(Notification)
+	// HideToTray hides the window after the first-hide hint is acknowledged.
+	// The entry point wires it to the same hide the close button uses; nil
+	// leaves the window visible.
+	HideToTray func()
+	// TrayHintSeen is the persisted first-hide hint state (R-18). False shows
+	// the hint before the first close hides the window.
+	TrayHintSeen bool
+	// SaveTrayHintSeen persists the hint acknowledgement. Nil keeps the
+	// state in memory only.
+	SaveTrayHintSeen func(bool) error
 }
 
 // LifecycleStatus is the state the tray/menu bar shows: a short label and
 // whether an active session can still be stopped. It is read on the UI
 // thread.
 type LifecycleStatus struct {
-	// Text is one of 就绪, 扫描中, 收尾中 or 保存失败.
+	// Text is one of 就绪, 扫描中, 收尾中, 保存失败 or 退出失败.
 	Text string
 	// Busy is whether a scan session is still active and stoppable.
 	Busy bool
+	// ExitCleanupFailed marks an explicit exit whose teardown did not finish.
+	// The tray then offers 仍然退出 instead of implying the failed cleanup can
+	// be retried (PR-19b, item 13).
+	ExitCleanupFailed bool
+	// ExitResultsSaved says the session has a result the saved-results
+	// wording may claim. It uses the notification facts, not the presence
+	// of a session identity.
+	ExitResultsSaved bool
+}
+
+// TrayMenuLabels is the tray menu text for one lifecycle state (08 §7).
+type TrayMenuLabels struct {
+	Status      string
+	Open        string
+	Stop        string
+	StopEnabled bool
+	Exit        string
+}
+
+// TrayMenu returns the four-state menu labels and the stop item's enabled
+// state. The first line is the disabled status row and the tooltip.
+func (s LifecycleStatus) TrayMenu() TrayMenuLabels {
+	switch s.Text {
+	case "扫描中":
+		return TrayMenuLabels{
+			Status:      "youkai · 正在扫描（停止：" + shortcutStopScan + "）",
+			Open:        "停止扫描并打开",
+			Stop:        "停止扫描",
+			StopEnabled: true,
+			Exit:        "停止扫描并退出",
+		}
+	case "收尾中":
+		return TrayMenuLabels{
+			Status: "youkai · 正在保存结果",
+			Open:   "打开 youkai（不取消剩余识别）",
+			Stop:   "停止扫描",
+			Exit:   "退出 youkai（等保存完成）",
+		}
+	case "保存失败":
+		return TrayMenuLabels{
+			Status: "youkai · 结果未保存，需要重试",
+			Open:   "打开 youkai",
+			Stop:   "停止扫描",
+			Exit:   "退出 youkai（会被拒绝并打开窗口）",
+		}
+	case "退出失败":
+		if s.ExitCleanupFailed {
+			status := "youkai · 退出清理未完成"
+			if s.ExitResultsSaved {
+				status += "，结果已保存"
+			}
+			return TrayMenuLabels{
+				Status: status,
+				Open:   "打开 youkai",
+				Stop:   "停止扫描",
+				Exit:   "仍然退出",
+			}
+		}
+		return TrayMenuLabels{
+			Status: "youkai · 退出失败",
+			Open:   "打开 youkai",
+			Stop:   "停止扫描",
+			Exit:   "退出 youkai",
+		}
+	default:
+		return TrayMenuLabels{
+			Status: "youkai · 就绪",
+			Open:   "打开 youkai",
+			Stop:   "停止扫描",
+			Exit:   "退出 youkai",
+		}
+	}
 }
 
 // exitState is where the explicit-exit flow stands.
@@ -194,6 +291,17 @@ const (
 	exitRunning
 	exitFailed
 	exitDone
+)
+
+// exitIntent is the user's unsettled request to leave the application. It
+// is the single source that decides what happens after an unsaved prompt or
+// an in-flight review save settles; the prompt itself only displays it.
+type exitIntent int
+
+const (
+	exitIntentNone exitIntent = iota
+	exitIntentNormal
+	exitIntentForce
 )
 
 // Model is the state of youkai's main window: what the prepare, progress
@@ -297,6 +405,10 @@ type Model struct {
 	exportOutcome *exportOutcome
 	exportDialog  exportDialogState
 	exportCancel  func()
+	// pendingNotificationRecordID is a notification click that arrived while
+	// the export dialog was writing. Only the last click is kept; closing
+	// the dialog replays it through OpenNotification (PR-19b, item 14).
+	pendingNotificationRecordID string
 	// exportAfterLoadID is the record whose load should open the export
 	// dialog when it lands. The records list sets it through navOpenRecord;
 	// a normal record open or a failed load clears it.
@@ -318,72 +430,124 @@ type Model struct {
 	scanActionRef    ui.Ref
 	settingsFirstRef ui.Ref
 
+	// The settings page's in-page directory and section anchors, the
+	// pending entry focus (the directory, or storage after 去清理), the
+	// "return to the prepare check" strip and the TOC's pending jump.
+	settingsSections        settingsSectionRefs
+	settingsFocusPending    bool
+	settingsFocusStorage    bool
+	settingsReturnToPrepare bool
+	settingsScrollTarget    settingsSectionID
+	settingsScroll          ui.ScrollState
+	settingsViewportRef     ui.Ref
+	// Diagnostics results and the about section's license failure.
+	diagnosticsNotice string
+	diagnosticsErr    string
+	aboutErr          string
+
 	// contentWidth/contentHeight track the page area so the shell can
 	// switch the results split orientation at narrow widths.
 	contentWidth  int
 	contentHeight int
 
-	// The results table's place and its chosen row live in the record
-	// workspace state; list keeps the toolkit's per-pass list state.
-	// tableSelected is the chosen display row of the filtered table, which
-	// maps back to the workspace's full-row selected index. textInputFocused
-	// is rebuilt every frame: MyGo's text inputs leave Escape to shortcuts,
-	// so the shell keeps the key with a focused field instead of taking it.
+	// The results list's chosen row lives in the record workspace state;
+	// list keeps the toolkit's per-pass list state. tableSelected is the
+	// chosen display row of the filtered list, which maps back to the
+	// workspace's full-row selected index. textInputFocused is rebuilt
+	// every frame: MyGo's text inputs leave Escape to shortcuts, so the
+	// shell keeps the key with a focused field instead of taking it.
 	list             ui.ListState
 	tableSelected    int
 	textInputFocused bool
-	split            float32
-	// The results composite takes a whole number of rows, so a partial row
-	// cannot sit at the bottom. Its slot fills the pane whatever the
-	// table's capped height, giving each frame the room to measure. The
-	// last whole-row height is kept for a page that returns before its
-	// slot has a committed frame.
-	resultsTableSlot   ui.Ref
-	resultsTableHeight float32
+	// The review layout's pane refs. The list is 240 DIP, the form 400,
+	// and the screenshots take the rest (never under 360). reviewLayout
+	// records the laid-out widths so tests can check the three profiles.
+	reviewFilterRef  ui.Ref
+	reviewCompactRef ui.Ref
+	reviewListRef    ui.Ref
+	reviewCropsRef   ui.Ref
+	reviewFormRef    ui.Ref
+	reviewLayout     reviewLayoutWidths
+	// mainUnitBounds records the rendered main-stat unit control for the
+	// 960-DIP layout regression; it is layout evidence, not state.
+	mainUnitBounds ui.Rect
+	// historyRowProbe measures the native history table's tallest cell, so
+	// its whole-row cap uses the platform's real line metrics.
+	historyRowProbe ui.Ref
 	// textScale is the desktop's text size as View last read it. The
-	// composite's rows scale with it, and the scroll/reset paths run from
-	// update handlers without a Context, so they read this recorded value
-	// instead of threading a Context through unrelated code. Zero means no
-	// frame has read the preference yet, which resultsMetricsFor treats as
-	// the 100% design.
+	// list rows and badges scale with it.
 	textScale float32
-	// The results composite tracks its list's vertical offset. A precise
-	// scroll may stop between rows; resultsScrollSeen and the two times
-	// debounce the rest snap that aligns it to a row.
-	resultsScroll        ui.ScrollState
-	resultsScrollSeen    float32
-	resultsScrollMovedAt time.Time
-	resultsScrollSnapAt  time.Time
-	// resultsDetail opens a narrow results page from its list to the
-	// chosen item's detail; it has no effect in the side-by-side split.
-	resultsDetail bool
-	// showEvidence reveals the detail pane's evidence area — screenshots,
-	// raw OCR lines, their provenance and model scores. It is off by
-	// default so the structured form stays the main view.
-	showEvidence bool
 
 	// The review editor: one item's unsaved draft, and the save currently
 	// in flight. reviewSerial invalidates a late response when a newer
 	// action owns the editor. navPrompt holds a navigation that waits for
 	// the dirty draft to be saved or discarded.
-	edit         *editState
-	reviewSerial int64
-	reviewSaving bool
-	reviewErr    string
-	reviewNotice string
-	lastAction   reviewAction
-	navPrompt    *navigationRequest
+	edit             *editState
+	reviewSerial     int64
+	reviewSaving     bool
+	reviewSaveFailed bool
+	reviewErr        string
+	reviewNotice     string
+	// reviewNoticeAcrossPages marks the one review outcome that must stay
+	// visible after leaving the item browser: saving a modify draft with
+	// 保存并继续 sends the item back to review, and the destination notice
+	// repeats that consequence on every destination (08 §3.4, 09 §4.1).
+	// Ordinary action results stay on the page that produced them (L-D).
+	reviewNoticeAcrossPages bool
+	// reviewNoticeKeep survives the selection settlement of the reload that
+	// resolves a revision conflict: the reloaded row may leave the current
+	// filter and move the selection, but the explanation must stay visible
+	// (PR-14b review).
+	reviewNoticeKeep bool
+	lastAction       reviewAction
+	navPrompt        *navigationRequest
 
 	exitState exitState
-	exitErr   string
+	// exitIntent survives every prompt and save transition until the exit
+	// is cancelled or settled. A second quit may only upgrade normal to
+	// force; a generic quit never downgrades the tray's 仍然退出.
+	exitIntent exitIntent
+	exitErr    string
+	// exitFailureWasSave says the failed wrap-up was blocked by its final
+	// save, not by another teardown error. A later successful retry clears
+	// that failure and returns the tray to the idle state; a non-save
+	// failure keeps its own "exit failed" state until the user retries.
+	exitFailureWasSave bool
+	// exitFailureDialogOpen shows the unsaved-result dialog once per failed
+	// wrap-up; Esc leaves the inline failure and retry on the scan page.
+	exitFailureDialogOpen bool
 
-	// The close-window preference and the last persistence failure, plus a
-	// notice the entry point sets when the tray/menu bar entry is
-	// unavailable — the close-to-tray default must not hide the only way
-	// back into the app.
+	// The close-window preference and the last persistence failure. The
+	// entry point reports a missing tray entry separately: close-to-tray
+	// must not hide the only way back into the app.
 	closeBehavior    app.CloseBehavior
 	closeBehaviorErr string
-	windowNotice     string
+	// trayUnavailable is the tray creation failure the entry point reported;
+	// empty while the tray exists. The close option then reads as the fixed
+	// stop-and-exit behavior and the first-hide hint never appears.
+	trayUnavailable string
+
+	// First-hide hint (P-10/R-18): seen is the persisted acknowledgement,
+	// open is the dialog currently on screen, and hideOnDone remembers
+	// whether acknowledging it must hide the window (the close path) or only
+	// close the dialog (the settings replay).
+	trayHintSeen       bool
+	trayHintOpen       bool
+	trayHintHideOnDone bool
+	trayHintErr        string
+
+	// Notification edges, derived from the accepted service snapshots:
+	// notifyPrev is the last applied snapshot and notifySessions keeps each
+	// session's announcements. The map is deliberately not reset on a
+	// session switch: a refused start rolls the service back to the
+	// previous session, which must not announce its result twice.
+	notifyPrev      app.Snapshot
+	notifyPrevKnown bool
+	notifySessions  map[scan.ID]*sessionNotifications
+	// recordReads maps a workspace load version to its in-flight read, so a
+	// result notification created after the load started can wait for the
+	// same read and the exit flush can inspect its outcome.
+	recordReads map[int64]*recordLoad
 
 	// The auto-update corner's state (update.go); updatesEnabled is cached
 	// from Updates at construction — Enabled probes the install location,
@@ -421,7 +585,6 @@ func New(cfg Config) *Model {
 	m := &Model{
 		cfg:            cfg,
 		source:         cfg.ScanSource,
-		split:          420,
 		page:           pageScan,
 		recordTab:      recordTabSummary,
 		contentWidth:   1180,
@@ -431,6 +594,7 @@ func New(cfg Config) *Model {
 		historyLoading: true,
 		targetChoice:   -1,
 		closeBehavior:  closeBehavior,
+		trayHintSeen:   cfg.TrayHintSeen,
 	}
 	if cfg.Updates != nil {
 		m.updates = cfg.Updates
@@ -444,7 +608,10 @@ func New(cfg Config) *Model {
 }
 
 // SetContentSize records the page area for responsive layout. The entry
-// point calls it once at ready and again from Window.OnResize.
+// point calls it once at ready and again from Window.OnResize. The review
+// view has two width profiles — standard (with the 240-DIP item list) and
+// compact (the list in the top strip) — but both keep the screenshots and
+// the form side by side (09 §2).
 func (m *Model) SetContentSize(width, height int) {
 	if width <= 0 || height <= 0 {
 		return
@@ -452,19 +619,7 @@ func (m *Model) SetContentSize(width, height int) {
 	if m.contentWidth == width && m.contentHeight == height {
 		return
 	}
-	sideBySide := resultsSideBySide(m.contentWidth)
 	m.contentWidth, m.contentHeight = width, height
-	m.split = resultsSplitTableWidth(width)
-	if sideBySide != resultsSideBySide(width) && m.rec != nil {
-		// Crossing the split breakpoint changes the table pane and its
-		// column widths. Re-enter on the first visible row so the new
-		// layout starts from the same row and a mid-input offset cannot
-		// leave half rows behind.
-		if first, last := m.list.Visible(); last >= first && first >= 0 {
-			m.resetResultsScroll(first)
-			m.list.ScrollTo(first, ui.Start)
-		}
-	}
 	if m.upd != nil {
 		m.upd.Update(func() {})
 	}
@@ -522,11 +677,30 @@ func (m *Model) Apply(snap app.Snapshot) {
 	if snap.SessionID == m.appliedSession && snap.Revision <= m.appliedRevision {
 		return
 	}
+	previous, hadPrevious := m.notifyPrev, m.notifyPrevKnown
+	m.notifyPrev, m.notifyPrevKnown = snap, true
 	prevSession, prevBusy := m.appliedSession, m.prevBusy
 	replacedSession := m.priorSession
 	m.appliedSession, m.appliedRevision = snap.SessionID, snap.Revision
 	m.snap = snap
 	m.prevBusy = snap.Busy
+	// A failed exit learns its cause from the authoritative snapshot. The
+	// error can be reported before the save-failure delivery arrives, so
+	// keep upgrading the classification while the exit is in the failed
+	// state.
+	if m.exitState == exitFailed && m.snap.SaveError != "" {
+		m.exitFailureWasSave = true
+	}
+	// A save failure that blocked the exit is resolved once the retry
+	// persisted the final generation. Return to the idle state; the failed
+	// exit is no longer a condition the tray must report.
+	if m.exitState == exitFailed && m.exitFailureWasSave &&
+		m.snap.SaveError == "" && !m.snap.Busy {
+		m.exitState = exitIdle
+		m.exitErr = ""
+		m.exitFailureWasSave = false
+		m.exitFailureDialogOpen = false
+	}
 
 	// A new session becomes the open record: the live one, an empty view
 	// until its saved generations load (a refused start rolls the service
@@ -543,6 +717,7 @@ func (m *Model) Apply(snap app.Snapshot) {
 	// catchUpLive reloads once it settles. An opened history record stays
 	// on screen and loads the live record afresh when the user returns.
 	reloadedLive := false
+	var finalLoadVersion int64
 	if m.rec != nil && m.rec.Live && snap.SessionID != "" &&
 		m.rec.ID == string(snap.SessionID) && snap.SavedCount > m.liveSavedShown {
 		dirtyActive := m.editingDirty() || m.reviewSaving
@@ -550,6 +725,7 @@ func (m *Model) Apply(snap app.Snapshot) {
 			m.liveSavedShown = snap.SavedCount
 			m.reloadRecord(m.rec.ID, true)
 			reloadedLive = true
+			finalLoadVersion = m.recLoad
 		}
 	}
 	// A session that just wrapped left a durable final record: refresh the
@@ -571,10 +747,17 @@ func (m *Model) Apply(snap app.Snapshot) {
 				if !dirtyActive {
 					m.liveSavedShown = snap.SavedCount
 					m.reloadRecord(m.rec.ID, true)
+					finalLoadVersion = m.recLoad
 				}
 			}
 		}
 	}
+	// finalLoadVersion names the workspace load that is already reading the
+	// final record; the result notification waits for it and reads the same
+	// generation instead of issuing a second read. Zero means no such load
+	// is running (another record or page is open), so the notification loads
+	// the record itself.
+	m.notifySnapshot(previous, hadPrevious, snap, finalLoadVersion)
 }
 
 // beginSession routes a newly started scan into the open record. The new
@@ -591,7 +774,7 @@ func (m *Model) beginSession(id, replacedSession string) {
 			// draft belongs to: keep the editor and make the record live
 			// again instead of replacing it.
 			m.rec.Live = true
-			m.reviewNotice = ""
+			m.clearReviewNotice()
 			return
 		}
 		// The open record is history now; the new session's record waits
@@ -600,9 +783,9 @@ func (m *Model) beginSession(id, replacedSession string) {
 		if rolledBack {
 			// The refused start returned to the session that was live
 			// before it; no new scan is running, so the notice is stale.
-			m.reviewNotice = ""
+			m.clearReviewNotice()
 		} else {
-			m.reviewNotice = "新的扫描已开始；保存或放弃当前编辑后可查看本次扫描。"
+			m.setReviewNotice("新的扫描已开始；保存或放弃当前编辑后可查看本次扫描。")
 		}
 		return
 	}
@@ -855,7 +1038,7 @@ func (m *Model) OpenHistory() {
 // selection, scroll and unsaved edit; another record waits for the editor
 // to settle before it replaces the workspace.
 func (m *Model) openRecord(id string) {
-	if id == "" {
+	if id == "" || m.exitState == exitRunning || m.exitState == exitDone {
 		return
 	}
 	m.page = pageResults
@@ -863,8 +1046,8 @@ func (m *Model) openRecord(id string) {
 		// Entering from the list is a new visit: the previous visit's
 		// confirmed-and-stayed rows leave the pending segment, so the
 		// selection is checked against the rows the filters still show.
-		// Everything else — filters, search, set/slot choices, a still
-		// visible selection, scroll and the unsaved edit — stays.
+		// Everything else — the segment, set/slot facets, a still visible
+		// selection, scroll and the unsaved edit — stays.
 		m.clearRecentlyConfirmed()
 		m.settleResultSelection()
 		return
@@ -1047,34 +1230,128 @@ func (m *Model) PrepareRestore() {
 	m.cfg.Service.Stop()
 }
 
+// savedExitResults answers the exit-failure copy from the notification's
+// own facts. The open record is used only when it belongs to the failed
+// session, so an unrelated history record cannot lend it a result.
+func (m *Model) savedExitResults() bool {
+	var rec *record.Recovery
+	if m.recData != nil && m.snap.SessionID != "" &&
+		m.recData.Checkpoint.Session.SessionID == string(m.snap.SessionID) {
+		rec = m.recData
+	}
+	return snapshotHasSavedResults(m.snap, rec)
+}
+
 // LifecycleStatus renders the tray/menu bar state from the authoritative
 // snapshot and the exit flow.
 func (m *Model) LifecycleStatus() LifecycleStatus {
 	switch {
 	case m.exitState == exitRunning:
 		return LifecycleStatus{Text: "收尾中", Busy: false}
-	case m.exitState == exitFailed || m.snap.SaveError != "":
+	case m.snap.SaveError != "":
+		// The authoritative snapshot, not the last exit attempt: a retry
+		// that persisted the conditional result clears the failure and the
+		// tray must stop claiming the result is unsaved.
 		return LifecycleStatus{Text: "保存失败", Busy: m.snap.Busy && !m.Exiting()}
+	case m.exitState == exitFailed:
+		// Results are saved; only the teardown did not finish. The tray must
+		// not suggest a retry that the service caches as the same error.
+		return LifecycleStatus{
+			Text:              "退出失败",
+			Busy:              false,
+			ExitCleanupFailed: !m.exitFailedFromSave(),
+			ExitResultsSaved:  m.savedExitResults(),
+		}
 	case m.snap.Busy || m.startReqID != "":
+		if m.snap.Busy && wrappingUp(m.snap.Scan.Phase) {
+			return LifecycleStatus{Text: "收尾中", Busy: false}
+		}
 		return LifecycleStatus{Text: "扫描中", Busy: true}
 	default:
 		return LifecycleStatus{Text: "就绪", Busy: false}
 	}
 }
 
-// SetWindowNotice sets a persistent notice about the window lifecycle, for
-// example that the tray entry is unavailable and closing will therefore
-// quit instead of hiding. Empty clears it.
-func (m *Model) SetWindowNotice(notice string) {
-	m.windowNotice = notice
+// wrappingUp reports the phases where collection is over and only the
+// final save remains. The service keeps Busy true until that save settles.
+func wrappingUp(phase scan.Phase) bool {
+	return phase == scan.PhaseFinalizing || phase == scan.PhaseEnded
 }
 
-// AllowClose reports whether the window may close now. The first ask
-// starts the explicit-exit wrap-up asynchronously and refuses the close;
-// the wrap-up shows its progress in the window. A failed wrap-up (an
-// unsaved result) keeps the window with the save failure and its retry;
-// once the save settled, the next ask runs the wrap-up again. A completed
-// wrap-up allows every later ask.
+// SetTrayUnavailable records that the tray/menu bar entry could not be
+// created. Hiding then has no way back, so the close path falls back to the
+// explicit-exit wrap-up; the settings page shows that fixed option and the
+// reason, and the first-hide hint never appears.
+func (m *Model) SetTrayUnavailable(reason string) {
+	m.trayUnavailable = reason
+}
+
+// TrayUnavailable reports the tray creation failure, empty while the entry
+// exists.
+func (m *Model) TrayUnavailable() string { return m.trayUnavailable }
+
+// FirstHideHintDue reports whether closing would hide the window before
+// the first-hide hint was acknowledged.
+func (m *Model) FirstHideHintDue() bool {
+	return !m.trayHintSeen
+}
+
+// ShowFirstHideHint opens the hint before a close hides the window. The
+// acknowledgement then hides the window; a dismissal with Esc only closes
+// the dialog.
+func (m *Model) ShowFirstHideHint() {
+	m.trayHintOpen = true
+	m.trayHintHideOnDone = true
+	m.trayHintErr = ""
+}
+
+// ShowTrayHint reopens the hint from settings without hiding the window
+// afterwards.
+func (m *Model) ShowTrayHint() {
+	m.trayHintOpen = true
+	m.trayHintHideOnDone = false
+	m.trayHintErr = ""
+}
+
+// trayHintDismissed handles Escape or a backdrop press: it closes the
+// dialog without acknowledging or hiding.
+func (m *Model) trayHintDismissed() {
+	m.trayHintOpen = false
+	m.trayHintHideOnDone = false
+}
+
+// acknowledgeTrayHint records the acknowledgement and, on the close path,
+// hides the window. A failed settings write does not block the hide; the
+// next launch shows the hint again and settings reports the error.
+func (m *Model) acknowledgeTrayHint() {
+	m.trayHintOpen = false
+	hide := m.trayHintHideOnDone
+	m.trayHintHideOnDone = false
+	if !m.trayHintSeen {
+		m.trayHintSeen = true
+		if m.cfg.SaveTrayHintSeen != nil {
+			if err := m.cfg.SaveTrayHintSeen(true); err != nil {
+				m.trayHintErr = "保存设置失败：" + err.Error()
+			}
+		}
+	}
+	// A quit request can arrive while the hint is open and leave its unsaved
+	// dialog waiting. Hiding now would put that prompt behind the tray icon
+	// and swallow the exit; keep the window so the user can answer it
+	// (PR-18, 09 §4.1). A failed cleanup is not such a prompt: with
+	// close-to-tray the close still hides, and the tray restores it.
+	if hide && m.navPrompt == nil && !m.Exiting() && m.cfg.HideToTray != nil {
+		m.cfg.HideToTray()
+	}
+}
+
+// AllowClose reports whether the window may close now. Every explicit-exit
+// ask starts or joins the wrap-up and refuses the close; a dirty editor or
+// an in-flight review save is settled through the ordinary prompt first.
+// A failed final save keeps the window with its retry; after a non-save
+// teardown failure the ask reopens the failure dialog, except for the tray's
+// 仍然退出 path, which settles directly after the same editor guards. A
+// completed wrap-up allows every later ask.
 //
 // This is the explicit-exit path, used by the window close when the user
 // chose close-to-exit, and by every quit event regardless of the close
@@ -1086,19 +1363,104 @@ func (m *Model) AllowClose() bool {
 	case exitRunning:
 		return false
 	}
+	m.requestExit(false)
+	return false
+}
+
+// ExitAnyway is the tray's 仍然退出 action. It takes the settled exit path
+// after the ordinary unsaved-input and save-in-flight guards. The failure
+// dialog's 仍然退出 button uses the same method (PR-19b, decision 2).
+func (m *Model) ExitAnyway() {
+	if m.exitState != exitFailed || m.exitFailedFromSave() {
+		return
+	}
+	m.requestExit(true)
+}
+
+// requestExit records the exit intent, then settles the editor through its
+// ordinary save/discard prompt. The intent lives outside the prompt so a
+// navigation prompt cannot swallow a quit and a successful in-flight save
+// can continue it. An exit prompt replaces a non-exit prompt; a second quit
+// may only upgrade normal to force, never downgrade 仍然退出.
+func (m *Model) requestExit(force bool) {
+	if m.exitState == exitRunning || m.exitState == exitDone {
+		return
+	}
+	if force {
+		m.exitIntent = exitIntentForce
+	} else if m.exitIntent == exitIntentNone {
+		m.exitIntent = exitIntentNormal
+	}
+	if m.navPrompt != nil {
+		if m.navPrompt.kind != navExit {
+			m.navPrompt = &navigationRequest{kind: navExit}
+			m.compactListOpen = false
+			m.compactListFocusRequested = false
+		}
+		if m.reviewSaving {
+			m.reviewErr = "正在保存，完成前不能退出。"
+		}
+		m.exitFailureDialogOpen = false
+		return
+	}
+	req := &navigationRequest{kind: navExit}
 	if m.reviewSaving {
-		m.navPrompt = &navigationRequest{kind: navExit}
 		m.reviewErr = "正在保存，完成前不能退出。"
-		return false
+		m.navPrompt = req
+		m.exitFailureDialogOpen = false
+		return
 	}
 	if m.editingDirty() {
-		// The close is refused until the editor's input is saved or
-		// discarded; the prompt offers both and a way to stay.
-		m.navPrompt = &navigationRequest{kind: navExit}
-		return false
+		m.navPrompt = req
+		m.exitFailureDialogOpen = false
+		return
+	}
+	m.continueExit()
+}
+
+// continueExit consumes the exit intent after the editor settled. A generic
+// quit during a non-save teardown failure only reopens the dialog; the
+// tray/dialog 仍然退出 takes the settled exit path.
+func (m *Model) continueExit() {
+	intent := m.exitIntent
+	if intent == exitIntentNone {
+		return
+	}
+	m.exitIntent = exitIntentNone
+	m.navPrompt = nil
+	if m.exitState == exitFailed && !m.exitFailedFromSave() {
+		if intent == exitIntentForce {
+			m.exitAnyway()
+			return
+		}
+		m.exitFailureDialogOpen = true
+		return
 	}
 	m.beginExit()
-	return false
+}
+
+// continueExitAfterSave reports whether a settled review save consumed a
+// pending exit. It runs before a navigation's after callback because the
+// exit owns the application, not the discarded prompt target.
+func (m *Model) continueExitAfterSave() bool {
+	if m.exitIntent == exitIntentNone {
+		return false
+	}
+	m.continueExit()
+	return true
+}
+
+// applyLatestSnapshot applies the service's authoritative snapshot before an
+// exit decision that must not depend on the subscription pump's delivery
+// order. The later delivery of the same revision is discarded. A service
+// double that reports no session must not erase the session the model
+// already shows.
+func (m *Model) applyLatestSnapshot() {
+	latest := m.cfg.Service.Snapshot()
+	if latest.SessionID == "" && m.snap.SessionID != "" {
+		return
+	}
+	m.Apply(latest)
 }
 
 // beginExit starts the explicit-exit wrap-up. It runs once the editor is
@@ -1109,23 +1471,61 @@ func (m *Model) beginExit() {
 	}
 	m.edit = nil
 	m.navPrompt = nil
+	m.exitIntent = exitIntentNone
+	// The exit progress owns the window: an earlier hint or export dialog
+	// would otherwise stack under it, with buttons the user cannot reach.
+	m.trayHintOpen = false
+	m.trayHintHideOnDone = false
+	m.pendingNotificationRecordID = ""
+	m.closeExportDialog()
 	m.exitState = exitRunning
 	m.exitErr = ""
+	m.exitFailureDialogOpen = false
 	m.goAsync(func() {
 		err := m.cfg.Service.Quit()
 		m.update(func() {
+			// Quit's own update can be posted before the subscription pump's
+			// final snapshot. Read the authoritative snapshot first so both
+			// the failure classification and the pending result see the end.
+			m.applyLatestSnapshot()
 			if err != nil {
 				m.exitState = exitFailed
+				m.exitFailureWasSave = m.snap.SaveError != ""
 				m.exitErr = err.Error()
+				m.exitFailureDialogOpen = true
 				if m.cfg.OnExitFailed != nil {
 					m.cfg.OnExitFailed()
 				}
 				return
 			}
-			m.exitState = exitDone
-			if m.cfg.OnExitSettled != nil {
-				m.cfg.OnExitSettled()
-			}
+			m.finishExit()
 		})
 	})
+}
+
+// finishExit runs the settled exit path exactly once. Service.Quit's
+// teardown may have failed, but once the user chooses 仍然退出 the process
+// must end through the same callback as a successful exit (PR-19b, item 13).
+func (m *Model) finishExit() {
+	m.exitState = exitDone
+	m.exitIntent = exitIntentNone
+	m.exitFailureDialogOpen = false
+	// The entry point quits the application from OnExitSettled and then
+	// stops delivering queued updates. A result notification still waiting
+	// for its record must be settled first, or the first segment stays on
+	// screen and the promise to notify again is never kept.
+	m.flushResultsBeforeExit()
+	if m.cfg.OnExitSettled != nil {
+		m.cfg.OnExitSettled()
+	}
+}
+
+// exitAnyway is the dialog's 仍然退出 action. It is only valid when the
+// failed exit was not a final-save failure; a save failure must keep the
+// retry path and never allow bypassing the unsaved result.
+func (m *Model) exitAnyway() {
+	if m.exitState != exitFailed || m.exitFailedFromSave() || m.reviewSaving || m.editingDirty() {
+		return
+	}
+	m.finishExit()
 }

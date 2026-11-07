@@ -249,6 +249,11 @@ func main() {
 		OpenDiagnosticsDirectory: func() error {
 			return mygo.Shell.OpenPath(app.DiagnosticsDirectory(paths))
 		},
+		// Settings › 关于 opens the third-party notices that ships beside
+		// the executable.
+		OpenLicenses: func() error {
+			return mygo.Shell.OpenPath(filepath.Join(paths.Resources, "THIRD-PARTY-NOTICES.md"))
+		},
 		// The auto-update corner: MyGo's updater behind the UI's seam. The
 		// running version shows in the area ("当前版本 …"); DevAutoInstall
 		// is the rehearsal switch (YOUKAI_DEV_AUTOUPDATE) that installs a
@@ -257,18 +262,38 @@ func main() {
 		// 练) — development only, never a user setting.
 		Updates:        mygoUpdates{},
 		AppVersion:     mygo.App.Version(),
+		BuildCommit:    app.BuildCommit(),
 		DevAutoInstall: os.Getenv("YOUKAI_DEV_AUTOUPDATE") != "",
 		// The close preference is read at startup and persisted in the data
 		// root; the window's setting row changes it. Closing hides by
-		// default; quitting always runs the explicit-exit wrap-up.
+		// default; quitting always runs the explicit-exit wrap-up. The
+		// settings value keeps both preferences, so saving one never erases
+		// the other.
 		CloseBehavior: settings.CloseBehavior,
 		SaveCloseBehavior: func(behavior app.CloseBehavior) error {
-			err := app.SaveSettings(paths.Data, app.Settings{CloseBehavior: behavior})
+			settings.CloseBehavior = behavior
+			err := app.SaveSettings(paths.Data, settings)
 			if err != nil {
 				log.Printf("youkai: save settings: %v", err)
 			}
 			return err
 		},
+		// The first-hide hint is acknowledged once; its persisted flag is
+		// what keeps later closes from asking again (R-18).
+		TrayHintSeen: settings.TrayHintSeen,
+		SaveTrayHintSeen: func(seen bool) error {
+			settings.TrayHintSeen = seen
+			err := app.SaveSettings(paths.Data, settings)
+			if err != nil {
+				log.Printf("youkai: save settings: %v", err)
+			}
+			return err
+		},
+		// The two-stage scan notifications and the first-hide hint's hide
+		// action belong to the native lifecycle; the model only assembles
+		// the text and decides which record a click opens.
+		Notify:     func(n ui.Notification) { life.Notify(n) },
+		HideToTray: func() { life.HideToTray() },
 		// After a successful install the application restarts into the new
 		// version: this first Relaunch only starts the exit — the close
 		// interception cancels it (see updateInstalled above) after firing
@@ -285,8 +310,8 @@ func main() {
 		// quit goroutine already waited for the wrap-up, so quitting re-
 		// enters the allowed path (the model allows the close) and the
 		// event loop ends — relaunching instead when an update is
-		// installed. A failed wrap-up never reaches here — the window
-		// stays with the save failure instead.
+		// installed. A failed final save never reaches here; a failed
+		// teardown reaches it only through the explicit 仍然退出 path.
 		OnExitSettled: func() {
 			life.Refresh()
 			if updateInstalled {
@@ -329,6 +354,10 @@ func main() {
 	mygo.App.OnBeforeQuit(func(e *mygo.QuitEvent) {
 		life.OnBeforeQuit(e)
 	})
+	// Notification clicks can arrive after this run's Notification object is
+	// gone (or from the notification center); the ID carries the record and
+	// segment, so one app-wide handler covers both segments.
+	mygo.App.OnNotificationClick(life.OnNotificationClick)
 
 	mygo.App.WhenReady(func() {
 		placement := windowPlacementFor(mygo.Screen.PrimaryDisplay().WorkArea)

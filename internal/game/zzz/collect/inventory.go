@@ -66,6 +66,12 @@ type Inventory struct {
 	// macOS cloud profile. It only widens the settle wait for a motion
 	// observed near the budget's end; it never shortens the ScrollBudget.
 	ScrollTiming *ScrollTiming
+	// ScrollNow supplies awaitScroll's clock; nil takes time.Now. Scripted
+	// traversal tests inject a frame-driven clock so a slow matcher pass
+	// cannot consume a wall-clock budget and change the scroll verdict.
+	// When set, the frame request uses the caller's context instead of a
+	// real-time deadline; the frame-driven clock still bounds the wait.
+	ScrollNow func() time.Time
 	// StableFrames is the consecutive same-verdict observation count that
 	// counts as settled. Zero takes the default.
 	StableFrames int
@@ -140,6 +146,25 @@ func (inv *Inventory) scrollBudget() time.Duration {
 		return inv.ScrollBudget
 	}
 	return DefaultScrollBudget
+}
+
+// scrollNow is awaitScroll's clock. The injected clock exists for scripted
+// tests, which advance it by frames instead of depending on matcher speed.
+func (inv *Inventory) scrollNow() time.Time {
+	if inv.ScrollNow != nil {
+		return inv.ScrollNow()
+	}
+	return time.Now()
+}
+
+// scrollFrameContext bounds one frame request. A scripted test clock owns
+// the wait's deadline by frame count, so its context must not cancel on
+// wall-clock time; production keeps the real deadline.
+func scrollFrameContext(ctx context.Context, deadline time.Time, injectedClock bool) (context.Context, context.CancelFunc) {
+	if injectedClock {
+		return context.WithCancel(ctx)
+	}
+	return context.WithDeadline(ctx, deadline)
 }
 
 // scrollTiming returns the client's scroll timing profile; nil takes the
@@ -3138,7 +3163,7 @@ const (
 // flag records whether the whole wait only ever proved stillness.
 func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame) (scrollOutcome, error) {
 	timing := run.inv.scrollTiming()
-	waitStart := time.Now()
+	waitStart := run.inv.scrollNow()
 	deadline := waitStart.Add(run.inv.scrollBudget())
 	// motionStarted and motionAt record the first observation that the
 	// list's content changed (a displacement, a lost overlap, or a
@@ -3242,10 +3267,10 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 		if err := ctx.Err(); err != nil {
 			return scrollOutcome{}, err
 		}
-		if !time.Now().Before(effectiveDeadline()) {
+		if !run.inv.scrollNow().Before(effectiveDeadline()) {
 			return finish()
 		}
-		fctx, cancel := context.WithDeadline(ctx, effectiveDeadline())
+		fctx, cancel := scrollFrameContext(ctx, effectiveDeadline(), run.inv.ScrollNow != nil)
 		f, err := run.view.Frame(fctx, platform.FrameRequest{After: after})
 		cancel()
 		if err != nil {

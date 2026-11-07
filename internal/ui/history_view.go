@@ -261,7 +261,7 @@ func (m *Model) historyConclusionInput(entry HistoryEntry) recordConclusionInput
 		Coverage:                 entry.Coverage,
 		Termination:              entry.Termination,
 		Counts:                   entry.Counts,
-		Interrupted:              recordConclusionInterrupted(entry.Termination, entry.Interrupted, false),
+		Interrupted:              recordConclusionInterrupted(entry.Termination, entry.Interrupted, active),
 		IncompletePositions:      entry.IncompletePositions,
 		IncompletePositionsKnown: entry.IncompletePositionsKnown,
 		Unreadable:               entry.Unreadable,
@@ -529,6 +529,8 @@ func (m *Model) historyExportBlockedReason(entry HistoryEntry) string {
 		return "正在退出应用，不能导出。"
 	case m.reviewSaving:
 		return "正在保存修改，完成前不能导出。"
+	case m.cleanupRunning():
+		return "正在清理，完成前不能导出。"
 	default:
 		return ""
 	}
@@ -545,8 +547,8 @@ func (m *Model) openHistoryExport(entry HistoryEntry) {
 	m.closeHistoryMenu()
 	m.historyMenuID = ""
 	m.histChoice = entry.Label
-	m.page = pageResults
 	if m.recordIsOpen(entry.ID) && m.recErr == "" {
+		m.page = pageResults
 		// The target is already the open record; the title bar's own
 		// export entry handles its draft and blocked states.
 		m.clearRecentlyConfirmed()

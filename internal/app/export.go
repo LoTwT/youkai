@@ -266,7 +266,7 @@ func BuildUsableExport(rec *record.Recovery) (*UsableExport, error) {
 // shape. The persisted issue list and the current validation must both be
 // error-free, so a previous failed check is never upgraded by export.
 func usableItem(item *record.ItemRecord) (ExportItem, bool) {
-	if item.Status != record.StatusProduced {
+	if !ItemInterpreted(*item) {
 		return ExportItem{}, false
 	}
 	structured, ok := structuredDiscPayload(item.Data)

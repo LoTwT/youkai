@@ -147,6 +147,10 @@ func (m *Model) InstallUpdate() {
 	m.updatesState = updateInstalling
 	m.updatesInstallErr = ""
 	m.updatesProgress = 0
+	// Publish the install to the service before any download work: new
+	// starts are refused from this moment, and the restart at the end is
+	// the only way out. A failed or cancelled install must clear it again.
+	m.cfg.Service.SetUpdateInstalling(true)
 	handle := m.updatesHandle
 	m.goAsync(func() {
 		err := handle.Install(context.Background(), func(downloaded, total int64) {
@@ -161,7 +165,9 @@ func (m *Model) InstallUpdate() {
 		m.update(func() {
 			if err != nil {
 				// The app keeps running the current version; the update
-				// stays found, so the button offers the install again.
+				// stays found, so the button offers the install again. The
+				// service must accept starts again too.
+				m.cfg.Service.SetUpdateInstalling(false)
 				m.updatesState = updateAvailable
 				m.updatesInstallErr = err.Error()
 				return
@@ -220,52 +226,59 @@ func (m *Model) updateStatusText() string {
 	}
 }
 
-// updateArea is the auto-update corner at the bottom of the window: the
-// running version, then — for builds that cannot update (test packages,
-// development runs) — the note saying so; otherwise a check button, the
-// found version with its notes and the install button — disabled with its
-// reason while a scan session is active — and the honest outcome of every
-// step.
-func (m *Model) updateArea(c *ui.Context, t *ui.Theme) {
-	if m.updates == nil {
-		return
-	}
-	// The running version names the build on screen (the 2026-10-17
-	// upgrade rehearsal could not tell what it was running): the update
-	// area is where a user checks what they run, next to what they could.
+// updateDotVisible reports the design's one update cue: a dot on the
+// settings rail entry and on the in-page directory's 更新 entry while a
+// newer version is waiting to be installed (08 §6). There is no page-top
+// banner; the update section is the only place the news is written.
+func (m *Model) updateDotVisible() bool {
+	return m.updatesState == updateAvailable
+}
+
+// updateDot is the small accent circle both entries carry. Its label keeps
+// the indicator discoverable in tests and assistive technology.
+func updateDot(c *ui.Context, t *ui.Theme, tok *Tokens) {
+	ui.Box(c).Size(t.Space(0.75), t.Space(0.75)).Radius(t.Space(0.375)).
+		Background(tok.AccentFG).Shrink(0).Label("有新版本")
+}
+
+// updateArea is the settings update section: the running version, the state
+// of the last check, the found version with its notes, the one primary
+// action (安装并重启 while a version waits, 检查更新 otherwise) and every
+// honest failure with its retry. Builds without updates say so once.
+func (m *Model) updateArea(c *ui.Context, t *ui.Theme, tok *Tokens) {
 	if m.appVersion != "" {
-		ui.Text(c, "当前版本 "+m.appVersion).TextColor(t.TextMuted)
+		ui.Text(c, "当前版本 "+m.appVersion).TextColor(tok.TextMuted)
 	}
-	if !m.updatesEnabled {
-		ui.Text(c, "当前构建未启用自动更新。").TextColor(t.TextMuted)
+	if m.updates == nil || !m.updatesEnabled {
+		ui.Text(c, "这个版本不支持自动更新").TextColor(tok.TextMuted)
 		return
 	}
-	ui.Column(c).Gap(t.Space(1)).Children(func() {
-		ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
-			if m.updatesState != updateChecking && m.updatesState != updateInstalling && m.updatesState != updateInstalled {
-				if ui.Button(c, "检查更新").Clicked() {
-					m.CheckUpdates()
-				}
-			}
-			ui.Text(c, m.updateStatusText()).TextColor(t.TextMuted)
-		})
-		if m.updatesState == updateAvailable {
+	ui.Column(c).Gap(t.Space(1.5)).Children(func() {
+		switch m.updatesState {
+		case updateAvailable:
+			m.updateAvailableArea(c, t, tok)
+		case updateInstalling:
+			ui.Text(c, m.updateStatusText()).TextColor(tok.TextMuted)
+			ui.Progress(c, m.updatesProgress)
+		case updateInstalled:
+			ui.Text(c, m.updateStatusText()).TextColor(tok.TextMuted)
+		default:
 			ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
-				blocked := m.updateBlockedReason()
-				if blocked != "" {
-					if ui.Button(c, "安装更新").Disabled(true).Clicked() {
-						m.InstallUpdate() // unreachable on a disabled button; the model re-checks the block
+				ui.Text(c, m.updateStatusText()).TextColor(tok.TextMuted)
+				ui.Box(c).Grow(1)
+				if m.updatesState != updateChecking {
+					label := "检查更新"
+					if m.updatesCheckErr != "" {
+						label = "重试检查"
 					}
-					ui.Text(c, blocked).TextColor(t.TextMuted)
-					return
-				}
-				if ui.Button(c, "安装更新").Clicked() {
-					m.InstallUpdate()
+					if ui.Button(c, label).Clicked() {
+						m.CheckUpdates()
+					}
 				}
 			})
-			if m.updatesNotes != "" {
-				ui.Text(c, m.updatesNotes).TextColor(t.TextMuted).FontSize(t.FontSize * 0.9)
-			}
+		}
+		if m.updatesState == updateAvailable && m.updatesNotes != "" {
+			ui.Text(c, m.updatesNotes).TextColor(tok.TextMuted).FontSize(t.FontSize * 0.9)
 		}
 		if m.updatesCheckErr != "" {
 			ui.Text(c, "检查更新失败："+m.updatesCheckErr).TextColor(t.Danger)
@@ -274,4 +287,26 @@ func (m *Model) updateArea(c *ui.Context, t *ui.Theme) {
 			ui.Text(c, "安装更新失败："+m.updatesInstallErr+"。应用继续运行当前版本，可重试安装。").TextColor(t.Danger)
 		}
 	})
+}
+
+// updateAvailableArea is the found-version row. The install is the page's
+// only primary action; a scan, wrap-up, failed save or exit disables it with
+// its reason beside it, and the model's InstallUpdate repeats the guard.
+func (m *Model) updateAvailableArea(c *ui.Context, t *ui.Theme, tok *Tokens) {
+	blocked := m.updateBlockedReason()
+	label := "安装并重启"
+	if m.updatesInstallErr != "" {
+		label = "重试安装"
+	}
+	ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
+		ui.Text(c, m.updateStatusText()).TextColor(tok.TextMuted)
+		ui.Box(c).Grow(1)
+		button := ui.PrimaryButton(c, label).Disabled(blocked != "")
+		if button.Clicked() {
+			m.InstallUpdate()
+		}
+	})
+	if blocked != "" {
+		ui.Text(c, blocked).TextColor(t.TextMuted).FontSize(t.FontSize * 0.9)
+	}
 }

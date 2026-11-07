@@ -25,8 +25,16 @@ type fakeLifecycleModel struct {
 	allowResults []bool
 	allow        bool
 	allowCalls   int
+	exitAnyCalls int
 	stopCalls    int
 	notice       string
+	// hintDue answers FirstHideHintDue; showHintCalls counts the prompt
+	// requests.
+	hintDue       bool
+	showHintCalls int
+	// openedNotifications records the record IDs a notification click
+	// opened.
+	openedNotifications []string
 	// events records "stop" and "prepare-restore" in call order; tests
 	// share it with the fake window to assert the restore ordering.
 	events *[]string
@@ -47,6 +55,8 @@ func (f *fakeLifecycleModel) AllowClose() bool {
 	}
 	return f.allow
 }
+
+func (f *fakeLifecycleModel) ExitAnyway() { f.exitAnyCalls++ }
 
 func (f *fakeLifecycleModel) Stop() {
 	f.stopCalls++
@@ -74,14 +84,28 @@ func (f *fakeLifecycleModel) LifecycleStatus() ui.LifecycleStatus {
 	return f.status
 }
 
-func (f *fakeLifecycleModel) SetWindowNotice(notice string) { f.notice = notice }
+func (f *fakeLifecycleModel) SetTrayUnavailable(reason string) {
+	f.notice = "托盘/菜单栏入口不可用（" + reason + "）。关闭窗口将停止扫描并退出应用。"
+}
+
+func (f *fakeLifecycleModel) FirstHideHintDue() bool { return f.hintDue }
+
+func (f *fakeLifecycleModel) ShowFirstHideHint() { f.showHintCalls++ }
+
+func (f *fakeLifecycleModel) OpenNotification(recordID string) {
+	f.openedNotifications = append(f.openedNotifications, recordID)
+}
 
 // fakeWindow records the window calls in order; "stop" from the model is
 // recorded through events as well, so restore order is observable.
 type fakeWindow struct {
-	events *[]string
-	shows  int
-	hides  int
+	events  *[]string
+	shows   int
+	hides   int
+	flashes int
+	// redraws counts the frames requested after a state change that had no
+	// input event of its own (the first-hide hint, a notification click).
+	redraws int
 }
 
 func (w *fakeWindow) record(event string) {
@@ -93,6 +117,15 @@ func (w *fakeWindow) Show()    { w.shows++; w.record("show") }
 func (w *fakeWindow) Hide()    { w.hides++; w.record("hide") }
 func (w *fakeWindow) Focus()   { w.record("focus") }
 func (w *fakeWindow) Restore() { w.record("restore") }
+func (w *fakeWindow) FlashFrame(flash bool) {
+	if flash {
+		w.flashes++
+	}
+}
+func (w *fakeWindow) Update(func()) {
+	w.redraws++
+	w.record("update")
+}
 
 // fakeTray records the menus and tooltips the lifecycle installs and the
 // click callbacks it registers.
@@ -118,6 +151,50 @@ func (t *fakeTray) OnClick(fn func()) func() {
 func (t *fakeTray) Bounds() mygo.Rectangle {
 	t.boundsCalls++
 	return t.bounds
+}
+
+// fakeNotification records the two-stage order, the options and the close.
+type fakeNotification struct {
+	opts   mygo.NotificationOptions
+	events *[]string
+	shows  int
+	closes int
+	err    error
+	// onShow runs inside Show, before it returns: it models a macOS call
+	// that processes queued main-thread events (including a second
+	// notification) while showing.
+	onShow func()
+}
+
+func (n *fakeNotification) Show() error {
+	n.shows++
+	if n.events != nil {
+		*n.events = append(*n.events, "show:"+n.opts.ID)
+	}
+	if n.onShow != nil {
+		n.onShow()
+	}
+	return n.err
+}
+
+func (n *fakeNotification) Close() {
+	n.closes++
+	if n.events != nil {
+		*n.events = append(*n.events, "close:"+n.opts.ID)
+	}
+}
+
+// installFakeNotifications replaces the native notification factory and
+// returns the created notifications in order.
+func installFakeNotifications(l *windowLifecycle) (*[]*fakeNotification, *[]string) {
+	var created []*fakeNotification
+	var events []string
+	l.newNotification = func(opts mygo.NotificationOptions) notificationSurface {
+		n := &fakeNotification{opts: opts, events: &events}
+		created = append(created, n)
+		return n
+	}
+	return &created, &events
 }
 
 // fakeEvent is a preventable close/quit event.
@@ -157,6 +234,60 @@ func menuItem(t *testing.T, menu *mygo.Menu, label string) *mygo.MenuItem {
 	return nil
 }
 
+// The first close shows the hint instead of hiding. Once acknowledged, the
+// next close hides without asking again.
+func TestFirstCloseShowsHideHint(t *testing.T) {
+	model := &fakeLifecycleModel{behavior: app.CloseBehaviorHide, hintDue: true}
+	life := newWindowLifecycle(model)
+	installFakeTray(t, life)
+	win := &fakeWindow{}
+	life.AttachWindow(win)
+
+	first := &fakeEvent{}
+	life.OnWindowClose(first)
+	if !first.prevented || win.hides != 0 {
+		t.Fatalf("the first close: prevented=%v hides=%d, want the prompt", first.prevented, win.hides)
+	}
+	if model.showHintCalls != 1 {
+		t.Fatalf("first-hide prompts = %d, want 1", model.showHintCalls)
+	}
+	if win.redraws != 1 {
+		t.Fatalf("frames requested after the close = %d, want 1 without further input", win.redraws)
+	}
+
+	// The hint's acknowledgement marks it seen; a later close hides
+	// directly.
+	model.hintDue = false
+	second := &fakeEvent{}
+	life.OnWindowClose(second)
+	if !second.prevented || win.hides != 1 {
+		t.Fatalf("the acknowledged close: prevented=%v hides=%d, want one hide", second.prevented, win.hides)
+	}
+	if model.showHintCalls != 1 {
+		t.Fatalf("the hint showed again: %d prompts", model.showHintCalls)
+	}
+}
+
+// A missing tray never shows the hint: the close falls back to the exit
+// wrap-up, where the window is still visible.
+func TestFirstHideHintSkippedWithoutTray(t *testing.T) {
+	model := &fakeLifecycleModel{behavior: app.CloseBehaviorHide, hintDue: true, allow: false}
+	life := newWindowLifecycle(model)
+	life.newTray = func(mygo.TrayOptions) (traySurface, error) {
+		return nil, errors.New("no notification area")
+	}
+	life.CreateTray()
+	win := &fakeWindow{}
+	life.AttachWindow(win)
+
+	event := &fakeEvent{}
+	life.OnWindowClose(event)
+	if model.showHintCalls != 0 || win.hides != 0 || model.allowCalls != 1 {
+		t.Fatalf("tray-less first close: prompts=%d hides=%d allow=%d",
+			model.showHintCalls, win.hides, model.allowCalls)
+	}
+}
+
 // The default close hides to the tray without starting the exit wrap-up.
 func TestWindowCloseHidesByDefault(t *testing.T) {
 	model := &fakeLifecycleModel{behavior: app.CloseBehaviorHide, allow: false}
@@ -181,6 +312,31 @@ func TestWindowCloseHidesByDefault(t *testing.T) {
 	}
 	if model.allowCalls != 0 || model.stopCalls != 0 {
 		t.Fatalf("hiding started the exit path: allowCalls=%d stopCalls=%d", model.allowCalls, model.stopCalls)
+	}
+}
+
+// A close after a failed cleanup still hides under the close-to-tray
+// preference; it does not reopen the failure dialog or run the exit path.
+func TestWindowCloseHidesAfterCleanupFailure(t *testing.T) {
+	model := &fakeLifecycleModel{
+		behavior: app.CloseBehaviorHide,
+		status: ui.LifecycleStatus{
+			Text: "退出失败", ExitCleanupFailed: true,
+		},
+	}
+	life := newWindowLifecycle(model)
+	installFakeTray(t, life)
+	win := &fakeWindow{}
+	life.AttachWindow(win)
+
+	event := &fakeEvent{}
+	life.OnWindowClose(event)
+	if !event.prevented || win.hides != 1 {
+		t.Fatalf("cleanup-failed close: prevented=%v hides=%d, want one hide", event.prevented, win.hides)
+	}
+	if model.allowCalls != 0 || model.showHintCalls != 0 {
+		t.Fatalf("cleanup-failed close reopened the failure path: allowCalls=%d hints=%d",
+			model.allowCalls, model.showHintCalls)
 	}
 }
 
@@ -553,6 +709,256 @@ func TestRedactedURLDropsQuery(t *testing.T) {
 	}
 }
 
+// The tray menu follows the four lifecycle states, including the fixed
+// labels and the stop item's enabled state (08 §7).
+func TestTrayMenuStates(t *testing.T) {
+	cases := []struct {
+		status      ui.LifecycleStatus
+		statusLabel string
+		open        string
+		stopEnabled bool
+		exit        string
+	}{
+		{
+			status:      ui.LifecycleStatus{Text: "就绪"},
+			statusLabel: "youkai · 就绪",
+			open:        "打开 youkai",
+			exit:        "退出 youkai",
+		},
+		{
+			status:      ui.LifecycleStatus{Text: "扫描中", Busy: true},
+			statusLabel: "youkai · 正在扫描（停止：Ctrl+Alt+Shift+S）",
+			open:        "停止扫描并打开",
+			stopEnabled: true,
+			exit:        "停止扫描并退出",
+		},
+		{
+			status:      ui.LifecycleStatus{Text: "收尾中"},
+			statusLabel: "youkai · 正在保存结果",
+			open:        "打开 youkai（不取消剩余识别）",
+			exit:        "退出 youkai（等保存完成）",
+		},
+		{
+			status:      ui.LifecycleStatus{Text: "保存失败"},
+			statusLabel: "youkai · 结果未保存，需要重试",
+			open:        "打开 youkai",
+			exit:        "退出 youkai（会被拒绝并打开窗口）",
+		},
+		{
+			status: ui.LifecycleStatus{
+				Text: "退出失败", ExitCleanupFailed: true,
+			},
+			statusLabel: "youkai · 退出清理未完成",
+			open:        "打开 youkai",
+			exit:        "仍然退出",
+		},
+		{
+			status: ui.LifecycleStatus{
+				Text: "退出失败", ExitCleanupFailed: true, ExitResultsSaved: true,
+			},
+			statusLabel: "youkai · 退出清理未完成，结果已保存",
+			open:        "打开 youkai",
+			exit:        "仍然退出",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.status.Text, func(t *testing.T) {
+			model := &fakeLifecycleModel{behavior: app.CloseBehaviorHide, status: tc.status}
+			life := newWindowLifecycle(model)
+			menu := life.trayMenu()
+			status := menuItem(t, menu, tc.statusLabel)
+			if !status.Disabled {
+				t.Fatal("the status line accepts clicks")
+			}
+			menuItem(t, menu, tc.open)
+			stop := menuItem(t, menu, "停止扫描")
+			if stop.Disabled != !tc.stopEnabled {
+				t.Fatalf("stop disabled = %v, want enabled %v", stop.Disabled, tc.stopEnabled)
+			}
+			menuItem(t, menu, tc.exit)
+		})
+	}
+}
+
+// TestTrayExitAnywayUsesForcedExit checks decision 2: the tray's 仍然退出
+// calls the model's forced-exit path instead of the generic quit event.
+func TestTrayExitAnywayUsesForcedExit(t *testing.T) {
+	model := &fakeLifecycleModel{
+		behavior: app.CloseBehaviorHide,
+		status: ui.LifecycleStatus{
+			Text: "退出失败", ExitCleanupFailed: true,
+		},
+	}
+	life := newWindowLifecycle(model)
+	quits := 0
+	life.quitApp = func() { quits++ }
+	tray, _ := installFakeTray(t, life)
+	win := &fakeWindow{}
+	life.AttachWindow(win)
+
+	item := menuItem(t, tray.menu, "仍然退出")
+	item.Click(item, nil)
+	if model.exitAnyCalls != 1 || quits != 0 {
+		t.Fatalf("tray 仍然退出: forced=%d quits=%d, want one forced and no quit",
+			model.exitAnyCalls, quits)
+	}
+	if win.redraws != 1 {
+		t.Fatalf("tray 仍然退出 requested %d frames, want 1", win.redraws)
+	}
+	if win.shows != 1 {
+		t.Fatalf("tray 仍然退出 left a possible unsaved prompt hidden: shows=%d", win.shows)
+	}
+}
+
+// The result notification closes the input-stop segment before showing,
+// then flashes the taskbar button.
+func TestNotificationTwoStageOrder(t *testing.T) {
+	model := &fakeLifecycleModel{behavior: app.CloseBehaviorHide}
+	life := newWindowLifecycle(model)
+	created, events := installFakeNotifications(life)
+	win := &fakeWindow{}
+	life.AttachWindow(win)
+
+	first := ui.Notification{
+		ID:       ui.NotificationID("rec-1", ui.NotificationInputStopped),
+		Segment:  ui.NotificationInputStopped,
+		RecordID: "rec-1",
+		Title:    "youkai 已停止操作游戏",
+		Body:     "正在识别和保存结果。",
+	}
+	life.Notify(first)
+	if len(*created) != 1 || (*created)[0].shows != 1 {
+		t.Fatalf("first notification = %d created, want one shown", len(*created))
+	}
+	if win.flashes != 0 {
+		t.Fatal("the input-stop notification flashed the taskbar")
+	}
+
+	second := ui.Notification{
+		ID:       ui.NotificationID("rec-1", ui.NotificationResult),
+		Segment:  ui.NotificationResult,
+		RecordID: "rec-1",
+		Title:    "扫描完成：扫全了",
+		Body:     "3 件可以导出。",
+		Flash:    true,
+	}
+	life.Notify(second)
+	want := "show:" + first.ID + ",close:" + first.ID + ",show:" + second.ID
+	if got := strings.Join(*events, ","); got != want {
+		t.Fatalf("notification order = %q, want %q", got, want)
+	}
+	if win.flashes != 1 {
+		t.Fatalf("taskbar flashes = %d, want 1", win.flashes)
+	}
+	if len(*created) != 2 || (*created)[1].opts.ID != second.ID ||
+		(*created)[1].opts.Title != second.Title || (*created)[1].opts.Body != second.Body {
+		t.Fatalf("second notification options = %+v", (*created)[1].opts)
+	}
+}
+
+// A result that arrives while the first Show is still running (macOS keeps
+// dispatching main-thread events) must still close the first segment: the
+// first notification is registered before Show, not after it returns.
+func TestNotificationShowReentrancyClosesTheFirstSegment(t *testing.T) {
+	model := &fakeLifecycleModel{behavior: app.CloseBehaviorHide}
+	life := newWindowLifecycle(model)
+	var events []string
+	var firstID, secondID string
+	first := ui.Notification{
+		ID:       ui.NotificationID("rec-1", ui.NotificationInputStopped),
+		Segment:  ui.NotificationInputStopped,
+		RecordID: "rec-1",
+		Title:    "youkai 已停止操作游戏",
+		Body:     "正在识别和保存结果。",
+	}
+	second := ui.Notification{
+		ID:       ui.NotificationID("rec-1", ui.NotificationResult),
+		Segment:  ui.NotificationResult,
+		RecordID: "rec-1",
+		Title:    "扫描完成：扫全了",
+		Body:     "3 件可以导出。",
+		Flash:    true,
+	}
+	firstID, secondID = first.ID, second.ID
+	reentered := false
+	life.newNotification = func(opts mygo.NotificationOptions) notificationSurface {
+		note := &fakeNotification{opts: opts, events: &events}
+		if opts.ID == firstID {
+			note.onShow = func() {
+				if reentered {
+					return
+				}
+				reentered = true
+				life.Notify(second)
+			}
+		}
+		return note
+	}
+	life.Notify(first)
+	want := "show:" + firstID + ",close:" + firstID + ",show:" + secondID
+	if got := strings.Join(events, ","); got != want {
+		t.Fatalf("reentrant notification order = %q, want %q", got, want)
+	}
+	if !reentered || life.firstNotification != nil {
+		t.Fatalf("reentrant result left firstNotification = %v", life.firstNotification)
+	}
+}
+
+// A session that never sent the first segment (prepare timeout) shows only
+// the result and has nothing to close.
+func TestResultNotificationWithoutFirstSegment(t *testing.T) {
+	model := &fakeLifecycleModel{behavior: app.CloseBehaviorHide}
+	life := newWindowLifecycle(model)
+	created, events := installFakeNotifications(life)
+	win := &fakeWindow{}
+	life.AttachWindow(win)
+
+	result := ui.Notification{
+		ID:       ui.NotificationID("rec-2", ui.NotificationResult),
+		Segment:  ui.NotificationResult,
+		RecordID: "rec-2",
+		Title:    "没有开始扫描",
+		Body:     "30 秒内游戏没有就绪。点击查看。",
+		Flash:    true,
+	}
+	life.Notify(result)
+	if len(*created) != 1 || strings.Join(*events, ",") != "show:"+result.ID {
+		t.Fatalf("prepare-timeout notification = %d created, events %v", len(*created), *events)
+	}
+	if win.flashes != 1 {
+		t.Fatalf("taskbar flashes = %d, want 1", win.flashes)
+	}
+}
+
+// A notification click restores the window and asks the model to open the
+// record; it never starts a scan.
+func TestNotificationClickOpensTheRecord(t *testing.T) {
+	model := &fakeLifecycleModel{behavior: app.CloseBehaviorHide}
+	life := newWindowLifecycle(model)
+	win := &fakeWindow{}
+	life.AttachWindow(win)
+
+	life.OnNotificationClick(ui.NotificationID("rec-3", ui.NotificationResult))
+	if win.shows != 1 {
+		t.Fatalf("notification click shows = %d, want 1", win.shows)
+	}
+	if len(model.openedNotifications) != 1 || model.openedNotifications[0] != "rec-3" {
+		t.Fatalf("opened notifications = %v", model.openedNotifications)
+	}
+	if model.stopCalls != 0 {
+		t.Fatalf("an idle notification click stopped a scan: %d", model.stopCalls)
+	}
+	if win.redraws != 1 {
+		t.Fatalf("frames requested after the click = %d, want 1", win.redraws)
+	}
+
+	life.OnNotificationClick("someone-elses-notification")
+	if win.shows != 1 || len(model.openedNotifications) != 1 || win.redraws != 1 {
+		t.Fatalf("a foreign notification click was handled: shows=%d opened=%v redraws=%d",
+			win.shows, model.openedNotifications, win.redraws)
+	}
+}
+
 // The tray menu carries the status, opens the window, stops only the scan
 // and quits through the explicit-exit path.
 func TestTrayMenuActions(t *testing.T) {
@@ -569,7 +975,7 @@ func TestTrayMenuActions(t *testing.T) {
 	life.AttachWindow(win)
 
 	menu := tray.menu
-	status := menuItem(t, menu, "Youkai · 扫描中")
+	status := menuItem(t, menu, "youkai · 正在扫描（停止：Ctrl+Alt+Shift+S）")
 	if !status.Disabled {
 		t.Fatal("the status item accepts clicks")
 	}
@@ -582,14 +988,14 @@ func TestTrayMenuActions(t *testing.T) {
 		t.Fatalf("tray stop: stops=%d quits=%d, want one stop and no quit", model.stopCalls, quits)
 	}
 
-	open := menuItem(t, menu, "打开主窗口")
+	open := menuItem(t, menu, "停止扫描并打开")
 	open.Click(open, nil)
 	if win.shows != 1 || model.stopCalls != 2 {
 		// Restore also stops the still-busy session: the restore contract.
 		t.Fatalf("tray open: shows=%d stops=%d", win.shows, model.stopCalls)
 	}
 
-	quit := menuItem(t, menu, "退出")
+	quit := menuItem(t, menu, "停止扫描并退出")
 	quit.Click(quit, nil)
 	if quits != 1 {
 		t.Fatalf("tray quit calls = %d, want 1", quits)
@@ -607,8 +1013,10 @@ func TestTrayMenuActions(t *testing.T) {
 	if !menuItem(t, tray.menu, "停止扫描").Disabled {
 		t.Fatal("stop stays enabled without a session")
 	}
-	menuItem(t, tray.menu, "Youkai · 就绪")
-	if len(tray.tooltips) == 0 || tray.tooltips[len(tray.tooltips)-1] != "Youkai · 就绪" {
+	menuItem(t, tray.menu, "youkai · 就绪")
+	menuItem(t, tray.menu, "打开 youkai")
+	menuItem(t, tray.menu, "退出 youkai")
+	if len(tray.tooltips) == 0 || tray.tooltips[len(tray.tooltips)-1] != "youkai · 就绪" {
 		t.Fatalf("tooltip = %q, want the ready status", tray.tooltips)
 	}
 	life.Refresh()

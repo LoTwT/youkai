@@ -204,46 +204,62 @@ func (m *Model) performSummaryAction(c *ui.Context, kind summaryActionKind) {
 }
 
 // openSummaryClass opens the item browser on the rows of one four-class
-// bucket. The empty class means "every item". Until PR-14b adds the
-// four-class segments, 待补录 maps to the existing 无法导出 segment (failed
-// and unprocessed rows), 待校对 to 待校对, and warning/passed to 全部; in
-// every case the first row of the clicked class becomes the selection so the
-// count and the opened item agree.
+// bucket. The request goes through requestNavigation so a dirty editor gets
+// the shared save/discard/stay dialog, and openSummaryClassState is the only
+// place that applies the segment, facets and class selection.
 func (m *Model) openSummaryClass(class app.ItemClass) {
 	if m.rec == nil {
 		return
 	}
-	filter := resultFilterAll
-	switch class {
-	case app.ItemClassPendingBackfill:
-		filter = resultFilterUnexportable
-	case app.ItemClassPendingReview:
-		filter = resultFilterPending
+	filter, ok := summaryClassFilter(class)
+	if !ok {
+		return
 	}
+	m.requestNavigation(navigationRequest{
+		kind:         navSummaryClass,
+		filter:       filter,
+		summaryClass: class,
+	})
+}
+
+// summaryClassFilter maps a summary bucket to the item segment that holds
+// it. Every class opens its own segment; the selection then picks the first
+// row of that class.
+func summaryClassFilter(class app.ItemClass) (resultFilter, bool) {
+	switch class {
+	case app.ItemClassPendingBackfill, app.ItemClassPendingReview:
+		return resultFilterPending, true
+	case app.ItemClassWarning:
+		return resultFilterWarning, true
+	case app.ItemClassPassed, "":
+		return resultFilterAll, true
+	default:
+		return resultFilterAll, false
+	}
+}
+
+// openSummaryClassState applies a summary-class request after the editor is
+// settled. Facets are cleared so the clicked bucket cannot be hidden by a
+// remembered set/slot choice.
+func (m *Model) openSummaryClassState(filter resultFilter, class app.ItemClass) {
+	m.applyResultFilterState(filter, "", "")
 	m.recordTab = recordTabItems
-	m.resultsDetail = false
-	// The item browser remembers search and set/slot filters across visits.
-	// A count cell promises the class's first item, so those additional
-	// filters must not hide it.
-	m.search = ""
-	m.setFilter = ""
-	m.slotFilter = ""
-	m.setResultFilter(filter)
 	if class == "" {
 		m.settleResultSelection()
+		m.enterReviewView()
 		return
 	}
 	if m.selectSummaryClass(class) {
+		m.enterReviewView()
 		return
 	}
-	// The existing pending segment only shows quality-pending rows; a class
-	// the segment cannot represent (for example a produced item the export
-	// refuses for validation) still opens in 全部 so the count and its item
-	// stay connected until PR-14b adds the four-class filters.
+	// The class may be represented by a different segment (a produced item
+	// the export refuses); fall back to all and keep the count connected.
 	if filter != resultFilterAll {
-		m.setResultFilter(resultFilterAll)
+		m.applyResultFilterState(resultFilterAll, "", "")
 		m.selectSummaryClass(class)
 	}
+	m.enterReviewView()
 }
 
 // selectSummaryClass chooses the first row of one class among the rows the
@@ -276,22 +292,12 @@ func (m *Model) selectSummaryClass(class app.ItemClass) bool {
 }
 
 // summaryCounts is the shared four-class partition for the summary's count
-// cells, the workspace header and the pending action labels. The export
-// snapshot is authoritative for the current revision. A record whose export
-// cannot be built falls back to classifying the loaded checkpoint, so that
-// pass runs only while the export snapshot is missing. PR-14b's per-item
+// cells, the workspace header and the pending action labels. It reads the
+// loaded checkpoint's rows through recordClassCounts; the export snapshot is
+// built from that same revision, so both must agree. PR-14b's per-item
 // segments must read this function instead of adding a second counting rule.
 func (m *Model) summaryCounts() app.ItemClassCounts {
-	if m.exportData != nil {
-		return m.exportData.Summary.Counts
-	}
-	if m.recData != nil {
-		return app.ClassifyItems(m.recData.Checkpoint.Items)
-	}
-	if m.rec != nil {
-		return m.rec.Classes
-	}
-	return app.ItemClassCounts{}
+	return m.recordClassCounts()
 }
 
 // summaryCountsGrid lays the four count cells on one row at 1120 DIP and
@@ -499,10 +505,10 @@ func (m *Model) summaryCountLine() string {
 // title was about coverage.
 func (m *Model) summaryTerminationLine() string {
 	term := m.rec.Shell.Termination
+	if recordConclusionInterrupted(term, m.rec.Interrupted, m.rec.Live) {
+		return "结束：中断恢复"
+	}
 	if term == nil {
-		if m.rec.Interrupted {
-			return "结束：中断恢复"
-		}
 		if m.rec.Live && m.snap.Busy {
 			return "结束：进行中"
 		}
@@ -511,12 +517,12 @@ func (m *Model) summaryTerminationLine() string {
 	switch term.Kind {
 	case record.TerminationCompleted:
 		return "结束：正常结束"
+	case record.TerminationInterrupted:
+		return "结束：中断恢复"
 	case record.TerminationCancelled:
 		return "结束：手动停止"
 	case record.TerminationFailed:
 		return "结束：中途停止"
-	case record.TerminationInterrupted:
-		return "结束：中断恢复"
 	default:
 		return "结束：未知"
 	}
@@ -716,24 +722,16 @@ func (m *Model) copySummaryDiagnostics(c *ui.Context) {
 	c.Toast("已复制诊断信息")
 }
 
-// summaryDiagnosticsText assembles the copyable text. It copies only the
-// fields app.DiagnosticsText allows; window titles and user paths never
-// enter it.
+// summaryDiagnosticsText assembles the copyable text for the opened record.
+// It delegates the shared version, system and allowlisted assembly to
+// diagnosticsText; this record only supplies its termination.
 func (m *Model) summaryDiagnosticsText() string {
 	term := m.rec.Shell.Termination
 	scan := app.DiagnosticsScanFromTermination(term)
 	if scan == nil && m.rec.Interrupted {
 		scan = &app.DiagnosticsScan{End: string(record.TerminationInterrupted)}
 	}
-	var system app.SystemInfo
-	if m.cfg.SystemInfo != nil {
-		system = m.cfg.SystemInfo()
-	}
-	return app.DiagnosticsText(app.DiagnosticsInput{
-		Version: m.cfg.AppVersion,
-		System:  system,
-		Scan:    scan,
-	})
+	return m.diagnosticsText(scan)
 }
 
 // summaryUnreadable is the record's page-level failure state: the reason and
@@ -816,6 +814,13 @@ func (m *Model) recordSummaryConclusion() summaryConclusion {
 	out := recordOutcomeFor(m.summaryConclusionInput())
 	wording := recordSummaryWording(out)
 	primary, secondary := m.summaryConclusionActions(out)
+	if primary.Kind == summaryActionExport && primary.disabled() {
+		// A disabled export action may be transient (loading, writing,
+		// saving, finishing) or caused by a failed snapshot. The title must
+		// not promise "可以直接导出" while the button beside it is disabled
+		// (PR-15).
+		wording.Title = strings.TrimSuffix(wording.Title, "，可以直接导出")
+	}
 	return summaryConclusion{
 		Eyebrow:    wording.Eyebrow,
 		Title:      wording.Title,
@@ -1072,12 +1077,12 @@ func emptyRecordWording(in recordConclusionInput) summaryWording {
 		if action != "" {
 			supplement = "怎么做：" + action
 		}
+	case recordConclusionInterrupted(term, in.Interrupted, false):
+		title = "扫描中断，没有采集到任何驱动盘"
+		supplement = "请重新开始扫描。"
 	case term != nil && term.Kind == record.TerminationCancelled:
 		title = "已手动停止，没有采集到任何驱动盘"
 		supplement = "回到准备检查后重新开始。"
-	case term != nil && term.Kind == record.TerminationInterrupted:
-		title = "扫描中断，没有采集到任何驱动盘"
-		supplement = "请重新开始扫描。"
 	default:
 		supplement = "回到准备检查后重新开始。"
 	}

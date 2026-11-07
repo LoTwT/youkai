@@ -20,6 +20,10 @@ const stopMeans = "停止方式：点击本窗口的“停止扫描”按钮。"
 // whenever the window needs a frame and only reads the model; every
 // interaction schedules its work through the model's actions.
 func (m *Model) View(c *ui.Context) {
+	// A browse click leaves the pointer on the position the editor's write
+	// buttons reuse. End that guard as soon as the pointer leaves it, before
+	// this frame reads any click (08 §3.4).
+	m.updateReviewBrowseGuard(c)
 	// Each build pass notes the text field that holds the keyboard, so the
 	// shell's Escape handler can leave the key to it.
 	m.textInputFocused = false
@@ -142,7 +146,10 @@ func (m *Model) progressArea(c *ui.Context, t *ui.Theme) {
 		ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
 			if snap.SaveError != "" {
 				ui.Text(c, "保存失败："+snap.SaveError+"（结果尚未保存）").TextColor(t.Danger)
-				if ui.Button(c, "重试保存").Clicked() {
+				// The exit-failure dialog owns the retry while it is open;
+				// a second copy behind the modal would also be the first
+				// label a keyboard or accessibility pass finds.
+				if !m.exitFailureDialogOpen && ui.Button(c, "重试保存").Clicked() {
 					m.RetrySave()
 				}
 			} else if snap.SavePending {
@@ -227,6 +234,14 @@ func (m *Model) exitArea(c *ui.Context, t *ui.Theme) {
 	case exitRunning:
 		ui.Text(c, "正在退出：停止扫描 → 保存结果 → 释放识别资源……").TextColor(t.TextMuted)
 	case exitFailed:
-		ui.Text(c, "退出未完成："+m.exitErr+"。请先“重试保存”，成功后再关闭窗口退出。").TextColor(t.Danger)
+		if m.exitFailedFromSave() {
+			ui.Text(c, "退出未完成："+m.exitErr+"。请先“重试保存”，成功后再关闭窗口退出。").TextColor(t.Danger)
+			return
+		}
+		if m.savedExitResults() {
+			ui.Text(c, "退出未完成："+m.exitErr+"。扫描结果已保存，退出清理没有完成；再次退出可重新打开退出失败对话框，在那里仍然退出或复制诊断信息。").TextColor(t.Danger)
+			return
+		}
+		ui.Text(c, "退出未完成："+m.exitErr+"。当前没有待保存的扫描结果；再次退出可重新打开退出失败对话框，在那里仍然退出或复制诊断信息。").TextColor(t.Danger)
 	}
 }

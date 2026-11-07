@@ -18,9 +18,10 @@ type ItemClass string
 
 const (
 	// ItemClassPendingBackfill is an item whose processing outcome failed
-	// or that has not been processed yet (queued, running or unprocessed).
-	// Failed and unprocessed items stay distinguishable through
-	// record.Status and UnprocessedReason, but both need a person.
+	// or that has not been processed yet (queued, running or unprocessed)
+	// and that has no manual interpretation yet. Failed and unprocessed
+	// items stay distinguishable through record.Status and
+	// UnprocessedReason, but both need a person until backfilled.
 	ItemClassPendingBackfill ItemClass = "pendingBackfill"
 	// ItemClassPendingReview is a produced item a person still has to
 	// settle: needsReview quality, failed or unavailable validation, or a
@@ -75,6 +76,25 @@ func (c *ItemClassCounts) add(class ItemClass) {
 	}
 }
 
+// ItemInterpreted reports whether a saved item has an interpretation to
+// validate and export. A produced item always does. A failed or
+// unprocessed item becomes interpreted only after a manual revision
+// supplied its structured payload; its original Status, Failure and
+// Reason stay untouched. No extra persisted flag is needed.
+func ItemInterpreted(item record.ItemRecord) bool {
+	if item.Status == record.StatusProduced {
+		return true
+	}
+	if item.Status != record.StatusFailed && item.Status != record.StatusUnprocessed {
+		return false
+	}
+	if item.Revision <= 0 || len(item.Data) == 0 {
+		return false
+	}
+	_, ok := structuredDiscPayload(item.Data)
+	return ok
+}
+
 // ClassifyItem returns the display class of one captured item using the
 // fixed order: processing outcome, validation, quality, warning.
 //
@@ -101,10 +121,11 @@ func ClassifyItems(items []record.ItemRecord) ItemClassCounts {
 // decision is already known, so the export build does not validate items
 // twice. It must stay the same decision as ClassifyItem.
 func classifyWithExport(item *record.ItemRecord, exported ExportItem, usable bool) ItemClass {
-	// 1. Processing outcome: a failed or not-yet-processed observation has
-	// no data to validate. Failed and unprocessed items both need a person
-	// to fill them in.
-	if item.Status != record.StatusProduced {
+	// 1. Processing outcome: a failed or not-yet-processed observation with
+	// no manual interpretation still needs a person to fill it in. A
+	// backfilled item keeps its original outcome but continues through the
+	// validation and quality steps like any other interpretation.
+	if !ItemInterpreted(*item) {
 		return ItemClassPendingBackfill
 	}
 	// 2. Validation and 3. Quality: a validation failure, an unresolved

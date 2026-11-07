@@ -19,12 +19,23 @@ const (
 	shortcutSave = "Ctrl+S"
 	// shortcutNextPending moves to the next pending item.
 	shortcutNextPending = "Ctrl+J"
-	// shortcutExport reveals the record's export controls until the export
-	// dialog replaces them.
+	// shortcutPreviousPending moves to the previous pending item.
+	shortcutPreviousPending = "Ctrl+Shift+J"
+	// shortcutZoomIn enlarges the screenshots.
+	shortcutZoomIn = "Ctrl+="
+	// shortcutZoomOut shrinks the screenshots.
+	shortcutZoomOut = "Ctrl+-"
+	// shortcutZoomFit fits the screenshots to the area.
+	shortcutZoomFit = "Ctrl+0"
+	// shortcutExport opens the record's export dialog from the record
+	// workspace.
 	shortcutExport = "Ctrl+E"
 	// shortcutFocusRegion moves the keyboard between the page's large
 	// regions.
 	shortcutFocusRegion = "F6"
+	// shortcutFocusRegionBack moves the keyboard back through the same
+	// regions.
+	shortcutFocusRegionBack = "Shift+F6"
 	// shortcutOpenRecord opens the chosen record in the records list.
 	shortcutOpenRecord = "Enter"
 	// shortcutCloseOverlay closes an overlay or returns to the page's

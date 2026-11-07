@@ -137,7 +137,7 @@ func ToStructuredWithState(rec DiscRecord, rarity string, state CaptureState, is
 	allIssues := append([]Issue(nil), issues...)
 	if rarity != RarityS {
 		allIssues = append(allIssues, newIssue("rarity", CodeRarityUnverified,
-			"本次捕获没有已验证的 S 稀有度证据，rarity 保留为 null"))
+			"本次捕获没有已验证的 S 稀有度证据，稀有度保持未读取"))
 	}
 	return StructuredDisc{
 		Data:       ToDataWithState(rec, rarity, state),

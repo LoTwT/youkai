@@ -6,6 +6,7 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -139,6 +140,399 @@ func (f *exportDialogFixture) open(t *testing.T) {
 	if !f.m.exportDialog.open {
 		t.Fatalf("the export dialog did not open: %q", f.tt.Texts())
 	}
+}
+
+// TestExportEntryBlockedDuringCleanup covers PR-13: a running record
+// deletion must not let the export dialog open over the cleanup.
+func TestExportEntryBlockedDuringCleanup(t *testing.T) {
+	f := newExportDialogFixture(t, testRecord(), false)
+	f.m.cleanup = &cleanupPrompt{target: cleanupOneRecord, recordID: f.m.rec.ID, running: true}
+	f.tt.Frame()
+	if !f.m.exportEntryBlocked() {
+		t.Fatal("the export entry stayed enabled during cleanup")
+	}
+	if got := f.m.exportBlockedReasonWithDraft(false); got != "正在清理，完成前不能导出。" {
+		t.Fatalf("the export block reason = %q", got)
+	}
+	f.m.requestExport()
+	f.tt.Frame()
+	if f.m.exportDialog.open {
+		t.Fatalf("the export dialog opened during cleanup: %q", f.tt.Texts())
+	}
+}
+
+// TestCleanupReasonBesideBothExportEntries covers PR-19b item 7: the title
+// bar and the completion form both explain the disabled export while a
+// deletion runs.
+func TestCleanupReasonBesideBothExportEntries(t *testing.T) {
+	m, _, tt := openResponsiveResults(t, recovery(confirmedReviewItem(t, 1, 12)), 1180, 760)
+	m.cfg.DirectExportSaver = &fakeDirectExportSaver{}
+	m.cleanup = &cleanupPrompt{target: cleanupOneScreenshots, recordID: m.rec.ID, ready: true, running: true}
+	tt.Frame()
+	const reason = "正在清理，完成前不能导出。"
+	count := 0
+	for _, text := range tt.Texts() {
+		if text == reason {
+			count++
+		}
+	}
+	if count != 2 {
+		t.Fatalf("the cleanup reason appears %d times, want title bar and completion form: %q",
+			count, tt.Texts())
+	}
+}
+
+// TestExportNotificationClickWaitsForDialogClose covers item 14: a click
+// during the write is remembered (last one wins), the dialog keeps its
+// frozen numbers and notice, and closing the dialog opens the record.
+func TestExportNotificationClickWaitsForDialogClose(t *testing.T) {
+	f := newExportDialogFixture(t, testRecord(), false)
+	other1 := testRecord()
+	other1.Checkpoint.Session.SessionID = "other1"
+	other2 := testRecord()
+	other2.Checkpoint.Session.SessionID = "other2"
+	f.svc.mu.Lock()
+	f.svc.loads["other1"] = other1
+	f.svc.loads["other2"] = other2
+	f.svc.mu.Unlock()
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	f.saver.saveCtxFn = func(context.Context, app.ExportFormat, string, []byte) (string, error) {
+		once.Do(func() { close(started) })
+		<-release
+		return "/tmp/notified.youkai.json", nil
+	}
+	f.open(t)
+	if err := f.tt.Click("导出 JSON"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the export write did not start")
+	}
+	f.tt.Frame()
+	beforeData := f.m.exportData
+	beforeRecord := f.m.rec.ID
+
+	f.m.OpenNotification("other1")
+	f.tt.Frame()
+	if !f.m.exportDialog.open || !f.m.exporting || f.m.rec.ID != beforeRecord ||
+		f.m.exportData != beforeData {
+		t.Fatalf("a notification click interrupted the write: %s", probeReviewState(f.m))
+	}
+	if !f.tt.HasText("关闭导出对话框后会打开通知对应的记录。") {
+		t.Fatalf("the pending notification is not explained: %q", f.tt.Texts())
+	}
+	f.m.OpenNotification("other2")
+	f.tt.Frame()
+	if f.m.pendingNotificationRecordID != "other2" {
+		t.Fatalf("the last notification click was not kept: %q", f.m.pendingNotificationRecordID)
+	}
+
+	close(release)
+	settle(t, f.m, f.q, f.tt)
+	if f.m.exportDialogSuccess() == nil {
+		t.Fatalf("the export did not finish: %s", probeReviewState(f.m))
+	}
+	if err := f.tt.Click("完成"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, f.m, f.q, f.tt)
+	if f.m.exportDialog.open {
+		t.Fatal("the export dialog stayed open after 完成")
+	}
+	if f.m.rec == nil || f.m.rec.ID != "other2" {
+		t.Fatalf("closing did not open the last notification record: %s", probeReviewState(f.m))
+	}
+}
+
+// TestExportNotificationClickReplaysOnCancelAndFailure covers the settled
+// non-success states: closing still honors the click.
+func TestExportNotificationClickReplaysOnCancelAndFailure(t *testing.T) {
+	for _, mode := range []string{"cancel", "failure"} {
+		t.Run(mode, func(t *testing.T) {
+			f := newExportDialogFixture(t, testRecord(), false)
+			other := testRecord()
+			other.Checkpoint.Session.SessionID = "other"
+			f.svc.mu.Lock()
+			f.svc.loads["other"] = other
+			f.svc.mu.Unlock()
+
+			started := make(chan struct{})
+			release := make(chan struct{})
+			var once sync.Once
+			f.saver.saveCtxFn = func(ctx context.Context, _ app.ExportFormat, _ string, _ []byte) (string, error) {
+				once.Do(func() { close(started) })
+				if mode == "cancel" {
+					<-ctx.Done()
+					return "", ctx.Err()
+				}
+				<-release
+				return "", errors.New("磁盘已满")
+			}
+			f.open(t)
+			if err := f.tt.Click("导出 JSON"); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case <-started:
+			case <-time.After(2 * time.Second):
+				t.Fatal("the export write did not start")
+			}
+			f.m.OpenNotification("other")
+			f.tt.Frame()
+			if f.m.pendingNotificationRecordID != "other" {
+				t.Fatalf("the click was not remembered: %q", f.m.pendingNotificationRecordID)
+			}
+			if mode == "cancel" {
+				if err := f.tt.Click("取消"); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				close(release)
+			}
+			settle(t, f.m, f.q, f.tt)
+			if !f.m.exportDialog.open {
+				t.Fatalf("%s closed the dialog before the user did", mode)
+			}
+			if !f.tt.HasText("关闭导出对话框后会打开通知对应的记录。") {
+				t.Fatalf("%s lost the pending-notification notice: %q", mode, f.tt.Texts())
+			}
+			if err := f.tt.Click("关闭导出对话框"); err != nil {
+				t.Fatal(err)
+			}
+			settle(t, f.m, f.q, f.tt)
+			if f.m.rec == nil || f.m.rec.ID != "other" {
+				t.Fatalf("%s did not replay the notification click: %s", mode, probeReviewState(f.m))
+			}
+		})
+	}
+}
+
+// TestExportNotificationReplayKeepsUnsavedPrompt covers the navigation
+// guard: the replayed click uses OpenNotification's normal prompt.
+func TestExportNotificationReplayKeepsUnsavedPrompt(t *testing.T) {
+	f := newExportDialogFixture(t, recovery(reviewRowItem(t, 1, 12)), false)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	f.saver.saveCtxFn = func(context.Context, app.ExportFormat, string, []byte) (string, error) {
+		once.Do(func() { close(started) })
+		<-release
+		return "/tmp/notified.youkai.json", nil
+	}
+	f.open(t)
+	if err := f.tt.Click("导出 JSON"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the export write did not start")
+	}
+	f.m.OpenNotification("rec")
+	f.tt.Frame()
+	close(release)
+	settle(t, f.m, f.q, f.tt)
+	if f.m.exportDialogSuccess() == nil {
+		t.Fatalf("the export did not finish: %s", probeReviewState(f.m))
+	}
+	f.m.edit = &editState{
+		recordID: "rec",
+		seq:      1,
+		original: editDraft{Level: "15"},
+		draft:    editDraft{Level: "14"},
+	}
+	if !f.m.editingDirty() {
+		t.Fatal("the test draft is not dirty")
+	}
+	if err := f.tt.Click("完成"); err != nil {
+		t.Fatal(err)
+	}
+	f.tt.Frame()
+	if f.m.navPrompt == nil {
+		t.Fatalf("the replay bypassed the unsaved-input prompt: %s", probeReviewState(f.m))
+	}
+	if f.m.rec == nil || f.m.rec.ID != "rec" {
+		t.Fatalf("the replay switched before the prompt was answered: %s", probeReviewState(f.m))
+	}
+}
+
+// TestExportNotificationEscCloseReplays covers the modal's own close path:
+// a real Escape after a settled write must replay the remembered click.
+func TestExportNotificationEscCloseReplays(t *testing.T) {
+	f := newExportDialogFixture(t, testRecord(), false)
+	other := testRecord()
+	other.Checkpoint.Session.SessionID = "other"
+	f.svc.mu.Lock()
+	f.svc.loads["other"] = other
+	f.svc.mu.Unlock()
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	f.saver.saveCtxFn = func(context.Context, app.ExportFormat, string, []byte) (string, error) {
+		once.Do(func() { close(started) })
+		<-release
+		return "/tmp/notified.youkai.json", nil
+	}
+	f.open(t)
+	if err := f.tt.Click("导出 JSON"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the export write did not start")
+	}
+	f.m.OpenNotification("other")
+	close(release)
+	settle(t, f.m, f.q, f.tt)
+	if f.m.exportDialogSuccess() == nil {
+		t.Fatalf("the export did not finish: %s", probeReviewState(f.m))
+	}
+	f.tt.Key(0, ui.KeyEscape)
+	settle(t, f.m, f.q, f.tt)
+	if f.m.exportDialog.open {
+		t.Fatal("Escape did not close the settled export dialog")
+	}
+	if f.m.rec == nil || f.m.rec.ID != "other" {
+		t.Fatalf("Escape did not replay the notification click: %s", probeReviewState(f.m))
+	}
+}
+
+// TestExportNotificationClickAfterWriteSettles covers decision 3: once the
+// write ends but its success, canceled or failure dialog is still open, a
+// notification click is remembered there too.
+func TestExportNotificationClickAfterWriteSettles(t *testing.T) {
+	for _, mode := range []string{"success", "cancel", "failure"} {
+		t.Run(mode, func(t *testing.T) {
+			f := newExportDialogFixture(t, testRecord(), false)
+			other := testRecord()
+			other.Checkpoint.Session.SessionID = "other"
+			f.svc.mu.Lock()
+			f.svc.loads["other"] = other
+			f.svc.mu.Unlock()
+
+			started := make(chan struct{})
+			release := make(chan struct{})
+			var once sync.Once
+			f.saver.saveCtxFn = func(ctx context.Context, _ app.ExportFormat, _ string, _ []byte) (string, error) {
+				once.Do(func() { close(started) })
+				switch mode {
+				case "cancel":
+					<-ctx.Done()
+					return "", ctx.Err()
+				case "failure":
+					<-release
+					return "", errors.New("磁盘已满")
+				default:
+					<-release
+					return "/tmp/notified.youkai.json", nil
+				}
+			}
+			f.open(t)
+			if err := f.tt.Click("导出 JSON"); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case <-started:
+			case <-time.After(2 * time.Second):
+				t.Fatal("the export write did not start")
+			}
+			if mode == "cancel" {
+				if err := f.tt.Click("取消"); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				close(release)
+			}
+			settle(t, f.m, f.q, f.tt)
+			beforeRecord := f.m.rec.ID
+			f.m.OpenNotification("other")
+			f.tt.Frame()
+			if !f.m.exportDialog.open || f.m.rec.ID != beforeRecord {
+				t.Fatalf("%s dialog was interrupted by the click: %s", mode, probeReviewState(f.m))
+			}
+			if f.m.pendingNotificationRecordID != "other" {
+				t.Fatalf("%s did not remember the click: %q", mode, f.m.pendingNotificationRecordID)
+			}
+			if !f.tt.HasText("关闭导出对话框后会打开通知对应的记录。") {
+				t.Fatalf("%s lost the pending notice: %q", mode, f.tt.Texts())
+			}
+			switch mode {
+			case "success":
+				if f.m.exportDialogSuccess() == nil || !f.tt.HasText("完成") {
+					t.Fatalf("the success content was interrupted: %q", f.tt.Texts())
+				}
+			case "cancel":
+				if !f.tt.HasText("已取消，没有写入文件。") {
+					t.Fatalf("the canceled content was interrupted: %q", f.tt.Texts())
+				}
+			case "failure":
+				if !f.tt.HasText("重试") || !f.tt.HasText("导出失败：磁盘已满") {
+					t.Fatalf("the failure content was interrupted: %q", f.tt.Texts())
+				}
+			}
+			closeLabel := "关闭导出对话框"
+			if mode == "success" {
+				closeLabel = "完成"
+			}
+			if err := f.tt.Click(closeLabel); err != nil {
+				t.Fatal(err)
+			}
+			settle(t, f.m, f.q, f.tt)
+			if f.m.rec == nil || f.m.rec.ID != "other" {
+				t.Fatalf("%s close did not open the clicked record: %s", mode, probeReviewState(f.m))
+			}
+		})
+	}
+}
+
+// TestExportPendingNotificationClearedByExplicitTransfer covers the
+// recorded mutation gaps: an explicit dialog destination or exit wins and
+// clears the deferred click.
+func TestExportPendingNotificationClearedByExplicitTransfer(t *testing.T) {
+	t.Run("go to review", func(t *testing.T) {
+		f := newExportDialogFixture(t, testRecord(), false)
+		f.open(t)
+		f.m.pendingNotificationRecordID = "other"
+		f.m.exportDialogGoToReview()
+		if f.m.pendingNotificationRecordID != "" {
+			t.Fatalf("去校对 kept the pending click: %q", f.m.pendingNotificationRecordID)
+		}
+		if f.m.page != pageResults || f.m.recordTab != recordTabItems {
+			t.Fatalf("去校对 landed on %v/%v", f.m.page, f.m.recordTab)
+		}
+	})
+	t.Run("delete screenshots", func(t *testing.T) {
+		f := newExportDialogFixture(t, testRecord(), false)
+		f.open(t)
+		f.m.pendingNotificationRecordID = "other"
+		f.m.exportDialogDeleteScreenshots("rec")
+		if f.m.pendingNotificationRecordID != "" {
+			t.Fatalf("删除截图 kept the pending click: %q", f.m.pendingNotificationRecordID)
+		}
+		if f.m.rec == nil || f.m.rec.ID != "rec" || f.m.recordTab != recordTabSummary {
+			t.Fatalf("删除截图 landed on %s", probeReviewState(f.m))
+		}
+	})
+	t.Run("begin exit", func(t *testing.T) {
+		f := newExportDialogFixture(t, testRecord(), false)
+		f.open(t)
+		f.m.pendingNotificationRecordID = "other"
+		f.m.beginExit()
+		drainAll(t, f.m, f.q)
+		if f.m.pendingNotificationRecordID != "" {
+			t.Fatalf("退出 kept the pending click: %q", f.m.pendingNotificationRecordID)
+		}
+		if f.m.rec == nil || f.m.rec.ID != "rec" {
+			t.Fatalf("退出 navigated to the notification record: %s", probeReviewState(f.m))
+		}
+	})
 }
 
 // TestExportDialogShowsCountsFormatDifferenceAndSuccess covers S8's
@@ -584,30 +978,128 @@ func TestExportDialogAsksForUnsavedChangesFirst(t *testing.T) {
 	f := newExportDialogFixture(t, rec, false)
 	showRecordItems(f.m)
 	f.tt.Frame()
-	f.m.selected = 0
-	f.m.startEdit()
 	if f.m.edit == nil {
 		t.Fatal("the editor did not open")
 	}
 	f.m.edit.draft.Level = "14"
 	f.tt.Frame()
 
-	if err := f.tt.Click("导出…"); err != nil {
-		t.Fatalf("click 导出…: %v", err)
-	}
+	// The click path is covered by the clean fixture above; requestExport
+	// is the one entry the title bar and Ctrl+E share.
+	f.m.requestExport()
 	f.tt.Frame()
 	if f.m.exportDialog.open {
 		t.Fatal("the export dialog opened over a dirty draft")
 	}
-	if f.m.navPrompt == nil || !f.tt.HasText("当前条目有未保存的修改。") {
+	if f.m.navPrompt == nil || !f.tt.HasText("第 2 件有未保存的修改") {
 		t.Fatalf("the unsaved-changes prompt did not appear: %q", f.tt.Texts())
 	}
 	if err := f.tt.Click("放弃修改"); err != nil {
-		t.Fatalf("click 放弃修改: %v", err)
+		t.Fatal(err)
 	}
 	f.tt.Frame()
 	if !f.m.exportDialog.open {
 		t.Fatalf("the dialog did not open after discarding the draft: %q", f.tt.Texts())
+	}
+}
+
+// typeReviewLevel types into the focused level field, so the save tests use
+// the same input path as a person instead of writing the draft directly.
+func typeReviewLevel(t *testing.T, f *exportDialogFixture, text string) {
+	t.Helper()
+	f.m.requestReviewFieldFocus(FormFieldLevel)
+	f.tt.Frame()
+	f.tt.Frame()
+	if active, _ := f.tt.TextInputActive(); !active {
+		t.Fatalf("the level field did not take focus: %q", f.tt.Texts())
+	}
+	f.tt.Key(ui.Cmd, ui.KeyA)
+	f.tt.Type(text)
+	f.tt.Frame()
+	if f.m.edit == nil || f.m.edit.draft.Level != text {
+		t.Fatalf("typing did not reach the draft: edit=%+v texts=%q", f.m.edit, f.tt.Texts())
+	}
+}
+
+// blockReviewSave holds the next revision save until release is called. The
+// save then fails, so the test can inspect the in-flight state and the
+// retained draft without depending on timing.
+func blockReviewSave(t *testing.T, svc *fakeService) (release func()) {
+	t.Helper()
+	gate := make(chan struct{})
+	svc.mu.Lock()
+	svc.saveFn = func(string, int64, int64, app.ItemRevisionEdit) (app.ItemRevisionResult, error) {
+		<-gate
+		return app.ItemRevisionResult{}, fmt.Errorf("磁盘已满")
+	}
+	svc.mu.Unlock()
+	return func() { close(gate) }
+}
+
+// TestExportDuringReviewSaveKeepsDraft covers H3: neither the button nor
+// Ctrl+E may open the export dialog while a save is in flight, and a failed
+// save must leave the typed draft and its retry band intact.
+func TestExportDuringReviewSaveKeepsDraft(t *testing.T) {
+	for _, entry := range []string{"click", "key"} {
+		t.Run(entry, func(t *testing.T) {
+			f := newExportDialogFixture(t, recovery(reviewRowItem(t, 1, 12)), false)
+			showRecordItems(f.m)
+			f.tt.Frame()
+			if f.m.edit == nil {
+				t.Fatal("the editor did not open")
+			}
+			typeReviewLevel(t, f, "11")
+			release := blockReviewSave(t, f.svc)
+			f.tt.Key(ui.Cmd, ui.KeyS)
+			f.tt.Frame()
+			if !f.m.reviewSaving {
+				release()
+				t.Fatal("the review save did not start")
+			}
+			if entry == "click" {
+				if err := f.tt.Click("导出…"); err != nil {
+					t.Fatalf("click export: %v", err)
+				}
+			} else {
+				f.tt.Key(ui.Cmd, ui.KeyE)
+			}
+			f.tt.Frame()
+			if f.m.exportDialog.open {
+				t.Fatalf("%s opened the export dialog during a save", entry)
+			}
+			if f.m.edit == nil || f.m.edit.draft.Level != "11" {
+				t.Fatalf("%s lost the draft during the save: %+v", entry, f.m.edit)
+			}
+			release()
+			drainAll(t, f.m, f.q)
+			f.tt.Frame()
+			if f.m.edit == nil || f.m.edit.draft.Level != "11" {
+				t.Fatalf("%s lost the draft after the failed save: %+v", entry, f.m.edit)
+			}
+			if !f.m.reviewSaveFailed || !strings.Contains(f.m.reviewErr, "磁盘已满") {
+				t.Fatalf("%s lost the failure state: err=%q failed=%v", entry, f.m.reviewErr, f.m.reviewSaveFailed)
+			}
+			if !f.tt.HasText("保存失败") {
+				t.Fatalf("%s lost the failure band: %q", entry, f.tt.Texts())
+			}
+		})
+	}
+}
+
+// TestClearCleanEditorForExportKeepsSavingDraft pins the second H3 guard:
+// editingDirty returns false while a save is in flight, so the export
+// preflight must not treat that draft as clean.
+func TestClearCleanEditorForExportKeepsSavingDraft(t *testing.T) {
+	f := newExportDialogFixture(t, recovery(reviewRowItem(t, 1, 12)), false)
+	showRecordItems(f.m)
+	f.tt.Frame()
+	if f.m.edit == nil {
+		t.Fatal("the editor did not open")
+	}
+	f.m.reviewSaving = true
+	f.m.clearCleanEditorForExport()
+	if f.m.edit == nil {
+		t.Fatal("the export preflight cleared a saving draft")
 	}
 }
 
@@ -651,15 +1143,18 @@ func TestExportDialogShowsTheBlockedReason(t *testing.T) {
 		t.Fatalf("an unsaved session exported: %+v", calls)
 	}
 
-	// A review save in flight is the third S8 blocked case.
+	// A review save in flight blocks the entry itself, so the draft cannot be
+	// detached by opening the dialog. Other blocked reasons still open the
+	// dialog to explain why the formats cannot run.
 	h := newExportDialogFixture(t, recovery(uiStructuredItem(t, 1, record.QualityAutoAccepted)), false)
 	h.m.reviewSaving = true
-	h.open(t)
+	h.m.requestExport()
+	h.tt.Frame()
+	if h.m.exportDialog.open {
+		t.Fatal("the export dialog opened while a review save was in flight")
+	}
 	if !h.tt.HasText("正在保存修改，完成前不能导出。") {
 		t.Fatalf("the review-save block is missing: %q", h.tt.Texts())
-	}
-	if err := h.tt.Click("导出 CSV"); err != nil {
-		t.Fatalf("click blocked 导出 CSV: %v", err)
 	}
 	if calls := h.saver.snapshot(); len(calls) != 0 {
 		t.Fatalf("a review save in flight exported: %+v", calls)

@@ -114,16 +114,13 @@ func TestEditConfirmShortcutSavesTheDraft(t *testing.T) {
 			reviewRowItem(t, 1, 12),
 			reviewRowItem(t, 2, 10),
 		)
-		if err := tt.Click("编辑"); err != nil {
-			t.Fatal(err)
-		}
-		settle(t, m, q, tt)
+		tt.Frame()
 		m.edit.draft.Level = "13"
 		tt.Frame()
-		if got := m.statusShortcutText(); got != shortcutConfirmNext+" 保存并确认并下一项  ·  "+shortcutSave+" 保存修改" {
+		if got := m.statusShortcutText(); got != shortcutConfirmNext+" 确认并下一项  ·  "+shortcutSave+" 保存修改  ·  "+shortcutZoomIn+" 放大  ·  "+shortcutZoomOut+" 缩小" {
 			t.Fatalf("the editing status bar names %q", got)
 		}
-		if !tt.HasText(shortcutConfirmNext+" 保存并确认并下一项") || !tt.HasText(shortcutSave+" 保存修改") {
+		if !tt.HasText(shortcutConfirmNext+" 确认并下一项") || !tt.HasText(shortcutSave+" 保存修改") {
 			t.Fatalf("the editing status bar does not show its keys: %q", tt.Texts())
 		}
 
@@ -135,8 +132,8 @@ func TestEditConfirmShortcutSavesTheDraft(t *testing.T) {
 		if level := svc.saves[0].edit.Data.Level; level == nil || *level != 13 {
 			t.Fatalf("⌘↵ saved level %v, want the draft's 13", level)
 		}
-		if m.edit != nil {
-			t.Fatal("⌘↵ left the editor open after a successful save")
+		if m.edit == nil || m.edit.seq != 2 {
+			t.Fatalf("⌘↵ did not open the next item's editor: %+v", m.edit)
 		}
 		if m.selected != 1 {
 			t.Fatalf("⌘↵ did not advance to the next pending item: selected %d", m.selected)
@@ -155,10 +152,7 @@ func TestEditConfirmShortcutSavesTheDraft(t *testing.T) {
 		svc.saveFn = func(string, int64, int64, app.ItemRevisionEdit) (app.ItemRevisionResult, error) {
 			return app.ItemRevisionResult{}, errors.New("disk full")
 		}
-		if err := tt.Click("编辑"); err != nil {
-			t.Fatal(err)
-		}
-		settle(t, m, q, tt)
+		tt.Frame()
 		m.edit.draft.Level = "13"
 		tt.Frame()
 
@@ -177,7 +171,7 @@ func TestEditConfirmShortcutSavesTheDraft(t *testing.T) {
 		if !strings.Contains(m.reviewErr, "disk full") {
 			t.Fatalf("the save failure = %q", m.reviewErr)
 		}
-		if !tt.HasText("保存失败：disk full") {
+		if !tt.HasText("没有保存：保存失败：disk full") {
 			t.Fatalf("the save failure does not show: %q", tt.Texts())
 		}
 	})
@@ -188,10 +182,7 @@ func TestEditConfirmShortcutSavesTheDraft(t *testing.T) {
 // saving then continues into the scan.
 func TestScanStartShortcutPromptsForUnsavedEdit(t *testing.T) {
 	m, q, tt, svc := openReviewRecordPage(t, reviewRowItem(t, 1, 12))
-	if err := tt.Click("编辑"); err != nil {
-		t.Fatal(err)
-	}
-	settle(t, m, q, tt)
+	tt.Frame()
 	m.edit.draft.Level = "13"
 	tt.Frame()
 
@@ -209,11 +200,11 @@ func TestScanStartShortcutPromptsForUnsavedEdit(t *testing.T) {
 	if len(svc.starts) != 0 {
 		t.Fatalf("⌘R started %d scans before the draft settled", len(svc.starts))
 	}
-	if !tt.HasText("当前条目有未保存的修改。") || !tt.HasText("留在当前项") {
+	if !tt.HasText("第 1 件有未保存的修改") || !tt.HasText("留在这里") {
 		t.Fatalf("the unsaved-edit prompt does not show: %q", tt.Texts())
 	}
 
-	if err := tt.Click("留在当前项"); err != nil {
+	if err := tt.Click("留在这里"); err != nil {
 		t.Fatal(err)
 	}
 	settle(t, m, q, tt)
@@ -226,7 +217,7 @@ func TestScanStartShortcutPromptsForUnsavedEdit(t *testing.T) {
 
 	tt.Key(ui.Cmd, ui.KeyR)
 	settle(t, m, q, tt)
-	if err := tt.Click("保存修改并继续"); err != nil {
+	if err := tt.Click("保存并继续"); err != nil {
 		t.Fatal(err)
 	}
 	settle(t, m, q, tt)
@@ -249,10 +240,7 @@ func TestScanButtonAndShortcutPromptAlike(t *testing.T) {
 		reviewRowItem(t, 1, 12),
 		reviewRowItem(t, 2, 10),
 	)
-	if err := tt.Click("编辑"); err != nil {
-		t.Fatal(err)
-	}
-	settle(t, m, q, tt)
+	tt.Frame()
 	m.edit.draft.Level = "13"
 	tt.Frame()
 	m.page = pageScan
@@ -266,7 +254,7 @@ func TestScanButtonAndShortcutPromptAlike(t *testing.T) {
 	if len(svc.starts) != 0 {
 		t.Fatalf("⌘R started %d scans before the draft settled", len(svc.starts))
 	}
-	if err := tt.Click("留在当前项"); err != nil {
+	if err := tt.Click("留在这里"); err != nil {
 		t.Fatal(err)
 	}
 	settle(t, m, q, tt)
@@ -284,11 +272,11 @@ func TestScanButtonAndShortcutPromptAlike(t *testing.T) {
 	if len(svc.starts) != 0 {
 		t.Fatalf("the start button started %d scans before the draft settled", len(svc.starts))
 	}
-	if !tt.HasText("当前条目有未保存的修改。") {
+	if !tt.HasText("第 1 件有未保存的修改") {
 		t.Fatalf("the unsaved prompt does not show: %q", tt.Texts())
 	}
 
-	if err := tt.Click("保存修改并继续"); err != nil {
+	if err := tt.Click("保存并继续"); err != nil {
 		t.Fatal(err)
 	}
 	settle(t, m, q, tt)
@@ -307,16 +295,13 @@ func TestScanButtonAndShortcutPromptAlike(t *testing.T) {
 func TestEditSaveShortcut(t *testing.T) {
 	t.Run("saves modifications", func(t *testing.T) {
 		m, q, tt, svc := openReviewRecordPage(t, reviewRowItem(t, 1, 12))
-		if err := tt.Click("编辑"); err != nil {
-			t.Fatal(err)
-		}
-		settle(t, m, q, tt)
+		tt.Frame()
 		m.edit.draft.Level = "13"
 		tt.Frame()
-		if got := m.statusShortcutText(); got != shortcutConfirmNext+" 保存并确认并下一项  ·  "+shortcutSave+" 保存修改" {
+		if got := m.statusShortcutText(); got != shortcutConfirmNext+" 确认并下一项  ·  "+shortcutSave+" 保存修改  ·  "+shortcutZoomIn+" 放大  ·  "+shortcutZoomOut+" 缩小" {
 			t.Fatalf("the editing status bar names %q", got)
 		}
-		if !tt.HasText(shortcutConfirmNext+" 保存并确认并下一项") || !tt.HasText(shortcutSave+" 保存修改") {
+		if !tt.HasText(shortcutConfirmNext+" 确认并下一项") || !tt.HasText(shortcutSave+" 保存修改") {
 			t.Fatalf("the editing status bar does not show its keys: %q", tt.Texts())
 		}
 
@@ -325,23 +310,20 @@ func TestEditSaveShortcut(t *testing.T) {
 		if svc.saveCount() != 1 || svc.saves[0].edit.Confirmed {
 			t.Fatalf("⌘S saves = %+v, want one unconfirmed save", svc.saves)
 		}
-		if m.edit != nil {
-			t.Fatal("a successful ⌘S left the editor open")
+		if m.edit == nil || m.edit.draft.Level != "13" {
+			t.Fatalf("a successful ⌘S did not reopen the saved draft: %+v", m.edit)
 		}
 		if m.rec.Rows[0].LevelText() != "13 级" {
 			t.Fatalf("the saved row shows %q", m.rec.Rows[0].LevelText())
 		}
-		if got := m.statusShortcutText(); got == shortcutConfirmNext+" 保存并确认并下一项  ·  "+shortcutSave+" 保存修改" {
-			t.Fatal("the closed editor still names its keys")
+		if got := m.statusShortcutText(); !strings.Contains(got, shortcutSave+" 保存修改") {
+			t.Fatalf("the reopened editor lost its keys: %q", got)
 		}
 	})
 
 	t.Run("no modifications", func(t *testing.T) {
 		m, q, tt, svc := openReviewRecordPage(t, reviewRowItem(t, 1, 12))
-		if err := tt.Click("编辑"); err != nil {
-			t.Fatal(err)
-		}
-		settle(t, m, q, tt)
+		tt.Frame()
 
 		tt.Key(ui.Cmd, ui.KeyS)
 		settle(t, m, q, tt)
@@ -364,10 +346,7 @@ func TestEditSaveShortcut(t *testing.T) {
 		svc.saveFn = func(string, int64, int64, app.ItemRevisionEdit) (app.ItemRevisionResult, error) {
 			return app.ItemRevisionResult{}, errors.New("disk full")
 		}
-		if err := tt.Click("编辑"); err != nil {
-			t.Fatal(err)
-		}
-		settle(t, m, q, tt)
+		tt.Frame()
 		m.edit.draft.Level = "13"
 		tt.Frame()
 
@@ -382,7 +361,7 @@ func TestEditSaveShortcut(t *testing.T) {
 		if m.rec.Rows[0].LevelText() != "12 级" {
 			t.Fatalf("a failed ⌘S changed the row: %q", m.rec.Rows[0].LevelText())
 		}
-		if !tt.HasText("保存失败：disk full") {
+		if !tt.HasText("没有保存：保存失败：disk full") {
 			t.Fatalf("the save failure does not show: %q", tt.Texts())
 		}
 	})
@@ -414,23 +393,17 @@ func TestEscapeClosesTheRowMenu(t *testing.T) {
 // with MyGo: the popup closes and the shell does not move the focus to the
 // table behind it.
 func TestEscapeClosesTheSelectPopup(t *testing.T) {
-	_, _, tt := openResponsiveResults(t, responsiveResultRecord(t), 1024, 700)
-	// The chosen row's slot is in the detail, so another slot's exact
-	// option label exists only while the popup is open.
-	if _, ok := tt.Find("2 号位"); ok {
-		t.Fatalf("the slot option is visible before the popup opens: %q", tt.Texts())
-	}
-	if err := tt.Click("全部槽位"); err != nil {
-		t.Fatal(err)
+	_, _, tt := openResponsiveResults(t, responsiveResultRecord(t), 1180, 760)
+	if err := tt.Click("装备状态"); err != nil {
+		t.Fatalf("%v: %q", err, tt.Texts())
 	}
 	tt.Frame()
-	if _, ok := tt.Find("2 号位"); !ok {
-		t.Fatalf("the slot popup did not open: %q", tt.Texts())
+	if _, ok := tt.Find("unequipped 未装备"); !ok {
+		t.Fatalf("the equipment popup did not open: %q", tt.Texts())
 	}
-
 	tt.Key(0, ui.KeyEscape)
 	tt.Frame()
-	if _, ok := tt.Find("2 号位"); ok {
+	if _, ok := tt.Find("unequipped 未装备"); ok {
 		t.Fatal("Escape did not close the select popup")
 	}
 	if tt.Focused("河豚电音") {
@@ -442,10 +415,7 @@ func TestEscapeClosesTheSelectPopup(t *testing.T) {
 // held navigation it stays on the current item and keeps the draft.
 func TestEscapeCancelsTheUnsavedPrompt(t *testing.T) {
 	m, q, tt, _ := openReviewRecordPage(t, reviewRowItem(t, 1, 12))
-	if err := tt.Click("编辑"); err != nil {
-		t.Fatal(err)
-	}
-	settle(t, m, q, tt)
+	tt.Frame()
 	m.edit.draft.Level = "13"
 	tt.Frame()
 
@@ -494,55 +464,20 @@ func TestEscapeReturnsTheFocusToTheTable(t *testing.T) {
 			t.Fatalf("Escape did not give the history table the focus: %q", tt.Texts())
 		}
 	})
-
-	t.Run("results", func(t *testing.T) {
-		_, _, tt := openResponsiveResults(t, responsiveResultRecord(t), 1024, 700)
-		if err := tt.Click("显示证据"); err != nil {
-			t.Fatal(err)
-		}
-		tt.Frame()
-		tt.Key(0, ui.KeyEscape)
-		tt.Frame()
-		tt.Frame()
-		if !tt.Focused("河豚电音") {
-			t.Fatalf("Escape did not give the results table the focus: %q", tt.Texts())
-		}
-	})
 }
 
 // TestEscapeStaysInATextField checks that Escape in a text input is not
 // pulled away to the table. MyGo's text inputs leave the key unhandled, so
 // the shell has to keep its hands off while one holds the keyboard.
 func TestEscapeStaysInATextField(t *testing.T) {
-	m, _, tt := openResponsiveResults(t, responsiveResultRecord(t), 1024, 700)
-
-	// Tab until the search field takes what is typed. Typing is the probe:
-	// every other focus stop on this page ignores text.
-	focused := false
-	for i := 0; i < 30; i++ {
-		tt.Key(0, ui.KeyTab)
-		tt.Frame()
-		tt.Type("2")
-		tt.Frame()
-		if m.search == "2" {
-			focused = true
-			break
-		}
-		m.search = ""
-	}
-	if !focused {
-		t.Fatal("Tab never reached the results search field")
-	}
-	m.search = ""
+	m, _, tt := openResponsiveResults(t, recovery(reviewRowItem(t, 1, 12)), 1024, 700)
 	tt.Frame()
-
-	tt.Key(0, ui.KeyEscape)
-	tt.Frame()
-	tt.Frame()
-	tt.Type("3")
-	tt.Frame()
-	if m.search != "3" {
-		t.Fatalf("Escape moved the keyboard out of the input: search %q", m.search)
+	// The view sets this while a text input holds the keyboard. Escape must
+	// leave that decision to the input instead of focusing the list.
+	m.textInputFocused = true
+	m.handleEscapeShortcut(nil)
+	if m.focusListRequested {
+		t.Fatal("Escape moved the keyboard out of the text field")
 	}
 }
 
@@ -556,10 +491,7 @@ func TestEditNextShortcutPromptsForUnsavedEdit(t *testing.T) {
 			reviewRowItem(t, 1, 12),
 			reviewRowItem(t, 2, 10),
 		)
-		if err := tt.Click("编辑"); err != nil {
-			t.Fatal(err)
-		}
-		settle(t, m, q, tt)
+		tt.Frame()
 		m.edit.draft.Level = "13"
 		tt.Frame()
 		return m, q, tt, svc
@@ -575,10 +507,10 @@ func TestEditNextShortcutPromptsForUnsavedEdit(t *testing.T) {
 		if m.selected != 0 || svc.saveCount() != 0 {
 			t.Fatalf("⌘J moved before the draft settled: selected %d saves %d", m.selected, svc.saveCount())
 		}
-		if !tt.HasText("当前条目有未保存的修改。") || !tt.HasText("留在当前项") {
+		if !tt.HasText("第 1 件有未保存的修改") || !tt.HasText("留在这里") {
 			t.Fatalf("the unsaved prompt does not show: %q", tt.Texts())
 		}
-		if err := tt.Click("留在当前项"); err != nil {
+		if err := tt.Click("留在这里"); err != nil {
 			t.Fatal(err)
 		}
 		settle(t, m, q, tt)
@@ -595,15 +527,15 @@ func TestEditNextShortcutPromptsForUnsavedEdit(t *testing.T) {
 		if m.navPrompt == nil {
 			t.Fatal("⌘J bypassed the unsaved prompt")
 		}
-		if err := tt.Click("保存修改并继续"); err != nil {
+		if err := tt.Click("保存并继续"); err != nil {
 			t.Fatal(err)
 		}
 		settle(t, m, q, tt)
 		if svc.saveCount() != 1 || svc.saves[0].edit.Confirmed {
 			t.Fatalf("⌘J saves = %+v, want one unconfirmed save", svc.saves)
 		}
-		if m.selected != 1 || m.edit != nil {
-			t.Fatalf("save-and-continue did not move: selected %d edit %+v", m.selected, m.edit)
+		if m.selected != 1 || m.edit == nil || m.edit.seq != 2 {
+			t.Fatalf("save-and-continue did not open the next item: selected %d edit %+v", m.selected, m.edit)
 		}
 	})
 
@@ -621,8 +553,8 @@ func TestEditNextShortcutPromptsForUnsavedEdit(t *testing.T) {
 		if svc.saveCount() != 0 {
 			t.Fatalf("discarding saved %d revisions", svc.saveCount())
 		}
-		if m.selected != 1 || m.edit != nil || m.navPrompt != nil {
-			t.Fatalf("discard-and-continue did not move: selected %d edit %+v prompt %+v",
+		if m.selected != 1 || m.edit == nil || m.edit.seq != 2 || m.navPrompt != nil {
+			t.Fatalf("discard-and-continue did not open the next item: selected %d edit %+v prompt %+v",
 				m.selected, m.edit, m.navPrompt)
 		}
 	})
@@ -632,10 +564,7 @@ func TestEditNextShortcutPromptsForUnsavedEdit(t *testing.T) {
 			reviewRowItem(t, 1, 12),
 			reviewRowItem(t, 2, 10),
 		)
-		if err := tt.Click("编辑"); err != nil {
-			t.Fatal(err)
-		}
-		settle(t, m, q, tt)
+		tt.Frame()
 
 		// Make the draft dirty through the form, not a test-only field
 		// assignment: the picker writes the bound draft value.
@@ -674,22 +603,12 @@ func TestStatusBarNamesOnlyUsableShortcuts(t *testing.T) {
 		t.Fatalf("the prepare status = %q", got)
 	}
 
-	m2, q2, tt2 := openResponsiveResults(t, responsiveResultRecord(t), 1024, 700)
-	if got := m2.statusShortcutText(); got != shortcutConfirmNext+" 确认并下一项  ·  "+shortcutNextPending+" 下一个待校对" {
-		t.Fatalf("the results status = %q", got)
-	}
-	if tt2.HasText(shortcutSave + " 保存修改") {
-		t.Fatalf("the results list names the editor key: %q", tt2.Texts())
-	}
-	if err := tt2.Click("编辑"); err != nil {
-		t.Fatal(err)
-	}
-	settle(t, m2, q2, tt2)
-	if got := m2.statusShortcutText(); got != shortcutConfirmNext+" 保存并确认并下一项  ·  "+shortcutSave+" 保存修改" {
+	m2, _, tt2 := openResponsiveResults(t, responsiveResultRecord(t), 1024, 700)
+	if got := m2.statusShortcutText(); got != shortcutConfirmNext+" 确认并下一项  ·  "+shortcutSave+" 保存修改  ·  "+shortcutZoomIn+" 放大  ·  "+shortcutZoomOut+" 缩小" {
 		t.Fatalf("the editing status = %q", got)
 	}
-	if tt2.HasText(shortcutNextPending+" 下一个待校对") || tt2.HasText(shortcutConfirmNext+" 确认并下一项") {
-		t.Fatalf("the editing status still names review keys: %q", tt2.Texts())
+	if tt2.HasText(shortcutNextPending + " 下一个待校对") {
+		t.Fatalf("the editing status still names the pending walk keys: %q", tt2.Texts())
 	}
 
 	svc := &fakeService{history: historyTableRecords(3)}

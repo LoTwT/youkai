@@ -123,9 +123,11 @@ func (m *Model) exportBusy() bool {
 // reviewActionsBlocked reports whether review edits and confirmations must
 // stay disabled: while a save is in flight, the latest checkpoint is still
 // loading (the visible record is an older snapshot then), the last load
-// failed (the record on screen is stale), or an export holds its snapshot.
+// failed (the record on screen is stale), an export holds its snapshot, or a
+// screenshot cleanup is running and will reload the record when it finishes.
 func (m *Model) reviewActionsBlocked() bool {
-	return m.reviewSaving || m.loading || m.recErr != "" || m.exportBusy()
+	return m.reviewSaving || m.loading || m.recErr != "" || m.exportBusy() || m.exportDialog.open ||
+		(m.cleanup != nil && m.cleanup.running)
 }
 
 // exportAvailable reports whether this build offers an export entry.
@@ -171,6 +173,8 @@ func (m *Model) exportBlockedReasonWithDraft(blockDirty bool) string {
 		return "正在退出应用，不能导出。"
 	case m.reviewSaving:
 		return "正在保存修改，完成前不能导出。"
+	case m.cleanupRunning():
+		return "正在清理，完成前不能导出。"
 	case blockDirty && m.editingDirty():
 		return "有未保存的修改，保存或放弃后可导出。"
 	case m.loading:
@@ -194,16 +198,35 @@ func (m *Model) exportBlockedReasonWithDraft(blockDirty bool) string {
 
 // exportEntryBlocked reports whether the workspace's export entry and its
 // Ctrl+E shortcut are unusable now. The title-bar button and the shortcut
-// share this answer, so they cannot disagree (L-2). Unsaved review input
-// does not block the entry itself: opening it first shows the ordinary
-// save/discard prompt, as the export dialog must not open over a dirty
-// draft.
+// share this answer, so they cannot disagree (L-2). A save in flight also
+// blocks the entry: the draft must stay attached to its row until the result
+// is known. Unsaved review input does not block the entry itself: opening it
+// first shows the ordinary save/discard prompt, as the export dialog must not
+// open over a dirty draft.
 func (m *Model) exportEntryBlocked() bool {
-	return !m.exportAvailable() ||
-		m.exporting ||
-		m.exitState == exitRunning ||
-		m.exitState == exitDone ||
-		m.rec == nil
+	return m.exportEntryBlockedReason() != ""
+}
+
+// exportEntryBlockedReason names why the export entry is disabled, so the
+// title bar and the completion form can show the reason beside the disabled
+// button (09 §4.1).
+func (m *Model) exportEntryBlockedReason() string {
+	switch {
+	case !m.exportAvailable():
+		return "当前构建未启用导出。"
+	case m.exporting:
+		return "正在导出，完成前不能导出。"
+	case m.reviewSaving:
+		return "正在保存修改，完成前不能导出。"
+	case m.cleanupRunning():
+		return "正在清理，完成前不能导出。"
+	case m.exitState == exitRunning || m.exitState == exitDone:
+		return "正在退出应用，不能导出。"
+	case m.rec == nil:
+		return "结果尚未加载，不能导出。"
+	default:
+		return ""
+	}
 }
 
 // exportDialogJSON starts the JSON export from the dialog.
@@ -231,8 +254,20 @@ func (m *Model) openExportDialog() {
 	if m.exportEntryBlocked() {
 		return
 	}
+	m.clearCleanEditorForExport()
 	m.exportOutcome = nil
 	m.exportDialog = exportDialogState{open: true}
+}
+
+// clearCleanEditorForExport settles an editor that no longer needs a draft
+// before the export dialog opens. editingDirty hides a draft while a save is
+// in flight, so the save state must be checked separately or that draft would
+// be mistaken for a clean editor.
+func (m *Model) clearCleanEditorForExport() {
+	if m.reviewSaving || m.editingDirty() {
+		return
+	}
+	m.clearEdit()
 }
 
 // closeExportDialog hides the dialog. An export in flight keeps it open;
@@ -244,6 +279,19 @@ func (m *Model) closeExportDialog() {
 	}
 	m.exportDialog = exportDialogState{}
 	m.exportCancel = nil
+	m.replayPendingNotification()
+}
+
+// replayPendingNotification opens the record a notification click named
+// while the export dialog was writing. Closing in any settled state
+// (success, canceled or failure) honors the last click; the normal
+// OpenNotification guards apply unchanged.
+func (m *Model) replayPendingNotification() {
+	recordID := m.pendingNotificationRecordID
+	m.pendingNotificationRecordID = ""
+	if recordID != "" {
+		m.OpenNotification(recordID)
+	}
 }
 
 // startExport renders and saves one format. Both output formats derive
@@ -407,8 +455,16 @@ func (m *Model) exportDialogTitle() string {
 // exportEntryArea is the record workspace's title-bar entry. A build
 // without a saver still shows where export lives, disabled.
 func (m *Model) exportEntryArea(c *ui.Context) {
-	if ui.Button(c, "导出…").Disabled(m.exportEntryBlocked()).Clicked() {
+	blocked := m.exportEntryBlocked()
+	if ui.Button(c, "导出…").Disabled(blocked).Clicked() {
 		m.requestExport()
+	}
+	if blocked {
+		if reason := m.exportEntryBlockedReason(); reason != "" {
+			t := c.Theme()
+			ui.Text(c, reason).FontSize(t.FontSize * 0.85).
+				TextColor(t.TextMuted).SingleLine()
+		}
 	}
 }
 
@@ -433,8 +489,7 @@ func (m *Model) exportDialogView(c *ui.Context, t *ui.Theme) {
 		// backdrop press are ignored. The next frame rebuilds it.
 		return
 	}
-	m.exportDialog = exportDialogState{}
-	m.exportCancel = nil
+	m.closeExportDialog()
 }
 
 // exportDialogContent switches the modal between the pre-export content
@@ -443,9 +498,13 @@ func (m *Model) exportDialogView(c *ui.Context, t *ui.Theme) {
 func (m *Model) exportDialogContent(c *ui.Context, t *ui.Theme) {
 	if m.exportDialogSuccess() != nil {
 		m.exportDialogSuccessContent(c, t)
-		return
+	} else {
+		m.exportDialogPreExport(c, t)
 	}
-	m.exportDialogPreExport(c, t)
+	if m.pendingNotificationRecordID != "" {
+		ui.Text(c, "关闭导出对话框后会打开通知对应的记录。").TextColor(t.TextMuted).
+			FontSize(t.FontSize * 0.9)
+	}
 }
 
 // exportDialogPreExport shows what the file will contain, the two
@@ -666,11 +725,11 @@ func (m *Model) exportDialogExcludedReasons(c *ui.Context, t *ui.Theme) {
 // exportDialogGoToReview leaves the dialog for the item browser's
 // 待处理 segment.
 func (m *Model) exportDialogGoToReview() {
+	m.pendingNotificationRecordID = ""
 	m.exportDialog = exportDialogState{}
 	m.exportCancel = nil
 	m.page = pageResults
 	m.recordTab = recordTabItems
-	m.resultsDetail = false
 	m.setResultFilter(resultFilterPending)
 }
 
@@ -744,6 +803,10 @@ func (m *Model) exportDialogDeleteScreenshots(recordID string) {
 	if recordID == "" {
 		return
 	}
+	// This explicit transfer owns the destination: the exported record's
+	// summary and cleanup prompt. A pending notification click is discarded
+	// rather than competing with it (PR-19b, item 14).
+	m.pendingNotificationRecordID = ""
 	m.exportDialog = exportDialogState{}
 	m.exportCancel = nil
 	m.page = pageResults

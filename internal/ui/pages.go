@@ -59,6 +59,14 @@ func (m *Model) viewPages(c *ui.Context) {
 			// Entering the list puts the keyboard on its first row (08 §5).
 			m.historyFocusPending = true
 		}
+		if page == pageSettings {
+			// Entering settings puts the keyboard on the in-page directory,
+			// unless the disk-space entry asked for the storage section.
+			m.settingsFocusPending = true
+		}
+		if m.lastPage == pageSettings && page != pageSettings {
+			m.leaveSettingsPage()
+		}
 		m.lastPage = page
 	}
 	m.registerPageShortcuts(c)
@@ -67,8 +75,10 @@ func (m *Model) viewPages(c *ui.Context) {
 	} else {
 		// The pending segment's just-confirmed markers belong to the item
 		// browser's current visit; the summary and other destinations
-		// refresh it.
+		// refresh it. The browse guard protects only that bar's reused
+		// position, so leaving the item browser ends it too.
 		m.clearRecentlyConfirmed()
+		m.clearReviewBrowseGuard()
 	}
 	if page != pageHistory {
 		// The row menu only exists on the records list; leaving it must not
@@ -82,11 +92,17 @@ func (m *Model) viewPages(c *ui.Context) {
 		ui.Column(c).Grow(1).FillHeight().Children(func() {
 			m.pageBody(c, t)
 			m.pageActions(c, t, tok)
+			m.reviewNoticePage(c, t)
 			ui.Divider(c)
 			m.pageStatusBar(c, t)
 		})
 	})
+	// The export modal and the unsaved-changes dialog both cover the
+	// whole window; only one of them is open at a time.
 	m.exportDialogView(c, t)
+	m.navigationPrompt(c, t)
+	m.trayHintDialogView(c, t)
+	m.exitDialogView(c, t)
 }
 
 // navRail is the three-destination rail: icon above label, the active
@@ -99,17 +115,17 @@ func (m *Model) navRail(c *ui.Context, t *ui.Theme, tok *Tokens) {
 	onRecords := page == pageResults || page == pageHistory
 	ui.Column(c).Width(navRailWidth).FillHeight().Background(tok.SurfaceWindow).
 		Padding(t.Space(2.5), 0).Gap(t.Space(1.5)).AlignItems(ui.Center).FocusGroup(ui.Vertical).Children(func() {
-		m.navRailItem(c, t, tok, "扫描", scanIcon, page == pageScan, m.showScanDestination)
-		m.navRailItem(c, t, tok, "记录", recordsIcon, onRecords, m.showRecordsDestination)
+		m.navRailItem(c, t, tok, "扫描", scanIcon, page == pageScan, false, m.showScanDestination)
+		m.navRailItem(c, t, tok, "记录", recordsIcon, onRecords, false, m.showRecordsDestination)
 		ui.Box(c).Grow(1)
-		m.navRailItem(c, t, tok, "设置", settingsIcon, page == pageSettings, m.showSettingsDestination)
+		m.navRailItem(c, t, tok, "设置", settingsIcon, page == pageSettings, m.updateDotVisible(), m.showSettingsDestination)
 	})
 }
 
 // navRailItem is one rail destination. The active item carries the
 // accent-soft face and the accent foreground, and its ref lets F6 return
 // the keyboard to the rail.
-func (m *Model) navRailItem(c *ui.Context, t *ui.Theme, tok *Tokens, label string, icon *ui.SVG, active bool, action func()) {
+func (m *Model) navRailItem(c *ui.Context, t *ui.Theme, tok *Tokens, label string, icon *ui.SVG, active, showDot bool, action func()) {
 	bg, fg := tok.SurfaceWindow, tok.TextSecondary
 	if active {
 		bg, fg = tok.AccentSoft, tok.AccentFG
@@ -126,7 +142,12 @@ func (m *Model) navRailItem(c *ui.Context, t *ui.Theme, tok *Tokens, label strin
 	item.Children(func() {
 		ui.Column(c).Gap(t.Space(0.5)).AlignItems(ui.Center).Children(func() {
 			ui.Icon(c, icon).Size(t.Space(5), t.Space(5)).TextColor(fg)
-			ui.Text(c, label).FontSize(t.FontSize * 0.8).TextColor(fg).SingleLine()
+			ui.Row(c).Gap(t.Space(0.75)).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, label).FontSize(t.FontSize * 0.8).TextColor(fg).SingleLine()
+				if showDot {
+					updateDot(c, t, tok)
+				}
+			})
 		})
 	})
 }
@@ -193,16 +214,13 @@ func (m *Model) pageBody(c *ui.Context, t *ui.Theme) {
 			m.historyPage(c, t)
 		})
 	case pageSettings:
-		ui.Scroll(c).Grow(1).Children(func() {
-			ui.Column(c).Gap(t.Space(2)).Padding(t.Space(3), t.Space(3)).Children(func() {
-				m.settingsPage(c, t)
-			})
+		ui.Column(c).Grow(1).FillHeight().Padding(t.Space(3), t.Space(3)).Gap(t.Space(2)).Children(func() {
+			m.settingsPage(c, t)
 		})
 	default:
 		ui.Column(c).Grow(1).Padding(t.Space(3), t.Space(3)).Gap(t.Space(2)).Children(func() {
 			ui.Scroll(c).Grow(1).Children(func() {
 				ui.Column(c).Gap(t.Space(2)).Children(func() {
-					m.navigationPrompt(c, t)
 					m.prepareArea(c, t)
 					if m.snap.SessionID != "" {
 						ui.Divider(c)
@@ -243,6 +261,29 @@ func (m *Model) pageActions(c *ui.Context, t *ui.Theme, tok *Tokens) {
 	})
 }
 
+// reviewNoticePage keeps the last review outcome visible when the item
+// action bar is not on screen: the summary, the records list and settings
+// must not hide that a saved modification went back to review (08 §3.4,
+// 09 §4.1). The item browser shows the same line in its action bar.
+func (m *Model) reviewNoticePage(c *ui.Context, t *ui.Theme) {
+	if m.reviewNotice == "" || m.displayPage() == pageScan {
+		return
+	}
+	// The item browser shows the same line in its action bar, which needs a
+	// row and not the finished-review empty state. A failed record load
+	// replaces that bar with the error, so the notice must move to the page
+	// level instead of being suppressed (PR-19b round 2).
+	if m.displayPage() == pageResults && m.recordTab == recordTabItems && m.recErr == "" &&
+		m.selectedRow() != nil && !(m.filter == resultFilterPending && m.reviewSettled()) {
+		return
+	}
+	ui.Row(c).Padding(t.Space(1.5), t.Space(3)).Children(func() {
+		ui.Text(c, m.reviewNotice).FontSize(t.FontSize * 0.85).TextColor(t.TextMuted)
+	})
+}
+
+// pageStatusBar is the window's bottom status line: the page's conclusion
+// on the left and the keys that work there on the right.
 func (m *Model) pageStatusBar(c *ui.Context, t *ui.Theme) {
 	ui.Row(c).Background(t.Surface).Padding(t.Space(2), t.Space(3)).Children(func() {
 		ui.Text(c, m.pageStatusText()).TextColor(t.TextMuted).FontSize(t.FontSize * 0.85)

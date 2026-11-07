@@ -88,6 +88,42 @@ func TestScanEndDoesNotPromptScreenshotRetention(t *testing.T) {
 	}
 }
 
+// TestRunningCleanupCannotBeReopened covers PR-19b: clicking the completion
+// form's screenshot link during a running deletion must keep the running
+// prompt (and the write/export gates that depend on it).
+func TestRunningCleanupCannotBeReopened(t *testing.T) {
+	m, _, tt := openResponsiveResults(t, recovery(confirmedReviewItem(t, 1, 12)), 1180, 760)
+	tt.Frame()
+	saver := &fakeDirectExportSaver{}
+	m.cfg.DirectExportSaver = saver
+	p := &cleanupPrompt{target: cleanupOneScreenshots, recordID: m.rec.ID, ready: true, running: true}
+	m.cleanup = p
+	tt.Frame()
+
+	// The visible entry is disabled; its click must not replace the prompt.
+	if err := tt.Click("删除这条记录的截图…"); err != nil {
+		t.Logf("disabled cleanup link click: %v", err)
+	}
+	tt.Frame()
+	if m.cleanup != p || !m.cleanup.running {
+		t.Fatalf("the entry replaced the running cleanup: %+v", m.cleanup)
+	}
+	// The programmatic entry keeps the same guard for every other caller.
+	m.RequestScreenshotCleanup(m.rec.ID)
+	if m.cleanup != p || !m.cleanup.running {
+		t.Fatalf("a second request dropped the running cleanup state: %+v", m.cleanup)
+	}
+
+	tt.Key(ui.Cmd, ui.KeyE)
+	tt.Frame()
+	if m.exportDialog.open {
+		t.Fatal("Ctrl+E opened the export dialog while the deletion was running")
+	}
+	if len(saver.snapshot()) != 0 {
+		t.Fatalf("the blocked export wrote %d files", len(saver.snapshot()))
+	}
+}
+
 func TestViewHistoryScreenshotCleanupPreviewsCancelAndFails(t *testing.T) {
 	svc := cleanupPreviewService(
 		[]record.RecordInfo{{ID: "r1", LatestRevision: 2, SavedAt: time.Now()}},
@@ -182,11 +218,11 @@ func TestViewStorageBulkCleanupPreviewsAndIndependentEntries(t *testing.T) {
 	tt := ui.NewTester(m.View, 1020, 700)
 	settle(t, m, q, tt)
 
-	if !tt.HasText("历史 2 条 · 记录数据 5.8 KB · 截图 4 张 4.0 KB · 缓存 1.0 KB · 日志 2.0 KB · 磁盘可用 5.0 GB / 10.0 GB") {
+	if !tt.HasText("记录 5.8 KB（2 条） · 截图 4 张 4.0 KB · 缓存 1.0 KB · 日志 2.0 KB") {
 		t.Fatalf("the storeroom summary does not show: %q", tt.Texts())
 	}
 
-	if err := tt.Click("删除全部截图"); err != nil {
+	if err := tt.Click("删除全部截图…"); err != nil {
 		t.Fatal(err)
 	}
 	settle(t, m, q, tt)
@@ -202,7 +238,7 @@ func TestViewStorageBulkCleanupPreviewsAndIndependentEntries(t *testing.T) {
 	// The screenshot entry fails on its own without touching the record
 	// entries, and keeps a retry.
 	svc.deleteErr = errString("截图被占用")
-	if err := tt.Click("删除全部截图"); err != nil {
+	if err := tt.Click("删除全部截图…"); err != nil {
 		t.Fatal(err)
 	}
 	settle(t, m, q, tt)
@@ -218,7 +254,7 @@ func TestViewStorageBulkCleanupPreviewsAndIndependentEntries(t *testing.T) {
 	settle(t, m, q, tt)
 
 	svc.deleteErr = nil
-	if err := tt.Click("删除全部记录"); err != nil {
+	if err := tt.Click("删除全部记录…"); err != nil {
 		t.Fatal(err)
 	}
 	settle(t, m, q, tt)
@@ -276,7 +312,7 @@ func TestViewCleanupDisabledReasons(t *testing.T) {
 	if !tt2.HasText("扫描会话进行中，结束后才能清理。") {
 		t.Fatalf("the active scan does not block cleanup: %q", tt2.Texts())
 	}
-	if err := tt2.Click("删除全部记录"); err != nil {
+	if err := tt2.Click("删除全部记录…"); err != nil {
 		t.Fatal(err)
 	}
 	drainAll(t, m2, q2)
@@ -500,7 +536,7 @@ func TestViewStorageUsageFailureDoesNotShowStaleNumbers(t *testing.T) {
 	if !tt.HasText("占用读取失败：权限不足") {
 		t.Fatalf("the storage failure does not show: %q", tt.Texts())
 	}
-	if tt.HasText("历史 0 条") {
+	if tt.HasText("缓存 0 B") {
 		t.Fatalf("a failed measurement still shows numbers: %q", tt.Texts())
 	}
 }
@@ -527,13 +563,14 @@ func TestViewMissingEvidenceAfterCleanup(t *testing.T) {
 	if !tt.HasText("截图已删除或缺失") {
 		t.Fatalf("the missing-evidence mark does not show: %q", tt.Texts())
 	}
-	if err := tt.Click("显示证据"); err != nil {
-		t.Fatal(err)
-	}
 	settle(t, m, q, tt)
 	if !tt.HasText("该记录的截图已删除或缺失，无法显示图像；识别文本与字段数据仍保留。") {
 		t.Fatalf("the evidence area does not explain the missing screenshots: %q", tt.Texts())
 	}
+	if err := tt.Click("原始识别文字与修订（1 条）"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
 	if !tt.HasText("静听嘉音") {
 		t.Fatalf("the recognized text disappeared with the screenshots: %q", tt.Texts())
 	}

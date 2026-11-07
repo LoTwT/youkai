@@ -937,8 +937,8 @@ func TestRecordConclusion(t *testing.T) {
 			wantOutcome:       recordOutcomeEmpty,
 			tag:               "中断",
 			text:              "已恢复已保存部分",
-			summaryTitle:      "没有采集到任何驱动盘",
-			summarySupplement: "回到准备检查后重新开始。",
+			summaryTitle:      "扫描中断，没有采集到任何驱动盘",
+			summarySupplement: "请重新开始扫描。",
 		},
 		{
 			name: "save failure outranks running and zero items",
@@ -1316,16 +1316,23 @@ func TestHistoryRowExportSettlesDirtyDraftFirst(t *testing.T) {
 
 	m.page = pageHistory
 	tt.Frame()
-	m.openHistoryMenu("r02")
-	tt.Frame()
-	if err := tt.Click("导出…"); err != nil {
-		t.Fatal(err)
+	label := historyLabel(t, m, "r02")
+	var target HistoryEntry
+	for _, entry := range m.visibleHistory() {
+		if entry.Label == label {
+			target = entry
+			break
+		}
 	}
+	if target.ID == "" {
+		t.Fatal("r02 is not in the visible history")
+	}
+	m.openHistoryExport(target)
 	tt.Frame()
 	if m.exportDialog.open || m.navPrompt == nil {
 		t.Fatalf("dirty row export = dialog=%t prompt=%v", m.exportDialog.open, m.navPrompt)
 	}
-	if !tt.HasText("当前条目有未保存的修改。") {
+	if !tt.HasText("第 1 件有未保存的修改") {
 		t.Fatalf("the unsaved-changes prompt is missing: %q", tt.Texts())
 	}
 	if err := tt.Click("放弃修改"); err != nil {
@@ -1422,5 +1429,24 @@ func TestHistoryPerRowExportUsesThatRecord(t *testing.T) {
 	}
 	if !tt.HasText("已导出 2 件") {
 		t.Fatalf("the dialog success is missing: %q", tt.Texts())
+	}
+}
+
+// TestActiveHistoryEntryIsRunningNotInterrupted checks historyConclusionInput
+// passes the existing active/live fact into the shared interruption rule.
+func TestActiveHistoryEntryIsRunningNotInterrupted(t *testing.T) {
+	m := &Model{
+		appliedSession: scan.ID("rec"),
+		snap:           app.Snapshot{Busy: true},
+	}
+	in := m.historyConclusionInput(HistoryEntry{ID: "rec", CapturedCount: 0})
+	if in.Interrupted {
+		t.Fatalf("an active unfinished session is marked interrupted: %+v", in)
+	}
+	if !in.ScanNotWrapped {
+		t.Fatalf("an active unfinished session is not marked running: %+v", in)
+	}
+	if got := recordOutcomeFor(in).Kind; got != recordOutcomeRunning {
+		t.Fatalf("active history outcome = %v, want running", got)
 	}
 }

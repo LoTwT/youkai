@@ -106,6 +106,8 @@ type fakeService struct {
 	discoveries         int
 	discoverFn          func() (app.TargetDiscoveryResult, error)
 
+	updateInstalling []bool
+
 	list      []record.RecordInfo
 	history   []app.HistoryRecord
 	historyFn func() ([]app.HistoryRecord, error)
@@ -434,6 +436,20 @@ func (f *fakeService) Quit() error {
 	return nil
 }
 
+// SetUpdateInstalling records the install publication the update flow owns
+// (M-2); the sequence tells a start from a failed install's clear.
+func (f *fakeService) SetUpdateInstalling(installing bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.updateInstalling = append(f.updateInstalling, installing)
+}
+
+func (f *fakeService) updateInstallingCalls() []bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]bool(nil), f.updateInstalling...)
+}
+
 // fakeEvidence is the evidence double: every load is recorded and answers
 // from a table, so tests assert which images the view asked for.
 type fakeEvidence struct {
@@ -588,4 +604,5 @@ func intp(v int) *int { return &v }
 // record; the shell's own tests cover the summary landing.
 func showRecordItems(m *Model) {
 	m.recordTab = recordTabItems
+	m.enterReviewView()
 }
