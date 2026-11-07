@@ -1382,8 +1382,11 @@ func (m *Model) reviewModifyActions(c *ui.Context, t *ui.Theme, row *Row) {
 // space it keeps when there is none, so the buttons above never move.
 func reviewActionReason(c *ui.Context, t *ui.Theme, reason string) {
 	if reason == "" {
-		// An invisible line of the same font keeps the buttons in place.
-		ui.Text(c, "\u00a0").FontSize(t.FontSize * 0.85).Role(ui.RoleNone)
+		// The spacer uses a CJK glyph, invisible, so its line gets the same
+		// font fallback as every reason above (all start in Chinese) and
+		// therefore exactly the same height on every platform. A Latin-only
+		// spacer was 0.04 DIP shorter on Windows, moving the buttons (L9).
+		ui.Text(c, "中").FontSize(t.FontSize * 0.85).TextColor(ui.Transparent).Role(ui.RoleNone)
 		return
 	}
 	ui.Text(c, reason).FontSize(t.FontSize * 0.85).TextColor(t.TextMuted)
