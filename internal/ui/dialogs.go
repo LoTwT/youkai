@@ -98,7 +98,7 @@ func (m *Model) exitDialogView(c *ui.Context, t *ui.Theme) {
 						TextColor(t.TextMuted).FontSize(t.FontSize * 0.9)
 				}
 				if !saveFailure {
-					if m.snap.SessionID != "" {
+					if m.savedExitResults() {
 						ui.Text(c, "扫描结果已保存；退出清理没有完成，重试不会改变结果。可以仍然退出，或关闭对话框继续查看结果。").
 							TextColor(t.TextMuted).FontSize(t.FontSize * 0.9)
 					} else {
@@ -129,12 +129,12 @@ func (m *Model) exitFailureDetail() string {
 		return "退出收尾没有完成：扫描结果还没有保存。"
 	}
 	if m.exitErr != "" {
-		if m.snap.SessionID != "" {
+		if m.savedExitResults() {
 			return "扫描结果已保存，退出清理没有完成：" + m.exitErr + "。"
 		}
 		return "退出清理没有完成：" + m.exitErr + "。当前没有待保存的扫描结果。"
 	}
-	if m.snap.SessionID != "" {
+	if m.savedExitResults() {
 		return "扫描结果已保存，退出清理没有完成。"
 	}
 	return "退出清理没有完成。当前没有待保存的扫描结果。"

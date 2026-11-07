@@ -119,6 +119,41 @@ func TestFirstHideHintOnceAndReplay(t *testing.T) {
 	}
 }
 
+// TestFirstHideHintHidesAfterCleanupFailure covers the close-to-tray
+// preference after a failed cleanup: acknowledging the hint must hide the
+// window even though the exit state is failed, because closing did not
+// reopen the failure dialog.
+func TestFirstHideHintHidesAfterCleanupFailure(t *testing.T) {
+	hides := 0
+	m, q := newTestModel(t, Config{
+		Service:    &fakeService{quitFn: func() error { return errors.New("close recognizer: busy") }},
+		HideToTray: func() { hides++ },
+	})
+	tt := ui.NewTester(m.View, 1020, 700)
+	settle(t, m, q, tt)
+	m.AllowClose()
+	drainAll(t, m, q)
+	tt.Frame()
+	if m.exitState != exitFailed {
+		t.Fatalf("the fixture did not fail the exit: %v", m.exitState)
+	}
+	m.exitFailureDialogOpen = false
+	tt.Frame()
+
+	m.ShowFirstHideHint()
+	tt.Frame()
+	if err := tt.Click("知道了"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if hides != 1 {
+		t.Fatalf("acknowledging the hint after a failed cleanup hid %d times", hides)
+	}
+	if m.navPrompt != nil {
+		t.Fatalf("hiding left a prompt behind the window: %s", probeReviewState(m))
+	}
+}
+
 // TestFirstHideHintDismissalKeepsItDue checks Escape/backdrop: closing the
 // dialog without its button neither acknowledges nor hides.
 func TestFirstHideHintDismissalKeepsItDue(t *testing.T) {
@@ -264,6 +299,7 @@ func TestExitCleanupFailureOffersExitAnyway(t *testing.T) {
 		OnExitSettled: func() { settled++ },
 	})
 	m.snap.SessionID = "s1"
+	m.snap.SavedCount = 1
 	m.SetContentSize(1020, 700)
 	tt := ui.NewTester(m.View, 1020, 700)
 	settle(t, m, q, tt)
@@ -399,27 +435,24 @@ func TestExitCleanupFailureExitAnywayPromptsDirty(t *testing.T) {
 	}
 }
 
-// TestExitCleanupFailureExitAnywayWaitsForSave covers the in-flight save:
-// no exit may settle until the save finishes.
+// TestExitCleanupFailureExitAnywayWaitsForSave covers the in-flight save
+// through the real save callback: no exit may settle until the save
+// finishes, and its success then continues the forced exit.
 func TestExitCleanupFailureExitAnywayWaitsForSave(t *testing.T) {
-	settled := 0
-	m, q := newTestModel(t, Config{
-		Service:       &fakeService{quitFn: func() error { return errors.New("close recognizer: busy") }},
-		OnExitSettled: func() { settled++ },
-	})
-	m.AllowClose()
-	drainAll(t, m, q)
-	m.reviewSaving = true
-	m.ExitAnyway()
-	if m.navPrompt == nil || m.exitState != exitFailed || settled != 0 {
-		t.Fatalf("仍然退出 settled during a save: %s", probeReviewState(m))
+	f := newExitMatrixFixture(t)
+	f.dirty(t)
+	release := f.blockedSave(t, nil)
+
+	f.m.ExitAnyway()
+	f.tt.Frame()
+	if f.m.navPrompt == nil || f.m.exitState != exitFailed || f.settled != 0 {
+		t.Fatalf("仍然退出 settled during a save: %s", probeReviewState(f.m))
 	}
-	m.reviewSaving = false
-	m.promptDiscardAndContinue()
-	drainAll(t, m, q)
-	if m.exitState != exitDone || settled != 1 {
+	release()
+	drainAll(t, f.m, f.q)
+	if f.m.exitState != exitDone || f.settled != 1 {
 		t.Fatalf("the settled save did not allow the forced exit: state %v settled %d",
-			m.exitState, settled)
+			f.m.exitState, f.settled)
 	}
 }
 
@@ -644,6 +677,56 @@ func TestNonSaveExitFailureCopyDoesNotClaimAnUnsavedResult(t *testing.T) {
 	}
 	if !tt.HasText("再次退出可重新打开退出失败对话框") {
 		t.Fatalf("the inline exit failure does not explain how to reopen the dialog: %q", tt.Texts())
+	}
+}
+
+// TestSnapshotHasSavedResultsUsesNotificationFacts covers R5-3: the exit
+// copy reuses the notification's saved-result decision, including its
+// saved-to-captured fallback for a lagging snapshot.
+func TestSnapshotHasSavedResultsUsesNotificationFacts(t *testing.T) {
+	cases := []struct {
+		name string
+		snap app.Snapshot
+		rec  *record.Recovery
+		want bool
+	}{
+		{"no session", snap("", 1, false, scan.PhaseEnded, scan.Counts{}, 0, false, ""), nil, false},
+		{"session without a result", snap("s1", 1, false, scan.PhaseEnded, scan.Counts{}, 0, false, ""), nil, false},
+		{"saved result", snap("s1", 1, false, scan.PhaseEnded, scan.Counts{Captured: 1, Produced: 1}, 1, false, ""), nil, true},
+		{"captured fallback", snap("s1", 1, false, scan.PhaseEnded, scan.Counts{Captured: 2}, 0, false, ""), nil, true},
+		{"record fallback", snap("s1", 1, false, scan.PhaseEnded, scan.Counts{}, 0, false, ""), recovery(reviewRowItem(t, 1, 12)), true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := snapshotHasSavedResults(tc.snap, tc.rec); got != tc.want {
+				t.Fatalf("snapshotHasSavedResults = %v, want %v for %+v", got, tc.want, tc.snap)
+			}
+		})
+	}
+}
+
+// TestExitFailureWithSessionButNoResultDoesNotClaimSavedResults covers the
+// preparation-failure and stopped-before-capture case: a session identity
+// alone is not a saved scan result.
+func TestExitFailureWithSessionButNoResultDoesNotClaimSavedResults(t *testing.T) {
+	m, q := newTestModel(t, Config{Service: &fakeService{
+		quitFn: func() error { return errors.New("close recognizer: busy") },
+	}})
+	m.snap = snap("s1", 1, false, scan.PhaseEnded, scan.Counts{}, 0, false, "")
+	tt := ui.NewTester(m.View, 1020, 700)
+	settle(t, m, q, tt)
+	m.AllowClose()
+	drainAll(t, m, q)
+	tt.Frame()
+
+	if tt.HasText("扫描结果已保存") {
+		t.Fatalf("a session without results claims a saved scan result: %q", tt.Texts())
+	}
+	if !tt.HasText("当前没有待保存的扫描结果") {
+		t.Fatalf("the failure does not state that no result is pending: %q", tt.Texts())
+	}
+	if got := m.LifecycleStatus().TrayMenu().Status; got != "youkai · 退出清理未完成" {
+		t.Fatalf("tray status for a session without results = %q", got)
 	}
 }
 

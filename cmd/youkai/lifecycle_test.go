@@ -315,6 +315,31 @@ func TestWindowCloseHidesByDefault(t *testing.T) {
 	}
 }
 
+// A close after a failed cleanup still hides under the close-to-tray
+// preference; it does not reopen the failure dialog or run the exit path.
+func TestWindowCloseHidesAfterCleanupFailure(t *testing.T) {
+	model := &fakeLifecycleModel{
+		behavior: app.CloseBehaviorHide,
+		status: ui.LifecycleStatus{
+			Text: "退出失败", ExitCleanupFailed: true,
+		},
+	}
+	life := newWindowLifecycle(model)
+	installFakeTray(t, life)
+	win := &fakeWindow{}
+	life.AttachWindow(win)
+
+	event := &fakeEvent{}
+	life.OnWindowClose(event)
+	if !event.prevented || win.hides != 1 {
+		t.Fatalf("cleanup-failed close: prevented=%v hides=%d, want one hide", event.prevented, win.hides)
+	}
+	if model.allowCalls != 0 || model.showHintCalls != 0 {
+		t.Fatalf("cleanup-failed close reopened the failure path: allowCalls=%d hints=%d",
+			model.allowCalls, model.showHintCalls)
+	}
+}
+
 // A left click restores the window on Windows, and a double click is the
 // same callback twice: the second restore only re-shows the visible window
 // and rebuilds nothing.

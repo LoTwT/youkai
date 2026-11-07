@@ -385,6 +385,15 @@ func (m *Model) resultNotification(snap app.Snapshot, saveFailed bool, rec *reco
 	}
 }
 
+// snapshotHasSavedResults reports whether the session has a result to call
+// saved. It reuses the notification facts, including the saved-to-captured
+// fallback for a snapshot whose saved counter lags the final record, so the
+// exit failure copy cannot claim a result the result notification says never
+// started.
+func snapshotHasSavedResults(snap app.Snapshot, rec *record.Recovery) bool {
+	return notificationFactsFor(snap, rec).saved > 0
+}
+
 // notificationFactsFor reads the conclusion from the final record when it
 // loaded. The summary builds its four-class cells and coverage from the same
 // recovery, so both surfaces always agree.

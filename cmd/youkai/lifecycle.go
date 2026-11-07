@@ -449,9 +449,10 @@ func (l *windowLifecycle) trayMenu() *mygo.Menu {
 	exit := func(*mygo.MenuItem, *mygo.Window) { l.quitApp() }
 	if labels.Exit == "仍然退出" {
 		// Only this tray item takes the forced settled-exit path. Ctrl+Q and
-		// the window close keep reopening the failure dialog (PR-19b,
-		// decision 2). A required unsaved prompt must be visible even when
-		// the window is hidden.
+		// a close under 关窗即退出 keep reopening the failure dialog; a
+		// close-to-tray close still only hides (PR-19b, decision 2 and
+		// round 5). A required unsaved prompt must be visible even when the
+		// window is hidden.
 		exit = func(*mygo.MenuItem, *mygo.Window) {
 			l.model.ExitAnyway()
 			if !l.model.Exiting() {

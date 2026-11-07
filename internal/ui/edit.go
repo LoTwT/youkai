@@ -119,10 +119,6 @@ type navigationRequest struct {
 	kind     navKind
 	seq      int64
 	recordID string
-	// exitAnyway marks the tray's 仍然退出 path. A generic quit or window
-	// close after a non-save teardown failure reopens the failure dialog
-	// instead (PR-19b, decision 2).
-	exitAnyway bool
 	// page is the destination of a navPage request.
 	page Page
 	// The filter fields belong to navResultFilter / navSummaryClass; the
@@ -658,6 +654,11 @@ func (m *Model) requestNavigation(req navigationRequest) {
 	if m.exitState == exitRunning || m.exitState == exitDone {
 		return
 	}
+	if m.exitIntent != exitIntentNone {
+		// The quit owns the next transition; another navigation must not
+		// replace its prompt or run before the exit it asked for.
+		return
+	}
 	if m.navPrompt != nil {
 		// The open prompt owns the decision; a render-time selection or a
 		// second navigation must not replace its target.
@@ -749,18 +750,7 @@ func (m *Model) runNavigation(req navigationRequest) {
 		}
 		m.page = req.page
 	case navExit:
-		if req.exitAnyway {
-			m.exitAnyway()
-			return
-		}
-		if m.exitState == exitFailed && !m.exitFailedFromSave() {
-			// A generic quit or close after the teardown failed reopens the
-			// dialog; only the tray's 仍然退出 settles directly (PR-19b,
-			// decision 2).
-			m.exitFailureDialogOpen = true
-			return
-		}
-		m.beginExit()
+		m.continueExit()
 	case navStartScan:
 		m.Start()
 	case navExport:
@@ -830,10 +820,14 @@ func (m *Model) promptDiscardAndContinue() {
 	m.runNavigation(req)
 }
 
-// promptStay closes the prompt and keeps the editor open.
+// promptStay closes the prompt and keeps the editor open. Staying cancels
+// a pending exit; it never leaves the intent to fire after a later save.
 func (m *Model) promptStay() {
 	if m.reviewSaving {
 		return
+	}
+	if m.navPrompt != nil && m.navPrompt.kind == navExit {
+		m.exitIntent = exitIntentNone
 	}
 	m.navPrompt = nil
 }
@@ -1004,6 +998,9 @@ func (m *Model) submitReview(recordID string, seq, expectedRevision int64, data 
 				if m.edit != nil && m.edit.recordID == recordID && m.edit.seq == seq {
 					m.edit = nil
 				}
+				if m.continueExitAfterSave() {
+					return
+				}
 				if after != nil {
 					after()
 				}
@@ -1083,6 +1080,9 @@ func (m *Model) submitReview(recordID string, seq, expectedRevision int64, data 
 				m.setReviewNotice(fmt.Sprintf("已保存修订 %d。", result.Item.Revision))
 			}
 			m.catchUpLive()
+			if m.continueExitAfterSave() {
+				return
+			}
 			if after != nil {
 				after()
 			}
@@ -1097,6 +1097,7 @@ func (m *Model) handleReviewError(recordID string, err error) {
 	if errors.Is(err, record.ErrRevisionConflict) {
 		m.edit = nil
 		m.navPrompt = nil
+		m.exitIntent = exitIntentNone
 		m.reviewErr = ""
 		m.reviewSaveFailed = false
 		m.setReviewNotice("记录已被更新，正在重新加载当前修订；旧输入未保存。")
