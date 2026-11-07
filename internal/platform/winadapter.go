@@ -123,14 +123,21 @@ func (a *WinAdapter) logf(format string, args ...any) {
 // aware, or its screen coordinates are virtualized and the whole
 // physical-pixel premise collapses. MyGo configures the awareness before
 // creating windows; this check reports the process capability, it never
-// changes it.
+// changes it. A readable awareness that is not per-monitor-v2 carries the
+// same dpiAwarenessMismatch code the readiness checklist reports for that
+// condition, so a start refusal and the checklist agree; an unreadable
+// awareness stays a missing capability (the fact cannot be claimed).
 func (a *WinAdapter) Preflight() Preflight {
 	self, err := a.natives.Geo.SelfDpiAwareness()
-	return Preflight{Checks: []CapabilityCheck{{
+	check := CapabilityCheck{
 		Name: "perMonitorV2DpiAwareness",
 		OK:   err == nil && self == windows.DpiAwarenessPerMonitorV2,
 		Err:  err,
-	}}}
+	}
+	if err == nil && self != windows.DpiAwarenessPerMonitorV2 {
+		check.Code = CodeDpiAwarenessMismatch
+	}
+	return Preflight{Checks: []CapabilityCheck{check}}
 }
 
 var (

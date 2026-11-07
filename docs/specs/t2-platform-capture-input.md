@@ -184,7 +184,7 @@ Mac 的显示配置随后续版本确定：先在现有设备上检查客户端�
 
 **DPI 检查的处理方法：**`dpiAwarenessMismatch` 是 youkai 自身的配置问题，用户无法自行修复；界面只说明这一点并给出“复制诊断信息”，不引导用户修改系统缩放。`dpiVirtualized` 的处理方法是关闭游戏程序的“替代高 DPI 缩放行为”后重新打开游戏重试；`dpiCheckUnavailable` 的处理方法是重新打开游戏和 youkai 后重试。两者仍失败时都复制诊断信息；无法判定时按拒绝处理，不能开始。平台不按 DPI 数缩放整张图绕过（见 2.1）。
 
-**DPI 码的透传（PR-11）：**适配器按原码把 `dpiAwarenessMismatch`、`dpiVirtualized`、`dpiCheckUnavailable` 透传到端口层，并归类为 Setup（`internal/platform/winadapter.go` 的 `mapWinFault`）；记录与界面的故障码映射使用同一组码。`Preflight` 的 DPI 感知能力检查仍报 `permissionMissing`：它只回答进程能力是否具备；只读准备检查与会话首次观测用上面三行区分具体原因。
+**DPI 码的透传（PR-11）：**适配器按原码把 `dpiAwarenessMismatch`、`dpiVirtualized`、`dpiCheckUnavailable` 透传到端口层，并归类为 Setup（`internal/platform/winadapter.go` 的 `mapWinFault`）；记录与界面的故障码映射使用同一组码。`Preflight` 的 DPI 感知能力检查在 youkai 已知不是每显示器 DPI 感知 v2 时同样报 `dpiAwarenessMismatch`（经 `CapabilityCheck.Code`），使开始被拒与只读准备检查同码；能力查询本身失败时仍按能力缺失报 `permissionMissing`，因为无法据此断定感知模式。
 
 **macOS 云客户端（后续版本，沿用已验收 1164×762）：**目标解析先按 bundle、layer 0、onScreen、最小尺寸和“完整落在一块显示器内”过滤。若同 bundle 存在满足其他条件、只是跨屏或超出所有显示器的正常窗口，报 `targetOffscreen`，而不是笼统的 `targetNotFound`；确实没有可解析窗口仍报 `targetNotFound`。窗口点尺寸不是 1164×762 时在启动采集流之前报 `windowSizeUnsupported`；采集流已启动但帧尺寸或内容区与 `MacCloudLayout()` 不一致时报 `frameConfigMismatch`。三者的中文提示见上表。macOS 的窗口常量、布局和阈值不变。
 

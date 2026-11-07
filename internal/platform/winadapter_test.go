@@ -667,7 +667,7 @@ func TestWinOpenResolution(t *testing.T) {
 		w.geo.self = windows.DpiAwarenessSystem
 		w.geo.mu.Unlock()
 		f := w.adapter.Preflight().Fault()
-		if f == nil || f.Code != CodePermissionMissing || !contains(f.Message, "perMonitorV2DpiAwareness") {
+		if f == nil || f.Code != CodeDpiAwarenessMismatch || !contains(f.Message, "perMonitorV2DpiAwareness") {
 			t.Fatalf("pm2 missing: %+v", f)
 		}
 	})

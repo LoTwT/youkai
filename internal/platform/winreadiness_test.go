@@ -324,6 +324,28 @@ func TestWinReadinessDisplayScale(t *testing.T) {
 	})
 }
 
+// F1: the start-time preflight and the read-only checklist name the same
+// cause with the same code when youkai itself is known not PMv2.
+func TestWinDpiAwarenessCodeMatchesReadiness(t *testing.T) {
+	w := newWinWorld(t)
+	w.geo.mu.Lock()
+	w.geo.self = windows.DpiAwarenessSystem
+	w.geo.mu.Unlock()
+
+	start := w.adapter.Preflight().Fault()
+	if start == nil || start.Code != CodeDpiAwarenessMismatch {
+		t.Fatalf("preflight = %+v, want dpiAwarenessMismatch", start)
+	}
+	report, err := w.adapter.CheckReadiness(ReadinessRequest{Display: testDisplayPolicy()})
+	if err != nil {
+		t.Fatalf("check readiness: %v", err)
+	}
+	checklist := readinessChecks(t, report)[ReadinessDisplayScale]
+	if checklist.Fault == nil || checklist.Fault.Code != start.Code {
+		t.Fatalf("checklist display scale = %+v, want code %q", checklist, start.Code)
+	}
+}
+
 func TestWinReadinessFixedTarget(t *testing.T) {
 	w := newWinWorld(t)
 	cfg := w.config()

@@ -354,11 +354,16 @@ type Observation struct {
 
 // CapabilityCheck is one process-capability preflight result: a name,
 // whether it passed and the raw query error when the query itself
-// failed (a failed query does not count as a pass).
+// failed (a failed query does not count as a pass). Code optionally names
+// the diagnostic code a failure reports; empty means permissionMissing.
+// A platform uses it when the same condition already has a more precise
+// code elsewhere, so a start refusal and the read-only preparation check
+// report the same cause.
 type CapabilityCheck struct {
 	Name string
 	OK   bool
 	Err  error
+	Code string
 }
 
 // Preflight is the outcome of the port's capability preflight. It
@@ -371,10 +376,11 @@ type Preflight struct {
 	Checks []CapabilityCheck
 }
 
-// Fault returns the first missing capability as a permissionMissing
-// fault — the check that failed names the missing capability in the
-// message — or nil when every check passed. A failed query counts as
-// missing: without the fact, permission cannot be claimed.
+// Fault returns the first missing capability as a fault — the check that
+// failed names the missing capability in the message — or nil when every
+// check passed. The code is the check's own Code when set, otherwise
+// permissionMissing. A failed query counts as missing: without the fact,
+// permission cannot be claimed.
 func (p Preflight) Fault() *Fault {
 	for _, c := range p.Checks {
 		if c.OK {
@@ -384,7 +390,11 @@ func (p Preflight) Fault() *Fault {
 		if c.Err != nil {
 			msg = "capability " + c.Name + " unverifiable: " + c.Err.Error()
 		}
-		return NewFault(CodePermissionMissing, msg)
+		code := c.Code
+		if code == "" {
+			code = CodePermissionMissing
+		}
+		return NewFault(code, msg)
 	}
 	return nil
 }
