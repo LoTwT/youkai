@@ -296,11 +296,20 @@ func TestSavedInvalidValueIsNotDirtyUntilEdited(t *testing.T) {
 	it := withStructured(t, reviewRowItem(t, 1, 12), func(s *zzz.StructuredDisc) {
 		level := 99
 		s.Data.Level = &level
+		s.Data.Substats = []zzz.SubstatData{}
 	})
 	m, _, tt, _ := openReviewableResults(t, recovery(it), 1180, 760)
 	tt.Frame()
 	if m.edit == nil || m.edit.draft.Level != "99" {
 		t.Fatalf("the saved invalid level did not open: %s", probeReviewState(m))
+	}
+	if m.edit.original.Substats == nil || m.edit.draft.Substats == nil {
+		t.Fatalf("the confirmed empty substat list lost its shape: original=%v draft=%v",
+			m.edit.original.Substats, m.edit.draft.Substats)
+	}
+	data, problems := m.edit.draft.toData()
+	if len(problems) == 0 || data.Substats == nil || len(data.Substats) != 0 {
+		t.Fatalf("toData = %+v, problems %+v; want the confirmed empty list", data, problems)
 	}
 	if m.editingDirty() {
 		t.Fatal("the untouched saved invalid value is dirty")
@@ -939,6 +948,41 @@ func TestRevisionConflictNoticeSurvivesEmptyFilter(t *testing.T) {
 	}
 	if !tt.HasText("记录已被更新") {
 		t.Fatalf("the conflict notice is not visible: %q", tt.Texts())
+	}
+}
+
+// TestRevisionConflictReloadFailureNoticeVisible covers PR-19b round 2: when
+// the conflict reload fails, the item action bar never renders, so the
+// explanation must appear at page level.
+func TestRevisionConflictReloadFailureNoticeVisible(t *testing.T) {
+	m, q, tt, svc := openReviewableResults(t, recovery(reviewRowItem(t, 1, 12)), 1180, 760)
+	tt.Frame()
+	m.edit.draft.Level = "14"
+	m.edit.refresh()
+	svc.saveFn = func(string, int64, int64, app.ItemRevisionEdit) (app.ItemRevisionResult, error) {
+		return app.ItemRevisionResult{}, fmt.Errorf("stale: %w", record.ErrRevisionConflict)
+	}
+	svc.mu.Lock()
+	svc.loadErr = map[string]error{"rec": errors.New("disk gone")}
+	svc.mu.Unlock()
+
+	tt.Frame()
+	m.saveEdit(reviewSave, nil)
+	drainAll(t, m, q)
+	tt.Frame()
+	tt.Frame()
+	if !strings.Contains(m.recErr, "disk gone") {
+		t.Fatalf("the reload did not fail: %s", probeReviewState(m))
+	}
+	want := "记录已被更新，重新加载失败；旧输入未保存。"
+	if m.reviewNotice != want {
+		t.Fatalf("the failed-reload notice = %q, want %q", m.reviewNotice, want)
+	}
+	if !tt.HasText(want) {
+		t.Fatalf("the failed-reload notice is not visible: %q", tt.Texts())
+	}
+	if !tt.HasText("记录读取失败：disk gone") {
+		t.Fatalf("the record error is not visible: %q", tt.Texts())
 	}
 }
 

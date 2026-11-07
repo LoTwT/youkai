@@ -270,8 +270,10 @@ func (m *Model) reviewNoticePage(c *ui.Context, t *ui.Theme) {
 		return
 	}
 	// The item browser shows the same line in its action bar, which needs a
-	// row and not the finished-review empty state.
-	if m.displayPage() == pageResults && m.recordTab == recordTabItems &&
+	// row and not the finished-review empty state. A failed record load
+	// replaces that bar with the error, so the notice must move to the page
+	// level instead of being suppressed (PR-19b round 2).
+	if m.displayPage() == pageResults && m.recordTab == recordTabItems && m.recErr == "" &&
 		m.selectedRow() != nil && !(m.filter == resultFilterPending && m.reviewSettled()) {
 		return
 	}

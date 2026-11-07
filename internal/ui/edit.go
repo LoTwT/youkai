@@ -137,7 +137,13 @@ type navigationRequest struct {
 // cloneDraft copies a draft including its substat slice.
 func cloneDraft(d editDraft) editDraft {
 	out := d
-	out.Substats = append([]substatDraft(nil), d.Substats...)
+	if d.Substats != nil {
+		// Preserve an explicitly confirmed empty list: a nil slice would
+		// mean "count unknown" in the saved data and would also make an
+		// untouched draft compare as dirty (PR-19b round 2).
+		out.Substats = make([]substatDraft, len(d.Substats))
+		copy(out.Substats, d.Substats)
+	}
 	return out
 }
 
