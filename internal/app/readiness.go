@@ -14,8 +14,9 @@ import (
 
 // ReadinessMinFreeBytes is the free space the preparation checklist
 // requires before a scan may start. It is a conservative bound for the
-// evidence and checkpoint writes of a full scan; the exact product value
-// is still a review point (08 §1.1 writes "至少 x GB").
+// evidence and checkpoint writes of a full scan; 08 §1.1 registers 1 GB
+// as provisional until the W-3 end-to-end acceptance fixes it from the
+// actual scan data volume.
 const ReadinessMinFreeBytes int64 = 1 << 30
 
 // ReadinessVerdict is one checklist row's conclusion (R-01). The values
