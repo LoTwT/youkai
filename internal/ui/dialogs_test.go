@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LoTwT/youkai/internal/app"
 	"github.com/LoTwT/youkai/internal/record"
 	"github.com/LoTwT/youkai/internal/scan"
 	"github.com/egoist/mygo/ui"
@@ -200,41 +201,92 @@ func TestExitFailureWithoutSaveErrorKeepsAnExitFailedTrayState(t *testing.T) {
 		t.Fatalf("the failed exit settled as %v", m.exitState)
 	}
 	status := m.LifecycleStatus()
-	if status.Text != "退出失败" {
-		t.Fatalf("tray status after a non-save exit failure = %q", status.Text)
+	if status.Text != "退出失败" || !status.ExitCleanupFailed {
+		t.Fatalf("tray status after a non-save exit failure = %+v", status)
 	}
 	labels := status.TrayMenu()
-	if labels.Status != "youkai · 退出失败" || labels.Open != "打开 youkai" ||
-		labels.Exit != "退出 youkai" {
+	if labels.Status != "youkai · 退出清理未完成，结果已保存" || labels.Open != "打开 youkai" ||
+		labels.Exit != "仍然退出" {
 		t.Fatalf("tray menu after a non-save exit failure = %+v", labels)
 	}
 }
 
-// TestExitFailureRetrySucceeds covers the retry path: the failed exit keeps
-// its state until a later quit succeeds, then the tray returns to idle.
-func TestExitFailureRetrySucceeds(t *testing.T) {
+// TestExitFailureDoesNotRetryCleanup covers item 13: a non-save teardown
+// error is cached by Service.Quit, so the next quit is the explicit 仍然退出
+// path, not another doomed Quit call.
+func TestExitFailureDoesNotRetryCleanup(t *testing.T) {
 	attempts := 0
-	m, q := newTestModel(t, Config{Service: &fakeService{
-		quitFn: func() error {
+	settled := 0
+	m, q := newTestModel(t, Config{
+		Service: &fakeService{quitFn: func() error {
 			attempts++
-			if attempts == 1 {
-				return errors.New("close recognizer: busy")
-			}
-			return nil
-		},
-	}})
+			return errors.New("close recognizer: busy")
+		}},
+		OnExitSettled: func() { settled++ },
+	})
 	m.AllowClose()
 	drainAll(t, m, q)
-	if got := m.LifecycleStatus().Text; got != "退出失败" {
-		t.Fatalf("first failed exit status = %q", got)
+	if attempts != 1 || m.exitState != exitFailed {
+		t.Fatalf("first exit: attempts %d state %v", attempts, m.exitState)
 	}
 	m.AllowClose()
 	drainAll(t, m, q)
-	if m.exitState != exitDone {
-		t.Fatalf("the retried exit settled as %v", m.exitState)
+	if attempts != 1 {
+		t.Fatalf("the cleanup was retried %d times, want no retry", attempts)
 	}
-	if got := m.LifecycleStatus().Text; got != "就绪" {
-		t.Fatalf("tray status after the successful retry = %q", got)
+	if m.exitState != exitDone || settled != 1 {
+		t.Fatalf("仍然退出 did not settle: state %v settled %d", m.exitState, settled)
+	}
+}
+
+// TestExitCleanupFailureOffersExitAnyway covers the dialog: only a non-save
+// failure offers 仍然退出, and the button uses the settled exit path.
+func TestExitCleanupFailureOffersExitAnyway(t *testing.T) {
+	settled := 0
+	m, q := newTestModel(t, Config{
+		Service:       &fakeService{quitFn: func() error { return errors.New("close recognizer: busy") }},
+		OnExitSettled: func() { settled++ },
+	})
+	m.SetContentSize(1020, 700)
+	tt := ui.NewTester(m.View, 1020, 700)
+	settle(t, m, q, tt)
+	m.AllowClose()
+	drainAll(t, m, q)
+	tt.Frame()
+	if !tt.HasText("仍然退出") || !tt.HasText("扫描结果已保存") {
+		t.Fatalf("the cleanup failure dialog is incomplete: %q", tt.Texts())
+	}
+	if err := tt.Click("仍然退出"); err != nil {
+		t.Fatal(err)
+	}
+	drainAll(t, m, q)
+	if m.exitState != exitDone || settled != 1 {
+		t.Fatalf("仍然退出 did not settle: state %v settled %d", m.exitState, settled)
+	}
+}
+
+// TestExitSaveFailureCannotExitAnyway covers the other side: a failed final
+// save keeps its retry path and never offers a bypass.
+func TestExitSaveFailureCannotExitAnyway(t *testing.T) {
+	settled := 0
+	m := &Model{snap: app.Snapshot{SaveError: "磁盘已满"}}
+	m.exitState = exitFailed
+	m.exitFailureWasSave = true
+	m.exitFailureDialogOpen = true
+	m.cfg.OnExitSettled = func() { settled++ }
+	m.SetContentSize(1020, 700)
+	tt := ui.NewTester(m.View, 1020, 700)
+	tt.Frame()
+	if tt.HasText("仍然退出") {
+		t.Fatalf("a save failure offered 仍然退出: %q", tt.Texts())
+	}
+	if !tt.HasText("重试保存") {
+		t.Fatalf("a save failure lost its retry path: %q", tt.Texts())
+	}
+	m.exitAnyway()
+	if m.exitState != exitFailed || settled != 0 {
+		t.Fatalf("exitAnyway bypassed the save failure: state %v settled %d",
+			m.exitState, settled)
 	}
 }
 
@@ -400,7 +452,7 @@ func TestNonSaveExitFailureCopyDoesNotClaimAnUnsavedResult(t *testing.T) {
 	}
 	for _, want := range []string{
 		"youkai 没有退出",
-		"当前没有待保存的扫描结果",
+		"扫描结果已保存",
 		"复制诊断信息",
 	} {
 		if !tt.HasText(want) {
@@ -413,7 +465,7 @@ func TestNonSaveExitFailureCopyDoesNotClaimAnUnsavedResult(t *testing.T) {
 	if tt.HasText("请先重试保存") {
 		t.Fatal("the inline exit failure still asks for a save retry")
 	}
-	if !tt.HasText("当前没有待保存的扫描结果") {
+	if !tt.HasText("扫描结果已保存") {
 		t.Fatal("the inline exit failure does not state that the result is saved")
 	}
 }

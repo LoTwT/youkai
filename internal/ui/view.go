@@ -181,6 +181,6 @@ func (m *Model) exitArea(c *ui.Context, t *ui.Theme) {
 			ui.Text(c, "退出未完成："+m.exitErr+"。请先“重试保存”，成功后再关闭窗口退出。").TextColor(t.Danger)
 			return
 		}
-		ui.Text(c, "退出未完成："+m.exitErr+"。当前没有待保存的扫描结果；可在退出失败对话框复制诊断信息，关闭对话框后可继续查看结果。").TextColor(t.Danger)
+		ui.Text(c, "退出未完成："+m.exitErr+"。扫描结果已保存，退出清理没有完成；可在退出失败对话框仍然退出或复制诊断信息。").TextColor(t.Danger)
 	}
 }

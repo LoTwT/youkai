@@ -200,6 +200,10 @@ type LifecycleStatus struct {
 	Text string
 	// Busy is whether a scan session is still active and stoppable.
 	Busy bool
+	// ExitCleanupFailed marks an explicit exit whose results were saved but
+	// whose teardown did not finish. The tray then offers 仍然退出 instead of
+	// implying the failed cleanup can be retried (PR-19b, item 13).
+	ExitCleanupFailed bool
 }
 
 // TrayMenuLabels is the tray menu text for one lifecycle state (08 §7).
@@ -238,6 +242,14 @@ func (s LifecycleStatus) TrayMenu() TrayMenuLabels {
 			Exit:   "退出 youkai（会被拒绝并打开窗口）",
 		}
 	case "退出失败":
+		if s.ExitCleanupFailed {
+			return TrayMenuLabels{
+				Status: "youkai · 退出清理未完成，结果已保存",
+				Open:   "打开 youkai",
+				Stop:   "停止扫描",
+				Exit:   "仍然退出",
+			}
+		}
 		return TrayMenuLabels{
 			Status: "youkai · 退出失败",
 			Open:   "打开 youkai",
@@ -352,6 +364,10 @@ type Model struct {
 	exportOutcome *exportOutcome
 	exportDialog  exportDialogState
 	exportCancel  func()
+	// pendingNotificationRecordID is a notification click that arrived while
+	// the export dialog was writing. Only the last click is kept; closing
+	// the dialog replays it through OpenNotification (PR-19b, item 14).
+	pendingNotificationRecordID string
 	// exportAfterLoadID is the record whose load should open the export
 	// dialog when it lands. The records list sets it through navOpenRecord;
 	// a normal record open or a failed load clears it.
@@ -1159,9 +1175,13 @@ func (m *Model) LifecycleStatus() LifecycleStatus {
 		// tray must stop claiming the result is unsaved.
 		return LifecycleStatus{Text: "保存失败", Busy: m.snap.Busy && !m.Exiting()}
 	case m.exitState == exitFailed:
-		// The teardown failed for a reason other than the final save; the
-		// application is still running and the user has to retry the exit.
-		return LifecycleStatus{Text: "退出失败", Busy: false}
+		// Results are saved; only the teardown did not finish. The tray must
+		// not suggest a retry that the service caches as the same error.
+		return LifecycleStatus{
+			Text:              "退出失败",
+			Busy:              false,
+			ExitCleanupFailed: !m.exitFailedFromSave(),
+		}
 	case m.snap.Busy || m.startReqID != "":
 		if m.snap.Busy && wrappingUp(m.snap.Scan.Phase) {
 			return LifecycleStatus{Text: "收尾中", Busy: false}
@@ -1260,6 +1280,14 @@ func (m *Model) AllowClose() bool {
 		return true
 	case exitRunning:
 		return false
+	case exitFailed:
+		if !m.exitFailedFromSave() {
+			// The results are saved; the teardown error is cached and a
+			// retry cannot clear it. A close or tray quit after this state
+			// is the user's 仍然退出 choice (PR-19b, item 13).
+			m.exitAnyway()
+			return false
+		}
 	}
 	if m.reviewSaving {
 		m.navPrompt = &navigationRequest{kind: navExit}
@@ -1301,6 +1329,7 @@ func (m *Model) beginExit() {
 	// would otherwise stack under it, with buttons the user cannot reach.
 	m.trayHintOpen = false
 	m.trayHintHideOnDone = false
+	m.pendingNotificationRecordID = ""
 	m.closeExportDialog()
 	m.exitState = exitRunning
 	m.exitErr = ""
@@ -1322,17 +1351,33 @@ func (m *Model) beginExit() {
 				}
 				return
 			}
-			m.exitState = exitDone
-			m.exitFailureDialogOpen = false
-			// The entry point quits the application from OnExitSettled and
-			// then stops delivering queued updates. A result notification
-			// still waiting for its record must be settled first, or the
-			// first segment stays on screen and the promise to notify again
-			// is never kept.
-			m.flushResultsBeforeExit()
-			if m.cfg.OnExitSettled != nil {
-				m.cfg.OnExitSettled()
-			}
+			m.finishExit()
 		})
 	})
+}
+
+// finishExit runs the settled exit path exactly once. Service.Quit's
+// teardown may have failed, but once the user chooses 仍然退出 the process
+// must end through the same callback as a successful exit (PR-19b, item 13).
+func (m *Model) finishExit() {
+	m.exitState = exitDone
+	m.exitFailureDialogOpen = false
+	// The entry point quits the application from OnExitSettled and then
+	// stops delivering queued updates. A result notification still waiting
+	// for its record must be settled first, or the first segment stays on
+	// screen and the promise to notify again is never kept.
+	m.flushResultsBeforeExit()
+	if m.cfg.OnExitSettled != nil {
+		m.cfg.OnExitSettled()
+	}
+}
+
+// exitAnyway is the dialog's 仍然退出 action. It is only valid when the
+// failed exit was not a final-save failure; a save failure must keep the
+// retry path and never allow bypassing the unsaved result.
+func (m *Model) exitAnyway() {
+	if m.exitState != exitFailed || m.exitFailedFromSave() {
+		return
+	}
+	m.finishExit()
 }

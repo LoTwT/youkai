@@ -279,6 +279,19 @@ func (m *Model) closeExportDialog() {
 	}
 	m.exportDialog = exportDialogState{}
 	m.exportCancel = nil
+	m.replayPendingNotification()
+}
+
+// replayPendingNotification opens the record a notification click named
+// while the export dialog was writing. Closing in any settled state
+// (success, canceled or failure) honors the last click; the normal
+// OpenNotification guards apply unchanged.
+func (m *Model) replayPendingNotification() {
+	recordID := m.pendingNotificationRecordID
+	m.pendingNotificationRecordID = ""
+	if recordID != "" {
+		m.OpenNotification(recordID)
+	}
 }
 
 // startExport renders and saves one format. Both output formats derive
@@ -476,8 +489,7 @@ func (m *Model) exportDialogView(c *ui.Context, t *ui.Theme) {
 		// backdrop press are ignored. The next frame rebuilds it.
 		return
 	}
-	m.exportDialog = exportDialogState{}
-	m.exportCancel = nil
+	m.closeExportDialog()
 }
 
 // exportDialogContent switches the modal between the pre-export content
@@ -486,9 +498,13 @@ func (m *Model) exportDialogView(c *ui.Context, t *ui.Theme) {
 func (m *Model) exportDialogContent(c *ui.Context, t *ui.Theme) {
 	if m.exportDialogSuccess() != nil {
 		m.exportDialogSuccessContent(c, t)
-		return
+	} else {
+		m.exportDialogPreExport(c, t)
 	}
-	m.exportDialogPreExport(c, t)
+	if m.pendingNotificationRecordID != "" {
+		ui.Text(c, "关闭导出对话框后会打开通知对应的记录。").TextColor(t.TextMuted).
+			FontSize(t.FontSize * 0.9)
+	}
 }
 
 // exportDialogPreExport shows what the file will contain, the two
@@ -709,6 +725,7 @@ func (m *Model) exportDialogExcludedReasons(c *ui.Context, t *ui.Theme) {
 // exportDialogGoToReview leaves the dialog for the item browser's
 // 待处理 segment.
 func (m *Model) exportDialogGoToReview() {
+	m.pendingNotificationRecordID = ""
 	m.exportDialog = exportDialogState{}
 	m.exportCancel = nil
 	m.page = pageResults
@@ -786,6 +803,10 @@ func (m *Model) exportDialogDeleteScreenshots(recordID string) {
 	if recordID == "" {
 		return
 	}
+	// This explicit transfer owns the destination: the exported record's
+	// summary and cleanup prompt. A pending notification click is discarded
+	// rather than competing with it (PR-19b, item 14).
+	m.pendingNotificationRecordID = ""
 	m.exportDialog = exportDialogState{}
 	m.exportCancel = nil
 	m.page = pageResults

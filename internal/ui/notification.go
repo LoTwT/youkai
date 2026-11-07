@@ -96,10 +96,12 @@ func (m *Model) OpenNotification(recordID string) {
 	if m.exporting {
 		// The export dialog shows the frozen snapshot of the record being
 		// written. Switching records underneath it would pair the write
-		// progress with another record's counts; leave the dialog and its
-		// record alone, and let the user continue after the write.
+		// progress with another record's counts. Keep only the latest click
+		// and replay it after the user closes the dialog (PR-19b, item 14).
+		m.pendingNotificationRecordID = recordID
 		return
 	}
+	m.pendingNotificationRecordID = ""
 	m.closeExportDialog()
 	if m.exitState == exitRunning || m.exitState == exitDone {
 		return
