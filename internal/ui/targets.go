@@ -24,9 +24,14 @@ const (
 	// elevated (or its own level is unknown), so a denied process query is
 	// not an elevation mismatch. The row's value carries the cause; this is
 	// its action. The raw failure is in the diagnostic log.
-	targetUnreadableText = "请先点“重新检查”，反复出现时仍无法读取就复制诊断信息。"
-	// targetDiscoveryFailedText: enumeration itself failed.
-	targetDiscoveryFailedText = "请先点“重新检查”，反复出现时仍失败就复制诊断信息。"
+	targetUnreadableText = "请点“重新检查”；仍无法读取时复制诊断信息。"
+	// targetDiscoveryFailedAction: enumeration itself failed; the row's value
+	// carries the cause and this is its action.
+	targetDiscoveryFailedAction = "请点“重新检查”；仍失败时复制诊断信息。"
+	// targetDiscoveryFailedText is the complete refusal shown left of the
+	// start button. It repeats the cause because no row value sits beside
+	// that line.
+	targetDiscoveryFailedText = "查找游戏窗口失败。" + targetDiscoveryFailedAction
 	// targetGoneText: the confirmed window vanished between confirmation
 	// and start.
 	targetGoneText = "确认的游戏窗口已关闭或被替换，请点“重新检查”后重新选择。"

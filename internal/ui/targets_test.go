@@ -194,7 +194,7 @@ func TestViewTargetDiscoveryFailure(t *testing.T) {
 	tt := ui.NewTester(m.View, 1020, 700)
 	settle(t, m, q, tt)
 
-	if !tt.HasText("查找游戏窗口失败") || !tt.HasText("怎么做："+targetDiscoveryFailedText) {
+	if !tt.HasText("查找游戏窗口失败") || !tt.HasText("怎么做："+targetDiscoveryFailedAction) {
 		t.Fatalf("the discovery failure does not show: %q", tt.Texts())
 	}
 	if err := tt.Click("开始扫描"); err != nil {
@@ -277,8 +277,8 @@ func TestViewReadableCandidateWinsOverAccessDenied(t *testing.T) {
 	if !tt.HasText(targetLabel(cand)) {
 		t.Fatalf("the readable candidate is not listed: %q", tt.Texts())
 	}
-	if tt.HasText("无法读取游戏窗口（可能以管理员身份运行）") {
-		t.Fatalf("the elevated hint replaced a usable candidate list: %q", tt.Texts())
+	if tt.HasText("无法读取游戏窗口") {
+		t.Fatalf("the denied hint replaced a usable candidate list: %q", tt.Texts())
 	}
 }
 
@@ -325,6 +325,43 @@ func TestViewStartTargetGoneMapsAndRefreshes(t *testing.T) {
 	}
 	if svc.readinessCount() < 2 {
 		t.Fatalf("readiness checks = %d, want a refresh after the refused start", svc.readinessCount())
+	}
+}
+
+// TestViewStartDiscoveryFailureKeepsCause: when the start is refused because
+// discovery failed and the following re-check finds the confirmed window
+// again, the target row reads normally. The reason left of the start button
+// must still carry the cause, not only the recovery action.
+func TestViewStartDiscoveryFailureKeepsCause(t *testing.T) {
+	cand := testTarget(0xB0ABE, 42, `C:\Games\ZZZ\ZenlessZoneZero.exe`)
+	svc := &fakeService{
+		targets: []app.TargetCandidate{cand},
+		startFn: func(app.StartRequest) (app.StartOutcome, error) {
+			return app.StartOutcome{}, app.ErrTargetDiscoveryFailed
+		},
+	}
+	m, q := newTestModel(t, Config{Service: svc, ScanSource: targetSource()})
+	tt := ui.NewTester(m.View, 1020, 700)
+	settle(t, m, q, tt)
+	if err := tt.Click(targetLabel(cand)); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
+	if err := tt.Click("开始扫描"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
+
+	// The re-check after the refusal found the same window; the row itself
+	// no longer shows a failure.
+	if !m.targetReady() {
+		t.Fatal("the re-check lost the confirmed window")
+	}
+	if got := m.scanStartBlockedReason(); got != targetDiscoveryFailedText {
+		t.Fatalf("start reason = %q, want the full discovery failure", got)
+	}
+	if !tt.HasText(targetDiscoveryFailedText) {
+		t.Fatalf("the discovery failure's cause is missing beside the start: %q", tt.Texts())
 	}
 }
 

@@ -420,21 +420,24 @@ func (m *Model) targetReadinessRow(check app.ReadinessCheck) readinessRow {
 		row.status = readinessUnsatisfied
 		row.value = "无法读取游戏窗口（游戏以管理员身份运行）"
 		row.action = readinessActionExit
-		row.startReason = "游戏窗口需要与 youkai 相同的管理员权限。"
+		row.startReason = "youkai 需要与游戏相同的管理员权限。"
 	case m.targetsAccessDenied > 0:
 		row.status = readinessUnsatisfied
 		row.value = "无法读取游戏窗口"
-		row.how = "请先点“重新检查”，反复出现时复制诊断信息。"
+		row.how = targetUnreadableText
+		row.action = readinessActionDiagnostics
 		row.startReason = "无法读取游戏窗口。"
 	case m.targetsUnreadable > 0:
 		row.status = readinessUnsatisfied
 		row.value = "无法读取游戏进程信息"
 		row.how = targetUnreadableText
+		row.action = readinessActionDiagnostics
 		row.startReason = "无法读取游戏进程信息。"
 	case check.FaultCode == "observationFailed" && len(m.targets) == 0:
 		row.status = readinessUnsatisfied
 		row.value = "查找游戏窗口失败"
-		row.how = targetDiscoveryFailedText
+		row.how = targetDiscoveryFailedAction
+		row.action = readinessActionDiagnostics
 		row.startReason = "查找游戏窗口失败。"
 	default:
 		row.status = readinessUnsatisfied
@@ -682,15 +685,17 @@ func (m *Model) readinessBlocked() bool {
 }
 
 // readinessPrimaryAction names the row the keyboard should land on: the
-// first row that needs the user and has a control. An unsatisfied row with
-// only an explanation falls through to the next actionable row; when
-// nothing needs action the start button is the target ("" here).
+// first row that needs the user and has a control. A copy-only diagnostics
+// action is not a primary target; the page keeps 重新检查 as the actionable
+// place. An unsatisfied row with only an explanation falls through to the
+// next actionable row; when nothing needs action the start button is the
+// target ("" here).
 func (m *Model) readinessPrimaryAction() app.ReadinessItem {
 	for _, row := range m.readinessRows() {
 		if row.status != readinessUnsatisfied && row.status != readinessConfirm {
 			continue
 		}
-		if row.action != readinessActionNone {
+		if row.action != readinessActionNone && row.action != readinessActionDiagnostics {
 			return row.item
 		}
 	}

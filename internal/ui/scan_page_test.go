@@ -800,8 +800,8 @@ func TestTargetUnavailableStatesBlockStart(t *testing.T) {
 		if m.scanStartReady() {
 			t.Fatal("the access-denied target still offers the start")
 		}
-		if m.scanStartBlockedReason() == "" {
-			t.Fatal("the disabled start has no reason")
+		if got := m.scanStartBlockedReason(); got != "youkai 需要与游戏相同的管理员权限。" {
+			t.Fatalf("start reason = %q, want the elevation cause", got)
 		}
 		if !tt.HasText("无法读取游戏窗口（游戏以管理员身份运行）") {
 			t.Fatalf("the target row does not explain the elevation case: %q", tt.Texts())
@@ -822,6 +822,35 @@ func TestTargetUnavailableStatesBlockStart(t *testing.T) {
 		}
 	})
 
+	t.Run("access denied while elevated", func(t *testing.T) {
+		// The game denies its process while youkai already matches the
+		// game's level (the default report says medium/medium), so this is
+		// not the elevation mismatch: the row needs handling, a short
+		// reason, and a diagnostics action.
+		svc := &fakeService{targetsAccessDenied: 1}
+		m, q := newTestModel(t, Config{Service: svc, ScanSource: targetSource()})
+		tt := ui.NewTester(m.View, 1020, 700)
+		settle(t, m, q, tt)
+		if m.scanStartReady() {
+			t.Fatal("the access-denied target still offers the start")
+		}
+		if got := m.scanStartBlockedReason(); got != "无法读取游戏窗口。" {
+			t.Fatalf("start reason = %q, want the denied target", got)
+		}
+		if !tt.HasText("无法读取游戏窗口") || !tt.HasText("怎么做："+targetUnreadableText) {
+			t.Fatalf("the denied target does not explain the failure: %q", tt.Texts())
+		}
+		if tt.HasText("无法读取游戏窗口（游戏以管理员身份运行）") {
+			t.Fatalf("an elevated youkai was told the game is elevated: %q", tt.Texts())
+		}
+		if _, ok := tt.Find("复制诊断信息"); !ok {
+			t.Fatalf("the denied target has no diagnostics action: %q", tt.Texts())
+		}
+		if !tt.Focused("重新检查") {
+			t.Fatalf("the re-check action does not take the focus: %q", tt.Texts())
+		}
+	})
+
 	t.Run("process unreadable", func(t *testing.T) {
 		svc := &fakeService{targetsUnreadable: 1}
 		m, q := newTestModel(t, Config{Service: svc, ScanSource: targetSource()})
@@ -835,6 +864,9 @@ func TestTargetUnavailableStatesBlockStart(t *testing.T) {
 		}
 		if !tt.HasText("! 1 项需要处理") {
 			t.Fatalf("the unreadable target is not counted: %q", tt.Texts())
+		}
+		if _, ok := tt.Find("复制诊断信息"); !ok {
+			t.Fatalf("the unreadable target has no diagnostics action: %q", tt.Texts())
 		}
 		if !tt.Focused("重新检查") {
 			t.Fatalf("the re-check action does not take the focus: %q", tt.Texts())
@@ -858,6 +890,9 @@ func TestTargetUnavailableStatesBlockStart(t *testing.T) {
 		}
 		if !tt.HasText("! 1 项需要处理") {
 			t.Fatalf("the failed discovery is not counted: %q", tt.Texts())
+		}
+		if _, ok := tt.Find("复制诊断信息"); !ok {
+			t.Fatalf("the failed discovery has no diagnostics action: %q", tt.Texts())
 		}
 		if !tt.Focused("重新检查") {
 			t.Fatalf("the re-check action does not take the focus: %q", tt.Texts())
