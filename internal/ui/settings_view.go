@@ -204,7 +204,7 @@ func (m *Model) settingsTableOfContents(c *ui.Context, t *ui.Theme, tok *Tokens)
 				if i == 0 {
 					entry = entry.Bind(&m.settingsFirstRef)
 					if m.settingsFocusPending && !m.settingsFocusStorage {
-						entry = entry.AutoFocus()
+						entry = entry.Focus()
 						m.settingsFocusPending = false
 					}
 				}
@@ -233,7 +233,7 @@ func (m *Model) settingsGeneral(c *ui.Context, t *ui.Theme, tok *Tokens) {
 			radio := ui.Radio(c, &fixed, string(app.CloseBehaviorExit), "停止扫描并退出").
 				Disabled(true)
 			if compactFocus {
-				radio = radio.Bind(&m.settingsFirstRef).AutoFocus()
+				radio = radio.Bind(&m.settingsFirstRef).Focus()
 				m.settingsFocusPending = false
 			}
 		})
@@ -249,12 +249,12 @@ func (m *Model) settingsGeneral(c *ui.Context, t *ui.Theme, tok *Tokens) {
 		ui.Row(c).Gap(t.Space(3)).Children(func() {
 			hide := ui.Radio(c, &behavior, string(app.CloseBehaviorHide), "隐藏到通知区域（默认）")
 			if behavior == string(app.CloseBehaviorHide) && compactFocus {
-				hide = hide.Bind(&m.settingsFirstRef).AutoFocus()
+				hide = hide.Bind(&m.settingsFirstRef).Focus()
 				m.settingsFocusPending = false
 			}
 			exit := ui.Radio(c, &behavior, string(app.CloseBehaviorExit), "停止扫描并退出")
 			if behavior == string(app.CloseBehaviorExit) && compactFocus {
-				exit = exit.Bind(&m.settingsFirstRef).AutoFocus()
+				exit = exit.Bind(&m.settingsFirstRef).Focus()
 				m.settingsFocusPending = false
 			}
 		})
@@ -411,7 +411,7 @@ func (m *Model) storageActionsRow(c *ui.Context, t *ui.Theme, tok *Tokens) {
 		opened := false
 		open := ui.Button(c, "打开数据目录").Disabled(m.cfg.OpenDataDirectory == nil)
 		if focusStorage && m.cfg.OpenDataDirectory != nil {
-			open = open.AutoFocus().ScrollIntoView()
+			open = open.Focus().ScrollIntoView()
 			opened = true
 		}
 		if m.cfg.OpenDataDirectory != nil && open.Clicked() {
@@ -419,7 +419,7 @@ func (m *Model) storageActionsRow(c *ui.Context, t *ui.Theme, tok *Tokens) {
 		}
 		cache := ui.Button(c, "清缓存").Disabled(m.storageLoading)
 		if focusStorage && !opened {
-			cache = cache.AutoFocus().ScrollIntoView()
+			cache = cache.Focus().ScrollIntoView()
 		}
 		if cache.Clicked() {
 			m.RequestCacheClear()

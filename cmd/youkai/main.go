@@ -230,6 +230,8 @@ func main() {
 
 	model := ui.New(ui.Config{
 		Service: svc,
+		// The scan page's countdown and ten-second readiness re-check.
+		After: time.After,
 		ScanSource: ui.ScanSourceInfo{
 			Available: source != nil,
 			Label:     sourceLabel,
@@ -383,6 +385,12 @@ func main() {
 		})
 		win.OnClose(func(e *mygo.CloseEvent) {
 			life.OnWindowClose(e)
+		})
+		// Regaining focus re-checks the read-only checklist, so a game
+		// setting changed while youkai was in the background is reflected
+		// when the user comes back (08 §1.1).
+		win.OnFocus(func() {
+			model.WindowFocused()
 		})
 		model.Attach(win)
 		if width, height := win.ContentSize(); width > 0 && height > 0 {

@@ -162,7 +162,7 @@ func TestRecordSummaryConclusionTable(t *testing.T) {
 			name: "zero captured items return to the preparation check",
 			view: summaryView(0, app.ItemClassCounts{},
 				shell(pageFault, record.CoverageUnknown, record.SortVerificationUnverified, nil)),
-			wantTitle:      "没有采集到任何驱动盘：游戏页面不是驱动盘仓库页",
+			wantTitle:      "没有开始：游戏页面不是驱动盘仓库页",
 			wantPrimary:    summaryActionPrepare,
 			wantPrimaryLbl: "回到准备检查",
 			wantSupplement: "怎么做：请打开驱动盘仓库页后重新开始扫描。",
@@ -778,7 +778,7 @@ func TestViewSummaryZeroItemsReturnsToPrepare(t *testing.T) {
 	m, q, tt, _ := openSummaryRecord(t, rec,
 		Config{DirectExportSaver: &fakeDirectExportSaver{}}, 1180, 760)
 
-	if !tt.HasText("没有采集到任何驱动盘：游戏页面不是驱动盘仓库页") ||
+	if !tt.HasText("没有开始：游戏页面不是驱动盘仓库页") ||
 		!tt.HasText("回到准备检查") {
 		t.Fatalf("the zero-item conclusion is missing: %q", tt.Texts())
 	}
@@ -938,7 +938,7 @@ func TestViewSummaryEndings(t *testing.T) {
 		{"fault", recordWith(failed, record.CoveragePartial, record.SortVerificationUnverified, truncatedAt3, 1),
 			"扫描中途停止：游戏失去了焦点", "修正后重新扫描"},
 		{"zero items", recordWith(pageFault, record.CoverageUnknown, record.SortVerificationUnverified, nil, 0),
-			"没有采集到任何驱动盘：游戏页面不是驱动盘仓库页", "回到准备检查"},
+			"没有开始：游戏页面不是驱动盘仓库页", "回到准备检查"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

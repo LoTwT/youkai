@@ -119,15 +119,15 @@ A–G 节按现有规格写。2026-11-03 检查点 1 后：首版只支持 Windo
 | 编号 | 规格要求 | 当前实现 | 影响的功能 |
 | --- | --- | --- | --- |
 | D-01 | 三种客户端都能扫描；准备阶段显示已找到的客户端和窗口，多候选时由用户选择（[T6 §1](../../specs/t6-review-export-workflow.md#1-最小界面与完整使用流程)） | 安装版没有接入扫描源，扫描页显示“当前安装版没有接入扫描源”（`cmd/youkai/main.go:204-209`）；开发构建用环境变量选择数据源和客户端（`cmd/youkai/main.go:479-530`），没有界面上的客户端选择 | F-07、F-09 |
-| D-02 | 开始区域显示“请在 30 秒内切回目标游戏”和实际注册的停止快捷键（[架构 §5](../../specs/scanner-architecture.md#隐藏恢复与退出)、[T1 §2](../../specs/t1-mygo-ui-distribution.md#2-关窗与使用提示)） | 准备区只显示前台提示和“停止方式：点击本窗口的‘停止扫描’按钮”（`internal/ui/view.go:12-17`、`:36-47`）。按键文字写死为 mac 符号：状态栏的 `⌃⌥⌘S 停止扫描`（`internal/ui/pages.go:301`）与 `⌘R 开始扫描`（`pages.go:304`）；设置页快捷键表中只有停止键按平台显示，`⌘R`、`⌘↵`、`⌘J`、`⌘S` 在 Windows 上也显示 mac 符号（`internal/ui/settings_view.go:125-131`） | F-09、F-12、F-29 |
 | D-03 | 采集中的恢复入口写作“停止扫描并打开”（[T1 §2](../../specs/t1-mygo-ui-distribution.md#2-关窗与使用提示)） | 托盘菜单始终是“打开主窗口”（`cmd/youkai/lifecycle.go:346`），Windows 左键单击也直接走恢复 → 停止（`lifecycle.go:174`、`model.go:937-942`） | F-33、F-34 |
 | D-04 | 每个故障都有中文提示（[T2 §3.2 故障码表](../../specs/t2-platform-capture-input.md#windows-扫描前预检w2b权威说明)） | `failureText` 只映射了部分故障码（`internal/ui/session_status.go:87-170`）；`focusLost`、`targetNotFound`、`hotkeyUnavailable`、`permissionMissing`、`screenRecordingUnavailable` 等常见码未映射；Windows DPI 预检的 `dpiAwarenessMismatch`、`dpiVirtualized`、`dpiCheckUnavailable`（`internal/platform/windows/fault.go:36-46`）也未映射 | F-08、F-14 |
 | D-07 | 截图与字段表单同时显示（[T1 §1](../../specs/t1-mygo-ui-distribution.md#1-已确认选择与界面建议)、[T6 §2](../../specs/t6-review-export-workflow.md#2-结果浏览与逐件校对)） | 证据区默认折叠（`internal/ui/model.go:309-312`） | F-18 |
 | D-08 | 历史列表显示客户端（[T6 §3](../../specs/t6-review-export-workflow.md#历史记录与存储管理)） | 历史列表没有客户端列；日期筛选需手输 `YYYY-MM-DD`（`internal/ui/history_view.go:131-133`） | F-24 |
-| D-09 | 准备阶段显示保存位置（T6 §1） | 准备区不显示保存位置 | F-07 |
 | D-10 | 全局停止热键“仅扫描期间注册、可自定义”（[T2 §2.2](../../specs/t2-platform-capture-input.md#22-macosscreencapturekit-窗口流与-quartz-输入) 第 85 行，“macOS 实测轮 ① 结论”）；排期见[开发指南](../../development.md)第 41 行“自定义留待 M3 设置” | 热键按平台固定，没有自定义入口（`internal/ui/settings_view.go:135-141`）。规格要求可自定义，实现排在 M3，目前未做 | F-29 |
 | D-11 | 首版使用固定系统默认位置和“打开目录”入口（[T6 §3 历史记录与存储管理](../../specs/t6-review-export-workflow.md#历史记录与存储管理)） | 导出成功后没有“打开目录”入口，只在下载目录出错时显示该按钮（`internal/ui/export.go:272-277`） | F-23 |
 | D-12 | 规格之间不一致：T6 §1 写“用户先打开仓库、准备筛选与排序并回顶”（[T6 §1](../../specs/t6-review-export-workflow.md#1-最小界面与完整使用流程)），而 T5 §1 写扫描器自动重置筛选、勾选 S、回顶，不操作排序（[T5 §1 操作起点](../../specs/t5-zzz-inventory-traversal.md#1-推荐路径与范围)） | 实现按 T5（扫描器自动准备筛选与回顶）。本草案按 T5 写（F-06、C-07）；T6 §1 这句已于 2026-11-05 按 T5 同步 | F-06 |
+
+D-02、D-09 已由 PR-17 关闭（2026-11-08）：扫描页底部操作条显示停止热键、30 秒规则与预计耗时，清单下方以“保存在本机”说明保存位置。
 
 ## 规格中的后续工作与设计建议
 

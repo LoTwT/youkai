@@ -30,10 +30,13 @@ type Service interface {
 	// Start accepts a start request into the single active slot; the
 	// same request ID returns the session it created.
 	Start(req app.StartRequest) (app.StartOutcome, error)
-	// DiscoverTargets enumerates the game windows the wired source offers
-	// for user confirmation (P-01). The model calls it only when
-	// ScanSourceInfo.TargetSelection is set.
-	DiscoverTargets() (app.TargetDiscoveryResult, error)
+	// CheckReadiness is the read-only preparation check (R-01). It never
+	// starts a session, takes the scan occupancy or sends input, and it
+	// also carries the discovered target candidates.
+	CheckReadiness(target *app.TargetCandidate) app.ReadinessReport
+	// ScanDurationEstimate is the expected duration of one full scan,
+	// taken from the newest normally completed scans (P-14).
+	ScanDurationEstimate() (app.ScanDurationEstimate, error)
 	// Stop requests an idempotent user stop of the active session.
 	Stop()
 	// Snapshot is the authoritative state at one service revision.
@@ -165,6 +168,15 @@ type Config struct {
 	// StartUpdateChecks; nil waits real time. View tests inject a
 	// controllable wait to drive the schedule without sleeping.
 	UpdateCheckWait func(interval time.Duration) <-chan time.Time
+	// Now reports the current time for the preparation countdown and the
+	// readiness freshness rule; nil uses time.Now. Tests inject a fixed
+	// clock to assert the countdown text and the ten-second re-check.
+	Now func() time.Time
+	// After schedules the scan page's one-shot timers: the preparation
+	// countdown redraw and the ten-second readiness re-check. Nil starts no
+	// timer, so view tests drive those transitions explicitly instead of
+	// sleeping. The entry point passes time.After.
+	After func(time.Duration) <-chan time.Time
 	// OnUpdateInstalled runs on the UI thread after an update installed
 	// successfully — the entry point relaunches the application in it,
 	// which runs the normal quit sequence (a session whose save keeps
@@ -345,14 +357,40 @@ type Model struct {
 	// discovery is in flight, its user-facing failure, the chosen row (-1
 	// for none), the counts of game windows whose process could not be
 	// opened (lower-integrity vs. elevated-or-unknown) and the serial that
-	// discards stale results.
+	// discards stale results. The candidates now arrive through the
+	// readiness report, so one read-only pass feeds both the target row and
+	// the rest of the checklist.
 	targets             []app.TargetCandidate
-	targetsLoading      bool
-	targetsErr          string
 	targetsAccessDenied int
 	targetsUnreadable   int
 	targetChoice        int
-	targetsSerial       int
+
+	// The read-only preparation check (R-01). The report is kept while a
+	// newer pass runs, so the checklist never blanks out between checks;
+	// the serial discards a superseded pass. readinessLoaded distinguishes
+	// the first pass (start disabled until it lands) from a later refresh.
+	readiness             app.ReadinessReport
+	readinessLoading      bool
+	readinessLoaded       bool
+	readinessSerial       int
+	readinessFocus        bool
+	readinessFocusStart   bool
+	readinessFocusRefresh bool
+	readinessTimerArmed   bool
+	// startFailure is the last session that ended before input ever opened
+	// (a preparation-stage refusal). The checklist shows its cause on top
+	// and promotes the corresponding row (Q-B, 08 §1.2).
+	startFailure        scan.ID
+	startFailureItem    app.ReadinessItem
+	startFailureCode    string
+	startFailureParams  map[string]string
+	startFailureMessage string
+	// estimate is P-14's expected duration; estimateLoaded keeps a missing
+	// value apart from a zero one.
+	estimate       app.ScanDurationEstimate
+	estimateLoaded bool
+	// prepareTimerArmed keeps one countdown redraw in flight.
+	prepareTimerArmed bool
 
 	history        []HistoryEntry
 	histChoice     string
@@ -428,6 +466,8 @@ type Model struct {
 	railActiveRef    ui.Ref
 	workspaceTabsRef ui.Ref
 	scanActionRef    ui.Ref
+	scanRefreshRef   ui.Ref
+	scanRowRef       ui.Ref
 	settingsFirstRef ui.Ref
 
 	// The settings page's in-page directory and section anchors, the
@@ -435,6 +475,7 @@ type Model struct {
 	// "return to the prepare check" strip and the TOC's pending jump.
 	settingsSections        settingsSectionRefs
 	settingsFocusPending    bool
+	settingsFocusNext       bool
 	settingsFocusStorage    bool
 	settingsReturnToPrepare bool
 	settingsScrollTarget    settingsSectionID
@@ -635,11 +676,13 @@ func (m *Model) Attach(upd Updater) {
 	m.upd = upd
 	m.loadHistory()
 	m.refreshStorage()
-	// The installed Windows source discovers its target windows: the
-	// prepare area lists them for confirmation before the first start
-	// (P-01). A source with a fixed target does not need this.
-	if m.source.TargetSelection {
-		m.refreshTargets()
+	// The preparation checklist is one read-only pass (R-01). It also
+	// discovers the target candidates the installed source needs confirmed
+	// (P-01), so a fixed-target source skips only the candidate list, not
+	// the checklist. P-14's estimate is read once per history change.
+	if m.source.Available {
+		m.refreshReadiness()
+		m.loadDurationEstimate()
 	}
 }
 
@@ -684,6 +727,10 @@ func (m *Model) Apply(snap app.Snapshot) {
 	m.appliedSession, m.appliedRevision = snap.SessionID, snap.Revision
 	m.snap = snap
 	m.prevBusy = snap.Busy
+	// A session that ended before input opened never scanned anything: the
+	// page keeps the checklist with the refusal on top (08 §1.2), and the
+	// record's summary will say 没有开始 rather than 没有采集到.
+	m.notePreparationFailure(snap)
 	// A failed exit learns its cause from the authoritative snapshot. The
 	// error can be reported before the save-failure delivery arrives, so
 	// keep upgrading the classification while the exit is in the failed
@@ -734,13 +781,17 @@ func (m *Model) Apply(snap app.Snapshot) {
 	// termination and saved revision are the final ones. The idle snapshot
 	// at startup loads history once via Attach.
 	if prevBusy && !snap.Busy && snap.SessionID != "" {
-		if snap.SaveError == "" && snap.Scan.Phase == scan.PhaseEnded {
+		if snap.SaveError == "" && snap.Scan.Phase == scan.PhaseEnded && snap.Scan.InputOpened {
+			// A preparation-stage refusal never opened input and never
+			// operated the game; it remains on the scan page with its cause
+			// instead of posing as a completed zero-item scan (08 §1.2).
 			if m.liveRecordOpen() && !m.editingDirty() && !m.reviewSaving {
 				m.openRecordWorkspace()
 			}
 		}
 		m.loadHistory()
 		m.refreshStorage()
+		m.loadDurationEstimate()
 		if !reloadedLive {
 			if m.rec != nil && m.rec.Live && m.rec.ID == string(snap.SessionID) {
 				dirtyActive := m.editingDirty() || m.reviewSaving
@@ -766,6 +817,13 @@ func (m *Model) Apply(snap app.Snapshot) {
 // is the session the previous snapshot replaced; when the new session
 // equals it, a refused start rolled the service back to that ended session.
 func (m *Model) beginSession(id, replacedSession string) {
+	if m.startFailure != "" && m.startFailure != scan.ID(id) {
+		m.startFailure = ""
+		m.startFailureItem = ""
+		m.startFailureCode = ""
+		m.startFailureParams = nil
+		m.startFailureMessage = ""
+	}
 	busyEditing := m.reviewSaving || m.editingDirty()
 	rolledBack := replacedSession != "" && id == replacedSession
 	if busyEditing && m.rec != nil {
@@ -1126,10 +1184,10 @@ func (m *Model) Start() {
 					m.startErr = startErrorText(err)
 				}
 				// The refused start may be a window that vanished
-				// between confirmation and start: refresh the list so the
-				// stale candidate cannot be chosen again.
+				// between confirmation and start: refresh the checklist so
+				// the stale candidate cannot be chosen again.
 				if m.source.TargetSelection {
-					m.refreshTargets()
+					m.refreshReadiness()
 				}
 			}
 		})
@@ -1137,12 +1195,16 @@ func (m *Model) Start() {
 }
 
 // canStart says whether the start button is usable: a source must be
-// wired, a discovery source must have a confirmed candidate, no start may
-// be in flight, no session may hold the active slot, the process may not
-// be exiting, and no update may be installing or done and about to
-// restart — a scan just begun would be cut short by it.
+// wired, the read-only checklist must have loaded with no known-unsatisfied
+// row (an unknown row still lets the session's full precheck decide), a
+// discovery source must have a confirmed candidate, no start may be in
+// flight, no session may hold the active slot, the process may not be
+// exiting, and no update may be installing or done and about to restart — a
+// scan just begun would be cut short by it.
 func (m *Model) canStart() bool {
-	return m.source.Available && m.targetReady() && m.startReqID == "" && !m.snap.Busy &&
+	return m.source.Available && m.readinessLoaded && !m.readinessBlocked() &&
+		m.targetReady() && m.startReqID == "" && !m.snap.Busy && m.snap.SaveError == "" &&
+		m.snap.StartBlocked == app.StartBlockedNone &&
 		m.exitState == exitIdle && !m.updateRestartImminent()
 }
 

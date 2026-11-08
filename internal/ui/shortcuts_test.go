@@ -12,19 +12,17 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-// TestScanStartShortcutStartsOnPrepare checks ⌘R on the scan prepare page:
-// the status bar names it and the key issues the same start as the button.
+// TestScanStartShortcutStartsOnPrepare checks Ctrl+R on the scan prepare
+// page. The bottom action bar owns the visible start affordance (09 §5.3),
+// and the key issues the same start as the button.
 func TestScanStartShortcutStartsOnPrepare(t *testing.T) {
 	svc := &fakeService{}
 	m, q := newTestModel(t, Config{Service: svc})
 	tt := ui.NewTester(m.View, 1020, 700)
 	settle(t, m, q, tt)
 
-	if got := m.statusShortcutText(); got != shortcutStartScan+" 开始扫描" {
-		t.Fatalf("the prepare status bar names %q", got)
-	}
-	if !tt.HasText(shortcutStartScan + " 开始扫描") {
-		t.Fatalf("the prepare status bar does not show ⌘R: %q", tt.Texts())
+	if got := m.statusShortcutText(); got != "" {
+		t.Fatalf("the prepare status bar repeats shortcut hints: %q", got)
 	}
 	tt.Key(ui.Cmd, ui.KeyR)
 	settle(t, m, q, tt)
@@ -47,11 +45,8 @@ func TestScanStartShortcutRequiresAPreparableScan(t *testing.T) {
 		m.page = pageScan
 		tt.Frame()
 
-		if got := m.statusShortcutText(); got != shortcutStopScan+" 停止扫描" {
+		if got := m.statusShortcutText(); got != "" {
 			t.Fatalf("the running status bar names %q", got)
-		}
-		if tt.HasText(shortcutStartScan + " 开始扫描") {
-			t.Fatalf("the running scan still names ⌘R: %q", tt.Texts())
 		}
 		tt.Key(ui.Cmd, ui.KeyR)
 		settle(t, m, q, tt)
@@ -188,8 +183,8 @@ func TestScanStartShortcutPromptsForUnsavedEdit(t *testing.T) {
 
 	m.page = pageScan
 	tt.Frame()
-	if !tt.HasText(shortcutStartScan + " 开始扫描") {
-		t.Fatalf("the prepare page lost ⌘R with a dirty draft: %q", tt.Texts())
+	if got := m.statusShortcutText(); got != "" {
+		t.Fatalf("the prepare page repeats shortcut hints with a dirty draft: %q", got)
 	}
 
 	tt.Key(ui.Cmd, ui.KeyR)
@@ -592,14 +587,14 @@ func TestEditNextShortcutPromptsForUnsavedEdit(t *testing.T) {
 }
 
 // TestStatusBarNamesOnlyUsableShortcuts checks the destination-specific
-// key line: prepare names ⌘R, an editor names its save-and-confirm and save
-// keys, results name their list keys, history names Return, and settings
-// names none.
+// key line: the scan page names none (its action bar owns them), an editor
+// names its save-and-confirm and save keys, results name their list keys,
+// history names Return, and settings names none.
 func TestStatusBarNamesOnlyUsableShortcuts(t *testing.T) {
 	m, q := newTestModel(t, Config{Service: &fakeService{}})
 	tt := ui.NewTester(m.View, 1020, 700)
 	settle(t, m, q, tt)
-	if got := m.statusShortcutText(); got != shortcutStartScan+" 开始扫描" {
+	if got := m.statusShortcutText(); got != "" {
 		t.Fatalf("the prepare status = %q", got)
 	}
 

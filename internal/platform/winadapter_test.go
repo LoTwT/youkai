@@ -1209,3 +1209,46 @@ func TestWinOpenConfirmedHandleHint(t *testing.T) {
 		t.Fatalf("a recycled handle must report targetNotFound, got %v", err)
 	}
 }
+
+// TestWinDiscoverTargetsDeduplicatesDenialLog pins the readiness page's
+// ten-second re-check against a flooding diagnostic log: the same denial
+// state is logged once, and a new state logs again.
+func TestWinDiscoverTargetsDeduplicatesDenialLog(t *testing.T) {
+	w := newWinWorld(t)
+	var logs bytes.Buffer
+	w.adapter.Log = log.New(&logs, "", 0)
+	denied := &fakeWnd{hwnd: 0xB0AC0, pid: 8888, visible: true, className: "UnityWndClass", title: "绝区零"}
+	w.win.mu.Lock()
+	w.win.wnds = append(w.win.wnds, denied)
+	w.win.mu.Unlock()
+	w.procs.mu.Lock()
+	w.procs.byPID[8888] = fakeProcInfo{err: windows.ErrProcessAccessDenied, imageName: "ZenlessZoneZero.exe"}
+	w.procs.mu.Unlock()
+
+	for i := 0; i < 3; i++ {
+		if _, err := w.adapter.DiscoverTargets(); err != nil {
+			t.Fatalf("discover %d: %v", i, err)
+		}
+	}
+	if got := strings.Count(logs.String(), "unreadable game windows"); got != 1 {
+		t.Fatalf("denial log lines = %d after three passes, want 1:\n%s", got, logs.String())
+	}
+
+	// The window disappears: the state resets, and the same denial later
+	// is a new event worth one line.
+	w.win.mu.Lock()
+	w.win.wnds = w.win.wnds[:1]
+	w.win.mu.Unlock()
+	if _, err := w.adapter.DiscoverTargets(); err != nil {
+		t.Fatalf("discover after the denial cleared: %v", err)
+	}
+	w.win.mu.Lock()
+	w.win.wnds = append(w.win.wnds, denied)
+	w.win.mu.Unlock()
+	if _, err := w.adapter.DiscoverTargets(); err != nil {
+		t.Fatalf("discover after the denial returned: %v", err)
+	}
+	if got := strings.Count(logs.String(), "unreadable game windows"); got != 2 {
+		t.Fatalf("denial log lines = %d after a cleared and returned denial, want 2:\n%s", got, logs.String())
+	}
+}

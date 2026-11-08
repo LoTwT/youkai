@@ -185,7 +185,7 @@ func TestShellStartsOnScanWithSavedRecords(t *testing.T) {
 	drainAll(t, m, q)
 	tt.Frame()
 
-	if m.displayPage() != pageScan || !tt.HasText(scanHint) {
+	if m.displayPage() != pageScan || !tt.HasText("准备检查") {
 		t.Fatalf("startup lands on page %v, want the scan page", m.displayPage())
 	}
 	if tt.HasText("全部记录") {
@@ -212,7 +212,7 @@ func TestRecordsDestinationRoutesWithoutStageSwitch(t *testing.T) {
 	m.page = pageScan
 	tt.Frame()
 
-	if !tt.HasText(scanHint) {
+	if !tt.HasText("准备检查") {
 		t.Fatal("the scan page does not show the scan hint")
 	}
 	if tt.HasText("结果与校对") {
@@ -261,7 +261,7 @@ func TestRecordsDestinationRoutesWithoutStageSwitch(t *testing.T) {
 		t.Fatal(err)
 	}
 	tt.Frame()
-	if m.displayPage() != pageScan || !tt.HasText(scanHint) {
+	if m.displayPage() != pageScan || !tt.HasText("准备检查") {
 		t.Fatalf("scan shows page %v, want prepare", m.displayPage())
 	}
 	if m.rec == nil {

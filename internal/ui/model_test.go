@@ -131,6 +131,7 @@ func TestApplySwitchesSessionAndReloadsSavedGrowth(t *testing.T) {
 func TestStartRequestsAreIdempotentPerClickBurst(t *testing.T) {
 	svc := &fakeService{}
 	m, q := newTestModel(t, Config{Service: svc})
+	drainAll(t, m, q) // the first readiness pass settles before a start
 
 	m.Start()
 	m.Start() // the first request is still in flight
@@ -159,6 +160,7 @@ func TestStartRefusalIsShown(t *testing.T) {
 		return app.StartOutcome{}, errors.New("no scan source is wired")
 	}}
 	m, q := newTestModel(t, Config{Service: svc})
+	drainAll(t, m, q) // the first readiness pass settles before a start
 	m.Start()
 	drainAll(t, m, q)
 	if m.startErr == "" {
