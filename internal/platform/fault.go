@@ -91,6 +91,17 @@ const (
 	// CodeIntegrityUnverifiable: a mandatory integrity level could not be
 	// read. The check is fail-closed.
 	CodeIntegrityUnverifiable = "integrityUnverifiable"
+	// CodeDpiAwarenessMismatch: youkai itself is not per-monitor-v2 DPI
+	// aware, so its screen coordinates may be virtualized. This is a
+	// process-capability defect, not a game setting.
+	CodeDpiAwarenessMismatch = "dpiAwarenessMismatch"
+	// CodeDpiVirtualized: the target window's own DPI differs from its
+	// monitor's effective DPI, so the measured client rect is not the
+	// physical region. The configuration is refused, never scaled.
+	CodeDpiVirtualized = "dpiVirtualized"
+	// CodeDpiCheckUnavailable: a DPI fact could not be observed;
+	// virtualization status is unverified, never fine.
+	CodeDpiCheckUnavailable = "dpiCheckUnavailable"
 
 	// Premise.
 	CodeFocusLost         = "focusLost"
@@ -134,6 +145,9 @@ var codeClasses = map[string]FaultClass{
 	CodeExclusiveFullscreen:        ClassSetup,
 	CodeIntegrityMismatch:          ClassSetup,
 	CodeIntegrityUnverifiable:      ClassSetup,
+	CodeDpiAwarenessMismatch:       ClassSetup,
+	CodeDpiVirtualized:             ClassSetup,
+	CodeDpiCheckUnavailable:        ClassSetup,
 	CodeFocusLost:                  ClassPremise,
 	CodeTargetHidden:               ClassPremise,
 	CodeTargetAmbiguous:            ClassPremise,

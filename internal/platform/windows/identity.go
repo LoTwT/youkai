@@ -47,30 +47,30 @@ type WindowIdentity struct {
 	// ProcessStartedAt distinguishes a restarted process that happened to
 	// reuse the same PID.
 	ProcessStartedAt time.Time
-	// ClassName and Title are screening hints recorded at lock time. They
-	// are not identity: titles change freely and class names are not
-	// unique, so verification deliberately ignores them.
+	// ClassName is a screening hint recorded at lock time. It is not
+	// identity: class names are not unique, so verification deliberately
+	// ignores them.
 	ClassName string
-	Title     string
 }
 
 // WindowProbe is one enumerated top-level window with the facts used by
-// selection and verification.
+// selection and verification. It deliberately carries no window title:
+// probing another process's caption is user data the scanner never needs
+// (T2 §3.2).
 type WindowProbe struct {
 	HWND             HWND
 	PID              ProcessID
 	ImagePath        string
 	ProcessStartedAt time.Time
 	ClassName        string
-	Title            string
 	Visible          bool
 	Minimized        bool
 	Cloaked          bool
 }
 
 // TargetSpec selects the game window from enumerated probes. The
-// executable path is the authoritative identity; class and title are
-// screening hints applied only when the executable alone leaves several
+// executable path is the authoritative identity; the class name is a
+// screening hint applied only when the executable alone leaves several
 // candidates (launcher, login or secondary windows of the same process).
 type TargetSpec struct {
 	// ExecutablePath is the full path of the game executable, compared
@@ -90,8 +90,6 @@ type TargetSpec struct {
 	ProcessStartedAtHint time.Time
 	// ClassNameHint, when set, must equal the candidate's class name.
 	ClassNameHint string
-	// TitleHint, when set, must be contained in the candidate's title.
-	TitleHint string
 	// RequireVisible requires the selected window to be visible and not
 	// cloaked; a hidden or suspended candidate yields a not-ready result
 	// instead of a lock.
@@ -151,9 +149,9 @@ func (e *SelectionError) Error() string {
 //     set) to match: a confirmed window that vanished or was recycled is
 //     a stale selection, never a cue to pick another window of the same
 //     executable;
-//  3. if several remain and hints are set, narrow by exact class name,
-//     then by title substring — hints refine identity, they never pick a
-//     window the executable does not own;
+//  3. if several remain and hints are set, narrow by exact class name —
+//     hints refine identity, they never pick a window the executable does
+//     not own;
 //  4. if several remain, drop hidden and cloaked windows whenever at
 //     least one visible candidate exists: one visible candidate is
 //     selected, several visible candidates are an ambiguity error whose
@@ -207,17 +205,6 @@ func SelectTarget(probes []WindowProbe, spec TargetSpec) (WindowProbe, error) {
 			candidates = narrowed
 		}
 	}
-	if len(candidates) > 1 && spec.TitleHint != "" {
-		narrowed := candidates[:0]
-		for _, p := range candidates {
-			if strings.Contains(p.Title, spec.TitleHint) {
-				narrowed = append(narrowed, p)
-			}
-		}
-		if len(narrowed) > 0 {
-			candidates = narrowed
-		}
-	}
 	if len(candidates) > 1 {
 		visible := make([]WindowProbe, 0, len(candidates))
 		for _, p := range candidates {
@@ -254,7 +241,6 @@ func LockIdentity(p WindowProbe) WindowIdentity {
 		ImagePath:        p.ImagePath,
 		ProcessStartedAt: p.ProcessStartedAt,
 		ClassName:        p.ClassName,
-		Title:            p.Title,
 	}
 }
 
@@ -323,9 +309,10 @@ type WindowAPI interface {
 	// best-effort treated as "not cloaked" by the collector.
 	Cloaked(hwnd HWND) (bool, error)
 	ClassName(hwnd HWND) (string, error)
-	// Title reads the window title. Reading the caption of another
-	// process's top-level window does not send it a message, so a hung
-	// target cannot hang the reader.
+	// Title reads the window title. Probe collection deliberately does not
+	// call it: another process's caption is user data the scan never needs.
+	// It remains for explicit diagnostic tools (tools/winprobe), which
+	// report titles on purpose.
 	Title(hwnd HWND) (string, error)
 }
 
@@ -363,7 +350,6 @@ func CollectProbes(win WindowAPI, procs ProcessAPI) ([]WindowProbe, error) {
 			continue
 		}
 		className, _ := win.ClassName(h)
-		title, _ := win.Title(h)
 		cloaked := false
 		if c, err := win.Cloaked(h); err == nil {
 			cloaked = c
@@ -374,7 +360,6 @@ func CollectProbes(win WindowAPI, procs ProcessAPI) ([]WindowProbe, error) {
 			ImagePath:        path,
 			ProcessStartedAt: started,
 			ClassName:        className,
-			Title:            title,
 			Visible:          win.IsWindowVisible(h),
 			Minimized:        win.IsIconic(h),
 			Cloaked:          cloaked,

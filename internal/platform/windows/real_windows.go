@@ -73,10 +73,10 @@ func (winWindowAPI) ClassName(hwnd HWND) (string, error) {
 	return windows.UTF16ToString(buf[:n]), nil
 }
 
+// Title is not called by probe collection (the scan never needs another
+// process's caption); it backs the explicit diagnostic reader used by
+// tools/winprobe.
 func (winWindowAPI) Title(hwnd HWND) (string, error) {
-	// Reading the caption of another process's top-level window uses the
-	// system's cached text and sends the target no message, so a hung
-	// game cannot hang the reader.
 	var buf [512]uint16
 	ret, _, _ := procGetWindowTextW.Call(uintptr(hwnd), uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)))
 	return windows.UTF16ToString(buf[:ret]), nil

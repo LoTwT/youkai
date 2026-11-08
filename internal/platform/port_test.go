@@ -139,6 +139,9 @@ func TestFaultClassTable(t *testing.T) {
 		CodeTargetNotFound:             ClassSetup,
 		CodeScreenRecordingUnavailable: ClassSetup,
 		CodeUnsupportedPlatform:        ClassSetup,
+		CodeDpiAwarenessMismatch:       ClassSetup,
+		CodeDpiVirtualized:             ClassSetup,
+		CodeDpiCheckUnavailable:        ClassSetup,
 		CodeFocusLost:                  ClassPremise,
 		CodeTargetHidden:               ClassPremise,
 		CodeTargetAmbiguous:            ClassPremise,
@@ -188,6 +191,12 @@ func TestPreflightFaultNamesTheMissingCapability(t *testing.T) {
 	f = (Preflight{Checks: []CapabilityCheck{{Name: "dpiAwareness", OK: false, Err: errString("query refused")}}}).Fault()
 	if f == nil || f.Message != "capability dpiAwareness unverifiable: query refused" {
 		t.Fatalf("unverifiable capability: %+v", f)
+	}
+	// A check may name the condition's own code; its class follows the
+	// code table rather than the permissionMissing default.
+	f = (Preflight{Checks: []CapabilityCheck{{Name: "dpiAwareness", OK: false, Code: CodeDpiAwarenessMismatch}}}).Fault()
+	if f == nil || f.Code != CodeDpiAwarenessMismatch || f.Class != ClassSetup {
+		t.Fatalf("named capability code: %+v", f)
 	}
 }
 

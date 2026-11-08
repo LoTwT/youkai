@@ -54,6 +54,15 @@ func main() {
 		return
 	}
 
+	// The read-only preparation-check entry (R-01) for real-machine rounds
+	// before PR-17 wires the scanning page. It runs before the event loop so
+	// no window steals the game's focus; it creates no session, takes no scan
+	// occupancy, registers no hotkey and sends no input.
+	if value := os.Getenv(readinessCheckEnv); value != "" {
+		runReadinessCheck(value)
+		return
+	}
+
 	paths, err := app.Resolve(app.Options{
 		Name:      mygo.App.Name(),
 		Resources: resourcesRoot(),

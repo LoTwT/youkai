@@ -111,7 +111,7 @@ func runProbe(opts options) (windowReport *WindowReport, framesReport *FramesRep
 
 	matches := filterProbes(probes, opts.exe)
 	for _, probe := range matches {
-		windowReport.Candidates = append(windowReport.Candidates, collectWindowFacts(probe, geo, self, selfErr))
+		windowReport.Candidates = append(windowReport.Candidates, collectWindowFacts(probe, probeTitle(winAPI, probe.HWND), geo, self, selfErr))
 	}
 	windowReport.CandidateCount = len(windowReport.Candidates)
 
@@ -172,7 +172,7 @@ func runProbe(opts options) (windowReport *WindowReport, framesReport *FramesRep
 	}
 	target := findCandidate(windowReport.Candidates, selection.HWND)
 	if target == nil {
-		windowReport.Candidates = append(windowReport.Candidates, collectWindowFacts(selection, geo, self, selfErr))
+		windowReport.Candidates = append(windowReport.Candidates, collectWindowFacts(selection, probeTitle(winAPI, selection.HWND), geo, self, selfErr))
 		windowReport.CandidateCount = len(windowReport.Candidates)
 		target = &windowReport.Candidates[len(windowReport.Candidates)-1]
 	}
@@ -329,14 +329,25 @@ func observeLocked(winAPI windows.WindowAPI, procs windows.ProcessAPI, geo windo
 	return current, nil
 }
 
-func collectWindowFacts(probe windows.WindowProbe, geo windows.GeometryAPI, self windows.DpiAwareness, selfErr error) WindowFacts {
+// probeTitle reads one window's caption for the diagnostic report. The
+// scanner's probe collection never does this; this developer tool reports
+// the title on purpose, and the read stays explicit here.
+func probeTitle(win windows.WindowAPI, hwnd windows.HWND) string {
+	title, err := win.Title(hwnd)
+	if err != nil {
+		return ""
+	}
+	return title
+}
+
+func collectWindowFacts(probe windows.WindowProbe, title string, geo windows.GeometryAPI, self windows.DpiAwareness, selfErr error) WindowFacts {
 	facts := WindowFacts{
 		HWND:             uint64(probe.HWND),
 		HWNDHex:          fmt.Sprintf("0x%X", uint64(probe.HWND)),
 		PID:              uint32(probe.PID),
 		Executable:       probe.ImagePath,
 		ProcessStartedAt: probe.ProcessStartedAt.UTC(),
-		Title:            probe.Title,
+		Title:            title,
 		ClassName:        probe.ClassName,
 		Visible:          probe.Visible,
 		Minimized:        probe.Minimized,
