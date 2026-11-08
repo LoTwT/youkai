@@ -124,8 +124,10 @@ func (m *Model) refreshReadiness() {
 				case attention == 0:
 					m.readinessFocusStart = true
 				default:
-					// Unsatisfied rows without a control: the refresh entry
-					// is the only actionable place left.
+					// No row offers a primary control: every failed row only
+					// explains, or the target row's diagnostics deliberately
+					// yields to 重新检查. The refresh entry is the actionable
+					// place left.
 					m.readinessFocusRefresh = true
 				}
 			}
@@ -685,19 +687,26 @@ func (m *Model) readinessBlocked() bool {
 }
 
 // readinessPrimaryAction names the row the keyboard should land on: the
-// first row that needs the user and has a control. A copy-only diagnostics
-// action is not a primary target; the page keeps 重新检查 as the actionable
-// place. An unsatisfied row with only an explanation falls through to the
-// next actionable row; when nothing needs action the start button is the
-// target ("" here).
+// first row that needs the user and has a control. Diagnostics counts as a
+// control on every row except the target row: copying it cannot resolve a
+// denied or unreadable target, so 重新检查 is that row's first-entry target.
+// The lookup stops there instead of moving to a later row, because the
+// first unsatisfied row owns the focus (08 §1). An unsatisfied row with
+// only an explanation falls through to the next actionable row; when no row
+// offers a control the start button is the target ("" here, with 重新检查
+// used when rows remain).
 func (m *Model) readinessPrimaryAction() app.ReadinessItem {
 	for _, row := range m.readinessRows() {
 		if row.status != readinessUnsatisfied && row.status != readinessConfirm {
 			continue
 		}
-		if row.action != readinessActionNone && row.action != readinessActionDiagnostics {
-			return row.item
+		if row.action == readinessActionNone {
+			continue
 		}
+		if row.item == app.ReadinessTargetClient && row.action == readinessActionDiagnostics {
+			return ""
+		}
+		return row.item
 	}
 	return ""
 }

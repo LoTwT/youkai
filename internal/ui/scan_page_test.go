@@ -290,8 +290,8 @@ func TestReadinessOrderAndRepairChecklistPutsFailuresFirst(t *testing.T) {
 }
 
 // TestReadinessFocusRules covers the first-entry focus: the first
-// actionable unsatisfied row, the start button when everything is
-// satisfied, and 重新检查 when the failure has no control of its own.
+// unsatisfied row's own control, the start button when everything is
+// satisfied, and 重新检查 when no row has a primary control.
 func TestReadinessFocusRules(t *testing.T) {
 	t.Run("first unsatisfied action", func(t *testing.T) {
 		svc := &fakeService{readiness: readinessWith(app.ReadinessCheck{
@@ -318,6 +318,51 @@ func TestReadinessFocusRules(t *testing.T) {
 			t.Fatalf("the start button does not take the first-entry focus: %q", tt.Texts())
 		}
 	})
+	t.Run("display scale diagnostics before a later action", func(t *testing.T) {
+		// The first unsatisfied row owns the focus even when its only control
+		// is copying diagnostics; a later cleanup action must not take it
+		// (08 §1's first-unsatisfied rule).
+		svc := &fakeService{readiness: readinessWith(
+			app.ReadinessCheck{
+				Item: app.ReadinessDisplayScale, Verdict: app.ReadinessUnsatisfied,
+				Current: "self=system", Required: "self=perMonitorV2 window=monitor",
+				FaultCode: "dpiAwarenessMismatch",
+			},
+			app.ReadinessCheck{
+				Item: app.ReadinessDiskSpace, Verdict: app.ReadinessUnsatisfied,
+				Current: "100000000", Required: "1073741824",
+			},
+		)}
+		m, q := newTestModel(t, Config{Service: svc})
+		tt := ui.NewTester(m.View, 1020, 700)
+		settle(t, m, q, tt)
+		if !tt.Focused("复制诊断信息") {
+			t.Fatalf("the display-scale row's diagnostics does not take the focus: %q", tt.Texts())
+		}
+		if tt.Focused("去清理") {
+			t.Fatalf("the focus skipped to the disk row: %q", tt.Texts())
+		}
+	})
+
+	t.Run("display scale diagnostics over refresh", func(t *testing.T) {
+		// A DPI mismatch is youkai's own problem; re-checking cannot fix it,
+		// so the row's diagnostics entry is the place to land.
+		svc := &fakeService{readiness: readinessWith(app.ReadinessCheck{
+			Item: app.ReadinessDisplayScale, Verdict: app.ReadinessUnsatisfied,
+			Current: "self=system", Required: "self=perMonitorV2 window=monitor",
+			FaultCode: "dpiAwarenessMismatch",
+		})}
+		m, q := newTestModel(t, Config{Service: svc})
+		tt := ui.NewTester(m.View, 1020, 700)
+		settle(t, m, q, tt)
+		if !tt.Focused("复制诊断信息") {
+			t.Fatalf("the display-scale row's diagnostics does not take the focus: %q", tt.Texts())
+		}
+		if tt.Focused("重新检查") {
+			t.Fatalf("the focus fell back to refresh over the row's diagnostics: %q", tt.Texts())
+		}
+	})
+
 	t.Run("no action falls back to refresh", func(t *testing.T) {
 		svc := &fakeService{readiness: readinessWith(app.ReadinessCheck{
 			Item: app.ReadinessGameResolution, Verdict: app.ReadinessUnsatisfied,
