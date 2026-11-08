@@ -441,6 +441,11 @@ type winSession struct {
 	// fullscreenUnknownLogged keeps the shell-state diagnostic from
 	// repeating on every preparation observation.
 	fullscreenUnknownLogged bool
+	// foreignForeground is the last non-target foreground window logged;
+	// foreignForegroundLogged says it is still current, so polling a held
+	// foreground writes one line per change.
+	foreignForeground       windows.HWND
+	foreignForegroundLogged bool
 }
 
 var (
@@ -484,10 +489,52 @@ func (s *winSession) Activate() error {
 func (s *winSession) observe() winObservation {
 	obs := windows.ObserveTarget(s.adapter.natives.Win, s.adapter.natives.Procs,
 		s.adapter.natives.Geo, s.adapter.natives.FG, s.locked, s.tracker, s.adapter.now())
+	if obs.Matched {
+		s.logForeignForeground(obs.ForegroundHWND)
+	}
 	if obs.Fault != nil {
 		return winObservation{obs: obs, fault: obs.Fault}
 	}
 	return winObservation{obs: obs}
+}
+
+// logForeignForeground names the window holding the foreground when it is
+// not the target, once per change. The focusLost fault only says that some
+// other window won, which cannot tell a user action from another program
+// taking the foreground. It logs the window class and the executable file
+// name: the caption of an external window is user data and a full path can
+// contain the user name, so neither is read. ImageName needs no handle to
+// the other process, so an elevated or protected window is still named.
+func (s *winSession) logForeignForeground(foreground windows.HWND) {
+	s.mu.Lock()
+	if foreground == s.locked.HWND {
+		s.foreignForegroundLogged = false
+		s.mu.Unlock()
+		return
+	}
+	if s.foreignForegroundLogged && s.foreignForeground == foreground {
+		s.mu.Unlock()
+		return
+	}
+	s.foreignForeground = foreground
+	s.foreignForegroundLogged = true
+	s.mu.Unlock()
+
+	if foreground == 0 {
+		s.adapter.logf("foreground: no window holds the foreground; target hwnd %d", s.locked.HWND)
+		return
+	}
+	className, processName := "", ""
+	if c, err := s.adapter.natives.Win.ClassName(foreground); err == nil {
+		className = c
+	}
+	if pid, err := s.adapter.natives.Win.ThreadProcessID(foreground); err == nil && pid != 0 {
+		if name, err := s.adapter.natives.Procs.ImageName(pid); err == nil {
+			processName = name
+		}
+	}
+	s.adapter.logf("foreground: hwnd %d class %q process %q holds the foreground; target hwnd %d",
+		foreground, className, processName, s.locked.HWND)
 }
 
 // Observe implements Session.

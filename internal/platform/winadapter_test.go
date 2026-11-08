@@ -1210,6 +1210,79 @@ func TestWinOpenConfirmedHandleHint(t *testing.T) {
 	}
 }
 
+// TestWinObserveLogsForeignForeground pins the focusLost diagnostic: the line
+// names the foreground window's class and executable file name, never its
+// caption or full path, and polling writes it once per change.
+func TestWinObserveLogsForeignForeground(t *testing.T) {
+	const (
+		shellHwnd = windows.HWND(0x51)
+		otherHwnd = windows.HWND(0x52)
+		shellPID  = windows.ProcessID(5100)
+	)
+	w := newWinWorld(t)
+	sess := w.openReady(t)
+	defer sess.Close()
+	var logs bytes.Buffer
+	w.adapter.Log = log.New(&logs, "", 0)
+	w.win.mu.Lock()
+	w.win.wnds = append(w.win.wnds,
+		&fakeWnd{hwnd: shellHwnd, pid: shellPID, visible: true, className: "Shell_TrayWnd", title: "private caption"},
+		&fakeWnd{hwnd: otherHwnd, pid: 5200, visible: true, className: "OtherClass"})
+	w.win.titleReads = 0
+	w.win.mu.Unlock()
+	w.procs.mu.Lock()
+	w.procs.byPID[shellPID] = fakeProcInfo{path: `C:\Users\private\explorer.exe`, started: w.started}
+	w.procs.mu.Unlock()
+
+	setForeground := func(hwnd windows.HWND) {
+		t.Helper()
+		w.fg.mu.Lock()
+		w.fg.foreground = hwnd
+		w.fg.mu.Unlock()
+		if _, err := sess.Observe(); err != nil {
+			t.Fatalf("observe: %v", err)
+		}
+	}
+	count := func(fragment string) int { return strings.Count(logs.String(), fragment) }
+	shellLine := fmt.Sprintf(`foreground: hwnd %d class "Shell_TrayWnd" process "explorer.exe" holds the foreground; target hwnd %d`, shellHwnd, gameHwnd)
+
+	setForeground(shellHwnd)
+	setForeground(shellHwnd)
+	if got := count(shellLine); got != 1 {
+		t.Fatalf("lines for a held foreign foreground = %d, want 1:\n%s", got, logs.String())
+	}
+	if strings.Contains(logs.String(), "private") {
+		t.Fatalf("the line leaks a caption or path:\n%s", logs.String())
+	}
+	if w.win.titleReads != 0 {
+		t.Fatalf("title reads = %d, want 0", w.win.titleReads)
+	}
+
+	// A different window and a moment with no foreground are new facts. An
+	// unnameable process still logs the hwnd and class.
+	setForeground(otherHwnd)
+	if got := count(fmt.Sprintf(`foreground: hwnd %d class "OtherClass" process ""`, otherHwnd)); got != 1 {
+		t.Fatalf("lines for an unnameable process = %d, want 1:\n%s", got, logs.String())
+	}
+	setForeground(0)
+	if got := count("foreground: no window holds the foreground"); got != 1 {
+		t.Fatalf("lines for no foreground = %d, want 1:\n%s", got, logs.String())
+	}
+
+	// Regaining the foreground writes nothing, and losing it to the same
+	// window again is a new event.
+	setForeground(shellHwnd)
+	before := count("foreground:")
+	setForeground(gameHwnd)
+	if got := count("foreground:"); got != before {
+		t.Fatalf("regaining the foreground logged a line:\n%s", logs.String())
+	}
+	setForeground(shellHwnd)
+	if got := count(shellLine); got != 3 {
+		t.Fatalf("shell lines after losing the foreground again = %d, want 3:\n%s", got, logs.String())
+	}
+}
+
 // TestWinDiscoverTargetsDeduplicatesDenialLog pins the readiness page's
 // ten-second re-check against a flooding diagnostic log: the same denial
 // state is logged once, and a new state logs again.

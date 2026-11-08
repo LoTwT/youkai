@@ -141,8 +141,13 @@ type TargetObservation struct {
 	Mismatch *MismatchError
 	// Foreground is true when the target is the actual foreground window.
 	Foreground bool
-	Visible    bool
-	Minimized  bool
+	// ForegroundHWND is the window Foreground was decided from, read once so
+	// a diagnostic names the same window the verdict saw. Zero means no
+	// window held the foreground, which happens during a switch. It is only
+	// meaningful when Matched is true.
+	ForegroundHWND HWND
+	Visible        bool
+	Minimized      bool
 	// Occlusion is the checked-point state; passive observations leave
 	// it notChecked.
 	Occlusion OcclusionState
@@ -215,7 +220,8 @@ func ObserveTarget(win WindowAPI, procs ProcessAPI, geo GeometryAPI, fg Foregrou
 	obs.Matched = true
 	obs.Visible = win.IsWindowVisible(locked.HWND)
 	obs.Minimized = win.IsIconic(locked.HWND)
-	obs.Foreground = fg.ForegroundWindow() == locked.HWND
+	obs.ForegroundHWND = fg.ForegroundWindow()
+	obs.Foreground = obs.ForegroundHWND == locked.HWND
 
 	measurement, fault := MeasureClient(geo, locked.HWND)
 	if fault == nil {
