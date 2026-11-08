@@ -369,10 +369,14 @@ type Model struct {
 	// newer pass runs, so the checklist never blanks out between checks;
 	// the serial discards a superseded pass. readinessLoaded distinguishes
 	// the first pass (start disabled until it lands) from a later refresh.
-	readiness             app.ReadinessReport
-	readinessLoading      bool
-	readinessLoaded       bool
-	readinessSerial       int
+	readiness        app.ReadinessReport
+	readinessLoading bool
+	readinessLoaded  bool
+	readinessSerial  int
+	// readinessFocusGiven records that the first completed pass already
+	// delivered the initial focus; later passes must never take it again.
+	// readinessFocus is the one-shot request the render pass consumes.
+	readinessFocusGiven   bool
 	readinessFocus        bool
 	readinessFocusStart   bool
 	readinessFocusRefresh bool
@@ -385,6 +389,10 @@ type Model struct {
 	startFailureCode    string
 	startFailureParams  map[string]string
 	startFailureMessage string
+	// startFailureReadinessSerial is the pass that was current when the
+	// refusal was recorded. The next completed read-only pass replaces the
+	// failure marker on the rows it can judge.
+	startFailureReadinessSerial int
 	// estimate is P-14's expected duration; estimateLoaded keeps a missing
 	// value apart from a zero one.
 	estimate       app.ScanDurationEstimate
@@ -475,7 +483,6 @@ type Model struct {
 	// "return to the prepare check" strip and the TOC's pending jump.
 	settingsSections        settingsSectionRefs
 	settingsFocusPending    bool
-	settingsFocusNext       bool
 	settingsFocusStorage    bool
 	settingsReturnToPrepare bool
 	settingsScrollTarget    settingsSectionID
@@ -823,6 +830,7 @@ func (m *Model) beginSession(id, replacedSession string) {
 		m.startFailureCode = ""
 		m.startFailureParams = nil
 		m.startFailureMessage = ""
+		m.startFailureReadinessSerial = 0
 	}
 	busyEditing := m.reviewSaving || m.editingDirty()
 	rolledBack := replacedSession != "" && id == replacedSession

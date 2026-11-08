@@ -58,6 +58,14 @@ type readinessRow struct {
 	why    string
 	how    string
 	action readinessActionKind
+	// startReason is the compact reason shown left of the start button when
+	// the row's own value would be too long or misleading there.
+	startReason string
+	// failureOnly marks a row whose displayed failure comes from the last
+	// preparation-stage refusal while the read-only check does not block a
+	// retry. Such a row stays pinned and expanded but never disables the
+	// start (08 §1.2).
+	failureOnly bool
 }
 
 // readinessItems is the checklist order of 08 §1.1. Rows are sorted for
@@ -100,10 +108,13 @@ func (m *Model) refreshReadiness() {
 			}
 			m.readiness = report
 			m.applyReadinessTargets(report)
-			if !m.readinessFocus {
-				// The first completed pass moves the keyboard to the first
-				// actionable item (or the start button when everything is
-				// satisfied). Later passes never move it.
+			m.replaceRecheckedStartFailure()
+			if !m.readinessFocusGiven {
+				// Only the first completed pass moves the keyboard to the
+				// first actionable item (or the start button when everything
+				// is satisfied). Later passes, including ones that reorder
+				// rows, never take it.
+				m.readinessFocusGiven = true
 				m.readinessFocus = true
 				primary := m.readinessPrimaryAction()
 				attention := m.readinessCount()
@@ -311,10 +322,15 @@ func (m *Model) readinessRow(check app.ReadinessCheck) readinessRow {
 		}
 	}
 	if m.startFailureItem == check.Item && m.startFailure != "" {
+		// The refusal is presentation only: it pins and explains the row,
+		// but a row that the read-only check does not fail must not keep the
+		// start disabled (the beginSession deadlock in the round-1 review).
+		blocking := row.status == readinessUnsatisfied || row.status == readinessConfirm
 		row.status = readinessUnsatisfied
 		row.value = m.startFailureValue(check.Item)
 		row.why, row.how = readinessFailureParts(m.startFailureCode, m.startFailureParams)
 		row.action = readinessActionNone
+		row.failureOnly = !blocking
 		if row.why == row.value {
 			row.why = ""
 		}
@@ -323,6 +339,26 @@ func (m *Model) readinessRow(check app.ReadinessCheck) readinessRow {
 		}
 	}
 	return row
+}
+
+// replaceRecheckedStartFailure drops a read-only row's failure marker once
+// the next pass judging that row has completed. The hotkey and game-page
+// rows stay marked until the next start, because only a start can check
+// them (Q-B, 08 §1.2).
+func (m *Model) replaceRecheckedStartFailure() {
+	if m.startFailureItem == "" || m.readinessSerial == m.startFailureReadinessSerial {
+		return
+	}
+	if !readinessReadOnlyItem(m.startFailureItem) {
+		return
+	}
+	m.startFailureItem = ""
+}
+
+// readinessReadOnlyItem reports whether a completed checklist pass replaces
+// the row's start-failure marker.
+func readinessReadOnlyItem(item app.ReadinessItem) bool {
+	return item != app.ReadinessStopHotkey && item != app.ReadinessGamePage
 }
 
 // waitingForGame reports the not-found state: the target row has no window
@@ -377,26 +413,43 @@ func (m *Model) targetReadinessRow(check app.ReadinessCheck) readinessRow {
 		row.value = fmt.Sprintf("找到 %d 个窗口 → 请选择要扫描的一个", len(m.targets))
 		row.how = "不会替你选择；选中后点“开始扫描”。"
 		row.action = readinessActionChooseTarget
+	case m.targetsAccessDenied > 0 && m.targetNeedsElevation():
+		// P-05: the permission row carries the full explanation and the
+		// same exit; this row says the short cause and never repeats the
+		// passage next to its button.
+		row.status = readinessUnsatisfied
+		row.value = "无法读取游戏窗口（游戏以管理员身份运行）"
+		row.action = readinessActionExit
+		row.startReason = "游戏窗口需要与 youkai 相同的管理员权限。"
 	case m.targetsAccessDenied > 0:
-		row.status = readinessUnknown
-		row.value = "无法读取游戏窗口（可能以管理员身份运行）"
-		row.how = "先从托盘退出 youkai，再以管理员身份运行，然后点“重新检查”。"
+		row.status = readinessUnsatisfied
+		row.value = "无法读取游戏窗口"
+		row.how = "请先点“重新检查”，反复出现时复制诊断信息。"
+		row.startReason = "无法读取游戏窗口。"
 	case m.targetsUnreadable > 0:
-		row.status = readinessUnknown
+		row.status = readinessUnsatisfied
 		row.value = "无法读取游戏进程信息"
-		row.why = targetUnreadableText
-		row.action = readinessActionDiagnostics
+		row.how = targetUnreadableText
+		row.startReason = "无法读取游戏进程信息。"
 	case check.FaultCode == "observationFailed" && len(m.targets) == 0:
-		row.status = readinessUnknown
+		row.status = readinessUnsatisfied
 		row.value = "查找游戏窗口失败"
-		row.why = targetDiscoveryFailedText
-		row.action = readinessActionDiagnostics
+		row.how = targetDiscoveryFailedText
+		row.startReason = "查找游戏窗口失败。"
 	default:
 		row.status = readinessUnsatisfied
 		row.value = "未找到《绝区零》窗口 → 启动游戏并打开驱动盘仓库页"
 		row.how = "找到后点“重新检查”。"
 	}
 	return row
+}
+
+// targetNeedsElevation reports the P-05 shape: the game window is visible
+// but its process is denied while youkai runs at a lower integrity level.
+// The permission row, not this one, carries the full elevation passage.
+func (m *Model) targetNeedsElevation() bool {
+	check := m.readinessCheck(app.ReadinessAdministrator)
+	return check.Verdict == app.ReadinessUnsatisfied && check.FaultCode == "integrityMismatch"
 }
 
 func targetExecutableName(candidate app.TargetCandidate) string {
@@ -503,6 +556,9 @@ func readinessDisplayScaleRow(check app.ReadinessCheck) readinessRow {
 	}
 	if check.FaultCode == "dpiAwarenessMismatch" {
 		row.value = "youkai 的显示缩放支持不完整 → 这是 youkai 自身的问题"
+		// 08 §1.1 requires a diagnostic entry on this row; the shared copy
+		// action is the only one it can offer.
+		row.action = readinessActionDiagnostics
 	}
 	if check.FaultCode != "" && check.FaultCode != "dpiAwarenessMismatch" &&
 		row.status == readinessUnsatisfied {
@@ -591,9 +647,9 @@ func (m *Model) startFailureValue(item app.ReadinessItem) string {
 	return m.startFailureMessage
 }
 
-// readinessSummary counts the rows that stop a start. Unknown rows are
-// shown but do not block: the session's own precheck stays authoritative,
-// while a row known not to hold must be fixed first.
+// readinessCount counts the rows the header reports as needing attention.
+// It includes a presentation-only failure row so the header never says
+// 全部满足 beside a red row.
 func (m *Model) readinessCount() int {
 	attention := 0
 	for _, row := range m.readinessRows() {
@@ -604,8 +660,25 @@ func (m *Model) readinessCount() int {
 	return attention
 }
 
+// readinessBlockingCount counts the rows that actually stop a start.
+// Unknown rows and presentation-only failures do not block: the session's
+// own precheck stays authoritative, while a row known not to hold must be
+// fixed first.
+func (m *Model) readinessBlockingCount() int {
+	attention := 0
+	for _, row := range m.readinessRows() {
+		if row.failureOnly {
+			continue
+		}
+		if row.status == readinessUnsatisfied || row.status == readinessConfirm {
+			attention++
+		}
+	}
+	return attention
+}
+
 func (m *Model) readinessBlocked() bool {
-	return m.readinessCount() > 0
+	return m.readinessBlockingCount() > 0
 }
 
 // readinessPrimaryAction names the row the keyboard should land on: the
@@ -630,6 +703,9 @@ func (m *Model) readinessStartReason() string {
 	rows := m.readinessRows()
 	var attention []readinessRow
 	for _, row := range rows {
+		if row.failureOnly {
+			continue
+		}
 		if row.status == readinessUnsatisfied || row.status == readinessConfirm {
 			attention = append(attention, row)
 		}
@@ -644,6 +720,9 @@ func (m *Model) readinessStartReason() string {
 }
 
 func readinessShortReason(row readinessRow) string {
+	if row.startReason != "" {
+		return row.startReason
+	}
 	switch row.item {
 	case app.ReadinessTargetClient:
 		if row.status == readinessConfirm {
@@ -790,6 +869,7 @@ func (m *Model) notePreparationFailure(snap app.Snapshot) {
 	m.startFailureCode = trigger.Code
 	m.startFailureParams = trigger.Params
 	m.startFailureItem = readinessItemForFault(trigger.Code)
+	m.startFailureReadinessSerial = m.readinessSerial
 	if trigger.Kind == scan.TriggerUser {
 		m.startFailureMessage = "没有开始：已手动停止"
 	} else if cause := faultCauseText(trigger.Code, trigger.Params); cause != "" {
@@ -797,7 +877,13 @@ func (m *Model) notePreparationFailure(snap app.Snapshot) {
 	} else {
 		m.startFailureMessage = "没有开始：原因未知"
 	}
+	// Returning from a refused start moves the keyboard to the failed
+	// row's control, or to 重新检查 when it has none. This is a one-shot
+	// request, not the first-entry rule.
 	m.readinessFocus = true
+	if m.readinessPrimaryAction() == "" {
+		m.readinessFocusRefresh = true
+	}
 	m.refreshReadiness()
 }
 
@@ -887,7 +973,7 @@ func (m *Model) readinessChecklist(c *ui.Context, t *ui.Theme, tok *Tokens) {
 			}
 			refresh := ui.Button(c, "重新检查").Bind(&m.scanRefreshRef)
 			if m.readinessFocus && m.readinessFocusRefresh {
-				refresh = refresh.AutoFocus()
+				refresh = refresh.Focus()
 				m.readinessFocus = false
 				m.readinessFocusRefresh = false
 			}
@@ -950,7 +1036,7 @@ func (m *Model) readinessRowView(c *ui.Context, t *ui.Theme, tok *Tokens, row re
 				if primary {
 					button = button.Bind(&m.scanRowRef)
 					if m.readinessFocus {
-						button = button.AutoFocus()
+						button = button.Focus()
 						m.readinessFocus = false
 					}
 				}
@@ -1002,7 +1088,7 @@ func (m *Model) readinessTargetChoices(c *ui.Context, primary bool) {
 			if i == 0 && primary {
 				radio = radio.Bind(&m.scanRowRef)
 				if m.readinessFocus {
-					radio = radio.AutoFocus()
+					radio = radio.Focus()
 					m.readinessFocus = false
 				}
 			}
@@ -1037,9 +1123,13 @@ func (m *Model) scanStageArea(c *ui.Context, t *ui.Theme) {
 				FontSize(t.FontSize * 0.9)
 			m.schedulePrepareTick()
 		case scan.PhaseCapturing:
-			ui.Text(c, "正在扫描").FontSize(t.FontSize * 1.6).FontWeight(600)
-			ui.Textf(c, "已采集 %d 件", snap.Counts.Captured)
+			ui.Textf(c, "正在扫描 · 已采集 %d 件", snap.Counts.Captured).
+				FontSize(t.FontSize * 1.6).FontWeight(600)
 			ui.Text(c, "总数未知，不显示百分比").TextColor(t.TextMuted).FontSize(t.FontSize * 0.9)
+			// 09 §5.3 keeps this safety line: clicking the window itself
+			// takes the game's focus and therefore stops the scan.
+			ui.Text(c, "点击窗口本身也会让游戏失焦而停止").TextColor(t.TextMuted).
+				FontSize(t.FontSize * 0.9)
 		default:
 			remaining := snap.Counts.Queued + snap.Counts.Running
 			if remaining > 0 {

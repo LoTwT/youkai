@@ -269,7 +269,7 @@ func (m *Model) pageActions(c *ui.Context, t *ui.Theme, tok *Tokens) {
 			m.requestScanStart()
 		}
 		if m.scanStartReady() && m.readinessFocus && m.readinessFocusStart {
-			button.AutoFocus()
+			button.Focus()
 			m.readinessFocus = false
 			m.readinessFocusStart = false
 		}
@@ -365,7 +365,15 @@ func (m *Model) scanStartBlockedReason() string {
 	case m.startReqID != "":
 		return "正在开始扫描……"
 	default:
-		return m.readinessStartReason()
+		if reason := m.readinessStartReason(); reason != "" {
+			return reason
+		}
+		if !m.targetReady() {
+			// A target row without its own blocking conclusion must still
+			// explain why the button is disabled.
+			return "请先确认要扫描的游戏窗口。"
+		}
+		return ""
 	}
 }
 

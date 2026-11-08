@@ -22,10 +22,11 @@ import (
 const (
 	// targetUnreadableText: the game window exists and youkai is already
 	// elevated (or its own level is unknown), so a denied process query is
-	// not an elevation mismatch. The raw failure is in the diagnostic log.
-	targetUnreadableText = "无法读取游戏进程信息。请先点“重新检查”，反复出现时复制诊断信息。"
+	// not an elevation mismatch. The row's value carries the cause; this is
+	// its action. The raw failure is in the diagnostic log.
+	targetUnreadableText = "请先点“重新检查”，反复出现时仍无法读取就复制诊断信息。"
 	// targetDiscoveryFailedText: enumeration itself failed.
-	targetDiscoveryFailedText = "查找游戏窗口失败。请先点“重新检查”，反复出现时复制诊断信息。"
+	targetDiscoveryFailedText = "请先点“重新检查”，反复出现时仍失败就复制诊断信息。"
 	// targetGoneText: the confirmed window vanished between confirmation
 	// and start.
 	targetGoneText = "确认的游戏窗口已关闭或被替换，请点“重新检查”后重新选择。"

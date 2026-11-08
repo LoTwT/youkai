@@ -194,7 +194,7 @@ func TestViewTargetDiscoveryFailure(t *testing.T) {
 	tt := ui.NewTester(m.View, 1020, 700)
 	settle(t, m, q, tt)
 
-	if !tt.HasText("查找游戏窗口失败") || !tt.HasText("为什么："+targetDiscoveryFailedText) {
+	if !tt.HasText("查找游戏窗口失败") || !tt.HasText("怎么做："+targetDiscoveryFailedText) {
 		t.Fatalf("the discovery failure does not show: %q", tt.Texts())
 	}
 	if err := tt.Click("开始扫描"); err != nil {
@@ -220,7 +220,7 @@ func TestViewElevatedGameSuggestsAdmin(t *testing.T) {
 	tt := ui.NewTester(m.View, 1020, 700)
 	settle(t, m, q, tt)
 
-	if !tt.HasText("无法读取游戏窗口（可能以管理员身份运行）") {
+	if !tt.HasText("无法读取游戏窗口（游戏以管理员身份运行）") {
 		t.Fatalf("the elevated-game hint does not show: %q", tt.Texts())
 	}
 	if tt.HasText("未找到《绝区零》窗口 → 启动游戏并打开驱动盘仓库页") {
@@ -247,7 +247,7 @@ func TestViewUnreadableGameShowsGenericCopy(t *testing.T) {
 	tt := ui.NewTester(m.View, 1020, 700)
 	settle(t, m, q, tt)
 
-	if !tt.HasText("无法读取游戏进程信息") || !tt.HasText("为什么："+targetUnreadableText) {
+	if !tt.HasText("无法读取游戏进程信息") || !tt.HasText("怎么做："+targetUnreadableText) {
 		t.Fatalf("the unreadable-game copy does not show: %q", tt.Texts())
 	}
 	if tt.HasText("可能以管理员身份运行") {

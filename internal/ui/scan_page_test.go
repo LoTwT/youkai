@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -222,8 +223,10 @@ func TestReadinessUnsatisfiedCopy(t *testing.T) {
 				}
 			}
 			for _, label := range tc.actions {
-				if !tt.HasText(label) {
-					t.Fatalf("the row's action %q does not show: %q", label, tt.Texts())
+				// Find matches the whole label, so an explanation that merely
+				// mentions the action does not satisfy the test.
+				if _, ok := tt.Find(label); !ok {
+					t.Fatalf("the row's action %q is not a button: %q", label, tt.Texts())
 				}
 			}
 			if m.scanStartReady() {
@@ -589,13 +592,14 @@ func TestScanPreparationFailureReturnsToChecklist(t *testing.T) {
 	if !tt.HasText("没有开始：" + faultCauseText("integrityMismatch", failed.Scan.Trigger.Params)) {
 		t.Fatalf("the refusal does not stay on the checklist: %q", tt.Texts())
 	}
-	admin, ok := tt.Find("管理员权限")
-	if !ok {
-		t.Fatalf("the failure row is missing: %q", tt.Texts())
+	if !tt.HasText("管理员权限") {
+		t.Fatalf("the failed row is missing: %q", tt.Texts())
 	}
-	target, ok := tt.Find("目标客户端")
-	if !ok || admin.Y > target.Y {
-		t.Fatalf("the failed item is not on top: admin %v target %v", admin, target)
+	// The refusal triggers a read-only pass; that pass replaces the
+	// presentation marker on rows it can judge, so a now-satisfied row
+	// must not keep the start disabled (round-1 decision).
+	if !m.scanStartReady() {
+		t.Fatal("the re-checked row still blocks the next start")
 	}
 }
 
@@ -603,7 +607,13 @@ func TestScanPreparationFailureReturnsToChecklist(t *testing.T) {
 // tested on start, and a failure returns to the checklist with the row on
 // top.
 func TestScanHotkeyFailurePromotesTheHotkeyRow(t *testing.T) {
-	svc := &fakeService{}
+	// Another unsatisfied row sorts before the hotkey in the checklist
+	// order; only the failure pin puts the hotkey above it.
+	svc := &fakeService{readiness: readinessWith(app.ReadinessCheck{
+		Item: app.ReadinessAdministrator, Verdict: app.ReadinessUnsatisfied,
+		Current: "target=high self=medium", Required: "target<=self",
+		FaultCode: "integrityMismatch",
+	})}
 	m, q := newTestModel(t, Config{Service: svc})
 	tt := ui.NewTester(m.View, 1020, 700)
 	settle(t, m, q, tt)
@@ -622,10 +632,299 @@ func TestScanHotkeyFailurePromotesTheHotkeyRow(t *testing.T) {
 	if !ok {
 		t.Fatalf("the hotkey row is missing: %q", tt.Texts())
 	}
-	gamePage, ok := tt.Find("游戏页面、遮挡、独占全屏")
-	if !ok || hotkey.Y > gamePage.Y {
-		t.Fatalf("the hotkey row is not promoted: hotkey %v gamePage %v", hotkey, gamePage)
+	// Compare against a satisfied row, not the other post-start row: the two
+	// post-start rows are already in this order without the promotion.
+	target, ok := tt.Find("目标客户端")
+	if !ok || hotkey.Y >= target.Y {
+		t.Fatalf("the hotkey row is not promoted: hotkey %v target %v", hotkey, target)
 	}
+	// An unsatisfied row earlier in the checklist order must not outrank the
+	// failure; this is what the pin mapping itself decides.
+	admin, ok := tt.Find("管理员权限")
+	if !ok || hotkey.Y >= admin.Y {
+		t.Fatalf("another failure outranks the hotkey: hotkey %v admin %v", hotkey, admin)
+	}
+}
+
+// applyPreparationFailure drives one preparing session to a refusal before
+// input opened, as the service reports a preparation-stage fault.
+func applyPreparationFailure(t *testing.T, m *Model, q *queueUpdater, tt *ui.Tester, code string, params map[string]string) {
+	t.Helper()
+	applyAndSettle(t, m, q, tt, snap("s1", 1, true, scan.PhasePreparing, scan.Counts{}, 0, true, ""))
+	failed := snap("s1", 2, false, scan.PhaseEnded, scan.Counts{}, 0, false, "")
+	failed.Scan.InputOpened = false
+	failed.Scan.End = scan.EndFailed
+	failed.Scan.Trigger = &scan.Trigger{
+		Kind: scan.TriggerFault, Code: code, Phase: scan.PhasePreparing, Params: params,
+	}
+	applyAndSettle(t, m, q, tt, failed)
+}
+
+// TestPreparationFailureDoesNotBlockRestart pins the round-1 fix: the
+// failure record only pins and explains the row; it never keeps 开始扫描
+// disabled after the read-only check says the row holds. The hotkey and
+// game page rows stay pinned until the next start because only a start can
+// check them.
+func TestPreparationFailureDoesNotBlockRestart(t *testing.T) {
+	t.Run("hotkey", func(t *testing.T) {
+		svc := &fakeService{}
+		m, q := newTestModel(t, Config{Service: svc})
+		tt := ui.NewTester(m.View, 1020, 700)
+		settle(t, m, q, tt)
+		applyPreparationFailure(t, m, q, tt, "hotkeyUnavailable", nil)
+		if !m.scanStartReady() {
+			t.Fatal("the hotkey failure still blocks the next start")
+		}
+		if !tt.HasText("没有开始：停止热键已被其他程序占用") {
+			t.Fatalf("the hotkey failure lost its explanation: %q", tt.Texts())
+		}
+		if !tt.HasText("停止热键已被其他程序占用") {
+			t.Fatalf("the hotkey row lost its failure value: %q", tt.Texts())
+		}
+	})
+
+	t.Run("integrity", func(t *testing.T) {
+		svc := &fakeService{}
+		m, q := newTestModel(t, Config{Service: svc})
+		tt := ui.NewTester(m.View, 1020, 700)
+		settle(t, m, q, tt)
+		params := map[string]string{"target": "high", "self": "medium"}
+		applyPreparationFailure(t, m, q, tt, "integrityMismatch", params)
+		if !m.scanStartReady() {
+			t.Fatal("the integrity failure still blocks the next start after the re-check passed")
+		}
+		if !tt.HasText("没有开始：" + faultCauseText("integrityMismatch", params)) {
+			t.Fatalf("the integrity failure lost its explanation: %q", tt.Texts())
+		}
+	})
+
+	t.Run("prepare timeout", func(t *testing.T) {
+		svc := &fakeService{}
+		m, q := newTestModel(t, Config{Service: svc})
+		tt := ui.NewTester(m.View, 1020, 700)
+		settle(t, m, q, tt)
+		applyPreparationFailure(t, m, q, tt, "prepareTimeout", nil)
+		if !m.scanStartReady() {
+			t.Fatal("the game-page failure still blocks the next start")
+		}
+		if !tt.HasText("没有开始：30 秒内游戏没有就绪") {
+			t.Fatalf("the timeout lost its explanation: %q", tt.Texts())
+		}
+	})
+
+	t.Run("target lost", func(t *testing.T) {
+		original := testTarget(0xB0ABE, 42, `C:\Games\ZZZ\ZenlessZoneZero.exe`)
+		replacement := testTarget(0xB0ABF, 43, `C:\Games\ZZZ\ZenlessZoneZero.exe`)
+		svc := &fakeService{targets: []app.TargetCandidate{original}}
+		m, q := newTestModel(t, Config{Service: svc, ScanSource: targetSource()})
+		tt := ui.NewTester(m.View, 1020, 700)
+		settle(t, m, q, tt)
+		if err := tt.Click(targetLabel(original)); err != nil {
+			t.Fatal(err)
+		}
+		settle(t, m, q, tt)
+
+		// The confirmed window is gone; the re-check after the refusal finds
+		// the restarted game and must offer it again.
+		svc.mu.Lock()
+		svc.targets = []app.TargetCandidate{replacement}
+		svc.mu.Unlock()
+		applyPreparationFailure(t, m, q, tt, "targetLost", nil)
+		if !tt.HasText("已找到 1 个窗口 → 请确认要扫描的一个") {
+			t.Fatalf("the candidate list did not return: %q", tt.Texts())
+		}
+		if !tt.HasText(targetLabel(replacement)) {
+			t.Fatalf("the replacement window is not listed: %q", tt.Texts())
+		}
+		if m.scanStartReady() {
+			t.Fatal("the start is offered before the replacement is confirmed")
+		}
+		if !tt.HasText("请先确认要扫描的游戏窗口。") {
+			t.Fatalf("the start does not explain the missing confirmation: %q", tt.Texts())
+		}
+		if err := tt.Click(targetLabel(replacement)); err != nil {
+			t.Fatal(err)
+		}
+		settle(t, m, q, tt)
+		if !m.scanStartReady() {
+			t.Fatal("confirming the replacement does not allow a restart")
+		}
+	})
+}
+
+// TestReadinessLaterRecheckKeepsFocus: only the first completed pass may
+// move the keyboard. A background pass that reorders rows and builds a new
+// control must not take the focus away from 重新检查.
+func TestReadinessLaterRecheckKeepsFocus(t *testing.T) {
+	svc := &fakeService{readiness: readinessWith(app.ReadinessCheck{
+		Item: app.ReadinessGameResolution, Verdict: app.ReadinessUnsatisfied,
+		Current: "2560x1440", Required: "1920x1080",
+		FaultCode: "clientTierUnsupported",
+	})}
+	m, q := newTestModel(t, Config{Service: svc})
+	tt := ui.NewTester(m.View, 1020, 700)
+	settle(t, m, q, tt)
+	if !tt.Focused("重新检查") {
+		t.Fatalf("the first pass did not focus the fallback action: %q", tt.Texts())
+	}
+
+	applyReadinessReport(t, m, q, tt, svc, readinessWith(app.ReadinessCheck{
+		Item: app.ReadinessDiskSpace, Verdict: app.ReadinessUnsatisfied,
+		Current: "100000000", Required: "1073741824",
+	}))
+	if !tt.Focused("重新检查") {
+		t.Fatalf("a later re-check moved the focus away from refresh: %q", tt.Texts())
+	}
+	if tt.Focused("去清理") {
+		t.Fatalf("the re-check's new row took the focus: %q", tt.Texts())
+	}
+}
+
+// TestTargetUnavailableStatesBlockStart covers the P-05 and M1′ target
+// states: each one counts as needing handling, disables the start with a
+// non-empty reason, and leaves the focus on an actionable control.
+func TestTargetUnavailableStatesBlockStart(t *testing.T) {
+	t.Run("access denied without elevation", func(t *testing.T) {
+		svc := &fakeService{
+			targetsAccessDenied: 1,
+			readiness: readinessWith(app.ReadinessCheck{
+				Item: app.ReadinessAdministrator, Verdict: app.ReadinessUnsatisfied,
+				Current: "target=unreadable self=medium", Required: "target<=self",
+				FaultCode:   "integrityMismatch",
+				FaultParams: map[string]string{"target": "unreadable", "self": "medium"},
+			}),
+		}
+		m, q := newTestModel(t, Config{Service: svc, ScanSource: targetSource()})
+		tt := ui.NewTester(m.View, 1020, 700)
+		settle(t, m, q, tt)
+		if m.scanStartReady() {
+			t.Fatal("the access-denied target still offers the start")
+		}
+		if m.scanStartBlockedReason() == "" {
+			t.Fatal("the disabled start has no reason")
+		}
+		if !tt.HasText("无法读取游戏窗口（游戏以管理员身份运行）") {
+			t.Fatalf("the target row does not explain the elevation case: %q", tt.Texts())
+		}
+		if !tt.Focused("退出 youkai") {
+			t.Fatalf("the elevation action does not take the focus: %q", tt.Texts())
+		}
+		// The full elevation passage belongs to the permission row only.
+		action := faultActionText("integrityMismatch", nil)
+		mentions := 0
+		for _, text := range tt.Texts() {
+			if strings.Contains(text, action) {
+				mentions++
+			}
+		}
+		if mentions != 1 {
+			t.Fatalf("the elevation passage appears %d times, want once: %q", mentions, tt.Texts())
+		}
+	})
+
+	t.Run("process unreadable", func(t *testing.T) {
+		svc := &fakeService{targetsUnreadable: 1}
+		m, q := newTestModel(t, Config{Service: svc, ScanSource: targetSource()})
+		tt := ui.NewTester(m.View, 1020, 700)
+		settle(t, m, q, tt)
+		if m.scanStartReady() {
+			t.Fatal("the unreadable target still offers the start")
+		}
+		if got := m.scanStartBlockedReason(); got != "无法读取游戏进程信息。" {
+			t.Fatalf("start reason = %q, want the unreadable target", got)
+		}
+		if !tt.HasText("! 1 项需要处理") {
+			t.Fatalf("the unreadable target is not counted: %q", tt.Texts())
+		}
+		if !tt.Focused("重新检查") {
+			t.Fatalf("the re-check action does not take the focus: %q", tt.Texts())
+		}
+	})
+
+	t.Run("discovery failed", func(t *testing.T) {
+		svc := &fakeService{readiness: readinessWith(app.ReadinessCheck{
+			Item: app.ReadinessTargetClient, Verdict: app.ReadinessUnknown,
+			Current: "enumerationFailed=true", Required: "confirmed=1",
+			FaultCode: "observationFailed",
+		})}
+		m, q := newTestModel(t, Config{Service: svc, ScanSource: targetSource()})
+		tt := ui.NewTester(m.View, 1020, 700)
+		settle(t, m, q, tt)
+		if m.scanStartReady() {
+			t.Fatal("the failed discovery still offers the start")
+		}
+		if got := m.scanStartBlockedReason(); got != "查找游戏窗口失败。" {
+			t.Fatalf("start reason = %q, want the discovery failure", got)
+		}
+		if !tt.HasText("! 1 项需要处理") {
+			t.Fatalf("the failed discovery is not counted: %q", tt.Texts())
+		}
+		if !tt.Focused("重新检查") {
+			t.Fatalf("the re-check action does not take the focus: %q", tt.Texts())
+		}
+	})
+}
+
+// TestScanStageCopy covers 08 §1.2's capturing and wrap-up copy, the
+// safety note about clicking the window, and the save-failure block.
+func TestScanStageCopy(t *testing.T) {
+	t.Run("capturing", func(t *testing.T) {
+		svc := &fakeService{}
+		m, q := newTestModel(t, Config{Service: svc})
+		tt := ui.NewTester(m.View, 1020, 700)
+		settle(t, m, q, tt)
+		applyAndSettle(t, m, q, tt, snap("s1", 1, true, scan.PhaseCapturing,
+			scan.Counts{Captured: 12}, 0, true, ""))
+		if !tt.HasText("正在扫描 · 已采集 12 件") {
+			t.Fatalf("the capturing stage does not show its count: %q", tt.Texts())
+		}
+		if !tt.HasText("点击窗口本身也会让游戏失焦而停止") {
+			t.Fatalf("the capturing stage lost the safety note: %q", tt.Texts())
+		}
+	})
+
+	t.Run("finalizing remaining", func(t *testing.T) {
+		svc := &fakeService{}
+		m, q := newTestModel(t, Config{Service: svc})
+		tt := ui.NewTester(m.View, 1020, 700)
+		settle(t, m, q, tt)
+		applyAndSettle(t, m, q, tt, snap("s1", 1, true, scan.PhaseFinalizing,
+			scan.Counts{Queued: 3, Running: 1}, 0, true, ""))
+		if !tt.HasText("已停止操作游戏，正在识别剩余 4 件并保存") {
+			t.Fatalf("the finalizing stage does not show the remaining count: %q", tt.Texts())
+		}
+	})
+
+	t.Run("finalizing saving", func(t *testing.T) {
+		svc := &fakeService{}
+		m, q := newTestModel(t, Config{Service: svc})
+		tt := ui.NewTester(m.View, 1020, 700)
+		settle(t, m, q, tt)
+		applyAndSettle(t, m, q, tt, snap("s1", 1, true, scan.PhaseFinalizing,
+			scan.Counts{}, 0, true, ""))
+		if !tt.HasText("已停止操作游戏，正在保存结果") {
+			t.Fatalf("the saving stage does not show its copy: %q", tt.Texts())
+		}
+	})
+
+	t.Run("save failure", func(t *testing.T) {
+		svc := &fakeService{}
+		m, q := newTestModel(t, Config{Service: svc})
+		tt := ui.NewTester(m.View, 1020, 700)
+		settle(t, m, q, tt)
+		applyAndSettle(t, m, q, tt, snap("s1", 1, false, scan.PhaseFinalizing,
+			scan.Counts{Captured: 10}, 2, false, "磁盘已满"))
+		for _, want := range []string{
+			"扫描结果还没有保存",
+			"磁盘已满",
+			"此时不能开始新扫描、不能安装更新，退出会被拒绝。",
+			"重试保存",
+		} {
+			if !tt.HasText(want) {
+				t.Fatalf("the save-failure block lost %q: %q", want, tt.Texts())
+			}
+		}
+	})
 }
 
 // TestResultsTitleForRefusedStart: a history or live record that never
