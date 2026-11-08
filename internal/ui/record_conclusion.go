@@ -190,6 +190,21 @@ func emptyListConclusion(in recordConclusionInput) recordConclusion {
 	}
 }
 
+// terminationNotStarted reports a session that ended during preparation:
+// it never opened input, so its record must say "没有开始", never "没有采集到
+// 任何驱动盘" (which implies a scan operated the game).
+func terminationNotStarted(term *record.Termination) bool {
+	if term == nil || term.Phase != record.PhasePreparing {
+		return false
+	}
+	switch term.Kind {
+	case record.TerminationFailed, record.TerminationCancelled:
+		return true
+	default:
+		return false
+	}
+}
+
 // listFaultConclusion is the list's fault wording, including the preparing
 // phase's "没有开始" variant.
 func listFaultConclusion(in recordConclusionInput) recordConclusion {

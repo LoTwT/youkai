@@ -54,7 +54,17 @@ func (m *Model) focusPageContent(c *ui.Context, direction int) {
 			m.focusNavRail(c)
 			return
 		}
-		m.scanActionRef.Focus(c)
+		// Never park the keyboard on a disabled start: the first row that
+		// needs the user, then 重新检查, and only a ready start button.
+		if item := m.readinessPrimaryAction(); item != "" {
+			m.scanRowRef.Focus(c)
+			return
+		}
+		if m.scanStartReady() {
+			m.scanActionRef.Focus(c)
+			return
+		}
+		m.scanRefreshRef.Focus(c)
 	case pageSettings:
 		if direction < 0 {
 			m.focusNavRail(c)

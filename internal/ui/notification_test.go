@@ -284,6 +284,7 @@ func TestPrepareTimeoutSendsOnlyTheResult(t *testing.T) {
 	preparing := snap("s1", 1, true, scan.PhasePreparing, scan.Counts{}, 0, false, "")
 	m.Apply(preparing)
 	timeout := snap("s1", 2, false, scan.PhaseEnded, scan.Counts{}, 0, false, "")
+	timeout.Scan.InputOpened = false
 	timeout.Scan.End = scan.EndFailed
 	timeout.Scan.Trigger = &scan.Trigger{Kind: scan.TriggerFault, Code: "prepareTimeout", Phase: scan.PhasePreparing}
 	m.Apply(timeout)
@@ -305,6 +306,7 @@ func TestUserStopDuringPreparationReportsTheStop(t *testing.T) {
 	m, _, got, q := notificationModel(t)
 	m.Apply(snap("s1", 1, true, scan.PhasePreparing, scan.Counts{}, 0, false, ""))
 	stopped := snap("s1", 2, false, scan.PhaseEnded, scan.Counts{}, 0, false, "")
+	stopped.Scan.InputOpened = false
 	stopped.Scan.End = scan.EndCancelled
 	stopped.Scan.Trigger = &scan.Trigger{Kind: scan.TriggerUser, Code: scan.CodeUserCancelled}
 	m.Apply(stopped)

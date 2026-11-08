@@ -11,7 +11,6 @@ import (
 	"testing"
 
 	"github.com/LoTwT/youkai/internal/record"
-	"github.com/LoTwT/youkai/internal/scan"
 )
 
 func TestSessionTerminationNotice(t *testing.T) {
@@ -39,9 +38,16 @@ func TestSessionTerminationNotice(t *testing.T) {
 		{
 			name:     "failed preparing",
 			term:     &record.Termination{Kind: record.TerminationFailed, Code: "pageUnverified", Phase: record.PhasePreparing},
-			rows:     3,
-			want:     "扫描失败：游戏页面不是驱动盘仓库页。请打开驱动盘仓库页后重新开始扫描。（准备阶段）",
+			rows:     0,
+			want:     "没有开始：游戏页面不是驱动盘仓库页。请打开驱动盘仓库页后重新开始扫描。",
 			wantKind: record.TerminationFailed,
+			wantOK:   true,
+		},
+		{
+			name:     "cancelled preparing",
+			term:     &record.Termination{Kind: record.TerminationCancelled, Code: "userCancelled", Phase: record.PhasePreparing},
+			want:     "没有开始：已手动停止",
+			wantKind: record.TerminationCancelled,
 			wantOK:   true,
 		},
 		{
@@ -81,6 +87,17 @@ func TestSessionTerminationNotice(t *testing.T) {
 				t.Fatalf("notice = %q/%q/%v, want %q/%q/%v", got, kind, ok, tc.want, tc.wantKind, tc.wantOK)
 			}
 		})
+	}
+}
+
+func TestNotStartedEmptyResultsText(t *testing.T) {
+	m, _ := newTestModel(t, Config{Service: &fakeService{}})
+	m.rec = &RecordView{Shell: record.SessionShell{Termination: &record.Termination{
+		Kind: record.TerminationFailed, Code: "integrityMismatch", Phase: record.PhasePreparing,
+	}}}
+	got := m.emptyResultsTextForTermination()
+	if got != "没有已保存的条目。" {
+		t.Fatalf("empty results text = %q, want the no-saved-items wording", got)
 	}
 }
 
@@ -232,24 +249,10 @@ func TestSessionTerminationNoticeUsesFailureParams(t *testing.T) {
 	if !ok || kind != record.TerminationFailed {
 		t.Fatalf("notice = %q/%q/%v", got, kind, ok)
 	}
-	for _, want := range []string{"扫描失败：", "2560×1440", "1920×1080", "准备阶段", "未保留任何条目"} {
+	for _, want := range []string{"没有开始：", "2560×1440", "1920×1080"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("notice %q missing %q", got, want)
 		}
-	}
-}
-
-func TestTriggerTextLocalizesKnownFault(t *testing.T) {
-	trigger := scan.Trigger{
-		Kind: scan.TriggerFault, Code: "integrityMismatch", Phase: scan.PhasePreparing,
-		Params: map[string]string{"target": "high", "self": "medium"},
-	}
-	got := triggerText(trigger)
-	if !strings.Contains(got, "以管理员身份运行") {
-		t.Fatalf("trigger text = %q, want the Chinese permission prompt", got)
-	}
-	if strings.Contains(got, "integrityMismatch") {
-		t.Fatalf("trigger text leaks the raw code: %q", got)
 	}
 }
 

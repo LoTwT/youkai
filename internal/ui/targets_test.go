@@ -47,10 +47,10 @@ func TestViewTargetNotFound(t *testing.T) {
 	tt := ui.NewTester(m.View, 1020, 700)
 	settle(t, m, q, tt)
 
-	if !tt.HasText("未找到《绝区零》窗口。请启动游戏并保持窗口可见，然后点“重新检查”。") {
+	if !tt.HasText("未找到《绝区零》窗口 → 启动游戏并打开驱动盘仓库页") {
 		t.Fatalf("the not-found state does not show: %q", tt.Texts())
 	}
-	if !tt.HasText("未找到《绝区零》窗口，请启动游戏后点“重新检查”。") {
+	if !tt.HasText("未找到可扫描的游戏窗口。") {
 		t.Fatalf("the start's refusal reason does not show: %q", tt.Texts())
 	}
 	if err := tt.Click("开始扫描"); err != nil {
@@ -71,14 +71,14 @@ func TestViewSingleCandidateNeedsConfirmation(t *testing.T) {
 	tt := ui.NewTester(m.View, 1020, 700)
 	settle(t, m, q, tt)
 
-	if !tt.HasText("已找到 1 个窗口，请选择要扫描的一个。") {
+	if !tt.HasText("已找到 1 个窗口 → 请确认要扫描的一个") {
 		t.Fatalf("the candidate count does not show: %q", tt.Texts())
 	}
 	label := targetLabel(cand)
 	if !tt.HasText(label) {
 		t.Fatalf("the unique candidate is not shown: %q", tt.Texts())
 	}
-	if !tt.HasText("请选择要扫描的游戏窗口。") {
+	if !tt.HasText("请先确认要扫描的游戏窗口。") {
 		t.Fatalf("the unconfirmed-target reason does not show: %q", tt.Texts())
 	}
 	if err := tt.Click("开始扫描"); err != nil {
@@ -119,7 +119,7 @@ func TestViewTwoCandidatesRequireAChoice(t *testing.T) {
 	tt := ui.NewTester(m.View, 1020, 700)
 	settle(t, m, q, tt)
 
-	if !tt.HasText("已找到 2 个窗口，请选择要扫描的一个。") {
+	if !tt.HasText("找到 2 个窗口 → 请选择要扫描的一个") {
 		t.Fatalf("the candidate count does not show: %q", tt.Texts())
 	}
 	if !tt.HasText(targetLabel(first)) || !tt.HasText(targetLabel(second)) {
@@ -176,7 +176,7 @@ func TestViewTargetRefreshClearsVanishedChoice(t *testing.T) {
 	if m.targetReady() {
 		t.Fatal("the start must stay disabled after the confirmed window vanished")
 	}
-	if !tt.HasText("已找到 1 个窗口，请选择要扫描的一个。") {
+	if !tt.HasText("已找到 1 个窗口 → 请确认要扫描的一个") {
 		t.Fatalf("the refreshed count does not show: %q", tt.Texts())
 	}
 }
@@ -185,16 +185,17 @@ func TestViewTargetRefreshClearsVanishedChoice(t *testing.T) {
 // raw internal error out of the UI, and keeps the start disabled until a
 // check succeeds.
 func TestViewTargetDiscoveryFailure(t *testing.T) {
-	svc := &fakeService{targetsErr: errString("枚举失败")}
+	svc := &fakeService{readiness: readinessWith(app.ReadinessCheck{
+		Item: app.ReadinessTargetClient, Verdict: app.ReadinessUnknown,
+		Current: "enumerationFailed=true", Required: "confirmed=1",
+		FaultCode: "observationFailed",
+	})}
 	m, q := newTestModel(t, Config{Service: svc, ScanSource: targetSource()})
 	tt := ui.NewTester(m.View, 1020, 700)
 	settle(t, m, q, tt)
 
-	if !tt.HasText(targetDiscoveryFailedText) {
+	if !tt.HasText("查找游戏窗口失败") || !tt.HasText("怎么做："+targetDiscoveryFailedAction) {
 		t.Fatalf("the discovery failure does not show: %q", tt.Texts())
-	}
-	if tt.HasText("枚举失败") {
-		t.Fatalf("the raw discovery error reached the UI: %q", tt.Texts())
 	}
 	if err := tt.Click("开始扫描"); err != nil {
 		t.Fatal(err)
@@ -209,19 +210,24 @@ func TestViewTargetDiscoveryFailure(t *testing.T) {
 // window whose process cannot be opened (the game runs elevated) must ask
 // for the same privileges, never claim the game is not running.
 func TestViewElevatedGameSuggestsAdmin(t *testing.T) {
-	svc := &fakeService{targetsAccessDenied: 1}
+	svc := &fakeService{targetsAccessDenied: 1, readiness: readinessWith(
+		app.ReadinessCheck{Item: app.ReadinessTargetClient, Verdict: app.ReadinessUnknown, Current: "candidates=0 denied=1 unreadable=0", Required: "confirmed=1"},
+		app.ReadinessCheck{Item: app.ReadinessAdministrator, Verdict: app.ReadinessUnsatisfied,
+			Current: "target=unreadable self=medium", Required: "target<=self",
+			FaultCode: "integrityMismatch", FaultParams: map[string]string{"target": "unreadable", "self": "medium"}},
+	)}
 	m, q := newTestModel(t, Config{Service: svc, ScanSource: targetSource()})
 	tt := ui.NewTester(m.View, 1020, 700)
 	settle(t, m, q, tt)
 
-	if !tt.HasText(targetElevatedText()) {
+	if !tt.HasText("无法读取游戏窗口（游戏以管理员身份运行）") {
 		t.Fatalf("the elevated-game hint does not show: %q", tt.Texts())
 	}
-	if tt.HasText(targetNotFoundText) {
+	if tt.HasText("未找到《绝区零》窗口 → 启动游戏并打开驱动盘仓库页") {
 		t.Fatalf("an unreadable elevated window was reported as not found: %q", tt.Texts())
 	}
-	if !tt.HasText(faultCauseText("integrityMismatch", nil)) {
-		t.Fatalf("the start's refusal reason does not show: %q", tt.Texts())
+	if !tt.HasText("为什么："+faultCauseText("integrityMismatch", nil)) || !tt.HasText("退出 youkai") {
+		t.Fatalf("the permission row does not carry the administrator action: %q", tt.Texts())
 	}
 	if err := tt.Click("开始扫描"); err != nil {
 		t.Fatal(err)
@@ -241,13 +247,13 @@ func TestViewUnreadableGameShowsGenericCopy(t *testing.T) {
 	tt := ui.NewTester(m.View, 1020, 700)
 	settle(t, m, q, tt)
 
-	if !tt.HasText(targetUnreadableText) {
+	if !tt.HasText("无法读取游戏进程信息") || !tt.HasText("怎么做："+targetUnreadableText) {
 		t.Fatalf("the unreadable-game copy does not show: %q", tt.Texts())
 	}
-	if tt.HasText(targetElevatedText()) {
+	if tt.HasText("可能以管理员身份运行") {
 		t.Fatalf("an elevated youkai was told to run as administrator: %q", tt.Texts())
 	}
-	if tt.HasText(targetNotFoundText) {
+	if tt.HasText("未找到《绝区零》窗口 → 启动游戏并打开驱动盘仓库页") {
 		t.Fatalf("an unreadable game window was reported as not found: %q", tt.Texts())
 	}
 	if err := tt.Click("开始扫描"); err != nil {
@@ -271,8 +277,8 @@ func TestViewReadableCandidateWinsOverAccessDenied(t *testing.T) {
 	if !tt.HasText(targetLabel(cand)) {
 		t.Fatalf("the readable candidate is not listed: %q", tt.Texts())
 	}
-	if tt.HasText(targetElevatedText()) {
-		t.Fatalf("the elevated hint replaced a usable candidate list: %q", tt.Texts())
+	if tt.HasText("无法读取游戏窗口") {
+		t.Fatalf("the denied hint replaced a usable candidate list: %q", tt.Texts())
 	}
 }
 
@@ -311,14 +317,51 @@ func TestViewStartTargetGoneMapsAndRefreshes(t *testing.T) {
 	if tt.HasText("gone or was replaced") {
 		t.Fatalf("the raw target-gone error reached the UI: %q", tt.Texts())
 	}
-	if !tt.HasText(targetNotFoundText) {
+	if !tt.HasText("未找到《绝区零》窗口 → 启动游戏并打开驱动盘仓库页") {
 		t.Fatalf("the candidate list was not refreshed: %q", tt.Texts())
 	}
 	if m.targetReady() {
 		t.Fatal("the start must stay disabled after the confirmed window vanished")
 	}
-	if svc.discoveries < 2 {
-		t.Fatalf("discoveries = %d, want a refresh after the refused start", svc.discoveries)
+	if svc.readinessCount() < 2 {
+		t.Fatalf("readiness checks = %d, want a refresh after the refused start", svc.readinessCount())
+	}
+}
+
+// TestViewStartDiscoveryFailureKeepsCause: when the start is refused because
+// discovery failed and the following re-check finds the confirmed window
+// again, the target row reads normally. The reason left of the start button
+// must still carry the cause, not only the recovery action.
+func TestViewStartDiscoveryFailureKeepsCause(t *testing.T) {
+	cand := testTarget(0xB0ABE, 42, `C:\Games\ZZZ\ZenlessZoneZero.exe`)
+	svc := &fakeService{
+		targets: []app.TargetCandidate{cand},
+		startFn: func(app.StartRequest) (app.StartOutcome, error) {
+			return app.StartOutcome{}, app.ErrTargetDiscoveryFailed
+		},
+	}
+	m, q := newTestModel(t, Config{Service: svc, ScanSource: targetSource()})
+	tt := ui.NewTester(m.View, 1020, 700)
+	settle(t, m, q, tt)
+	if err := tt.Click(targetLabel(cand)); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
+	if err := tt.Click("开始扫描"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
+
+	// The re-check after the refusal found the same window; the row itself
+	// no longer shows a failure.
+	if !m.targetReady() {
+		t.Fatal("the re-check lost the confirmed window")
+	}
+	if got := m.scanStartBlockedReason(); got != targetDiscoveryFailedText {
+		t.Fatalf("start reason = %q, want the full discovery failure", got)
+	}
+	if !tt.HasText(targetDiscoveryFailedText) {
+		t.Fatalf("the discovery failure's cause is missing beside the start: %q", tt.Texts())
 	}
 }
 
@@ -363,7 +406,8 @@ func TestViewFixedTargetSourceSkipsSelection(t *testing.T) {
 	if svc.discoveries != 0 {
 		t.Fatalf("a fixed-target source discovered %d times", svc.discoveries)
 	}
-	if strings.Contains(strings.Join(tt.Texts(), "\n"), "目标客户端") {
+	if strings.Contains(strings.Join(tt.Texts(), "\n"), "请确认要扫描的一个") ||
+		strings.Contains(strings.Join(tt.Texts(), "\n"), "请选择要扫描的一个") {
 		t.Fatalf("a fixed-target source shows the target list: %q", tt.Texts())
 	}
 	if err := tt.Click("开始扫描"); err != nil {

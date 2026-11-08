@@ -1,20 +1,9 @@
 package ui
 
 import (
-	"fmt"
-
 	"github.com/LoTwT/youkai/internal/scan"
 	"github.com/egoist/mygo/ui"
 )
-
-// scanHint is the confirmed foreground-scan notice (T1 §2), shown in the
-// prepare area at all times.
-const scanHint = "扫描期间会自动操作游戏。请保持游戏窗口在前台，不要切换应用或手动操作游戏。扫描完成或停止后，即可校对结果。"
-
-// stopMeans is how a scan can be stopped in this build: the window's stop
-// button (a global shortcut arrives with M2's platform work, and nothing
-// unregistered is claimed).
-const stopMeans = "停止方式：点击本窗口的“停止扫描”按钮。"
 
 // View builds the main window's page shell. It runs on the UI thread
 // whenever the window needs a frame and only reads the model; every
@@ -35,132 +24,6 @@ func (m *Model) View(c *ui.Context) {
 	m.viewPages(c)
 }
 
-// prepareArea is the always-present start area: the target choice (when
-// the source discovers windows), the confirmed hint, the stop means and the
-// start button with its state.
-func (m *Model) prepareArea(c *ui.Context, t *ui.Theme) {
-	ui.Column(c).Gap(t.Space(1)).Children(func() {
-		if m.source.TargetSelection {
-			m.targetArea(c, t)
-			ui.Divider(c)
-		}
-		ui.Text(c, scanHint)
-		ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
-			if note := m.startNote(); note != "" {
-				ui.Text(c, note).TextColor(t.TextMuted)
-			}
-		})
-		ui.Text(c, stopMeans).TextColor(t.TextMuted).FontSize(t.FontSize * 0.9)
-	})
-}
-
-// targetArea is the temporary target selection: the game windows the
-// source discovered as a minimal radio list (P-01). A single candidate is
-// shown for confirmation too; the user never starts on an unconfirmed
-// window. The scan page redesign (PR-17) replaces this with the
-// preparation checklist.
-func (m *Model) targetArea(c *ui.Context, t *ui.Theme) {
-	ui.Column(c).Gap(t.Space(1)).Children(func() {
-		ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "目标客户端").FontWeight(600)
-			ui.Box(c).Grow(1)
-			if ui.Button(c, "重新检查").Clicked() {
-				m.refreshTargets()
-			}
-		})
-		switch {
-		case m.targetsLoading:
-			ui.Text(c, "正在查找游戏窗口……").TextColor(t.TextMuted)
-		case m.targetsErr != "":
-			ui.Text(c, m.targetsErr).TextColor(t.Danger)
-		case len(m.targets) == 0 && m.targetsAccessDenied > 0:
-			ui.Text(c, targetElevatedText()).TextColor(t.Danger)
-		case len(m.targets) == 0 && m.targetsUnreadable > 0:
-			ui.Text(c, targetUnreadableText).TextColor(t.Danger)
-		case len(m.targets) == 0:
-			ui.Text(c, targetNotFoundText).TextColor(t.TextMuted)
-		default:
-			ui.Textf(c, "已找到 %d 个窗口，请选择要扫描的一个。", len(m.targets)).TextColor(t.TextMuted)
-			ui.RadioGroup(c, func() {
-				for i, candidate := range m.targets {
-					ui.Radio(c, &m.targetChoice, i, targetLabel(candidate))
-				}
-			}).Label("目标客户端")
-		}
-	})
-}
-
-// startNote explains the start button's state beside it: the wired source,
-// the target choice when the source discovers windows, the refusal while a
-// session holds the active slot, the failure of the last attempt, or the
-// exit in progress.
-func (m *Model) startNote() string {
-	switch {
-	case m.exitState == exitRunning:
-		return "正在退出，不能再开始扫描。"
-	case m.startErr != "":
-		if m.source.TargetSelection {
-			return m.startErr
-		}
-		return "开始失败：" + m.startErr
-	case m.snap.Busy:
-		return fmt.Sprintf("扫描进行中（会话 %s），结束后可再次开始。", m.snap.SessionID)
-	case m.updateRestartImminent():
-		return "正在安装更新，应用稍后将自动重启；暂不能开始扫描。"
-	case m.startReqID != "":
-		return "正在开始扫描……"
-	case !m.source.Available:
-		return "暂无可用扫描源：" + m.source.Reason
-	case m.source.TargetSelection && m.targetsLoading:
-		return "正在查找游戏窗口……"
-	case m.source.TargetSelection && m.targetsErr != "":
-		return m.targetsErr
-	case m.source.TargetSelection && len(m.targets) == 0 && m.targetsAccessDenied > 0:
-		return faultCauseText("integrityMismatch", nil)
-	case m.source.TargetSelection && len(m.targets) == 0 && m.targetsUnreadable > 0:
-		return targetUnreadableText
-	case m.source.TargetSelection && len(m.targets) == 0:
-		return "未找到《绝区零》窗口，请启动游戏后点“重新检查”。"
-	case m.source.TargetSelection && m.chosenTarget() == nil:
-		return "请选择要扫描的游戏窗口。"
-	case m.source.Label != "":
-		return "扫描源：" + m.source.Label
-	default:
-		return ""
-	}
-}
-
-// progressArea shows the session's phase, the provable counts, how it
-// ended and the save state, with the idempotent stop button.
-func (m *Model) progressArea(c *ui.Context, t *ui.Theme) {
-	snap := m.snap
-	ui.Column(c).Gap(t.Space(1)).Children(func() {
-		ui.Row(c).Gap(t.Space(3)).AlignItems(ui.Center).Children(func() {
-			ui.Textf(c, "会话 %s · 阶段：%s", snap.SessionID, phaseText(snap.Scan.Phase))
-			if end := endText(snap.Scan); end != "" {
-				ui.Text(c, "结束："+end)
-			}
-			ui.Box(c).Grow(1)
-		})
-		ui.Text(c, countsText(snap.Scan.Counts))
-		ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
-			if snap.SaveError != "" {
-				ui.Text(c, "保存失败："+snap.SaveError+"（结果尚未保存）").TextColor(t.Danger)
-				// The exit-failure dialog owns the retry while it is open;
-				// a second copy behind the modal would also be the first
-				// label a keyboard or accessibility pass finds.
-				if !m.exitFailureDialogOpen && ui.Button(c, "重试保存").Clicked() {
-					m.RetrySave()
-				}
-			} else if snap.SavePending {
-				ui.Textf(c, "已保存 %d 条 · 有内容待写入", snap.SavedCount)
-			} else {
-				ui.Textf(c, "已保存 %d 条", snap.SavedCount)
-			}
-		})
-	})
-}
-
 // phaseText renders a session phase. Nothing beyond the phase itself is
 // claimed — no percentage the scan cannot prove.
 func phaseText(p scan.Phase) string {
@@ -176,55 +39,6 @@ func phaseText(p scan.Phase) string {
 	default:
 		return string(p)
 	}
-}
-
-// countsText renders the captured count and the five processing states.
-func countsText(counts scan.Counts) string {
-	return fmt.Sprintf("已采集 %d · 已产出 %d · 失败 %d · 未处理 %d · 排队 %d · 识别中 %d",
-		counts.Captured, counts.Produced, counts.Failed, counts.Unprocessed,
-		counts.Queued, counts.Running)
-}
-
-// endText renders how a session ended, from the kernel's first trigger;
-// empty while it still runs.
-func endText(s scan.Snapshot) string {
-	if s.Phase != scan.PhaseEnded || s.End == "" {
-		return ""
-	}
-	trigger := ""
-	if s.Trigger != nil {
-		trigger = "（" + triggerText(*s.Trigger) + "）"
-	}
-	switch s.End {
-	case scan.EndCompleted:
-		return "正常结束" + trigger
-	case scan.EndCancelled:
-		return "用户取消" + trigger
-	case scan.EndFailed:
-		return "故障结束" + trigger
-	default:
-		return string(s.End) + trigger
-	}
-}
-
-func triggerText(trigger scan.Trigger) string {
-	kind := "故障"
-	if trigger.Kind == scan.TriggerUser {
-		kind = "用户"
-	}
-	if trigger.Kind == scan.TriggerFault {
-		if detail := failureText(trigger.Code, trigger.Params); detail != "" {
-			return fmt.Sprintf("%s停止，阶段：%s，%s", kind, phaseText(trigger.Phase), detail)
-		}
-	}
-	text := fmt.Sprintf("%s停止，阶段：%s", kind, phaseText(trigger.Phase))
-	if trigger.Message != "" {
-		text += "，" + trigger.Message
-	}
-	if trigger.Code != "" {
-		text += "（" + trigger.Code + "）"
-	}
-	return text
 }
 
 // exitArea shows the explicit-exit wrap-up's progress, or its failure with

@@ -125,22 +125,22 @@ func TestViewCloseBehaviorPreference(t *testing.T) {
 	}
 }
 
-// TestViewStartAndStopByPhase drives the prepare and progress areas
-// through the phases: the confirmed hint shows, the start button follows
-// availability, a double click cannot issue two starts, the stop button
-// follows the busy state, and only provable counts and the end reason
-// appear.
+// TestViewStartAndStopByPhase drives the scan page through the stages:
+// the checklist replaces the old prepare hint, a double click cannot issue
+// two starts, the stop button follows the busy state, and the stage block
+// shows only provable facts.
 func TestViewStartAndStopByPhase(t *testing.T) {
+	now := time.Date(2026, 11, 8, 10, 0, 0, 0, time.UTC)
 	svc := &fakeService{}
-	m, q := newTestModel(t, Config{Service: svc})
+	m, q := newTestModel(t, Config{Service: svc, Now: func() time.Time { return now }})
 	tt := ui.NewTester(m.View, 1020, 700)
 	settle(t, m, q, tt)
 
-	if !tt.HasText(scanHint) {
-		t.Error("the confirmed scan hint does not show")
+	if !tt.HasText("准备检查") {
+		t.Fatalf("the preparation checklist does not show: %q", tt.Texts())
 	}
-	if !tt.HasText("停止方式：点击本窗口的“停止扫描”按钮。") {
-		t.Error("the stop means do not show")
+	if !tt.HasText("中途停止 " + shortcutStopScan) {
+		t.Fatalf("the bottom bar does not name the stop hotkey: %q", tt.Texts())
 	}
 
 	// Idle with a source: a second start while the request is in flight
@@ -154,11 +154,14 @@ func TestViewStartAndStopByPhase(t *testing.T) {
 		t.Fatalf("the start issued %d requests for one click burst", len(svc.starts))
 	}
 
-	// Preparing: the start is unavailable, the stop works.
-	applyAndSettle(t, m, q, tt, snap("s1", 1, true, scan.PhasePreparing,
-		scan.Counts{}, 0, true, ""))
-	if !tt.HasText("阶段：准备中") {
-		t.Error("the preparing phase does not show")
+	// Preparing: countdown, waiting copy, activation result, stop works.
+	preparing := snap("s1", 1, true, scan.PhasePreparing, scan.Counts{}, 0, true, "")
+	preparing.Scan.PrepareDeadline = now.Add(30 * time.Second)
+	applyAndSettle(t, m, q, tt, preparing)
+	for _, want := range []string{"30 秒", "请在倒计时结束前让游戏保持在前台", "正在等待游戏就绪", "请确保 youkai 没有盖住游戏窗口"} {
+		if !tt.HasText(want) {
+			t.Errorf("the preparing stage does not show %q: %q", want, tt.Texts())
+		}
 	}
 	if m.scanStartReady() {
 		t.Error("the start is offered during preparation")
@@ -171,11 +174,14 @@ func TestViewStartAndStopByPhase(t *testing.T) {
 		t.Fatalf("during preparation: %d starts, %d stops", len(svc.starts), svc.stops)
 	}
 
-	// Capturing: the counts show as proven facts, no percentage.
+	// Capture: one provable count and no percentage (R-11).
 	applyAndSettle(t, m, q, tt, snap("s1", 2, true, scan.PhaseCapturing,
 		scan.Counts{Captured: 5, Produced: 2, Failed: 1, Unprocessed: 1, Queued: 1}, 0, true, ""))
-	if !tt.HasText("阶段：采集中") || !tt.HasText("已采集 5 · 已产出 2 · 失败 1 · 未处理 1 · 排队 1 · 识别中 0") {
-		t.Errorf("the provable counts do not show: %q", tt.Texts())
+	if !tt.HasText("正在扫描") || !tt.HasText("已采集 5 件") {
+		t.Errorf("the capture stage does not show its count: %q", tt.Texts())
+	}
+	if tt.HasText("已产出 2") || tt.HasText("排队 1") {
+		t.Errorf("the capture stage leaks internal progress: %q", tt.Texts())
 	}
 	if err := tt.Click("停止扫描"); err != nil {
 		t.Fatal(err)
@@ -185,30 +191,36 @@ func TestViewStartAndStopByPhase(t *testing.T) {
 		t.Fatalf("the stop button stopped working while busy: %d", svc.stops)
 	}
 
-	// Ended: the end reason with its first trigger shows, the stop is
-	// disabled, and a new start is possible again with a fresh request
-	// identity.
-	ended := snap("s1", 3, false, scan.PhaseEnded,
+	// Finalizing: the stop is over, recognition and saving remain.
+	applyAndSettle(t, m, q, tt, snap("s1", 3, true, scan.PhaseFinalizing,
+		scan.Counts{Captured: 5, Produced: 3, Queued: 2}, 3, true, ""))
+	if !tt.HasText("已停止操作游戏，正在识别剩余 2 件并保存") {
+		t.Errorf("the finalizing stage does not show: %q", tt.Texts())
+	}
+
+	// Ended after input opened: the page returns to the checklist and the
+	// summary opens; a new attempt gets a fresh request identity.
+	ended := snap("s1", 4, false, scan.PhaseEnded,
 		scan.Counts{Captured: 5, Produced: 3, Failed: 1, Unprocessed: 1}, 5, false, "")
 	ended.Scan.End = scan.EndCancelled
 	ended.Scan.Trigger = &scan.Trigger{
 		Kind: scan.TriggerUser, Code: scan.CodeUserCancelled, Phase: scan.PhaseCapturing,
 	}
 	applyAndSettle(t, m, q, tt, ended)
+	if m.displayPage() != pageResults || m.recordTab != recordTabSummary {
+		t.Fatalf("the ended scan shows page %v tab %v, want the summary", m.displayPage(), m.recordTab)
+	}
 	m.page = pageScan
 	tt.Frame()
-	if !tt.HasText("结束：用户取消（用户停止，阶段：采集中（userCancelled））") {
-		t.Errorf("the end reason does not show: %q", tt.Texts())
-	}
-	if err := tt.Click("停止扫描"); err == nil {
-		t.Fatal("the idle page still offers a stop after the session ended")
+	if !tt.HasText("准备检查") {
+		t.Fatalf("the scan page did not return to the checklist: %q", tt.Texts())
 	}
 	if err := tt.Click("开始扫描"); err != nil {
 		t.Fatal(err)
 	}
 	drainAll(t, m, q)
 	if svc.stops != 2 {
-		t.Fatalf("the disabled stop button still stopped: %d", svc.stops)
+		t.Fatalf("the idle page still stopped a session: %d", svc.stops)
 	}
 	if len(svc.starts) != 2 || svc.starts[0].ID == svc.starts[1].ID {
 		t.Fatalf("a new attempt after an ended session: %+v", svc.starts)
@@ -224,7 +236,10 @@ func TestViewStartWithoutSource(t *testing.T) {
 	m, q := newTestModel(t, Config{Service: svc, ScanSource: ScanSourceInfo{Reason: reason}})
 	tt := ui.NewTester(m.View, 1020, 700)
 	settle(t, m, q, tt)
-	if !tt.HasText("暂无可用扫描源：" + reason) {
+	if !tt.HasText("这个版本还不能扫描") || !tt.HasText(reason) {
+		t.Errorf("the no-source state does not show its reason: %q", tt.Texts())
+	}
+	if !tt.HasText("这个版本还不能扫描。") {
 		t.Errorf("the start's refusal reason does not show: %q", tt.Texts())
 	}
 	if err := tt.Click("开始扫描"); err != nil {
@@ -486,8 +501,11 @@ func TestViewSaveFailureShowsRetry(t *testing.T) {
 
 	applyAndSettle(t, m, q, tt, snap("s1", 3, false, scan.PhaseEnded,
 		scan.Counts{Captured: 4, Produced: 4}, 2, true, "磁盘已满"))
-	if !tt.HasText("保存失败：磁盘已满（结果尚未保存）") {
+	if !tt.HasText("扫描结果还没有保存") || !tt.HasText("磁盘已满") {
 		t.Fatalf("the save failure does not show: %q", tt.Texts())
+	}
+	if !tt.HasText("已保存 2 条；其余已采集结果尚未保存。") {
+		t.Fatalf("the save failure does not name what is unsaved: %q", tt.Texts())
 	}
 	if tt.HasText("已保存 2 条 · 有内容待写入") {
 		t.Fatal("a failed save showed as merely pending")
@@ -497,10 +515,12 @@ func TestViewSaveFailureShowsRetry(t *testing.T) {
 	// disappears.
 	applyAndSettle(t, m, q, tt, snap("s1", 4, false, scan.PhaseEnded,
 		scan.Counts{Captured: 4, Produced: 4}, 4, false, ""))
-	if !tt.HasText("已保存 4 条") {
-		t.Fatalf("the saved count does not show: %q", tt.Texts())
+	m.page = pageScan
+	tt.Frame()
+	if !tt.HasText("准备检查") {
+		t.Fatalf("the scan page did not return to the checklist: %q", tt.Texts())
 	}
-	if tt.HasText("重试保存") || tt.HasText("保存失败") {
+	if tt.HasText("重试保存") || tt.HasText("扫描结果还没有保存") {
 		t.Fatalf("the retry still shows after a clean save: %q", tt.Texts())
 	}
 }

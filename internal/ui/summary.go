@@ -1069,6 +1069,24 @@ func emptyRecordWording(in recordConclusionInput) summaryWording {
 			action = guidance.action
 		}
 	}
+	// A preparation-stage refusal never scanned anything. Its record says
+	// "没有开始", the same wording the history row uses, so an integrity
+	// refusal cannot read as a completed zero-item scan.
+	if terminationNotStarted(term) {
+		title := "没有开始"
+		switch term.Kind {
+		case record.TerminationFailed:
+			if cause != "" {
+				title += "：" + cause
+			}
+			if action != "" {
+				return summaryWording{Title: title, Supplement: "怎么做：" + action}
+			}
+		case record.TerminationCancelled:
+			title += "：已手动停止"
+		}
+		return summaryWording{Title: title, Supplement: "回到准备检查后重新开始。"}
+	}
 	title := "没有采集到任何驱动盘"
 	supplement := ""
 	switch {

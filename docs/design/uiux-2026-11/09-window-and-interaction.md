@@ -113,7 +113,7 @@ MyGo 通过 `WindowOptions.MinWidth`、`MinHeight`（`window.go:77`）设置最�
 
 ### 4.5 快捷键
 
-快捷键文字按平台显示。首版只有 Windows，所以界面上只出现 Windows 写法；修饰键写 `Ctrl`、`Alt`、`Shift`，用 `+` 连接，不出现 `⌘⌃⌥⇧`（现状 H1、D-02）。写法集中在一处生成，mac 后续版本再接入（[06 §3 第 7 条](06-proposals-and-phase2.md#3-给第二阶段的输入)）。
+快捷键文字按平台显示。首版只有 Windows，所以界面上只出现 Windows 写法；修饰键写 `Ctrl`、`Alt`、`Shift`，用 `+` 连接，不出现 `⌘⌃⌥⇧`（H1；D-02 已由 PR-17 关闭）。写法集中在一处生成，mac 后续版本再接入（[06 §3 第 7 条](06-proposals-and-phase2.md#3-给第二阶段的输入)）。
 
 | 操作 | Windows | 作用范围 | 与现状的差异 |
 | --- | --- | --- | --- |

@@ -98,6 +98,10 @@ func (m *Model) resultsTitle() string {
 	if m.rec.EvidenceRemoved {
 		evidence = "，截图已删除或缺失"
 	}
+	notStarted := terminationNotStarted(m.rec.Shell.Termination)
+	if m.rec.Live && notStarted {
+		return fmt.Sprintf("结果：没有开始（已保存 %d 条%s）", len(m.rec.Rows), evidence)
+	}
 	if m.rec.Live {
 		return fmt.Sprintf("结果：本次扫描（已保存 %d 条%s）", len(m.rec.Rows), evidence)
 	}

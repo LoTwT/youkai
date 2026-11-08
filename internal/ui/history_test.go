@@ -891,7 +891,7 @@ func TestRecordConclusion(t *testing.T) {
 			wantOutcome:       recordOutcomeEmpty,
 			tag:               "失败",
 			text:              "没有开始：30 秒内游戏没有就绪",
-			summaryTitle:      "没有采集到任何驱动盘：30 秒内游戏没有就绪",
+			summaryTitle:      "没有开始：30 秒内游戏没有就绪",
 			summarySupplement: "怎么做：请让游戏保持在前台并停在驱动盘仓库页，然后重新开始扫描。",
 		},
 		{

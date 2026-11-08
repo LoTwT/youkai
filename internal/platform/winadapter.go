@@ -75,6 +75,10 @@ type WinAdapter struct {
 	Now func() time.Time
 	// Log receives diagnostics; nil uses the standard logger.
 	Log *log.Logger
+	// discoveryLogKey remembers the last discovery warning so the
+	// ten-second readiness re-check does not repeat the same line forever.
+	logMu           sync.Mutex
+	discoveryLogKey string
 }
 
 // NewWinAdapter validates the natives and returns the adapter.
@@ -160,9 +164,6 @@ func (a *WinAdapter) DiscoverTargets() (TargetDiscoveryResult, error) {
 	selfLevel, selfErr := a.natives.Integrity.SelfIntegrity()
 	selfKnown := selfErr == nil
 	selfElevated := selfKnown && selfLevel >= windows.IntegrityHigh
-	if selfErr != nil {
-		a.logf("discovery: youkai self integrity unreadable: %v", selfErr)
-	}
 	found, err := windows.DiscoverTargets(a.natives.Win, a.natives.Procs, windows.DiscoverySpec{
 		ImageName:          windows.DefaultGameImageName,
 		ClassNameHint:      windows.DefaultGameWindowClass,
@@ -172,10 +173,34 @@ func (a *WinAdapter) DiscoverTargets() (TargetDiscoveryResult, error) {
 	if err != nil {
 		return TargetDiscoveryResult{}, err
 	}
-	if found.AccessDeniedWindows > 0 || found.UnreadableGameWindows > 0 {
-		a.logf("discovery: unreadable game windows: elevation-hint=%d generic=%d self=%s",
+	// The readiness page re-runs this every ten seconds. Log a warning
+	// once per distinct state instead of once per pass, so an access-denied
+	// game window cannot flood the diagnostic log.
+	state := ""
+	switch {
+	case selfErr != nil && (found.AccessDeniedWindows > 0 || found.UnreadableGameWindows > 0):
+		state = fmt.Sprintf("self=%v denied=%d unreadable=%d",
+			selfErr, found.AccessDeniedWindows, found.UnreadableGameWindows)
+	case selfErr != nil:
+		state = fmt.Sprintf("self=%v", selfErr)
+	case found.AccessDeniedWindows > 0 || found.UnreadableGameWindows > 0:
+		state = fmt.Sprintf("denied=%d unreadable=%d self=%s",
 			found.AccessDeniedWindows, found.UnreadableGameWindows,
 			windows.IntegrityLabel(selfLevel, selfErr))
+	}
+	a.logMu.Lock()
+	changed := state != a.discoveryLogKey
+	a.discoveryLogKey = state
+	a.logMu.Unlock()
+	if changed && state != "" {
+		if selfErr != nil {
+			a.logf("discovery: youkai self integrity unreadable: %v", selfErr)
+		}
+		if found.AccessDeniedWindows > 0 || found.UnreadableGameWindows > 0 {
+			a.logf("discovery: unreadable game windows: elevation-hint=%d generic=%d self=%s",
+				found.AccessDeniedWindows, found.UnreadableGameWindows,
+				windows.IntegrityLabel(selfLevel, selfErr))
+		}
 	}
 	result := TargetDiscoveryResult{
 		AccessDeniedWindows:   found.AccessDeniedWindows,

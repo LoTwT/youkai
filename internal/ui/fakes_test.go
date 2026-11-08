@@ -106,6 +106,13 @@ type fakeService struct {
 	discoveries         int
 	discoverFn          func() (app.TargetDiscoveryResult, error)
 
+	readiness      app.ReadinessReport
+	readinessFn    func(target *app.TargetCandidate) app.ReadinessReport
+	readinessCalls int
+	estimate       app.ScanDurationEstimate
+	estimateErr    error
+	estimateCalls  int
+
 	updateInstalling []bool
 
 	list      []record.RecordInfo
@@ -174,7 +181,104 @@ func (f *fakeService) DiscoverTargets() (app.TargetDiscoveryResult, error) {
 	}, f.targetsErr
 }
 
-// lastStart returns the most recent recorded start request.
+// CheckReadiness records each read-only pass. Without an injected report
+// it claims every check satisfied and carries the fake's candidates, so
+// tests that are not about the checklist keep a usable start page.
+func (f *fakeService) CheckReadiness(target *app.TargetCandidate) app.ReadinessReport {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.readinessCalls++
+	if f.readinessFn != nil {
+		return f.readinessFn(target)
+	}
+	if len(f.readiness.Checks) > 0 || !f.readiness.CheckedAt.IsZero() {
+		result := f.readiness
+		// The fake's candidate fields are its discovery state; tests can
+		// change them without rebuilding the report.
+		result.Candidates = f.targets
+		result.AccessDeniedWindows = f.targetsAccessDenied
+		result.UnreadableGameWindows = f.targetsUnreadable
+		return result
+	}
+	return fakeReadyReport(f.targets, f.targetsAccessDenied, f.targetsUnreadable)
+}
+
+// ScanDurationEstimate answers P-14's expected duration.
+func (f *fakeService) ScanDurationEstimate() (app.ScanDurationEstimate, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.estimateCalls++
+	return f.estimate, f.estimateErr
+}
+
+func (f *fakeService) readinessCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.readinessCalls
+}
+
+// fakeReadyReport is the fake's all-satisfied checklist in the service's
+// row order.
+func fakeReadyReport(candidates []app.TargetCandidate, denied, unreadable int) app.ReadinessReport {
+	at := time.Date(2026, 11, 8, 10, 0, 0, 0, time.UTC)
+	report := app.ReadinessReport{
+		CheckedAt:             at,
+		Candidates:            candidates,
+		AccessDeniedWindows:   denied,
+		UnreadableGameWindows: unreadable,
+	}
+	for _, item := range readinessItems {
+		check := app.ReadinessCheck{Item: item, Verdict: app.ReadinessSatisfied, CheckedAt: at}
+		switch item {
+		case app.ReadinessStopHotkey, app.ReadinessGamePage:
+			check.Verdict = app.ReadinessCheckedAfterStart
+		case app.ReadinessAdministrator:
+			check.Current = "target=medium self=medium"
+			check.Required = "target<=self"
+		case app.ReadinessGameResolution:
+			check.Current = "1920x1080"
+			check.Required = "1920x1080"
+		case app.ReadinessWindowPosition:
+			check.Current = "10,20 1920x1080"
+			check.Required = "workArea=0,0 3840x2160 monitor=0,0 3840x2160"
+		case app.ReadinessDisplayScale:
+			check.Current = "self=perMonitorV2 window=96 monitor=96"
+			check.Required = "self=perMonitorV2 window=monitor"
+		case app.ReadinessDiskSpace:
+			check.Current = "41000000000"
+			check.Required = "1073741824"
+		case app.ReadinessRecognitionResources:
+			check.Current = "present"
+			check.Required = "files=runtime,model"
+		}
+		report.Checks = append(report.Checks, check)
+	}
+	return report
+}
+
+// readinessWith starts from the fake's all-satisfied report and replaces
+// the named rows, so a test states only the conclusions it cares about.
+func readinessWith(overrides ...app.ReadinessCheck) app.ReadinessReport {
+	report := fakeReadyReport(nil, 0, 0)
+	for _, override := range overrides {
+		replaced := false
+		for i := range report.Checks {
+			if report.Checks[i].Item == override.Item {
+				if override.CheckedAt.IsZero() {
+					override.CheckedAt = report.CheckedAt
+				}
+				report.Checks[i] = override
+				replaced = true
+				break
+			}
+		}
+		if !replaced {
+			report.Checks = append(report.Checks, override)
+		}
+	}
+	return report
+}
+
 func (f *fakeService) lastStart() app.StartRequest {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -498,10 +602,11 @@ func snap(session string, rev uint64, busy bool, phase scan.Phase, counts scan.C
 		SavePending: pending,
 		SaveError:   saveErr,
 		Scan: scan.Snapshot{
-			SessionID: scan.ID(session),
-			Revision:  rev,
-			Phase:     phase,
-			Counts:    counts,
+			SessionID:   scan.ID(session),
+			Revision:    rev,
+			Phase:       phase,
+			InputOpened: phase != scan.PhasePreparing,
+			Counts:      counts,
 		},
 	}
 }

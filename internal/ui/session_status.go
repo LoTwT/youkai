@@ -519,6 +519,24 @@ func (m *Model) incompletePositionsNote() string {
 // notice still explains why the record is incomplete.
 func sessionTerminationNotice(term *record.Termination, params map[string]string, interrupted, live bool, rows int) (string, record.TerminationKind, bool) {
 	if term != nil {
+		if terminationNotStarted(term) {
+			// A refusal during preparation is not a scan that failed: use the
+			// same "没有开始" wording as the history row and the summary.
+			text := "没有开始"
+			switch term.Kind {
+			case record.TerminationFailed:
+				if detail := failureText(term.Code, params); detail != "" {
+					text += "：" + detail
+				} else if term.Code != "" {
+					text += "：" + term.Code
+				} else {
+					text += "：原因未知"
+				}
+			case record.TerminationCancelled:
+				text += "：已手动停止"
+			}
+			return text, term.Kind, true
+		}
 		switch term.Kind {
 		case record.TerminationFailed:
 			text := "扫描失败："
@@ -608,6 +626,11 @@ func (m *Model) emptyResultsTextForTermination() string {
 		return ""
 	}
 	term := m.rec.Shell.Termination
+	if terminationNotStarted(term) {
+		// The termination notice above the list already says 没有开始 with
+		// its cause; the empty state only needs to say nothing was saved.
+		return "没有已保存的条目。"
+	}
 	if recordConclusionInterrupted(term, m.rec.Interrupted, m.rec.Live) {
 		return "本次扫描中断，没有已保存的条目。"
 	}

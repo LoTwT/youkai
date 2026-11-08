@@ -1,8 +1,7 @@
 package ui
 
 import (
-	"fmt"
-
+	"github.com/LoTwT/youkai/internal/app"
 	"github.com/LoTwT/youkai/internal/scan"
 	"github.com/egoist/mygo/ui"
 )
@@ -70,6 +69,11 @@ func (m *Model) viewPages(c *ui.Context) {
 		m.lastPage = page
 	}
 	m.registerPageShortcuts(c)
+	if page == pageScan {
+		// Entering the scan page applies the ten-second freshness rule; a
+		// focus or timer event also triggers it while the page stays open.
+		m.refreshReadinessIfStale()
+	}
 	if page == pageResults && m.recordTab == recordTabItems {
 		m.registerResultsShortcuts(c)
 	} else {
@@ -90,7 +94,7 @@ func (m *Model) viewPages(c *ui.Context) {
 		m.navRail(c, t, tok)
 		ui.Divider(c)
 		ui.Column(c).Grow(1).FillHeight().Children(func() {
-			m.pageBody(c, t)
+			m.pageBody(c, t, tok)
 			m.pageActions(c, t, tok)
 			m.reviewNoticePage(c, t)
 			ui.Divider(c)
@@ -203,7 +207,7 @@ func (m *Model) navigatePage(page Page) {
 	m.requestNavigation(navigationRequest{kind: navPage, page: page})
 }
 
-func (m *Model) pageBody(c *ui.Context, t *ui.Theme) {
+func (m *Model) pageBody(c *ui.Context, t *ui.Theme, tok *Tokens) {
 	switch m.displayPage() {
 	case pageResults:
 		m.recordWorkspace(c, t)
@@ -218,14 +222,10 @@ func (m *Model) pageBody(c *ui.Context, t *ui.Theme) {
 			m.settingsPage(c, t)
 		})
 	default:
-		ui.Column(c).Grow(1).Padding(t.Space(3), t.Space(3)).Gap(t.Space(2)).Children(func() {
-			ui.Scroll(c).Grow(1).Children(func() {
+		ui.Column(c).Grow(1).FillHeight().Padding(t.Space(3), t.Space(3)).Children(func() {
+			ui.Scroll(c).Grow(1).MinHeight(0).Children(func() {
 				ui.Column(c).Gap(t.Space(2)).Children(func() {
-					m.prepareArea(c, t)
-					if m.snap.SessionID != "" {
-						ui.Divider(c)
-						m.progressArea(c, t)
-					}
+					m.scanArea(c, t, tok)
 					if m.exitState != exitIdle {
 						ui.Divider(c)
 						m.exitArea(c, t)
@@ -236,17 +236,24 @@ func (m *Model) pageBody(c *ui.Context, t *ui.Theme) {
 	}
 }
 
-// pageActions is the scan page's bottom action bar: start while idle, stop
-// while a session is running. The records workspace keeps its actions in
-// its title bar instead.
+// pageActions is the scan page's bottom action bar: the start facts on the
+// left, the disabled reason and 开始扫描 on the right, or 停止扫描 while a
+// session runs. The bar takes its content height instead of a fixed one so
+// the minimum window keeps every line and the button visible (08 §1.3;
+// T-08 may only wrap or drop the estimate).
 func (m *Model) pageActions(c *ui.Context, t *ui.Theme, tok *Tokens) {
 	if m.displayPage() != pageScan {
 		return
 	}
 	ui.Divider(c)
-	ui.Row(c).Height(t.Space(13)).Background(tok.SurfaceHeader).
-		Padding(0, t.Space(3)).AlignItems(ui.Center).Children(func() {
-		ui.Box(c).Grow(1)
+	ui.Row(c).Background(tok.SurfaceHeader).Padding(t.Space(1.5), t.Space(3)).
+		AlignItems(ui.Center).Gap(t.Space(3)).Children(func() {
+		ui.Column(c).Grow(1).Gap(t.Space(0.5)).Children(func() {
+			ui.Text(c, "中途停止 "+shortcutStopScan).FontSize(t.FontSize * 0.85).TextColor(t.TextMuted)
+			ui.Text(c, "点开始后 30 秒内保持游戏在前台，扫描期间不要操作游戏").
+				FontSize(t.FontSize * 0.85).TextColor(t.TextMuted)
+			ui.Text(c, m.estimateText()).FontSize(t.FontSize * 0.85).TextColor(t.TextMuted)
+		})
 		if m.snap.Busy || m.startReqID != "" {
 			button := ui.Button(c, "停止扫描").TextColor(t.Danger).Bind(&m.scanActionRef)
 			if button.Clicked() {
@@ -254,9 +261,17 @@ func (m *Model) pageActions(c *ui.Context, t *ui.Theme, tok *Tokens) {
 			}
 			return
 		}
+		if reason := m.scanStartBlockedReason(); reason != "" {
+			ui.Text(c, reason).TextColor(t.TextMuted).FontSize(t.FontSize * 0.9).Shrink(1)
+		}
 		button := ui.PrimaryButton(c, "开始扫描").Disabled(!m.scanStartReady()).Bind(&m.scanActionRef)
 		if button.Clicked() {
 			m.requestScanStart()
+		}
+		if m.scanStartReady() && m.readinessFocus && m.readinessFocusStart {
+			button.Focus()
+			m.readinessFocus = false
+			m.readinessFocusStart = false
 		}
 	})
 }
@@ -306,16 +321,60 @@ func (m *Model) statusShortcutText() string {
 			return m.resultShortcutText()
 		}
 	case pageScan:
-		if m.snap.Busy || m.startReqID != "" {
-			return shortcutStopScan + " 停止扫描"
-		}
-		if m.scanStartReady() {
-			return shortcutStartScan + " 开始扫描"
-		}
+		// The bottom action bar already names the stop hotkey and the
+		// estimate; 09 §5.3 keeps further shortcut hints out of the page.
+		return ""
 	}
 	// The records list names no keys: 09 §5.3 keeps shortcut hints out of
 	// the interface text.
 	return ""
+}
+
+// scanStartBlockedReason names why the start button is unavailable, in the
+// order the user meets the conditions: exit and update flows, the service's
+// slot state, page-owned work, the source and target, then the checklist.
+// The text sits left of the button (08 §1, R-14); a busy session shows the
+// stop button instead and never reaches this copy.
+func (m *Model) scanStartBlockedReason() string {
+	switch {
+	case m.exitState == exitRunning || m.exitState == exitDone:
+		return "正在退出，不能再开始扫描。"
+	case m.startErr != "":
+		if m.source.TargetSelection {
+			return m.startErr
+		}
+		return "开始失败：" + m.startErr
+	case m.snap.StartBlocked == app.StartBlockedSaveRetry:
+		return "上次扫描的结果还没有保存，请先重试保存。"
+	case m.snap.StartBlocked == app.StartBlockedUpdateInstall:
+		return "更新正在安装，应用重启前不能开始扫描。"
+	case m.snap.StartBlocked == app.StartBlockedQuitting:
+		return "正在退出，不能再开始扫描。"
+	case m.snap.StartBlocked == app.StartBlockedOccupied:
+		return "上次扫描仍在收尾，等它结束或点“停止扫描”。"
+	case m.updateRestartImminent():
+		return "正在安装更新，应用稍后将自动重启；暂不能开始扫描。"
+	case m.reviewSaving:
+		return "正在保存校对修改，完成前不能开始扫描。"
+	case m.exportBusy():
+		return "正在导出，完成前不能开始扫描。"
+	case !m.source.Available:
+		return "这个版本还不能扫描。"
+	case !m.readinessLoaded:
+		return "正在检查……"
+	case m.startReqID != "":
+		return "正在开始扫描……"
+	default:
+		if reason := m.readinessStartReason(); reason != "" {
+			return reason
+		}
+		if !m.targetReady() {
+			// A target row without its own blocking conclusion must still
+			// explain why the button is disabled.
+			return "请先确认要扫描的游戏窗口。"
+		}
+		return ""
+	}
 }
 
 func (m *Model) pageStatusText() string {
@@ -330,9 +389,13 @@ func (m *Model) pageStatusText() string {
 	case pageSettings:
 		return "设置更改会立即保存"
 	default:
-		if m.snap.SessionID != "" {
-			return fmt.Sprintf("扫描会话 %s · %s", m.snap.SessionID, phaseText(m.snap.Scan.Phase))
+		switch {
+		case m.snap.SaveError != "":
+			return "扫描结果未保存 · 需要重试"
+		case m.snap.Busy:
+			return "扫描" + phaseText(m.snap.Scan.Phase)
+		default:
+			return "就绪 · 自动保存已开启"
 		}
-		return "就绪 · 自动保存已开启"
 	}
 }
