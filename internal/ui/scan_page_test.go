@@ -344,6 +344,32 @@ func TestReadinessFocusRules(t *testing.T) {
 		}
 	})
 
+	t.Run("unreadable target before a later action", func(t *testing.T) {
+		// The target row has a diagnostics control, but copying it cannot
+		// resolve an unreadable process. The row still owns the first-entry
+		// focus, so the keyboard falls back to 重新检查 instead of skipping
+		// to a later row's cleanup action (08 §1's first-unsatisfied rule).
+		svc := &fakeService{
+			targetsUnreadable: 1,
+			readiness: readinessWith(app.ReadinessCheck{
+				Item: app.ReadinessDiskSpace, Verdict: app.ReadinessUnsatisfied,
+				Current: "100000000", Required: "1073741824",
+			}),
+		}
+		m, q := newTestModel(t, Config{Service: svc, ScanSource: targetSource()})
+		tt := ui.NewTester(m.View, 1020, 700)
+		settle(t, m, q, tt)
+		if _, ok := tt.Find("去清理"); !ok {
+			t.Fatalf("the later cleanup action is missing: %q", tt.Texts())
+		}
+		if !tt.Focused("重新检查") {
+			t.Fatalf("the unreadable target does not keep the focus on refresh: %q", tt.Texts())
+		}
+		if tt.Focused("去清理") {
+			t.Fatalf("the focus skipped to the later cleanup action: %q", tt.Texts())
+		}
+	})
+
 	t.Run("display scale diagnostics over refresh", func(t *testing.T) {
 		// A DPI mismatch is youkai's own problem; re-checking cannot fix it,
 		// so the row's diagnostics entry is the place to land.
