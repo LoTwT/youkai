@@ -498,7 +498,7 @@ func (m *Model) clearResultsLocked() {
 	m.selected = -1
 	m.liveSavedShown = 0
 	m.edit = nil
-	m.navPrompt = nil
+	m.abandonNavigationPrompt()
 	m.reviewErr = ""
 	m.clearReviewNotice()
 }
