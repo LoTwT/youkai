@@ -38,9 +38,13 @@ const (
 	// a recovered window must not leave "re-check and choose again" behind.
 	targetGoneText = "确认的游戏窗口已关闭或被替换。"
 	// targetStartFailedText is the generic fallback for any other start
-	// refusal in the installed UI. It claims no recovery action and no
-	// diagnostic entry, because not every refusal is logged.
-	targetStartFailedText = "原因未知。"
+	// refusal in the installed UI. The service logs these refusals with
+	// their raw cause (the scan lock, recognizer creation, record creation
+	// and the source's own preparation); the line sends the user to that
+	// log instead of claiming the cause is unknown. Diagnostics copy is an
+	// allowlisted summary and does not contain youkai.log, so it must not
+	// be named here.
+	targetStartFailedText = "详细原因已写入诊断日志；可在“设置 › 诊断”打开诊断目录查看。"
 )
 
 // chosenTarget returns the confirmed candidate, nil when none is chosen.

@@ -636,7 +636,8 @@ func TestViewStartRefusalGenericFallback(t *testing.T) {
 	}
 	settle(t, m, q, tt)
 
-	if !tt.HasText("上次开始失败：" + targetStartFailedText) {
+	const want = "上次开始失败：详细原因已写入诊断日志；可在“设置 › 诊断”打开诊断目录查看。"
+	if !tt.HasText(want) {
 		t.Fatalf("the generic start copy does not show: %q", tt.Texts())
 	}
 	if tt.HasText("internal detail") {

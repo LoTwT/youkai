@@ -520,6 +520,31 @@ func TestScanStartBlockedReasons(t *testing.T) {
 			t.Fatalf("the old refusal came back after the block cleared: %q %q", m.startErr, tt.Texts())
 		}
 	})
+	t.Run("save retry replaces the last refusal", func(t *testing.T) {
+		svc := &fakeService{startFn: func(app.StartRequest) (app.StartOutcome, error) {
+			return app.StartOutcome{}, errString("refused for the test")
+		}}
+		m, q := newTestModel(t, Config{Service: svc})
+		tt := ui.NewTester(m.View, 1020, 700)
+		settle(t, m, q, tt)
+		m.Start()
+		settle(t, m, q, tt)
+		if !tt.HasText("上次开始失败：refused for the test") {
+			t.Fatalf("the refusal is missing as a past event: %q", tt.Texts())
+		}
+
+		// A previous session's failed final save is newer than this start
+		// attempt; it replaces the past event while it blocks a new start.
+		s := snap("s1", 1, false, scan.PhaseEnded, scan.Counts{}, 0, false, "")
+		s.StartBlocked = app.StartBlockedSaveRetry
+		applyAndSettle(t, m, q, tt, s)
+		if got := m.scanStartBlockedReason(); got != "上次扫描的结果还没有保存，请先重试保存。" {
+			t.Fatalf("the save-retry block is masked by the old refusal: %q", got)
+		}
+		if m.startErr != "" || tt.HasText("上次开始失败") {
+			t.Fatalf("the superseded refusal survived the save-retry block: %q %q", m.startErr, tt.Texts())
+		}
+	})
 	t.Run("quit cleanup remains blocked", func(t *testing.T) {
 		svc := &fakeService{}
 		m, q := newTestModel(t, Config{Service: svc})
@@ -851,27 +876,41 @@ func TestScanStageActivationAndCountdown(t *testing.T) {
 // TestScanPageActionBarFitsMinimumWindow measures the 960×640 contract:
 // with both the current reason and the last start failure on screen, both
 // texts and the start button are fully inside the window at 100%, 125% and
-// 150% text, the button is not pushed out, and a long past event wraps.
-// The last two scales are the T-08 shapes; a real Windows round still
-// confirms the platform's own text metrics.
+// 150% text, the button is not pushed out, and at 150% the past-event line
+// wraps instead of clipping. The failure is the installed UI's longest
+// fallback; the last two scales are the T-08 shapes, and a real Windows
+// round still confirms the platform's own text metrics.
 func TestScanPageActionBarFitsMinimumWindow(t *testing.T) {
-	const longFailure = "app: start: the confirmed game window closed before the scan could begin; the preparation checklist was refreshed after the refusal"
-	wantFailure := "上次开始失败：" + longFailure
+	cand := testTarget(0xB0ABE, 42, `C:\Games\ZZZ\ZenlessZoneZero.exe`)
+	wantFailure := "上次开始失败：" + targetStartFailedText
 	for _, scale := range []float32{1, 1.25, 1.5} {
 		t.Run(fmt.Sprintf("scale_%g", scale), func(t *testing.T) {
-			svc := &fakeService{startFn: func(app.StartRequest) (app.StartOutcome, error) {
-				return app.StartOutcome{}, errString(longFailure)
-			}}
-			m, q := newTestModel(t, Config{Service: svc})
+			svc := &fakeService{
+				targets:   []app.TargetCandidate{cand},
+				readiness: fakeReadyReport([]app.TargetCandidate{cand}, 0, 0),
+				startFn: func(app.StartRequest) (app.StartOutcome, error) {
+					return app.StartOutcome{}, errString("internal detail")
+				},
+			}
+			m, q := newTestModel(t, Config{Service: svc, ScanSource: targetSource()})
 			tt := ui.NewTester(m.View, 960, 640)
 			tt.SetPreferences(ui.Preferences{TextScale: scale, ReduceMotion: true})
 			settle(t, m, q, tt)
+			if err := tt.Click(targetLabel(cand)); err != nil {
+				t.Fatal(err)
+			}
+			settle(t, m, q, tt)
 			m.Start()
 			settle(t, m, q, tt)
-			applyReadinessReport(t, m, q, tt, svc, readinessWith(app.ReadinessCheck{
-				Item: app.ReadinessDiskSpace, Verdict: app.ReadinessUnsatisfied,
-				Current: "100000000", Required: "1073741824",
-			}))
+			report := fakeReadyReport([]app.TargetCandidate{cand}, 0, 0)
+			for i := range report.Checks {
+				if report.Checks[i].Item == app.ReadinessDiskSpace {
+					report.Checks[i].Verdict = app.ReadinessUnsatisfied
+					report.Checks[i].Current = "100000000"
+					report.Checks[i].Required = "1073741824"
+				}
+			}
+			applyReadinessReport(t, m, q, tt, svc, report)
 
 			for _, want := range []string{"中途停止 " + shortcutStopScan, "点开始后 30 秒内保持游戏在前台，扫描期间不要操作游戏"} {
 				if !tt.HasText(want) {
@@ -911,8 +950,8 @@ func TestScanPageActionBarFitsMinimumWindow(t *testing.T) {
 				t.Fatalf("the past failure runs into the button at scale %g: %+v %+v",
 					scale, failureRect, button)
 			}
-			if failureRect.H <= currentRect.H*1.5 {
-				t.Fatalf("the long past failure did not wrap at scale %g: %+v", scale, failureRect)
+			if scale == 1.5 && failureRect.H <= currentRect.H*1.5 {
+				t.Fatalf("the past failure was clipped instead of wrapping at scale %g: %+v", scale, failureRect)
 			}
 			bottom := button.Y + button.H
 			t.Logf("scale %g: current %+v, failure %+v, start button bottom = %.1f DIP, margin %.1f",
