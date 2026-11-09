@@ -13,8 +13,10 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-// readinessClock is the fixed check time the fake report carries; tests
-// compare the header against the same instant instead of a hard-coded zone.
+// readinessClock is the fixed check time the fake report carries. The
+// default test model clock and countdown tests use the same instant, so the
+// freshness rule never compares the report against the wall clock, and the
+// header is compared against the same instant instead of a hard-coded zone.
 func readinessClock() time.Time {
 	return time.Date(2026, 11, 8, 10, 0, 0, 0, time.UTC)
 }
@@ -550,7 +552,7 @@ func (c *testClock) add(d time.Duration) {
 // TestReadinessAutoRecheck covers both triggers: regaining focus and the
 // ten-second timer. A second focus while a check runs must not stack one.
 func TestReadinessAutoRecheck(t *testing.T) {
-	clock := &testClock{t: time.Date(2026, 11, 8, 10, 0, 0, 0, time.UTC)}
+	clock := &testClock{t: readinessClock()}
 	timers := &timerRecorder{}
 	svc := &fakeService{}
 	svc.readinessFn = func(*app.TargetCandidate) app.ReadinessReport {
@@ -588,7 +590,7 @@ func TestReadinessAutoRecheck(t *testing.T) {
 // TestScanStageActivationAndCountdown covers the preparing stage's
 // activation results and the countdown text.
 func TestScanStageActivationAndCountdown(t *testing.T) {
-	now := time.Date(2026, 11, 8, 10, 0, 0, 0, time.UTC)
+	now := readinessClock()
 	svc := &fakeService{}
 	m, q := newTestModel(t, Config{Service: svc, Now: func() time.Time { return now }})
 	tt := ui.NewTester(m.View, 1020, 700)

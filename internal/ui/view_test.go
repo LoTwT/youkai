@@ -130,7 +130,7 @@ func TestViewCloseBehaviorPreference(t *testing.T) {
 // two starts, the stop button follows the busy state, and the stage block
 // shows only provable facts.
 func TestViewStartAndStopByPhase(t *testing.T) {
-	now := time.Date(2026, 11, 8, 10, 0, 0, 0, time.UTC)
+	now := readinessClock()
 	svc := &fakeService{}
 	m, q := newTestModel(t, Config{Service: svc, Now: func() time.Time { return now }})
 	tt := ui.NewTester(m.View, 1020, 700)

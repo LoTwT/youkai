@@ -220,7 +220,7 @@ func (f *fakeService) readinessCount() int {
 // fakeReadyReport is the fake's all-satisfied checklist in the service's
 // row order.
 func fakeReadyReport(candidates []app.TargetCandidate, denied, unreadable int) app.ReadinessReport {
-	at := time.Date(2026, 11, 8, 10, 0, 0, 0, time.UTC)
+	at := readinessClock()
 	report := app.ReadinessReport{
 		CheckedAt:             at,
 		Candidates:            candidates,
