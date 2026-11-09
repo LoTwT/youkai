@@ -1220,6 +1220,9 @@ func TestWinObserveLogsForeignForeground(t *testing.T) {
 		shellPID  = windows.ProcessID(5100)
 	)
 	w := newWinWorld(t)
+	// The session watcher would otherwise observe and log on its own
+	// goroutine while this test reads the buffer without a lock.
+	w.adapter.WatchEvery = time.Hour
 	sess := w.openReady(t)
 	defer sess.Close()
 	var logs bytes.Buffer
@@ -1227,7 +1230,7 @@ func TestWinObserveLogsForeignForeground(t *testing.T) {
 	w.win.mu.Lock()
 	w.win.wnds = append(w.win.wnds,
 		&fakeWnd{hwnd: shellHwnd, pid: shellPID, visible: true, className: "Shell_TrayWnd", title: "private caption"},
-		&fakeWnd{hwnd: otherHwnd, pid: 5200, visible: true, className: "OtherClass"})
+		&fakeWnd{hwnd: otherHwnd, pid: 5200, visible: true, className: "OtherClass", title: "private other caption"})
 	w.win.titleReads = 0
 	w.win.mu.Unlock()
 	w.procs.mu.Lock()
@@ -1250,12 +1253,6 @@ func TestWinObserveLogsForeignForeground(t *testing.T) {
 	setForeground(shellHwnd)
 	if got := count(shellLine); got != 1 {
 		t.Fatalf("lines for a held foreign foreground = %d, want 1:\n%s", got, logs.String())
-	}
-	if strings.Contains(logs.String(), "private") {
-		t.Fatalf("the line leaks a caption or path:\n%s", logs.String())
-	}
-	if w.win.titleReads != 0 {
-		t.Fatalf("title reads = %d, want 0", w.win.titleReads)
 	}
 
 	// A different window and a moment with no foreground are new facts. An
@@ -1280,6 +1277,80 @@ func TestWinObserveLogsForeignForeground(t *testing.T) {
 	setForeground(shellHwnd)
 	if got := count(shellLine); got != 3 {
 		t.Fatalf("shell lines after losing the foreground again = %d, want 3:\n%s", got, logs.String())
+	}
+
+	// The privacy guard applies to every branch above, including an
+	// unnameable process and a window whose caption also says "private".
+	if strings.Contains(logs.String(), "private") {
+		t.Fatalf("the line leaks a caption or path:\n%s", logs.String())
+	}
+	w.win.mu.Lock()
+	titleReads := w.win.titleReads
+	w.win.mu.Unlock()
+	if titleReads != 0 {
+		t.Fatalf("title reads = %d, want 0", titleReads)
+	}
+}
+
+// A lost target is not a foreign foreground: the observation stops before it
+// reads the foreground, so it must not write the no-foreground line for a
+// handle that no longer names the locked target.
+func TestWinObserveLostTargetLogsNoForeground(t *testing.T) {
+	w := newWinWorld(t)
+	w.adapter.WatchEvery = time.Hour
+	sess := w.openReady(t)
+	defer sess.Close()
+	var logs bytes.Buffer
+	w.adapter.Log = log.New(&logs, "", 0)
+
+	// Another window owns the foreground while the target disappears.
+	w.fg.set(windows.HWND(0x53))
+	w.win.mu.Lock()
+	w.win.wnds[0].gone = true
+	w.win.mu.Unlock()
+
+	obs, err := sess.Observe()
+	if err != nil {
+		t.Fatalf("observe: %v", err)
+	}
+	var targetLost bool
+	for _, p := range obs.Problems {
+		if p.Code == CodeTargetLost {
+			targetLost = true
+		}
+	}
+	if obs.Ready || !targetLost {
+		t.Fatalf("a vanished target must report targetLost: %+v", obs)
+	}
+	if strings.Contains(logs.String(), "foreground:") {
+		t.Fatalf("a lost target logged a foreground line:\n%s", logs.String())
+	}
+}
+
+// TestWinObserveEscapesForegroundClass pins the quoted formatting: a window
+// class is arbitrary text from another process, so it must not be able to end
+// the diagnostic line or forge a new one.
+func TestWinObserveEscapesForegroundClass(t *testing.T) {
+	const hostileHwnd = windows.HWND(0x54)
+	w := newWinWorld(t)
+	w.adapter.WatchEvery = time.Hour
+	sess := w.openReady(t)
+	defer sess.Close()
+	var logs bytes.Buffer
+	w.adapter.Log = log.New(&logs, "", 0)
+	w.win.mu.Lock()
+	w.win.wnds = append(w.win.wnds, &fakeWnd{
+		hwnd: hostileHwnd, pid: 5400, visible: true, className: "Evil\nClass",
+	})
+	w.win.mu.Unlock()
+	w.fg.set(hostileHwnd)
+
+	if _, err := sess.Observe(); err != nil {
+		t.Fatalf("observe: %v", err)
+	}
+	out := strings.TrimSuffix(logs.String(), "\n")
+	if strings.Contains(out, "\n") || !strings.Contains(out, `class "Evil\nClass"`) {
+		t.Fatalf("the class control character was not escaped: %q", out)
 	}
 }
 

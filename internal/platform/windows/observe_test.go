@@ -37,6 +37,38 @@ func (w *observeWorld) observe(at time.Time) TargetObservation {
 	return ObserveTarget(w.win, w.procs, w.geo, w.fg, w.locked, w.tracker, at)
 }
 
+// foregroundSequence scripts successive ForegroundWindow reads, so a test can
+// tell one observation apart from a second read during the same observation.
+type foregroundSequence struct {
+	*fakeForeground
+	windows []HWND
+	reads   int
+}
+
+func (f *foregroundSequence) ForegroundWindow() HWND {
+	h := f.windows[f.reads]
+	f.reads++
+	return h
+}
+
+func TestObserveTargetReadsForegroundOnce(t *testing.T) {
+	w := newObserveWorld(t)
+	w.observe(time.Now()) // seed geometry version 1
+	// A second read would see the target and flip the verdict.
+	fg := &foregroundSequence{fakeForeground: &fakeForeground{}, windows: []HWND{555, 7}}
+
+	obs := ObserveTarget(w.win, w.procs, w.geo, fg, w.locked, w.tracker, time.Now())
+	if fg.reads != 1 {
+		t.Fatalf("foreground reads = %d, want 1", fg.reads)
+	}
+	if obs.ForegroundHWND != 555 {
+		t.Fatalf("diagnostic window = %d, want the read window 555", obs.ForegroundHWND)
+	}
+	if obs.Foreground {
+		t.Fatal("the verdict must use the same read as the diagnostic window")
+	}
+}
+
 func TestObserveTargetHealthy(t *testing.T) {
 	w := newObserveWorld(t)
 	at := time.Date(2026, 10, 18, 12, 0, 1, 0, time.UTC)
