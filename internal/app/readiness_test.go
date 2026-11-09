@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/LoTwT/youkai/internal/platform"
-	"github.com/LoTwT/youkai/internal/platform/windows"
 	"github.com/LoTwT/youkai/internal/record"
 )
 
@@ -373,14 +372,11 @@ func TestServiceCheckReadinessLogsFaultChangesOnly(t *testing.T) {
 }
 
 // TestServiceCheckReadinessRedactsHomePaths covers both free-text fields the
-// readiness log carries: a row's platform message and the platform error. A
-// SelectionError for a game under the Windows profile quotes the path with %q,
-// so both reach the log with doubled backslashes.
+// readiness log carries: a row's platform message and the platform error.
+// The target-selection message no longer includes a directory, but redaction
+// remains the fallback for any other message that carries a home path.
 func TestServiceCheckReadinessRedactsHomePaths(t *testing.T) {
-	quoted := (&windows.SelectionError{
-		Kind:       windows.SelectionNoWindow,
-		Executable: `C:\Users\alice\Games\ZenlessZoneZero.exe`,
-	}).Error()
+	quoted := `no top-level window of "C:\Users\alice\Games\ZenlessZoneZero.exe"`
 	assertRedacted := func(t *testing.T, logs string) {
 		t.Helper()
 		if strings.Contains(logs, "alice") {

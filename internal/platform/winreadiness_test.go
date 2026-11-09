@@ -372,6 +372,35 @@ func TestWinReadinessFixedTarget(t *testing.T) {
 	assertReadOnly(t, w)
 }
 
+// TestWinReadinessFixedTargetNamesOnlyTheExecutable pins the readiness log's
+// path-free target message: a configured game under the user's profile must
+// report its executable name, never the directory or profile name. The path
+// uses backslashes on every host, so the extraction cannot rely on the host
+// platform's path separator.
+func TestWinReadinessFixedTargetNamesOnlyTheExecutable(t *testing.T) {
+	w := newWinWorld(t)
+	report, err := w.adapter.CheckReadiness(ReadinessRequest{
+		Target:  TargetSpec{ExecutablePath: `C:\Users\alice\Games\ZenlessZoneZero.exe`},
+		Display: testDisplayPolicy(),
+	})
+	if err != nil {
+		t.Fatalf("check readiness: %v", err)
+	}
+	target := readinessChecks(t, report)[ReadinessTargetClient]
+	if target.Fault == nil || target.Fault.Code != CodeTargetNotFound {
+		t.Fatalf("target = %+v, want a targetNotFound fault", target)
+	}
+	if !strings.Contains(target.Fault.Message, "ZenlessZoneZero.exe") {
+		t.Fatalf("fault message does not name the executable: %q", target.Fault.Message)
+	}
+	for _, hidden := range []string{"Users", "alice", `Games\`} {
+		if strings.Contains(target.Fault.Message, hidden) {
+			t.Fatalf("fault message carries the configured directory %q: %q", hidden, target.Fault.Message)
+		}
+	}
+	assertReadOnly(t, w)
+}
+
 // TestWinReadinessFaultMessagesNeverCarryAWindowTitle pins the privacy side
 // of the readiness log: the app logs the platform fault message after
 // home-path redaction, so a titled window must not put its caption into the

@@ -293,25 +293,20 @@ func commitText(commit string) string {
 
 var (
 	// The user-name segment runs to the next path separator so a name
-	// with spaces is removed whole. Windows profile paths allow any run of
-	// backslashes: SelectionError.Error quotes the executable with %q, so a
-	// path reaches the readiness log with doubled separators.
+	// with spaces is removed whole.
 	unixHomePath = regexp.MustCompile(`(?i)(?:/Users/|/home/)[^/\\]+`)
-	winHomePath  = regexp.MustCompile(`(?i)[A-Za-z]:\\+Users\\+[^\\]+`)
+	winHomePath  = regexp.MustCompile(`(?i)[A-Za-z]:\\Users\\[^\\]+`)
 )
 
 // redactText keeps a one-line diagnostic value free of the user's home
 // directory: macOS and Linux home paths and Windows profile paths become
 // <用户目录>, and the current user's exact home path is replaced even when
-// its parent does not follow those layouts. Windows profile paths are
-// matched with any run of backslashes so quoted error messages are covered;
-// all other text is preserved.
+// its parent does not follow those layouts. All other text is preserved;
+// window titles have no free-form field here to enter through.
 //
-// This redaction is a fallback, not the privacy guarantee. Copied diagnostics
-// are bounded by the field allowlist in DiagnosticsText, which never copies a
-// trigger's message or params; the readiness log never reads another window's
-// title, and redactText only removes home paths from the free text it is
-// allowed to carry.
+// This redaction is a fallback, not the privacy guarantee: the guarantee
+// is the field allowlist in DiagnosticsText, which never copies a
+// trigger's message or params.
 func redactText(text string) string {
 	text = strings.TrimSpace(text)
 	if text == "" {
@@ -326,39 +321,12 @@ func redactText(text string) string {
 	return text
 }
 
-// replaceFold replaces every case-insensitive occurrence of a path with new.
+// replaceFold replaces every case-insensitive occurrence of old with new.
 // Windows commonly spells a path with different case from the value
-// os.UserHomeDir returns, and SelectionError.Error quotes the executable with
-// %q, which doubles every backslash. A Windows path therefore matches any run
-// of backslashes at each separator; a POSIX path keeps its literal separator.
-// Each segment is quoted so a home directory containing regular-expression
-// metacharacters is matched literally.
+// os.UserHomeDir returns.
 func replaceFold(text, old, new string) string {
 	if old == "" {
 		return text
 	}
-	return regexp.MustCompile("(?i)"+foldPathPattern(old)).ReplaceAllString(text, new)
-}
-
-// foldPathPattern turns a home path into a pattern with literal segments whose
-// separators tolerate the escaped spelling of a quoted Windows path.
-// Separators stay in the pattern so a POSIX home directory is still anchored
-// to its leading slash.
-func foldPathPattern(path string) string {
-	separator := `/`
-	if strings.ContainsRune(path, '\\') {
-		separator = `\\+`
-	}
-	var b strings.Builder
-	start := 0
-	for i, r := range path {
-		if r != '/' && r != '\\' {
-			continue
-		}
-		b.WriteString(regexp.QuoteMeta(path[start:i]))
-		b.WriteString(separator)
-		start = i + 1
-	}
-	b.WriteString(regexp.QuoteMeta(path[start:]))
-	return b.String()
+	return regexp.MustCompile("(?i)"+regexp.QuoteMeta(old)).ReplaceAllString(text, new)
 }
