@@ -155,7 +155,7 @@ go build -o winprobe.exe ./tools/winprobe
 - 每次运行的第一行日志写明版本、构建提交（取 `debug.ReadBuildInfo` 的 VCS 信息，工作区有本地修改时加 `-modified` 后缀；构建未打标时为 `unknown`）、平台与数据根，用户反馈附带日志即可定位构建。发布与打包 workflow 保证这个提交号干净：对 `mygo.json` 的改写（版本/渠道前缀/移除 updates）经 `git update-index --skip-worktree` 对 Git 隐藏；VCS 戳记按 `git status` 判定，未跟踪文件同样算作修改，因此构建前的其余过程文件只进被 `.gitignore` 忽略的目录（fetchdeps 产物、VC++ DLL）或 runner 的临时目录（`RUNNER_TEMP`，VC++ 步骤的说明文件）——test-v0.0.1 至 test-v0.0.4 的 Windows 构建曾因该说明文件写在仓库根而携带 `-modified`，已修复。构建产物因此携带标签或提交的干净提交号，不带 `-modified`。
 - 日志打不开（如目录不可写）不阻止启动：stderr 照常输出并提示一次原因；运行中文件写入失败同样只退回 stderr 镜像（降级逻辑在 `internal/app`，Windows 上备份文件被杀毒或备份软件占用时轮转重试而不丢行，每轮失败只提示一次）。
 - `YOUKAI_SELFTEST` 自检在路径解析之前运行，仍只写 stderr（安装布局验证按[打包与安装包](#打包与安装包)的重定向方式读取）。
-- 只读准备检查的故障按状态变化写日志：`youkai: readiness: fault item=… verdict=… code=… current=… required=… message=…` 在一项的结论或故障码出现、变化时写一行；同样的故障在页面的 10 秒重查中保持安静，故障消失时写 `youkai: readiness: fault cleared item=… verdict=… code=…`。平台检查本身失败（拿不到平台报告）另按错误文本去重，恢复时写 `platform check recovered`；失败期间不把清单行当作已恢复。`message` 是平台生成的英文诊断原因，来自不读取外部窗口标题的只读检查路径；日志只取上述字段，不写窗口标题、账号标识或凭据，用户目录路径按诊断脱敏规则替换为 `<用户目录>`。
+- 只读准备检查的故障按状态变化写日志：`youkai: readiness: fault item=… verdict=… code=… current=… required=… message=…` 在一项的结论、故障码或脱敏后的消息出现、变化时写一行。去重键是 `verdict + code + 脱敏后的 message`，不含 `current`（磁盘可用字节数每次都会变），所以同样的故障在页面的 10 秒重查中保持安静；第一次写时带上当次的 `current` 作为证据。没有故障码但 `verdict=unsatisfied` 的行（磁盘空间不足、识别资源缺失）同样会拦住开始，也按这一键记录。故障消失时写 `youkai: readiness: fault cleared item=… verdict=… code=…`。平台检查本身失败（拿不到平台报告）另按错误文本去重，恢复时写 `platform check recovered`；失败期间不把清单行当作已恢复。`message` 主要是平台生成的诊断原因，`rawSuffix` 还会拼接系统错误文本，所以中文 Windows 上可能是中文（推断）；日志只取上述字段，不写窗口标题、账号标识或凭据，平台错误与 `message` 中的用户目录路径按诊断脱敏规则替换为 `<用户目录>`（包括 `%q` 转义后连续反斜杠的写法）。
 
 ### 复制诊断信息的内容清单
 

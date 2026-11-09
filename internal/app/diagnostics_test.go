@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LoTwT/youkai/internal/platform/windows"
 	"github.com/LoTwT/youkai/internal/record"
 	"github.com/LoTwT/youkai/internal/scan"
 )
@@ -197,6 +198,27 @@ func TestRedactTextHidesHomePathsWithSpaces(t *testing.T) {
 				t.Fatalf("redactText(%q) = %q, want %q", tc.in, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestRedactTextHidesEscapedWindowsProfilePaths covers the text the readiness
+// log actually receives: SelectionError.Error quotes the executable with %q,
+// so a game under the Windows profile arrives with doubled backslashes. The
+// single-backslash table above did not cover that form.
+func TestRedactTextHidesEscapedWindowsProfilePaths(t *testing.T) {
+	message := (&windows.SelectionError{
+		Kind:       windows.SelectionNoWindow,
+		Executable: `C:\Users\alice\Games\ZenlessZoneZero.exe`,
+	}).Error()
+	if !strings.Contains(message, `C:\\Users\\alice`) {
+		t.Fatalf("SelectionError no longer spells the quoted path with escaped backslashes; adapt this test to the new text: %q", message)
+	}
+	got := redactText(message)
+	if strings.Contains(got, "alice") {
+		t.Fatalf("redactText left the profile name in the quoted path: %q", got)
+	}
+	if !strings.Contains(got, "<用户目录>") {
+		t.Fatalf("redactText did not mark the profile path: %q", got)
 	}
 }
 

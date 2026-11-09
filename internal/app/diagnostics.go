@@ -293,20 +293,25 @@ func commitText(commit string) string {
 
 var (
 	// The user-name segment runs to the next path separator so a name
-	// with spaces is removed whole.
+	// with spaces is removed whole. Windows profile paths allow any run of
+	// backslashes: SelectionError.Error quotes the executable with %q, so a
+	// path reaches the readiness log with doubled separators.
 	unixHomePath = regexp.MustCompile(`(?i)(?:/Users/|/home/)[^/\\]+`)
-	winHomePath  = regexp.MustCompile(`(?i)[A-Za-z]:\\Users\\[^\\]+`)
+	winHomePath  = regexp.MustCompile(`(?i)[A-Za-z]:\\+Users\\+[^\\]+`)
 )
 
 // redactText keeps a one-line diagnostic value free of the user's home
 // directory: macOS and Linux home paths and Windows profile paths become
 // <用户目录>, and the current user's exact home path is replaced even when
-// its parent does not follow those layouts. All other text is preserved;
-// window titles have no free-form field here to enter through.
+// its parent does not follow those layouts. Windows profile paths are
+// matched with any run of backslashes so quoted error messages are covered;
+// all other text is preserved.
 //
-// This redaction is a fallback, not the privacy guarantee: the guarantee
-// is the field allowlist in DiagnosticsText, which never copies a
-// trigger's message or params.
+// This redaction is a fallback, not the privacy guarantee. Copied diagnostics
+// are bounded by the field allowlist in DiagnosticsText, which never copies a
+// trigger's message or params; the readiness log never reads another window's
+// title, and redactText only removes home paths from the free text it is
+// allowed to carry.
 func redactText(text string) string {
 	text = strings.TrimSpace(text)
 	if text == "" {

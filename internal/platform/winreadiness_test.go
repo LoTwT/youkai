@@ -373,9 +373,10 @@ func TestWinReadinessFixedTarget(t *testing.T) {
 }
 
 // TestWinReadinessFaultMessagesNeverCarryAWindowTitle pins the privacy side
-// of the readiness log: the app writes the platform fault message verbatim, so
-// a titled window must not put its caption into the message (or params). The
-// fixed-target failure keeps the titled window present while selection fails.
+// of the readiness log: the app logs the platform fault message after
+// home-path redaction, so a titled window must not put its caption into the
+// message (or params) in the first place. The fixed-target failure keeps the
+// titled window present while selection fails.
 func TestWinReadinessFaultMessagesNeverCarryAWindowTitle(t *testing.T) {
 	const title = "不应进入诊断的窗口标题"
 	w := newWinWorld(t)

@@ -143,13 +143,14 @@ func (s *Service) CheckReadiness(target *TargetCandidate) ReadinessReport {
 	return Readiness{Paths: s.cfg.Paths, Source: s.cfg.Source, log: &s.readinessLog}.Check(target)
 }
 
-// readinessLogState remembers the fault each checklist row reported last, so
-// the ten-second re-check writes a line only when a fault appears, changes
-// or clears instead of once per pass.
+// readinessLogState remembers the failure each checklist row reported last,
+// so the ten-second re-check writes a line only when a failure appears,
+// changes or clears instead of once per pass.
 type readinessLogState struct {
 	mu sync.Mutex
-	// faults is keyed by row. The verdict and code identify the fault; the
-	// message may embed measured values, so it is logged but not compared.
+	// faults is keyed by row. The verdict, code and redacted message identify
+	// the failure. current is deliberately excluded: the disk's free-byte
+	// count changes on every pass and would otherwise write a line each time.
 	faults      map[ReadinessItem]readinessFault
 	platformErr string
 }
@@ -157,12 +158,28 @@ type readinessLogState struct {
 type readinessFault struct {
 	verdict ReadinessVerdict
 	code    string
+	message string
+}
+
+// readinessFaultOf reports whether the row is a failure worth logging and
+// the value the log compares. An unsatisfied row without a fault code (disk
+// space, recognition resources) still blocks start, so it is a failure too;
+// its measured current value stays out of the comparison.
+func readinessFaultOf(check ReadinessCheck) (readinessFault, bool) {
+	if check.FaultCode == "" && check.Verdict != ReadinessUnsatisfied {
+		return readinessFault{}, false
+	}
+	return readinessFault{
+		verdict: check.Verdict,
+		code:    check.FaultCode,
+		message: redactText(check.FaultMessage),
+	}, true
 }
 
 // observe compares this pass with the previous one. A platform failure is
 // itself a state: it is logged once per distinct error and its recovery is
-// logged once. While the platform report is unavailable, row faults are left
-// untouched so a failed platform check does not fabricate recoveries.
+// logged once. While the platform report is unavailable, row failures are
+// left untouched so a failed platform check does not fabricate recoveries.
 func (s *readinessLogState) observe(report ReadinessReport, platformErr error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -184,18 +201,17 @@ func (s *readinessLogState) observe(report ReadinessReport, platformErr error) {
 	seen := make(map[ReadinessItem]bool, len(report.Checks))
 	for _, check := range report.Checks {
 		seen[check.Item] = true
-		if check.FaultCode == "" {
+		fault, failed := readinessFaultOf(check)
+		if !failed {
 			continue
 		}
-		fault := readinessFault{verdict: check.Verdict, code: check.FaultCode}
 		current[check.Item] = fault
 		previous, existed := s.faults[check.Item]
 		if existed && previous == fault {
 			continue
 		}
 		log.Printf("youkai: readiness: fault item=%s verdict=%s code=%s current=%q required=%q message=%q",
-			check.Item, check.Verdict, check.FaultCode, check.Current, check.Required,
-			redactText(check.FaultMessage))
+			check.Item, check.Verdict, check.FaultCode, check.Current, check.Required, fault.message)
 	}
 	for item, previous := range s.faults {
 		if seen[item] {

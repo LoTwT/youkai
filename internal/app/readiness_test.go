@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/LoTwT/youkai/internal/platform"
+	"github.com/LoTwT/youkai/internal/platform/windows"
 	"github.com/LoTwT/youkai/internal/record"
 )
 
@@ -368,6 +369,187 @@ func TestServiceCheckReadinessLogsFaultChangesOnly(t *testing.T) {
 	}
 	if got := strings.Count(logs.String(), "fault item=targetClient"); got != 2 {
 		t.Fatalf("the satisfied pass wrote a fault line:\n%s", logs)
+	}
+}
+
+// TestServiceCheckReadinessRedactsHomePaths covers both free-text fields the
+// readiness log carries: a row's platform message and the platform error. A
+// SelectionError for a game under the Windows profile quotes the path with %q,
+// so both reach the log with doubled backslashes.
+func TestServiceCheckReadinessRedactsHomePaths(t *testing.T) {
+	quoted := (&windows.SelectionError{
+		Kind:       windows.SelectionNoWindow,
+		Executable: `C:\Users\alice\Games\ZenlessZoneZero.exe`,
+	}).Error()
+	assertRedacted := func(t *testing.T, logs string) {
+		t.Helper()
+		if strings.Contains(logs, "alice") {
+			t.Fatalf("the readiness log leaks the profile name:\n%s", logs)
+		}
+		if !strings.Contains(logs, "<用户目录>") {
+			t.Fatalf("the readiness log does not mark the profile path:\n%s", logs)
+		}
+	}
+
+	t.Run("fault message", func(t *testing.T) {
+		paths := newTestPaths(t)
+		source := &readinessFakeSource{report: readinessTargetFault(
+			platform.CodeTargetNotFound, quoted, platform.ReadinessUnsatisfied)}
+		svc, _ := newTestService(t, paths, source, func() (Recognizer, error) { return newFakeRecognizer(), nil })
+		logs := captureReadinessLog(t)
+		svc.CheckReadiness(nil)
+		assertRedacted(t, logs.String())
+	})
+
+	t.Run("platform error", func(t *testing.T) {
+		paths := newTestPaths(t)
+		source := &readinessFakeSource{err: errors.New("display policy: " + quoted)}
+		svc, _ := newTestService(t, paths, source, func() (Recognizer, error) { return newFakeRecognizer(), nil })
+		logs := captureReadinessLog(t)
+		svc.CheckReadiness(nil)
+		assertRedacted(t, logs.String())
+	})
+}
+
+// TestServiceCheckReadinessLogsResourceRowWithoutFaultCode pins the blocking
+// row that has no fault code: it still writes its failure, keeps the first
+// line's current value as evidence, stays quiet while unchanged, and reports
+// its clearing.
+func TestServiceCheckReadinessLogsResourceRowWithoutFaultCode(t *testing.T) {
+	paths := newTestPaths(t)
+	source := &readinessFakeSource{report: readinessTargetSatisfied()}
+	svc, _ := newTestService(t, paths, source, func() (Recognizer, error) { return newFakeRecognizer(), nil })
+	logs := captureReadinessLog(t)
+
+	report := svc.CheckReadiness(nil)
+	resources := checkByItem(t, report, ReadinessRecognitionResources)
+	if resources.Verdict != ReadinessUnsatisfied || resources.FaultCode != "" {
+		t.Fatalf("resource row = %+v, want unsatisfied without a fault code", resources)
+	}
+	if got := strings.Count(logs.String(), "fault item=recognitionResources"); got != 1 {
+		t.Fatalf("the unsatisfied resource row wrote %d fault lines, want 1:\n%s", got, logs)
+	}
+	if !strings.Contains(logs.String(), `current="missing=runtime,model"`) {
+		t.Fatalf("the first resource line does not carry the current value:\n%s", logs)
+	}
+
+	svc.CheckReadiness(nil)
+	if got := strings.Count(logs.String(), "fault item=recognitionResources"); got != 1 {
+		t.Fatalf("the unchanged resource row wrote %d fault lines, want 1:\n%s", got, logs)
+	}
+
+	writeRecognitionResources(t, paths)
+	svc.CheckReadiness(nil)
+	if got := strings.Count(logs.String(), "fault cleared item=recognitionResources"); got != 1 {
+		t.Fatalf("the recovered resource row wrote %d cleared lines, want 1:\n%s", got, logs)
+	}
+}
+
+// TestReadinessLogDiskSpaceIgnoresChangingFreeBytes pins the comparison rule
+// for the other code-less blocker: free bytes change on every pass, so the
+// key must omit current while the first line still carries it.
+func TestReadinessLogDiskSpaceIgnoresChangingFreeBytes(t *testing.T) {
+	logs := captureReadinessLog(t)
+	state := &readinessLogState{}
+	disk := ReadinessCheck{Item: ReadinessDiskSpace, Verdict: ReadinessUnsatisfied,
+		Current: "1073741823", Required: "1073741824"}
+
+	state.observe(ReadinessReport{Checks: []ReadinessCheck{disk}}, nil)
+	if got := strings.Count(logs.String(), "fault item=diskSpace"); got != 1 {
+		t.Fatalf("the unsatisfied disk row wrote %d fault lines, want 1:\n%s", got, logs)
+	}
+	if !strings.Contains(logs.String(), `fault item=diskSpace verdict=unsatisfied code= current="1073741823"`) {
+		t.Fatalf("the first disk line does not carry the current value:\n%s", logs)
+	}
+
+	disk.Current = "1073741822"
+	state.observe(ReadinessReport{Checks: []ReadinessCheck{disk}}, nil)
+	if got := strings.Count(logs.String(), "fault item=diskSpace"); got != 1 {
+		t.Fatalf("a changed free-byte count wrote %d fault lines, want 1:\n%s", got, logs)
+	}
+}
+
+// TestServiceCheckReadinessLogsChangedCauseUnderSameCode pins the message as
+// part of the state key: the same verdict and code with a different measured
+// cause must write a new line, while an unchanged report stays quiet.
+func TestServiceCheckReadinessLogsChangedCauseUnderSameCode(t *testing.T) {
+	paths := newTestPaths(t)
+	source := &readinessFakeSource{report: platform.ReadinessReport{Checks: []platform.ReadinessCheck{{
+		Item:     platform.ReadinessGameResolution,
+		Verdict:  platform.ReadinessUnsatisfied,
+		Current:  "1280x720",
+		Required: "1920x1080",
+		Fault: &platform.Fault{Code: platform.CodeClientTierNotOpened,
+			Message: "client area 1280x720 is a known tier but no profile for it has field acceptance"},
+	}}}}
+	svc, _ := newTestService(t, paths, source, func() (Recognizer, error) { return newFakeRecognizer(), nil })
+	logs := captureReadinessLog(t)
+
+	svc.CheckReadiness(nil)
+	svc.CheckReadiness(nil)
+	if got := strings.Count(logs.String(), "fault item=gameResolution"); got != 1 {
+		t.Fatalf("the unchanged resolution fault wrote %d lines, want 1:\n%s", got, logs)
+	}
+
+	source.report = platform.ReadinessReport{Checks: []platform.ReadinessCheck{{
+		Item:     platform.ReadinessGameResolution,
+		Verdict:  platform.ReadinessUnsatisfied,
+		Current:  "2560x1440",
+		Required: "1920x1080",
+		Fault: &platform.Fault{Code: platform.CodeClientTierNotOpened,
+			Message: "client area 2560x1440 is a known tier but no profile for it has field acceptance"},
+	}}}
+	svc.CheckReadiness(nil)
+	if got := strings.Count(logs.String(), "fault item=gameResolution"); got != 2 {
+		t.Fatalf("a changed cause under the same code wrote %d lines, want 2:\n%s", got, logs)
+	}
+	if !strings.Contains(logs.String(), `message="client area 2560x1440`) {
+		t.Fatalf("the changed resolution cause is missing:\n%s", logs)
+	}
+}
+
+// TestServiceCheckReadinessPlatformFailureKeepsRowState pins that a failed
+// platform check is not a recovery: the row fault stays remembered, so the
+// same fault is not logged again after the platform returns, and no cleared
+// line appears until the row itself is satisfied.
+func TestServiceCheckReadinessPlatformFailureKeepsRowState(t *testing.T) {
+	paths := newTestPaths(t)
+	source := &readinessFakeSource{report: readinessTargetFault(
+		platform.CodeTargetNotFound, "first cause", platform.ReadinessUnsatisfied)}
+	svc, _ := newTestService(t, paths, source, func() (Recognizer, error) { return newFakeRecognizer(), nil })
+	logs := captureReadinessLog(t)
+
+	svc.CheckReadiness(nil)
+	if got := strings.Count(logs.String(), "fault item=targetClient"); got != 1 {
+		t.Fatalf("the first fault wrote %d lines, want 1:\n%s", got, logs)
+	}
+
+	source.err = errors.New("platform check boom")
+	svc.CheckReadiness(nil)
+	if got := strings.Count(logs.String(), "fault cleared item=targetClient"); got != 0 {
+		t.Fatalf("a platform failure cleared the row:\n%s", logs)
+	}
+
+	source.err = nil
+	svc.CheckReadiness(nil)
+	if got := strings.Count(logs.String(), "fault item=targetClient"); got != 1 {
+		t.Fatalf("the unchanged fault repeated after a platform failure:\n%s", logs)
+	}
+	if got := strings.Count(logs.String(), "fault cleared item=targetClient"); got != 0 {
+		t.Fatalf("the platform recovery cleared the row:\n%s", logs)
+	}
+
+	source.err = errors.New("platform check boom")
+	svc.CheckReadiness(nil)
+	if got := strings.Count(logs.String(), "fault cleared item=targetClient"); got != 0 {
+		t.Fatalf("a second platform failure cleared the row:\n%s", logs)
+	}
+
+	source.err = nil
+	source.report = readinessTargetSatisfied()
+	svc.CheckReadiness(nil)
+	if got := strings.Count(logs.String(), "fault cleared item=targetClient"); got != 1 {
+		t.Fatalf("the satisfied row wrote %d cleared lines, want 1:\n%s", got, logs)
 	}
 }
 
