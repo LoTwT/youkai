@@ -16,11 +16,16 @@ func availableSource() ScanSourceInfo {
 }
 
 // newTestModel attaches a queued updater, so the model's background work
-// is observable and confined to the test goroutine.
+// is observable and confined to the test goroutine. Unless a test injects
+// its own clock, the model shares the fake report's fixed check time so the
+// ten-second freshness rule never depends on when the test runs.
 func newTestModel(t *testing.T, cfg Config) (*Model, *queueUpdater) {
 	t.Helper()
 	if cfg.ScanSource == (ScanSourceInfo{}) {
 		cfg.ScanSource = availableSource()
+	}
+	if cfg.Now == nil {
+		cfg.Now = readinessClock
 	}
 	m := New(cfg)
 	q := &queueUpdater{}
