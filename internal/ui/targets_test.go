@@ -365,6 +365,92 @@ func TestViewStartDiscoveryFailureKeepsCause(t *testing.T) {
 	}
 }
 
+// TestRefusedStartReasonClearsAfterARecheck pins the rule that the reason
+// beside the start describes the current state. The refusal stays after the
+// automatic re-check it launched, then disappears when the user confirms a
+// window again or runs 重新检查.
+func TestRefusedStartReasonClearsAfterARecheck(t *testing.T) {
+	first := testTarget(0xB0ABE, 42, `C:\Games\ZZZ\ZenlessZoneZero.exe`)
+	second := testTarget(0xB0ABF, 42, `C:\Games\ZZZ\ZenlessZoneZero.exe`)
+
+	t.Run("confirm another window", func(t *testing.T) {
+		svc := &fakeService{
+			targets: []app.TargetCandidate{first},
+			startFn: func(app.StartRequest) (app.StartOutcome, error) {
+				return app.StartOutcome{}, app.ErrTargetGone
+			},
+		}
+		m, q := newTestModel(t, Config{Service: svc, ScanSource: targetSource()})
+		tt := ui.NewTester(m.View, 1020, 700)
+		settle(t, m, q, tt)
+		if err := tt.Click(targetLabel(first)); err != nil {
+			t.Fatal(err)
+		}
+		settle(t, m, q, tt)
+
+		// The confirmed window disappears while the start is in flight.
+		svc.mu.Lock()
+		svc.targets = []app.TargetCandidate{second}
+		svc.mu.Unlock()
+		if err := tt.Click("开始扫描"); err != nil {
+			t.Fatal(err)
+		}
+		settle(t, m, q, tt)
+		if got := m.scanStartBlockedReason(); got != targetGoneText {
+			t.Fatalf("the refusal did not stay beside the start: %q", got)
+		}
+
+		if err := tt.Click(targetLabel(second)); err != nil {
+			t.Fatal(err)
+		}
+		settle(t, m, q, tt)
+		if m.startErr != "" {
+			t.Fatalf("the old refusal survived the new confirmation: %q", m.startErr)
+		}
+		if got := m.scanStartBlockedReason(); got == targetGoneText {
+			t.Fatalf("the old refusal still explains the start: %q", got)
+		}
+		if !m.scanStartReady() {
+			t.Fatalf("the start is not offered after the new confirmation: %q", m.scanStartBlockedReason())
+		}
+	})
+
+	t.Run("re-check", func(t *testing.T) {
+		cand := testTarget(0xB0ABE, 42, `C:\Games\ZZZ\ZenlessZoneZero.exe`)
+		svc := &fakeService{
+			targets: []app.TargetCandidate{cand},
+			startFn: func(app.StartRequest) (app.StartOutcome, error) {
+				return app.StartOutcome{}, app.ErrTargetDiscoveryFailed
+			},
+		}
+		m, q := newTestModel(t, Config{Service: svc, ScanSource: targetSource()})
+		tt := ui.NewTester(m.View, 1020, 700)
+		settle(t, m, q, tt)
+		if err := tt.Click(targetLabel(cand)); err != nil {
+			t.Fatal(err)
+		}
+		settle(t, m, q, tt)
+		if err := tt.Click("开始扫描"); err != nil {
+			t.Fatal(err)
+		}
+		settle(t, m, q, tt)
+		if got := m.scanStartBlockedReason(); got != targetDiscoveryFailedText {
+			t.Fatalf("the refusal did not stay beside the start: %q", got)
+		}
+
+		if err := tt.Click("重新检查"); err != nil {
+			t.Fatal(err)
+		}
+		settle(t, m, q, tt)
+		if m.startErr != "" {
+			t.Fatalf("the old refusal survived 重新检查: %q", m.startErr)
+		}
+		if got := m.scanStartBlockedReason(); got == targetDiscoveryFailedText {
+			t.Fatalf("the old refusal still explains the start: %q", got)
+		}
+	})
+}
+
 // Any other start refusal in the installed UI gets the generic Chinese
 // fallback; the detail stays in the diagnostic log.
 func TestViewStartRefusalGenericFallback(t *testing.T) {

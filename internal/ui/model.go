@@ -352,6 +352,11 @@ type Model struct {
 	startSerial int
 	startReqID  string
 	startErr    string
+	// startErrReadinessSerial is the readiness pass current when the
+	// refusal was recorded (the pass the refusal itself launched). A pass
+	// that began later re-judged the state and replaces the reason; the
+	// automatic re-check must not erase it before the user sees it.
+	startErrReadinessSerial int
 
 	// Target candidates (P-01): the last discovery result, whether a
 	// discovery is in flight, its user-facing failure, the chosen row (-1
@@ -735,6 +740,12 @@ func (m *Model) Apply(snap app.Snapshot) {
 	m.appliedSession, m.appliedRevision = snap.SessionID, snap.Revision
 	m.snap = snap
 	m.prevBusy = snap.Busy
+	// A service-owned block is the current reason. The last start refusal
+	// describes an earlier moment and must neither hide it nor come back
+	// once the block clears.
+	if snap.StartBlocked != app.StartBlockedNone {
+		m.startErr = ""
+	}
 	// A session that ended before input opened never scanned anything: the
 	// page keeps the checklist with the refusal on top (08 §1.2), and the
 	// record's summary will say 没有开始 rather than 没有采集到.
@@ -1198,6 +1209,11 @@ func (m *Model) Start() {
 				if m.source.TargetSelection {
 					m.refreshReadiness()
 				}
+				// This pass only re-enumerates after the refusal; the text
+				// stays until a later pass re-judges the state (a re-check
+				// or a new confirmation) or the service reports its own
+				// block.
+				m.startErrReadinessSerial = m.readinessSerial
 			}
 		})
 	})

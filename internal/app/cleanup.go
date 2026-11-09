@@ -204,7 +204,11 @@ func (s *Service) PreviewAllRecords() (CleanupPreview, error) {
 // final and may be removed. Callers hold mu.
 func (s *Service) cleanupBlockedLocked() error {
 	if s.quitting {
-		return &CleanupBlockedError{Reason: "正在退出应用，不能清理。"}
+		// Quitting also stays set after an exit failed (a final save that a
+		// retry later completed, or a failed teardown), while the window is
+		// back to idle. The interface shows a genuine running exit itself
+		// before this reason can surface, so name the state that remains.
+		return &CleanupBlockedError{Reason: "退出清理没有完成，不能清理；请退出 youkai 后重新打开。"}
 	}
 	a := s.active
 	if a == nil {

@@ -332,24 +332,23 @@ func (m *Model) statusShortcutText() string {
 
 // scanStartBlockedReason names why the start button is unavailable, in the
 // order the user meets the conditions: exit and update flows, the service's
-// slot state, page-owned work, the source and target, then the checklist.
-// The text sits left of the button (08 §1, R-14); a busy session shows the
-// stop button instead and never reaches this copy.
+// current state, page-owned work, the last start refusal, the source and
+// target, then the checklist. A refusal describes an earlier moment and
+// comes after the current blockers so it never hides a newer reason. The
+// text sits left of the button (08 §1, R-14); a busy session shows the stop
+// button instead and never reaches this copy.
 func (m *Model) scanStartBlockedReason() string {
 	switch {
 	case m.exitState == exitRunning || m.exitState == exitDone:
 		return "正在退出，不能再开始扫描。"
-	case m.startErr != "":
-		if m.source.TargetSelection {
-			return m.startErr
-		}
-		return "开始失败：" + m.startErr
+	case m.snap.SaveError != "":
+		return "上次扫描的结果还没有保存，请先重试保存。"
 	case m.snap.StartBlocked == app.StartBlockedSaveRetry:
 		return "上次扫描的结果还没有保存，请先重试保存。"
 	case m.snap.StartBlocked == app.StartBlockedUpdateInstall:
 		return "更新正在安装，应用重启前不能开始扫描。"
 	case m.snap.StartBlocked == app.StartBlockedQuitting:
-		return "正在退出，不能再开始扫描。"
+		return "退出清理没有完成，不能再开始扫描；请退出 youkai 后重新打开。"
 	case m.snap.StartBlocked == app.StartBlockedOccupied:
 		return "上次扫描仍在收尾，等它结束或点“停止扫描”。"
 	case m.updateRestartImminent():
@@ -358,6 +357,11 @@ func (m *Model) scanStartBlockedReason() string {
 		return "正在保存校对修改，完成前不能开始扫描。"
 	case m.exportBusy():
 		return "正在导出，完成前不能开始扫描。"
+	case m.startErr != "":
+		if m.source.TargetSelection {
+			return m.startErr
+		}
+		return "开始失败：" + m.startErr
 	case !m.source.Available:
 		return "这个版本还不能扫描。"
 	case !m.readinessLoaded:

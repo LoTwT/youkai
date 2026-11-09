@@ -319,6 +319,17 @@ func TestViewCleanupDisabledReasons(t *testing.T) {
 	if _, _, _, allRecords := svc2.cleanupCalls(); allRecords != 0 {
 		t.Fatalf("a disabled bulk entry still deleted: %d", allRecords)
 	}
+
+	// A genuine exit keeps the running copy; only the settled exit failure
+	// names the incomplete cleanup.
+	m3, q3 := newTestModel(t, Config{Service: &fakeService{}, DirectExportSaver: &fakeDirectExportSaver{}})
+	m3.page = pageSettings
+	m3.exitState = exitRunning
+	tt3 := ui.NewTester(m3.View, 1020, 700)
+	settle(t, m3, q3, tt3)
+	if !tt3.HasText("正在退出应用，不能清理。") {
+		t.Fatalf("the running exit lost its cleanup copy: %q", tt3.Texts())
+	}
 }
 
 func TestViewHistoryRecordDeletionClosesResults(t *testing.T) {

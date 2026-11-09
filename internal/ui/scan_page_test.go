@@ -481,6 +481,59 @@ func TestScanStartBlockedReasons(t *testing.T) {
 			t.Fatalf("the export block does not show: %q", tt.Texts())
 		}
 	})
+	t.Run("service block replaces the last refusal", func(t *testing.T) {
+		svc := &fakeService{startFn: func(app.StartRequest) (app.StartOutcome, error) {
+			return app.StartOutcome{}, errString("refused for the test")
+		}}
+		m, q := newTestModel(t, Config{Service: svc})
+		tt := ui.NewTester(m.View, 1020, 700)
+		settle(t, m, q, tt)
+		m.Start()
+		settle(t, m, q, tt)
+		if got := m.scanStartBlockedReason(); !strings.Contains(got, "refused for the test") {
+			t.Fatalf("the refusal is missing at the moment it happened: %q", got)
+		}
+
+		s := snap("s1", 1, false, scan.PhaseEnded, scan.Counts{}, 0, false, "")
+		s.StartBlocked = app.StartBlockedQuitting
+		applyAndSettle(t, m, q, tt, s)
+		if got := m.scanStartBlockedReason(); got != "退出清理没有完成，不能再开始扫描；请退出 youkai 后重新打开。" {
+			t.Fatalf("the service block is masked by the old refusal: %q", got)
+		}
+
+		// The superseded refusal must not come back when the block clears.
+		idle := snap("s1", 2, false, scan.PhaseEnded, scan.Counts{}, 0, false, "")
+		applyAndSettle(t, m, q, tt, idle)
+		if got := m.scanStartBlockedReason(); strings.Contains(got, "refused for the test") {
+			t.Fatalf("the old refusal came back after the block cleared: %q", got)
+		}
+	})
+	t.Run("quit cleanup remains blocked", func(t *testing.T) {
+		svc := &fakeService{}
+		m, q := newTestModel(t, Config{Service: svc})
+		tt := ui.NewTester(m.View, 1020, 700)
+		settle(t, m, q, tt)
+		s := snap("s1", 1, false, scan.PhaseEnded, scan.Counts{}, 0, false, "")
+		s.StartBlocked = app.StartBlockedQuitting
+		applyAndSettle(t, m, q, tt, s)
+		if !tt.HasText("退出清理没有完成，不能再开始扫描；请退出 youkai 后重新打开。") {
+			t.Fatalf("the incomplete exit does not explain the start block: %q", tt.Texts())
+		}
+		if tt.HasText("正在退出，不能再开始扫描。") {
+			t.Fatalf("a settled exit still claims to be running: %q", tt.Texts())
+		}
+	})
+	t.Run("genuine exit keeps the running copy", func(t *testing.T) {
+		svc := &fakeService{}
+		m, q := newTestModel(t, Config{Service: svc})
+		tt := ui.NewTester(m.View, 1020, 700)
+		settle(t, m, q, tt)
+		m.exitState = exitRunning
+		tt.Frame()
+		if !tt.HasText("正在退出，不能再开始扫描。") {
+			t.Fatalf("the running exit lost its copy: %q", tt.Texts())
+		}
+	})
 	t.Run("several rows", func(t *testing.T) {
 		svc := &fakeService{}
 		m, q := newTestModel(t, Config{Service: svc})

@@ -109,6 +109,7 @@ func (m *Model) refreshReadiness() {
 			m.readiness = report
 			m.applyReadinessTargets(report)
 			m.replaceRecheckedStartFailure()
+			m.replaceRecheckedStartError()
 			if !m.readinessFocusGiven {
 				// Only the first completed pass moves the keyboard to the
 				// first actionable item (or the start button when everything
@@ -355,6 +356,17 @@ func (m *Model) replaceRecheckedStartFailure() {
 		return
 	}
 	m.startFailureItem = ""
+}
+
+// replaceRecheckedStartError drops the last start refusal once a readiness
+// pass that began after the refusal completes. The pass the refusal itself
+// launched keeps the text: it must stay visible until the user re-checks or
+// confirms a window again.
+func (m *Model) replaceRecheckedStartError() {
+	if m.startErr == "" || m.readinessSerial == m.startErrReadinessSerial {
+		return
+	}
+	m.startErr = ""
 }
 
 // readinessReadOnlyItem reports whether a completed checklist pass replaces
