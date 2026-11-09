@@ -318,6 +318,11 @@ func (l *windowLifecycle) OnBeforeQuit(e preventableEvent) {
 		if !l.model.Exiting() {
 			l.Restore()
 		}
+		// The refusal changed the window's state: it opened a prompt, or the
+		// running wrap-up advanced. The quit callback renders no frame of its
+		// own, so ask for one; otherwise the prompt or progress waits for the
+		// next input, and a restored window can show stale content.
+		l.redraw()
 	}
 	l.Refresh()
 }
