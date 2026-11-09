@@ -194,7 +194,9 @@ type StartOutcome struct {
 
 // NewService assembles the application service. It takes over the
 // data-root occupancy for the explicit-exit wrap-up; callers keep their
-// own release as a crash fallback (Close is idempotent).
+// own release for what the wrap-up leaves held — after a failed cleanup
+// that release is the normal one at process exit, not a crash fallback
+// (Close is idempotent).
 func NewService(cfg Config) (*Service, error) {
 	if cfg.DataLock == nil {
 		return nil, errors.New("app: new service: data-root lock is nil")
@@ -874,6 +876,16 @@ func (s *Service) Quit() error {
 // workers, which the wrap-up already joined — and the data-root
 // occupancy goes last, after which nothing below the root may be written
 // again.
+//
+// A failed recognizer close or OCR shutdown deliberately leaves the
+// data-root occupancy held: the failed exit lets the user keep viewing
+// and saving results, so releasing the root here would let another
+// process take it and write concurrently. The release then belongs to the
+// process exit — the entry point's deferred DataRootLock.Close, or the OS
+// after the process is gone — unless the explicit exit is the installed
+// update's restart, whose handoff in OnQuit releases the root before the
+// new process starts. The error is still returned so the caller can offer
+// the explicit exit.
 func (s *Service) teardown() error {
 	s.mu.Lock()
 	rec := s.recognizer
@@ -887,6 +899,11 @@ func (s *Service) teardown() error {
 	}
 	if err := s.shutdownOCR(); err != nil {
 		errs = append(errs, fmt.Errorf("shut down the OCR environment: %w", err))
+	}
+	if len(errs) > 0 {
+		err := errors.Join(errs...)
+		log.Printf("youkai: exit wrap-up: %v (data-root occupancy kept for the restart handoff or process exit)", err)
+		return err
 	}
 	if err := s.cfg.DataLock.Close(); err != nil {
 		errs = append(errs, fmt.Errorf("release the data-root occupancy: %w", err))

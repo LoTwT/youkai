@@ -94,9 +94,10 @@ func main() {
 	// checkpoints and history under the same root. A second youkai process
 	// on the same data root — under any path alias — fails the occupancy,
 	// shows why and exits; MyGo's single-instance lock does not cover this
-	// occupancy. The service takes over the occupancy for the explicit-exit
-	// wrap-up; the deferred release stays as the crash fallback (Close is
-	// idempotent).
+	// occupancy. The service releases it in the explicit-exit wrap-up when
+	// the cleanup succeeded; after a failed cleanup the deferred release
+	// below is the normal release at process exit — a crash skips it and
+	// leaves the release to the OS (Close is idempotent).
 	dataLock, err := acquireInstanceLocks(paths.Data, instanceLockOps{
 		requestSingleInstance: mygo.App.RequestSingleInstanceLock,
 		acquireDataRoot:       app.AcquireDataRootLock,
@@ -137,7 +138,11 @@ func main() {
 	// occupancy: a second instance exits at the single-instance lock above
 	// (or, under another app name, at the data-root acquire) before touching
 	// the log directory, so two processes never interleave or truncate each
-	// other's lines. The alternative — per-process file
+	// other's lines. The installed update's restart keeps that property:
+	// its OnQuit handoff detaches the logger from this file before it
+	// releases the occupancy, so the lines this process still logs on its
+	// way out go to stderr only and the new process appends alone. The
+	// alternative — per-process file
 	// names — would leave one file per start in the directory and make
 	// "attach the log" mean picking among many. The cost is that the lines
 	// above, and lock failures, never reach the log file: stderr carries
@@ -222,11 +227,13 @@ func main() {
 	// interception refuses the first quit of every exit so the wrap-up can
 	// run (AllowClose starts it and says no). The relaunch the install
 	// asks for is therefore cancelled by design, so the restart is re-
-	// issued once the wrap-up settled: the quit is allowed then, and the
-	// data-root occupancy is already released by the wrap-up's teardown,
-	// so the relaunched process can take it. Both callbacks run on the UI
-	// thread, as does everything they touch.
-	updateInstalled := false
+	// issued once the wrap-up settled: the quit is allowed then. The
+	// data-root occupancy must be free before the new process starts: the
+	// wrap-up's teardown releases it when the cleanup succeeded, and after
+	// a failed teardown the handoff below releases it from OnQuit, after
+	// the framework's last write and before relaunchNow. Both callbacks
+	// run on the UI thread, as does everything they touch.
+	handoff := newRelaunchHandoff(dataLock)
 
 	model := ui.New(ui.Config{
 		Service: svc,
@@ -307,15 +314,14 @@ func main() {
 		HideToTray: func() { life.HideToTray() },
 		// After a successful install the application restarts into the new
 		// version: this first Relaunch only starts the exit — the close
-		// interception cancels it (see updateInstalled above) after firing
-		// the wrap-up — and the re-issued one below, with the wrap-up
-		// settled, is the restart itself. A session whose final save keeps
-		// failing still refuses the exit, the window stays with its retry,
-		// and the installed update runs at the next launch.
+		// interception cancels it (relaunchHandoff.onUpdateInstalled records
+		// the install) after firing the wrap-up — and the re-issued one in
+		// onExitSettled, with the wrap-up settled, is the restart itself. A
+		// session whose final save keeps failing still refuses the exit,
+		// the window stays with its retry, and the installed update runs at
+		// the next launch.
 		OnUpdateInstalled: func() {
-			updateInstalled = true
-			log.Printf("youkai: update installed, restarting the application")
-			mygo.App.Relaunch()
+			handoff.onUpdateInstalled(mygo.App.Relaunch)
 		},
 		// A settled explicit exit closes the application: the model's
 		// quit goroutine already waited for the wrap-up, so quitting re-
@@ -325,12 +331,7 @@ func main() {
 		// teardown reaches it only through the explicit 仍然退出 path.
 		OnExitSettled: func() {
 			life.Refresh()
-			if updateInstalled {
-				log.Printf("youkai: exit settled, relaunching into the installed update")
-				mygo.App.Relaunch()
-				return
-			}
-			mygo.App.Quit()
+			handoff.onExitSettled(mygo.App.Relaunch, mygo.App.Quit)
 		},
 		// A failed final save leaves the process alive. The restore entry
 		// must become visible again even when the exit was requested from
@@ -365,6 +366,9 @@ func main() {
 	mygo.App.OnBeforeQuit(func(e *mygo.QuitEvent) {
 		life.OnBeforeQuit(e)
 	})
+	// The installed update's restart must hand the data root over before
+	// MyGo starts the new process; see relaunchHandoff for the timing.
+	mygo.App.OnQuit(handoff.onQuit)
 	// Notification clicks can arrive after this run's Notification object is
 	// gone (or from the notification center); the ID carries the record and
 	// segment, so one app-wide handler covers both segments.
