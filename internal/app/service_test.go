@@ -1047,6 +1047,13 @@ func TestQuitCleanupFailureKeepsDataRootOccupied(t *testing.T) {
 			if _, err := svc.SaveItemRevision(string(snap.SessionID), 1, 0, ItemRevisionEdit{Data: reviewData()}); err != nil {
 				t.Fatalf("save revision after a failed teardown: %v", err)
 			}
+			// A new start is refused as well. The kept occupancy means the
+			// released-guard of AcquireScanLock cannot refuse it here, so
+			// the quitting state is what keeps a scan from beginning after
+			// the failed exit.
+			if _, err := svc.Start(StartRequest{ID: "after-failed-teardown"}); err == nil || !strings.Contains(err.Error(), "quitting") {
+				t.Fatalf("start after a failed teardown = %v, want the quitting refusal", err)
+			}
 			// A repeated Quit returns the same cached outcome without
 			// re-running the teardown.
 			second := svc.Quit()

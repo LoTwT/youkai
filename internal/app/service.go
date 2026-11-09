@@ -194,7 +194,9 @@ type StartOutcome struct {
 
 // NewService assembles the application service. It takes over the
 // data-root occupancy for the explicit-exit wrap-up; callers keep their
-// own release as a crash fallback (Close is idempotent).
+// own release for what the wrap-up leaves held — after a failed cleanup
+// that release is the normal one at process exit, not a crash fallback
+// (Close is idempotent).
 func NewService(cfg Config) (*Service, error) {
 	if cfg.DataLock == nil {
 		return nil, errors.New("app: new service: data-root lock is nil")
