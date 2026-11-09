@@ -260,6 +260,24 @@ func TestReviewResultNoticeDoesNotFollowTheTab(t *testing.T) {
 	}
 }
 
+// TestRecordWorkspaceSummaryDropsOrdinaryReviewNotice covers the other
+// direct 摘要 switch: when a finished scan lands on the open record's
+// summary, an ordinary result from the item browser must not come along.
+func TestRecordWorkspaceSummaryDropsOrdinaryReviewNotice(t *testing.T) {
+	m, _, tt, _ := openReviewRecordPage(t, reviewRowItem(t, 1, 12))
+	tt.Frame()
+	const notice = "已确认并定位下一项（序号 1）。"
+	m.setReviewNotice(notice)
+	m.openRecordWorkspace()
+	tt.Frame()
+	if m.recordTab != recordTabSummary {
+		t.Fatalf("the workspace opened tab %v", m.recordTab)
+	}
+	if m.reviewNotice != "" || tt.HasText(notice) {
+		t.Fatalf("the item result followed the summary switch: %q", tt.Texts())
+	}
+}
+
 // TestInvalidInputIsStillUnsaved covers L-B: an invalid value with no data
 // representation is a real change, so leaving the item prompts instead of
 // silently discarding it.
@@ -983,6 +1001,48 @@ func TestRevisionConflictReloadFailureNoticeVisible(t *testing.T) {
 	}
 	if !tt.HasText("记录读取失败：disk gone") {
 		t.Fatalf("the record error is not visible: %q", tt.Texts())
+	}
+}
+
+// TestRevisionConflictReloadSuccessClearsFailedNotice covers the second
+// independent fault after a conflict: once a later load of the same record
+// succeeds, the pinned explanation must stop claiming the reload failed.
+func TestRevisionConflictReloadSuccessClearsFailedNotice(t *testing.T) {
+	m, q, tt, svc := openReviewableResults(t, recovery(reviewRowItem(t, 1, 12)), 1180, 760)
+	tt.Frame()
+	m.edit.draft.Level = "14"
+	m.edit.refresh()
+	svc.saveFn = func(string, int64, int64, app.ItemRevisionEdit) (app.ItemRevisionResult, error) {
+		return app.ItemRevisionResult{}, fmt.Errorf("stale: %w", record.ErrRevisionConflict)
+	}
+	svc.mu.Lock()
+	svc.loadErr = map[string]error{"rec": errors.New("disk gone")}
+	svc.mu.Unlock()
+
+	tt.Frame()
+	m.saveEdit(reviewSave, nil)
+	drainAll(t, m, q)
+	tt.Frame()
+	tt.Frame()
+	failed := "记录已被更新，重新加载失败；旧输入未保存。"
+	if m.reviewNotice != failed {
+		t.Fatalf("the failed-reload notice = %q, want %q", m.reviewNotice, failed)
+	}
+
+	// The next successful load of the open record (for example, a live
+	// record catching up with saved generations) must replace the failure.
+	svc.mu.Lock()
+	delete(svc.loadErr, "rec")
+	svc.mu.Unlock()
+	m.reloadRecord("rec", false)
+	drainAll(t, m, q)
+	tt.Frame()
+	want := "记录已被更新，已重新加载当前修订；旧输入未保存。"
+	if m.reviewNotice != want {
+		t.Fatalf("the settled notice = %q, want %q", m.reviewNotice, want)
+	}
+	if !tt.HasText(want) || tt.HasText(failed) {
+		t.Fatalf("the stale failure is still on screen: %q", tt.Texts())
 	}
 }
 

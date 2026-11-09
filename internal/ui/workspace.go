@@ -103,12 +103,28 @@ func (m *Model) workspaceStatusTexts() (coverage, pending, saved string) {
 	return coverage, pending, saved
 }
 
+// showRecordTab applies a settled 摘要 / 逐件 switch. 摘要 and 逐件 are
+// separate screens (08 §2, §3), so an ordinary action result from the item
+// browser does not follow the user into the summary (L-D). The modify
+// flow's "back to review" consequence is the one result that intentionally
+// stays across screens. Callers that bypass requestNavigation use this too,
+// so the invariant does not depend on which entry point switched the tab.
+func (m *Model) showRecordTab(tab recordTab) {
+	if tab != m.recordTab && !m.reviewNoticeAcrossPages {
+		m.clearReviewNotice()
+	}
+	m.recordTab = tab
+	if tab == recordTabItems {
+		m.enterReviewView()
+	}
+}
+
 // openRecordWorkspace shows the opened record's summary. It switches only
 // the view: it never activates the window, so a scan that finished in the
 // background stays in the background (C-09).
 func (m *Model) openRecordWorkspace() {
 	m.page = pageResults
-	m.recordTab = recordTabSummary
+	m.showRecordTab(recordTabSummary)
 }
 
 // enterReviewView starts a review visit on the item tab: the form region
