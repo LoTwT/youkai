@@ -424,9 +424,9 @@ func (l *windowLifecycle) OnNotificationClick(id string) {
 }
 
 // redraw requests one frame after model state changed outside an input
-// event. The close callback and a notification click both arrive with no
-// follow-up event, so the dialog or page they chose would otherwise remain
-// invisible until the user moved the mouse.
+// event. The close callback, the quit callback, and a notification click
+// arrive with no follow-up event, so the dialog or page they chose would
+// otherwise remain invisible until the user moved the mouse.
 func (l *windowLifecycle) redraw() {
 	if l.window != nil {
 		l.window.Update(func() {})

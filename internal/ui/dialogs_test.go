@@ -376,7 +376,7 @@ func TestExitFailureDialogEscThenExitReopens(t *testing.T) {
 	if !m.exitFailureDialogOpen {
 		t.Fatalf("the next exit did not reopen the failure dialog: %s", probeReviewState(m))
 	}
-	if !tt.HasText("仍然退出") {
+	if !tt.HasText("youkai 没有退出") {
 		t.Fatalf("the reopened failure dialog is incomplete: %q", tt.Texts())
 	}
 	if attempts != 1 {
