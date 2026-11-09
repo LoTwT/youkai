@@ -419,6 +419,62 @@ func TestStayCancelsExitIntent(t *testing.T) {
 	}
 }
 
+// TestFailedReloadCancelsExitIntent covers CL-2: when a record reload fails
+// while the exit prompt is open, the prompt disappears and the quit must
+// disappear with it. Navigation must reach its ordinary unsaved-input
+// prompt instead of being silently refused, and a later save must not exit
+// without asking again.
+func TestFailedReloadCancelsExitIntent(t *testing.T) {
+	m, q, tt, svc := openReviewRecordPage(t, reviewRowItem(t, 1, 12))
+	tt.Frame()
+	m.edit.draft.Level = "13"
+	m.edit.refresh()
+	tt.Frame()
+	id := m.rec.ID
+	// A reload is already in flight when the user quits; the read then
+	// fails, so the exit prompt can no longer offer its save.
+	svc.loadErr = map[string]error{id: errors.New("read failed")}
+	m.reloadRecord(id, m.rec.Live)
+	if m.AllowClose() {
+		t.Fatal("the close was allowed with an unsaved edit")
+	}
+	drainAll(t, m, q)
+	tt.Frame()
+	if m.recErr == "" || !m.editingDirty() {
+		t.Fatalf("the failed load did not keep a blocked draft: %s", probeReviewState(m))
+	}
+	if m.exitIntent != exitIntentNone || m.navPrompt != nil {
+		t.Fatalf("the failed load kept the exit intent: %s", probeReviewState(m))
+	}
+
+	m.navigatePage(pageSettings)
+	tt.Frame()
+	if m.navPrompt == nil || m.navPrompt.kind != navPage {
+		t.Fatalf("navigation after the failed load was silently refused: %s", probeReviewState(m))
+	}
+	if err := tt.Click("留在这里"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+
+	// The read recovers; the draft can be saved, but that save must not
+	// resume the quit whose prompt was already gone.
+	svc.loadErr = nil
+	m.reloadRecord(id, m.rec.Live)
+	drainAll(t, m, q)
+	tt.Frame()
+	if m.recErr != "" || m.edit == nil {
+		t.Fatalf("the recovered load lost the draft: %s", probeReviewState(m))
+	}
+	m.saveEdit(reviewSave, nil)
+	drainAll(t, m, q)
+	tt.Frame()
+	if svc.quits != 0 || m.exitState != exitIdle {
+		t.Fatalf("a save after the failed load exited without asking: quits=%d state=%v",
+			svc.quits, m.exitState)
+	}
+}
+
 // TestRevisionConflictCancelsExitIntent covers M4: a conflict during the
 // prompt's save must cancel the quit; a later successful save must not exit.
 func TestRevisionConflictCancelsExitIntent(t *testing.T) {
