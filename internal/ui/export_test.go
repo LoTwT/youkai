@@ -1443,6 +1443,41 @@ func TestExportDialogOffersScreenshotDeletionWhenNothingIsPending(t *testing.T) 
 	}
 }
 
+// TestExportScreenshotLinkDropsOrdinaryReviewNotice covers the export
+// dialog's explicit transfer to the summary: the item browser's ordinary
+// action result must not follow the record tab switch (L-D, 08 §2, §3).
+func TestExportScreenshotLinkDropsOrdinaryReviewNotice(t *testing.T) {
+	rec := recovery(uiStructuredItem(t, 1, record.QualityAutoAccepted))
+	f := newExportDialogFixture(t, rec, false)
+	f.svc.previewFn = func(kind, recordID string) (app.CleanupPreview, error) {
+		return app.CleanupPreview{Records: 1, EvidenceFiles: 3, EvidenceBytes: 1024, PendingReview: 0}, nil
+	}
+	// Keep the item browser away from its own screenshot link: the dialog's
+	// link is the one this test drives.
+	f.m.setResultFilter(resultFilterAll)
+	f.m.recordTab = recordTabItems
+	const notice = "已确认并定位下一项（序号 1）。"
+	f.m.setReviewNotice(notice)
+	f.tt.Frame()
+
+	f.open(t)
+	if err := f.tt.Click("导出 JSON"); err != nil {
+		t.Fatalf("click 导出 JSON: %v", err)
+	}
+	settle(t, f.m, f.q, f.tt)
+	if err := f.tt.Click("删除这条记录的截图…"); err != nil {
+		t.Fatalf("click 删除这条记录的截图…: %v", err)
+	}
+	settle(t, f.m, f.q, f.tt)
+
+	if f.m.page != pageResults || f.m.recordTab != recordTabSummary {
+		t.Fatalf("the screenshot link landed on page %v tab %v", f.m.page, f.m.recordTab)
+	}
+	if f.m.reviewNotice != "" || f.tt.HasText(notice) {
+		t.Fatalf("the item result followed the summary switch: %q", f.tt.Texts())
+	}
+}
+
 // TestExportKeepsTheSnapshotWhenTheRecordChanges keeps the frozen
 // revision contract of the export snapshot.
 func TestExportKeepsTheSnapshotWhenTheRecordChanges(t *testing.T) {

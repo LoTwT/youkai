@@ -810,7 +810,7 @@ func (m *Model) exportDialogDeleteScreenshots(recordID string) {
 	m.exportDialog = exportDialogState{}
 	m.exportCancel = nil
 	m.page = pageResults
-	m.recordTab = recordTabSummary
+	m.showRecordTab(recordTabSummary)
 	m.RequestScreenshotCleanup(recordID)
 }
 
