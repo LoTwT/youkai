@@ -2,6 +2,7 @@ package app
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -219,6 +220,35 @@ func TestRedactTextHidesEscapedWindowsProfilePaths(t *testing.T) {
 	}
 	if !strings.Contains(got, "<用户目录>") {
 		t.Fatalf("redactText did not mark the profile path: %q", got)
+	}
+}
+
+// TestRedactTextHidesEscapedHomeOutsideUsers pins the fallback for a home
+// directory that does not follow the conventional profile root. The readiness
+// log receives a %q-quoted executable, so the home path may appear with doubled
+// backslashes even though it does not match the generic Users layout.
+// os.UserHomeDir reads USERPROFILE on Windows and HOME elsewhere.
+func TestRedactTextHidesEscapedHomeOutsideUsers(t *testing.T) {
+	const home = `D:\Profiles\alice`
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	if got, err := os.UserHomeDir(); err != nil || got != home {
+		t.Fatalf("os.UserHomeDir() = %q, %v; cannot inject the home directory", got, err)
+	}
+
+	message := (&windows.SelectionError{
+		Kind:       windows.SelectionNoWindow,
+		Executable: home + `\Games\x.exe`,
+	}).Error()
+	if !strings.Contains(message, `D:\\Profiles\\alice\\Games`) {
+		t.Fatalf("SelectionError no longer spells the quoted path with escaped backslashes; adapt this test to the new text: %q", message)
+	}
+	got := redactText(message)
+	if strings.Contains(got, "alice") {
+		t.Fatalf("redactText left the injected home name in the quoted path: %q", got)
+	}
+	if !strings.Contains(got, "<用户目录>") {
+		t.Fatalf("redactText did not mark the injected home path: %q", got)
 	}
 }
 

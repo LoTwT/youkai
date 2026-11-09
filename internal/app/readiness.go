@@ -64,11 +64,12 @@ type ReadinessCheck struct {
 	Required    string
 	FaultCode   string
 	FaultParams map[string]string
-	// FaultMessage is the platform's English diagnostic reason for
-	// FaultCode. It is evidence for the diagnostic log only: the interface
-	// localizes FaultCode/FaultParams and must not display this text. The
-	// readiness path never reads another window's title, so the message
-	// carries no external window title.
+	// FaultMessage is the diagnostic reason for FaultCode. It is usually the
+	// platform's English text, but it may also include a system error suffix
+	// and therefore localized text. It is evidence for the diagnostic log
+	// only: the interface localizes FaultCode/FaultParams and must not display
+	// this text. The readiness path never reads another window's title, so
+	// the message carries no external window title.
 	FaultMessage string
 	CheckedAt    time.Time
 }

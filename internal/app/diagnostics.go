@@ -326,12 +326,39 @@ func redactText(text string) string {
 	return text
 }
 
-// replaceFold replaces every case-insensitive occurrence of old with new.
+// replaceFold replaces every case-insensitive occurrence of a path with new.
 // Windows commonly spells a path with different case from the value
-// os.UserHomeDir returns.
+// os.UserHomeDir returns, and SelectionError.Error quotes the executable with
+// %q, which doubles every backslash. A Windows path therefore matches any run
+// of backslashes at each separator; a POSIX path keeps its literal separator.
+// Each segment is quoted so a home directory containing regular-expression
+// metacharacters is matched literally.
 func replaceFold(text, old, new string) string {
 	if old == "" {
 		return text
 	}
-	return regexp.MustCompile("(?i)"+regexp.QuoteMeta(old)).ReplaceAllString(text, new)
+	return regexp.MustCompile("(?i)"+foldPathPattern(old)).ReplaceAllString(text, new)
+}
+
+// foldPathPattern turns a home path into a pattern with literal segments whose
+// separators tolerate the escaped spelling of a quoted Windows path.
+// Separators stay in the pattern so a POSIX home directory is still anchored
+// to its leading slash.
+func foldPathPattern(path string) string {
+	separator := `/`
+	if strings.ContainsRune(path, '\\') {
+		separator = `\\+`
+	}
+	var b strings.Builder
+	start := 0
+	for i, r := range path {
+		if r != '/' && r != '\\' {
+			continue
+		}
+		b.WriteString(regexp.QuoteMeta(path[start:i]))
+		b.WriteString(separator)
+		start = i + 1
+	}
+	b.WriteString(regexp.QuoteMeta(path[start:]))
+	return b.String()
 }
