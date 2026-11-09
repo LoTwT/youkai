@@ -722,16 +722,7 @@ func (m *Model) runNavigation(req navigationRequest) {
 	case navSummaryClass:
 		m.openSummaryClassState(req.filter, req.summaryClass)
 	case navRecordTab:
-		if req.recordTab != m.recordTab && !m.reviewNoticeAcrossPages {
-			// 摘要 and 逐件 are separate screens (08 §2, §3): an ordinary
-			// action result from the item browser does not follow the user
-			// into the summary (L-D).
-			m.clearReviewNotice()
-		}
-		m.recordTab = req.recordTab
-		if m.recordTab == recordTabItems {
-			m.enterReviewView()
-		}
+		m.showRecordTab(req.recordTab)
 	case navOpenRecord:
 		m.page = pageResults
 		m.performOpenRecord(req.recordID, req.exportAfterLoad)
@@ -1132,7 +1123,7 @@ func (m *Model) handleReviewError(recordID string, err error) {
 		m.exitIntent = exitIntentNone
 		m.reviewErr = ""
 		m.reviewSaveFailed = false
-		m.setReviewNotice("记录已被更新，正在重新加载当前修订；旧输入未保存。")
+		m.setReviewNotice(conflictNoticeReloading)
 		m.reviewNoticeKeep = true
 		if m.rec != nil && m.rec.ID == recordID {
 			m.reloadRecord(recordID, m.rec.Live)
@@ -1146,20 +1137,32 @@ func (m *Model) handleReviewError(recordID string, err error) {
 	m.reviewErr = "保存失败：" + err.Error() + "。输入已保留，可重试。"
 }
 
-// settleConflictNotice replaces the in-progress conflict explanation once
-// the reload it announced has settled. The notice stays pinned for the next
-// navigation, but it must not keep claiming a load is still running (PR-19b
-// review).
+// The conflict explanation is pinned across the reload it caused. Each
+// text names one reload state so a later load cannot leave a stale claim.
+const (
+	conflictNoticeReloading = "记录已被更新，正在重新加载当前修订；旧输入未保存。"
+	conflictNoticeReloaded  = "记录已被更新，已重新加载当前修订；旧输入未保存。"
+	conflictNoticeFailed    = "记录已被更新，重新加载失败；旧输入未保存。"
+)
+
+// settleConflictNotice replaces the conflict explanation once the reload it
+// announced has settled. The notice stays pinned for the next navigation,
+// but it must not keep claiming a load is still running, and a later
+// successful load must replace an earlier failure (PR-19b review).
 func (m *Model) settleConflictNotice(reloaded bool) {
-	if !m.reviewNoticeKeep ||
-		!strings.HasPrefix(m.reviewNotice, "记录已被更新，正在重新加载当前修订") {
+	if !m.reviewNoticeKeep {
+		return
+	}
+	switch m.reviewNotice {
+	case conflictNoticeReloading, conflictNoticeFailed:
+	default:
 		return
 	}
 	if reloaded {
-		m.reviewNotice = "记录已被更新，已重新加载当前修订；旧输入未保存。"
+		m.reviewNotice = conflictNoticeReloaded
 		return
 	}
-	m.reviewNotice = "记录已被更新，重新加载失败；旧输入未保存。"
+	m.reviewNotice = conflictNoticeFailed
 }
 
 // applySavedItem replaces the saved item's row in place, locating it by
