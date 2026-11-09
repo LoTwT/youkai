@@ -255,6 +255,9 @@ func (f *flakyStore) heal() {
 // ordering assertions read both.
 type recordingRecognizer struct {
 	delegate Recognizer
+	// closeErr is returned after the delegate closes, so a test can inject
+	// a recognizer cleanup failure without changing the recorded counts.
+	closeErr error
 
 	mu            sync.Mutex
 	inFlight      int
@@ -289,7 +292,10 @@ func (r *recordingRecognizer) Close() error {
 			r.phaseAtClose = "no-session"
 		}
 	}
-	return r.delegate.Close()
+	if err := r.delegate.Close(); err != nil {
+		return err
+	}
+	return r.closeErr
 }
 
 // wire lets Close observe the service's session phase.

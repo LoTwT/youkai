@@ -986,6 +986,91 @@ func TestQuitStopsSessionThenClosesRecognizerThenReleasesOccupancy(t *testing.T)
 	}
 }
 
+// TestQuitCleanupFailureKeepsDataRootOccupied pins the explicit-exit rule
+// for a failed teardown: when closing the recognizer or shutting the OCR
+// environment fails, the data-root occupancy stays held. The failed exit
+// leaves the process able to view and save results, so releasing the root
+// would let another process take it and write concurrently. The occupancy
+// then releases only at process exit — the entry point's deferred Close,
+// or the OS after the process is gone.
+func TestQuitCleanupFailureKeepsDataRootOccupied(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		closeErr error
+		shutdown func() error
+		wantErr  string
+	}{
+		{
+			name:     "recognizer close",
+			closeErr: errors.New("injected recognizer close failure"),
+			wantErr:  "close recognizer",
+		},
+		{
+			name: "OCR shutdown",
+			shutdown: func() error {
+				return errors.New("injected OCR shutdown failure")
+			},
+			wantErr: "shut down the OCR environment",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			paths := newTestPaths(t)
+			rec := &recordingRecognizer{delegate: newFakeRecognizer(), closeErr: tc.closeErr}
+			shutdownCalls := 0
+			shutdown := func() error {
+				shutdownCalls++
+				if tc.shutdown != nil {
+					return tc.shutdown()
+				}
+				return nil
+			}
+			svc, dataLock := newTestService(t, paths,
+				devFixtureSource(t, 1, 0),
+				func() (Recognizer, error) { return rec, nil },
+				shutdown)
+			if _, err := svc.Start(StartRequest{ID: "cleanup-failure"}); err != nil {
+				t.Fatalf("start: %v", err)
+			}
+			snap := waitNotBusy(t, svc)
+
+			first := svc.Quit()
+			if first == nil || !strings.Contains(first.Error(), tc.wantErr) {
+				t.Fatalf("Quit = %v, want the %s failure", first, tc.wantErr)
+			}
+			// Another process cannot take the root while this process may
+			// still write below it.
+			if _, err := AcquireDataRootLock(paths.Data); !errors.Is(err, ErrLockHeld) {
+				t.Fatalf("data-root occupancy after a failed teardown: %v, want ErrLockHeld", err)
+			}
+			// The failure dialog invites the user to keep viewing results;
+			// saving a revision still writes under the held root.
+			if _, err := svc.SaveItemRevision(string(snap.SessionID), 1, 0, ItemRevisionEdit{Data: reviewData()}); err != nil {
+				t.Fatalf("save revision after a failed teardown: %v", err)
+			}
+			// A repeated Quit returns the same cached outcome without
+			// re-running the teardown.
+			second := svc.Quit()
+			if second == nil || second.Error() != first.Error() {
+				t.Fatalf("repeated Quit = %v, want the cached %v", second, first)
+			}
+			if rec.closeCount != 1 || shutdownCalls != 1 {
+				t.Fatalf("teardown re-ran: recognizer closed %d times, OCR shutdown %d times",
+					rec.closeCount, shutdownCalls)
+			}
+			// The entry point's deferred close is the process-exit release;
+			// the root becomes acquirable once it runs.
+			if err := dataLock.Close(); err != nil {
+				t.Fatalf("release the data-root occupancy at exit: %v", err)
+			}
+			taken, err := AcquireDataRootLock(paths.Data)
+			if err != nil {
+				t.Fatalf("data root after the exit release: %v", err)
+			}
+			taken.Close()
+		})
+	}
+}
+
 // TestScanLockReleasedAfterSessionEnd pins the scan occupancy's
 // lifetime: held from the accepted start, released when the session
 // wraps up — not at process exit.
