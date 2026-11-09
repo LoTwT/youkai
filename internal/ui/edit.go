@@ -511,7 +511,7 @@ func (m *Model) startEditRow(row *Row) {
 	if first, _ := reviewFormFields(m.reviewProblems(row)); first != nil {
 		m.edit.firstFields = first
 	}
-	m.navPrompt = nil
+	m.abandonNavigationPrompt()
 	m.reviewErr = ""
 	m.reviewSaveFailed = false
 	m.lastAction = reviewSave
