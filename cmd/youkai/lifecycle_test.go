@@ -313,6 +313,9 @@ func TestWindowCloseHidesByDefault(t *testing.T) {
 	if model.allowCalls != 0 || model.stopCalls != 0 {
 		t.Fatalf("hiding started the exit path: allowCalls=%d stopCalls=%d", model.allowCalls, model.stopCalls)
 	}
+	if win.redraws != 0 {
+		t.Fatalf("hiding requested %d frames, want none", win.redraws)
+	}
 }
 
 // A close after a failed cleanup still hides under the close-to-tray
@@ -397,7 +400,10 @@ func TestTrayClickDuringExitUsesRestore(t *testing.T) {
 }
 
 // Close-to-exit runs the wrap-up through AllowClose and keeps the window
-// until it settles.
+// until it settles. A refused close also changed the window's state — an
+// unsaved edit opens the exit prompt, and an earlier cleanup failure
+// reopens its dialog — so the lifecycle must request the frame that shows
+// it; the close callback renders no frame of its own.
 func TestWindowCloseExitsWhenPreferenceSaysSo(t *testing.T) {
 	model := &fakeLifecycleModel{
 		behavior:     app.CloseBehaviorExit,
@@ -418,6 +424,9 @@ func TestWindowCloseExitsWhenPreferenceSaysSo(t *testing.T) {
 	}
 	if win.hides != 0 {
 		t.Fatal("close-to-exit hid the window")
+	}
+	if win.redraws != 1 {
+		t.Fatalf("frames requested after the refused close = %d, want 1 without further input", win.redraws)
 	}
 }
 

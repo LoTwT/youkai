@@ -263,6 +263,11 @@ func (l *windowLifecycle) OnWindowClose(e preventableEvent) {
 		// until the final save settled. A completed wrap-up allows the close.
 		if !l.model.AllowClose() {
 			e.PreventDefault()
+			// The refusal changed the window's state: an unsaved edit opens
+			// the exit prompt, and an earlier cleanup failure reopens its
+			// dialog. The close callback renders no frame of its own, so
+			// without this request the prompt waits for a pointer move.
+			l.redraw()
 		}
 		l.Refresh()
 		return
