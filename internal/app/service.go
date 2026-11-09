@@ -875,10 +875,12 @@ func (s *Service) Quit() error {
 // A failed recognizer close or OCR shutdown deliberately leaves the
 // data-root occupancy held: the failed exit lets the user keep viewing
 // and saving results, so releasing the root here would let another
-// process take it and write concurrently. The process exit releases it
-// instead — the entry point's deferred DataRootLock.Close, or the OS
-// after the process is gone. The error is still returned so the caller
-// can offer the explicit exit.
+// process take it and write concurrently. The release then belongs to the
+// process exit — the entry point's deferred DataRootLock.Close, or the OS
+// after the process is gone — unless the explicit exit is the installed
+// update's restart, whose handoff in OnQuit releases the root before the
+// new process starts. The error is still returned so the caller can offer
+// the explicit exit.
 func (s *Service) teardown() error {
 	s.mu.Lock()
 	rec := s.recognizer
@@ -895,7 +897,7 @@ func (s *Service) teardown() error {
 	}
 	if len(errs) > 0 {
 		err := errors.Join(errs...)
-		log.Printf("youkai: exit wrap-up: %v (data-root occupancy kept until process exit)", err)
+		log.Printf("youkai: exit wrap-up: %v (data-root occupancy kept for the restart handoff or process exit)", err)
 		return err
 	}
 	if err := s.cfg.DataLock.Close(); err != nil {

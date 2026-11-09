@@ -233,7 +233,7 @@ func main() {
 	// a failed teardown the handoff below releases it from OnQuit, after
 	// the framework's last write and before relaunchNow. Both callbacks
 	// run on the UI thread, as does everything they touch.
-	handoff := relaunchHandoff{detachLog: detachDiagnosticLog, release: dataLock.Close}
+	handoff := newRelaunchHandoff(dataLock)
 
 	model := ui.New(ui.Config{
 		Service: svc,
@@ -314,15 +314,14 @@ func main() {
 		HideToTray: func() { life.HideToTray() },
 		// After a successful install the application restarts into the new
 		// version: this first Relaunch only starts the exit — the close
-		// interception cancels it (see updateInstalled above) after firing
-		// the wrap-up — and the re-issued one below, with the wrap-up
-		// settled, is the restart itself. A session whose final save keeps
-		// failing still refuses the exit, the window stays with its retry,
-		// and the installed update runs at the next launch.
+		// interception cancels it (relaunchHandoff.onUpdateInstalled records
+		// the install) after firing the wrap-up — and the re-issued one in
+		// onExitSettled, with the wrap-up settled, is the restart itself. A
+		// session whose final save keeps failing still refuses the exit,
+		// the window stays with its retry, and the installed update runs at
+		// the next launch.
 		OnUpdateInstalled: func() {
-			handoff.updateInstalled = true
-			log.Printf("youkai: update installed, restarting the application")
-			mygo.App.Relaunch()
+			handoff.onUpdateInstalled(mygo.App.Relaunch)
 		},
 		// A settled explicit exit closes the application: the model's
 		// quit goroutine already waited for the wrap-up, so quitting re-
@@ -332,13 +331,7 @@ func main() {
 		// teardown reaches it only through the explicit 仍然退出 path.
 		OnExitSettled: func() {
 			life.Refresh()
-			handoff.settle()
-			if handoff.updateInstalled {
-				log.Printf("youkai: exit settled, relaunching into the installed update")
-				mygo.App.Relaunch()
-				return
-			}
-			mygo.App.Quit()
+			handoff.onExitSettled(mygo.App.Relaunch, mygo.App.Quit)
 		},
 		// A failed final save leaves the process alive. The restore entry
 		// must become visible again even when the exit was requested from

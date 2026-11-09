@@ -53,9 +53,10 @@ func readDiagnosticLog(t *testing.T, logDir string) string {
 }
 
 // TestRelaunchReleasesDataRootBeforeRestart pins the installed update's
-// restart handoff: the root stays held through every point at which the
-// exit can still be refused or the app keeps running, and the OnQuit
-// listener — the last step before MyGo starts the new process — detaches
+// restart handoff: the root stays held from the install request through
+// every quit the exit interception can still refuse — including a quit
+// after the install but before the wrap-up settled — and the OnQuit
+// listener, the last step before MyGo starts the new process, detaches
 // the diagnostic log and then releases the root.
 func TestRelaunchReleasesDataRootBeforeRestart(t *testing.T) {
 	root := t.TempDir()
@@ -65,30 +66,43 @@ func TestRelaunchReleasesDataRootBeforeRestart(t *testing.T) {
 	}
 	defer held.Close()
 	logDir := routeLogToDataRoot(t)
-	handoff := relaunchHandoff{
-		detachLog: detachDiagnosticLog,
-		release: func() error {
-			if log.Writer() != os.Stderr {
-				t.Error("the data-root occupancy was released before the diagnostic log was detached")
-			}
-			return held.Close()
-		},
+
+	handoff := newRelaunchHandoff(held)
+	release := handoff.release
+	handoff.release = func() error {
+		if log.Writer() != os.Stderr {
+			t.Error("the data-root occupancy was released before the diagnostic log was detached")
+		}
+		return release()
+	}
+	var relaunches, quits int
+	relaunch := func() { relaunches++ }
+	quit := func() { quits++ }
+
+	// The install requests the restart; the close interception cancels
+	// that quit, so the app keeps running with the occupancy and the
+	// diagnostic log in place.
+	handoff.onUpdateInstalled(relaunch)
+	if relaunches != 1 {
+		t.Fatalf("the install requested %d relaunches, want 1", relaunches)
 	}
 
-	// A quit without the settled exit: the install's first relaunch is
-	// cancelled by the exit interception, and the app keeps running. The
-	// occupancy and the diagnostic log stay where they are.
+	// A quit between the install and the settled wrap-up can still be
+	// refused (Windows WM_ENDSESSION, for one): the installed flag alone
+	// must not release.
 	handoff.onQuit()
-	requireRootHeld(t, root, "after a quit without a settled exit")
+	requireRootHeld(t, root, "after a quit before the wrap-up settled")
 	log.Print("youkai: logged before the restart handoff")
 	if got := readDiagnosticLog(t, logDir); !strings.Contains(got, "logged before the restart handoff") {
 		t.Fatalf("a line logged before the restart handoff did not reach the data root: %q", got)
 	}
 
-	handoff.updateInstalled = true
-	handoff.settle()
-	// The settled exit re-issued the relaunch, but the quit is still on
-	// its way; a listener can refuse it.
+	// The settled exit re-issues the restart; the quit is still on its
+	// way, so a listener can refuse it.
+	handoff.onExitSettled(relaunch, quit)
+	if relaunches != 2 || quits != 0 {
+		t.Fatalf("after the settled exit: %d relaunches, %d quits; want 2 and 0", relaunches, quits)
+	}
 	requireRootHeld(t, root, "after the settled exit requested the relaunch")
 
 	handoff.onQuit()
@@ -106,10 +120,12 @@ func TestRelaunchReleasesDataRootBeforeRestart(t *testing.T) {
 	taken.Close()
 }
 
-// TestPlainExitKeepsDataRootUntilProcessExit pins the non-restart path: an
-// explicit exit that is not the installed update's restart leaves the
-// release to the entry point's deferred Close at process exit, even after
-// a successful teardown, and the diagnostic log keeps receiving lines.
+// TestPlainExitKeepsDataRootUntilProcessExit pins the non-restart path: a
+// settled exit without an installed update quits instead of relaunching,
+// and the handoff's quit listener releases nothing — the occupancy goes
+// with the wrap-up's teardown on success or the entry point's deferred
+// Close at process exit after a failed teardown. The diagnostic log keeps
+// receiving lines.
 func TestPlainExitKeepsDataRootUntilProcessExit(t *testing.T) {
 	root := t.TempDir()
 	held, err := app.AcquireDataRootLock(root)
@@ -117,8 +133,12 @@ func TestPlainExitKeepsDataRootUntilProcessExit(t *testing.T) {
 		t.Fatalf("acquire the data-root occupancy: %v", err)
 	}
 	logDir := routeLogToDataRoot(t)
-	handoff := relaunchHandoff{detachLog: detachDiagnosticLog, release: held.Close}
-	handoff.settle()
+	handoff := newRelaunchHandoff(held)
+	var relaunches, quits int
+	handoff.onExitSettled(func() { relaunches++ }, func() { quits++ })
+	if quits != 1 || relaunches != 0 {
+		t.Fatalf("a plain settled exit: %d quits, %d relaunches; want 1 and 0", quits, relaunches)
+	}
 	handoff.onQuit()
 	requireRootHeld(t, root, "after a plain exit's quit listener")
 	log.Print("youkai: logged on the plain exit")
