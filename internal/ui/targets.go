@@ -28,16 +28,19 @@ const (
 	// targetDiscoveryFailedAction: enumeration itself failed; the row's value
 	// carries the cause and this is its action.
 	targetDiscoveryFailedAction = "请点“重新检查”；仍失败时复制诊断信息。"
-	// targetDiscoveryFailedText is the complete refusal shown left of the
-	// start button. It repeats the cause because no row value sits beside
-	// that line.
-	targetDiscoveryFailedText = "查找游戏窗口失败。" + targetDiscoveryFailedAction
+	// targetDiscoveryFailedText is the past-event cause of a start refused
+	// because enumeration failed. The checklist row owns the current action;
+	// by the time this line is read that row may already be satisfied again,
+	// so this copy must not tell the user to re-check or retry.
+	targetDiscoveryFailedText = "查找游戏窗口失败。"
 	// targetGoneText: the confirmed window vanished between confirmation
-	// and start.
-	targetGoneText = "确认的游戏窗口已关闭或被替换，请点“重新检查”后重新选择。"
+	// and start. Like targetDiscoveryFailedText this is past-event copy only:
+	// a recovered window must not leave "re-check and choose again" behind.
+	targetGoneText = "确认的游戏窗口已关闭或被替换。"
 	// targetStartFailedText is the generic fallback for any other start
-	// refusal in the installed UI.
-	targetStartFailedText = "开始扫描失败，请稍后重试；详细信息已写入诊断日志。"
+	// refusal in the installed UI. It claims no recovery action and no
+	// diagnostic entry, because not every refusal is logged.
+	targetStartFailedText = "原因未知。"
 )
 
 // chosenTarget returns the confirmed candidate, nil when none is chosen.
@@ -59,9 +62,11 @@ func (m *Model) targetReady() bool {
 	return m.chosenTarget() != nil
 }
 
-// startErrorText maps a refused start in the installed UI to user copy; a
-// fixed-target development source keeps its raw error for field work. The
-// service's start refusal already logged the original.
+// startErrorText maps a refused start in the installed UI to the past-event
+// line beside the start. It names only what happened: the current state and
+// its action belong to the checklist, which may already be satisfied again.
+// A fixed-target development source keeps its raw error for field work. The
+// service logs most refusals; an update-install refusal is not logged.
 func startErrorText(err error) string {
 	switch {
 	case errors.Is(err, app.ErrTargetGone):

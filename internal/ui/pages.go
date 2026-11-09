@@ -237,10 +237,10 @@ func (m *Model) pageBody(c *ui.Context, t *ui.Theme, tok *Tokens) {
 }
 
 // pageActions is the scan page's bottom action bar: the start facts on the
-// left, the disabled reason and 开始扫描 on the right, or 停止扫描 while a
-// session runs. The bar takes its content height instead of a fixed one so
-// the minimum window keeps every line and the button visible (08 §1.3;
-// T-08 may only wrap or drop the estimate).
+// left, the current reason and the last start failure beside 开始扫描 on the
+// right, or 停止扫描 while a session runs. The bar takes its content height
+// instead of a fixed one so the minimum window keeps every line and the
+// button visible (08 §1.3; T-08 may only wrap or drop the estimate).
 func (m *Model) pageActions(c *ui.Context, t *ui.Theme, tok *Tokens) {
 	if m.displayPage() != pageScan {
 		return
@@ -261,8 +261,19 @@ func (m *Model) pageActions(c *ui.Context, t *ui.Theme, tok *Tokens) {
 			}
 			return
 		}
-		if reason := m.scanStartBlockedReason(); reason != "" {
-			ui.Text(c, reason).TextColor(t.TextMuted).FontSize(t.FontSize * 0.9).Shrink(1)
+		reason := m.scanStartBlockedReason()
+		failure := m.scanStartFailureLine()
+		if reason != "" || failure != "" {
+			// The current reason and the past failure are separate slots:
+			// both may show at once, and each may wrap inside the bar.
+			ui.Column(c).Gap(t.Space(0.5)).AlignItems(ui.End).Children(func() {
+				if reason != "" {
+					ui.Text(c, reason).TextColor(t.TextMuted).FontSize(t.FontSize * 0.9)
+				}
+				if failure != "" {
+					ui.Text(c, failure).TextColor(t.Danger).FontSize(t.FontSize * 0.9)
+				}
+			})
 		}
 		button := ui.PrimaryButton(c, "开始扫描").Disabled(!m.scanStartReady()).Bind(&m.scanActionRef)
 		if button.Clicked() {
@@ -330,15 +341,14 @@ func (m *Model) statusShortcutText() string {
 	return ""
 }
 
-// scanStartBlockedReason names why the start button is unavailable, in the
-// order the user meets the conditions: exit and update flows, the service's
-// current state, page-owned work, the source and target, the checklist, and
-// last the previous start refusal. A refusal describes an earlier moment and
-// is shown only when nothing current explains the disabled start; only a
-// user action (重新检查, a new window confirmation, or the next start)
-// clears it, so automatic re-checks do not make it vanish unseen. The text
-// sits left of the button (08 §1, R-14); a busy session shows the stop
-// button instead and never reaches this copy.
+// scanStartBlockedReason names why the start button is unavailable now, in
+// the order the user meets the conditions: exit and update flows, the
+// service's current state, page-owned work, the source and target, and the
+// checklist. It returns empty when nothing blocks the start. The last
+// refused start is a past event rendered separately by
+// scanStartFailureLine, so it can neither hide a current reason nor be
+// mistaken for one. The text sits left of the button (08 §1, R-14); a busy
+// session shows the stop button instead and never reaches this copy.
 func (m *Model) scanStartBlockedReason() string {
 	switch {
 	case m.exitState == exitRunning || m.exitState == exitDone:
@@ -365,15 +375,7 @@ func (m *Model) scanStartBlockedReason() string {
 		return "正在开始扫描……"
 	default:
 		if reason := m.readinessStartReason(); reason != "" {
-			// The checklist judges the current state. A refusal that is still
-			// remembered yields to it instead of hiding the newer reason.
 			return reason
-		}
-		if m.startErr != "" {
-			if m.source.TargetSelection {
-				return m.startErr
-			}
-			return "开始失败：" + m.startErr
 		}
 		if !m.targetReady() {
 			// A target row without its own blocking conclusion must still
@@ -382,6 +384,17 @@ func (m *Model) scanStartBlockedReason() string {
 		}
 		return ""
 	}
+}
+
+// scanStartFailureLine is the last refused start as a past event. It is
+// shown beside the current reason and may stay while the start is usable
+// again; its copy names only what happened, so no stale action guidance
+// survives a recovered window. Only a user action clears it (08 §1.1).
+func (m *Model) scanStartFailureLine() string {
+	if m.startErr == "" {
+		return ""
+	}
+	return "上次开始失败：" + m.startErr
 }
 
 func (m *Model) pageStatusText() string {

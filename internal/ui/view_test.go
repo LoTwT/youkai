@@ -252,7 +252,7 @@ func TestViewStartWithoutSource(t *testing.T) {
 }
 
 // TestViewStartRefusalIsShown checks that a refused start's reason shows
-// beside the button.
+// beside the button as a past event.
 func TestViewStartRefusalIsShown(t *testing.T) {
 	svc := &fakeService{startFn: func(app.StartRequest) (app.StartOutcome, error) {
 		return app.StartOutcome{}, errString("no scan source is wired")
@@ -264,7 +264,7 @@ func TestViewStartRefusalIsShown(t *testing.T) {
 		t.Fatal(err)
 	}
 	settle(t, m, q, tt)
-	if !tt.HasText("开始失败：no scan source is wired") {
+	if !tt.HasText("上次开始失败：no scan source is wired") {
 		t.Errorf("the start refusal does not show: %q", tt.Texts())
 	}
 }

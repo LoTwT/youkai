@@ -351,7 +351,11 @@ type Model struct {
 	// service answered, so a double click cannot start two sessions.
 	startSerial int
 	startReqID  string
-	startErr    string
+	// startErr is the last refused start as a past event, not part of the
+	// current reason. It survives automatic re-checks and may sit beside a
+	// usable start; only 重新检查, a new window confirmation or 更换目标, or
+	// the next start clears it.
+	startErr string
 
 	// Target candidates (P-01): the last discovery result, whether a
 	// discovery is in flight, its user-facing failure, the chosen row (-1
@@ -735,10 +739,11 @@ func (m *Model) Apply(snap app.Snapshot) {
 	m.appliedSession, m.appliedRevision = snap.SessionID, snap.Revision
 	m.snap = snap
 	m.prevBusy = snap.Busy
-	// A service-owned block is the current reason. The last start refusal
-	// describes an earlier moment and must neither hide it nor come back
-	// once the block clears.
-	if snap.StartBlocked != app.StartBlockedNone {
+	// A service-owned block is the current reason, and a refusal it
+	// superseded must not come back once the block clears. Occupied is the
+	// placeholder the refused attempt itself published while preparing, not
+	// a newer judgement; treating it as one would drop the actual refusal.
+	if startBlockSupersedesRefusal(snap.StartBlocked) {
 		m.startErr = ""
 	}
 	// A session that ended before input opened never scanned anything: the
@@ -823,6 +828,20 @@ func (m *Model) Apply(snap app.Snapshot) {
 	// is running (another record or page is open), so the notification loads
 	// the record itself.
 	m.notifySnapshot(previous, hadPrevious, snap, finalLoadVersion)
+}
+
+// startBlockSupersedesRefusal reports whether a service block speaks for the
+// current state and therefore replaces the last start failure. Quitting, an
+// update install and a failed final save outlive the refused attempt.
+// Occupied is the placeholder that attempt itself published while preparing,
+// so it cannot supersede its own refusal.
+func startBlockSupersedesRefusal(block app.StartBlockedReason) bool {
+	switch block {
+	case app.StartBlockedQuitting, app.StartBlockedUpdateInstall, app.StartBlockedSaveRetry:
+		return true
+	default:
+		return false
+	}
 }
 
 // beginSession routes a newly started scan into the open record. The new
@@ -1191,16 +1210,16 @@ func (m *Model) Start() {
 		m.update(func() {
 			m.startReqID = ""
 			if err != nil {
-				// A snapshot that already names the service's own block is
-				// newer than this refused attempt. Recording it would bring
-				// the stale text back once that block clears, for example
-				// after an update install fails.
-				if m.snap.StartBlocked == app.StartBlockedNone {
+				// A service block that outlives this attempt is newer than the
+				// refusal and replaces it. Occupied is this attempt's own
+				// placeholder, so the refusal behind it is still this start's
+				// outcome and must be kept.
+				if !startBlockSupersedesRefusal(m.snap.StartBlocked) {
 					m.startErr = err.Error()
 					if m.source.TargetSelection {
-						// The installed UI shows user copy; the raw error is
-						// already in the diagnostic log (the service logs the
-						// refused start) and stays hidden here.
+						// The installed UI shows past-event copy; the raw error
+						// stays in the diagnostic log for most refusals. An
+						// update-install refusal is not logged (follow-up #126).
 						m.startErr = startErrorText(err)
 					}
 				}

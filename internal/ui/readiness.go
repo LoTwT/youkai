@@ -1091,6 +1091,9 @@ func (m *Model) runReadinessAction(c *ui.Context, action readinessActionKind) {
 	case readinessActionDiagnostics:
 		m.copyDiagnostics(c)
 	case readinessActionChangeTarget:
+		// Asking for another window retires the failure of the old choice,
+		// like a new confirmation; the past event belongs to that choice.
+		m.startErr = ""
 		m.targetChoice = -1
 	}
 }
