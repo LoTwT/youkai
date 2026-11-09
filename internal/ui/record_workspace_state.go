@@ -558,7 +558,7 @@ func (m *Model) showRecord(id string, live bool) {
 	m.compactListOpen = false
 	m.compactListFocusRequested = false
 	m.edit = nil
-	m.navPrompt = nil
+	m.abandonNavigationPrompt()
 	m.reviewErr = ""
 	m.reviewSaveFailed = false
 	m.clearReviewNotice()
@@ -639,7 +639,7 @@ func (m *Model) reloadRecord(id string, live bool) {
 				if m.edit == nil || !m.edit.dirty() {
 					m.edit = nil
 				}
-				m.navPrompt = nil
+				m.abandonNavigationPrompt()
 				if m.exportAfterLoadID == id {
 					m.exportAfterLoadID = ""
 				}

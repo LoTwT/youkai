@@ -551,9 +551,10 @@ type Model struct {
 	navPrompt        *navigationRequest
 
 	exitState exitState
-	// exitIntent survives every prompt and save transition until the exit
-	// is cancelled or settled. A second quit may only upgrade normal to
-	// force; a generic quit never downgrades the tray's 仍然退出.
+	// exitIntent survives prompt and save transitions until the exit is
+	// settled or cancelled; abandoning its prompt cancels it. A second quit
+	// may only upgrade normal to force; a generic quit never downgrades the
+	// tray's 仍然退出.
 	exitIntent exitIntent
 	exitErr    string
 	// exitFailureWasSave says the failed wrap-up was blocked by its final
