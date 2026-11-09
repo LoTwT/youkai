@@ -263,6 +263,11 @@ func (l *windowLifecycle) OnWindowClose(e preventableEvent) {
 		// until the final save settled. A completed wrap-up allows the close.
 		if !l.model.AllowClose() {
 			e.PreventDefault()
+			// The refusal changed the window's state: an unsaved edit opens
+			// the exit prompt, and an earlier cleanup failure reopens its
+			// dialog. The close callback renders no frame of its own, so
+			// without this request the prompt waits for a pointer move.
+			l.redraw()
 		}
 		l.Refresh()
 		return
@@ -313,6 +318,11 @@ func (l *windowLifecycle) OnBeforeQuit(e preventableEvent) {
 		if !l.model.Exiting() {
 			l.Restore()
 		}
+		// The refusal changed the window's state: it opened a prompt, or the
+		// running wrap-up advanced. The quit callback renders no frame of its
+		// own, so ask for one; otherwise the prompt or progress waits for the
+		// next input, and a restored window can show stale content.
+		l.redraw()
 	}
 	l.Refresh()
 }
@@ -414,9 +424,9 @@ func (l *windowLifecycle) OnNotificationClick(id string) {
 }
 
 // redraw requests one frame after model state changed outside an input
-// event. The close callback and a notification click both arrive with no
-// follow-up event, so the dialog or page they chose would otherwise remain
-// invisible until the user moved the mouse.
+// event. The close callback, the quit callback, and a notification click
+// arrive with no follow-up event, so the dialog or page they chose would
+// otherwise remain invisible until the user moved the mouse.
 func (l *windowLifecycle) redraw() {
 	if l.window != nil {
 		l.window.Update(func() {})
