@@ -1,8 +1,12 @@
 package app
 
 import (
+	"bytes"
+	"errors"
+	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -288,5 +292,113 @@ func TestGameScanSourceReadinessPassesTheConfirmedTarget(t *testing.T) {
 	}
 	if port.got.Target.HandleHint != 0 || port.got.Target.ExecutablePath != `C:\game\ZenlessZoneZero.exe` {
 		t.Fatalf("a fixed-target source must keep its configured target: %+v", port.got.Target)
+	}
+}
+
+// captureReadinessLog redirects the standard logger for one test. The
+// readiness page re-checks every ten seconds, so these tests inspect how many
+// lines one repeated condition produces.
+func captureReadinessLog(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	logs := &bytes.Buffer{}
+	previous := log.Writer()
+	log.SetOutput(logs)
+	t.Cleanup(func() { log.SetOutput(previous) })
+	return logs
+}
+
+func readinessTargetFault(code, message string, verdict platform.ReadinessVerdict) platform.ReadinessReport {
+	return platform.ReadinessReport{Checks: []platform.ReadinessCheck{{
+		Item:     platform.ReadinessTargetClient,
+		Verdict:  verdict,
+		Current:  "candidates=0",
+		Required: "confirmed=1",
+		Fault:    &platform.Fault{Code: code, Message: message},
+	}}}
+}
+
+func readinessTargetSatisfied() platform.ReadinessReport {
+	return platform.ReadinessReport{Checks: []platform.ReadinessCheck{{
+		Item:     platform.ReadinessTargetClient,
+		Verdict:  platform.ReadinessSatisfied,
+		Current:  "candidates=1",
+		Required: "confirmed=1",
+	}}}
+}
+
+// TestServiceCheckReadinessLogsFaultChangesOnly pins the log's state-change
+// rule: repeated passes with the same fault stay quiet, a different fault and
+// the recovery each produce exactly one line, and the line carries the
+// platform message that used to be discarded.
+func TestServiceCheckReadinessLogsFaultChangesOnly(t *testing.T) {
+	paths := newTestPaths(t)
+	source := &readinessFakeSource{report: readinessTargetFault(
+		platform.CodeTargetNotFound, "first cause", platform.ReadinessUnsatisfied)}
+	svc, _ := newTestService(t, paths, source, func() (Recognizer, error) { return newFakeRecognizer(), nil })
+	logs := captureReadinessLog(t)
+
+	svc.CheckReadiness(nil)
+	svc.CheckReadiness(nil)
+	if got := strings.Count(logs.String(), "fault item=targetClient"); got != 1 {
+		t.Fatalf("the unchanged fault wrote %d lines, want 1:\n%s", got, logs)
+	}
+	if !strings.Contains(logs.String(), `message="first cause"`) {
+		t.Fatalf("the fault message is missing from the log:\n%s", logs)
+	}
+
+	source.report = readinessTargetFault(
+		platform.CodeTargetAmbiguous, "second cause", platform.ReadinessUnsatisfied)
+	svc.CheckReadiness(nil)
+	svc.CheckReadiness(nil)
+	if got := strings.Count(logs.String(), "code=targetAmbiguous"); got != 1 {
+		t.Fatalf("the changed fault wrote %d lines, want 1:\n%s", got, logs)
+	}
+	if got := strings.Count(logs.String(), "fault item=targetClient"); got != 2 {
+		t.Fatalf("total fault lines = %d, want 2:\n%s", got, logs)
+	}
+	if !strings.Contains(logs.String(), `message="second cause"`) {
+		t.Fatalf("the changed fault message is missing from the log:\n%s", logs)
+	}
+
+	source.report = readinessTargetSatisfied()
+	svc.CheckReadiness(nil)
+	svc.CheckReadiness(nil)
+	if got := strings.Count(logs.String(), "fault cleared item=targetClient"); got != 1 {
+		t.Fatalf("the recovery wrote %d lines, want 1:\n%s", got, logs)
+	}
+	if got := strings.Count(logs.String(), "fault item=targetClient"); got != 2 {
+		t.Fatalf("the satisfied pass wrote a fault line:\n%s", logs)
+	}
+}
+
+// TestServiceCheckReadinessLogsPlatformFailureOnce covers the other line the
+// ten-second re-check used to repeat: a source that cannot produce a platform
+// report. The same error stays quiet; a different error and the recovery are
+// each written once.
+func TestServiceCheckReadinessLogsPlatformFailureOnce(t *testing.T) {
+	paths := newTestPaths(t)
+	source := &readinessFakeSource{err: errors.New("display policy: first failure")}
+	svc, _ := newTestService(t, paths, source, func() (Recognizer, error) { return newFakeRecognizer(), nil })
+	logs := captureReadinessLog(t)
+
+	svc.CheckReadiness(nil)
+	svc.CheckReadiness(nil)
+	if got := strings.Count(logs.String(), "platform check failed"); got != 1 {
+		t.Fatalf("the unchanged platform error wrote %d lines, want 1:\n%s", got, logs)
+	}
+
+	source.err = errors.New("display policy: second failure")
+	svc.CheckReadiness(nil)
+	svc.CheckReadiness(nil)
+	if got := strings.Count(logs.String(), "platform check failed"); got != 2 {
+		t.Fatalf("the changed platform error left %d lines, want 2:\n%s", got, logs)
+	}
+
+	source.err = nil
+	source.report = readinessTargetSatisfied()
+	svc.CheckReadiness(nil)
+	svc.CheckReadiness(nil)
+	if got := strings.Count(logs.String(), "platform check recovered"); got != 1 {
+		t.Fatalf("the platform recovery wrote %d lines, want 1:\n%s", got, logs)
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/LoTwT/youkai/internal/game/zzz/collect"
@@ -63,7 +64,13 @@ type ReadinessCheck struct {
 	Required    string
 	FaultCode   string
 	FaultParams map[string]string
-	CheckedAt   time.Time
+	// FaultMessage is the platform's English diagnostic reason for
+	// FaultCode. It is evidence for the diagnostic log only: the interface
+	// localizes FaultCode/FaultParams and must not display this text. The
+	// readiness path never reads another window's title, so the message
+	// carries no external window title.
+	FaultMessage string
+	CheckedAt    time.Time
 }
 
 // ReadinessReport is one read-only preparation check. It is assembled
@@ -89,6 +96,17 @@ type ReadinessSource interface {
 type Readiness struct {
 	Paths  Paths
 	Source ScanSource
+	// log deduplicates the diagnostic log. NewReadiness supplies it; the
+	// zero value keeps no history and therefore logs every pass.
+	log *readinessLogState
+}
+
+// NewReadiness returns a checker whose diagnostic log writes a fault when it
+// appears or changes and writes its clearing when it disappears. Reusing the
+// returned value keeps that history, which is what a repeatedly checked page
+// needs; the check interval belongs to the caller.
+func NewReadiness(paths Paths, source ScanSource) Readiness {
+	return Readiness{Paths: paths, Source: source, log: &readinessLogState{}}
 }
 
 // Check runs one read-only check. Every row carries its own check time so
@@ -98,10 +116,11 @@ func (r Readiness) Check(target *TargetCandidate) ReadinessReport {
 	at := nowUTC()
 	report := ReadinessReport{CheckedAt: at, Checks: defaultReadinessChecks(at)}
 
+	var platformErr error
 	if source, ok := r.Source.(ReadinessSource); ok {
 		platformReport, err := source.CheckReadiness(target)
 		if err != nil {
-			log.Printf("youkai: readiness: platform check failed: %v", err)
+			platformErr = err
 		} else {
 			mergePlatformReadiness(&report, platformReport, at)
 		}
@@ -109,13 +128,93 @@ func (r Readiness) Check(target *TargetCandidate) ReadinessReport {
 
 	report.set(readinessDiskSpace(r.Paths.Data, at))
 	report.set(readinessRecognitionResources(r.Paths.Resources, at))
+
+	logState := r.log
+	if logState == nil {
+		logState = &readinessLogState{}
+	}
+	logState.observe(report, platformErr)
 	return report
 }
 
 // CheckReadiness implements the service's read-only preparation check
 // (R-01). It never starts a session or takes the scan occupancy.
 func (s *Service) CheckReadiness(target *TargetCandidate) ReadinessReport {
-	return Readiness{Paths: s.cfg.Paths, Source: s.cfg.Source}.Check(target)
+	return Readiness{Paths: s.cfg.Paths, Source: s.cfg.Source, log: &s.readinessLog}.Check(target)
+}
+
+// readinessLogState remembers the fault each checklist row reported last, so
+// the ten-second re-check writes a line only when a fault appears, changes
+// or clears instead of once per pass.
+type readinessLogState struct {
+	mu sync.Mutex
+	// faults is keyed by row. The verdict and code identify the fault; the
+	// message may embed measured values, so it is logged but not compared.
+	faults      map[ReadinessItem]readinessFault
+	platformErr string
+}
+
+type readinessFault struct {
+	verdict ReadinessVerdict
+	code    string
+}
+
+// observe compares this pass with the previous one. A platform failure is
+// itself a state: it is logged once per distinct error and its recovery is
+// logged once. While the platform report is unavailable, row faults are left
+// untouched so a failed platform check does not fabricate recoveries.
+func (s *readinessLogState) observe(report ReadinessReport, platformErr error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if platformErr != nil {
+		message := redactText(platformErr.Error())
+		if message != s.platformErr {
+			s.platformErr = message
+			log.Printf("youkai: readiness: platform check failed: %s", message)
+		}
+		return
+	}
+	if s.platformErr != "" {
+		s.platformErr = ""
+		log.Printf("youkai: readiness: platform check recovered")
+	}
+
+	current := make(map[ReadinessItem]readinessFault, len(report.Checks))
+	seen := make(map[ReadinessItem]bool, len(report.Checks))
+	for _, check := range report.Checks {
+		seen[check.Item] = true
+		if check.FaultCode == "" {
+			continue
+		}
+		fault := readinessFault{verdict: check.Verdict, code: check.FaultCode}
+		current[check.Item] = fault
+		previous, existed := s.faults[check.Item]
+		if existed && previous == fault {
+			continue
+		}
+		log.Printf("youkai: readiness: fault item=%s verdict=%s code=%s current=%q required=%q message=%q",
+			check.Item, check.Verdict, check.FaultCode, check.Current, check.Required,
+			redactText(check.FaultMessage))
+	}
+	for item, previous := range s.faults {
+		if seen[item] {
+			continue
+		}
+		log.Printf("youkai: readiness: fault cleared item=%s verdict=unknown code=%s", item, previous.code)
+	}
+	for _, check := range report.Checks {
+		previous, existed := s.faults[check.Item]
+		if !existed {
+			continue
+		}
+		if _, stillFaulted := current[check.Item]; stillFaulted {
+			continue
+		}
+		log.Printf("youkai: readiness: fault cleared item=%s verdict=%s code=%s",
+			check.Item, check.Verdict, previous.code)
+	}
+	s.faults = current
 }
 
 // CheckReadiness implements ReadinessSource for the game source. The
@@ -222,6 +321,7 @@ func mergePlatformReadiness(report *ReadinessReport, source platform.ReadinessRe
 		if check.Fault != nil {
 			out.FaultCode = check.Fault.Code
 			out.FaultParams = copyReadinessParams(check.Fault.Params)
+			out.FaultMessage = check.Fault.Message
 		}
 		report.set(out)
 	}

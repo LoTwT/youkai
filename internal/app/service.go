@@ -132,6 +132,10 @@ type Service struct {
 	// the service only reflects it in snapshots.
 	updateInstalling bool
 
+	// readinessLog keeps the last readiness fault state across the page's
+	// ten-second re-checks, so unchanged faults do not fill the log.
+	readinessLog readinessLogState
+
 	// quitMu serializes Quit attempts; the teardown below it runs once.
 	quitMu           sync.Mutex
 	quitTeardownDone bool

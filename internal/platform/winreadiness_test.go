@@ -3,6 +3,7 @@ package platform
 import (
 	"errors"
 	"image"
+	"strings"
 	"testing"
 	"time"
 
@@ -366,6 +367,44 @@ func TestWinReadinessFixedTarget(t *testing.T) {
 	} {
 		if got := checks[item].Verdict; got != ReadinessSatisfied {
 			t.Fatalf("%s = %s, want satisfied", item, got)
+		}
+	}
+	assertReadOnly(t, w)
+}
+
+// TestWinReadinessFaultMessagesNeverCarryAWindowTitle pins the privacy side
+// of the readiness log: the app writes the platform fault message verbatim, so
+// a titled window must not put its caption into the message (or params). The
+// fixed-target failure keeps the titled window present while selection fails.
+func TestWinReadinessFaultMessagesNeverCarryAWindowTitle(t *testing.T) {
+	const title = "不应进入诊断的窗口标题"
+	w := newWinWorld(t)
+	w.win.mu.Lock()
+	w.win.wnds[0].title = title
+	w.win.mu.Unlock()
+
+	report, err := w.adapter.CheckReadiness(ReadinessRequest{
+		Target:  TargetSpec{ExecutablePath: `C:\missing\ZenlessZoneZero.exe`},
+		Display: testDisplayPolicy(),
+	})
+	if err != nil {
+		t.Fatalf("check readiness: %v", err)
+	}
+	target := readinessChecks(t, report)[ReadinessTargetClient]
+	if target.Fault == nil || target.Fault.Code != CodeTargetNotFound {
+		t.Fatalf("target = %+v, want a targetNotFound fault", target)
+	}
+	for _, check := range report.Checks {
+		if check.Fault == nil {
+			continue
+		}
+		if strings.Contains(check.Fault.Message, title) {
+			t.Fatalf("%s fault message names the window title: %q", check.Item, check.Fault.Message)
+		}
+		for key, value := range check.Fault.Params {
+			if strings.Contains(value, title) {
+				t.Fatalf("%s fault param %q names the window title: %q", check.Item, key, value)
+			}
 		}
 	}
 	assertReadOnly(t, w)
