@@ -570,7 +570,17 @@ func TestReadinessAutoRecheck(t *testing.T) {
 	if timers.count() == 0 {
 		t.Fatal("the readiness timer was not armed")
 	}
-	clock.add(11 * time.Second)
+	// Nine seconds after the result is still inside the ten-second floor:
+	// another pass may start only once the result is at least ten seconds
+	// old.
+	clock.add(9 * time.Second)
+	m.refreshReadinessIfStale()
+	settle(t, m, q, tt)
+	if got := svc.readinessCount(); got != 1 {
+		t.Fatalf("the page re-checked %s after the last result, before the ten-second floor",
+			clock.now().Sub(readinessClock()))
+	}
+	clock.add(2 * time.Second)
 	timers.fire(t, 0)
 	settle(t, m, q, tt)
 	if got := svc.readinessCount(); got != 2 {
@@ -596,11 +606,14 @@ func TestScanStageActivationAndCountdown(t *testing.T) {
 	tt := ui.NewTester(m.View, 1020, 700)
 	settle(t, m, q, tt)
 	preparing := snap("s1", 1, true, scan.PhasePreparing, scan.Counts{}, 0, true, "")
-	preparing.Scan.PrepareDeadline = now.Add(30 * time.Second)
+	preparing.Scan.PrepareDeadline = now.Add(27 * time.Second)
 	preparing.Scan.Activation = scan.ActivationActivated
 	applyAndSettle(t, m, q, tt, preparing)
-	if !tt.HasText("30 秒") || !tt.HasText("已把游戏切到前台") {
-		t.Fatalf("the activated preparing stage does not show: %q", tt.Texts())
+	if !tt.HasText("27 秒") {
+		t.Fatalf("the preparing stage does not show the remaining 27 seconds: %q", tt.Texts())
+	}
+	if !tt.HasText("已把游戏切到前台") {
+		t.Fatalf("the preparing stage lost the activated result: %q", tt.Texts())
 	}
 	refused := preparing
 	refused.Revision = 2

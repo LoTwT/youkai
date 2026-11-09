@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/LoTwT/youkai/internal/app"
+	"github.com/LoTwT/youkai/internal/record"
 	"github.com/egoist/mygo/ui"
 )
 
@@ -419,6 +420,64 @@ func TestStayCancelsExitIntent(t *testing.T) {
 	}
 }
 
+// TestFailedReloadCancelsExitIntent covers CL-2: when a record reload fails
+// while the exit prompt is open, the prompt disappears and the quit must
+// disappear with it. The test constructs the prompt over a dirty draft so it
+// can also observe that navigation reaches its ordinary unsaved-input prompt
+// instead of being silently refused; users cannot start a reload from that
+// editor. The reachable form of this state is a failed confirmation's prompt
+// over a clean editor followed by a failed live reload.
+func TestFailedReloadCancelsExitIntent(t *testing.T) {
+	m, q, tt, svc := openReviewRecordPage(t, reviewRowItem(t, 1, 12))
+	tt.Frame()
+	m.edit.draft.Level = "13"
+	m.edit.refresh()
+	tt.Frame()
+	id := m.rec.ID
+	// A reload is already in flight when the user quits; the read then
+	// fails, so the exit prompt can no longer offer its save.
+	svc.loadErr = map[string]error{id: errors.New("read failed")}
+	m.reloadRecord(id, m.rec.Live)
+	if m.AllowClose() {
+		t.Fatal("the close was allowed with an unsaved edit")
+	}
+	drainAll(t, m, q)
+	tt.Frame()
+	if m.recErr == "" || !m.editingDirty() {
+		t.Fatalf("the failed load did not keep a blocked draft: %s", probeReviewState(m))
+	}
+	if m.exitIntent != exitIntentNone || m.navPrompt != nil {
+		t.Fatalf("the failed load kept the exit intent: %s", probeReviewState(m))
+	}
+
+	m.navigatePage(pageSettings)
+	tt.Frame()
+	if m.navPrompt == nil || m.navPrompt.kind != navPage {
+		t.Fatalf("navigation after the failed load was silently refused: %s", probeReviewState(m))
+	}
+	if err := tt.Click("留在这里"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+
+	// The read recovers; the draft can be saved, but that save must not
+	// resume the quit whose prompt was already gone.
+	svc.loadErr = nil
+	m.reloadRecord(id, m.rec.Live)
+	drainAll(t, m, q)
+	tt.Frame()
+	if m.recErr != "" || m.edit == nil {
+		t.Fatalf("the recovered load lost the draft: %s", probeReviewState(m))
+	}
+	m.saveEdit(reviewSave, nil)
+	drainAll(t, m, q)
+	tt.Frame()
+	if svc.quits != 0 || m.exitState != exitIdle {
+		t.Fatalf("a save after the failed load exited without asking: quits=%d state=%v",
+			svc.quits, m.exitState)
+	}
+}
+
 // TestRevisionConflictCancelsExitIntent covers M4: a conflict during the
 // prompt's save must cancel the quit; a later successful save must not exit.
 func TestRevisionConflictCancelsExitIntent(t *testing.T) {
@@ -555,5 +614,143 @@ func TestExitPromptRetryFailureKeepsTheExitPending(t *testing.T) {
 	}
 	if pending := m.pendingItemsCount(); pending != 2 {
 		t.Fatalf("the failed retry settled %d items, want 2 pending", 2-pending)
+	}
+}
+
+// failedConfirmPrompt reaches the production state where an exit prompt stays
+// open over a clean editor: the quit arrived while a confirmation was saving,
+// and that write then failed. 保存并继续 remains the way to retry the
+// confirmation, so the prompt cannot be treated as an unsaved draft.
+func failedConfirmPrompt(t *testing.T, items ...record.ItemRecord) (*Model, *queueUpdater, *ui.Tester, *fakeService) {
+	t.Helper()
+	m, q, tt, svc := openReviewRecordPage(t, items...)
+	orig := svc.saveFn
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	first := true
+	svc.saveFn = func(recordID string, sequence, expectedRevision int64, edit app.ItemRevisionEdit) (app.ItemRevisionResult, error) {
+		if first {
+			first = false
+			once.Do(func() { close(entered) })
+			<-release
+			return app.ItemRevisionResult{}, errors.New("磁盘已满")
+		}
+		return orig(recordID, sequence, expectedRevision, edit)
+	}
+	tt.Frame()
+	if err := tt.Click("确认并下一项"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the confirmation did not start")
+	}
+	m.AllowClose()
+	tt.Frame()
+	close(release)
+	drainAll(t, m, q)
+	tt.Frame()
+	if m.navPrompt == nil || m.navPrompt.kind != navExit || m.exitIntent == exitIntentNone || m.editingDirty() {
+		t.Fatalf("fixture: %s", probeReviewState(m))
+	}
+	return m, q, tt, svc
+}
+
+// TestShowRecordCancelsExitIntent covers CL-2's showRecord path: a new scan
+// session replaces the workspace while a failed confirmation's exit prompt is
+// open. The prompt and the quit it carried must both disappear, or every
+// later navigation is silently refused.
+func TestShowRecordCancelsExitIntent(t *testing.T) {
+	m, q, tt, _ := failedConfirmPrompt(t, reviewRowItem(t, 1, 12), reviewRowItem(t, 2, 12))
+	m.Apply(app.Snapshot{SessionID: "new-session"})
+	drainAll(t, m, q)
+	tt.Frame()
+	if m.exitIntent != exitIntentNone || m.navPrompt != nil {
+		t.Fatalf("the new session kept the exit intent: %s", probeReviewState(m))
+	}
+	m.navigatePage(pageSettings)
+	tt.Frame()
+	if m.displayPage() != pageSettings {
+		t.Fatalf("navigation after the new session was silently refused: page %v", m.displayPage())
+	}
+}
+
+// TestClearResultsLockedCancelsExitIntent keeps the same invariant on the
+// deletion path: clearing the results area abandons its prompt and the exit
+// intent it carried. No ordering was found that reaches deletion with the
+// exit prompt still open, so this asserts the state directly.
+func TestClearResultsLockedCancelsExitIntent(t *testing.T) {
+	m, _, _, _ := failedConfirmPrompt(t, reviewRowItem(t, 1, 12), reviewRowItem(t, 2, 12))
+	m.clearResultsLocked()
+	if m.navPrompt != nil || m.exitIntent != exitIntentNone {
+		t.Fatalf("clearResultsLocked kept the exit intent: %s", probeReviewState(m))
+	}
+}
+
+// TestStartEditRowCancelsExitIntent covers the remaining CL-2 residue: a
+// confirmation is durable but reports an error, so the exit prompt stays over
+// a clean editor; a later successful live reload removes the confirmed row
+// from the pending segment and the renderer opens the next row through
+// startEditRow. That transition must abandon the prompt together with the
+// quit, or navigation is silently refused and a later save exits.
+func TestStartEditRowCancelsExitIntent(t *testing.T) {
+	m, q, tt, svc := openReviewRecordPage(t, reviewRowItem(t, 1, 12), reviewRowItem(t, 2, 12))
+	m.requestResultFilter(resultFilterPending, "", "")
+	m.rec.Live = true
+	m.appliedSession = "r1"
+	drainAll(t, m, q)
+	m.rec.Live = true
+	tt.Frame()
+	orig := svc.saveFn
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	first := true
+	svc.saveFn = func(recordID string, sequence, expectedRevision int64, edit app.ItemRevisionEdit) (app.ItemRevisionResult, error) {
+		if first {
+			first = false
+			once.Do(func() { close(entered) })
+			<-release
+			if _, err := orig(recordID, sequence, expectedRevision, edit); err != nil {
+				t.Errorf("orig: %v", err)
+			}
+			return app.ItemRevisionResult{}, errors.New("post-commit failure")
+		}
+		return orig(recordID, sequence, expectedRevision, edit)
+	}
+	tt.Frame()
+	if err := tt.Click("确认并下一项"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the confirmation did not start")
+	}
+	m.AllowClose()
+	tt.Frame()
+	close(release)
+	drainAll(t, m, q)
+	tt.Frame()
+	if m.navPrompt == nil || m.exitIntent == exitIntentNone {
+		t.Fatalf("fixture: %s", probeReviewState(m))
+	}
+
+	m.Apply(app.Snapshot{SessionID: "r1", Revision: 2, SavedCount: m.liveSavedShown + 1})
+	drainAll(t, m, q)
+	tt.Frame()
+	tt.Frame()
+	if m.navPrompt != nil || m.exitIntent != exitIntentNone {
+		t.Fatalf("startEditRow left the exit intent without its prompt: %s", probeReviewState(m))
+	}
+	if m.edit == nil || m.edit.seq != 2 {
+		t.Fatalf("the renderer did not open the next pending row: %s", probeReviewState(m))
+	}
+	m.navigatePage(pageSettings)
+	tt.Frame()
+	if m.displayPage() != pageSettings {
+		t.Fatalf("navigation after the live reload was silently refused: page %v", m.displayPage())
 	}
 }

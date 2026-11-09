@@ -511,7 +511,7 @@ func (m *Model) startEditRow(row *Row) {
 	if first, _ := reviewFormFields(m.reviewProblems(row)); first != nil {
 		m.edit.firstFields = first
 	}
-	m.navPrompt = nil
+	m.abandonNavigationPrompt()
 	m.reviewErr = ""
 	m.reviewSaveFailed = false
 	m.lastAction = reviewSave
@@ -852,6 +852,16 @@ func (m *Model) promptStay() {
 		m.exitIntent = exitIntentNone
 	}
 	m.navPrompt = nil
+}
+
+// abandonNavigationPrompt closes a prompt whose question can no longer be
+// answered, such as when its record is replaced or fails to load. The exit
+// intent lives outside the prompt so an in-flight save can continue it;
+// once the prompt is gone the intent must go too, or every navigation is
+// refused and a later save exits without asking.
+func (m *Model) abandonNavigationPrompt() {
+	m.navPrompt = nil
+	m.exitIntent = exitIntentNone
 }
 
 // editMatchesSelection reports the binding invariant: an editor may only
