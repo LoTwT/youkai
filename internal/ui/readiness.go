@@ -109,7 +109,6 @@ func (m *Model) refreshReadiness() {
 			m.readiness = report
 			m.applyReadinessTargets(report)
 			m.replaceRecheckedStartFailure()
-			m.replaceRecheckedStartError()
 			if !m.readinessFocusGiven {
 				// Only the first completed pass moves the keyboard to the
 				// first actionable item (or the start button when everything
@@ -356,17 +355,6 @@ func (m *Model) replaceRecheckedStartFailure() {
 		return
 	}
 	m.startFailureItem = ""
-}
-
-// replaceRecheckedStartError drops the last start refusal once a readiness
-// pass that began after the refusal completes. The pass the refusal itself
-// launched keeps the text: it must stay visible until the user re-checks or
-// confirms a window again.
-func (m *Model) replaceRecheckedStartError() {
-	if m.startErr == "" || m.readinessSerial == m.startErrReadinessSerial {
-		return
-	}
-	m.startErr = ""
 }
 
 // readinessReadOnlyItem reports whether a completed checklist pass replaces
@@ -1004,6 +992,9 @@ func (m *Model) readinessChecklist(c *ui.Context, t *ui.Theme, tok *Tokens) {
 				m.readinessFocusRefresh = false
 			}
 			if refresh.Clicked() {
+				// The user asked for a fresh judgement: the old refusal no
+				// longer speaks for the state this pass reports.
+				m.startErr = ""
 				m.refreshReadiness()
 			}
 		})
@@ -1124,6 +1115,8 @@ func (m *Model) readinessTargetChoices(c *ui.Context, primary bool) {
 		// Confirming the window lets the remaining rows judge that window
 		// instead of staying unknown (R-01). The start is not blocked by
 		// this refresh; the session's own precheck remains authoritative.
+		// A new confirmation also retires the refusal of the earlier choice.
+		m.startErr = ""
 		m.refreshReadiness()
 	}
 }

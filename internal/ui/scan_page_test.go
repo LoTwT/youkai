@@ -529,9 +529,16 @@ func TestScanStartBlockedReasons(t *testing.T) {
 		tt := ui.NewTester(m.View, 1020, 700)
 		settle(t, m, q, tt)
 		m.exitState = exitRunning
-		tt.Frame()
+		// A real running exit also carries the service's quitting block; the
+		// state alone is not what the user meets.
+		s := snap("s1", 1, false, scan.PhaseEnded, scan.Counts{}, 0, false, "")
+		s.StartBlocked = app.StartBlockedQuitting
+		applyAndSettle(t, m, q, tt, s)
 		if !tt.HasText("正在退出，不能再开始扫描。") {
 			t.Fatalf("the running exit lost its copy: %q", tt.Texts())
+		}
+		if tt.HasText("退出清理没有完成，不能再开始扫描；请退出 youkai 后重新打开。") {
+			t.Fatalf("a running exit claimed its cleanup had settled: %q", tt.Texts())
 		}
 	})
 	t.Run("several rows", func(t *testing.T) {
@@ -547,6 +554,75 @@ func TestScanStartBlockedReasons(t *testing.T) {
 		))
 		if !tt.HasText("还有 2 项需要处理") {
 			t.Fatalf("the multi-row reason does not count both: %q", tt.Texts())
+		}
+	})
+}
+
+// TestStartRefusalDoesNotMaskAnEarlierBlocker pins the precedence when a
+// blocker reaches the page before the refusal of a start already in flight.
+// The current block explains the disabled start; the later refusal must not
+// cover it, and a service block that clears must not bring the superseded
+// refusal back.
+func TestStartRefusalDoesNotMaskAnEarlierBlocker(t *testing.T) {
+	refusal := errString("refused for the test")
+	startRefused := func(t *testing.T) (*Model, *queueUpdater, *ui.Tester) {
+		t.Helper()
+		svc := &fakeService{startFn: func(app.StartRequest) (app.StartOutcome, error) {
+			return app.StartOutcome{}, refusal
+		}}
+		m, q := newTestModel(t, Config{Service: svc})
+		tt := ui.NewTester(m.View, 1020, 700)
+		settle(t, m, q, tt)
+		m.Start()
+		return m, q, tt
+	}
+
+	t.Run("update install", func(t *testing.T) {
+		m, q, tt := startRefused(t)
+		blocked := snap("s1", 1, false, scan.PhaseEnded, scan.Counts{}, 0, false, "")
+		blocked.StartBlocked = app.StartBlockedUpdateInstall
+		m.Apply(blocked)
+		settle(t, m, q, tt)
+		if got := m.scanStartBlockedReason(); got != "更新正在安装，应用重启前不能开始扫描。" {
+			t.Fatalf("the update block lost to the later refusal: %q", got)
+		}
+
+		// The install failed and the block clears; the refusal it superseded
+		// must not resurface.
+		cleared := snap("s1", 2, false, scan.PhaseEnded, scan.Counts{}, 0, false, "")
+		applyAndSettle(t, m, q, tt, cleared)
+		if got := m.scanStartBlockedReason(); strings.Contains(got, "refused for the test") {
+			t.Fatalf("the superseded refusal came back: %q", got)
+		}
+	})
+
+	t.Run("review save", func(t *testing.T) {
+		m, q, tt := startRefused(t)
+		m.reviewSaving = true
+		settle(t, m, q, tt)
+		if got := m.scanStartBlockedReason(); got != "正在保存校对修改，完成前不能开始扫描。" {
+			t.Fatalf("the review save lost to the later refusal: %q", got)
+		}
+		// Unlike a service block, this page-owned state ends without a new
+		// judgement of the start; the refusal stays remembered.
+		m.reviewSaving = false
+		tt.Frame()
+		if got := m.scanStartBlockedReason(); !strings.Contains(got, "refused for the test") {
+			t.Fatalf("the refusal did not return after the review save: %q", got)
+		}
+	})
+
+	t.Run("export", func(t *testing.T) {
+		m, q, tt := startRefused(t)
+		m.exporting = true
+		settle(t, m, q, tt)
+		if got := m.scanStartBlockedReason(); got != "正在导出，完成前不能开始扫描。" {
+			t.Fatalf("the export lost to the later refusal: %q", got)
+		}
+		m.exporting = false
+		tt.Frame()
+		if got := m.scanStartBlockedReason(); !strings.Contains(got, "refused for the test") {
+			t.Fatalf("the refusal did not return after the export: %q", got)
 		}
 	})
 }

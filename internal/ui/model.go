@@ -352,11 +352,6 @@ type Model struct {
 	startSerial int
 	startReqID  string
 	startErr    string
-	// startErrReadinessSerial is the readiness pass current when the
-	// refusal was recorded (the pass the refusal itself launched). A pass
-	// that began later re-judged the state and replaces the reason; the
-	// automatic re-check must not erase it before the user sees it.
-	startErrReadinessSerial int
 
 	// Target candidates (P-01): the last discovery result, whether a
 	// discovery is in flight, its user-facing failure, the chosen row (-1
@@ -1196,24 +1191,27 @@ func (m *Model) Start() {
 		m.update(func() {
 			m.startReqID = ""
 			if err != nil {
-				m.startErr = err.Error()
-				if m.source.TargetSelection {
-					// The installed UI shows user copy; the raw error is
-					// already in the diagnostic log (the service logs the
-					// refused start) and stays hidden here.
-					m.startErr = startErrorText(err)
+				// A snapshot that already names the service's own block is
+				// newer than this refused attempt. Recording it would bring
+				// the stale text back once that block clears, for example
+				// after an update install fails.
+				if m.snap.StartBlocked == app.StartBlockedNone {
+					m.startErr = err.Error()
+					if m.source.TargetSelection {
+						// The installed UI shows user copy; the raw error is
+						// already in the diagnostic log (the service logs the
+						// refused start) and stays hidden here.
+						m.startErr = startErrorText(err)
+					}
 				}
 				// The refused start may be a window that vanished
 				// between confirmation and start: refresh the checklist so
-				// the stale candidate cannot be chosen again.
+				// the stale candidate cannot be chosen again. The automatic
+				// pass only re-enumerates; the refusal stays until a user
+				// action clears it.
 				if m.source.TargetSelection {
 					m.refreshReadiness()
 				}
-				// This pass only re-enumerates after the refusal; the text
-				// stays until a later pass re-judges the state (a re-check
-				// or a new confirmation) or the service reports its own
-				// block.
-				m.startErrReadinessSerial = m.readinessSerial
 			}
 		})
 	})

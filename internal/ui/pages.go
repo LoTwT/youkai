@@ -332,17 +332,17 @@ func (m *Model) statusShortcutText() string {
 
 // scanStartBlockedReason names why the start button is unavailable, in the
 // order the user meets the conditions: exit and update flows, the service's
-// current state, page-owned work, the last start refusal, the source and
-// target, then the checklist. A refusal describes an earlier moment and
-// comes after the current blockers so it never hides a newer reason. The
-// text sits left of the button (08 §1, R-14); a busy session shows the stop
+// current state, page-owned work, the source and target, the checklist, and
+// last the previous start refusal. A refusal describes an earlier moment and
+// is shown only when nothing current explains the disabled start; only a
+// user action (重新检查, a new window confirmation, or the next start)
+// clears it, so automatic re-checks do not make it vanish unseen. The text
+// sits left of the button (08 §1, R-14); a busy session shows the stop
 // button instead and never reaches this copy.
 func (m *Model) scanStartBlockedReason() string {
 	switch {
 	case m.exitState == exitRunning || m.exitState == exitDone:
 		return "正在退出，不能再开始扫描。"
-	case m.snap.SaveError != "":
-		return "上次扫描的结果还没有保存，请先重试保存。"
 	case m.snap.StartBlocked == app.StartBlockedSaveRetry:
 		return "上次扫描的结果还没有保存，请先重试保存。"
 	case m.snap.StartBlocked == app.StartBlockedUpdateInstall:
@@ -357,11 +357,6 @@ func (m *Model) scanStartBlockedReason() string {
 		return "正在保存校对修改，完成前不能开始扫描。"
 	case m.exportBusy():
 		return "正在导出，完成前不能开始扫描。"
-	case m.startErr != "":
-		if m.source.TargetSelection {
-			return m.startErr
-		}
-		return "开始失败：" + m.startErr
 	case !m.source.Available:
 		return "这个版本还不能扫描。"
 	case !m.readinessLoaded:
@@ -370,7 +365,15 @@ func (m *Model) scanStartBlockedReason() string {
 		return "正在开始扫描……"
 	default:
 		if reason := m.readinessStartReason(); reason != "" {
+			// The checklist judges the current state. A refusal that is still
+			// remembered yields to it instead of hiding the newer reason.
 			return reason
+		}
+		if m.startErr != "" {
+			if m.source.TargetSelection {
+				return m.startErr
+			}
+			return "开始失败：" + m.startErr
 		}
 		if !m.targetReady() {
 			// A target row without its own blocking conclusion must still
