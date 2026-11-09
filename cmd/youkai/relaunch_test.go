@@ -54,10 +54,10 @@ func readDiagnosticLog(t *testing.T, logDir string) string {
 
 // TestRelaunchReleasesDataRootBeforeRestart pins the installed update's
 // restart handoff: the root stays held from the install request through
-// every quit the exit interception can still refuse — including a quit
-// after the install but before the wrap-up settled — and the OnQuit
-// listener, the last step before MyGo starts the new process, detaches
-// the diagnostic log and then releases the root.
+// every quit that reaches OnQuit before the wrap-up settled — a Windows
+// session end (WM_ENDSESSION) after the install, for one — and the
+// OnQuit listener, the last step before MyGo starts the new process,
+// detaches the diagnostic log and then releases the root.
 func TestRelaunchReleasesDataRootBeforeRestart(t *testing.T) {
 	root := t.TempDir()
 	held, err := app.AcquireDataRootLock(root)
@@ -87,9 +87,9 @@ func TestRelaunchReleasesDataRootBeforeRestart(t *testing.T) {
 		t.Fatalf("the install requested %d relaunches, want 1", relaunches)
 	}
 
-	// A quit between the install and the settled wrap-up can still be
-	// refused (Windows WM_ENDSESSION, for one): the installed flag alone
-	// must not release.
+	// A session end (Windows WM_ENDSESSION) reaches OnQuit without the
+	// quit sequence: no restart follows and the wrap-up may still be
+	// running, so the installed flag alone must not release.
 	handoff.onQuit()
 	requireRootHeld(t, root, "after a quit before the wrap-up settled")
 	log.Print("youkai: logged before the restart handoff")
