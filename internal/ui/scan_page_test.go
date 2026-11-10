@@ -976,11 +976,15 @@ func TestScanPageActionBarFitsMinimumWindow(t *testing.T) {
 // TestScanPageActionBarWrapsLongPastFailure keeps the T-08 wrap contract
 // without relying on macOS text metrics: the past failure is long enough
 // that no font fits it on one line, so the bar must grow it instead of
-// clipping or ellipsizing it, and it must stay clear of the start button.
+// clipping or ellipsizing it, it must stay clear of the start button, and
+// the current reason and button must keep their area and place.
 func TestScanPageActionBarWrapsLongPastFailure(t *testing.T) {
-	const longFailure = "app: start: the confirmed game window closed before the scan could begin; " +
-		"the preparation checklist was refreshed after the refusal and the diagnostic log kept " +
-		"the raw cause for the next attempt, so this copy cannot fit on one line in any font"
+	const (
+		longFailure = "app: start: the confirmed game window closed before the scan could begin; " +
+			"the preparation checklist was refreshed after the refusal and the diagnostic log kept " +
+			"the raw cause for the next attempt, so this copy cannot fit on one line in any font"
+		textScale float32 = 1.5
+	)
 	svc := &fakeService{
 		readiness: fakeReadyReport(nil, 0, 0),
 		startFn: func(app.StartRequest) (app.StartOutcome, error) {
@@ -989,7 +993,7 @@ func TestScanPageActionBarWrapsLongPastFailure(t *testing.T) {
 	}
 	m, q := newTestModel(t, Config{Service: svc})
 	tt := ui.NewTester(m.View, 960, 640)
-	tt.SetPreferences(ui.Preferences{TextScale: 1.5, ReduceMotion: true})
+	tt.SetPreferences(ui.Preferences{TextScale: textScale, ReduceMotion: true})
 	settle(t, m, q, tt)
 	m.Start()
 	settle(t, m, q, tt)
@@ -1011,6 +1015,25 @@ func TestScanPageActionBarWrapsLongPastFailure(t *testing.T) {
 	if !ok {
 		t.Fatal("the start button is missing")
 	}
+	// Every element keeps its own area and stays inside the window before
+	// the wrap check uses the current reason as its one-line baseline: a
+	// squeezed-out element has H=0, which would make that baseline zero and
+	// let an unwrapped past failure pass.
+	for _, r := range []struct {
+		name string
+		rect ui.Rect
+	}{
+		{"current reason", currentRect},
+		{"past failure", failureRect},
+		{"start button", button},
+	} {
+		if r.rect.W <= 0 || r.rect.H <= 0 {
+			t.Fatalf("%s at text scale %g has no visible area: %+v", r.name, textScale, r.rect)
+		}
+		if r.rect.X < 0 || r.rect.Y < 0 || r.rect.X+r.rect.W > 960 || r.rect.Y+r.rect.H > 640 {
+			t.Fatalf("%s at text scale %g is not fully inside 960×640: %+v", r.name, textScale, r.rect)
+		}
+	}
 	// Two lines at least: one line cannot hold this copy in any font, so a
 	// one-line box means the line was clipped or ellipsized.
 	if failureRect.H <= currentRect.H*1.5 {
@@ -1018,6 +1041,15 @@ func TestScanPageActionBarWrapsLongPastFailure(t *testing.T) {
 	}
 	if failureRect.X+failureRect.W > button.X {
 		t.Fatalf("the long past failure runs into the button: %+v %+v", failureRect, button)
+	}
+	// The bar keeps the button on its right edge. A fixed-width container
+	// narrower than the page drags the button inward even when the three
+	// boxes stay inside the window, so pin the button's right side to the
+	// window's right side: the bar's own horizontal padding is at most 48
+	// DIP, and the button sits just inside it.
+	if button.X+button.W < 960-48 {
+		t.Fatalf("the start button at text scale %g is not at the bar's right edge: %+v",
+			textScale, button)
 	}
 	if failureRect.X < 0 || failureRect.Y < 0 || failureRect.X+failureRect.W > 960 || failureRect.Y+failureRect.H > 640 {
 		t.Fatalf("the long past failure is not fully visible in 960×640: %+v", failureRect)
