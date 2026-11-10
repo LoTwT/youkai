@@ -181,6 +181,7 @@ func (a *WinAdapter) readinessFixedTarget(spec TargetSpec, report *ReadinessRepo
 	if err != nil {
 		verdict := ReadinessUnsatisfied
 		code := CodeTargetNotFound
+		message := err.Error()
 		var sel *windows.SelectionError
 		if errors.As(err, &sel) {
 			switch sel.Kind {
@@ -191,6 +192,7 @@ func (a *WinAdapter) readinessFixedTarget(spec TargetSpec, report *ReadinessRepo
 			case windows.SelectionNoWindow, windows.SelectionHintGone:
 				code = CodeTargetNotFound
 			}
+			message = readinessSelectionMessage(sel)
 		} else {
 			verdict = ReadinessUnknown
 			code = CodeObservationFailed
@@ -200,7 +202,7 @@ func (a *WinAdapter) readinessFixedTarget(spec TargetSpec, report *ReadinessRepo
 			Verdict:  verdict,
 			Current:  "configured=1",
 			Required: "visible=1",
-			Fault:    NewFaultWithParams(code, err.Error(), nil),
+			Fault:    NewFaultWithParams(code, message, nil),
 			At:       at,
 		})
 		return nil
@@ -208,6 +210,17 @@ func (a *WinAdapter) readinessFixedTarget(spec TargetSpec, report *ReadinessRepo
 	report.set(ReadinessCheck{Item: ReadinessTargetClient, Verdict: ReadinessSatisfied,
 		Current: "configured=1", Required: "visible=1", At: at})
 	return &winReadinessTarget{hwnd: probe.HWND, pid: probe.PID}
+}
+
+// readinessSelectionMessage names the configured target without its
+// directory. The message is log-only evidence (the interface localizes the
+// fault code), and the configured executable path may contain the user's
+// profile name, so quoting the whole path would put it in the diagnostic
+// log. Kind detail and candidate count keep their original wording.
+func readinessSelectionMessage(err *windows.SelectionError) string {
+	named := *err
+	named.Executable = executableBase(err.Executable)
+	return named.Error()
 }
 
 func confirmedReadinessCandidate(candidates []TargetCandidate, spec TargetSpec) (TargetCandidate, bool) {

@@ -38,7 +38,7 @@ func runReadinessCheck(value string) {
 		log.Fatalf("youkai: readiness: %v", err)
 	}
 	source, _ := scanSource(filepath.Join(paths.Logs, "diagnostics"))
-	checker := app.Readiness{Paths: paths, Source: source}
+	checker := app.NewReadiness(paths, source)
 
 	interval, total := readinessSchedule(value)
 	deadline := time.Now().Add(total)

@@ -83,7 +83,7 @@ CGO_ENABLED=1 YOUKAI_READINESS_CHECK=1 go tool mygo dev
 CGO_ENABLED=1 YOUKAI_READINESS_CHECK=60s go tool mygo dev
 ```
 
-输出走日志（`mygo dev` 的控制台，或已构建 EXE 的 stderr；Windows 无控制台时重定向到文件）。每行 `item=… verdict=… current=… required=… code=…` 由服务层给出；有故障码时另起一行 `copy=…` 打印界面将使用的同一份中文文案。`verdict` 的四个值对应“满足 / 不满足 / 无法判断 / 点开始后检查”。入口不取得数据根或扫描占用，可以和已运行的 youkai 并存。
+输出走日志（`mygo dev` 的控制台，或已构建 EXE 的 stderr；Windows 无控制台时重定向到文件）。每行 `item=… verdict=… current=… required=… code=…` 由服务层给出；有故障码时另起一行 `copy=…` 打印界面将使用的同一份中文文案。`verdict` 的四个值对应“满足 / 不满足 / 无法判断 / 点开始后检查”。入口不取得数据根或扫描占用，可以和已运行的 youkai 并存。故障状态的落盘字段与去重规则见[诊断日志](#诊断日志)。
 
 ## Windows 只读截图探针（winprobe）
 
@@ -156,6 +156,7 @@ go build -o winprobe.exe ./tools/winprobe
 - 每次运行的第一行日志写明版本、构建提交（取 `debug.ReadBuildInfo` 的 VCS 信息，工作区有本地修改时加 `-modified` 后缀；构建未打标时为 `unknown`）、平台与数据根，用户反馈附带日志即可定位构建。发布与打包 workflow 保证这个提交号干净：对 `mygo.json` 的改写（版本/渠道前缀/移除 updates）经 `git update-index --skip-worktree` 对 Git 隐藏；VCS 戳记按 `git status` 判定，未跟踪文件同样算作修改，因此构建前的其余过程文件只进被 `.gitignore` 忽略的目录（fetchdeps 产物、VC++ DLL）或 runner 的临时目录（`RUNNER_TEMP`，VC++ 步骤的说明文件）——test-v0.0.1 至 test-v0.0.4 的 Windows 构建曾因该说明文件写在仓库根而携带 `-modified`，已修复。构建产物因此携带标签或提交的干净提交号，不带 `-modified`。
 - 日志打不开（如目录不可写）不阻止启动：stderr 照常输出并提示一次原因；运行中文件写入失败同样只退回 stderr 镜像（降级逻辑在 `internal/app`，Windows 上备份文件被杀毒或备份软件占用时轮转重试而不丢行，每轮失败只提示一次）。
 - `YOUKAI_SELFTEST` 自检在路径解析之前运行，仍只写 stderr（安装布局验证按[打包与安装包](#打包与安装包)的重定向方式读取）。
+- 只读准备检查的故障按状态变化写日志：`youkai: readiness: fault item=… verdict=… code=… current=… required=… message=…` 在一项的结论、故障码或脱敏后的消息出现、变化时写一行。去重键是 `verdict + code + 脱敏后的 message`，不含 `current`（磁盘可用字节数每次都会变），所以同样的故障在页面的 10 秒重查中保持安静；第一次写时带上当次的 `current` 作为证据。没有故障码但 `verdict=unsatisfied` 的行（磁盘空间不足、识别资源缺失）同样会拦住开始，也按这一键记录。故障消失时写 `youkai: readiness: fault cleared item=… verdict=… code=…`。平台检查本身失败（拿不到平台报告）另按错误文本去重，恢复时写 `platform check recovered`；失败期间不把清单行当作已恢复。平台失败期间磁盘与识别资源两行仍会重新测量，但不写日志：即使当次测到不足，日志也只有 `platform check failed`，平台检查恢复后的那次检查才补写这些行的 `fault item=…`。这是有意的取舍——平台错误在真机基本碰不到（`WinAdapter.CheckReadiness` 恒返回 nil 错误），不为它引入跨平台失败的待写状态；代价是平台失败与资源不足同时发生时，资源行的日志会晚一次检查出现。`message` 主要是平台生成的诊断原因，`rawSuffix` 还会拼接系统错误文本，所以中文 Windows 上可能是中文（推断）；日志只取上述字段，不写窗口标题、账号标识或凭据。准备检查的目标故障消息只写配置的可执行文件名，不写目录（固定目标找不到窗口时也是如此）；平台错误与其他行的 `message` 仍按诊断脱敏规则把用户目录替换为 `<用户目录>`，但脱敏只是兜底，不承诺识别任意私有路径。
 
 ### 复制诊断信息的内容清单
 

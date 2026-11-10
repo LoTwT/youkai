@@ -3,6 +3,7 @@ package platform
 import (
 	"errors"
 	"image"
+	"strings"
 	"testing"
 	"time"
 
@@ -366,6 +367,74 @@ func TestWinReadinessFixedTarget(t *testing.T) {
 	} {
 		if got := checks[item].Verdict; got != ReadinessSatisfied {
 			t.Fatalf("%s = %s, want satisfied", item, got)
+		}
+	}
+	assertReadOnly(t, w)
+}
+
+// TestWinReadinessFixedTargetNamesOnlyTheExecutable pins the readiness log's
+// path-free target message: a configured game under the user's profile must
+// report its executable name, never the directory or profile name. The path
+// uses backslashes on every host, so the extraction cannot rely on the host
+// platform's path separator.
+func TestWinReadinessFixedTargetNamesOnlyTheExecutable(t *testing.T) {
+	w := newWinWorld(t)
+	report, err := w.adapter.CheckReadiness(ReadinessRequest{
+		Target:  TargetSpec{ExecutablePath: `C:\Users\alice\Games\ZenlessZoneZero.exe`},
+		Display: testDisplayPolicy(),
+	})
+	if err != nil {
+		t.Fatalf("check readiness: %v", err)
+	}
+	target := readinessChecks(t, report)[ReadinessTargetClient]
+	if target.Fault == nil || target.Fault.Code != CodeTargetNotFound {
+		t.Fatalf("target = %+v, want a targetNotFound fault", target)
+	}
+	if !strings.Contains(target.Fault.Message, "ZenlessZoneZero.exe") {
+		t.Fatalf("fault message does not name the executable: %q", target.Fault.Message)
+	}
+	for _, hidden := range []string{"Users", "alice", `Games\`} {
+		if strings.Contains(target.Fault.Message, hidden) {
+			t.Fatalf("fault message carries the configured directory %q: %q", hidden, target.Fault.Message)
+		}
+	}
+	assertReadOnly(t, w)
+}
+
+// TestWinReadinessFaultMessagesNeverCarryAWindowTitle pins the privacy side
+// of the readiness log: the app logs the platform fault message after
+// home-path redaction, so a titled window must not put its caption into the
+// message (or params) in the first place. The fixed-target failure keeps the
+// titled window present while selection fails.
+func TestWinReadinessFaultMessagesNeverCarryAWindowTitle(t *testing.T) {
+	const title = "不应进入诊断的窗口标题"
+	w := newWinWorld(t)
+	w.win.mu.Lock()
+	w.win.wnds[0].title = title
+	w.win.mu.Unlock()
+
+	report, err := w.adapter.CheckReadiness(ReadinessRequest{
+		Target:  TargetSpec{ExecutablePath: `C:\missing\ZenlessZoneZero.exe`},
+		Display: testDisplayPolicy(),
+	})
+	if err != nil {
+		t.Fatalf("check readiness: %v", err)
+	}
+	target := readinessChecks(t, report)[ReadinessTargetClient]
+	if target.Fault == nil || target.Fault.Code != CodeTargetNotFound {
+		t.Fatalf("target = %+v, want a targetNotFound fault", target)
+	}
+	for _, check := range report.Checks {
+		if check.Fault == nil {
+			continue
+		}
+		if strings.Contains(check.Fault.Message, title) {
+			t.Fatalf("%s fault message names the window title: %q", check.Item, check.Fault.Message)
+		}
+		for key, value := range check.Fault.Params {
+			if strings.Contains(value, title) {
+				t.Fatalf("%s fault param %q names the window title: %q", check.Item, key, value)
+			}
 		}
 	}
 	assertReadOnly(t, w)
