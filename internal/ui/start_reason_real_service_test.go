@@ -67,6 +67,23 @@ func TestRealServiceFailedExitPublishesTheQuittingBlock(t *testing.T) {
 	t.Cleanup(func() {
 		releaseTeardown()
 		_ = svc.Quit()
+		// The failed teardown deliberately leaves the data root held until
+		// process exit (#148), so the test owns the release. This cleanup
+		// runs before TempDir removes the root, which lets Windows delete
+		// the still-locked file.
+		if err := lock.Close(); err != nil {
+			t.Errorf("release the data-root occupancy after the failed exit: %v", err)
+		}
+		// A second acquire conflicts while the lock is held, so this fails
+		// on every platform when the release above goes missing.
+		again, err := app.AcquireDataRootLock(paths.Data)
+		if err != nil {
+			t.Errorf("the data-root occupancy survived the test cleanup: %v", err)
+			return
+		}
+		if err := again.Close(); err != nil {
+			t.Errorf("release the reacquired data-root occupancy: %v", err)
+		}
 	})
 
 	m, q := newTestModel(t, Config{

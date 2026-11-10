@@ -876,10 +876,11 @@ func TestScanStageActivationAndCountdown(t *testing.T) {
 // TestScanPageActionBarFitsMinimumWindow measures the 960×640 contract:
 // with both the current reason and the last start failure on screen, both
 // texts and the start button are fully inside the window at 100%, 125% and
-// 150% text, the button is not pushed out, and at 150% the past-event line
-// wraps instead of clipping. The failure is the installed UI's longest
-// fallback; the last two scales are the T-08 shapes, and a real Windows
-// round still confirms the platform's own text metrics.
+// 150% text, the button is not pushed out, and the past failure keeps at
+// least one full line instead of being clipped. The line may wrap or fit
+// as the platform's own text metrics allow; a copy no font fits on one line
+// covers the wrap contract separately. The failure is the installed UI's
+// longest fallback, and the last two scales are the T-08 shapes.
 func TestScanPageActionBarFitsMinimumWindow(t *testing.T) {
 	cand := testTarget(0xB0ABE, 42, `C:\Games\ZZZ\ZenlessZoneZero.exe`)
 	wantFailure := "上次开始失败：" + targetStartFailedText
@@ -938,6 +939,9 @@ func TestScanPageActionBarFitsMinimumWindow(t *testing.T) {
 				{"past failure", failureRect},
 				{"start button", button},
 			} {
+				if r.rect.W <= 0 || r.rect.H <= 0 {
+					t.Fatalf("%s at scale %g has no visible area: %+v", r.name, scale, r.rect)
+				}
 				if r.rect.X < 0 || r.rect.Y < 0 || r.rect.X+r.rect.W > 960 || r.rect.Y+r.rect.H > 640 {
 					t.Fatalf("%s at scale %g is not fully visible in 960×640: %+v", r.name, scale, r.rect)
 				}
@@ -950,8 +954,14 @@ func TestScanPageActionBarFitsMinimumWindow(t *testing.T) {
 				t.Fatalf("the past failure runs into the button at scale %g: %+v %+v",
 					scale, failureRect, button)
 			}
-			if scale == 1.5 && failureRect.H <= currentRect.H*1.5 {
-				t.Fatalf("the past failure was clipped instead of wrapping at scale %g: %+v", scale, failureRect)
+			// The past failure may fit on one line or wrap, as the platform's
+			// own text metrics decide; either way it must keep at least one
+			// full line. The current reason uses the same font and size, so
+			// its one-line box is a font-independent baseline; the tolerance
+			// absorbs float rounding between the two layouts.
+			if failureRect.H+0.5 < currentRect.H {
+				t.Fatalf("the past failure is clipped below one line at scale %g: %+v (one line is %.1f)",
+					scale, failureRect, currentRect.H)
 			}
 			bottom := button.Y + button.H
 			t.Logf("scale %g: current %+v, failure %+v, start button bottom = %.1f DIP, margin %.1f",
@@ -960,6 +970,60 @@ func TestScanPageActionBarFitsMinimumWindow(t *testing.T) {
 				t.Fatalf("the start button bottom %.1f exceeds the 960×640 window at scale %g", bottom, scale)
 			}
 		})
+	}
+}
+
+// TestScanPageActionBarWrapsLongPastFailure keeps the T-08 wrap contract
+// without relying on macOS text metrics: the past failure is long enough
+// that no font fits it on one line, so the bar must grow it instead of
+// clipping or ellipsizing it, and it must stay clear of the start button.
+func TestScanPageActionBarWrapsLongPastFailure(t *testing.T) {
+	const longFailure = "app: start: the confirmed game window closed before the scan could begin; " +
+		"the preparation checklist was refreshed after the refusal and the diagnostic log kept " +
+		"the raw cause for the next attempt, so this copy cannot fit on one line in any font"
+	svc := &fakeService{
+		readiness: fakeReadyReport(nil, 0, 0),
+		startFn: func(app.StartRequest) (app.StartOutcome, error) {
+			return app.StartOutcome{}, errString(longFailure)
+		},
+	}
+	m, q := newTestModel(t, Config{Service: svc})
+	tt := ui.NewTester(m.View, 960, 640)
+	tt.SetPreferences(ui.Preferences{TextScale: 1.5, ReduceMotion: true})
+	settle(t, m, q, tt)
+	m.Start()
+	settle(t, m, q, tt)
+	applyReadinessReport(t, m, q, tt, svc, readinessWith(app.ReadinessCheck{
+		Item: app.ReadinessDiskSpace, Verdict: app.ReadinessUnsatisfied,
+		Current: "100000000", Required: "1073741824",
+	}))
+
+	wantFailure := "上次开始失败：" + longFailure
+	currentRect, ok := tt.Find("磁盘空间不足。")
+	if !ok {
+		t.Fatalf("the current reason is missing: %q", tt.Texts())
+	}
+	failureRect, ok := tt.Find(wantFailure)
+	if !ok {
+		t.Fatalf("the long past failure is missing: %q", tt.Texts())
+	}
+	button, ok := tt.Find("开始扫描")
+	if !ok {
+		t.Fatal("the start button is missing")
+	}
+	// Two lines at least: one line cannot hold this copy in any font, so a
+	// one-line box means the line was clipped or ellipsized.
+	if failureRect.H <= currentRect.H*1.5 {
+		t.Fatalf("the long past failure did not wrap: %+v (one line is %.1f)", failureRect, currentRect.H)
+	}
+	if failureRect.X+failureRect.W > button.X {
+		t.Fatalf("the long past failure runs into the button: %+v %+v", failureRect, button)
+	}
+	if failureRect.X < 0 || failureRect.Y < 0 || failureRect.X+failureRect.W > 960 || failureRect.Y+failureRect.H > 640 {
+		t.Fatalf("the long past failure is not fully visible in 960×640: %+v", failureRect)
+	}
+	if button.Y+button.H > 640 {
+		t.Fatalf("the start button bottom %.1f exceeds the 960×640 window", button.Y+button.H)
 	}
 }
 
