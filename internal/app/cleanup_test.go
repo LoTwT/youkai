@@ -205,6 +205,31 @@ func TestServiceCleanupBlockedWhileFinalSaveFails(t *testing.T) {
 	}
 }
 
+// TestCleanupReasonAfterAFailedExitNamesTheCurrentState pins the copy after
+// an explicit exit failed while leaving s.quitting set: cleanup stays
+// refused, but the reason names the incomplete exit cleanup and the way out
+// instead of claiming an exit is still running.
+func TestCleanupReasonAfterAFailedExitNamesTheCurrentState(t *testing.T) {
+	store, paths := cleanupStore(t)
+	cleanupFixture(t, store, "cleanup-1", true)
+	svc := newServiceWithStore(t, paths, store, nil,
+		func() (Recognizer, error) { return newFakeRecognizer(), nil })
+	// A failed final save keeps Quit returned with the teardown skipped; a
+	// successful retry then completes the save, leaving only this state.
+	svc.mu.Lock()
+	svc.quitting = true
+	svc.mu.Unlock()
+
+	_, err := svc.DeleteRecord("cleanup-1")
+	var blocked *CleanupBlockedError
+	if !errors.As(err, &blocked) {
+		t.Fatalf("DeleteRecord after a failed exit = %v, want CleanupBlockedError", err)
+	}
+	if !strings.Contains(blocked.Reason, "退出清理没有完成") || strings.Contains(blocked.Reason, "正在退出") {
+		t.Fatalf("cleanup reason = %q, want the incomplete cleanup without 正在退出", blocked.Reason)
+	}
+}
+
 // TestPendingReviewCountBackfillsLegacyLines mirrors the results view:
 // a legacy produced item with only raw drive-disc lines is still a row the
 // user will see as pending after the in-memory backfill, so cleanup

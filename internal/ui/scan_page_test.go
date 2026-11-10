@@ -481,6 +481,103 @@ func TestScanStartBlockedReasons(t *testing.T) {
 			t.Fatalf("the export block does not show: %q", tt.Texts())
 		}
 	})
+	t.Run("service block replaces the last refusal", func(t *testing.T) {
+		svc := &fakeService{startFn: func(app.StartRequest) (app.StartOutcome, error) {
+			return app.StartOutcome{}, errString("refused for the test")
+		}}
+		m, q := newTestModel(t, Config{Service: svc})
+		tt := ui.NewTester(m.View, 1020, 700)
+		settle(t, m, q, tt)
+		m.Start()
+		settle(t, m, q, tt)
+		if got := m.scanStartBlockedReason(); got != "" {
+			t.Fatalf("the past refusal still explains the current start: %q", got)
+		}
+		if !tt.HasText("上次开始失败：refused for the test") {
+			t.Fatalf("the refusal is missing as a past event: %q", tt.Texts())
+		}
+
+		s := snap("s1", 1, false, scan.PhaseEnded, scan.Counts{}, 0, false, "")
+		s.StartBlocked = app.StartBlockedQuitting
+		applyAndSettle(t, m, q, tt, s)
+		if got := m.scanStartBlockedReason(); got != "退出清理没有完成，不能再开始扫描；请退出 youkai 后重新打开。" {
+			t.Fatalf("the service block is masked by the old refusal: %q", got)
+		}
+		if m.startErr != "" {
+			t.Fatalf("the superseded refusal survived the service block: %q", m.startErr)
+		}
+		if tt.HasText("上次开始失败") {
+			t.Fatalf("the superseded refusal still shows: %q", tt.Texts())
+		}
+
+		// The superseded refusal must not come back when the block clears.
+		idle := snap("s1", 2, false, scan.PhaseEnded, scan.Counts{}, 0, false, "")
+		applyAndSettle(t, m, q, tt, idle)
+		if got := m.scanStartBlockedReason(); got != "" {
+			t.Fatalf("the cleared block left a current reason: %q", got)
+		}
+		if m.startErr != "" || tt.HasText("上次开始失败") {
+			t.Fatalf("the old refusal came back after the block cleared: %q %q", m.startErr, tt.Texts())
+		}
+	})
+	t.Run("save retry replaces the last refusal", func(t *testing.T) {
+		svc := &fakeService{startFn: func(app.StartRequest) (app.StartOutcome, error) {
+			return app.StartOutcome{}, errString("refused for the test")
+		}}
+		m, q := newTestModel(t, Config{Service: svc})
+		tt := ui.NewTester(m.View, 1020, 700)
+		settle(t, m, q, tt)
+		m.Start()
+		settle(t, m, q, tt)
+		if !tt.HasText("上次开始失败：refused for the test") {
+			t.Fatalf("the refusal is missing as a past event: %q", tt.Texts())
+		}
+
+		// A previous session's failed final save is newer than this start
+		// attempt; it replaces the past event while it blocks a new start.
+		s := snap("s1", 1, false, scan.PhaseEnded, scan.Counts{}, 0, false, "")
+		s.StartBlocked = app.StartBlockedSaveRetry
+		applyAndSettle(t, m, q, tt, s)
+		if got := m.scanStartBlockedReason(); got != "上次扫描的结果还没有保存，请先重试保存。" {
+			t.Fatalf("the save-retry block is masked by the old refusal: %q", got)
+		}
+		if m.startErr != "" || tt.HasText("上次开始失败") {
+			t.Fatalf("the superseded refusal survived the save-retry block: %q %q", m.startErr, tt.Texts())
+		}
+	})
+	t.Run("quit cleanup remains blocked", func(t *testing.T) {
+		svc := &fakeService{}
+		m, q := newTestModel(t, Config{Service: svc})
+		tt := ui.NewTester(m.View, 1020, 700)
+		settle(t, m, q, tt)
+		s := snap("s1", 1, false, scan.PhaseEnded, scan.Counts{}, 0, false, "")
+		s.StartBlocked = app.StartBlockedQuitting
+		applyAndSettle(t, m, q, tt, s)
+		if !tt.HasText("退出清理没有完成，不能再开始扫描；请退出 youkai 后重新打开。") {
+			t.Fatalf("the incomplete exit does not explain the start block: %q", tt.Texts())
+		}
+		if tt.HasText("正在退出，不能再开始扫描。") {
+			t.Fatalf("a settled exit still claims to be running: %q", tt.Texts())
+		}
+	})
+	t.Run("genuine exit keeps the running copy", func(t *testing.T) {
+		svc := &fakeService{}
+		m, q := newTestModel(t, Config{Service: svc})
+		tt := ui.NewTester(m.View, 1020, 700)
+		settle(t, m, q, tt)
+		m.exitState = exitRunning
+		// A real running exit also carries the service's quitting block; the
+		// state alone is not what the user meets.
+		s := snap("s1", 1, false, scan.PhaseEnded, scan.Counts{}, 0, false, "")
+		s.StartBlocked = app.StartBlockedQuitting
+		applyAndSettle(t, m, q, tt, s)
+		if !tt.HasText("正在退出，不能再开始扫描。") {
+			t.Fatalf("the running exit lost its copy: %q", tt.Texts())
+		}
+		if tt.HasText("退出清理没有完成，不能再开始扫描；请退出 youkai 后重新打开。") {
+			t.Fatalf("a running exit claimed its cleanup had settled: %q", tt.Texts())
+		}
+	})
 	t.Run("several rows", func(t *testing.T) {
 		svc := &fakeService{}
 		m, q := newTestModel(t, Config{Service: svc})
@@ -494,6 +591,157 @@ func TestScanStartBlockedReasons(t *testing.T) {
 		))
 		if !tt.HasText("还有 2 项需要处理") {
 			t.Fatalf("the multi-row reason does not count both: %q", tt.Texts())
+		}
+	})
+}
+
+// TestStartRefusalDoesNotMaskAnEarlierBlocker pins the split between the
+// current reason and the past start failure when a blocker reaches the page
+// before the refusal of a start already in flight. A page-owned blocker owns
+// the current line while the refusal stays visible as a past event; a
+// service block that outlives the attempt supersedes the refusal for good.
+func TestStartRefusalDoesNotMaskAnEarlierBlocker(t *testing.T) {
+	refusal := errString("refused for the test")
+	startRefused := func(t *testing.T) (*Model, *queueUpdater, *ui.Tester) {
+		t.Helper()
+		svc := &fakeService{startFn: func(app.StartRequest) (app.StartOutcome, error) {
+			return app.StartOutcome{}, refusal
+		}}
+		m, q := newTestModel(t, Config{Service: svc})
+		tt := ui.NewTester(m.View, 1020, 700)
+		settle(t, m, q, tt)
+		m.Start()
+		return m, q, tt
+	}
+
+	t.Run("update install", func(t *testing.T) {
+		m, q, tt := startRefused(t)
+		blocked := snap("s1", 1, false, scan.PhaseEnded, scan.Counts{}, 0, false, "")
+		blocked.StartBlocked = app.StartBlockedUpdateInstall
+		m.Apply(blocked)
+		settle(t, m, q, tt)
+		if got := m.scanStartBlockedReason(); got != "更新正在安装，应用重启前不能开始扫描。" {
+			t.Fatalf("the update block lost to the later refusal: %q", got)
+		}
+		if m.startErr != "" || tt.HasText("上次开始失败") {
+			t.Fatalf("the superseded refusal survived the service block: %q %q", m.startErr, tt.Texts())
+		}
+
+		// The install failed and the block clears; the refusal it superseded
+		// must not resurface.
+		cleared := snap("s1", 2, false, scan.PhaseEnded, scan.Counts{}, 0, false, "")
+		applyAndSettle(t, m, q, tt, cleared)
+		if got := m.scanStartBlockedReason(); got != "" {
+			t.Fatalf("the cleared block left a current reason: %q", got)
+		}
+		if m.startErr != "" || tt.HasText("上次开始失败") {
+			t.Fatalf("the superseded refusal came back: %q %q", m.startErr, tt.Texts())
+		}
+	})
+
+	t.Run("review save", func(t *testing.T) {
+		m, q, tt := startRefused(t)
+		m.reviewSaving = true
+		settle(t, m, q, tt)
+		if got := m.scanStartBlockedReason(); got != "正在保存校对修改，完成前不能开始扫描。" {
+			t.Fatalf("the review save lost to the later refusal: %q", got)
+		}
+		// A page-owned state does not judge the start; the refusal remains a
+		// separate past event and is still there when the save ends.
+		if m.startErr != string(refusal) || !tt.HasText("上次开始失败：refused for the test") {
+			t.Fatalf("the refusal did not stay visible: %q %q", m.startErr, tt.Texts())
+		}
+		m.reviewSaving = false
+		tt.Frame()
+		if got := m.scanStartBlockedReason(); got != "" {
+			t.Fatalf("the past refusal still explains the current start: %q", got)
+		}
+		if !tt.HasText("上次开始失败：refused for the test") {
+			t.Fatalf("the past refusal vanished after the review save: %q", tt.Texts())
+		}
+	})
+
+	t.Run("export", func(t *testing.T) {
+		m, q, tt := startRefused(t)
+		m.exporting = true
+		settle(t, m, q, tt)
+		if got := m.scanStartBlockedReason(); got != "正在导出，完成前不能开始扫描。" {
+			t.Fatalf("the export lost to the later refusal: %q", got)
+		}
+		if m.startErr != string(refusal) || !tt.HasText("上次开始失败：refused for the test") {
+			t.Fatalf("the refusal did not stay visible: %q %q", m.startErr, tt.Texts())
+		}
+		m.exporting = false
+		tt.Frame()
+		if got := m.scanStartBlockedReason(); got != "" {
+			t.Fatalf("the past refusal still explains the current start: %q", got)
+		}
+		if !tt.HasText("上次开始失败：refused for the test") {
+			t.Fatalf("the past refusal vanished after the export: %q", tt.Texts())
+		}
+	})
+}
+
+// TestStartRefusalSurvivesItsOwnPlaceholderSnapshot pins the regression:
+// Service.Start publishes a placeholder session (StartBlocked=Occupied)
+// before its slow preparation can refuse. The refusal may land before or
+// after that snapshot; either way it is this attempt's outcome and must stay
+// visible as the past failure after the rollback.
+func TestStartRefusalSurvivesItsOwnPlaceholderSnapshot(t *testing.T) {
+	const refusal = "refused for the test"
+	startRefused := func(t *testing.T) (*Model, *queueUpdater, *ui.Tester) {
+		t.Helper()
+		svc := &fakeService{startFn: func(app.StartRequest) (app.StartOutcome, error) {
+			return app.StartOutcome{}, errString(refusal)
+		}}
+		m, q := newTestModel(t, Config{Service: svc})
+		tt := ui.NewTester(m.View, 1020, 700)
+		settle(t, m, q, tt)
+		return m, q, tt
+	}
+	placeholder := func() app.Snapshot {
+		s := snap("s1", 1, true, scan.PhasePreparing, scan.Counts{}, 0, false, "")
+		s.StartBlocked = app.StartBlockedOccupied
+		return s
+	}
+	rollback := app.Snapshot{Revision: 2}
+	want := "上次开始失败：" + refusal
+
+	t.Run("placeholder before refusal", func(t *testing.T) {
+		m, q, tt := startRefused(t)
+		m.Start()
+		m.Apply(placeholder())
+		settle(t, m, q, tt)
+		if m.startErr != refusal {
+			t.Fatalf("the placeholder dropped the refusal: %q", m.startErr)
+		}
+
+		m.Apply(rollback)
+		settle(t, m, q, tt)
+		if m.startErr != refusal {
+			t.Fatalf("the rollback dropped the refusal: %q", m.startErr)
+		}
+		if !tt.HasText(want) {
+			t.Fatalf("the refusal is not visible after the rollback: %q", tt.Texts())
+		}
+	})
+
+	t.Run("refusal before late placeholder", func(t *testing.T) {
+		m, q, tt := startRefused(t)
+		m.Start()
+		settle(t, m, q, tt)
+		if m.startErr != refusal {
+			t.Fatalf("the refusal was not recorded: %q", m.startErr)
+		}
+
+		m.Apply(placeholder())
+		m.Apply(rollback)
+		settle(t, m, q, tt)
+		if m.startErr != refusal {
+			t.Fatalf("the late placeholder dropped the refusal: %q", m.startErr)
+		}
+		if !tt.HasText(want) {
+			t.Fatalf("the refusal is not visible after the rollback: %q", tt.Texts())
 		}
 	})
 }
@@ -626,32 +874,188 @@ func TestScanStageActivationAndCountdown(t *testing.T) {
 }
 
 // TestScanPageActionBarFitsMinimumWindow measures the 960×640 contract:
-// the action bar's start button is fully above the window's bottom edge at
-// 100%, 125% and 150% text. The last two are the T-08 shapes; a real
-// Windows round still confirms the platform's own text metrics.
+// with both the current reason and the last start failure on screen, both
+// texts and the start button are fully inside the window at 100%, 125% and
+// 150% text, the button is not pushed out, and the past failure keeps at
+// least one full line instead of being clipped. The line may wrap or fit
+// as the platform's own text metrics allow; a copy no font fits on one line
+// covers the wrap contract separately. The failure is the installed UI's
+// longest fallback, and the last two scales are the T-08 shapes.
 func TestScanPageActionBarFitsMinimumWindow(t *testing.T) {
+	cand := testTarget(0xB0ABE, 42, `C:\Games\ZZZ\ZenlessZoneZero.exe`)
+	wantFailure := "上次开始失败：" + targetStartFailedText
 	for _, scale := range []float32{1, 1.25, 1.5} {
 		t.Run(fmt.Sprintf("scale_%g", scale), func(t *testing.T) {
-			svc := &fakeService{}
-			m, q := newTestModel(t, Config{Service: svc})
+			svc := &fakeService{
+				targets:   []app.TargetCandidate{cand},
+				readiness: fakeReadyReport([]app.TargetCandidate{cand}, 0, 0),
+				startFn: func(app.StartRequest) (app.StartOutcome, error) {
+					return app.StartOutcome{}, errString("internal detail")
+				},
+			}
+			m, q := newTestModel(t, Config{Service: svc, ScanSource: targetSource()})
 			tt := ui.NewTester(m.View, 960, 640)
 			tt.SetPreferences(ui.Preferences{TextScale: scale, ReduceMotion: true})
 			settle(t, m, q, tt)
+			if err := tt.Click(targetLabel(cand)); err != nil {
+				t.Fatal(err)
+			}
+			settle(t, m, q, tt)
+			m.Start()
+			settle(t, m, q, tt)
+			report := fakeReadyReport([]app.TargetCandidate{cand}, 0, 0)
+			for i := range report.Checks {
+				if report.Checks[i].Item == app.ReadinessDiskSpace {
+					report.Checks[i].Verdict = app.ReadinessUnsatisfied
+					report.Checks[i].Current = "100000000"
+					report.Checks[i].Required = "1073741824"
+				}
+			}
+			applyReadinessReport(t, m, q, tt, svc, report)
+
 			for _, want := range []string{"中途停止 " + shortcutStopScan, "点开始后 30 秒内保持游戏在前台，扫描期间不要操作游戏"} {
 				if !tt.HasText(want) {
 					t.Fatalf("the bar lost %q at scale %g: %q", want, scale, tt.Texts())
 				}
 			}
+			current := "磁盘空间不足。"
+			currentRect, ok := tt.Find(current)
+			if !ok {
+				t.Fatalf("the current reason is missing at scale %g: %q", scale, tt.Texts())
+			}
+			failureRect, ok := tt.Find(wantFailure)
+			if !ok {
+				t.Fatalf("the past failure is missing at scale %g: %q", scale, tt.Texts())
+			}
 			button, ok := tt.Find("开始扫描")
 			if !ok {
 				t.Fatalf("the start button is missing at scale %g", scale)
 			}
+			for _, r := range []struct {
+				name string
+				rect ui.Rect
+			}{
+				{"current reason", currentRect},
+				{"past failure", failureRect},
+				{"start button", button},
+			} {
+				if r.rect.W <= 0 || r.rect.H <= 0 {
+					t.Fatalf("%s at scale %g has no visible area: %+v", r.name, scale, r.rect)
+				}
+				if r.rect.X < 0 || r.rect.Y < 0 || r.rect.X+r.rect.W > 960 || r.rect.Y+r.rect.H > 640 {
+					t.Fatalf("%s at scale %g is not fully visible in 960×640: %+v", r.name, scale, r.rect)
+				}
+			}
+			if currentRect.Y+currentRect.H > failureRect.Y {
+				t.Fatalf("the current reason and past failure overlap at scale %g: %+v %+v",
+					scale, currentRect, failureRect)
+			}
+			if failureRect.X+failureRect.W > button.X {
+				t.Fatalf("the past failure runs into the button at scale %g: %+v %+v",
+					scale, failureRect, button)
+			}
+			// The past failure may fit on one line or wrap, as the platform's
+			// own text metrics decide; either way it must keep at least one
+			// full line. The current reason uses the same font and size, so
+			// its one-line box is a font-independent baseline; the tolerance
+			// absorbs float rounding between the two layouts.
+			if failureRect.H+0.5 < currentRect.H {
+				t.Fatalf("the past failure is clipped below one line at scale %g: %+v (one line is %.1f)",
+					scale, failureRect, currentRect.H)
+			}
 			bottom := button.Y + button.H
-			t.Logf("scale %g: start button bottom = %.1f DIP, margin %.1f", scale, bottom, 640-bottom)
+			t.Logf("scale %g: current %+v, failure %+v, start button bottom = %.1f DIP, margin %.1f",
+				scale, currentRect, failureRect, bottom, 640-bottom)
 			if bottom > 640 {
 				t.Fatalf("the start button bottom %.1f exceeds the 960×640 window at scale %g", bottom, scale)
 			}
 		})
+	}
+}
+
+// TestScanPageActionBarWrapsLongPastFailure keeps the T-08 wrap contract
+// without relying on macOS text metrics: the past failure is long enough
+// that no font fits it on one line, so the bar must grow it instead of
+// clipping or ellipsizing it, it must stay clear of the start button, and
+// the current reason and button must keep their area and place.
+func TestScanPageActionBarWrapsLongPastFailure(t *testing.T) {
+	const (
+		longFailure = "app: start: the confirmed game window closed before the scan could begin; " +
+			"the preparation checklist was refreshed after the refusal and the diagnostic log kept " +
+			"the raw cause for the next attempt, so this copy cannot fit on one line in any font"
+		textScale float32 = 1.5
+	)
+	svc := &fakeService{
+		readiness: fakeReadyReport(nil, 0, 0),
+		startFn: func(app.StartRequest) (app.StartOutcome, error) {
+			return app.StartOutcome{}, errString(longFailure)
+		},
+	}
+	m, q := newTestModel(t, Config{Service: svc})
+	tt := ui.NewTester(m.View, 960, 640)
+	tt.SetPreferences(ui.Preferences{TextScale: textScale, ReduceMotion: true})
+	settle(t, m, q, tt)
+	m.Start()
+	settle(t, m, q, tt)
+	applyReadinessReport(t, m, q, tt, svc, readinessWith(app.ReadinessCheck{
+		Item: app.ReadinessDiskSpace, Verdict: app.ReadinessUnsatisfied,
+		Current: "100000000", Required: "1073741824",
+	}))
+
+	wantFailure := "上次开始失败：" + longFailure
+	currentRect, ok := tt.Find("磁盘空间不足。")
+	if !ok {
+		t.Fatalf("the current reason is missing: %q", tt.Texts())
+	}
+	failureRect, ok := tt.Find(wantFailure)
+	if !ok {
+		t.Fatalf("the long past failure is missing: %q", tt.Texts())
+	}
+	button, ok := tt.Find("开始扫描")
+	if !ok {
+		t.Fatal("the start button is missing")
+	}
+	// Every element keeps its own area and stays inside the window before
+	// the wrap check uses the current reason as its one-line baseline: a
+	// squeezed-out element has H=0, which would make that baseline zero and
+	// let an unwrapped past failure pass.
+	for _, r := range []struct {
+		name string
+		rect ui.Rect
+	}{
+		{"current reason", currentRect},
+		{"past failure", failureRect},
+		{"start button", button},
+	} {
+		if r.rect.W <= 0 || r.rect.H <= 0 {
+			t.Fatalf("%s at text scale %g has no visible area: %+v", r.name, textScale, r.rect)
+		}
+		if r.rect.X < 0 || r.rect.Y < 0 || r.rect.X+r.rect.W > 960 || r.rect.Y+r.rect.H > 640 {
+			t.Fatalf("%s at text scale %g is not fully inside 960×640: %+v", r.name, textScale, r.rect)
+		}
+	}
+	// Two lines at least: one line cannot hold this copy in any font, so a
+	// one-line box means the line was clipped or ellipsized.
+	if failureRect.H <= currentRect.H*1.5 {
+		t.Fatalf("the long past failure did not wrap: %+v (one line is %.1f)", failureRect, currentRect.H)
+	}
+	if failureRect.X+failureRect.W > button.X {
+		t.Fatalf("the long past failure runs into the button: %+v %+v", failureRect, button)
+	}
+	// The bar keeps the button on its right edge. A fixed-width container
+	// narrower than the page drags the button inward even when the three
+	// boxes stay inside the window, so pin the button's right side to the
+	// window's right side: the bar's own horizontal padding is at most 48
+	// DIP, and the button sits just inside it.
+	if button.X+button.W < 960-48 {
+		t.Fatalf("the start button at text scale %g is not at the bar's right edge: %+v",
+			textScale, button)
+	}
+	if failureRect.X < 0 || failureRect.Y < 0 || failureRect.X+failureRect.W > 960 || failureRect.Y+failureRect.H > 640 {
+		t.Fatalf("the long past failure is not fully visible in 960×640: %+v", failureRect)
+	}
+	if button.Y+button.H > 640 {
+		t.Fatalf("the start button bottom %.1f exceeds the 960×640 window", button.Y+button.H)
 	}
 }
 

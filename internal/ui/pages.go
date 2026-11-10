@@ -237,10 +237,10 @@ func (m *Model) pageBody(c *ui.Context, t *ui.Theme, tok *Tokens) {
 }
 
 // pageActions is the scan page's bottom action bar: the start facts on the
-// left, the disabled reason and 开始扫描 on the right, or 停止扫描 while a
-// session runs. The bar takes its content height instead of a fixed one so
-// the minimum window keeps every line and the button visible (08 §1.3;
-// T-08 may only wrap or drop the estimate).
+// left, the current reason and the last start failure beside 开始扫描 on the
+// right, or 停止扫描 while a session runs. The bar takes its content height
+// instead of a fixed one so the minimum window keeps every line and the
+// button visible (08 §1.3; T-08 may only wrap or drop the estimate).
 func (m *Model) pageActions(c *ui.Context, t *ui.Theme, tok *Tokens) {
 	if m.displayPage() != pageScan {
 		return
@@ -261,8 +261,19 @@ func (m *Model) pageActions(c *ui.Context, t *ui.Theme, tok *Tokens) {
 			}
 			return
 		}
-		if reason := m.scanStartBlockedReason(); reason != "" {
-			ui.Text(c, reason).TextColor(t.TextMuted).FontSize(t.FontSize * 0.9).Shrink(1)
+		reason := m.scanStartBlockedReason()
+		failure := m.scanStartFailureLine()
+		if reason != "" || failure != "" {
+			// The current reason and the past failure are separate slots:
+			// both may show at once, and each may wrap inside the bar.
+			ui.Column(c).Gap(t.Space(0.5)).AlignItems(ui.End).Children(func() {
+				if reason != "" {
+					ui.Text(c, reason).TextColor(t.TextMuted).FontSize(t.FontSize * 0.9)
+				}
+				if failure != "" {
+					ui.Text(c, failure).TextColor(t.Danger).FontSize(t.FontSize * 0.9)
+				}
+			})
 		}
 		button := ui.PrimaryButton(c, "开始扫描").Disabled(!m.scanStartReady()).Bind(&m.scanActionRef)
 		if button.Clicked() {
@@ -330,26 +341,24 @@ func (m *Model) statusShortcutText() string {
 	return ""
 }
 
-// scanStartBlockedReason names why the start button is unavailable, in the
-// order the user meets the conditions: exit and update flows, the service's
-// slot state, page-owned work, the source and target, then the checklist.
-// The text sits left of the button (08 §1, R-14); a busy session shows the
-// stop button instead and never reaches this copy.
+// scanStartBlockedReason names why the start button is unavailable now, in
+// the order the user meets the conditions: exit and update flows, the
+// service's current state, page-owned work, the source and target, and the
+// checklist. It returns empty when nothing blocks the start. The last
+// refused start is a past event rendered separately by
+// scanStartFailureLine, so it can neither hide a current reason nor be
+// mistaken for one. The text sits left of the button (08 §1, R-14); a busy
+// session shows the stop button instead and never reaches this copy.
 func (m *Model) scanStartBlockedReason() string {
 	switch {
 	case m.exitState == exitRunning || m.exitState == exitDone:
 		return "正在退出，不能再开始扫描。"
-	case m.startErr != "":
-		if m.source.TargetSelection {
-			return m.startErr
-		}
-		return "开始失败：" + m.startErr
 	case m.snap.StartBlocked == app.StartBlockedSaveRetry:
 		return "上次扫描的结果还没有保存，请先重试保存。"
 	case m.snap.StartBlocked == app.StartBlockedUpdateInstall:
 		return "更新正在安装，应用重启前不能开始扫描。"
 	case m.snap.StartBlocked == app.StartBlockedQuitting:
-		return "正在退出，不能再开始扫描。"
+		return "退出清理没有完成，不能再开始扫描；请退出 youkai 后重新打开。"
 	case m.snap.StartBlocked == app.StartBlockedOccupied:
 		return "上次扫描仍在收尾，等它结束或点“停止扫描”。"
 	case m.updateRestartImminent():
@@ -375,6 +384,17 @@ func (m *Model) scanStartBlockedReason() string {
 		}
 		return ""
 	}
+}
+
+// scanStartFailureLine is the last refused start as a past event. It is
+// shown beside the current reason and may stay while the start is usable
+// again; its copy names only what happened, so no stale action guidance
+// survives a recovered window. Only a user action clears it (08 §1.1).
+func (m *Model) scanStartFailureLine() string {
+	if m.startErr == "" {
+		return ""
+	}
+	return "上次开始失败：" + m.startErr
 }
 
 func (m *Model) pageStatusText() string {

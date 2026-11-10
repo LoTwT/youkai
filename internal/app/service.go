@@ -837,6 +837,10 @@ func (s *Service) LoadRecord(recordID string) (*record.Recovery, error) {
 // save and quit again — the last valid generation stays as the durable
 // result either way. Quit after a successful teardown returns its
 // outcome unchanged.
+//
+// Quit publishes the quitting state before waiting, so a snapshot taken
+// at the exit decision carries the current start block instead of a stale
+// revision.
 func (s *Service) Quit() error {
 	s.quitMu.Lock()
 	defer s.quitMu.Unlock()
@@ -846,6 +850,7 @@ func (s *Service) Quit() error {
 	s.mu.Lock()
 	s.quitting = true
 	a := s.active
+	s.notifyLocked()
 	s.mu.Unlock()
 	if a != nil {
 		if a.kernel != nil {

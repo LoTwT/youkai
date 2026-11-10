@@ -283,8 +283,9 @@ func TestViewReadableCandidateWinsOverAccessDenied(t *testing.T) {
 }
 
 // TestViewStartTargetGoneMapsAndRefreshes covers two review gaps at once:
-// the vanished-window refusal has Chinese copy (not the English internal
-// error), and the failed start refreshes the candidate list automatically.
+// the vanished-window failure leaves Chinese copy in the UI—the refreshed
+// checklist's current reason, never the English internal error—and the
+// failed start refreshes the candidate list automatically.
 func TestViewStartTargetGoneMapsAndRefreshes(t *testing.T) {
 	cand := testTarget(0xB0ABE, 42, `C:\Games\ZZZ\ZenlessZoneZero.exe`)
 	svc := &fakeService{
@@ -311,8 +312,14 @@ func TestViewStartTargetGoneMapsAndRefreshes(t *testing.T) {
 	}
 	settle(t, m, q, tt)
 
-	if !tt.HasText(targetGoneText) {
-		t.Fatalf("the vanished-window copy does not show: %q", tt.Texts())
+	if !tt.HasText("未找到可扫描的游戏窗口。") {
+		t.Fatalf("the current target state does not explain the start: %q", tt.Texts())
+	}
+	if !tt.HasText("上次开始失败：" + targetGoneText) {
+		t.Fatalf("the refused start is not visible as a past event: %q", tt.Texts())
+	}
+	if tt.HasText("请点“重新检查”后重新选择") {
+		t.Fatalf("the past event kept stale action guidance: %q", tt.Texts())
 	}
 	if tt.HasText("gone or was replaced") {
 		t.Fatalf("the raw target-gone error reached the UI: %q", tt.Texts())
@@ -330,8 +337,9 @@ func TestViewStartTargetGoneMapsAndRefreshes(t *testing.T) {
 
 // TestViewStartDiscoveryFailureKeepsCause: when the start is refused because
 // discovery failed and the following re-check finds the confirmed window
-// again, the target row reads normally. The reason left of the start button
-// must still carry the cause, not only the recovery action.
+// again, the target row reads normally and the current reason is empty. The
+// refusal must still show as a past event with its cause, not only the
+// recovery action or nothing at all.
 func TestViewStartDiscoveryFailureKeepsCause(t *testing.T) {
 	cand := testTarget(0xB0ABE, 42, `C:\Games\ZZZ\ZenlessZoneZero.exe`)
 	svc := &fakeService{
@@ -357,16 +365,257 @@ func TestViewStartDiscoveryFailureKeepsCause(t *testing.T) {
 	if !m.targetReady() {
 		t.Fatal("the re-check lost the confirmed window")
 	}
-	if got := m.scanStartBlockedReason(); got != targetDiscoveryFailedText {
-		t.Fatalf("start reason = %q, want the full discovery failure", got)
+	if got := m.scanStartBlockedReason(); got != "" {
+		t.Fatalf("a past refusal still explains the usable start: %q", got)
 	}
-	if !tt.HasText(targetDiscoveryFailedText) {
+	if got := m.scanStartFailureLine(); got != "上次开始失败："+targetDiscoveryFailedText {
+		t.Fatalf("start failure = %q, want the past discovery failure", got)
+	}
+	if !tt.HasText("上次开始失败：" + targetDiscoveryFailedText) {
 		t.Fatalf("the discovery failure's cause is missing beside the start: %q", tt.Texts())
+	}
+	if !tt.HasText("全部满足") {
+		t.Fatalf("the recovered checklist does not read as satisfied: %q", tt.Texts())
+	}
+}
+
+// TestRefusedStartReasonClearsAfterARecheck pins the two slots: the reason
+// beside the start describes the current state, while the refused start is
+// a past event that survives the automatic re-check it launched. The past
+// event disappears when the user confirms a window again or runs 重新检查.
+func TestRefusedStartReasonClearsAfterARecheck(t *testing.T) {
+	first := testTarget(0xB0ABE, 42, `C:\Games\ZZZ\ZenlessZoneZero.exe`)
+	second := testTarget(0xB0ABF, 42, `C:\Games\ZZZ\ZenlessZoneZero.exe`)
+
+	t.Run("confirm another window", func(t *testing.T) {
+		svc := &fakeService{
+			targets: []app.TargetCandidate{first},
+			startFn: func(app.StartRequest) (app.StartOutcome, error) {
+				return app.StartOutcome{}, app.ErrTargetGone
+			},
+		}
+		m, q := newTestModel(t, Config{Service: svc, ScanSource: targetSource()})
+		tt := ui.NewTester(m.View, 1020, 700)
+		settle(t, m, q, tt)
+		if err := tt.Click(targetLabel(first)); err != nil {
+			t.Fatal(err)
+		}
+		settle(t, m, q, tt)
+
+		// The confirmed window disappears while the start is in flight.
+		svc.mu.Lock()
+		svc.targets = []app.TargetCandidate{second}
+		svc.mu.Unlock()
+		if err := tt.Click("开始扫描"); err != nil {
+			t.Fatal(err)
+		}
+		settle(t, m, q, tt)
+		// The automatic re-check now finds the confirmed window gone, so the
+		// checklist's current reason takes the current line; the refusal stays
+		// visible as a separate past event.
+		if got := m.scanStartBlockedReason(); got != "请先确认要扫描的游戏窗口。" {
+			t.Fatalf("the current target state did not take precedence: %q", got)
+		}
+		if m.startErr != targetGoneText {
+			t.Fatalf("the refusal was not remembered: %q", m.startErr)
+		}
+		if !tt.HasText("上次开始失败：" + targetGoneText) {
+			t.Fatalf("the re-check hid the refused start: %q", tt.Texts())
+		}
+
+		if err := tt.Click(targetLabel(second)); err != nil {
+			t.Fatal(err)
+		}
+		settle(t, m, q, tt)
+		if m.startErr != "" {
+			t.Fatalf("the old refusal survived the new confirmation: %q", m.startErr)
+		}
+		if tt.HasText("上次开始失败") {
+			t.Fatalf("the old refusal still shows after the new confirmation: %q", tt.Texts())
+		}
+		if !m.scanStartReady() {
+			t.Fatalf("the start is not offered after the new confirmation: %q", m.scanStartBlockedReason())
+		}
+	})
+
+	t.Run("change target", func(t *testing.T) {
+		cand := testTarget(0xB0ABE, 42, `C:\Games\ZZZ\ZenlessZoneZero.exe`)
+		svc := &fakeService{
+			targets: []app.TargetCandidate{cand},
+			startFn: func(app.StartRequest) (app.StartOutcome, error) {
+				return app.StartOutcome{}, app.ErrTargetDiscoveryFailed
+			},
+		}
+		m, q := newTestModel(t, Config{Service: svc, ScanSource: targetSource()})
+		tt := ui.NewTester(m.View, 1020, 700)
+		settle(t, m, q, tt)
+		if err := tt.Click(targetLabel(cand)); err != nil {
+			t.Fatal(err)
+		}
+		settle(t, m, q, tt)
+		if err := tt.Click("开始扫描"); err != nil {
+			t.Fatal(err)
+		}
+		settle(t, m, q, tt)
+		if !tt.HasText("上次开始失败：" + targetDiscoveryFailedText) {
+			t.Fatalf("the refusal did not stay beside the start: %q", tt.Texts())
+		}
+
+		if err := tt.Click("更换目标"); err != nil {
+			t.Fatal(err)
+		}
+		settle(t, m, q, tt)
+		if m.startErr != "" || tt.HasText("上次开始失败") {
+			t.Fatalf("更换目标 did not clear the refusal: %q %q", m.startErr, tt.Texts())
+		}
+		if got := m.scanStartBlockedReason(); got != "请先确认要扫描的游戏窗口。" {
+			t.Fatalf("the changed target did not explain the disabled start: %q", got)
+		}
+	})
+
+	t.Run("re-check", func(t *testing.T) {
+		cand := testTarget(0xB0ABE, 42, `C:\Games\ZZZ\ZenlessZoneZero.exe`)
+		svc := &fakeService{
+			targets: []app.TargetCandidate{cand},
+			startFn: func(app.StartRequest) (app.StartOutcome, error) {
+				return app.StartOutcome{}, app.ErrTargetDiscoveryFailed
+			},
+		}
+		m, q := newTestModel(t, Config{Service: svc, ScanSource: targetSource()})
+		tt := ui.NewTester(m.View, 1020, 700)
+		settle(t, m, q, tt)
+		if err := tt.Click(targetLabel(cand)); err != nil {
+			t.Fatal(err)
+		}
+		settle(t, m, q, tt)
+		if err := tt.Click("开始扫描"); err != nil {
+			t.Fatal(err)
+		}
+		settle(t, m, q, tt)
+		if got := m.scanStartBlockedReason(); got != "" {
+			t.Fatalf("a past refusal still explains the usable start: %q", got)
+		}
+		if !tt.HasText("上次开始失败：" + targetDiscoveryFailedText) {
+			t.Fatalf("the refusal did not stay beside the start: %q", tt.Texts())
+		}
+
+		if err := tt.Click("重新检查"); err != nil {
+			t.Fatal(err)
+		}
+		settle(t, m, q, tt)
+		if m.startErr != "" {
+			t.Fatalf("the old refusal survived 重新检查: %q", m.startErr)
+		}
+		if tt.HasText("上次开始失败") {
+			t.Fatalf("the old refusal still shows after 重新检查: %q", tt.Texts())
+		}
+	})
+}
+
+// TestRefusedStartReasonSurvivesAutomaticRechecks pins the complement of
+// the user-action rule: focus and the ten-second timer re-judge the state
+// but never clear the last refusal, so the user can leave and return
+// without losing the explanation. A checklist blocker found by such a pass
+// is shown while it lasts, without discarding the refusal.
+func TestRefusedStartReasonSurvivesAutomaticRechecks(t *testing.T) {
+	clock := &testClock{t: readinessClock()}
+	timers := &timerRecorder{}
+	cand := testTarget(0xB0ABE, 42, `C:\Games\ZZZ\ZenlessZoneZero.exe`)
+	ready := func() app.ReadinessReport {
+		report := fakeReadyReport([]app.TargetCandidate{cand}, 0, 0)
+		report.CheckedAt = clock.now()
+		return report
+	}
+	svc := &fakeService{
+		targets:     []app.TargetCandidate{cand},
+		readinessFn: func(*app.TargetCandidate) app.ReadinessReport { return ready() },
+		startFn: func(app.StartRequest) (app.StartOutcome, error) {
+			return app.StartOutcome{}, app.ErrTargetDiscoveryFailed
+		},
+	}
+	m, q := newTestModel(t, Config{
+		Service: svc, ScanSource: targetSource(), Now: clock.now, After: timers.after,
+	})
+	tt := ui.NewTester(m.View, 1020, 700)
+	settle(t, m, q, tt)
+	if err := tt.Click(targetLabel(cand)); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
+	if err := tt.Click("开始扫描"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
+	if got := m.scanStartBlockedReason(); got != "" {
+		t.Fatalf("a past refusal still explains the usable start: %q", got)
+	}
+	if !tt.HasText("上次开始失败：" + targetDiscoveryFailedText) {
+		t.Fatalf("the refusal did not stay beside the start: %q", tt.Texts())
+	}
+
+	m.WindowFocused()
+	settle(t, m, q, tt)
+	if !tt.HasText("上次开始失败：" + targetDiscoveryFailedText) {
+		t.Fatalf("focus cleared the past failure: %q", tt.Texts())
+	}
+
+	clock.add(11 * time.Second)
+	timers.fire(t, 0)
+	settle(t, m, q, tt)
+	if !tt.HasText("上次开始失败：" + targetDiscoveryFailedText) {
+		t.Fatalf("the timer cleared the past failure: %q", tt.Texts())
+	}
+
+	// The automatic pass found a new checklist blocker: it owns the current
+	// line while it lasts, and the past failure stays visible separately.
+	svc.mu.Lock()
+	svc.readinessFn = func(*app.TargetCandidate) app.ReadinessReport {
+		report := ready()
+		for i := range report.Checks {
+			if report.Checks[i].Item == app.ReadinessDiskSpace {
+				report.Checks[i].Verdict = app.ReadinessUnsatisfied
+				report.Checks[i].Current = "100000000"
+				report.Checks[i].Required = "1073741824"
+			}
+		}
+		return report
+	}
+	svc.mu.Unlock()
+	m.WindowFocused()
+	settle(t, m, q, tt)
+	if got := m.scanStartBlockedReason(); got != "磁盘空间不足。" {
+		t.Fatalf("the checklist blocker did not take precedence: %q", got)
+	}
+	if m.startErr != targetDiscoveryFailedText ||
+		!tt.HasText("上次开始失败："+targetDiscoveryFailedText) {
+		t.Fatalf("the checklist blocker discarded the past failure: %q %q", m.startErr, tt.Texts())
+	}
+
+	// With the checklist satisfied again, only a user action may clear the
+	// remembered refusal.
+	svc.mu.Lock()
+	svc.readinessFn = func(*app.TargetCandidate) app.ReadinessReport { return ready() }
+	svc.mu.Unlock()
+	m.WindowFocused()
+	settle(t, m, q, tt)
+	if got := m.scanStartBlockedReason(); got != "" {
+		t.Fatalf("the past refusal still explains the usable start: %q", got)
+	}
+	if !tt.HasText("上次开始失败：" + targetDiscoveryFailedText) {
+		t.Fatalf("the past failure vanished after the checklist cleared: %q", tt.Texts())
+	}
+
+	if err := tt.Click("重新检查"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
+	if m.startErr != "" || tt.HasText("上次开始失败") {
+		t.Fatalf("重新检查 did not clear the refusal: %q %q", m.startErr, tt.Texts())
 	}
 }
 
 // Any other start refusal in the installed UI gets the generic Chinese
-// fallback; the detail stays in the diagnostic log.
+// past-event fallback; the raw detail stays out of the UI.
 func TestViewStartRefusalGenericFallback(t *testing.T) {
 	cand := testTarget(0xB0ABE, 42, `C:\Games\ZZZ\ZenlessZoneZero.exe`)
 	svc := &fakeService{
@@ -387,7 +636,8 @@ func TestViewStartRefusalGenericFallback(t *testing.T) {
 	}
 	settle(t, m, q, tt)
 
-	if !tt.HasText(targetStartFailedText) {
+	const want = "上次开始失败：详细原因已写入诊断日志；可在“设置 › 诊断”打开诊断目录查看。"
+	if !tt.HasText(want) {
 		t.Fatalf("the generic start copy does not show: %q", tt.Texts())
 	}
 	if tt.HasText("internal detail") {
