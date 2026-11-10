@@ -319,6 +319,114 @@ func TestViewCleanupDisabledReasons(t *testing.T) {
 	if _, _, _, allRecords := svc2.cleanupCalls(); allRecords != 0 {
 		t.Fatalf("a disabled bulk entry still deleted: %d", allRecords)
 	}
+
+	// A genuine exit keeps the running copy; only the settled exit failure
+	// names the incomplete cleanup.
+	m3, q3 := newTestModel(t, Config{Service: &fakeService{}, DirectExportSaver: &fakeDirectExportSaver{}})
+	m3.page = pageSettings
+	m3.exitState = exitRunning
+	tt3 := ui.NewTester(m3.View, 1020, 700)
+	settle(t, m3, q3, tt3)
+	s3 := snap("s1", 1, false, scan.PhaseEnded, scan.Counts{}, 0, false, "")
+	s3.StartBlocked = app.StartBlockedQuitting
+	applyAndSettle(t, m3, q3, tt3, s3)
+	if !tt3.HasText("正在退出应用，不能清理。") {
+		t.Fatalf("the running exit lost its cleanup copy: %q", tt3.Texts())
+	}
+	if tt3.HasText("退出清理没有完成，不能清理；请退出 youkai 后重新打开。") {
+		t.Fatalf("a running exit claimed its cleanup had settled: %q", tt3.Texts())
+	}
+}
+
+// TestViewCleanupAfterFailedExitShowsTheSettledReason pins the entry-level
+// refusal after a save retry returned the interface to idle while the
+// service still holds the quitting state: cleanup is refused before any
+// preview or deletion, with the copy that says this run cannot recover.
+func TestViewCleanupAfterFailedExitShowsTheSettledReason(t *testing.T) {
+	const reason = "退出清理没有完成，不能清理；请退出 youkai 后重新打开。"
+	svc := cleanupPreviewService(
+		[]record.RecordInfo{{ID: "r1", LatestRevision: 1, SavedAt: time.Now()}},
+		map[string]*record.Recovery{"r1": testRecord()},
+	)
+	m, q := newTestModel(t, Config{Service: svc, DirectExportSaver: &fakeDirectExportSaver{}})
+	m.page = pageSettings
+	tt := ui.NewTester(m.View, 1020, 700)
+	settle(t, m, q, tt)
+
+	// The save retry succeeded: the model is idle again and no save is
+	// pending, but the service reports the quit cleanup as unfinished.
+	s := snap("s1", 1, false, scan.PhaseEnded, scan.Counts{}, 0, false, "")
+	s.StartBlocked = app.StartBlockedQuitting
+	applyAndSettle(t, m, q, tt, s)
+
+	if !tt.HasText(reason) {
+		t.Fatalf("the settled exit does not explain the blocked cleanup: %q", tt.Texts())
+	}
+	m.RequestRecordCleanup("r1")
+	tt.Frame()
+	if m.cleanup != nil {
+		t.Fatalf("cleanup opened a preview in the settled exit: %+v", m.cleanup)
+	}
+	if m.cleanupNotice != reason {
+		t.Fatalf("cleanup notice = %q, want %q", m.cleanupNotice, reason)
+	}
+	if screenshots, all, records, allRecords := svc.cleanupCalls(); len(screenshots) != 0 ||
+		all != 0 || len(records) != 0 || allRecords != 0 {
+		t.Fatalf("a refused cleanup still deleted: %v %d %v %d",
+			screenshots, all, records, allRecords)
+	}
+}
+
+// TestViewCleanupRaceShowsTheServiceReasonWithoutRetry covers the smaller
+// race the entry check cannot close: the service refuses after the
+// interface allowed the confirmation. Every deletion entry must show the
+// service's reason instead of its generic failure text, without promising a
+// retry that cannot succeed.
+func TestViewCleanupRaceShowsTheServiceReasonWithoutRetry(t *testing.T) {
+	const reason = "退出清理没有完成，不能清理；请退出 youkai 后重新打开。"
+	entries := []struct {
+		name    string
+		request func(*Model)
+		generic string
+	}{
+		{"one record", func(m *Model) { m.RequestRecordCleanup("r1") }, "删除记录失败"},
+		{"one record's screenshots", func(m *Model) { m.RequestScreenshotCleanup("r1") }, "删除截图失败"},
+		{"all screenshots", func(m *Model) { m.RequestAllScreenshotCleanup() }, "删除全部截图失败"},
+		{"all records", func(m *Model) { m.RequestAllRecordCleanup() }, "删除全部记录失败"},
+	}
+	for _, tc := range entries {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := cleanupPreviewService(
+				[]record.RecordInfo{{ID: "r1", LatestRevision: 1, SavedAt: time.Now()}},
+				map[string]*record.Recovery{"r1": testRecord()},
+			)
+			svc.deleteErr = &app.CleanupBlockedError{Reason: reason}
+			m, q := newTestModel(t, Config{Service: svc, DirectExportSaver: &fakeDirectExportSaver{}})
+			m.page = pageSettings
+			tt := ui.NewTester(m.View, 1020, 700)
+			settle(t, m, q, tt)
+
+			tc.request(m)
+			settle(t, m, q, tt)
+			m.ConfirmCleanup()
+			settle(t, m, q, tt)
+
+			if m.cleanup == nil {
+				t.Fatal("the refused deletion discarded its prompt")
+			}
+			if m.cleanup.err != reason {
+				t.Fatalf("cleanup error = %q, want the service reason %q", m.cleanup.err, reason)
+			}
+			if !tt.HasText(reason) {
+				t.Fatalf("the service reason does not show: %q", tt.Texts())
+			}
+			for _, unwanted := range []string{tc.generic, "可重试", "app: cleanup is blocked"} {
+				if strings.Contains(m.cleanup.err, unwanted) {
+					t.Fatalf("the refusal carries %q: %q", unwanted, m.cleanup.err)
+				}
+			}
+		})
+	}
 }
 
 func TestViewHistoryRecordDeletionClosesResults(t *testing.T) {

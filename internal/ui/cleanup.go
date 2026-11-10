@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/LoTwT/youkai/internal/app"
@@ -391,6 +392,17 @@ func (m *Model) storagePromptArea(c *ui.Context, t *ui.Theme) {
 	})
 }
 
+// cleanupBlockedFailure reports the service's refusal reason when err is
+// one. That state cannot be retried away, so callers show the reason alone
+// instead of adding an action prefix or a retry promise.
+func cleanupBlockedFailure(err error) (string, bool) {
+	var blocked *app.CleanupBlockedError
+	if errors.As(err, &blocked) {
+		return blocked.Reason, true
+	}
+	return "", false
+}
+
 func (m *Model) finishScreenshotCleanup(p *cleanupPrompt, removal record.EvidenceRemoval, err error) {
 	p.running = false
 	if m.cleanup != p {
@@ -398,7 +410,11 @@ func (m *Model) finishScreenshotCleanup(p *cleanupPrompt, removal record.Evidenc
 		m.refreshStorage()
 		return
 	}
-	if err != nil {
+	if reason, blocked := cleanupBlockedFailure(err); blocked {
+		// The service owns the state and a retry cannot change it, so the
+		// refusal speaks for itself instead of gaining a retry promise.
+		p.err = reason
+	} else if err != nil {
 		p.err = "删除截图失败：" + err.Error()
 	} else {
 		m.cleanup = nil
@@ -423,7 +439,9 @@ func (m *Model) finishScreenshotBatch(p *cleanupPrompt, batch record.EvidenceBat
 	cleaned := len(batch.Results) - len(batch.Failed)
 	partial := fmt.Sprintf("已清理 %d 条记录：删除 %d 张截图（%s）。",
 		cleaned, batch.RemovedFiles, formatBytes(batch.RemovedBytes))
-	if err != nil {
+	if reason, blocked := cleanupBlockedFailure(err); blocked {
+		p.err = reason
+	} else if err != nil {
 		p.err = "删除全部截图失败：" + err.Error()
 		m.cleanupNotice = partial + "失败条目已保留，可重试。"
 	} else {
@@ -445,7 +463,9 @@ func (m *Model) finishRecordCleanup(p *cleanupPrompt, deletion record.RecordDele
 		m.refreshStorage()
 		return
 	}
-	if err != nil {
+	if reason, blocked := cleanupBlockedFailure(err); blocked {
+		p.err = reason
+	} else if err != nil {
 		p.err = "删除记录失败：" + err.Error() + "。记录保留，可重试。"
 	} else {
 		m.cleanup = nil
@@ -468,7 +488,9 @@ func (m *Model) finishRecordBatch(p *cleanupPrompt, batch record.RecordDeletionB
 		return
 	}
 	partial := fmt.Sprintf("已删除 %d 条记录（%s）。", batch.Records, formatBytes(batch.Bytes))
-	if err != nil {
+	if reason, blocked := cleanupBlockedFailure(err); blocked {
+		p.err = reason
+	} else if err != nil {
 		p.err = "删除全部记录失败：" + err.Error()
 		m.cleanupNotice = partial + "失败条目已保留，可重试。"
 	} else {
@@ -517,6 +539,11 @@ func (m *Model) cleanupBlockedReason() string {
 		return "正在退出应用，不能清理。"
 	case m.snap.SaveError != "":
 		return "有保存失败的扫描结果待重试保存，先完成保存再清理。"
+	case m.snap.StartBlocked == app.StartBlockedQuitting:
+		// A save retry can return the interface to idle while the process
+		// still refuses to quit cleanly. The service keeps record and
+		// screenshot cleanup blocked for the rest of this run.
+		return "退出清理没有完成，不能清理；请退出 youkai 后重新打开。"
 	case m.snap.Busy:
 		if m.snap.Scan.Phase == scan.PhaseFinalizing {
 			return "扫描正在收尾保存，完成前不能清理。"

@@ -135,7 +135,7 @@ go build -o winprobe.exe ./tools/winprobe
 
 | 占用域 | 锁文件位置 | 说明 |
 | --- | --- | --- |
-| 数据根占用 | 数据根内的 `youkai.lock`（正式版 `%LOCALAPPDATA%\Youkai\`、开发版对应 `Youkai Dev` 根；macOS 为 `~/Library/Application Support/<应用名>/`） | 入口在 `mygo.App.Run` 之前取得、进程退出释放；同一实际目录的路径别名（符号链接、`..`、大小写变体）天然落入同一占用域。取得失败即按原因显示提示并退出：Windows 用原生消息框，macOS 开发平台只写日志；两种原因（被另一进程占用 / 数据根的其他错误）见[08 §10](design/uiux-2026-11/08-screens.md#10-启动失败)。 |
+| 数据根占用 | 数据根内的 `youkai.lock`（正式版 `%LOCALAPPDATA%\Youkai\`、开发版对应 `Youkai Dev` 根；macOS 为 `~/Library/Application Support/<应用名>/`） | 入口在 `mygo.App.Run` 之前取得、进程退出释放（安装更新的重启在启动新进程前由退出钩子释放，见[发布与自动更新](release.md#更新配置与密钥)）；同一实际目录的路径别名（符号链接、`..`、大小写变体）天然落入同一占用域。取得失败即按原因显示提示并退出：Windows 用原生消息框，macOS 开发平台只写日志；两种原因（被另一进程占用 / 数据根的其他错误）见[08 §10](design/uiux-2026-11/08-screens.md#10-启动失败)。 |
 | 扫描占用 | `~/Library/Application Support/com.lotwt.youkai/scan.lock`（macOS）；`%LOCALAPPDATA%\com.lotwt.youkai\scan.lock`（Windows） | 按用户固定，目录名用基础应用标识 `com.lotwt.youkai`（不带开发版后缀、不是数据根的显示名），因此开发版与正式版在同一 OS 用户下共享同一把锁；由数据根占用持有者按需取得（先数据根后扫描）。应用服务在接纳开始请求时取得，会话结束（保存收尾完成）后释放；显式退出收尾兜底释放。 |
 
 开发者需知：锁文件为空文件，内容无意义，互斥完全来自 OS 原语；**不要删除运行中实例的锁文件**（删除后新进程会锁到新文件，占用域被拆散）。`internal/app` 的跨进程测试把扫描锁基目录注入为临时目录（Windows 的 Known Folder 无法按进程重定向，因此经测试注入而非环境变量），避免触碰真实用户目录或与正在运行的应用互相干扰。
@@ -152,6 +152,7 @@ go build -o winprobe.exe ./tools/winprobe
 | 轮转与保留 | 单文件 1 MiB 上限、保留 3 份备份（`internal/app` 的常量，按实机证据调整），轮转文件上限 4 个；`youkai.crash.log` 另计且不轮转。日志只按大小轮转，属诊断数据，不按时间清理，与历史记录的删除分开（架构第 5 节） |
 
 - 打开时机在数据根占用之后：第二实例占用失败即退出，不会打开日志文件，因此两个进程不会交错或截断同一文件；代价是路径解析失败、占用失败等早期错误不写入日志文件——路径解析失败只在 stderr（开发期可见，安装版无从看到），数据根占用失败在 Windows 另由启动提示告知用户，完整错误同时写到 stderr。
+- 安装更新的重启在退出钩子（`cmd/youkai` 的 `relaunchHandoff`）里先把标准日志从文件摘到 stderr，再释放数据根占用，MyGo 随后才启动新进程，因此新旧进程也不会同时写这个文件。成功路径同样摘除：清理成功时收尾已经释放了占用，钩子里的 `Close` 幂等、什么也不做。摘除之后的日志只到 stderr——例如 `cmd/youkai/updates.go` 的后台更新检查行、失败收尾在 `Run` 返回后的重复报告；清理失败本身已由收尾在摘除之前写入文件，证据不依赖摘除后的行。崩溃输出 `youkai.crash.log` 是例外：它只追加，保留它正是为了接住交接过程中的崩溃证据。普通退出不摘除，日志行为不变。
 - 每次运行的第一行日志写明版本、构建提交（取 `debug.ReadBuildInfo` 的 VCS 信息，工作区有本地修改时加 `-modified` 后缀；构建未打标时为 `unknown`）、平台与数据根，用户反馈附带日志即可定位构建。发布与打包 workflow 保证这个提交号干净：对 `mygo.json` 的改写（版本/渠道前缀/移除 updates）经 `git update-index --skip-worktree` 对 Git 隐藏；VCS 戳记按 `git status` 判定，未跟踪文件同样算作修改，因此构建前的其余过程文件只进被 `.gitignore` 忽略的目录（fetchdeps 产物、VC++ DLL）或 runner 的临时目录（`RUNNER_TEMP`，VC++ 步骤的说明文件）——test-v0.0.1 至 test-v0.0.4 的 Windows 构建曾因该说明文件写在仓库根而携带 `-modified`，已修复。构建产物因此携带标签或提交的干净提交号，不带 `-modified`。
 - 日志打不开（如目录不可写）不阻止启动：stderr 照常输出并提示一次原因；运行中文件写入失败同样只退回 stderr 镜像（降级逻辑在 `internal/app`，Windows 上备份文件被杀毒或备份软件占用时轮转重试而不丢行，每轮失败只提示一次）。
 - `YOUKAI_SELFTEST` 自检在路径解析之前运行，仍只写 stderr（安装布局验证按[打包与安装包](#打包与安装包)的重定向方式读取）。

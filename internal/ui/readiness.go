@@ -992,6 +992,9 @@ func (m *Model) readinessChecklist(c *ui.Context, t *ui.Theme, tok *Tokens) {
 				m.readinessFocusRefresh = false
 			}
 			if refresh.Clicked() {
+				// The user asked for a fresh judgement: the old refusal no
+				// longer speaks for the state this pass reports.
+				m.startErr = ""
 				m.refreshReadiness()
 			}
 		})
@@ -1088,6 +1091,9 @@ func (m *Model) runReadinessAction(c *ui.Context, action readinessActionKind) {
 	case readinessActionDiagnostics:
 		m.copyDiagnostics(c)
 	case readinessActionChangeTarget:
+		// Asking for another window retires the failure of the old choice,
+		// like a new confirmation; the past event belongs to that choice.
+		m.startErr = ""
 		m.targetChoice = -1
 	}
 }
@@ -1112,6 +1118,8 @@ func (m *Model) readinessTargetChoices(c *ui.Context, primary bool) {
 		// Confirming the window lets the remaining rows judge that window
 		// instead of staying unknown (R-01). The start is not blocked by
 		// this refresh; the session's own precheck remains authoritative.
+		// A new confirmation also retires the refusal of the earlier choice.
+		m.startErr = ""
 		m.refreshReadiness()
 	}
 }

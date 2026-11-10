@@ -454,3 +454,40 @@ func TestWinReadinessWithoutDisplayPolicyLeavesResolutionUnknown(t *testing.T) {
 		t.Fatalf("resolution current = %q, want the measured size", resolution.Current)
 	}
 }
+
+// A failed measurement leaves the geometry rows unknown, never
+// unsatisfied: the checklist cannot judge a window it could not measure,
+// and unsatisfied rows would disable the start for a fact nobody
+// established (#140).
+func TestWinReadinessMeasurementFailureLeavesGeometryRowsUnknown(t *testing.T) {
+	w := newWinWorld(t)
+	w.geo.mu.Lock()
+	w.geo.clientSize = windows.PixelPoint{}
+	w.geo.mu.Unlock()
+
+	report, err := w.adapter.CheckReadiness(ReadinessRequest{Display: testDisplayPolicy()})
+	if err != nil {
+		t.Fatalf("check readiness: %v", err)
+	}
+	checks := readinessChecks(t, report)
+	for _, item := range []ReadinessItem{
+		ReadinessGameResolution,
+		ReadinessWindowPosition,
+		ReadinessDisplayScale,
+	} {
+		check := checks[item]
+		if check.Verdict != ReadinessUnknown {
+			t.Fatalf("%s after a failed measurement = %s (%+v), want unknown",
+				item, check.Verdict, check)
+		}
+		if check.Fault == nil {
+			t.Fatalf("%s after a failed measurement carries no fault", item)
+		}
+	}
+	if got := checks[ReadinessGameResolution].Fault.Code; got != CodeGeometryInvalid {
+		t.Fatalf("resolution fault = %s, want %s", got, CodeGeometryInvalid)
+	}
+	if got := checks[ReadinessDisplayScale].Fault.Code; got != CodeDpiCheckUnavailable {
+		t.Fatalf("display scale fault = %s, want %s", got, CodeDpiCheckUnavailable)
+	}
+}
