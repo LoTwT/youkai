@@ -5,7 +5,7 @@ package ocrlayout
 
 const (
 	// ONNXRuntimeVersion is the pinned ONNX Runtime release.
-	ONNXRuntimeVersion = "1.29.0"
+	ONNXRuntimeVersion = "1.32.0"
 	// ModelName is the single recognition model shared by both platforms.
 	ModelName = "PP-OCRv6_rec_small.onnx"
 	// ModelDest is the model's path under the repository resources root.

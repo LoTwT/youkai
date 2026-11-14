@@ -1,5 +1,5 @@
 // Command fetchdeps installs youkai's pinned third-party resources: the
-// ONNX Runtime 1.29.0 native libraries for both release platforms and the
+// ONNX Runtime 1.32.0 native libraries for both release platforms and the
 // PP-OCRv6 recognition model. Sources and SHA-256 digests are fixed in
 // deps.go; downloads land in an ignored cache and in the MyGo resources
 // tree that ships with the app. No API key is needed.

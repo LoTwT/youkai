@@ -1,6 +1,6 @@
 # T1：MyGo 界面与构建分发
 
-更新日期：2026-11-05。状态：界面、平台、结果处理、关窗、分发和浏览器入口均已由用户确认（见第 4 节）；2026-10-20 冻结默认关窗行为；2026-10-21 将 MyGo 从 v0.5.5 升级至 v0.6.2，macOS arm64 打包与识别自检通过；构建与安装已双平台实机验证（mac 部分保留为后续版本基础，见[实施清单 M1](scanner-implementation-plan.md#m1正式工程资源与会话底座)），最低系统与显示配置尚未实测。2026-11-03 用户决定首版只支持 Windows 本地客户端、只交付 Windows 安装包，macOS 与 Windows 云客户端及 Mac DMG 移入后续版本；范围以[架构第 6 节](scanner-architecture.md#6-首版功能范围)为准。
+更新日期：2026-11-14。状态：界面、平台、结果处理、关窗、分发和浏览器入口均已由用户确认（见第 4 节）；2026-10-20 冻结默认关窗行为；2026-10-21 将 MyGo 从 v0.5.5 升级至 v0.6.2，macOS arm64 打包与识别自检通过；构建与安装已双平台实机验证（mac 部分保留为后续版本基础，见[实施清单 M1](scanner-implementation-plan.md#m1正式工程资源与会话底座)），最低系统与显示配置尚未实测。2026-11-03 用户决定首版只支持 Windows 本地客户端、只交付 Windows 安装包，macOS 与 Windows 云客户端及 Mac DMG 移入后续版本；范围以[架构第 6 节](scanner-architecture.md#6-首版功能范围)为准。
 
 本文维护界面框架选择、构建与分发影响、浏览器唤起依据和界面验收。会话所有权、隐藏恢复与退出顺序由[架构第 2、5 节](scanner-architecture.md#2-界面选择与应用层)维护，校对流程由 [T6](t6-review-export-workflow.md) 维护。
 
@@ -20,7 +20,7 @@
 
 默认按常规桌面应用处理关窗：用户点击关闭按钮时隐藏到托盘或菜单栏，应用继续运行；只有明确退出（菜单、⌘Q 或托盘退出）才停止扫描、保存并退出。设置可改为“关闭即停止并退出”，两种模式都保留。Windows 托盘与 macOS 菜单栏提供状态、打开主窗口、停止和退出入口。关窗偏好、托盘不可用、恢复时的失焦与退出收尾以[隐藏、恢复与退出契约](scanner-architecture.md#隐藏恢复与退出)为准；“隐藏后继续”不意味着失焦后自动恢复。
 
-MyGo 的 [Menus and the tray](https://mygo.egoist.dev/docs/menus#tray-icons) 提供 `NewTray`；[Windows](https://mygo.egoist.dev/docs/windows) 提供 `OnClose`、`Hide`、`Show`、`ShowInactive`（后者不主动聚焦，但不保证不遮挡游戏）。`OnClose` 与 [App.OnBeforeQuit](https://mygo.egoist.dev/docs/app) 可拦截关闭和退出，回调中只安排异步收尾；`App.Exit` 会跳过退出事件，不用于正常退出。
+MyGo 的 [Menus and the tray](https://mygo.egoist.dev/docs/menus#tray-icons) 提供 `NewTray`；[Windows](https://mygo.egoist.dev/docs/windows) 提供 `OnClose`、`Hide`、`Show`、`ShowInactive`（后者不主动聚焦，但不保证不遮挡游戏）。`OnClose` 与 [App.OnBeforeQuit](https://mygo.egoist.dev/docs/app) 可拦截关闭和退出，普通可取消退出在回调中安排异步收尾；v0.9.0 的 `QuitEvent.SessionEnding` 表示注销/关机已不可取消，入口先停止输入和写入接纳、准备原生终止路径，再同步排空已接纳的保存，跳过隐藏与对话框，具体顺序以[架构](scanner-architecture.md#隐藏恢复与退出)为准。`App.Exit` 会跳过退出事件，不用于正常退出。
 
 开始区域持续展示以下文案，正常点击“开始扫描”即可，不加勾选确认：
 
@@ -32,9 +32,9 @@ MyGo 的 [Menus and the tray](https://mygo.egoist.dev/docs/menus#tray-icons) 提
 
 ### 首轮框架与工具链候选
 
-正式功能使用 **MyGo v0.6.2 + Go 1.27.3**。v0.6.2 是当前最新发布版（2026-10-21 核对），固定提交 `cf26587264f26ea68bd1b8abbf5c9723f35e0a70`，[go.mod](https://github.com/egoist/mygo/blob/cf26587264f26ea68bd1b8abbf5c9723f35e0a70/go.mod) 要求 Go 1.27.1。main 分支在此之后的提交未发布，不跟随；升级时重新核对本文和架构中引用的源码行为。
+当前固定 **MyGo v0.9.0 + Go 1.27.4**（2026-11-14 核对）。MyGo [v0.9.0](https://github.com/egoist/mygo/releases/tag/v0.9.0) 固定提交 `4811a2869b5a66d2b7e21a9eb5993fcff544460b`，[go.mod](https://github.com/egoist/mygo/blob/4811a2869b5a66d2b7e21a9eb5993fcff544460b/go.mod) 要求 Go 1.27.3。完整版本表与兼容、验证结论见[升级记录](../reports/2026-11-14-dependency-upgrade.md)。
 
-当前版本由 2026-10-16 选定的 v0.5.5 升级而来。v0.5.5 的原选择依据是分栏布局、列表点击修复和 cgo 文件的原生 UI 检查（[vet_ui.go](https://github.com/egoist/mygo/blob/cf26587264f26ea68bd1b8abbf5c9723f35e0a70/cmd/mygo/vet_ui.go)）。2026-10-21 升级到 [v0.6.2 发布记录](https://github.com/egoist/mygo/releases/tag/v0.6.2)：v0.6.0 系列带来原生 UI 局部重绘与增量布局、loading 插件、安装器非 ASCII 路径修复等变化。升级后已在 v0.6.2 源码上复核本项目引用的单实例、cgo 默认值、资源合并、NSIS、深链接注册、文件对话框和 `App.Exit` 行为，未发现与 v0.5.5 阅读结论冲突；macOS arm64 打包与 `YOUKAI_SELFTEST` 识别自检通过。Windows 实机、安装器与自动更新链路未随本次升级重测，仍需按 [T7](t7-public-release-acceptance.md) 验收。
+上次升级记录：v0.6.2 由 2026-10-16 选定的 v0.5.5 升级而来。v0.5.5 的原选择依据是分栏布局、列表点击修复和 cgo 文件的原生 UI 检查（[vet_ui.go](https://github.com/egoist/mygo/blob/cf26587264f26ea68bd1b8abbf5c9723f35e0a70/cmd/mygo/vet_ui.go)）。2026-10-21 升级到 [v0.6.2 发布记录](https://github.com/egoist/mygo/releases/tag/v0.6.2)：v0.6.0 系列带来原生 UI 局部重绘与增量布局、loading 插件、安装器非 ASCII 路径修复等变化。升级后已在 v0.6.2 源码上复核本项目引用的单实例、cgo 默认值、资源合并、NSIS、深链接注册、文件对话框和 `App.Exit` 行为，未发现与 v0.5.5 阅读结论冲突；macOS arm64 打包与 `YOUKAI_SELFTEST` 识别自检通过。Windows 实机、安装器与自动更新链路未随本次升级重测，仍需按 [T7](t7-public-release-acceptance.md) 验收。
 
 本机 Go 已于 2026-10-15 经用户授权升级至 1.27.2（macOS arm64，SHA-256 与官网一致，签名与公证验证通过）。MyGo 已于 2026-10-16 固定为项目工具依赖（随工程初始化落地，当时 v0.5.5；2026-10-21 升级至 v0.6.2）；OCR 运行库与模型已由 fetchdeps 按固定摘要下载并随包分发（见 [T3](t3-ocr-runtime-model-samples.md#固定组合与制品静态核查)与[开发指南](../development.md)）；mingw-w64（`x86_64-w64-mingw32-gcc`）已安装。
 
@@ -46,7 +46,9 @@ MyGo 的 [Menus and the tray](https://mygo.egoist.dev/docs/menus#tray-icons) 提
 
 - `mygo dev` 与正式打包会合并目标平台资源，直接 `go run` / `go test` 使用未合并的目录（[resources.go](https://github.com/egoist/mygo/blob/cf26587264f26ea68bd1b8abbf5c9723f35e0a70/cmd/mygo/resources.go)、[分发文档](https://mygo.egoist.dev/docs/distribution)）。应用组装时确定资源根，向 OCR 传入明确路径；测试显式提供资源根。开发时能加载不代表从开始菜单启动也能加载。
 - 模型、字典和原生运行库随版本分发，结果和截图写用户数据目录；安装后的用户不需要 Go、C 编译器或前端运行时。
-- NSIS 安装为每用户安装；在 Windows 上构建时可自动下载 NSIS，其他主机缺少 `makensis` 时只警告并跳过安装包，所以编译成功不代表已生成安装包。脚本没有 VC++ Runtime 安装步骤。[nsis.go](https://github.com/egoist/mygo/blob/cf26587264f26ea68bd1b8abbf5c9723f35e0a70/cmd/mygo/nsis.go)
+- NSIS 安装为每用户安装；Windows 构建端可自动下载 NSIS。上游在其他主机缺少 `makensis` 时会警告并跳过，本项目统一入口则把缺工具/缺安装包视为构建失败，不能据编译成功宣称完成打包。脚本没有 VC++ Runtime 安装步骤；当前入口见[开发指南](../development.md#打包与安装包)。
+- 安装/卸载的核心安全契约（2026-11-14 用户收窄）：应用仍运行即停止后续目标文件变更，提示从应用菜单退出并处理未保存内容/保存错误后重试；不发送关窗或强杀，不自动提交草稿，不改用户数据。项目内适配绑定 MyGo v0.9.0 与完整模板，替换两个完整 CloseApp；检查放在实际最终 `$INSTDIR` 的文件操作之前，覆盖普通改目录、静默安装和卸载。只读 PowerShell/CIM 查询失败、缺工具、超时或未知返回码均拒绝，只有明确0才继续原NSIS动作；候选 Youkai 进程路径未知也拒绝，不把无路径系统进程一概当作应用。PS1删除独立强杀段，由同一NSIS检查最终 `/D` 目录，并向调用者传播异常/非零。最小 TEMP 回归27/27通过，待主控独立复审。
+- 用户本轮同意延期/未覆盖：检查后重新启动、完整OS级排斥、特殊路径别名/reparse、罕见权限组合和完整UI/W3矩阵；不再为这些边界加入锁/启动协议/ACL或迁移。标准NSIS卸载直接bootstrap返回0只表示worker启动，内部拒绝仍停止文件操作并提示；该返回码限制保留，未宣称修复。当前没有原生writer插件或自建卸载引导。完整事实和用户原话见[当前核心记录](../reports/2026-11-14-dependency-upgrade.md#r3-核心范围收敛与最小验证)。
 - MyGo 可生成 macOS `.app` 与 DMG，本地签名和 DMG 制作在 macOS 上执行。按用户选择采用 ad-hoc 签名，Developer ID 与公证不作为首版前提；macOS 制品与 DMG 已移出首版，保留为后续版本基础，路线见 [T7 第 3 节](t7-public-release-acceptance.md#3-不依赖付费证书的打包路线)。
 - 首版只交付 Windows 正式制品并在 Windows 上验收；macOS 制品随后续版本构建和验收。日常开发与 Windows 测试安排见[实施清单](scanner-implementation-plan.md#开发与-windows-测试方式)。
 
@@ -79,7 +81,7 @@ MyGo 的 [Menus and the tray](https://mygo.egoist.dev/docs/menus#tray-icons) 提
 | 扫描与校对节奏 | 扫描时游戏保持前台，完成或停止后校对，须明确告知。 | 开始前展示前台要求，扫描器可隐藏。 |
 | 扫描中关闭主窗口 | 默认隐藏到托盘或菜单栏并继续运行；设置可改为“关闭即停止并退出”，明确退出才停止、保存并退出。 | 托盘或菜单栏提供返回入口。 |
 | 分发形式 | 首版只交付 Windows 安装包，不走官方渠道；macOS DMG 拖拽安装移出首版、留待后续版本。 | 首版只验收 Windows 安装包的安装、数据路径和首次打开；Mac DMG 随后续版本验收。 |
-| 自动更新 | 首版包含（2026-10-16 确认）：MyGo v0.6.2 内置更新，从 GitHub Releases（`LoTwT/youkai`）获取经 MyGo 更新密钥签名的版本。 | 更新公钥自 0.0.1 内置；私钥不进仓库，扫描中不安装更新，测试版与正式版渠道分开；规则见[架构第 6 节](scanner-architecture.md#6-首版功能范围)。 |
+| 自动更新 | 首版包含（2026-10-16 确认）：MyGo 内置更新（当前 v0.9.0），从 GitHub Releases（`LoTwT/youkai`）获取经 MyGo 更新密钥签名的版本。 | 更新公钥自 0.0.1 内置；私钥不进仓库，扫描中不安装更新，测试版与正式版渠道分开；规则见[架构第 6 节](scanner-architecture.md#6-首版功能范围)。 |
 | 识别资源 | 完整包随附模型、字典与运行库，首次启动无需下载。 | 安装包更大，但省去首次下载与版本匹配；云游戏仍需联网。 |
 | 浏览器入口 | 网页唤起桌面 App（2026-10-16）。 | 按第 3 节实现与验收深链接。 |
 | 交付标准 | 正常构建打包，不准备 Apple Developer 会员或 Windows 证书；用户在测试前准备环境。 | 付费签名、公证和上架不作为首版前提，见 [T7](t7-public-release-acceptance.md)。 |
@@ -122,7 +124,7 @@ MyGo 按平台和架构构建并合并资源，首版交付目标为 `windows/am
 
 据此，“结果列表 + 图片证据 + 字段表单”不需要先自建控件库。
 
-**上游性能数据（v0.5.1，本项目未复跑，v0.6.2 未重新测量）：** 官方 2026-10-15 的 Windows amd64 基准（Go 1.27.1，六次中位数）中，`counter-native` 示例体积 9.37 MB、启动 6 秒后空闲私有工作集 12.15 MB；`BenchmarkListScroll`（百万变高行、无窗口 CPU 渲染）0.6873 ms/次。[原始数据](https://raw.githubusercontent.com/egoist/mygo/benchmarks/history/2026-10-14.json) · [基准源码](https://github.com/egoist/mygo/blob/408b4def1f3e6a8d3fac852396b4a46d82ba22a3/ui/list_test.go#L1118)。这些示例没有 OCR、模型、截图或游戏并行负载，只说明原生 UI 有较低占用的潜力，不能当作 youkai 的预算。
+**上游性能数据（v0.5.1，本项目未复跑，v0.9.0 也未重新测量）：** 官方 2026-10-15 的 Windows amd64 基准（Go 1.27.1，六次中位数）中，`counter-native` 示例体积 9.37 MB、启动 6 秒后空闲私有工作集 12.15 MB；`BenchmarkListScroll`（百万变高行、无窗口 CPU 渲染）0.6873 ms/次。[原始数据](https://raw.githubusercontent.com/egoist/mygo/benchmarks/history/2026-10-14.json) · [基准源码](https://github.com/egoist/mygo/blob/408b4def1f3e6a8d3fac852396b4a46d82ba22a3/ui/list_test.go#L1118)。这些示例没有 OCR、模型、截图或游戏并行负载，只说明原生 UI 有较低占用的潜力，不能当作 youkai 的预算。
 
 渲染只在输入、显式失效或动画时发生，空闲窗口不持续重绘；但持续刷新进度、重复解码图片仍会产生开销，缩略图与证据缓存必须有界。`MYGO_FRAME_STATS` 可分解构建、布局、绘制与呈现耗时，用于后续定位。
 

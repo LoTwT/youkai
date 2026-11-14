@@ -110,7 +110,11 @@ func (c DataCheck) Confirmable() bool {
 // not grow. A record whose scan has not wrapped is refused with
 // ErrRecordActive: the deliverer still owns that checkpoint and would
 // overwrite the revision with its in-memory copy.
-func (s *Service) SaveItemRevision(recordID string, sequence, expectedRevision int64, edit ItemRevisionEdit) (ItemRevisionResult, error) {
+func (s *Service) SaveItemRevision(recordID string, sequence, expectedRevision int64, edit ItemRevisionEdit) (result ItemRevisionResult, err error) {
+	if err = s.beginWrite(); err != nil {
+		return ItemRevisionResult{}, err
+	}
+	defer func() { s.finishWrite(err) }()
 	check := CheckDiscData(edit.Data)
 	if len(check.Blocking) > 0 {
 		return ItemRevisionResult{}, &RevisionInvalidError{Issues: check.Blocking}

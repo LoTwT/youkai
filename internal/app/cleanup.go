@@ -330,7 +330,11 @@ func (s *Service) PreviewCacheClear() (StorageClearPreview, error) {
 // ClearCache removes every entry below the dedicated cache root. It
 // refuses a root that is the data root or one of its ancestors, and never
 // follows a symlink at the cache root.
-func (s *Service) ClearCache() (StorageClearPreview, error) {
+func (s *Service) ClearCache() (result StorageClearPreview, err error) {
+	if err = s.beginWrite(); err != nil {
+		return StorageClearPreview{}, err
+	}
+	defer func() { s.finishWrite(err) }()
 	root := s.cfg.Paths.Cache
 	if err := clearableRoot(root, s.cfg.Paths.Data, "cache"); err != nil {
 		return StorageClearPreview{}, err
@@ -354,7 +358,11 @@ func (s *Service) PreviewOldLogClear() (StorageClearPreview, error) {
 // ClearOldLogs removes only rotated youkai.log.N backups. The active log
 // file is never deleted, so logging keeps working during and after the
 // clear.
-func (s *Service) ClearOldLogs() (StorageClearPreview, error) {
+func (s *Service) ClearOldLogs() (result StorageClearPreview, err error) {
+	if err = s.beginWrite(); err != nil {
+		return StorageClearPreview{}, err
+	}
+	defer func() { s.finishWrite(err) }()
 	root := s.cfg.Paths.Logs
 	if err := clearableRoot(root, s.cfg.Paths.Data, "logs"); err != nil {
 		return StorageClearPreview{}, err

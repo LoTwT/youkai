@@ -17,6 +17,18 @@
 #include <stddef.h>
 #include <stdint.h>
 
+/* Only for an irrevocable OS termination, before the UI thread joins
+ * background finalization. Carbon owns the remaining hotkey refs until
+ * process exit; callbacks and queued UI work are disabled, never freed
+ * underneath an in-flight caller. Ordinary cancelable quits do not use it. */
+void yk_prepare_system_termination(void);
+bool yk_system_terminating(void);
+#ifdef __OBJC__
+#include <dispatch/dispatch.h>
+/* 0 ran, -1 timed out, 1 handed over to OS termination. */
+int yk_run_on_main(double timeoutSec, dispatch_block_t block);
+#endif
+
 /* ---- Window and display enumeration (SCShareableContent) ---- */
 
 typedef struct YKWindow {

@@ -82,8 +82,8 @@ jobs:
             exit 1
           fi
       - name: Create the draft release
-        # The Windows job uploads into this one draft; without it the
-        # `mygo build -upload` would create a draft of its own.
+        # The Windows job uploads into this draft only after its local
+        # artifact checks and recognition self-test have all succeeded.
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -135,7 +135,7 @@ jobs:
         # MyGo merges resources/windows-amd64/ into the EXE's directory, which
         # is where the Windows loader looks when onnxruntime.dll (inside
         # onnxruntime/) resolves its static CRT imports. The runtime must be
-        # no older than the toolset that built ONNX Runtime 1.29.0; the v14
+        # no older than the toolset that built ONNX Runtime 1.32.0; the v14
         # series is binary-compatible, so the newest runtime available on
         # the runner is used.
         shell: pwsh
@@ -180,7 +180,7 @@ jobs:
           # test-v0.0.4 did). The Package workflow's manifest step reads
           # it from there.
           Set-Content -Path (Join-Path $env:RUNNER_TEMP "vc-redist-info.txt") -Value $info -Encoding utf8
-      - name: Build the EXE, the NSIS installer and the signed update, and upload
+      - name: Build the EXE, the NSIS installer and the signed update
         # Explicit CGO_ENABLED: MyGo defaults its child processes to
         # CGO_ENABLED=0 unless the environment overrides it. NSIS: MyGo
         # downloads it on Windows when makensis is not installed, and the
@@ -190,13 +190,13 @@ jobs:
           CGO_ENABLED: "1"
           GH_TOKEN: ${{ github.token }}
           MYGO_UPDATER_PRIVATE_KEY: ${{ secrets.MYGO_UPDATER_PRIVATE_KEY }}
-        run: go tool mygo build -platform windows/amd64 -upload
+        run: go run ./tools/mygobuild -platform windows/amd64
       - name: Verify the EXE, the installer, the packaged layout and the update files
         shell: bash
         run: |
           set -u
           exe="build/windows-amd64/Youkai.exe"
-          setup=$(find build/windows-amd64 -maxdepth 1 -name '*Setup*.exe' -print -quit)
+          setup=$(find build/windows-amd64 -maxdepth 1 -name "youkai-setup-${RELEASE_VERSION}-amd64.exe" -print -quit)
           archive="build/windows-amd64/youkai-${RELEASE_VERSION}-windows-amd64.tar.gz"
           manifest="build/windows-amd64/update-windows-amd64.json"
           fail=0
@@ -273,6 +273,28 @@ jobs:
           if (-not (Select-String -Path selftest-stderr.txt -Pattern 'youkai: self-test: updates=enabled' -Quiet)) {
             throw "a release build must have updates on — the self-test log does not say updates=enabled"
           }
+      - name: Upload verified artifacts, then the update manifest
+        # Keep every upload after all checks. In particular, MyGo's
+        # build -upload publishes before those later steps can reject a
+        # broken layout. The manifest remains last, as in MyGo's uploader.
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          dir="build/windows-amd64"
+          setup="$dir/youkai-setup-${RELEASE_VERSION}-amd64.exe"
+          archive="$dir/youkai-${RELEASE_VERSION}-windows-amd64.tar.gz"
+          manifest="$dir/update-windows-amd64.json"
+          test -f "$setup" && test -f "$archive" && test -f "$manifest"
+          test -f "$dir/install.ps1" && test -f build/SHA256SUMS
+          (cd "$dir" && sha256sum -c ../SHA256SUMS)
+          set -- "$setup" "$archive" "$dir/install.ps1" build/SHA256SUMS
+          for delta in "$dir"/youkai-*-to-"${RELEASE_VERSION}"-windows-amd64.delta; do
+            if [ -f "$delta" ]; then set -- "$@" "$delta"; fi
+          done
+          gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --clobber "$@"
+          gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --clobber "$manifest"
 
   publish:
     name: Verify the release assets and publish
@@ -298,17 +320,13 @@ jobs:
           version="${tag#"$prefix"}"
           repo="${GITHUB_REPOSITORY}"
           assets=$(gh release view "$tag" --repo "$repo" --json assets -q '.assets[].name')
-          # MyGo names the installer with spaces ("Youkai Setup <version>
-          # amd64.exe"), but GitHub renames every uploaded asset filename
-          # that contains special characters and stores each space as a
-          # dot: test-v0.0.1 holds "Youkai.Setup.0.0.1.amd64.exe", not
-          # "Youkai Setup 0.0.1 amd64.exe". Apply the same space-to-dot
-          # renaming to the expected names and match the stored names; the
-          # other assets contain no spaces and pass through unchanged.
+          # MyGo v0.7+ uses the ASCII slug in installer asset names.
           need=(
-            "Youkai Setup $version amd64.exe"
+            "youkai-setup-$version-amd64.exe"
             "youkai-$version-windows-amd64.tar.gz"
             "update-windows-amd64.json"
+            "install.ps1"
+            "SHA256SUMS"
           )
           fail=0
           for name in "${need[@]}"; do

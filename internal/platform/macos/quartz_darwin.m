@@ -33,18 +33,12 @@ static int32_t yk_frontmost_pid_on_main(void) {
 }
 
 int32_t yk_frontmost_pid(double timeoutSec) {
-	if ([NSThread isMainThread]) {
-		return yk_frontmost_pid_on_main();
-	}
 	__block int32_t pid = -1;
-	dispatch_semaphore_t done = dispatch_semaphore_create(0);
-	dispatch_async(dispatch_get_main_queue(), ^{
+	int rc = yk_run_on_main(timeoutSec, ^{
 		pid = yk_frontmost_pid_on_main();
-		dispatch_semaphore_signal(done);
 	});
-	dispatch_time_t deadline =
-	    dispatch_time(DISPATCH_TIME_NOW, (int64_t)(timeoutSec * NSEC_PER_SEC));
-	if (dispatch_semaphore_wait(done, deadline) != 0) {
+	if (rc == 1) return -2; /* system termination */
+	if (rc != 0) {
 		// No main run loop served the query within the bound; report the
 		// unavailability instead of hanging the caller.
 		return -1;
@@ -79,18 +73,12 @@ static int32_t yk_activate_pid_on_main(int32_t pid) {
 }
 
 int32_t yk_activate_pid(int32_t pid, double timeoutSec) {
-	if ([NSThread isMainThread]) {
-		return yk_activate_pid_on_main(pid);
-	}
 	__block int32_t rc = -1;
-	dispatch_semaphore_t done = dispatch_semaphore_create(0);
-	dispatch_async(dispatch_get_main_queue(), ^{
+	int dispatch = yk_run_on_main(timeoutSec, ^{
 		rc = yk_activate_pid_on_main(pid);
-		dispatch_semaphore_signal(done);
 	});
-	dispatch_time_t deadline =
-	    dispatch_time(DISPATCH_TIME_NOW, (int64_t)(timeoutSec * NSEC_PER_SEC));
-	if (dispatch_semaphore_wait(done, deadline) != 0) {
+	if (dispatch == 1) return -2; /* system termination */
+	if (dispatch != 0) {
 		return -1;
 	}
 	return rc;

@@ -133,6 +133,9 @@ type windowLifecycle struct {
 	// was created (a launch-time deep link is delivered after ready, but a
 	// second-instance message can queue earlier).
 	pendingRestore bool
+	// sessionEnding bypasses dialogs and hiding during an irrevocable OS
+	// logout/shutdown. The service save runs before the callback returns.
+	sessionEnding bool
 
 	// status is the last state rendered into the tray menu, to avoid
 	// rebuilding the menu for every unchanged snapshot.
@@ -253,6 +256,9 @@ func (l *windowLifecycle) Restore() {
 // tray and keeps the process running; close-to-exit runs the wrap-up; an
 // explicit exit already in progress is never turned into a hide.
 func (l *windowLifecycle) OnWindowClose(e preventableEvent) {
+	if l.sessionEnding {
+		return
+	}
 	if l.model.Exiting() || l.model.CloseBehavior() == app.CloseBehaviorExit || l.tray == nil {
 		if l.tray == nil {
 			// The log says which decision the close took: a report of a
@@ -302,6 +308,18 @@ func (l *windowLifecycle) HideToTray() {
 	l.logTrayBounds("at close")
 	l.window.Hide()
 	l.Refresh()
+}
+
+// OnSessionEnding joins the service's stop/save/teardown synchronously.
+// MyGo ignores cancellation on this path and may never return from Run.
+// Unsaved editor drafts stay uncommitted; no dialog can delay OS shutdown.
+func (l *windowLifecycle) OnSessionEnding(prepare, shutdown func()) {
+	if l.sessionEnding {
+		return
+	}
+	l.sessionEnding = true
+	prepare()
+	shutdown()
 }
 
 // OnBeforeQuit begins the explicit-exit wrap-up. It always runs, regardless

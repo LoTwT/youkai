@@ -471,6 +471,9 @@ const mainQueueRecoveryBound = 365 * 24 * time.Hour
 // including "no frontmost application", proves the queue is being
 // served, while -1 means the probe block did not run within the bound.
 func probeMainQueueServed() bool {
+	if bool(C.yk_system_terminating()) {
+		return true // no further dispatch during irrevocable termination
+	}
 	return int32(C.yk_frontmost_pid(C.double(mainQueueRecoveryBound.Seconds()))) != -1
 }
 
@@ -511,6 +514,8 @@ func (p darwinForegroundProbe) FrontmostPID() (int32, error) {
 	}
 	mainDispatchGate.release() // the block ran, whatever pid it produced
 	switch pid {
+	case -2:
+		return 0, errors.New("macos: system termination stopped the frontmost query")
 	case 0:
 		return 0, errors.New("macos: no frontmost application")
 	default:
@@ -548,6 +553,8 @@ func (a darwinAppActivator) ActivatePID(pid int32) error {
 	switch rc {
 	case 0:
 		return nil
+	case -2:
+		return errors.New("macos: system termination stopped target activation")
 	case 1:
 		return errors.New("macos: target application is no longer running")
 	default:
@@ -649,7 +656,15 @@ func (r darwinHotKeyRegistrar) Unregister(handle NativeHotKeyHandle) error {
 	if !ok || h.ref == nil {
 		return errors.New("macos: unknown native hotkey handle")
 	}
+	if bool(C.yk_system_terminating()) {
+		registryRemoveHotkey(h.id)
+		return nil // callback disabled; OS owns the still-live native ref
+	}
 	if err := mainDispatchGate.acquire("hotkey unregister"); err != nil {
+		if bool(C.yk_system_terminating()) {
+			registryRemoveHotkey(h.id)
+			return nil
+		}
 		return err
 	}
 	rc := C.yk_hotkey_unregister(h.ref, C.double(r.timeout.Seconds()))
@@ -667,6 +682,11 @@ func (r darwinHotKeyRegistrar) Unregister(handle NativeHotKeyHandle) error {
 	}
 	return nil
 }
+
+// PrepareSystemTermination is only for the noncancelable OS callback,
+// after scan cancellation and before joining its background cleanup.
+// Hotkeys remain native-owned until process exit, with callbacks disabled.
+func PrepareSystemTermination() { C.yk_prepare_system_termination() }
 
 // ---- Mach clock source ----
 

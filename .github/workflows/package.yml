@@ -81,7 +81,7 @@ jobs:
             fail=1
           fi
           for f in \
-            "Contents/Resources/onnxruntime/libonnxruntime.1.29.0.dylib" \
+            "Contents/Resources/onnxruntime/libonnxruntime.1.32.0.dylib" \
             "Contents/Resources/onnxruntime/LICENSE" \
             "Contents/Resources/onnxruntime/ThirdPartyNotices.txt" \
             "Contents/Resources/models/PP-OCRv6_rec_small.onnx" \
@@ -100,9 +100,9 @@ jobs:
           codesign --verify --deep --strict --verbose=2 "$app"
           echo "--- executable and dylib minimum system (LC_BUILD_VERSION) ---"
           otool -l "$app/Contents/MacOS/Youkai" | grep -A3 LC_BUILD_VERSION
-          otool -l "$app/Contents/Resources/onnxruntime/libonnxruntime.1.29.0.dylib" | grep -A3 LC_BUILD_VERSION
+          otool -l "$app/Contents/Resources/onnxruntime/libonnxruntime.1.32.0.dylib" | grep -A3 LC_BUILD_VERSION
           echo "--- dylib signature ---"
-          codesign -dv "$app/Contents/Resources/onnxruntime/libonnxruntime.1.29.0.dylib" 2>&1 || true
+          codesign -dv "$app/Contents/Resources/onnxruntime/libonnxruntime.1.32.0.dylib" 2>&1 || true
       - name: Recognition self-test on the packaged app
         # The bundle is ad-hoc signed on this runner, so it runs here. The
         # check loads the bundled dylib and model from Contents/Resources and
@@ -124,7 +124,7 @@ jobs:
           version=$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' mygo.json)
           app="build/darwin-arm64/Youkai.app"
           dmg=$(find build/darwin-arm64 -maxdepth 1 -name '*.dmg' -print -quit)
-          dylib="$app/Contents/Resources/onnxruntime/libonnxruntime.1.29.0.dylib"
+          dylib="$app/Contents/Resources/onnxruntime/libonnxruntime.1.32.0.dylib"
           model="$app/Contents/Resources/models/PP-OCRv6_rec_small.onnx"
           hash() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d' ' -f1; else shasum -a 256 "$1" | cut -d' ' -f1; fi; }
           {
@@ -140,7 +140,7 @@ jobs:
             printf 'Youkai.app (bundle)  %s bytes total  (in the DMG)\n' "$(du -sk "$app" | cut -f1)K"
             echo
             echo "## Bundled native libraries and model"
-            printf '%s  %s bytes  sha256:%s\n' "libonnxruntime.1.29.0.dylib" "$(wc -c < "$dylib" | tr -d ' ')" "$(hash "$dylib")"
+            printf '%s  %s bytes  sha256:%s\n' "libonnxruntime.1.32.0.dylib" "$(wc -c < "$dylib" | tr -d ' ')" "$(hash "$dylib")"
             printf '%s  %s bytes  sha256:%s\n' "PP-OCRv6_rec_small.onnx" "$(wc -c < "$model" | tr -d ' ')" "$(hash "$model")"
             echo
             echo "## Bundle signature"
@@ -193,7 +193,7 @@ jobs:
         # MyGo merges resources/windows-amd64/ into the EXE's directory, which
         # is where the Windows loader looks when onnxruntime.dll (inside
         # onnxruntime/) resolves its static CRT imports. The runtime must be
-        # no older than the toolset that built ONNX Runtime 1.29.0; the v14
+        # no older than the toolset that built ONNX Runtime 1.32.0; the v14
         # series is binary-compatible, so the newest runtime available on
         # the runner is used.
         shell: pwsh
@@ -244,13 +244,14 @@ jobs:
         # artifact check below fails loudly if the installer is missing.
         env:
           CGO_ENABLED: "1"
-        run: go tool mygo build -platform windows/amd64
+        run: go run ./tools/mygobuild -platform windows/amd64
       - name: Verify the EXE, the installer and the packaged layout
         shell: bash
         run: |
           set -u
           exe="build/windows-amd64/Youkai.exe"
-          setup=$(find build/windows-amd64 -maxdepth 1 -name '*Setup*.exe' -print -quit)
+          version=$(jq -r '.version' mygo.json)
+          setup=$(find build/windows-amd64 -maxdepth 1 -name "youkai-setup-${version}-amd64.exe" -print -quit)
           fail=0
           if [ ! -f "$exe" ]; then
             echo "ERROR: missing executable: $exe"
@@ -315,7 +316,8 @@ jobs:
         run: |
           version=$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' mygo.json)
           exe="build/windows-amd64/Youkai.exe"
-          setup=$(find build/windows-amd64 -maxdepth 1 -name '*Setup*.exe' -print -quit)
+          setup=$(find build/windows-amd64 -maxdepth 1 -name "youkai-setup-${version}-amd64.exe" -print -quit)
+          test -n "$setup" || { echo "ERROR: missing youkai-setup-${version}-amd64.exe"; exit 1; }
           hash() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d' ' -f1; else shasum -a 256 "$1" | cut -d' ' -f1; fi; }
           entry() { printf '%s  %s bytes  sha256:%s\n' "$1" "$(wc -c < "$2" | tr -d ' ')" "$(hash "$2")"; }
           {
@@ -344,7 +346,7 @@ jobs:
             entry "VCRUNTIME140.dll" "build/windows-amd64/VCRUNTIME140.dll"
             entry "VCRUNTIME140_1.dll" "build/windows-amd64/VCRUNTIME140_1.dll"
             echo
-            echo "ONNX Runtime 1.29.0 imports the VC++ v14 series (MSVCP140.dll, MSVCP140_1.dll, VCRUNTIME140.dll, VCRUNTIME140_1.dll; see T3 固定组合与制品静态核查); the v14 series is binary-compatible, so the runner's newest VC14x CRT (recorded above) is not older than the toolset that built it. Actual loading on a clean Windows machine is a Windows test item."
+            echo "ONNX Runtime 1.32.0 imports the VC++ v14 series (MSVCP140.dll, MSVCP140_1.dll, VCRUNTIME140.dll, VCRUNTIME140_1.dll; see T3 固定组合与制品静态核查); the v14 series is binary-compatible, so the runner's newest VC14x CRT (recorded above) is not older than the toolset that built it. Actual loading on a clean Windows machine is a Windows test item."
           } | tee packaging-manifest-windows-amd64.txt
       - name: Upload the installer and the manifest
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -352,5 +354,5 @@ jobs:
           name: youkai-windows-amd64-${{ github.sha }}
           if-no-files-found: error
           path: |
-            build/windows-amd64/*Setup*.exe
+            build/windows-amd64/youkai-setup-*-amd64.exe
             packaging-manifest-windows-amd64.txt

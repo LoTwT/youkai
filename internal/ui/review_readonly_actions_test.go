@@ -518,6 +518,16 @@ func TestReviewBrowseGuardIgnoresTab(t *testing.T) {
 	if !tt.Focused("确认并下一项") {
 		t.Fatalf("the guarded write button did not take the keyboard: %q", tt.Texts())
 	}
+	// MyGo v0.8+ delivers modifiers and unnamed keys to HandleInput too.
+	// Neither a bare Alt/Shift nor Caps Lock is a deliberate write action.
+	for _, code := range []ui.KeyCode{ui.CodeAltLeft, ui.CodeShiftLeft, ui.CodeCapsLock} {
+		tt.CodeDown(0, code)
+		tt.CodeUp(0, code)
+		tt.Frame()
+		if !m.reviewBrowseGuarded() || !tt.Focused("确认并下一项") {
+			t.Fatalf("key code %v released the browse shield or moved focus", code)
+		}
+	}
 	tt.Key(0, ui.KeyTab)
 	tt.Frame()
 	if !m.reviewBrowseGuarded() {

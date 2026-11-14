@@ -6,8 +6,8 @@
 
 ## ONNX Runtime
 
-- 组件：ONNX Runtime CPU 运行库 1.29.0。macOS 为 `onnxruntime/libonnxruntime.1.29.0.dylib`；Windows 为 `onnxruntime/onnxruntime.dll` 与 `onnxruntime/onnxruntime_providers_shared.dll`。
-- 来源：Microsoft 官方发布制品 `onnxruntime-osx-arm64-1.29.0.tgz` / `onnxruntime-win-x64-1.29.0.zip`（<https://github.com/microsoft/onnxruntime/releases/tag/v1.29.0>）。
+- 组件：ONNX Runtime CPU 运行库 1.32.0。macOS 为 `onnxruntime/libonnxruntime.1.32.0.dylib`；Windows 为 `onnxruntime/onnxruntime.dll` 与 `onnxruntime/onnxruntime_providers_shared.dll`。
+- 来源：Microsoft 官方发布制品 `onnxruntime-osx-arm64-1.32.0.tgz` / `onnxruntime-win-x64-1.32.0.zip`（<https://github.com/microsoft/onnxruntime/releases/tag/v1.32.0>）。
 - 许可：MIT。许可证原文与上游第三方声明随包放在 `onnxruntime/LICENSE` 与 `onnxruntime/ThirdPartyNotices.txt`。
 - Windows 运行前提：VC++ v14 x64 运行库（`MSVCP140.dll`、`MSVCP140_1.dll`、`VCRUNTIME140.dll`、`VCRUNTIME140_1.dll`）按应用本地部署随包放在 EXE 同目录，取自 Visual Studio 的 `VC\Redist\MSVC` 再分发文件，按 Microsoft 的 Visual Studio 再分发条款分发。
 
@@ -19,4 +19,4 @@
 
 ## 构建时链接的库
 
-以下组件不作为独立文件随包分发，编译链接进 Youkai 可执行文件：MyGo 原生 UI 框架（MIT，<https://github.com/egoist/mygo>）；Go 标准库与工具链（BSD 风格许可，<https://go.dev/LICENSE>）；Go 绑定 onnxruntime_go v1.36.0（MIT，<https://github.com/yalue/onnxruntime_go>）。
+以下组件不作为独立文件随包分发，编译链接进 Youkai 可执行文件：MyGo 原生 UI 框架（MIT，<https://github.com/egoist/mygo>）；Go 标准库与工具链（BSD 风格许可，<https://go.dev/LICENSE>）；Go 绑定 onnxruntime_go v1.38.0（MIT，<https://github.com/yalue/onnxruntime_go>）。
