@@ -100,7 +100,7 @@ AppKit 相关操作交由应用已有的主线程调度，帧回调用单独串�
 
 出处：[SCStream](https://developer.apple.com/documentation/screencapturekit/scstream)、[screenRect](https://developer.apple.com/documentation/screencapturekit/scstreamframeinfo/screenrect)、[pointPixelScale](https://developer.apple.com/documentation/screencapturekit/sccontentfilter/pointpixelscale)、[SCScreenshotManager](https://developer.apple.com/documentation/screencapturekit/scscreenshotmanager)。事件权限预检自 macOS 10.15 可用，基础事件投递更早；它们不能据此证明当前游戏兼容。
 
-技术简化候选是 **macOS 14+ 使用一套流路径**。Go 1.27 要求 macOS 13+，选定 ORT 1.29.0 arm64 制品的最低系统标记为 14.0，覆盖 12.3–13.x 会改变工具链或运行库候选；系统候选由 [T7](t7-public-release-acceptance.md#最低系统候选与证据)统一维护。游戏的 macOS 12+/M1+ 条件仍只引用 [T1 的 App Store 核查](t1-mygo-ui-distribution.md#仍需技术核对的事项)。Windows 的 PMv2 自 Windows 10 1703 可用，同样不能推出产品最低 Windows 版本。
+技术简化候选是 **macOS 14+ 使用一套流路径**。Go 1.27 要求 macOS 13+，当前 ORT 1.32.0 arm64 制品的最低系统标记仍为 14.0，覆盖 12.3 至 13.x 会改变工具链或运行库候选；系统候选由 [T7](t7-public-release-acceptance.md#最低系统候选与证据)统一维护。游戏的 macOS 12+/M1+ 条件仍只引用 [T1 的 App Store 核查](t1-mygo-ui-distribution.md#仍需技术核对的事项)。Windows 的 PMv2 自 Windows 10 1703 可用，同样不能推出产品最低 Windows 版本。
 
 ## 3. 图像、窗口与输入坐标
 

@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/LoTwT/youkai/internal/ocrlayout"
 )
 
 // The integration tests load the real ONNX Runtime library and the pinned
@@ -33,7 +35,7 @@ func resourcePaths(t *testing.T) (libPath, modelPath string, ok bool) {
 	case "darwin":
 		// Load the versioned file by its exact name; do not depend on an
 		// unversioned symlink being present (T3 §实际原生文件与打包成本).
-		libRel = filepath.Join("resources", "darwin-arm64", "onnxruntime", "libonnxruntime.1.29.0.dylib")
+		libRel = filepath.Join("resources", "darwin-arm64", "onnxruntime", ocrlayout.RuntimeLibName("darwin"))
 	case "windows":
 		libRel = filepath.Join("resources", "windows-amd64", "onnxruntime", "onnxruntime.dll")
 	default:

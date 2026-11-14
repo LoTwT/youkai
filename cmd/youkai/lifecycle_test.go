@@ -551,6 +551,38 @@ func TestCloseWithoutTrayLogsExitFallback(t *testing.T) {
 	}
 }
 
+func TestSessionEndingSavesSynchronouslyWithoutClosePrompts(t *testing.T) {
+	model := &fakeLifecycleModel{behavior: app.CloseBehaviorHide, hintDue: true}
+	life := newWindowLifecycle(model)
+	installFakeTray(t, life)
+	win := &fakeWindow{}
+	life.AttachWindow(win)
+	saves := 0
+	prepared := 0
+	shutdown := func() {
+		if prepared != 1 {
+			t.Fatal("synchronous save began before native termination preparation")
+		}
+		saves++
+		// Even a close delivered during the synchronous save cannot hide
+		// the app or open an unsaved-editor/first-hide prompt.
+		event := &fakeEvent{}
+		life.OnWindowClose(event)
+		if event.prevented {
+			t.Fatal("OS termination tried to cancel the close")
+		}
+	}
+	prepare := func() { prepared++ }
+	life.OnSessionEnding(prepare, shutdown)
+	if saves != 1 {
+		t.Fatal("session-ending callback returned before the save")
+	}
+	life.OnSessionEnding(prepare, shutdown)
+	if prepared != 1 || saves != 1 || model.allowCalls != 0 || model.showHintCalls != 0 || win.hides != 0 || win.shows != 0 || win.redraws != 0 {
+		t.Fatalf("session ending: saves=%d model=%+v window=%+v", saves, model, win)
+	}
+}
+
 // Explicit quit always runs the wrap-up, even with the hide preference, and
 // the second asking (after the wrap-up settled) lets the quit through.
 func TestExplicitQuitAlwaysWrapsUp(t *testing.T) {

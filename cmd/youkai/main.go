@@ -234,6 +234,8 @@ func main() {
 	// the framework's last write and before relaunchNow. Both callbacks
 	// run on the UI thread, as does everything they touch.
 	handoff := newRelaunchHandoff(dataLock)
+	// The no-argument form preserves the original process arguments.
+	relaunch := func() { mygo.App.Relaunch() }
 
 	model := ui.New(ui.Config{
 		Service: svc,
@@ -290,7 +292,7 @@ func main() {
 		CloseBehavior: settings.CloseBehavior,
 		SaveCloseBehavior: func(behavior app.CloseBehavior) error {
 			settings.CloseBehavior = behavior
-			err := app.SaveSettings(paths.Data, settings)
+			err := svc.SaveSettings(settings)
 			if err != nil {
 				log.Printf("youkai: save settings: %v", err)
 			}
@@ -301,7 +303,7 @@ func main() {
 		TrayHintSeen: settings.TrayHintSeen,
 		SaveTrayHintSeen: func(seen bool) error {
 			settings.TrayHintSeen = seen
-			err := app.SaveSettings(paths.Data, settings)
+			err := svc.SaveSettings(settings)
 			if err != nil {
 				log.Printf("youkai: save settings: %v", err)
 			}
@@ -321,7 +323,7 @@ func main() {
 		// the window stays with its retry, and the installed update runs at
 		// the next launch.
 		OnUpdateInstalled: func() {
-			handoff.onUpdateInstalled(mygo.App.Relaunch)
+			handoff.onUpdateInstalled(relaunch)
 		},
 		// A settled explicit exit closes the application: the model's
 		// quit goroutine already waited for the wrap-up, so quitting re-
@@ -331,7 +333,7 @@ func main() {
 		// teardown reaches it only through the explicit 仍然退出 path.
 		OnExitSettled: func() {
 			life.Refresh()
-			handoff.onExitSettled(mygo.App.Relaunch, mygo.App.Quit)
+			handoff.onExitSettled(relaunch, mygo.App.Quit)
 		},
 		// A failed final save leaves the process alive. The restore entry
 		// must become visible again even when the exit was requested from
@@ -343,10 +345,9 @@ func main() {
 	life = newWindowLifecycle(model)
 
 	// The explicit-exit wrap-up. The quit event only triggers it
-	// asynchronously — a quit callback must not block the main thread on
-	// session finalization, recognition or disk writes — and main joins
-	// it after the event loop stopped, so the wrap-up always completes
-	// before the process exits.
+	// asynchronously for cancelable quits, and main joins it after the
+	// event loop stopped. OS session termination cannot wait for that
+	// return: MyGo requires its callback to finish the save synchronously.
 	var shutdownOnce sync.Once
 	shutdown := func() {
 		shutdownOnce.Do(func() {
@@ -364,6 +365,13 @@ func main() {
 	// The window's close handler applies the preference separately; a quit
 	// already in progress is never turned into a hide.
 	mygo.App.OnBeforeQuit(func(e *mygo.QuitEvent) {
+		if e.SessionEnding {
+			life.OnSessionEnding(func() {
+				svc.PrepareSystemTermination()
+				platform.PrepareSystemTermination()
+			}, shutdown)
+			return
+		}
 		life.OnBeforeQuit(e)
 	})
 	// The installed update's restart must hand the data root over before

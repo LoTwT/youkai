@@ -27,7 +27,7 @@ type member struct {
 
 // dependency is one pinned download. platform is the "goos/goarch" of the
 // apps that need it, or "" when every platform does. Destinations follow
-// MyGo's resources layout (cmd/mygo/resources.go of MyGo v0.5.5): the
+// MyGo's resources layout (cmd/mygo/resources.go of MyGo v0.9.0): the
 // contents of platform directories such as resources/windows-amd64/ ship
 // only with that platform's app, merged into the resource root, and
 // everything else ships with every app.
@@ -61,45 +61,45 @@ func (d dependency) targets() []target {
 }
 
 // deps is the fixed list of third-party resources of the first release.
-// The two ORT archive digests and the libonnxruntime.1.29.0.dylib digest are
+// The two ORT archive digests and the libonnxruntime.1.32.0.dylib digest are
 // recorded in docs/specs/t3-ocr-runtime-model-samples.md; the other member
 // digests were computed from those digest-verified official archives, so
 // every unpacked file is checked against what was pinned, not against
 // whatever its source serves today.
 var deps = []dependency{
 	{
-		name:     "onnxruntime-win-x64-1.29.0.zip",
-		url:      "https://github.com/microsoft/onnxruntime/releases/download/v1.29.0/onnxruntime-win-x64-1.29.0.zip",
-		sha256:   "c9b4b7086b529ad814f428c1bad028e20a25d7dc0699836775faace4ab5b78b2",
+		name:     "onnxruntime-win-x64-1.32.0.zip",
+		url:      "https://github.com/microsoft/onnxruntime/releases/download/v1.32.0/onnxruntime-win-x64-1.32.0.zip",
+		sha256:   "aaa1d04fcf86bd31e84b90bc0cbde80e632bd0720dcc5d8ba05c4fe45c09d127",
 		platform: "windows/amd64",
 		kind:     kindZip,
 		members: []member{
 			{
-				name:   "onnxruntime-win-x64-1.29.0/lib/onnxruntime.dll",
+				name:   "onnxruntime-win-x64-1.32.0/lib/onnxruntime.dll",
 				dest:   ocrlayout.RuntimeDest("windows", "amd64"),
-				sha256: "69d8e6d3879a3b4001cdc74c8ed9ccc7e7f799a5b847059738323404519ec471",
+				sha256: "348c3d29d6995eee37e3451825eaddb7ea7400be3afda6ca2286b12bc775f042",
 			},
 			{
-				name:   "onnxruntime-win-x64-1.29.0/lib/onnxruntime_providers_shared.dll",
+				name:   "onnxruntime-win-x64-1.32.0/lib/onnxruntime_providers_shared.dll",
 				dest:   "windows-amd64/onnxruntime/onnxruntime_providers_shared.dll",
-				sha256: "87f6878cdc1f80b3a9afa5b0c84663315030b4957f5bbb6b66470557cb2f48d8",
+				sha256: "6caf57ac07c9cf72fb4e73c5bb0fe156f02dd60bbbd7385530c9a5654f10f950",
 			},
 			{
-				name:   "onnxruntime-win-x64-1.29.0/LICENSE",
+				name:   "onnxruntime-win-x64-1.32.0/LICENSE",
 				dest:   "windows-amd64/onnxruntime/LICENSE",
 				sha256: "c250d6278f0b47a6439fb7592b08b58a55eb9f535aa49a1db63211c3f982b674",
 			},
 			{
-				name:   "onnxruntime-win-x64-1.29.0/ThirdPartyNotices.txt",
+				name:   "onnxruntime-win-x64-1.32.0/ThirdPartyNotices.txt",
 				dest:   "windows-amd64/onnxruntime/ThirdPartyNotices.txt",
-				sha256: "4c5b864d8974c94b37461f38163facef79a1bb5dea461667ee9e5be6a8e73f83",
+				sha256: "bf8073fd6a112ac2a656bb60799652127e881689e51d37ad20df446cd5188b2d",
 			},
 		},
 	},
 	{
-		name:     "onnxruntime-osx-arm64-1.29.0.tgz",
-		url:      "https://github.com/microsoft/onnxruntime/releases/download/v1.29.0/onnxruntime-osx-arm64-1.29.0.tgz",
-		sha256:   "d0706fc34f315d8c88639d0a8c81f2e09e815f282cabed3493c06a054352cf92",
+		name:     "onnxruntime-osx-arm64-1.32.0.tgz",
+		url:      "https://github.com/microsoft/onnxruntime/releases/download/v1.32.0/onnxruntime-osx-arm64-1.32.0.tgz",
+		sha256:   "8ddca23f532b9d4fbb279ba9b08dab6c0ac94fdc9aec2eb44a1db7049216c043",
 		platform: "darwin/arm64",
 		kind:     kindTgz,
 		members: []member{
@@ -107,19 +107,19 @@ var deps = []dependency{
 				// The versioned dylib is the real file; lib/libonnxruntime.dylib
 				// in the same archive is a same-sized duplicate, which the
 				// digest below rules out unpacking by mistake.
-				name:   "onnxruntime-osx-arm64-1.29.0/lib/libonnxruntime.1.29.0.dylib",
+				name:   "onnxruntime-osx-arm64-1.32.0/lib/libonnxruntime.1.32.0.dylib",
 				dest:   ocrlayout.RuntimeDest("darwin", "arm64"),
-				sha256: "68f6e54e695583adc371aef610ec4abb1ffaa3df656582922de7690f7e2000eb",
+				sha256: "51c5a25a3dfafd74f62f403e6e0dc7881d97c0e627c703a4d9548c5677abc8fd",
 			},
 			{
-				name:   "onnxruntime-osx-arm64-1.29.0/LICENSE",
+				name:   "onnxruntime-osx-arm64-1.32.0/LICENSE",
 				dest:   "darwin-arm64/onnxruntime/LICENSE",
 				sha256: "2f07c72751aed99790b8a4869cf2311df85a860b22ded05fa22803587a48922c",
 			},
 			{
-				name:   "onnxruntime-osx-arm64-1.29.0/ThirdPartyNotices.txt",
+				name:   "onnxruntime-osx-arm64-1.32.0/ThirdPartyNotices.txt",
 				dest:   "darwin-arm64/onnxruntime/ThirdPartyNotices.txt",
-				sha256: "53d3fa5821ac016ac24dd35775c996efec86e2ae0841e9a3a5e146c0ae916845",
+				sha256: "d8696258afcf9df7827a5e01d6b6d55ee9b461b4e82020f5f48242deb9cc2270",
 			},
 		},
 	},

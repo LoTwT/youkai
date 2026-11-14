@@ -1,6 +1,6 @@
 # T3：OCR 运行库、模型与样本评估
 
-更新日期：2026-11-03。状态：首轮验证组合已固定并完成制品静态核查；绑定、运行库与模型已接入 youkai，双平台安装版实机完成加载与识别（自检及升级链，见[实施清单 M1](scanner-implementation-plan.md#m1正式工程资源与会话底座)）；2026-11-03 起首版只交付 Windows 本地客户端（范围见[架构 §6](scanner-architecture.md#6-首版功能范围)），本文的两平台制品、加载与验收要求保留为后续版本基础；macOS 云客户端首轮调参样本已建立；首版识别门槛只以 Windows 本地客户端一组样本判定，Windows 本地客户端样本与识别质量门槛仍待补齐，Windows 云与 macOS 云两组随后续版本。用户已认可模型评估方向与准确性边界：v6 small 优先验证，保留未知与人工校对，不承诺自动识别 100% 正确。字段范围由[架构第 6 节](scanner-architecture.md#首版字段清单提案)维护，管理状态与装备字段按 2026-10-20 冻结的数据模型执行；模块边界、取消与分发要求以[架构第 4 节](scanner-architecture.md#4-ocr原生资源与构建)为准。
+更新日期：2026-11-14。状态：当前组合已升级至 yalue v1.38.0 / ORT 1.32.0，模型保持原字节；本轮只完成本地检查，详见[升级记录](../reports/2026-11-14-dependency-upgrade.md)。旧组合的双平台安装、自检及升级链实机证据仍见[实施清单 M1](scanner-implementation-plan.md#m1正式工程资源与会话底座)，不覆盖新组合。2026-11-03 起首版只交付 Windows 本地客户端（范围见[架构 §6](scanner-architecture.md#6-首版功能范围)），本文的两平台制品、加载与验收要求保留为后续版本基础；macOS 云客户端首轮调参样本已建立；首版识别门槛只以 Windows 本地客户端一组样本判定，Windows 本地客户端样本与识别质量门槛仍待补齐，Windows 云与 macOS 云两组随后续版本。用户已认可模型评估方向与准确性边界：v6 small 优先验证，保留未知与人工校对，不承诺自动识别 100% 正确。字段范围由[架构第 6 节](scanner-architecture.md#首版字段清单提案)维护，管理状态与装备字段按 2026-10-20 冻结的数据模型执行；模块边界、取消与分发要求以[架构第 4 节](scanner-architecture.md#4-ocr原生资源与构建)为准。
 
 ## 1. 当前建议
 
@@ -8,7 +8,7 @@
 
 根据公开评测，优先验证 PP-OCRv6 small，以 tiny 比较更小体积的代价，保留 PP-OCRv5 作为参考路线基准。最终根据保留样本选择一个随包模型（首版为 Windows 本地客户端一组；另两组随后续版本），不默认同时部署多模型。参考仓库采用的 v5 具体变体、文件摘要与字典尚未核实，不能将其直接称作 mobile 或 server 模型。轻量应比较安装体积、冷启动、进程总内存、识别耗时和人工校对量，不能只看模型大小。
 
-首版建议一个识别工作者和小型有界队列，运行库随安装包提供。首轮固定 yalue v1.36.0、ORT 1.29.0 CPU 路径和 RapidOCR 发布的 PP-OCRv6 small ONNX 制品，Microsoft 官方 Go 包保留为替代；版本、制品和替换条件由本文维护。选择依据是两平台制品中的实际加载、字段输出、取消和重复运行表现，不以包名或标签有无代替验收。
+首版保持一个识别工作者和小型有界队列，运行库随安装包提供。当前固定 yalue v1.38.0、ORT 1.32.0 CPU 路径和 RapidOCR v3.10.0 的 PP-OCRv6 small ONNX 制品；模型、内嵌字符表、预处理和验收阈值不变。2026-11-14 升级只取得本地验证证据，旧 M1 / W3 真机结果不覆盖新组合，详见[升级记录](../reports/2026-11-14-dependency-upgrade.md)。
 
 ### 技术组合分别负责什么
 
@@ -32,7 +32,7 @@ T2 提供截图
 
 **模型选择建议：**优先验证 v6 small 的依据见下方公开评测。tiny 只有在驱动盘样本上通过相同质量门槛才替换它；small 未通过质量门槛时再比较 medium，不能仅因 medium 通用分数高就增加首版体积。模型与绑定是两项选择；采用 v6 不意味着向用户分发 Paddle/Python 环境，也不证明目前候选 ORT 组合已支持该制品。
 
-**绑定选择建议：**首轮采用 yalue v1.36.0 与 ORT 1.29.0，先缩小版本配套变量；它需要把会话取消接到 `RunOptions.Terminate`。Microsoft 官方 Go 包的固定源码已把 `Run(ctx)` 的取消接入原生终止，更接近 Go 调用习惯；如果其固定版本和双平台制品通过相同验收，可优先采用。两者都需要 cgo 和随包原生库，都不能保证原生调用在硬期限内结束，也都尚未在 youkai 运行。[yalue 版本说明](https://github.com/yalue/onnxruntime_go/blob/1f0fb0647fc7091b57ec72dcf0f666d2234e4d04/README.md) · [官方取消实现](https://github.com/microsoft/onnxruntime/blob/402979ac1bef89dcd55add41eaa7277c407599eb/go/onnxruntime/session.go)
+**绑定选择：**当前继续采用 yalue v1.38.0，固定源码 `75993804ebf75bfc35bd514e3d19cff35146545a` 的 `ORT_API_VERSION=31`，通过 `OrtGetApiBase()->GetApi(31)` 取得版本化函数表。ORT 1.32.0 原生库保留该 API；Mac 的实际加载、固定样本识别与取消由本轮集成测试核对，Windows 加载仍待新组合运行验证。Microsoft Go 包继续保留为替代候选，本轮不更换绑定路线。[固定头文件](https://github.com/yalue/onnxruntime_go/blob/75993804ebf75bfc35bd514e3d19cff35146545a/onnxruntime_c_api.h) · [加载桥接](https://github.com/yalue/onnxruntime_go/blob/75993804ebf75bfc35bd514e3d19cff35146545a/onnxruntime_wrapper.c)
 
 **开发与用户安装：**开发机需要 Go 和对应 C 工具链，正式制品分别构建；用户安装时不需要 Go、C 编译器或 Python。Windows 随包提供匹配的 DLL 和应用本地的 VC++ 运行库；Mac 随包提供 arm64 dylib，核对依赖、最低系统与签名。模型转换若需要 Python，属于开发阶段工具，不因此把 Python 加入用户安装包。资源通过明确路径加载，不能依赖当前目录或恰好安装在系统中的另一版本。[ORT 安装要求](https://onnxruntime.ai/docs/install/)
 
@@ -52,47 +52,47 @@ T2 提供截图
 
 | 依据 | 已确认事实 | 对本项目的影响 |
 | --- | --- | --- |
-| [yalue 固定版本加载源码](https://github.com/yalue/onnxruntime_go/blob/1f0fb0647fc7091b57ec72dcf0f666d2234e4d04/setup_env.go) | 非 Windows 实现使用 cgo 和 `dlopen`；未指定库路径时默认 `onnxruntime.so`，没有单独的 Darwin 默认文件名。源码注释称上游测过 arm64 OSX。 | Mac 应显式传入随包 dylib 的绝对路径。上游注释不证明 youkai 的安装包已可运行；需继续核对所选 arm64 二进制、依赖和签名。 |
+| [yalue 固定版本加载源码](https://github.com/yalue/onnxruntime_go/blob/75993804ebf75bfc35bd514e3d19cff35146545a/setup_env.go) | 非 Windows 实现使用 cgo 和 `dlopen`；未指定库路径时默认 `onnxruntime.so`，没有单独的 Darwin 默认文件名。源码注释称上游测过 arm64 OSX。 | Mac 应显式传入随包 dylib 的绝对路径。上游注释不证明 youkai 的安装包已可运行；需继续核对所选 arm64 二进制、依赖和签名。 |
 | [Microsoft 固定版本加载源码](https://github.com/microsoft/onnxruntime/blob/402979ac1bef89dcd55add41eaa7277c407599eb/go/onnxruntime/load_unix.go) | 官方 Go 实现同样使用 cgo 和 `dlopen`；Darwin 默认名为 `libonnxruntime.dylib`。 | 换绑定不能免除原生库打包。仍按应用资源根传明确路径，避免依赖用户机器的全局库。 |
 | [ORT 安装要求](https://onnxruntime.ai/docs/install/) | 官方列出 Windows Visual C++ Runtime 要求。 | 打包 DLL 之外还需核查选定制品的运行前提；首次不下载识别资源与完整离线首装是两项验收。 |
 | [PaddleOCR 文字识别模块](https://www.paddleocr.ai/main/en/version3.x/module_usage/text_recognition.html) | 识别模块接收文字区域；当前文档同时列有 PP-OCRv5 和 PP-OCRv6。公开速度数据不包含预处理与后处理。 | PP-OCRv5 是已有研究基准，不称作最新模型。公开精度、速度和模型大小不能直接作为游戏字段准确率、Go ONNX 延迟或最终安装体积。 |
 
 ### 固定组合与制品静态核查
 
-2026-10-16 将候选源码、两份官方 ORT 压缩包和模型文件下载到临时目录，复算摘要并解析 PE、Mach-O 和 ONNX 元数据，未安装或执行。MyGo 与 Go 的候选见 [T1](t1-mygo-ui-distribution.md#首轮框架与工具链候选)，最低系统见 [T7](t7-public-release-acceptance.md#最低系统候选与证据)。
+2026-10-16 首轮静态核查的历史证据见 M1 报告。下表维护 2026-11-14 当前组合；本轮从官方 v1.32.0 固定资产重新下载，压缩包和每个随包成员的摘要均已复算，成员摘要由 `tools/fetchdeps/deps.go` 固定。MyGo 与 Go 见 [T1](t1-mygo-ui-distribution.md#首轮框架与工具链候选)，最低系统候选见 [T7](t7-public-release-acceptance.md#最低系统候选与证据)。
 
-| 组成 | 首轮候选与来源 | 当前证据边界 |
+| 组成 | 当前版本与来源 | 当前证据边界 |
 | --- | --- | --- |
-| Go 绑定 | yalue v1.36.0，提交 `1f0fb0647fc7091b57ec72dcf0f666d2234e4d04`。 | [README](https://github.com/yalue/onnxruntime_go/blob/1f0fb0647fc7091b57ec72dcf0f666d2234e4d04/README.md)指定 ORT 1.29.0 头文件；Windows 使用动态加载跨过 MSVC 原生库与 MinGW cgo 的链接差异。已随 M1 实际构建并在双平台安装版加载（见[实施清单 M1](scanner-implementation-plan.md#m1正式工程资源与会话底座)）。 |
-| 原生引擎 | ORT 1.29.0 官方 Windows x64 / macOS arm64 包，源码提交 `2e2543fbe9fae542f921d47a72d21d5a4ef0b710`。 | 两包摘要与[官方发布制品](https://github.com/microsoft/onnxruntime/releases/tag/v1.29.0)相符；只选 CPU 执行提供器，不表示上游二进制已裁掉其他提供器。 |
-| 文字模型 | `PP-OCRv6_rec_small.onnx`，来自 RapidAI/RapidOCR 的 ModelScope `v3.10.0` 资源。 | [清单固定提交](https://github.com/RapidAI/RapidOCR/blob/7cfd3d9ef786a2e538ca30df700325e72e85b5f5/python/rapidocr/default_models.yaml)与下载文件摘要一致；不是从 Paddle 的 MB 数值推定 ONNX 体积。 |
-| 字符表 | 该 ONNX 的 `character` 元数据，顺序及摘要随模型固定。 | 已读取 18,708 个条目；加 CTC blank 和末尾空格后与输出的 18,710 类相符。无需另找一份可能不配套的 v5 字典。 |
+| Go 绑定 | yalue v1.38.0，提交 `75993804ebf75bfc35bd514e3d19cff35146545a`。 | C API 31，动态加载；Mac 本地真实识别验证，Windows 仅交叉编译与资源静态核对。 |
+| 原生引擎 | ORT 1.32.0 官方 Windows x64 / macOS arm64 包，提交 `fab30a46491a40f5e4c968b80e8a59acbbb91b53`。 | 压缩包摘要与[官方发布资产](https://github.com/microsoft/onnxruntime/releases/tag/v1.32.0)一致；使用 CPU 提供器，原生包仍有其他系统依赖。 |
+| 文字模型 | `PP-OCRv6_rec_small.onnx`，RapidOCR ModelScope `v3.10.0`。 | 2026-11-14 最新稳定 RapidOCR 仍为 v3.10.0；[固定清单](https://github.com/RapidAI/RapidOCR/blob/7cfd3d9ef786a2e538ca30df700325e72e85b5f5/python/rapidocr/default_models.yaml)仍指向同一 URL 和摘要，模型字节未变。 |
+| 字符表 | 同一 ONNX 的 `character` 元数据。 | 18,708 个条目，加 CTC blank 与末尾空格对应 18,710 类；不另换字典。 |
 
 以下 SHA-256 对实际下载字节复算。压缩包摘要不等于内部 DLL/dylib 摘要；后续本地签名或其他修改还会改变最终制品摘要。
 
 | 文件 | SHA-256 |
 | --- | --- |
-| `onnxruntime-win-x64-1.29.0.zip` | `c9b4b7086b529ad814f428c1bad028e20a25d7dc0699836775faace4ab5b78b2` |
-| `onnxruntime-osx-arm64-1.29.0.tgz` | `d0706fc34f315d8c88639d0a8c81f2e09e815f282cabed3493c06a054352cf92` |
+| `onnxruntime-win-x64-1.32.0.zip` | `aaa1d04fcf86bd31e84b90bc0cbde80e632bd0720dcc5d8ba05c4fe45c09d127` |
+| `onnxruntime-osx-arm64-1.32.0.tgz` | `8ddca23f532b9d4fbb279ba9b08dab6c0ac94fdc9aec2eb44a1db7049216c043` |
 | `PP-OCRv6_rec_small.onnx` | `6f327246b50388f3c176ae304bd95767ea6dc0c9ae92153ef8cbe210b3c14884` |
 
 **实际原生文件与打包成本：**
 
-- Windows 的 `onnxruntime.dll` 为 x64，16,149,344 字节；导入表包含 `MSVCP140.dll`、`MSVCP140_1.dll`、`VCRUNTIME140.dll`、`VCRUNTIME140_1.dll` 和系统 UCRT/API set。包中另有 21,856 字节的 `onnxruntime_providers_shared.dll`，首轮可一并保留；它不出现在主 DLL 的静态导入表，是否由选定路径动态加载仍待验证。PE 的 OS/subsystem 版本字段是 6.0，不能据此声称支持 Vista，导入 API、Go 和应用自身要求仍独立成立。
-- Mac 选用 `libonnxruntime.1.29.0.dylib`，为 arm64，43,184,400 字节，`LC_BUILD_VERSION` 的最低系统为 14.0。已见加载项均指向系统 framework 或系统库，包含 CoreML/Metal；即使只使用 CPU，也不能当作不存在这些动态依赖。该文件摘要为 `68f6e54e695583adc371aef610ec4abb1ffaa3df656582922de7690f7e2000eb`；用绝对路径加载版本化文件，不依赖工作目录中的别名。
-- small ONNX 为 21,234,383 字节。Windows 两个 DLL 加模型约 37.4 MB，Mac 一个运行库加模型约 64.4 MB，均为十进制未压缩磁盘量。它们不含应用本身、VC++ 安装资源、许可文件、截图或运行内存，也不是最终安装包大小。发布包无需复制 PDB、dSYM、头文件或上游测试程序；Mac 包中的另一个同尺寸 dylib 也不能不加区分地重复打包。
+- Windows 的 `onnxruntime.dll` 为 x64，20,602,168 字节；导入表包含 `MSVCP140.dll`、`MSVCP140_1.dll`、`VCRUNTIME140.dll`、`VCRUNTIME140_1.dll` 和系统 UCRT/API set。包中另有 21,816 字节的 `onnxruntime_providers_shared.dll`，首轮可一并保留；它不出现在主 DLL 的静态导入表，是否由选定路径动态加载仍待验证。PE 的 OS/subsystem 版本字段是 6.0，不能据此声称支持 Vista，导入 API、Go 和应用自身要求仍独立成立。
+- Mac 选用 `libonnxruntime.1.32.0.dylib`，为 arm64，47,589,736 字节，`LC_BUILD_VERSION` 的最低系统为 14.0。已见加载项均指向系统 framework 或系统库，包含 CoreML/Metal；即使只使用 CPU，也不能当作不存在这些动态依赖。该文件摘要为 `51c5a25a3dfafd74f62f403e6e0dc7881d97c0e627c703a4d9548c5677abc8fd`；用绝对路径加载版本化文件，不依赖工作目录中的别名。
+- small ONNX 为 21,234,383 字节。Windows 两个 DLL 加模型约 41.9 MB，Mac 一个运行库加模型约 68.8 MB，均为十进制未压缩磁盘量。它们不含应用本身、VC++ 安装资源、许可文件、截图或运行内存，也不是最终安装包大小。发布包无需复制 PDB、dSYM、头文件或上游测试程序；Mac 包中的另一个同尺寸 dylib 也不能不加区分地重复打包。
 
 这使“轻量”有了初始体积依据。首轮先使用上游制品；只有实际安装体积、内存或速度未达目标，才比较 tiny/v4、精简 ORT 或其他提供器。自行裁剪运行库会增加算子覆盖、平台构建与升级成本，不能仅因压缩包带有调试符号就先维护自编译 ORT。
 
 ### 绑定与运行库的实际交接
 
-yalue 的固定源码已提供内部线程配置、session config 和动态张量会话，可用于该模型的动态宽度。首轮由识别实现持有进程级 ORT 环境并复用模型会话，每次推理使用独立的 RunOptions；取消监听退出并与推理调用完成同步后，再释放 RunOptions 和张量。该库的 terminate 标志会保留，复用前必须清除；初版用每次独立的选项对象减少取消污染下一次推理的风险。[线程与取消源码](https://github.com/yalue/onnxruntime_go/blob/1f0fb0647fc7091b57ec72dcf0f666d2234e4d04/onnxruntime_go.go)
+yalue 的固定源码已提供内部线程配置、session config 和动态张量会话，可用于该模型的动态宽度。首轮由识别实现持有进程级 ORT 环境并复用模型会话，每次推理使用独立的 RunOptions；取消监听退出并与推理调用完成同步后，再释放 RunOptions 和张量。该库的 terminate 标志会保留，复用前必须清除；初版用每次独立的选项对象减少取消污染下一次推理的风险。[线程与取消源码](https://github.com/yalue/onnxruntime_go/blob/75993804ebf75bfc35bd514e3d19cff35146545a/onnxruntime_go.go)
 
 Microsoft Go 固定提交 `402979ac1bef89dcd55add41eaa7277c407599eb` 仍是替代候选。其 [C shim](https://github.com/microsoft/onnxruntime/blob/402979ac1bef89dcd55add41eaa7277c407599eb/go/onnxruntime/cshim.c)从 API 27 逐级协商到 17，不能因源码来自 ORT v1.31.0 就断言必须换成 1.31 原生库。替代评估可先用同一个 1.29.0 制品、模型和样本检查协商结果及功能，控制比较变量；其 `Run(ctx)` 已有取消监听与返回前收尾。若它在相同验收中更可靠或明显减少胶水代码，可替换 yalue，首版不同时分发两种绑定。
 
 Windows 开发端的 MinGW cgo 工具链和运行端的 MSVC Runtime 是两项要求。显式加载主 DLL 不会自动解决它所依赖 DLL 的搜索；最终还需检查 youkai EXE 由 C 工具链带入的依赖。[Microsoft 运行库要求](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist?view=msvc-170) · [分发条件](https://learn.microsoft.com/en-us/cpp/windows/redistributing-visual-cpp-files?view=msvc-170)
 
-**VC++ 运行库采用应用本地部署（用户 2026-10-16 确认）：** 所需的 4 个 x64 文件 `MSVCP140.dll`、`MSVCP140_1.dll`、`VCRUNTIME140.dll`、`VCRUNTIME140_1.dll` 取自 GitHub Actions Windows runner 上 Visual Studio 的 `VC\Redist\MSVC` 最新版本目录下 `x64` 的 `Microsoft.VC14*.CRT` 目录（不写死 CRT 编号，多个时取编号最高者），不从 vc_redist 安装器解包，随应用放在 EXE 所在目录，不运行需要提权的 VC++ 安装器，与 MyGo 的每用户安装（[NSIS 脚本](https://github.com/egoist/mygo/blob/cf26587264f26ea68bd1b8abbf5c9723f35e0a70/cmd/mygo/nsis.go)）一致。代价是这些文件的安全更新由 youkai 发新版负责。版本不早于构建 ORT 1.29.0 所用的工具集。取用路径已随打包 workflow 实测确认（run 38993717827 取 `14.51.36247.0`，实机安装目录的 4 个 DLL 与制品清单一致，见[M1 Windows 实机测试报告](../reports/2026-10-17-m1-windows-test.md)）；干净 Windows（无系统 VC++）上实际加载随包副本的验证经用户决定不补测（2026-10-18，以实机已装系统 VC++ 时安装版自检与运行通过为口径，见[实施清单 M1 结论](scanner-implementation-plan.md#m1正式工程资源与会话底座)），再分发条件的最终核对随正式发布完成。
+**VC++ 运行库采用应用本地部署（用户 2026-10-16 确认）：** 所需的 4 个 x64 文件 `MSVCP140.dll`、`MSVCP140_1.dll`、`VCRUNTIME140.dll`、`VCRUNTIME140_1.dll` 取自 GitHub Actions Windows runner 上 Visual Studio 的 `VC\Redist\MSVC` 最新版本目录下 `x64` 的 `Microsoft.VC14*.CRT` 目录（不写死 CRT 编号，多个时取编号最高者），不从 vc_redist 安装器解包，随应用放在 EXE 所在目录，不运行需要提权的 VC++ 安装器，与 MyGo 的每用户安装（[NSIS 脚本](https://github.com/egoist/mygo/blob/cf26587264f26ea68bd1b8abbf5c9723f35e0a70/cmd/mygo/nsis.go)）一致。代价是这些文件的安全更新由 youkai 发新版负责。当前需不早于构建 ORT 1.32.0 所用的工具集；本轮只核对导入表，实际 runner CRT 版本与加载须由新的 Package/Release 构建确认。取用路径已随打包 workflow 实测确认（run 38993717827 取 `14.51.36247.0`，实机安装目录的 4 个 DLL 与制品清单一致，见[M1 Windows 实机测试报告](../reports/2026-10-17-m1-windows-test.md)）；干净 Windows（无系统 VC++）上实际加载随包副本的验证经用户决定不补测（2026-10-18，以实机已装系统 VC++ 时安装版自检与运行通过为口径，见[实施清单 M1 结论](scanner-implementation-plan.md#m1正式工程资源与会话底座)），再分发条件的最终核对随正式发布完成。
 
 MyGo、yalue 和 ORT 的所读源码许可为 MIT，ORT 制品另带 `ThirdPartyNotices.txt`；RapidOCR 仓库和所读 [ModelScope v3.10.0 模型卡](https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.10.0/README.md)声明 Apache 2.0。模型托管根目录的独立 `LICENSE` 未取得，因此交付前仍需将模型原始来源、转换说明和适用声明一起核对归档；不把一个仓库的许可当作所有第三方字体或可选文件的统一许可。首版无需携带 RapidOCR 的 Python 环境或可视化字体。
 

@@ -33,6 +33,9 @@
 #import <Foundation/Foundation.h>
 #import <MacTypes.h>
 #import <dispatch/dispatch.h>
+#include <errno.h>
+#include <pthread.h>
+#include <time.h>
 
 /* HIToolbox event-manager types, prototypes and constants (see the
  * file comment). Layouts match the SDK declarations byte for byte. */
@@ -70,6 +73,7 @@ static const OSType YKHotKeySignature = 'ykai';
 /* The handler runs on the main thread; it only forwards the hotkey id
  * to Go, and the Go trigger must not block the main thread. */
 static OSStatus yk_hotkey_handler(void *inHandlerCallRef, void *inEvent, void *inUserData) {
+	if (yk_system_terminating()) return noErr;
 	(void)inHandlerCallRef;
 	(void)inUserData;
 	YKEventHotKeyID hotKeyID;
@@ -86,24 +90,75 @@ static OSStatus yk_hotkey_handler(void *inHandlerCallRef, void *inEvent, void *i
 /* The handler install status; guarded by running on the main thread. */
 static OSStatus g_handlerStatus = -1; /* not installed yet */
 
-/* yk_run_on_main marshals block onto the main thread with a bounded
- * wait; 0 ran, -1 timed out (no main run loop served the queue). */
-static int yk_run_on_main(double timeoutSec, dispatch_block_t block) {
+static pthread_mutex_t g_mainMutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t g_mainChanged = PTHREAD_COND_INITIALIZER;
+static bool g_systemTerminating = false;
+
+bool yk_system_terminating(void) {
+	pthread_mutex_lock(&g_mainMutex);
+	bool terminating = g_systemTerminating;
+	pthread_mutex_unlock(&g_mainMutex);
+	return terminating;
+}
+
+void yk_prepare_system_termination(void) {
+	pthread_mutex_lock(&g_mainMutex);
+	g_systemTerminating = true;
+	pthread_cond_broadcast(&g_mainChanged);
+	pthread_mutex_unlock(&g_mainMutex);
+}
+
+/* Pending blocks retain their captures until the main queue or OS
+ * disposes of them. Termination wakes waiters without running a nested
+ * loop, touching Carbon off-main, or freeing a still-referenced handle. */
+int yk_run_on_main(double timeoutSec, dispatch_block_t block) {
+	pthread_mutex_lock(&g_mainMutex);
+	if (g_systemTerminating) {
+		pthread_mutex_unlock(&g_mainMutex);
+		return 1;
+	}
 	if ([NSThread isMainThread]) {
+		pthread_mutex_unlock(&g_mainMutex);
 		block();
 		return 0;
 	}
-	__block dispatch_semaphore_t done = dispatch_semaphore_create(0);
+	__block bool ran = false;
 	dispatch_async(dispatch_get_main_queue(), ^{
-		block();
-		dispatch_semaphore_signal(done);
+		pthread_mutex_lock(&g_mainMutex);
+		if (!g_systemTerminating) {
+			pthread_mutex_unlock(&g_mainMutex);
+			block();
+			pthread_mutex_lock(&g_mainMutex);
+		}
+		ran = true;
+		pthread_cond_broadcast(&g_mainChanged);
+		pthread_mutex_unlock(&g_mainMutex);
 	});
-	dispatch_time_t deadline =
-	    dispatch_time(DISPATCH_TIME_NOW, (int64_t)(timeoutSec * NSEC_PER_SEC));
-	if (dispatch_semaphore_wait(done, deadline) != 0) {
-		return -1;
+	struct timespec deadline;
+	clock_gettime(CLOCK_MONOTONIC, &deadline);
+	int64_t nanos = (int64_t)(timeoutSec * NSEC_PER_SEC);
+	deadline.tv_sec += nanos / NSEC_PER_SEC;
+	deadline.tv_nsec += nanos % NSEC_PER_SEC;
+	if (deadline.tv_nsec >= NSEC_PER_SEC) {
+		deadline.tv_sec++;
+		deadline.tv_nsec -= NSEC_PER_SEC;
 	}
-	return 0;
+	int rc = 0;
+	while (!ran && !g_systemTerminating && rc == 0) {
+		struct timespec now, remaining;
+		clock_gettime(CLOCK_MONOTONIC, &now);
+		remaining.tv_sec = deadline.tv_sec - now.tv_sec;
+		remaining.tv_nsec = deadline.tv_nsec - now.tv_nsec;
+		if (remaining.tv_nsec < 0) {
+			remaining.tv_sec--;
+			remaining.tv_nsec += NSEC_PER_SEC;
+		}
+		if (remaining.tv_sec < 0) { rc = ETIMEDOUT; break; }
+		rc = pthread_cond_timedwait_relative_np(&g_mainChanged, &g_mainMutex, &remaining);
+	}
+	int result = g_systemTerminating ? 1 : (ran ? 0 : -1);
+	pthread_mutex_unlock(&g_mainMutex);
+	return result;
 }
 
 int yk_hotkey_register(uint32_t keyCode, uint32_t modifiers, int64_t handle,
@@ -126,6 +181,7 @@ int yk_hotkey_register(uint32_t keyCode, uint32_t modifiers, int64_t handle,
 		status = RegisterEventHotKey(keyCode, modifiers, hotKeyID,
 		                             GetApplicationEventTarget(), 0, &ref);
 	});
+	if (rc == 1) return -3; /* system termination refuses registration */
 	if (rc != 0) return -2; /* main run loop unavailable */
 	if (status != noErr) return (int)status;
 	*outRef = ref;
@@ -134,10 +190,12 @@ int yk_hotkey_register(uint32_t keyCode, uint32_t modifiers, int64_t handle,
 
 int yk_hotkey_unregister(void *ref, double timeoutSec) {
 	if (ref == NULL) return -1;
+	if (yk_system_terminating()) return 0; /* OS reclaims the Carbon ref */
 	__block OSStatus status = noErr;
 	int rc = yk_run_on_main(timeoutSec, ^{
 		status = UnregisterEventHotKey(ref);
 	});
+	if (rc == 1) return 0; /* OS reclaims the Carbon ref */
 	if (rc != 0) return -2; /* main run loop unavailable */
 	if (status != noErr) return (int)status;
 	return 0;

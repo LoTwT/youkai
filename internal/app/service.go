@@ -127,6 +127,13 @@ type Service struct {
 	subs       []*Subscription
 	quitting   bool
 	recognizer Recognizer
+	// Admission and Add share mu with the quit boundary. Wait runs only
+	// after admission closed, outside mu, so an accepted writer can finish
+	// (including its notification) before the data root is handed over.
+	writesClosed      bool
+	systemTerminating bool
+	acceptedWrites    sync.WaitGroup
+	drainErr          error
 	// updateInstalling reports an update install in progress. The update
 	// flow owns the fact and publishes it through SetUpdateInstalling;
 	// the service only reflects it in snapshots.
@@ -136,10 +143,18 @@ type Service struct {
 	// ten-second re-checks, so unchanged faults do not fill the log.
 	readinessLog readinessLogState
 
-	// quitMu serializes Quit attempts; the teardown below it runs once.
-	quitMu           sync.Mutex
-	quitTeardownDone bool
-	quitTeardownErr  error
+	// quitMu publishes one attempt to concurrent callers; each joins its
+	// exact result. A later explicit retry may start another attempt.
+	quitMu                   sync.Mutex
+	quitAttempt              *quitAttempt
+	quitTeardownDone         bool
+	quitTeardownErr          error
+	quitDataReleaseAttempted bool
+}
+
+type quitAttempt struct {
+	done chan struct{}
+	err  error
 }
 
 // activeSession is the one session occupying the active slot, from
@@ -778,6 +793,9 @@ func logSessionTrigger(id scan.ID, final scan.Snapshot) {
 func (s *Service) RetrySave() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.writesClosed {
+		return ErrServiceClosing
+	}
 	a := s.active
 	if a == nil || a.deliverer == nil || !a.deliverer.failed() {
 		return nil
@@ -829,44 +847,90 @@ func (s *Service) LoadRecord(recordID string) (*record.Recovery, error) {
 	return s.store.Load(recordID)
 }
 
-// Quit runs the explicit-exit wrap-up: it stops the active session,
-// waits for the session's finalization and saving, closes the recognizer,
-// destroys the OCR environment and releases the data-root occupancy — in
-// that order. It blocks until the wrap-up is done, so callers invoke it
-// from their own goroutine (a quit callback must not wait on finalization
-// or disk writes); repeated and concurrent calls join the same sequence.
-//
-// A failed final save is not a completed exit: Quit returns the error
-// with the teardown deliberately not run, so the process can retry the
-// save and quit again — the last valid generation stays as the durable
-// result either way. Quit after a successful teardown returns its
-// outcome unchanged.
-//
-// Quit publishes the quitting state before waiting, so a snapshot taken
-// at the exit decision carries the current start block instead of a stale
-// revision.
-func (s *Service) Quit() error {
-	s.quitMu.Lock()
-	defer s.quitMu.Unlock()
-	if s.quitTeardownDone {
-		return s.quitTeardownErr
-	}
+// stopForQuit closes admission and cancels input without joining work.
+func (s *Service) stopForQuit(systemTerminating bool) *activeSession {
 	s.mu.Lock()
+	s.systemTerminating = s.systemTerminating || systemTerminating
 	s.quitting = true
+	if !s.writesClosed {
+		s.drainErr = nil
+	}
+	s.writesClosed = true
 	a := s.active
+	var kernel *scan.Session
+	if a != nil {
+		a.stopRequested = true
+		kernel = a.kernel
+	}
 	s.notifyLocked()
 	s.mu.Unlock()
-	if a != nil {
-		if a.kernel != nil {
-			a.kernel.Cancel()
+	if kernel != nil {
+		kernel.Cancel()
+	}
+	return a
+}
+
+// PrepareSystemTermination stops input and admission before the native
+// preparation on the UI thread. It never waits for finalization; Quit
+// joins the accepted work after native main-queue dependencies are safe.
+func (s *Service) PrepareSystemTermination() { s.stopForQuit(true) }
+
+// Quit stops new writes and input, joins accepted writes and scan saving,
+// then closes OCR and releases the data root. Run it off the UI thread,
+// except after PrepareSystemTermination and native preparation in the
+// irrevocable OS callback. Concurrent calls join the same attempt.
+// A failed save retains the root and permits repair/retry. A failed OCR
+// teardown stays cached and retains the root for viewing and saving.
+func (s *Service) Quit() error {
+	s.quitMu.Lock()
+	if current := s.quitAttempt; current != nil {
+		s.quitMu.Unlock()
+		<-current.done
+		return current.err
+	}
+	current := &quitAttempt{done: make(chan struct{})}
+	s.quitAttempt = current
+	s.quitMu.Unlock()
+	err := s.quit()
+	s.quitMu.Lock()
+	current.err = err
+	s.quitAttempt = nil
+	close(current.done)
+	s.quitMu.Unlock()
+	return err
+}
+
+func (s *Service) quit() error {
+	a := s.stopForQuit(false)
+	// A failed exit keeps the root and permits repair saves again. Starts
+	// stay refused, and cleanup keeps its existing failure-state contract.
+	defer func() {
+		if !s.quitDataReleaseAttempted {
+			s.mu.Lock()
+			if !s.systemTerminating {
+				s.writesClosed = false
+			}
+			s.mu.Unlock()
 		}
+	}()
+	s.acceptedWrites.Wait()
+	s.mu.Lock()
+	drainErr := s.drainErr
+	s.mu.Unlock()
+	if a != nil {
 		<-a.wrapDone
 		s.mu.Lock()
 		saveErr := a.saveErr
 		s.mu.Unlock()
 		if saveErr != nil {
-			return fmt.Errorf("app: quit: scan %s still has an unsaved result: %w (retry the save, then quit again)", a.id, saveErr)
+			drainErr = errors.Join(drainErr, fmt.Errorf("scan %s still has an unsaved result: %w", a.id, saveErr))
 		}
+	}
+	if drainErr != nil {
+		return fmt.Errorf("app: quit: an accepted write failed: %w (retry the save, then quit again)", drainErr)
+	}
+	if s.quitTeardownDone {
+		return s.quitTeardownErr
 	}
 	err := s.teardown()
 	s.quitTeardownDone = true
@@ -909,6 +973,7 @@ func (s *Service) teardown() error {
 		log.Printf("youkai: exit wrap-up: %v (data-root occupancy kept for the restart handoff or process exit)", err)
 		return err
 	}
+	s.quitDataReleaseAttempted = true
 	if err := s.cfg.DataLock.Close(); err != nil {
 		errs = append(errs, fmt.Errorf("release the data-root occupancy: %w", err))
 	}
