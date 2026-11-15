@@ -176,6 +176,13 @@ func (m *Model) pagePadding() float32 {
 	}
 	return pageInset
 }
+
+// pageLeftPadding brings every page closer to the rail while keeping the
+// top, right and bottom insets unchanged.
+func (m *Model) pageLeftPadding() float32 {
+	return m.pagePadding() * 3 / 4
+}
+
 func (m *Model) railWidth() float32 {
 	if m.contentWidth < 1120 || (m.displayPage() == pageResults && m.recordTab == recordTabItems && !m.reviewStandard()) {
 		return 128

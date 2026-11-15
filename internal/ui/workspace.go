@@ -20,7 +20,7 @@ const (
 // switch and the chosen view. Coverage, quality and saving stay independent.
 func (m *Model) recordWorkspace(c *ui.Context, t *ui.Theme) {
 	tok := m.effectiveTokens()
-	ui.Column(c).Grow(1).FillHeight().MinHeight(0).Padding(m.pagePadding()).Gap(16).Children(func() {
+	ui.Column(c).Grow(1).FillHeight().MinHeight(0).Padding(m.pagePadding(), m.pagePadding(), m.pagePadding(), m.pageLeftPadding()).Gap(16).Children(func() {
 		m.recordWorkspaceHeader(c, t, tok)
 		switch m.recordTab {
 		case recordTabItems:

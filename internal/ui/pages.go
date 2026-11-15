@@ -215,14 +215,14 @@ func (m *Model) pageBody(c *ui.Context, t *ui.Theme, tok *Tokens) {
 	case pageResults:
 		m.recordWorkspace(c, t)
 	case pageHistory:
-		ui.Column(c).Grow(1).FillHeight().MinHeight(0).Padding(m.pagePadding()).Gap(16).Children(func() { m.historyPage(c, t) })
+		ui.Column(c).Grow(1).FillHeight().MinHeight(0).Padding(m.pagePadding(), m.pagePadding(), m.pagePadding(), m.pageLeftPadding()).Gap(16).Children(func() { m.historyPage(c, t) })
 	case pageSettings:
-		ui.Column(c).Grow(1).FillHeight().MinHeight(0).Padding(m.pagePadding()).Gap(16).Children(func() {
+		ui.Column(c).Grow(1).FillHeight().MinHeight(0).Padding(m.pagePadding(), m.pagePadding(), m.pagePadding(), m.pageLeftPadding()).Gap(16).Children(func() {
 			pageHeader(c).Children(func() { pageTitle(c, "设置") })
 			m.settingsPage(c, t)
 		})
 	default:
-		ui.Column(c).Grow(1).FillHeight().MinHeight(0).Padding(m.pagePadding()).Gap(16).Children(func() {
+		ui.Column(c).Grow(1).FillHeight().MinHeight(0).Padding(m.pagePadding(), m.pagePadding(), m.pagePadding(), m.pageLeftPadding()).Gap(16).Children(func() {
 			m.scanHeader(c, t)
 			contentPanel(c, tok).Children(func() {
 				ui.Scroll(c).Grow(1).MinHeight(0).Children(func() {

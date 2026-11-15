@@ -24,7 +24,7 @@ func TestSettingsShortcutsFillAvailableWidth(t *testing.T) {
 	}
 	// The card uses the width freed by removing the in-page directory.
 	wantRight := float32(1440) - m.pagePadding() - 25
-	wantLeft := m.railWidth() + m.pagePadding() + 25
+	wantLeft := m.railWidth() + m.pageLeftPadding() + 25
 	if math.Abs(float64(list.X-wantLeft)) > 1 || math.Abs(float64(list.X+list.W-wantRight)) > 1 {
 		t.Fatalf("shortcut viewport does not fill the card: %+v, want edges %v..%v", list, wantLeft, wantRight)
 	}

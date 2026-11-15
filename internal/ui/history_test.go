@@ -1380,7 +1380,7 @@ func TestHistoryTableFitsWidths(t *testing.T) {
 				if !ok {
 					t.Fatalf("%q is missing at %d", title, width)
 				}
-				if rect.X < m.railWidth()+m.pagePadding() || rect.X+rect.W > float32(width)-m.pagePadding() {
+				if rect.X < m.railWidth()+m.pageLeftPadding() || rect.X+rect.W > float32(width)-m.pagePadding() {
 					t.Errorf("%q at %+v is outside the %d page", title, rect, width)
 				}
 			}

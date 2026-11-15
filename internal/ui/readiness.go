@@ -1112,7 +1112,7 @@ func (m *Model) scanStageArea(c *ui.Context, t *ui.Theme) {
 	tok := m.effectiveTokens()
 	stage := ui.Column(c).Gap(24)
 	if snap.Phase == scan.PhaseCapturing || snap.Phase == scan.PhaseFinalizing {
-		width := min(float32(800), float32(m.contentWidth)-m.railWidth()-2*m.pagePadding()-48)
+		width := min(float32(800), float32(m.contentWidth)-m.railWidth()-m.pageLeftPadding()-m.pagePadding()-48)
 		stage = stage.Width(width).AlignSelf(ui.Center).MinHeight(max(280, float32(m.contentHeight)-300)).Justify(ui.Center)
 	}
 	stage.Children(func() {

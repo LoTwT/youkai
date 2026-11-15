@@ -331,7 +331,7 @@ func (m *Model) summaryCountsGrid(c *ui.Context, t *ui.Theme) {
 // two in the compact layout). The inner width is the window minus the rail,
 // its divider and the summary padding.
 func (m *Model) summaryCountCellWidth(t *ui.Theme, columns int) float32 {
-	inner := float32(m.contentWidth) - m.railWidth() - 2*m.pagePadding() - 64
+	inner := float32(m.contentWidth) - m.railWidth() - m.pageLeftPadding() - m.pagePadding() - 64
 	gaps := float32(12) * float32(columns-1)
 	width := (inner - gaps) / float32(columns)
 	if width < 1 {

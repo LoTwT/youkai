@@ -265,7 +265,7 @@ func (m *Model) settingsShortcuts(c *ui.Context, t *ui.Theme, tok *Tokens) {
 	// the list the card's actual available width as a floor, while allowing
 	// its intrinsic width to overflow at narrow widths and large text.
 	width, _ := c.Size()
-	innerWidth := max(0, width-m.railWidth()-2*m.pagePadding()-2*(settingsSectionInset+1))
+	innerWidth := max(0, width-m.railWidth()-m.pageLeftPadding()-m.pagePadding()-2*(settingsSectionInset+1))
 	ui.ScrollHorizontal(c).FillWidth().Focusable().Label("快捷键列表").Children(func() {
 		ui.Column(c).MinWidth(innerWidth).Children(func() {
 			for i, shortcut := range m.settingsShortcutRows() {

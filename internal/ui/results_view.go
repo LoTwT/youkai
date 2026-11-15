@@ -57,7 +57,7 @@ func (m *Model) reviewStandard() bool {
 // reviewInnerWidth is the width the page leaves for its panes: the window
 // less the navigation rail and the page padding.
 func (m *Model) reviewInnerWidth() float32 {
-	width := float32(m.contentWidth) - m.railWidth() - 2*m.pagePadding()
+	width := float32(m.contentWidth) - m.railWidth() - m.pageLeftPadding() - m.pagePadding()
 	if width < 0 {
 		return 0
 	}
