@@ -1,6 +1,6 @@
 # Youkai 扫描结果 JSON 与 CSV v2
 
-更新日期：2026-10-29。状态：v2 契约已冻结；结构化解析、结果浏览、自动接受与 JSON/CSV 导出已实现并合并到 `main`，真实六位置与 Windows 验收仍未完成。2026-10-20 冻结 v2 数据模型与导出：管理状态合并为 `managementState`，套装与代理人使用 fairy 数值 ID；`equipped` 从必填改为可选，装备状态或装备者未解析只作为字段警告，不再阻止可用导出；导出仍只提供 JSON 与 CSV，不提供 archive 视图、ZIP 或档案导入导出。2026-10-29 按[重新架构决策 §9.4(a)](../decisions/2026-10-28-scanner-rearchitecture.md#94-scan-json-formatmd已同步选定-a) 明确：重访只针对尚未确认采集的失败，在接纳前截住、不分配新序号；v2 格式与 `capturedCount = items.length + excludedCount` 不变。v1 文件保留原 `equipped: required` 语义；v2 读取端不得把 v1 文件按 v2 解释。会话、保存与物品身份以[公共架构第 5 节](scanner-architecture.md#5-扫描会话与结果语义)为准；操作流程见 [T6](t6-review-export-workflow.md)。
+更新日期：2026-11-16。本文只维护当前公共导出契约：JSON 使用 `formatVersion: 2`，CSV 使用第 5 节的固定列序。两种格式均由 [`internal/app/export.go`](../../internal/app/export.go) 生成，管理状态为必需字段，装备状态与装备者为可选字段；装备信息未解析时保留空值和 warning，不阻止可用导出。会话、保存与物品身份以[公共架构第 5 节](scanner-architecture.md#5-扫描会话与结果语义)为准；操作流程见 [T6](t6-review-export-workflow.md)。
 
 ## 1. 两种导出格式，同一数据源
 
@@ -21,13 +21,13 @@
 
 | 字段 | 类型与含义 |
 | --- | --- |
-| `format` / `formatVersion` | 固定 `"youkai.scan"` / `1`。 |
+| `format` / `formatVersion` | 固定 `"youkai.scan"` / `2`。 |
 | `exportedAt` | 此文件导出时间。 |
 | `producer` | `{ "name": "youkai", "version": string }`，版本非空。 |
 | `session` | 下表定义的来源会话。 |
 | `catalog` | `{ "namespace": "youkai.zzz", "revision": string, "sets": object, "agents": object }`。两张对象表均为十进制字符串键到显示名称的映射，只携带本文件实际引用的条目。 |
 | `fieldPolicy` | 固定 `{ "management": "required", "equipped": "optional" }`；含义见第 3 节。 |
-| `validationRules` | `{ "id": string, "version": string }` 或 `null`。本次当前校验所用的应用内置规则，标识与版本非空；`version` 是内置资料表的修订号，表内容变化即递增，与 `catalog.revision` 相同。不是原始识别资源版本，见下方当前校验契约。 |
+| `validationRules` | `{ "id": "zzzDriveDisc", "version": string }`。当前导出使用应用内置规则，版本非空；`version` 是内置资料表的修订号，表内容变化即递增，与 `catalog.revision` 相同。不是原始识别资源版本，见下方当前校验契约。 |
 | `excludedCount` | 本文件排除的已采集记录数；等于 `session.capturedCount - items.length`。 |
 | `items` | 第 3 节的记录数组。可用项为零时允许空数组，不丢失来源与覆盖信息。 |
 
@@ -52,7 +52,7 @@
 | `coverage` | `{ "status": "complete" 或 "partial" 或 "unknown", "expectedCount": integer 或 null }`。总数只有同范围可信证据时才填；它不是 `complete` 的必要条件。 |
 | `capturedCount` | 已接纳的 S 级物品观测数，包括后来失败或未处理项。导航尝试、参照物截图、重访前被截住的失败和明确非 S 项不计入。 |
 
-**重访口径（[决策 §9.4(a)](../decisions/2026-10-28-scanner-rearchitecture.md#94-scan-json-formatmd已同步选定-a)，2026-10-29）：** 只有尚未确认采集的失败（如详情归属未确认）才稍后重访；重访在接纳前截住，不分配 `sequence`，不产生第二条观测。已采集但 OCR/字段有问题的件交给现有逐件校对流程，不重访。旧尝试只留内部诊断，不计入任何件数、不进 `excludedCount`。因此 `capturedCount` 仍只计已接纳观测，`capturedCount = items.length + excludedCount` 与 v2 格式不变；`expectedCount` 仍只在有可信同范围证据时填写，且不是完整覆盖的必要条件（[决策 §4.5](../decisions/2026-10-28-scanner-rearchitecture.md#45-k4完整性)）。
+**重访口径：** 只有尚未确认采集的失败（如详情归属未确认）才稍后重访；重访在接纳前截住，不分配 `sequence`，不产生第二条观测。已采集但 OCR/字段有问题的件交给现有逐件校对流程，不重访。旧尝试只留内部诊断，不计入任何件数、不进 `excludedCount`。因此 `capturedCount` 只计已接纳观测，`capturedCount = items.length + excludedCount`；`expectedCount` 只在有可信同范围证据时填写，且不是完整覆盖的必要条件（[决策 §4.5](../decisions/2026-10-28-scanner-rearchitecture.md#45-k4完整性)、[§9.4(a)](../decisions/2026-10-28-scanner-rearchitecture.md#94-scan-json-formatmd已同步选定-a)）。
 
 **位置范围未证明（[决策 §4.6](../decisions/2026-10-28-scanner-rearchitecture.md#46-k5故障分级)）：** 该位置此前已接纳物品仍在 `items` 中、不计入 `excludedCount`，`coverage.status` 只报 `partial`；完整可用性与标注口径见 [T5 §3](t5-zzz-inventory-traversal.md#3-开始前必须核对的页面条件)。v2 不新增位置级范围标注字段。位置准备失败或位置证明失败（T5 §5 的位置级降级，2026-10-31 已实现）同样只令 `coverage.status=partial`；位置级原因留在会话内部 `observedScope`、诊断与结果界面，不进入 v2。
 
@@ -64,16 +64,16 @@
 
 ## 3. 一件驱动盘
 
-每条记录必需 `sequence`、`revision`、`quality`、`issues`、`validation`、`data`。
+每条记录必需 `sequence`、`revision`、`quality`、`issues`、`validation`、`data`。公共文件只包含可用记录：`data` 及必需字段均已知，质量已自动接受或人工确认，当前校验通过。下文的未知状态说明字段含义及排除原因，不表示必需字段为空的记录也能导出。
 
 | 字段 | 规则 |
 | --- | --- |
 | `sequence` | 从 1 开始的采集序号。可用数据可有间断，但不重编号。重访只对尚未确认采集的失败发生，且在接纳前截住，不分配新序号。禁止用属性哈希或数组位置充当身份。 |
 | `revision` | 原始结果为 0；每次已保存的人工修改或整件确认递增。只反映此件变化。 |
-| `quality` | `autoAccepted`、`needsReview`、`humanConfirmed`、`notEvaluated`。记录本修订的识别或人工确认状态，不说明库存覆盖，也不能代替当前资料校验。 |
+| `quality` | 可用记录为 `autoAccepted` 或 `humanConfirmed`；`needsReview`、`notEvaluated` 的记录不进入公共文件。记录本修订的识别或人工确认状态，不说明库存覆盖，也不能代替当前资料校验。 |
 | `issues` | 本修订的识别或人工校对问题数组，元素为 `{ "field": string 或 null, "code": string, "severity": "error" 或 "warning", "message": string }`。`null` 表示整件问题。 |
-| `validation` | `{ "status": "passed" 或 "failed" 或 "unavailable", "issues": array }`，问题结构同 `issues`。对应本件当前 `revision` 与顶层 `validationRules`，规则见下文。 |
-| `data` | 以下全部字段组成的对象；尚无规范化结果时整体为 `null`。不得用空对象冒充成功识别。 |
+| `validation` | `{ "status": "passed", "issues": array }`，问题结构同 `issues`，可保留 warning。对应本件当前 `revision` 与顶层 `validationRules`；`failed`、`unavailable` 的记录不进入公共文件，规则见下文。 |
+| `data` | 以下全部字段组成的非空对象；尚无规范化结果的记录不能导出，不得用空对象冒充成功识别。 |
 
 | `data` 字段 | 类型与业务语义 |
 | --- | --- |
@@ -98,19 +98,17 @@
 
 按 v2 的校对方案，可用数据接受所有必需字段已知、`validation.status=passed`、问题数组没有 `error`，且 `quality` 为 `autoAccepted` 或 `humanConfirmed` 的记录。`validation.issues` 中可以保留可选的 `equipped` warning。自动接受记录无需逐件人工确认，问题记录经校对确认后再纳入；说明见 [T6](t6-review-export-workflow.md#导出前校对的已确认规则)。仅保存局部修改不会自动确认整件。修改自动接受或已确认条目后，新修订进入 `needsReview`，整件确认后才可输出。手动补录可使原始失败或未处理记录变为可用，但不得改写其原始处理结局。
 
-v1 的 `equipped: required` 记录如果只有 `equippedStateUnavailable` 这一个持久化缺口、且 `revision=0`，v2 导出会将其重新归类为 `autoAccepted` 并在当前 `validation` 中保留 warning；这是对旧扫描检查点的一次兼容迁移，不修改磁盘上的检查点。`revision>0` 的人工修订不做自动升级，仍需整件确认。
-
 ### 当前校验
 
 `validation` 是对当前数据的可重算结论，与原始识别和人工确认分开。新扫描、保存人工修改或重开历史时，使用应用随包且明确固定的当前规则重新检查字段策略、资料标识、单位、槽位、等级及数值格式；不下载新规则，不用历史确认代替检查。顶层 `validationRules` 记录实际所用规则。
 
 - `passed`：全部必需检查完成且无错误，`validationRules` 必须非空；可选的 `equipped` warning 可以保留。
 - `failed`：已发现缺字段或领域冲突，`validation.issues` 至少有一个 `error`。
-- `unavailable`：尚无已知字段冲突，但缺少必需字段或规则无法解释该目录版本，不能完成全部检查；至少有一个说明资料缺口的 `error`。没有可用规则时 `validationRules=null`，所有记录均为 `unavailable`。v2 中 `equipped` 缺失或装备者未解析不属于 `unavailable`，只作为 warning。
+- `unavailable`：尚无已知字段冲突，但缺少必需字段或规则无法解释该目录版本，不能完成全部检查；至少有一个说明资料缺口的 `error`，不能作为可用项导出。`equipped` 缺失或装备者未解析不属于 `unavailable`，只作为 warning。
 
-重开历史记录时，界面同时显示原确认状态和当前问题，将 `failed/unavailable` 列入待处理；允许查看原图、保存未完成修改，但禁止整件确认与可用导出，直至当前检查通过。v2 的 `equipped` warning 不阻止整件确认或可用导出。界面不会把人工修订的 `needsReview` 自动升为自动接受；只有 §3 描述的 v1 `revision=0` 装备缺口迁移会在导出快照中重新归类。
+重开历史记录时，界面同时显示原确认状态和当前问题，将 `failed/unavailable` 列入待处理；允许查看原图、保存未完成修改，但禁止整件确认与可用导出，直至当前检查通过。`equipped` warning 不阻止整件确认或可用导出。界面不会把人工修订的 `needsReview` 自动升为自动接受。
 
-仅更新校验而未发生人工修改或确认时，保存只增加 `session.savedRevision`，不增加单件 `revision`；规则和结果均未变则不制造新修订。后台校验绑定所读的物品修订和规则版本，旧回包不得覆盖新值。导出取已保存的同一份规则、校验结果和数据快照；JSON 中每件均为 `passed`，有记录时规则不得为空。只读消费端不能把旧校验当作当前应用的验收结果，重新使用或转换时仍应按自己的校验契约检查。
+仅更新校验而未发生人工修改或确认时，保存只增加 `session.savedRevision`，不增加单件 `revision`；规则和结果均未变则不制造新修订。后台校验绑定所读的物品修订和规则版本，旧回包不得覆盖新值。导出基于同一已保存修订，按当前内置规则重验并冻结数据快照，供 JSON 与 CSV 共用；JSON 中每件均为 `passed`，规则对象非空，空记录文件也保留规则标识与版本。只读消费端不能把旧校验当作当前应用的验收结果，重新使用或转换时仍应按自己的校验契约检查。
 
 ## 4. 精确数值和单位
 
@@ -138,36 +136,61 @@ v1 的 `equipped: required` 记录如果只有 `equippedStateUnavailable` 这一
 
 ## 5. CSV 导出
 
-CSV 是单表宽表，一行一件可用盘，记录集合、顺序与同次 JSON 一致；副词条按画面顺序展开到 `sub1` 至 `sub4`。文件为 UTF-8 文本，首行为表头，逗号分隔；含逗号、双引号或换行的字段按 RFC 4180 加引号，双引号写成两个。空值写为空字段，不写 `null` 文本。
+CSV 是单表宽表，一行一件可用盘，记录集合、顺序与同次 JSON 一致；副词条按画面顺序展开到 `sub1` 至 `sub4`。文件使用带 BOM 的 UTF-8，便于电子表格识别中文；首行为表头，逗号分隔，行末为 LF。含逗号、双引号或换行的字段加双引号，字段内的双引号写成两个。空值写为空字段，不写 `null` 文本；`0` 是有效数值，不能当作空值。
 
-| 列 | 来源与含义 |
-| --- | --- |
-| `sequence` | `items[].sequence`。 |
-| `revision` | `items[].revision`。 |
-| `quality` | `items[].quality`。 |
-| `validationStatus` | `items[].validation.status`。 |
-| `setId` | `data.setId`，十进制数值；同次 JSON 的 `catalog.sets` 提供名称。 |
-| `rarity` | `data.rarity`。 |
-| `slot` / `level` | `data.slot` / `data.level`。 |
-| `mainStatAttribute` / `mainStatValue` / `mainStatUnit` | 主词条三个字段。 |
-| `sub1Attribute` / `sub1Value` / `sub1Unit` / `sub1Rolls` | 第一条副词条；`Rolls` 对应 `enhancementRolls`。`sub2` 至 `sub4` 同构。 |
-| `managementState` | `data.managementState`。 |
-| `equippedState` | `data.equipped.state`；`equipped=null` 时为空。 |
-| `equippedAgentId` | `data.equipped.agentId`，十进制数值；`unequipped` 或 `equipped=null` 时为空。 |
+下表逐列列出实际表头，顺序由 `csvHeader()` 固定；`data` 均指同次 JSON 的 `items[].data`。
 
-CSV 只承载物品行，不重复会话外壳、`catalog`、`excludedCount` 或问题数组；需要来源、覆盖结论和目录名称时导出 JSON。JSON 与 CSV 不包含截图、原始识别或修订历史，清理截图不影响已经导出的文件。
+| 序号 | 列名 | 来源与含义 |
+| --- | --- | --- |
+| 1 | `sequence` | `items[].sequence`；保留采集序号及间断。 |
+| 2 | `sessionId` | `session.id`；每行重复来源会话 ID，与 `sequence` 共同标识一次观测。 |
+| 3 | `revision` | `items[].revision`，不是 `session.savedRevision`。 |
+| 4 | `quality` | `items[].quality`；可用行只为 `autoAccepted` 或 `humanConfirmed`。 |
+| 5 | `validationStatus` | `items[].validation.status`；可用行固定为 `passed`。 |
+| 6 | `setId` | `data.setId`，十进制整数文本。 |
+| 7 | `setName` | 当前内置资料按 `setId` 查得的显示名，与同次 JSON 的 `catalog.sets` 对应。 |
+| 8 | `rarity` | `data.rarity`，固定 `S`。 |
+| 9 | `slot` | `data.slot`。 |
+| 10 | `level` | `data.level`。 |
+| 11 | `mainStatAttribute` | `data.mainStat.attribute`。 |
+| 12 | `mainStatValue` | `data.mainStat.value`；保留规范十进制文本，不换算百分数。 |
+| 13 | `mainStatUnit` | `data.mainStat.unit`。 |
+| 14 | `sub1Attribute` | `data.substats[0].attribute`。 |
+| 15 | `sub1Value` | `data.substats[0].value`；数值语义同主词条。 |
+| 16 | `sub1Unit` | `data.substats[0].unit`。 |
+| 17 | `sub1Rolls` | `data.substats[0].enhancementRolls`；`0` 写为 `0`。 |
+| 18 | `sub2Attribute` | `data.substats[1].attribute`。 |
+| 19 | `sub2Value` | `data.substats[1].value`。 |
+| 20 | `sub2Unit` | `data.substats[1].unit`。 |
+| 21 | `sub2Rolls` | `data.substats[1].enhancementRolls`。 |
+| 22 | `sub3Attribute` | `data.substats[2].attribute`。 |
+| 23 | `sub3Value` | `data.substats[2].value`。 |
+| 24 | `sub3Unit` | `data.substats[2].unit`。 |
+| 25 | `sub3Rolls` | `data.substats[2].enhancementRolls`。 |
+| 26 | `sub4Attribute` | `data.substats[3].attribute`。 |
+| 27 | `sub4Value` | `data.substats[3].value`。 |
+| 28 | `sub4Unit` | `data.substats[3].unit`。 |
+| 29 | `sub4Rolls` | `data.substats[3].enhancementRolls`。 |
+| 30 | `managementState` | `data.managementState`；可用行只为 `locked`、`discarded` 或 `none`。 |
+| 31 | `equippedState` | `data.equipped.state`；`equipped=null` 时为空。 |
+| 32 | `equippedAgentId` | `data.equipped.agentId`，十进制整数文本；未解析装备者、`unequipped` 或 `equipped=null` 时为空。 |
+| 33 | `agentName` | 当前内置资料按 `equippedAgentId` 查得的显示名，与同次 JSON 的 `catalog.agents` 对应；没有代理人 ID 时为空。 |
+
+不足四条副词条时，对应的整组四列为空，不补零或移动其他行；已纳入的副词条必须完整。可用行的必需字段非空，装备相关列允许为空；`equippedState=equipped` 时，`equippedAgentId` 和 `agentName` 也可能为空。显示名称只用于阅读，不能替代数值 ID。
+
+CSV 每行带 `sessionId`、套装名称和可解析的代理人名称，但不包含完整会话外壳、`session.savedRevision`、范围、覆盖、`catalog` 对象、`excludedCount`、规则版本或问题数组。需要这些元数据及装备 warning 的具体原因时导出 JSON。CSV 没有单独的格式版本列，读取端应核对完整表头；空记录文件仍带 BOM 和表头，来源会话等信息需从同次 JSON 获取。JSON 与 CSV 不包含截图、原始识别或修订历史，清理截图不影响已经导出的文件。
 
 ## 6. 示例与校验边界
 
-[可用数据示例](../examples/scan-usable-v2.json)为手写合成记录，用于解释格式；资源版本、规则版本、会话和字段均不构成游戏扫描或模型准确性证据。它演示人工确认记录、两类六号位百分比主词条、副词条强化档位、当前校验、三种管理状态、已装备代理人和已取消会话的部分结果。
+[JSON 示例](../examples/scan-usable-v2.json)和[同源 CSV 示例](../examples/scan-usable-v2.csv)为合成记录，用于解释格式；资源版本、规则版本、会话和字段均不构成游戏扫描或模型准确性证据。示例演示人工确认记录、两类六号位百分比主词条、副词条强化档位、当前校验、三种管理状态、已装备代理人和已取消会话的部分结果。CSV 的三行与 JSON 的序号 2、3、4 一致；首行带来源会话、河豚电音和耀嘉音，后两行未装备，代理人 ID 与名称均为空。
 
-实现时按顺序检查：
+公共文件没有应用内导入入口。消费端校验时按顺序检查：
 
-1. **文件与结构：**UTF-8、重复键、大小写、格式版本、必需字段、允许字段、枚举、时间、整数和十进制语法。Go 默认 JSON 解码不能单独满足所有要求，重复键和缺失布尔值应显式检查。
+1. **文件与结构：**UTF-8、重复键、大小写、格式版本、必需字段、允许字段、枚举、时间、整数和十进制语法。一次 JSON 解码不能单独满足所有契约要求。
 2. **关联与对账：**会话及序号唯一、顺序、采集与排除数、目录标识、修订连续性和当前校验。`capturedCount = items.length + excludedCount`；同一序号只出现一次；`catalog` 只含实际引用条目，数值 ID 与十进制字符串键一致。重访只对尚未确认采集的失败发生，且在接纳前截住、不分配新序号；旧尝试不进公共文件，也不改变本条等式。
-3. **领域与质量：**固定资料中的套装与代理人数值 ID、槽位与主词条组合、副词条类型、单位、等级范围、副词条强化档位 0–5、字段策略和当前修订确认状态；数值只检查格式。遍历全部合法属性与单位，包含六号位 `impact + percent`、`anomalyMastery + percent`。`managementState` 只接受三种真实状态或 `null`；`equipped` 的不变量按第 3 节检查。结构合法不等于识别正确，人工确认也不保证客观零错误。
+3. **领域与质量：**固定资料中的套装与代理人数值 ID、槽位与主词条组合、副词条类型、单位、等级范围、副词条强化档位 0 至 5、字段策略和当前修订确认状态；数值只检查格式。遍历全部合法属性与单位，包含六号位 `impact + percent`、`anomalyMastery + percent`。公共文件的 `managementState` 只接受三种真实状态；`null` 表示未解析，不能纳入可用导出，也不能补成 `none`。`equipped` 的不变量按第 3 节检查。结构合法不等于识别正确，人工确认也不保证客观零错误。
 4. **往返：**同属性双盘仍为两件；`null` 不变否定，`managementState=null` 不写成 `none`；导出再读取保留精确值、部分覆盖和原始序号；JSON 与 CSV 来自同一修订和同一批记录。没有截图时仍能解释缺失，不伪造证据。
 
-Go 的 `encoding/json` v1 文档说明其允许重复键和结构体字段不区分大小写匹配；当前文档也区分了 v2 默认拒绝重复键和大小写严格匹配的行为。实现时优先使用目标 Go 版本已提供的严格选项，再验证必需字段、关联和领域规则，不自行重复实现标准解码器，也不把一次 `Unmarshal` 当作全部校验。[Go 官方 JSON 文档](https://pkg.go.dev/encoding/json#pkg-overview)
+当前生成端使用 Go `encoding/json` 的 `Encoder`，关闭 HTML 转义并使用两空格缩进；CSV 使用 `encoding/csv.Writer`，先写入 UTF-8 BOM。这里的文件版本 `2` 指 Youkai 公共 JSON 契约，不表示使用了某个 JSON 标准库版本。编码实现见 [`internal/app/export.go`](../../internal/app/export.go)，不应把消费端建议误当作已经实现的公共文件导入器。
 
 外部工具适配不在本版范围；出现明确需求后再增加独立转换器并核对真实导入，不改变本格式的原始语义。
