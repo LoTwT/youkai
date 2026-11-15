@@ -62,29 +62,31 @@ func (m *Model) settingsPage(c *ui.Context, t *ui.Theme) {
 	if m.settingsReturnToPrepare {
 		m.settingsReturnStrip(c, tok)
 	}
-	ui.Scroll(c).Grow(1).FillWidth().FillHeight().TrackScroll(&m.settingsScroll).Bind(&m.settingsViewportRef).
-		Children(func() {
-			ui.Column(c).FillWidth().Gap(24).Children(func() {
-				m.settingsSection(c, t, settingsSectionGeneral, "常规", func() {
-					m.settingsGeneral(c, t, tok)
-				})
-				m.settingsSection(c, t, settingsSectionShortcuts, "快捷键", func() {
-					m.settingsShortcuts(c, t, tok)
-				})
-				m.settingsSection(c, t, settingsSectionStorage, "存储与清理", func() {
-					m.settingsStorage(c, t, tok)
-				})
-				m.settingsSection(c, t, settingsSectionDiagnostics, "诊断", func() {
-					m.settingsDiagnostics(c, t, tok)
-				})
-				m.settingsSection(c, t, settingsSectionUpdate, "更新", func() {
-					m.updateArea(c, t, tok)
-				})
-				m.settingsSection(c, t, settingsSectionAbout, "关于", func() {
-					m.settingsAbout(c, t, tok)
+	contentPanel(c, tok).Children(func() {
+		ui.Scroll(c).Grow(1).MinHeight(0).FillWidth().FillHeight().TrackScroll(&m.settingsScroll).Bind(&m.settingsViewportRef).
+			Children(func() {
+				ui.Column(c).FillWidth().Gap(24).Children(func() {
+					m.settingsSection(c, t, settingsSectionGeneral, "常规", func() {
+						m.settingsGeneral(c, t, tok)
+					})
+					m.settingsSection(c, t, settingsSectionShortcuts, "快捷键", func() {
+						m.settingsShortcuts(c, t, tok)
+					})
+					m.settingsSection(c, t, settingsSectionStorage, "存储与清理", func() {
+						m.settingsStorage(c, t, tok)
+					})
+					m.settingsSection(c, t, settingsSectionDiagnostics, "诊断", func() {
+						m.settingsDiagnostics(c, t, tok)
+					})
+					m.settingsSection(c, t, settingsSectionUpdate, "更新", func() {
+						m.updateArea(c, t, tok)
+					})
+					m.settingsSection(c, t, settingsSectionAbout, "关于", func() {
+						m.settingsAbout(c, t, tok)
+					})
 				})
 			})
-		})
+	})
 }
 
 // settingsReturnStrip is the prepare check's entry promise: cleaning up
@@ -98,11 +100,11 @@ func (m *Model) settingsReturnStrip(c *ui.Context, tok *Tokens) {
 		})
 }
 
-// settingsSection builds one full-width card and retains its jump anchor.
+// settingsSection retains its inset and jump anchor within the shared panel.
 func (m *Model) settingsSection(c *ui.Context, t *ui.Theme,
 	id settingsSectionID, title string, body func()) {
 	ref := m.settingsSections.ref(id)
-	column := panel(c, m.effectiveTokens()).FillWidth().Padding(settingsSectionInset).Gap(16)
+	column := ui.Column(c).FillWidth().Padding(settingsSectionInset).Gap(16)
 	if ref != nil {
 		column = column.Bind(ref)
 	}
