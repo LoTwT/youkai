@@ -109,7 +109,7 @@ func attributeChoices(current *string) []string {
 // unitChoices lists the units the affix type can carry. Both units are
 // offered while the type is unread; the authoritative slot/main and
 // substat rules still come from the detail parser at save time.
-func unitChoices(attribute, current *string) []string {
+func unitChoices(attribute *string, current string) []string {
 	allowed := []zzz.Unit{zzz.UnitFlat, zzz.UnitPercent}
 	if attribute != nil {
 		switch zzz.Attribute(*attribute) {
@@ -125,8 +125,8 @@ func unitChoices(attribute, current *string) []string {
 	for _, unit := range allowed {
 		options = append(options, describeUnit(string(unit)))
 	}
-	if current != nil && *current != "" {
-		label := describeUnit(*current)
+	if current = unitOptionValue(current); current != "" {
+		label := describeUnit(current)
 		if !slices.Contains(options, label) {
 			options = append(options, label)
 		}
@@ -205,11 +205,24 @@ func describeAttribute(attribute string) string {
 func describeUnit(unit string) string {
 	switch zzz.Unit(unit) {
 	case zzz.UnitFlat:
-		return "flat 固定值"
+		return "固定值"
 	case zzz.UnitPercent:
-		return "percent 百分比"
+		return "%"
 	default:
 		return unit + " 未知单位"
+	}
+}
+
+// unitOptionValue keeps compact unit labels separate from canonical data.
+// Unknown and legacy labels retain the existing picker-value contract.
+func unitOptionValue(label string) string {
+	switch label {
+	case "固定值":
+		return string(zzz.UnitFlat)
+	case "%":
+		return string(zzz.UnitPercent)
+	default:
+		return optionValue(label)
 	}
 }
 

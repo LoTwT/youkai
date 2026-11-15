@@ -114,3 +114,8 @@ const (
 	// incomplete positions stay in the observed scope with their reasons.
 	CodePositionFailureLimit = "positionFailureLimit"
 )
+
+// PositionReporter is an optional, display-only progress relay. Zero means
+// switching or not yet verified; 1–6 is emitted after wheel verification.
+// It never participates in traversal decisions or record persistence.
+type PositionReporter interface{ SetPositionSink(func(int)) }

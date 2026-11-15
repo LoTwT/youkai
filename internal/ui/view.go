@@ -9,6 +9,8 @@ import (
 // whenever the window needs a frame and only reads the model; every
 // interaction schedules its work through the model's actions.
 func (m *Model) View(c *ui.Context) {
+	w, h := c.Size()
+	m.SetContentSize(int(w), int(h))
 	// A browse click leaves the pointer on the position the editor's write
 	// buttons reuse. End that guard as soon as the pointer leaves it, before
 	// this frame reads any click (08 §3.4).

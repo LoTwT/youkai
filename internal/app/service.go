@@ -162,12 +162,13 @@ type quitAttempt struct {
 // retry settles it). A session accepted but not yet committed has no
 // kernel: its slow preparation runs without the service lock.
 type activeSession struct {
-	id        scan.ID
-	requestID string
-	startedAt time.Time
-	kernel    *scan.Session
-	deliverer *recordDeliverer
-	scanLock  *ScanLock
+	displayPosition int
+	id              scan.ID
+	requestID       string
+	startedAt       time.Time
+	kernel          *scan.Session
+	deliverer       *recordDeliverer
+	scanLock        *ScanLock
 	// stopRequested: a stop arrived before the kernel existed; it is
 	// applied at commit, so no stop is lost to the preparation window.
 	stopRequested bool
@@ -442,6 +443,9 @@ func (s *Service) Start(req StartRequest) (StartOutcome, error) {
 	if relay, ok := spec.Controller.(scopeRelay); ok {
 		relay.SetScopeSink(deliverer.observeScope)
 	}
+	if relay, ok := spec.Controller.(positionRelay); ok {
+		relay.SetPositionSink(func(position int) { s.observeDisplayPosition(a, position) })
+	}
 	kernel, err := scan.Start(scan.Config{
 		ID:         scan.ID(recordID),
 		Capacity:   scanPipelineCapacity,
@@ -556,6 +560,9 @@ func (s *Service) snapshotLocked() Snapshot {
 			}
 		}
 	}
+	if a := s.active; a != nil && !a.wrapped && snap.Scan.Phase == scan.PhaseCapturing {
+		snap.DisplayPosition = a.displayPosition
+	}
 	snap.StartBlocked = s.startBlockedLocked()
 	return snap
 }
@@ -610,6 +617,9 @@ const (
 // Snapshot is the service's authoritative state. Scan carries the
 // kernel's snapshot, zero when no session ever started.
 type Snapshot struct {
+	// DisplayPosition is ephemeral UI progress: 0 unknown, otherwise 1–6.
+	// It is deliberately absent from scan, records and export entities.
+	DisplayPosition int
 	// SessionID identifies the session this snapshot describes; empty
 	// when the service has never started one.
 	SessionID scan.ID
@@ -984,4 +994,28 @@ func (s *Service) teardown() error {
 		log.Printf("youkai: exit wrap-up complete")
 	}
 	return err
+}
+
+// observeDisplayPosition accepts early producer events before Start commits
+// its kernel, while rejecting stale sessions and all known wrap-up events.
+func (s *Service) observeDisplayPosition(a *activeSession, position int) {
+	if position < 0 || position > 6 {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.active != a || a.wrapped {
+		return
+	}
+	if a.kernel != nil {
+		phase := a.kernel.Snapshot().Phase
+		if phase == scan.PhaseFinalizing || phase == scan.PhaseEnded {
+			return
+		}
+	}
+	if a.displayPosition == position {
+		return
+	}
+	a.displayPosition = position
+	s.notifyLocked()
 }

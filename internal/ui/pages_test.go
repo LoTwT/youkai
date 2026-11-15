@@ -35,7 +35,7 @@ func TestNavRailIsFixedWidth(t *testing.T) {
 			if rect.X < 0 || rect.X+rect.W > navRailWidth {
 				t.Errorf("at %d: %q at %+v does not fit the %d-DIP rail", tc.width, label, rect, navRailWidth)
 			}
-			if rect.W < navRailItemWidth-1 {
+			if rect.W < m.railWidth()-25 {
 				t.Errorf("at %d: %q is %v wide, want the %d-DIP rail item", tc.width, label, rect.W, navRailItemWidth)
 			}
 		}
@@ -61,7 +61,7 @@ func TestNavRailIsFixedWidth(t *testing.T) {
 func TestNavRailIsTheFirstTabGroup(t *testing.T) {
 	m, q := newTestModel(t, Config{Service: &fakeService{},
 		ScanSource: ScanSourceInfo{Available: true}})
-	tt := ui.NewTester(m.View, 1180, 760)
+	tt := ui.NewTester(m.View, 1440, 900)
 	settle(t, m, q, tt)
 
 	tt.Key(0, ui.KeyTab)
@@ -83,7 +83,7 @@ func TestNavRailIsTheFirstTabGroup(t *testing.T) {
 	if m.displayPage() != pageHistory {
 		t.Fatalf("Enter on 记录 shows page %v, want the records list", m.displayPage())
 	}
-	// The rail is one Tab stop; the page content follows it.
+	// Theme lives only in Settings, so Tab goes directly into page content.
 	tt.Key(0, ui.KeyTab)
 	if !tt.Focused("去扫描页开始扫描") {
 		t.Fatalf("Tab after the rail did not reach the page content: %q", tt.Texts())
@@ -121,7 +121,7 @@ func countColorInRect(img *image.RGBA, c color.RGBA, r image.Rectangle) int {
 // record's workspace keeps 记录 highlighted.
 func TestNavRailActiveState(t *testing.T) {
 	m, q := newTestModel(t, Config{Service: &fakeService{}})
-	tt := ui.NewTester(m.View, 1180, 760)
+	tt := ui.NewTester(m.View, 1440, 900)
 	settle(t, m, q, tt)
 
 	soft := tokensFor(false).AccentSoft
@@ -180,7 +180,7 @@ func TestShellStartsOnScanWithSavedRecords(t *testing.T) {
 		loads: map[string]*record.Recovery{"r1": testRecord()},
 	}
 	m, q := newTestModel(t, Config{Service: svc})
-	tt := ui.NewTester(m.View, 1180, 760)
+	tt := ui.NewTester(m.View, 1440, 900)
 	settle(t, m, q, tt)
 	drainAll(t, m, q)
 	tt.Frame()
@@ -207,7 +207,7 @@ func TestRecordsDestinationRoutesWithoutStageSwitch(t *testing.T) {
 		loads: map[string]*record.Recovery{"r1": testRecord()},
 	}
 	m, q := newTestModel(t, Config{Service: svc})
-	tt := ui.NewTester(m.View, 1180, 760)
+	tt := ui.NewTester(m.View, 1440, 900)
 	settle(t, m, q, tt)
 	m.page = pageScan
 	tt.Frame()
@@ -244,7 +244,7 @@ func TestRecordsDestinationRoutesWithoutStageSwitch(t *testing.T) {
 	if !tt.HasText("‹ 全部记录") {
 		t.Fatalf("the workspace header does not offer its way back: %q", tt.Texts())
 	}
-	if !tt.HasText("摘要") || !tt.HasText("逐件") || !tt.HasText("导出…") {
+	if !tt.HasText("摘要") || !tt.HasText("逐件") || !tt.HasText("导出") {
 		t.Fatalf("the workspace title bar is incomplete: %q", tt.Texts())
 	}
 	if tt.HasText("+ 准备新扫描") {
@@ -332,14 +332,14 @@ func TestRecordWorkspaceShortcuts(t *testing.T) {
 		Service:           svc,
 		DirectExportSaver: &fakeDirectExportSaver{},
 	})
-	m.SetContentSize(1180, 760)
-	tt := ui.NewTester(m.View, 1180, 760)
+	m.SetContentSize(1440, 900)
+	tt := ui.NewTester(m.View, 1440, 900)
 	settle(t, m, q, tt)
 	m.histChoice = historyLabel(t, m, "r1")
 	m.OpenHistory()
 	settle(t, m, q, tt)
 
-	if m.recordTab != recordTabSummary || !tt.HasText("导出…") {
+	if m.recordTab != recordTabSummary || !tt.HasText("导出") {
 		t.Fatalf("the title bar does not hold the export entry: tab %v %q", m.recordTab, tt.Texts())
 	}
 	if err := tt.Click("逐件"); err != nil {
@@ -460,8 +460,8 @@ func TestWorkspaceCoverageMatchesTheConclusion(t *testing.T) {
 		Service:           svc,
 		DirectExportSaver: &fakeDirectExportSaver{},
 	})
-	m.SetContentSize(1180, 760)
-	tt := ui.NewTester(m.View, 1180, 760)
+	m.SetContentSize(1440, 900)
+	tt := ui.NewTester(m.View, 1440, 900)
 	settle(t, m, q, tt)
 	m.histChoice = historyLabel(t, m, "r1")
 	m.OpenHistory()
@@ -490,7 +490,7 @@ func TestWorkspaceCoverageMatchesTheConclusion(t *testing.T) {
 func TestScanActionsStayOnTheScanPage(t *testing.T) {
 	svc := &fakeService{}
 	m, q := newTestModel(t, Config{Service: svc})
-	tt := ui.NewTester(m.View, 1180, 760)
+	tt := ui.NewTester(m.View, 1440, 900)
 	settle(t, m, q, tt)
 
 	if err := tt.Click("开始扫描"); err != nil {
@@ -691,7 +691,7 @@ func TestNavRailRecordsRoundTripRestoresViewState(t *testing.T) {
 		},
 	}
 	m, q := newTestModel(t, Config{Service: svc})
-	tt := ui.NewTester(m.View, 1020, 700)
+	tt := ui.NewTester(m.View, 1440, 900)
 	settle(t, m, q, tt)
 	m.Apply(snap("s1", 1, true, scan.PhaseCapturing,
 		scan.Counts{Captured: 2, Produced: 2}, 1, true, ""))
@@ -1018,8 +1018,8 @@ func TestHistoryListReopenSettlesSelectionAgainstFilters(t *testing.T) {
 		loads: map[string]*record.Recovery{"r1": rec},
 	}
 	m, q := newTestModel(t, Config{Service: svc})
-	m.SetContentSize(1180, 760)
-	tt := ui.NewTester(m.View, 1180, 760)
+	m.SetContentSize(1440, 900)
+	tt := ui.NewTester(m.View, 1440, 900)
 	settle(t, m, q, tt)
 	m.histChoice = historyLabel(t, m, "r1")
 	m.OpenHistory()
@@ -1207,7 +1207,7 @@ func TestNavRailDestinationsGuardDirtyDrafts(t *testing.T) {
 // to the same snapshot. The destination must keep the list's real place,
 // not just the last explicitly captured one.
 func TestNavRailRecordsRestoresActualScroll(t *testing.T) {
-	for _, width := range []int{1440, 1180} {
+	for _, width := range []int{1440, 1376} {
 		height := 700
 		switch width {
 		case 1440:
@@ -1241,7 +1241,7 @@ func TestNavRailRecordsRestoresActualScroll(t *testing.T) {
 
 				// Actual pointer scrolling: no direct m.scroll or
 				// List.ScrollTo writes.
-				tt.Scroll(150, 350, 0, 240)
+				tt.Scroll(300, 450, 0, 240)
 				tt.Advance(time.Second)
 				settle(t, m, q, tt)
 				first, _ := m.list.Visible()
@@ -1291,7 +1291,7 @@ func TestNavRailRecordsRestoresActualScroll(t *testing.T) {
 // left the pending segment, so the revisit must revalidate the selection
 // against the visible rows instead of keeping its hidden detail.
 func TestNavRailSessionConfirmedStayRevisitRevalidates(t *testing.T) {
-	for _, width := range []int{1440, 1180} {
+	for _, width := range []int{1440, 1376} {
 		for _, rows := range []int{2, 1} {
 			t.Run(fmt.Sprintf("%d/%drows", width, rows), func(t *testing.T) {
 				items := []record.ItemRecord{

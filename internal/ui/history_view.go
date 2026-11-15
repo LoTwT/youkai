@@ -64,16 +64,21 @@ func historyColumnsFor(contentWidth int) []ui.TableColumn {
 // the first row with the 本次 badge; it opens the same record workspace as
 // any other row, so one record never has two editable copies.
 func (m *Model) historyPage(c *ui.Context, t *ui.Theme) {
-	_, tok := themeWithTokens(t, c.Preferences())
+	tok := m.effectiveTokens()
 	m.historyHeader(c, t, tok)
 	m.historyNotices(c, t)
+	contentPanel(c, tok).Children(func() {
+		m.historyContent(c, t, tok)
+	})
+}
 
+func (m *Model) historyContent(c *ui.Context, t *ui.Theme, tok *Tokens) {
 	switch {
 	case m.historyLoading && len(m.history) == 0:
-		ui.Text(c, "正在读取记录……").TextColor(tok.TextMuted)
+		ui.Text(c, "正在读取记录……").Padding(panelInset).TextColor(tok.TextMuted)
 		return
 	case m.histErr != "":
-		ui.Text(c, "历史记录读取失败："+m.histErr).TextColor(t.Danger)
+		ui.Text(c, "历史记录读取失败："+m.histErr).Padding(panelInset).TextColor(t.Danger)
 		return
 	case len(m.history) == 0:
 		m.historyEmptyState(c, t, tok, false)
@@ -89,28 +94,28 @@ func (m *Model) historyPage(c *ui.Context, t *ui.Theme) {
 	m.settleHistoryRow(len(entries))
 	m.prepareHistoryList(entries)
 
-	ui.Column(c).Grow(1).MinWidth(0).Background(tok.SurfaceCard).
-		Border(1, tok.TableBorder).Radius(t.Space(1.5)).Clip().Children(func() {
-		columns := historyColumnsFor(m.contentWidth)
-		table := ui.Table(c, &m.historyList, columns, len(entries), func(row, col int) {
+	columns := historyColumnsFor(m.contentWidth)
+	var table ui.Element
+	ui.Themed(c, m.theme.table.Theme(t.Dark)).Background(ui.Transparent).Fill().MinHeight(0).Children(func() {
+		table = ui.Table(c, &m.historyList, columns, len(entries), func(row, col int) {
 			if row < 0 || row >= len(entries) || col < 0 || col >= len(columns) {
 				return
 			}
-			m.historyCell(c, t, tok, entries[row], row, columns[col])
+			m.historyCell(c, c.Theme(), tok, entries[row], row, columns[col])
 		}).Fill().MinHeight(0)
-		if table.Submitted() {
-			m.openHistoryRow(m.historyRow)
-		}
-		// Shift+F10 and the menu key open the chosen row's menu while the
-		// table or one of its rows holds the keyboard (08 §5).
-		if m.historyList.Shortcut(c, ui.Shift, ui.KeyF10) ||
-			m.historyList.Shortcut(c, 0, ui.KeyContextMenu) {
-			m.openSelectedHistoryMenu()
-		}
-		if m.historyFocusPending && m.historyList.Focus(c) {
-			m.historyFocusPending = false
-		}
 	})
+	if table.Submitted() {
+		m.openHistoryRow(m.historyRow)
+	}
+	// Shift+F10 and the menu key open the chosen row's menu while the
+	// table or one of its rows holds the keyboard (08 §5).
+	if m.historyList.Shortcut(c, ui.Shift, ui.KeyF10) ||
+		m.historyList.Shortcut(c, 0, ui.KeyContextMenu) {
+		m.openSelectedHistoryMenu()
+	}
+	if m.historyFocusPending && m.historyList.Focus(c) {
+		m.historyFocusPending = false
+	}
 }
 
 // historyHeader is the page title and its date filter. The filter uses
@@ -118,8 +123,8 @@ func (m *Model) historyPage(c *ui.Context, t *ui.Theme) {
 // every record.
 func (m *Model) historyHeader(c *ui.Context, t *ui.Theme, tok *Tokens) {
 	m.settleHistoryFilterRange()
-	ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, "记录").FontWeight(600).FontSize(t.FontSize * 1.15)
+	pageHeader(c).Children(func() {
+		pageTitle(c, "记录")
 		if len(m.history) > 0 {
 			count := fmt.Sprintf("%d 条", len(m.history))
 			if m.historyLoading {
@@ -144,7 +149,7 @@ func (m *Model) historyHeader(c *ui.Context, t *ui.Theme, tok *Tokens) {
 			m.clampHistoryFilter(false)
 		}
 		if m.historyFilterActive && len(m.visibleHistory()) > 0 {
-			if ui.Button(c, "清除筛选").Clicked() {
+			if button(c, "清除筛选").Clicked() {
 				m.resetHistoryFilter()
 			}
 		}
@@ -158,13 +163,13 @@ func (m *Model) historyEmptyState(c *ui.Context, t *ui.Theme, tok *Tokens, filte
 	ui.Column(c).Grow(1).Justify(ui.Center).AlignItems(ui.Center).Gap(t.Space(2)).Children(func() {
 		if filtered {
 			ui.Text(c, "没有符合条件的记录").TextColor(tok.TextMuted)
-			if ui.Button(c, "清除筛选").Clicked() {
+			if button(c, "清除筛选").Clicked() {
 				m.resetHistoryFilter()
 			}
 			return
 		}
 		ui.Text(c, "还没有扫描记录").TextColor(tok.TextMuted)
-		if ui.Button(c, "去扫描页开始扫描").Clicked() {
+		if button(c, "去扫描页开始扫描").Clicked() {
 			m.showScanDestination()
 		}
 	})
@@ -231,7 +236,13 @@ func (m *Model) historyCell(c *ui.Context, t *ui.Theme, tok *Tokens, entry Histo
 // historyTimeCell is the row's first cell. Its height keeps the design's
 // comfortable rows instead of the toolkit's minimum.
 func (m *Model) historyTimeCell(c *ui.Context, t *ui.Theme, tok *Tokens, entry HistoryEntry, latest, chosen bool) {
-	ui.Row(c).Height(t.Space(8)).AlignItems(ui.Center).Children(func() {
+	cell := ui.Row(c).Height(t.Space(8)).AlignItems(ui.Center)
+	if chosen {
+		cell.DrawOver(func(p *ui.Painter, r ui.Rect) {
+			p.Fill(ui.Rect{X: r.X - t.Space(2), Y: r.Y, W: 3, H: r.H}, tok.RowSelectedBorder, 0)
+		})
+	}
+	cell.Children(func() {
 		ui.Row(c).Gap(t.Space(1)).AlignItems(ui.Center).Children(func() {
 			text := ui.Text(c, historyTimeText(entry)).SingleLine()
 			if latest && !entry.Unreadable {
@@ -240,7 +251,7 @@ func (m *Model) historyTimeCell(c *ui.Context, t *ui.Theme, tok *Tokens, entry H
 			if entry.Unreadable {
 				// 线框 10 keeps a damaged row's time muted: its reason, not
 				// its date, is what the user needs from the row.
-				text.TextColor(colorWhenChosen(chosen, tok.TextMuted, t.AccentText))
+				text.TextColor(colorWhenChosen(chosen, tok.TextMuted, tok.TextPrimary))
 			}
 			if entry.ID != "" && entry.ID == string(m.appliedSession) {
 				ui.Text(c, "本次").FontSize(t.FontSize*0.75).TextColor(tok.AccentFG).
@@ -284,11 +295,6 @@ func (m *Model) historyResultCell(c *ui.Context, t *ui.Theme, tok *Tokens, entry
 			if result.tone == recordToneDanger {
 				bg, fg = tok.DangerSoft, tok.DangerFG
 			}
-			if chosen {
-				// The accent-filled selected row would swallow the soft
-				// badge colors; the tag keeps its text and loses the face.
-				bg, fg = ui.Color{}, t.AccentText
-			}
 			ui.Text(c, result.tag).SingleLine().FontSize(t.FontSize*0.75).FontWeight(600).
 				TextColor(fg).Background(bg).Padding(0, t.Space(0.75)).Radius(t.Space(0.75))
 		}
@@ -298,11 +304,11 @@ func (m *Model) historyResultCell(c *ui.Context, t *ui.Theme, tok *Tokens, entry
 		}
 		switch result.tone {
 		case recordToneMuted:
-			text.TextColor(colorWhenChosen(chosen, tok.TextMuted, t.AccentText))
+			text.TextColor(colorWhenChosen(chosen, tok.TextMuted, tok.TextPrimary))
 		case recordToneWarning:
-			text.TextColor(colorWhenChosen(chosen, tok.WarningFG, t.AccentText))
+			text.TextColor(colorWhenChosen(chosen, tok.WarningFG, tok.TextPrimary))
 		case recordToneDanger:
-			text.TextColor(colorWhenChosen(chosen, t.Danger, t.AccentText))
+			text.TextColor(colorWhenChosen(chosen, t.Danger, tok.TextPrimary))
 		}
 	})
 }
@@ -311,7 +317,7 @@ func (m *Model) historyResultCell(c *ui.Context, t *ui.Theme, tok *Tokens, entry
 // a damaged record needs; strong marks the latest row.
 func (m *Model) historyNumberCell(c *ui.Context, t *ui.Theme, tok *Tokens, entry HistoryEntry, count int64, unreadable, strong, chosen bool) {
 	if unreadable {
-		ui.Text(c, "—").TextColor(colorWhenChosen(chosen, tok.TextMuted, t.AccentText))
+		ui.Text(c, "—").TextColor(colorWhenChosen(chosen, tok.TextMuted, tok.TextPrimary))
 		return
 	}
 	text := ui.Text(c, formatCount(count)).SingleLine()
@@ -324,20 +330,20 @@ func (m *Model) historyNumberCell(c *ui.Context, t *ui.Theme, tok *Tokens, entry
 // nothing has no pending work to count, so it shows the design's dash.
 func (m *Model) historyPendingCell(c *ui.Context, t *ui.Theme, tok *Tokens, entry HistoryEntry, chosen bool) {
 	if entry.Unreadable || entry.CapturedCount == 0 {
-		ui.Text(c, "—").TextColor(colorWhenChosen(chosen, tok.TextMuted, t.AccentText))
+		ui.Text(c, "—").TextColor(colorWhenChosen(chosen, tok.TextMuted, tok.TextPrimary))
 		return
 	}
 	pending := entry.Counts.Pending()
 	text := ui.Text(c, formatCount(pending)).SingleLine()
 	if pending > 0 {
-		text.TextColor(colorWhenChosen(chosen, tok.WarningFG, t.AccentText)).FontWeight(600)
+		text.TextColor(colorWhenChosen(chosen, tok.WarningFG, tok.TextPrimary)).FontWeight(600)
 	}
 }
 
 // historyMergedCountsCell is the compact tier's "待处理 / 可导出".
 func (m *Model) historyMergedCountsCell(c *ui.Context, t *ui.Theme, tok *Tokens, entry HistoryEntry, latest, chosen bool) {
 	if entry.Unreadable {
-		ui.Text(c, "—").TextColor(colorWhenChosen(chosen, tok.TextMuted, t.AccentText))
+		ui.Text(c, "—").TextColor(colorWhenChosen(chosen, tok.TextMuted, tok.TextPrimary))
 		return
 	}
 	pending := "—"
@@ -354,7 +360,7 @@ func (m *Model) historyMergedCountsCell(c *ui.Context, t *ui.Theme, tok *Tokens,
 // checkpoint cannot be read, which the wireframe's damaged row shows.
 func (m *Model) historySizeCell(c *ui.Context, t *ui.Theme, tok *Tokens, entry HistoryEntry, chosen bool) {
 	ui.Text(c, formatBytes(entry.TotalBytes)).SingleLine().
-		TextColor(colorWhenChosen(chosen, tok.TextMuted, t.AccentText))
+		TextColor(colorWhenChosen(chosen, tok.TextMuted, tok.TextPrimary))
 }
 
 // historyActionCell is the row's ⋯ trigger. 打开 is not an inline button:
@@ -408,7 +414,7 @@ func (m *Model) historyRowMenu(c *ui.Context, t *ui.Theme, tok *Tokens, anchor u
 				if reason != "" {
 					color = tok.TextMuted
 				}
-				m.historyMenuItem(c, t, "删除记录…", color, reason != "", true, func() {
+				m.historyMenuItem(c, t, "删除记录", color, reason != "", true, func() {
 					m.RequestRecordCleanup(entry.ID)
 				})
 				if reason != "" {
@@ -425,11 +431,11 @@ func (m *Model) historyRowMenu(c *ui.Context, t *ui.Theme, tok *Tokens, anchor u
 			if exportReason != "" {
 				exportColor = tok.TextMuted
 			}
-			m.historyMenuItem(c, t, "导出…", exportColor, exportReason != "", false, func() {
+			m.historyMenuItem(c, t, "导出", exportColor, exportReason != "", false, func() {
 				m.openHistoryExport(entry)
 			})
 			ui.Divider(c)
-			screenshotLabel := "删除截图…"
+			screenshotLabel := "删除截图"
 			if historyCompact(m.contentWidth) {
 				// Compact hides 占用; its number stays in the delete item.
 				screenshotLabel += "（" + formatBytes(entry.TotalBytes) + "）"
@@ -442,7 +448,7 @@ func (m *Model) historyRowMenu(c *ui.Context, t *ui.Theme, tok *Tokens, anchor u
 			m.historyMenuItem(c, t, screenshotLabel, deleteColor, reason != "", false, func() {
 				m.RequestScreenshotCleanup(entry.ID)
 			})
-			m.historyMenuItem(c, t, "删除记录…", deleteColor, reason != "", false, func() {
+			m.historyMenuItem(c, t, "删除记录", deleteColor, reason != "", false, func() {
 				m.RequestRecordCleanup(entry.ID)
 			})
 			if exportReason != "" {
@@ -609,13 +615,12 @@ func historyTimeText(entry HistoryEntry) string {
 	return entry.SavedAt.In(time.Local).Format("1 月 2 日 15:04")
 }
 
-// colorWhenChosen keeps secondary text readable on the accent-filled
-// selected row: the design requires pure white there, not the muted role.
-func colorWhenChosen(chosen bool, muted, onAccent ui.Color) ui.Color {
+// colorWhenChosen keeps special cell text readable on the selected object.
+func colorWhenChosen(chosen bool, normal, selected ui.Color) ui.Color {
 	if chosen {
-		return onAccent
+		return selected
 	}
-	return muted
+	return normal
 }
 
 // formatCount writes an integer with thousands separators, as the design's

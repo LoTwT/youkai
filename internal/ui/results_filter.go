@@ -14,9 +14,9 @@ import (
 // person still has to handle, the exportable items carrying a warning, and
 // every captured item.
 var resultFilterOrder = []resultFilter{
-	resultFilterPending,
-	resultFilterWarning,
 	resultFilterAll,
+	resultFilterWarning,
+	resultFilterPending,
 }
 
 func (f resultFilter) label() string {
@@ -320,7 +320,7 @@ func (m *Model) resultsFilterBar(c *ui.Context, t *ui.Theme) {
 		labels[i] = filter.label()
 	}
 	choice := m.reviewFilterChoice()
-	ui.Segmented(c, choice, labels...).Bind(&m.reviewFilterRef)
+	viewSegments(c, choice, m.effectiveTokens(), labels...).Bind(&m.reviewFilterRef)
 	if *choice >= 0 && *choice < len(resultFilterOrder) && resultFilterOrder[*choice] != m.filter {
 		m.setResultFilter(resultFilterOrder[*choice])
 	}
@@ -616,9 +616,9 @@ func (m *Model) registerResultsShortcuts(c *ui.Context) {
 	// Zoom belongs to the review view only and not to a text field: a
 	// focused field keeps its own Ctrl+= undo-like input handling.
 	if !m.textInputFocused {
-		c.OnShortcut(ui.Cmd, ui.KeyEqual, func() { m.zoomCrop(0.25) })
-		c.OnShortcut(ui.Cmd|ui.Shift, ui.KeyEqual, func() { m.zoomCrop(0.25) })
-		c.OnShortcut(ui.Cmd, ui.KeyMinus, func() { m.zoomCrop(-0.25) })
+		c.OnShortcut(ui.Cmd, ui.KeyEqual, func() { m.zoomCrop(reviewZoomStep) })
+		c.OnShortcut(ui.Cmd|ui.Shift, ui.KeyEqual, func() { m.zoomCrop(reviewZoomStep) })
+		c.OnShortcut(ui.Cmd, ui.KeyMinus, func() { m.zoomCrop(-reviewZoomStep) })
 		c.OnShortcut(ui.Cmd, ui.Key0, func() { m.zoomCrop(0) })
 	}
 }

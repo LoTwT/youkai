@@ -777,7 +777,7 @@ func TestTrayMenuStates(t *testing.T) {
 		},
 		{
 			status:      ui.LifecycleStatus{Text: "扫描中", Busy: true},
-			statusLabel: "youkai · 正在扫描（停止：Ctrl+Alt+Shift+S）",
+			statusLabel: (ui.LifecycleStatus{Text: "扫描中"}).TrayMenu().Status,
 			open:        "停止扫描并打开",
 			stopEnabled: true,
 			exit:        "停止扫描并退出",
@@ -1025,7 +1025,7 @@ func TestTrayMenuActions(t *testing.T) {
 	life.AttachWindow(win)
 
 	menu := tray.menu
-	status := menuItem(t, menu, "youkai · 正在扫描（停止：Ctrl+Alt+Shift+S）")
+	status := menuItem(t, menu, (ui.LifecycleStatus{Text: "扫描中"}).TrayMenu().Status)
 	if !status.Disabled {
 		t.Fatal("the status item accepts clicks")
 	}

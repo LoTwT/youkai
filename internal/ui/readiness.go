@@ -969,40 +969,22 @@ func (m *Model) readinessChecklist(c *ui.Context, t *ui.Theme, tok *Tokens) {
 		}
 	}
 	ui.Column(c).Gap(t.Space(2)).Children(func() {
-		ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "准备检查").FontSize(t.FontSize * 1.25).FontWeight(600)
+		ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, "准备检查").FontSize(t.FontSize * 16 / 14).FontWeight(600)
 			if attention > 0 {
-				ui.Textf(c, "! %d 项需要处理", attention).TextColor(t.Warning).FontSize(t.FontSize * 0.9)
+				ui.Textf(c, "! %d 项需要处理", attention).TextColor(t.Warning)
 			} else if m.readinessLoaded && unknown > 0 {
-				ui.Textf(c, "%d 项无法判断", unknown).TextColor(t.TextMuted).FontSize(t.FontSize * 0.9)
+				ui.Textf(c, "%d 项无法判断", unknown).TextColor(t.TextMuted)
 			} else if m.readinessLoaded {
-				ui.Text(c, "全部满足").TextColor(t.TextMuted).FontSize(t.FontSize * 0.9)
+				ui.Text(c, "全部满足 · 可以开始").TextColor(t.Success)
 			}
 			ui.Box(c).Grow(1)
-			if m.readinessLoading {
-				ui.Text(c, "正在检查…").TextColor(t.TextMuted).FontSize(t.FontSize * 0.9)
-			} else if !m.readiness.CheckedAt.IsZero() {
-				ui.Text(c, m.readiness.CheckedAt.Local().Format("15:04")+" 检查").
-					TextColor(t.TextMuted).FontSize(t.FontSize * 0.9)
-			}
-			refresh := ui.Button(c, "重新检查").Bind(&m.scanRefreshRef)
-			if m.readinessFocus && m.readinessFocusRefresh {
-				refresh = refresh.Focus()
-				m.readinessFocus = false
-				m.readinessFocusRefresh = false
-			}
-			if refresh.Clicked() {
-				// The user asked for a fresh judgement: the old refusal no
-				// longer speaks for the state this pass reports.
-				m.startErr = ""
-				m.refreshReadiness()
-			}
+			ui.Text(c, "S 级 · 1–6 号位").TextColor(tok.TextSecondary).Background(tok.AccentSoft).Padding(4, 12).Radius(4)
 		})
 		if m.startFailureMessage != "" {
 			ui.Text(c, m.startFailureMessage).TextColor(t.Danger).FontWeight(600)
 		}
-		ui.Column(c).Background(tok.SurfaceCard).Radius(t.Space(1.5)).
-			Padding(t.Space(1.5), t.Space(2)).Children(func() {
+		ui.Column(c).Background(tok.SurfaceCard).Children(func() {
 			for _, row := range rows {
 				m.readinessRowView(c, t, tok, row)
 			}
@@ -1020,50 +1002,48 @@ func (m *Model) readinessChecklist(c *ui.Context, t *ui.Theme, tok *Tokens) {
 
 func (m *Model) readinessRowView(c *ui.Context, t *ui.Theme, tok *Tokens, row readinessRow) {
 	primary := m.readinessPrimaryAction() == row.item
-	mark, severity := readinessStatusText(row.status)
-	color := t.TextMuted
+	_, severity := readinessStatusText(row.status)
+	status := map[readinessRowStatus]string{readinessSatisfied: "已满足", readinessUnsatisfied: "需处理", readinessUnknown: "待检查", readinessAfterStart: "开始后检查", readinessConfirm: "待确认"}[row.status]
+	color, glyph := tok.AccentFG, "◷"
 	switch severity {
 	case "ok":
-		color = t.Success
+		color, glyph = tok.SuccessFG, "✓"
 	case "bad":
-		color = t.Danger
+		color, glyph = tok.DangerFG, "!"
 	case "warn":
-		color = t.Warning
+		color, glyph = tok.WarningFG, "!"
 	}
-	ui.Column(c).Gap(t.Space(0.5)).Padding(t.Space(1), 0).Children(func() {
-		ui.Row(c).Gap(t.Space(1.5)).AlignItems(ui.Start).Children(func() {
-			ui.Text(c, mark).TextColor(color).FontWeight(600).Width(t.Space(2.5))
-			ui.Column(c).Grow(1).Gap(t.Space(0.25)).Children(func() {
-				ui.Row(c).Gap(t.Space(1.5)).AlignItems(ui.Start).Children(func() {
-					ui.Text(c, row.title).FontWeight(600).Width(t.Space(28))
-					ui.Text(c, row.value).TextColor(t.Text).Shrink(1)
-				})
-				if row.why != "" {
-					ui.Text(c, "为什么："+row.why).TextColor(t.TextMuted).FontSize(t.FontSize * 0.9)
-				}
-				if row.how != "" {
-					ui.Text(c, "怎么做："+row.how).TextColor(t.TextMuted).FontSize(t.FontSize * 0.9)
-				}
-				if row.action == readinessActionChooseTarget {
-					m.readinessTargetChoices(c, primary)
-				}
-			})
+	ui.Column(c).Gap(8).Padding(16, 0).Children(func() {
+		ui.Row(c).Gap(16).MinHeight(24).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, glyph).TextColor(color).Width(24).Shrink(0)
+			ui.Text(c, row.title).Width(t.FontSize * 148 / 14).Shrink(0)
+			ui.Text(c, row.value).Grow(1).Basis(0).MinWidth(0)
 			if label, ok := readinessActionLabel(row.action); ok {
-				button := ui.Button(c, label)
+				action := button(c, label)
 				if primary {
-					button = button.Bind(&m.scanRowRef)
+					action = action.Bind(&m.scanRowRef)
 					if m.readinessFocus {
-						button = button.Focus()
+						action.Focus()
 						m.readinessFocus = false
 					}
 				}
-				if button.Clicked() {
+				if action.Clicked() {
 					m.runReadinessAction(c, row.action)
 				}
 			}
+			ui.Text(c, status).TextColor(color).FontSize(t.FontSize * 12 / 14).Shrink(0)
 		})
-		ui.Divider(c)
+		if row.why != "" {
+			ui.Text(c, "为什么："+row.why).TextColor(t.TextMuted).FontSize(t.FontSize * 12 / 14)
+		}
+		if row.how != "" {
+			ui.Text(c, "怎么做："+row.how).TextColor(t.TextMuted).FontSize(t.FontSize * 12 / 14)
+		}
+		if row.action == readinessActionChooseTarget {
+			m.readinessTargetChoices(c, primary)
+		}
 	})
+	ui.Divider(c)
 }
 
 func readinessActionLabel(action readinessActionKind) (string, bool) {
@@ -1129,11 +1109,17 @@ func (m *Model) readinessTargetChoices(c *ui.Context, primary bool) {
 // it. Counts are limited to captured items (R-11's first version).
 func (m *Model) scanStageArea(c *ui.Context, t *ui.Theme) {
 	snap := m.snap.Scan
-	ui.Column(c).Gap(t.Space(2)).Children(func() {
+	tok := m.effectiveTokens()
+	stage := ui.Column(c).Gap(24)
+	if snap.Phase == scan.PhaseCapturing || snap.Phase == scan.PhaseFinalizing {
+		width := min(float32(800), float32(m.contentWidth)-m.railWidth()-m.pageLeftPadding()-m.pagePadding()-48)
+		stage = stage.Width(width).AlignSelf(ui.Center).MinHeight(max(280, float32(m.contentHeight)-300)).Justify(ui.Center)
+	}
+	stage.Children(func() {
 		switch snap.Phase {
 		case scan.PhasePreparing:
 			ui.Text(c, m.prepareCountdownText()).FontSize(t.FontSize * 2.6).FontWeight(600)
-			ui.Text(c, "请在倒计时结束前让游戏保持在前台").TextColor(t.Text)
+			ui.Text(c, "请在倒计时结束前让游戏保持在前台")
 			ui.Text(c, "正在等待游戏就绪").TextColor(t.TextMuted)
 			switch snap.Activation {
 			case scan.ActivationActivated:
@@ -1141,26 +1127,33 @@ func (m *Model) scanStageArea(c *ui.Context, t *ui.Theme) {
 			case scan.ActivationRefused:
 				ui.Text(c, "未能切换，请自己切换到游戏").TextColor(t.Warning)
 			}
-			ui.Text(c, "请确保 youkai 没有盖住游戏窗口").TextColor(t.TextMuted).
-				FontSize(t.FontSize * 0.9)
+			ui.Text(c, "请确保 youkai 没有盖住游戏窗口").TextColor(t.TextMuted)
 			m.schedulePrepareTick()
 		case scan.PhaseCapturing:
-			ui.Textf(c, "正在扫描 · 已采集 %d 件", snap.Counts.Captured).
-				FontSize(t.FontSize * 1.6).FontWeight(600)
-			ui.Text(c, "总数未知，不显示百分比").TextColor(t.TextMuted).FontSize(t.FontSize * 0.9)
-			// 09 §5.3 keeps this safety line: clicking the window itself
-			// takes the game's focus and therefore stops the scan.
-			ui.Text(c, "点击窗口本身也会让游戏失焦而停止").TextColor(t.TextMuted).
-				FontSize(t.FontSize * 0.9)
-		default:
+			scanStageHeading(c, t, tok, "正在扫描")
+			ui.Row(c).Gap(24).Children(func() {
+				scanMetric(c, t, tok, "已采集", formatCount(int64(snap.Counts.Captured))+" 件")
+				position := "—"
+				if m.snap.DisplayPosition >= 1 && m.snap.DisplayPosition <= 6 {
+					position = fmt.Sprintf("%d 号位", m.snap.DisplayPosition)
+				}
+				scanMetric(c, t, tok, "当前号位", position)
+			})
+
+		case scan.PhaseFinalizing:
+			scanStageHeading(c, t, tok, "识别和保存")
 			remaining := snap.Counts.Queued + snap.Counts.Running
+			ui.Row(c).Gap(24).Children(func() {
+				scanMetric(c, t, tok, "已采集", formatCount(int64(snap.Counts.Captured))+" 件")
+				scanMetric(c, t, tok, "剩余识别", formatCount(int64(remaining))+" 件")
+			})
 			if remaining > 0 {
-				ui.Textf(c, "已停止操作游戏，正在识别剩余 %d 件并保存", remaining).
-					FontSize(t.FontSize * 1.25).FontWeight(600)
+				ui.Textf(c, "已停止操作游戏，正在识别剩余 %d 件并保存", remaining)
 			} else {
-				ui.Text(c, "已停止操作游戏，正在保存结果").
-					FontSize(t.FontSize * 1.25).FontWeight(600)
+				ui.Text(c, "已停止操作游戏，正在保存结果")
 			}
+		default:
+			ui.Text(c, "正在保存结果").FontSize(t.FontSize * 24 / 14).FontWeight(700)
 		}
 	})
 }
@@ -1213,12 +1206,62 @@ func (m *Model) scanSaveFailureArea(c *ui.Context, t *ui.Theme) {
 		}
 		ui.Text(c, "此时不能开始新扫描、不能安装更新，退出会被拒绝。").TextColor(t.TextMuted)
 		ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
-			if !m.exitFailureDialogOpen && ui.PrimaryButton(c, "重试保存").Clicked() {
+			if !m.exitFailureDialogOpen && primaryButton(c, "重试保存").Clicked() {
 				m.RetrySave()
 			}
-			if ui.Button(c, "复制诊断信息").Clicked() {
+			if button(c, "复制诊断信息").Clicked() {
 				m.copyDiagnostics(c)
 			}
+		})
+	})
+}
+
+func (m *Model) scanHeader(c *ui.Context, t *ui.Theme) {
+	pageHeader(c).Children(func() {
+		pageTitle(c, "扫描")
+		ui.Box(c).Grow(1)
+		if m.snap.Busy {
+			return
+		}
+		if m.readinessLoading {
+			ui.Text(c, "正在检查…").TextColor(t.TextMuted)
+		} else if !m.readiness.CheckedAt.IsZero() {
+			ui.Text(c, m.readiness.CheckedAt.Local().Format("15:04")+" 检查").FontSize(t.FontSize * 12 / 14).TextColor(t.TextMuted)
+		}
+		refresh := button(c, "重新检查").Bind(&m.scanRefreshRef)
+		if m.readinessFocus && m.readinessFocusRefresh {
+			refresh.Focus()
+			m.readinessFocus = false
+			m.readinessFocusRefresh = false
+		}
+		if refresh.Clicked() {
+			m.startErr = ""
+			m.refreshReadiness()
+		}
+	})
+}
+
+func scanMetric(c *ui.Context, t *ui.Theme, tok *Tokens, label, value string) {
+	panel(c, tok).Background(tok.SurfaceSunken).Grow(1).Basis(0).MinHeight(176).Padding(24).Gap(24).Children(func() {
+		ui.Text(c, label).TextColor(tok.TextSecondary)
+		parts := strings.Fields(value)
+		ui.Row(c).Gap(8).AlignItems(ui.End).Children(func() {
+			if len(parts) > 0 {
+				ui.Text(c, parts[0]).FontSize(t.FontSize * 48 / 14).FontWeight(700).TextColor(tok.AccentFG)
+			}
+			if len(parts) > 1 {
+				ui.Text(c, strings.Join(parts[1:], " "))
+			}
+		})
+	})
+}
+
+func scanStageHeading(c *ui.Context, t *ui.Theme, tok *Tokens, label string) {
+	ui.Row(c).Gap(24).AlignItems(ui.Center).Children(func() {
+		ui.Row(c).Size(80, 80).Radius(16).Background(tok.AccentSoft).Center().Children(func() { ui.Icon(c, scanIcon).Size(32, 32).TextColor(tok.AccentFG) })
+		ui.Column(c).Gap(8).Children(func() {
+			ui.Text(c, label).FontSize(t.FontSize * 32 / 14).FontWeight(700)
+			ui.Text(c, "绝区零 · 驱动盘").TextColor(tok.TextSecondary)
 		})
 	})
 }

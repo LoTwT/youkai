@@ -6,7 +6,7 @@ import (
 	"github.com/egoist/mygo"
 )
 
-// TestWindowPlacementFor checks the design's window bounds: 1180 × 760 by
+// TestWindowPlacementFor checks the design's window bounds: 1440 × 900 by
 // default, 92% of a smaller work area, a 960 × 640 minimum that yields to
 // an even smaller work area (design 09 §1).
 func TestWindowPlacementFor(t *testing.T) {
@@ -18,22 +18,22 @@ func TestWindowPlacementFor(t *testing.T) {
 		{
 			name:     "4K at 125%",
 			workArea: mygo.Rectangle{Width: 3072, Height: 1680},
-			want:     windowPlacement{Width: 1180, Height: 760, MinWidth: 960, MinHeight: 640},
+			want:     windowPlacement{Width: 1440, Height: 900, MinWidth: 960, MinHeight: 640},
 		},
 		{
 			name:     "1080p at 125%",
 			workArea: mygo.Rectangle{Width: 1536, Height: 816},
-			want:     windowPlacement{Width: 1180, Height: 760, MinWidth: 960, MinHeight: 640},
+			want:     windowPlacement{Width: 1440, Height: 750, MinWidth: 960, MinHeight: 640},
 		},
 		{
 			name:     "1080p at 100%",
 			workArea: mygo.Rectangle{Width: 1920, Height: 1032},
-			want:     windowPlacement{Width: 1180, Height: 760, MinWidth: 960, MinHeight: 640},
+			want:     windowPlacement{Width: 1440, Height: 900, MinWidth: 960, MinHeight: 640},
 		},
 		{
 			name:     "1366x768 at 100%",
 			workArea: mygo.Rectangle{Width: 1366, Height: 728},
-			want:     windowPlacement{Width: 1180, Height: 669, MinWidth: 960, MinHeight: 640},
+			want:     windowPlacement{Width: 1256, Height: 669, MinWidth: 960, MinHeight: 640},
 		},
 		{
 			name:     "1366x768 at 125%",
@@ -47,7 +47,7 @@ func TestWindowPlacementFor(t *testing.T) {
 		},
 		{
 			name: "unknown work area",
-			want: windowPlacement{Width: 1180, Height: 760, MinWidth: 960, MinHeight: 640},
+			want: windowPlacement{Width: 1440, Height: 900, MinWidth: 960, MinHeight: 640},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

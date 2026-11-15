@@ -20,7 +20,7 @@ func TestLoadSettingsMissingFileUsesDefault(t *testing.T) {
 // The preference round-trips through the settings file.
 func TestSaveSettingsRoundTrip(t *testing.T) {
 	root := t.TempDir()
-	if err := SaveSettings(root, Settings{CloseBehavior: CloseBehaviorExit, TrayHintSeen: true}); err != nil {
+	if err := SaveSettings(root, Settings{CloseBehavior: CloseBehaviorExit, TrayHintSeen: true, Appearance: AppearanceDark}); err != nil {
 		t.Fatalf("SaveSettings: %v", err)
 	}
 	settings, err := LoadSettings(root)
@@ -32,6 +32,9 @@ func TestSaveSettingsRoundTrip(t *testing.T) {
 	}
 	if !settings.TrayHintSeen {
 		t.Fatal("the acknowledged first-hide hint did not round-trip")
+	}
+	if settings.Appearance != AppearanceDark {
+		t.Fatalf("appearance did not round-trip: %s", settings.Appearance)
 	}
 
 	// A second save replaces the first value.
@@ -65,6 +68,9 @@ func TestLoadSettingsWithoutCloseBehaviorUsesDefault(t *testing.T) {
 	}
 	if settings.TrayHintSeen {
 		t.Fatal("an older settings file hid the first-hide hint")
+	}
+	if settings.Appearance != AppearanceSystem {
+		t.Fatalf("older settings must follow system: %s", settings.Appearance)
 	}
 }
 

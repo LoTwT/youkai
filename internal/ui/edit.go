@@ -255,7 +255,7 @@ func (d editDraft) toData(_ ...*string) (zzz.DiscData, []fieldProblem) {
 
 	mainAttribute := optionValue(d.MainAttribute)
 	mainValue := strings.TrimSpace(d.MainValue)
-	mainUnit := optionValue(d.MainUnit)
+	mainUnit := unitOptionValue(d.MainUnit)
 	switch {
 	case mainAttribute == "" && mainValue == "" && mainUnit == "":
 		// Explicitly unread.
@@ -295,7 +295,7 @@ func (d editDraft) toData(_ ...*string) (zzz.DiscData, []fieldProblem) {
 			field := fmt.Sprintf("substats[%d]", i)
 			attribute := optionValue(sub.Attribute)
 			value := strings.TrimSpace(sub.Value)
-			unit := optionValue(sub.Unit)
+			unit := unitOptionValue(sub.Unit)
 			rolls := strings.TrimSpace(sub.Rolls)
 			if attribute == "" && value == "" && unit == "" && rolls == "" {
 				// A line exists but nothing on it was read: keep the

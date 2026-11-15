@@ -389,6 +389,17 @@ func TestHistoryDamagedRowTimeIsMuted(t *testing.T) {
 		t.Fatalf("the damaged row's time is not muted: normal min %d, damaged min %d",
 			normalMin, damagedMin)
 	}
+	// Choosing a special cell must replace its muted foreground along
+	// with the row face; the old on-accent white disappears on a pale row.
+	tt.Key(0, ui.KeyEnd)
+	tt.Frame()
+	if m.historyRow != 2 {
+		t.Fatal("keyboard did not choose the damaged row")
+	}
+	chosenMin := minLuminanceInRect(tt.Image(), damaged)
+	if chosenMin > normalMin+10 {
+		t.Fatalf("selected damaged time lost the readable body foreground: %d vs %d", chosenMin, normalMin)
+	}
 }
 
 // TestHistoryNumberColumnsDashDamagedRow checks that a damaged row shows
@@ -541,15 +552,15 @@ func TestHistoryDamagedRowOnlyDeletes(t *testing.T) {
 
 	m.openHistoryMenu("bad")
 	tt.Frame()
-	for _, text := range []string{"打开", "导出…", "删除截图…"} {
+	for _, text := range []string{"打开", "导出", "删除截图"} {
 		if countText(tt.Texts(), text) != 0 {
 			t.Errorf("the damaged row's menu offers %q: %q", text, tt.Texts())
 		}
 	}
-	if !tt.HasText("记录不可读，只能删除。") || !tt.HasText("删除记录…") {
+	if !tt.HasText("记录不可读，只能删除。") || !tt.HasText("删除记录") {
 		t.Fatalf("the damaged row's menu is incomplete: %q", tt.Texts())
 	}
-	if err := tt.Click("删除记录…"); err != nil {
+	if err := tt.Click("删除记录"); err != nil {
 		t.Fatal(err)
 	}
 	settle(t, m, q, tt)
@@ -577,7 +588,7 @@ func TestHistoryDeleteBlockedReasons(t *testing.T) {
 	if !tt.HasText("当前会话记录，扫描中或未转移前不能删除。") {
 		t.Fatalf("the live row's deletion reason does not show: %q", tt.Texts())
 	}
-	if err := tt.Click("删除记录…"); err != nil {
+	if err := tt.Click("删除记录"); err != nil {
 		t.Fatal(err)
 	}
 	settle(t, m, q, tt)
@@ -593,7 +604,7 @@ func TestHistoryDeleteBlockedReasons(t *testing.T) {
 	if !tt.HasText("扫描会话进行中，结束后才能清理。") {
 		t.Fatalf("the active scan's deletion reason does not show: %q", tt.Texts())
 	}
-	if err := tt.Click("删除截图…"); err != nil {
+	if err := tt.Click("删除截图"); err != nil {
 		t.Fatal(err)
 	}
 	settle(t, m, q, tt)
@@ -702,7 +713,7 @@ func TestHistoryCompactMovesStorageIntoTheMenu(t *testing.T) {
 			}
 			m.openHistoryMenu("r01")
 			tt.Frame()
-			want := "删除截图…"
+			want := "删除截图"
 			if !tc.storage {
 				want += "（1.0 MB）"
 			}
@@ -1061,7 +1072,7 @@ func TestHistoryRowMenu(t *testing.T) {
 
 	m.openHistoryMenu("r02")
 	tt.Frame()
-	for _, text := range []string{"打开", "导出…", "删除截图…", "删除记录…"} {
+	for _, text := range []string{"打开", "导出", "删除截图", "删除记录"} {
 		if !tt.HasText(text) {
 			t.Errorf("the row menu does not show %q: %q", text, tt.Texts())
 		}
@@ -1072,7 +1083,7 @@ func TestHistoryRowMenu(t *testing.T) {
 	if got := m.historyDeleteBlockedReason(m.history[1]); got != "" {
 		t.Fatalf("a normal record's delete entries are blocked: %q", got)
 	}
-	if err := tt.Click("删除记录…"); err != nil {
+	if err := tt.Click("删除记录"); err != nil {
 		t.Fatal(err)
 	}
 	settle(t, m, q, tt)
@@ -1084,12 +1095,12 @@ func TestHistoryRowMenu(t *testing.T) {
 	m.cleanup = nil
 	m.openHistoryMenu("r01")
 	tt.Frame()
-	if err := tt.Click("导出…"); err != nil {
+	if err := tt.Click("导出"); err != nil {
 		t.Fatal(err)
 	}
 	settle(t, m, q, tt)
 	if m.displayPage() != pageResults || m.rec == nil || m.rec.ID != "r01" {
-		t.Fatalf("导出… = page %v, record %+v, want the row's record opened",
+		t.Fatalf("导出 = page %v, record %+v, want the row's record opened",
 			m.displayPage(), m.rec)
 	}
 	if !m.exportDialog.open || !tt.HasText("导出 JSON") || !tt.HasText("去校对") {
@@ -1129,7 +1140,7 @@ func TestHistoryOpenAndReturn(t *testing.T) {
 	if m.displayPage() != pageHistory || m.historyRow != 1 {
 		t.Fatalf("returning to history = page %v, row %d", m.displayPage(), m.historyRow)
 	}
-	if !tt.HasText("已选中 " + historyTimeText(m.history[1])) {
+	if m.historyList.Selected == nil || *m.historyList.Selected != 1 {
 		t.Fatalf("the status bar lost the selection: %q", tt.Texts())
 	}
 }
@@ -1154,7 +1165,7 @@ func TestHistoryExportFailureShowsInDialog(t *testing.T) {
 
 	m.openHistoryMenu("r01")
 	tt.Frame()
-	if err := tt.Click("导出…"); err != nil {
+	if err := tt.Click("导出"); err != nil {
 		t.Fatal(err)
 	}
 	settle(t, m, q, tt)
@@ -1224,7 +1235,7 @@ func TestHistoryRowExportLoadFailureDoesNotOpenDialog(t *testing.T) {
 
 	m.openHistoryMenu("r01")
 	tt.Frame()
-	if err := tt.Click("导出…"); err != nil {
+	if err := tt.Click("导出"); err != nil {
 		t.Fatal(err)
 	}
 	settle(t, m, q, tt)
@@ -1265,7 +1276,7 @@ func TestHistoryRowExportForOpenRecordOpensTheDialog(t *testing.T) {
 	tt.Frame()
 	m.openHistoryMenu("r01")
 	tt.Frame()
-	if err := tt.Click("导出…"); err != nil {
+	if err := tt.Click("导出"); err != nil {
 		t.Fatal(err)
 	}
 	settle(t, m, q, tt)
@@ -1281,7 +1292,7 @@ func TestHistoryRowExportForOpenRecordOpensTheDialog(t *testing.T) {
 	}
 }
 
-// TestHistoryRowExportSettlesDirtyDraftFirst checks that a row's 导出…
+// TestHistoryRowExportSettlesDirtyDraftFirst checks that a row's 导出
 // goes through the existing save/discard prompt before opening the target
 // record and its dialog.
 func TestHistoryRowExportSettlesDirtyDraftFirst(t *testing.T) {
@@ -1369,12 +1380,12 @@ func TestHistoryTableFitsWidths(t *testing.T) {
 				if !ok {
 					t.Fatalf("%q is missing at %d", title, width)
 				}
-				if rect.X < navRailWidth+12 || rect.X+rect.W > float32(width)-12 {
+				if rect.X < m.railWidth()+m.pageLeftPadding() || rect.X+rect.W > float32(width)-m.pagePadding() {
 					t.Errorf("%q at %+v is outside the %d page", title, rect, width)
 				}
 			}
 			action, ok := tt.Find("⋯")
-			if !ok || action.X+action.W > float32(width)-12 {
+			if !ok || action.X+action.W > float32(width)-m.pagePadding() {
 				t.Fatalf("the row action at %+v does not fit %d", action, width)
 			}
 			if width >= historyStandardMinWidth && tt.HasText("待处理 / 可导出") {
@@ -1387,7 +1398,7 @@ func TestHistoryTableFitsWidths(t *testing.T) {
 	}
 }
 
-// TestHistoryPerRowExportUsesThatRecord checks that a row's 导出… opens
+// TestHistoryPerRowExportUsesThatRecord checks that a row's 导出 opens
 // that record first and exports its snapshot, not the previously open one.
 func TestHistoryPerRowExportUsesThatRecord(t *testing.T) {
 	svc := &fakeService{
@@ -1408,12 +1419,12 @@ func TestHistoryPerRowExportUsesThatRecord(t *testing.T) {
 
 	m.openHistoryMenu("r02")
 	tt.Frame()
-	if err := tt.Click("导出…"); err != nil {
+	if err := tt.Click("导出"); err != nil {
 		t.Fatal(err)
 	}
 	settle(t, m, q, tt)
 	if m.rec == nil || m.rec.ID != "r02" || !m.exportDialog.open {
-		t.Fatalf("导出… = record %+v dialog=%t, want r02's dialog", m.rec, m.exportDialog.open)
+		t.Fatalf("导出 = record %+v dialog=%t, want r02's dialog", m.rec, m.exportDialog.open)
 	}
 	if err := tt.Click("导出 JSON"); err != nil {
 		t.Fatal(err)

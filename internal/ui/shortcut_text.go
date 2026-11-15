@@ -1,35 +1,38 @@
 package ui
 
-// The single source of the key names the interface shows. The first release
-// targets Windows only, so every label uses Windows notation: Ctrl, Alt and
-// Shift joined by "+", never the macOS ⌘⌃⌥⇧ symbols (design 09 §4.5, D-02).
-// The bindings keep using ui.Cmd, which maps to Ctrl on Windows; a macOS
-// port changes only this table and the stop hotkey the entry point
-// registers.
-const (
+import (
+	"runtime"
+	"strings"
+
+	"github.com/LoTwT/youkai/internal/platform"
+)
+
+// ui.Cmd maps to Command on macOS and Ctrl on Windows. All visible hints
+// use this table, including toolbar, state and disabled-action text.
+var (
 	// shortcutStartScan starts a scan from the prepare page.
-	shortcutStartScan = "Ctrl+R"
+	shortcutStartScan = commandKey(runtime.GOOS) + "+R"
 	// shortcutStopScan is the global stop hotkey registered while a scan
 	// session runs.
-	shortcutStopScan = "Ctrl+Alt+Shift+S"
+	shortcutStopScan = stopShortcut(runtime.GOOS)
 	// shortcutConfirmNext saves the draft and moves to the next pending
 	// item.
-	shortcutConfirmNext = "Ctrl+Enter"
+	shortcutConfirmNext = commandKey(runtime.GOOS) + "+Enter"
 	// shortcutSave saves the draft without confirming it.
-	shortcutSave = "Ctrl+S"
+	shortcutSave = commandKey(runtime.GOOS) + "+S"
 	// shortcutNextPending moves to the next pending item.
-	shortcutNextPending = "Ctrl+J"
+	shortcutNextPending = commandKey(runtime.GOOS) + "+J"
 	// shortcutPreviousPending moves to the previous pending item.
-	shortcutPreviousPending = "Ctrl+Shift+J"
+	shortcutPreviousPending = commandKey(runtime.GOOS) + "+Shift+J"
 	// shortcutZoomIn enlarges the screenshots.
-	shortcutZoomIn = "Ctrl+="
+	shortcutZoomIn = commandKey(runtime.GOOS) + "+="
 	// shortcutZoomOut shrinks the screenshots.
-	shortcutZoomOut = "Ctrl+-"
+	shortcutZoomOut = commandKey(runtime.GOOS) + "+-"
 	// shortcutZoomFit fits the screenshots to the area.
-	shortcutZoomFit = "Ctrl+0"
+	shortcutZoomFit = commandKey(runtime.GOOS) + "+0"
 	// shortcutExport opens the record's export dialog from the record
 	// workspace.
-	shortcutExport = "Ctrl+E"
+	shortcutExport = commandKey(runtime.GOOS) + "+E"
 	// shortcutFocusRegion moves the keyboard between the page's large
 	// regions.
 	shortcutFocusRegion = "F6"
@@ -42,3 +45,32 @@ const (
 	// table.
 	shortcutCloseOverlay = "Esc"
 )
+
+func commandKey(goos string) string {
+	if goos == "darwin" {
+		return "Command"
+	}
+	return "Ctrl"
+}
+
+func stopShortcut(goos string) string {
+	spec := platform.StopScanHotkey(goos)
+	ctrl, alt := "Ctrl", "Alt"
+	if goos == "darwin" {
+		ctrl, alt = "Control", "Option"
+	}
+	var keys []string
+	if spec.Ctrl {
+		keys = append(keys, ctrl)
+	}
+	if spec.Alt {
+		keys = append(keys, alt)
+	}
+	if spec.Shift {
+		keys = append(keys, "Shift")
+	}
+	if spec.Meta {
+		keys = append(keys, "Command")
+	}
+	return strings.Join(append(keys, string(spec.Key)), "+")
+}

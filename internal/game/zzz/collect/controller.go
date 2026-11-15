@@ -87,10 +87,11 @@ type Controller struct {
 	// It is written on the producer goroutine (Prepare) and read there
 	// (Collect) and by Release (also on the producer, after the
 	// controller returned); released guards the cross-phase state.
-	mu       sync.Mutex
-	released bool
-	sess     platform.Session
-	trav     Traversal
+	mu           sync.Mutex
+	released     bool
+	sess         platform.Session
+	positionSink func(int)
+	trav         Traversal
 }
 
 // The kernel releases the platform session through this optional
@@ -243,6 +244,9 @@ func (c *Controller) Prepare(ctx context.Context, h *scan.ControllerHandle) erro
 				}
 				c.mu.Lock()
 				c.trav = trav
+				if reporter, ok := trav.(PositionReporter); ok {
+					reporter.SetPositionSink(c.positionSink)
+				}
 				c.mu.Unlock()
 				if err := trav.Precheck(ctx, sess); err != nil {
 					return err
@@ -476,3 +480,6 @@ func scanFault(f *platform.Fault) error {
 	}
 	return scan.NewFaultWithParams(f.Code, faultCause(f), f.Params)
 }
+
+// SetPositionSink binds display progress before the controller starts.
+func (c *Controller) SetPositionSink(sink func(int)) { c.positionSink = sink }

@@ -47,6 +47,33 @@ type panelStartMatcher struct {
 	page *panelStartPage
 }
 
+func TestPositionDisplayOnlyReportsVerifiedWheel(t *testing.T) {
+	for _, position := range []int{1, 2} {
+		page := &panelStartPage{layout: MacCloudLayout()}
+		inv := &Inventory{Layout: page.layout, Matcher: &panelStartMatcher{page: page}, ActionBudget: 5 * time.Millisecond, StableFrames: 1, MaxRetries: 1, RecheckEvery: time.Millisecond}
+		run := &inventoryRun{inv: inv, view: page, geo: 1}
+		var seen []int
+		inv.SetPositionSink(func(value int) {
+			seen = append(seen, value)
+			if value != 0 && (run.listMatch.Wheel == nil || run.listMatch.Wheel.Position != value) {
+				t.Error("position emitted before wheel verification")
+			}
+		})
+		_ = runScriptedSession(t, run, func(ctx context.Context, run *inventoryRun) error {
+			return run.preparePosition(ctx, position, &positionTiming{})
+		})
+		if len(seen) == 0 || seen[0] != 0 {
+			t.Fatalf("position %d never became unknown: %v", position, seen)
+		}
+		if position == 1 && (len(seen) != 2 || seen[1] != 1) {
+			t.Fatalf("verified wheel missing: %v", seen)
+		}
+		if position == 2 && len(seen) != 1 {
+			t.Fatalf("failed switch fabricated a position: %v", seen)
+		}
+	}
+}
+
 func (m *panelStartMatcher) Match(f platform.Frame) PageMatch {
 	if m.page.open {
 		return PageMatch{Page: PageFilterPanel,

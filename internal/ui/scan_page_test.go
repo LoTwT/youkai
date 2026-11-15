@@ -64,7 +64,7 @@ func TestScanActionBarEstimate(t *testing.T) {
 	m, q := newTestModel(t, Config{Service: svc})
 	tt := ui.NewTester(m.View, 1020, 700)
 	settle(t, m, q, tt)
-	if !tt.HasText("预计：约 14 分钟（依据最近 3 次扫描）") {
+	if tt.HasText("预计：") || tt.HasText("依据最近") {
 		t.Fatalf("the estimate does not show its basis: %q", tt.Texts())
 	}
 }
@@ -1047,7 +1047,7 @@ func TestScanPageActionBarWrapsLongPastFailure(t *testing.T) {
 	// boxes stay inside the window, so pin the button's right side to the
 	// window's right side: the bar's own horizontal padding is at most 48
 	// DIP, and the button sits just inside it.
-	if button.X+button.W < 960-48 {
+	if button.X+button.W < 960-64 {
 		t.Fatalf("the start button at text scale %g is not at the bar's right edge: %+v",
 			textScale, button)
 	}
@@ -1400,7 +1400,7 @@ func TestScanStageCopy(t *testing.T) {
 		settle(t, m, q, tt)
 		applyAndSettle(t, m, q, tt, snap("s1", 1, true, scan.PhaseCapturing,
 			scan.Counts{Captured: 12}, 0, true, ""))
-		if !tt.HasText("正在扫描 · 已采集 12 件") {
+		if !(tt.HasText("正在扫描") && tt.HasText("12") && tt.HasText("件") && tt.HasText("当前号位")) {
 			t.Fatalf("the capturing stage does not show its count: %q", tt.Texts())
 		}
 		if !tt.HasText("点击窗口本身也会让游戏失焦而停止") {

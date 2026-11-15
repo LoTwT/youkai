@@ -194,6 +194,10 @@ type Config struct {
 	// CloseBehavior is the persisted preference loaded at startup; empty
 	// means CloseBehaviorHide.
 	CloseBehavior app.CloseBehavior
+	// Appearance is the saved light/dark override. Applying it never
+	// navigates away from the current page or replaces this Model.
+	Appearance    app.Appearance
+	SetAppearance func(app.Appearance) error
 	// SaveCloseBehavior persists a preference change from the window. Nil
 	// keeps changes in memory only (tests and builds without a data root).
 	SaveCloseBehavior func(app.CloseBehavior) error
@@ -321,8 +325,12 @@ const (
 // records; its state is confined to the UI thread (see the package
 // comment).
 type Model struct {
-	cfg Config
-	upd Updater
+	pairedHeightIdentity reviewHeightIdentity
+	pairedHeights        map[string]float32
+	pairedMeasureReady   bool
+	cfg                  Config
+	theme                *themeState
+	upd                  Updater
 
 	// wg tracks the model-spawned background work; view tests wait on it
 	// to know a click's asynchronous work has settled.
@@ -575,6 +583,8 @@ type Model struct {
 	// must not hide the only way back into the app.
 	closeBehavior    app.CloseBehavior
 	closeBehaviorErr string
+	appearance       app.Appearance
+	appearanceErr    string
 	// trayUnavailable is the tray creation failure the entry point reported;
 	// empty while the tray exists. The close option then reads as the fixed
 	// stop-and-exit behavior and the first-hide hint never appears.
@@ -637,16 +647,18 @@ func New(cfg Config) *Model {
 	}
 	m := &Model{
 		cfg:            cfg,
+		theme:          newThemeState(),
 		source:         cfg.ScanSource,
 		page:           pageScan,
 		recordTab:      recordTabSummary,
-		contentWidth:   1180,
-		contentHeight:  760,
+		contentWidth:   1440,
+		contentHeight:  900,
 		cache:          newEvidenceCache(cfg.Evidence, limit),
 		historyRow:     -1,
 		historyLoading: true,
 		targetChoice:   -1,
 		closeBehavior:  closeBehavior,
+		appearance:     cfg.Appearance.Normalized(),
 		trayHintSeen:   cfg.TrayHintSeen,
 	}
 	if cfg.Updates != nil {
@@ -662,7 +674,7 @@ func New(cfg Config) *Model {
 
 // SetContentSize records the page area for responsive layout. The entry
 // point calls it once at ready and again from Window.OnResize. The review
-// view has two width profiles — standard (with the 240-DIP item list) and
+// view has two width profiles — standard (with the 256-DIP item list) and
 // compact (the list in the top strip) — but both keep the screenshots and
 // the form side by side (09 §2).
 func (m *Model) SetContentSize(width, height int) {

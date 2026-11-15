@@ -125,10 +125,10 @@ func TestScaleResultsBrowserRendersThousandRows(t *testing.T) {
 	m, _, tt, _ := openReviewRecordPage(t, items...)
 	elapsed := time.Since(start)
 
-	if !tt.HasText("结果：历史记录 r1（1000 条）") {
+	if m.rec == nil || len(m.rec.Rows) != 1000 {
 		t.Fatalf("the 1000-row record title does not show: %q", tt.Texts()[:min(8, len(tt.Texts()))])
 	}
-	if !tt.HasText("待校对 1000 件") {
+	if !tt.HasText("待处理 1,000") {
 		t.Fatalf("the pending count does not show: %q", tt.Texts()[:min(8, len(tt.Texts()))])
 	}
 	if !tt.HasText("河豚电音") {

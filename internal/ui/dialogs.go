@@ -6,15 +6,14 @@ import (
 )
 
 // trayHintDialogView is the first-hide hint (08 §9, P-10/R-18). It appears
-// before the first close hides the window and on the settings page's replay
-// entry. Escape closes it without acknowledging, so the next close asks
-// again.
+// before the first close hides the window. Escape closes it without
+// acknowledging, so the next close asks again.
 func (m *Model) trayHintDialogView(c *ui.Context, t *ui.Theme) {
 	if !m.trayHintOpen {
 		return
 	}
 	open := true
-	ui.Modal(c, &open, func() {
+	m.modal(c, &open, func() {
 		ui.Column(c).Width(t.Space(115)).Gap(t.Space(2)).Children(func() {
 			ui.Text(c, "youkai 会继续在后台运行").FontWeight(600)
 			ui.Text(c, "关闭窗口后，youkai 的图标在任务栏右侧的通知区域；Windows 11 可能把它收在 ^ 里面。点图标可以重新打开，右键图标可以退出。").
@@ -29,11 +28,8 @@ func (m *Model) trayHintDialogView(c *ui.Context, t *ui.Theme) {
 			if m.trayHintErr != "" {
 				ui.Text(c, m.trayHintErr).TextColor(t.Danger).FontSize(t.FontSize * 0.9)
 			}
-			ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, "之后可在 设置 › 常规 重看").TextColor(t.TextMuted).
-					FontSize(t.FontSize * 0.9)
-				ui.Box(c).Grow(1)
-				if ui.PrimaryButton(c, "知道了").Clicked() {
+			actionRow(c).Wrap().Children(func() {
+				if primaryButton(c, "知道了").Clicked() {
 					m.acknowledgeTrayHint()
 				}
 			})
@@ -52,7 +48,7 @@ func (m *Model) exitDialogView(c *ui.Context, t *ui.Theme) {
 	switch m.exitState {
 	case exitRunning:
 		open := true
-		ui.Modal(c, &open, func() {
+		m.modal(c, &open, func() {
 			ui.Column(c).Width(t.Space(95)).Gap(t.Space(2)).Children(func() {
 				ui.Text(c, "正在退出：保存结果……").FontWeight(600)
 				ui.Text(c, "退出会先停止扫描并保存结果；重复退出会连到同一次收尾。").
@@ -69,13 +65,13 @@ func (m *Model) exitDialogView(c *ui.Context, t *ui.Theme) {
 		if saveFailure {
 			title = "结果还没有保存，youkai 没有退出"
 		}
-		ui.Modal(c, &open, func() {
+		m.modal(c, &open, func() {
 			ui.Column(c).Width(t.Space(110)).Gap(t.Space(2)).Children(func() {
 				ui.Text(c, title).FontWeight(600)
 				ui.Text(c, m.exitFailureDetail()).TextColor(t.TextMuted)
-				ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
+				actionRow(c).Wrap().Children(func() {
 					if saveFailure {
-						retry := ui.PrimaryButton(c, "重试保存").
+						retry := primaryButton(c, "重试保存").
 							Disabled(m.snap.SaveError == "")
 						if retry.Clicked() {
 							m.exitFailureDialogOpen = false
@@ -85,11 +81,11 @@ func (m *Model) exitDialogView(c *ui.Context, t *ui.Theme) {
 						// The saved result is safe; only the teardown failed
 						// and Service.Quit caches that error, so this is the
 						// explicit way out (PR-19b, item 13).
-						if ui.PrimaryButton(c, "仍然退出").Clicked() {
+						if primaryButton(c, "仍然退出").Clicked() {
 							m.ExitAnyway()
 						}
 					}
-					if ui.Button(c, "复制诊断信息").Clicked() {
+					if button(c, "复制诊断信息").Clicked() {
 						m.copyCurrentDiagnostics(c)
 					}
 				})

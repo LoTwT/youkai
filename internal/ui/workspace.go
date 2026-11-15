@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"github.com/LoTwT/youkai/internal/record"
 	"github.com/egoist/mygo/ui"
 )
 
@@ -16,16 +17,14 @@ const (
 )
 
 // recordWorkspace is an opened record: its title bar, the 摘要 / 逐件
-// switch and the chosen view. The summary is the designed conclusion; the
-// item browser keeps its existing content until PR-14b replaces it.
+// switch and the chosen view. Coverage, quality and saving stay independent.
 func (m *Model) recordWorkspace(c *ui.Context, t *ui.Theme) {
-	_, tok := themeWithTokens(t, c.Preferences())
-	ui.Column(c).Grow(1).FillHeight().Children(func() {
+	tok := m.effectiveTokens()
+	ui.Column(c).Grow(1).FillHeight().MinHeight(0).Padding(m.pagePadding(), m.pagePadding(), m.pagePadding(), m.pageLeftPadding()).Gap(16).Children(func() {
 		m.recordWorkspaceHeader(c, t, tok)
-		ui.Divider(c)
 		switch m.recordTab {
 		case recordTabItems:
-			ui.Column(c).Grow(1).Padding(t.Space(3), t.Space(3)).Gap(t.Space(2)).Children(func() {
+			ui.Column(c).Grow(1).MinHeight(0).Gap(16).Children(func() {
 				m.resultsArea(c, t)
 			})
 		default:
@@ -38,32 +37,58 @@ func (m *Model) recordWorkspace(c *ui.Context, t *ui.Theme) {
 // the record title, the 摘要 / 逐件 switch, the three status slots (coverage,
 // pending, saved) and the export entry that opens the modal dialog.
 func (m *Model) recordWorkspaceHeader(c *ui.Context, t *ui.Theme, tok *Tokens) {
-	ui.Row(c).Gap(t.Space(2)).Padding(t.Space(2), t.Space(3)).
-		Background(tok.SurfaceHeader).AlignItems(ui.Center).Children(func() {
-		if ui.Button(c, "‹ 全部记录").Clicked() {
-			m.navigatePage(pageHistory)
-		}
-		ui.Text(c, m.resultsTitle()).FontWeight(600).SingleLine().Shrink(1)
-		if m.rec != nil && m.rec.ID != string(m.appliedSession) &&
-			m.appliedSession != "" && m.exitState != exitRunning {
-			if ui.Button(c, "查看本次扫描").Clicked() {
-				m.ShowLive()
+	ui.Column(c).Gap(16).Children(func() {
+		pageHeader(c).Children(func() {
+			if button(c, "‹ 全部记录").Clicked() {
+				m.navigatePage(pageHistory)
 			}
-		}
-		tab := int(m.recordTab)
-		ui.Segmented(c, &tab, "摘要", "逐件").Bind(&m.workspaceTabsRef)
-		if tab >= 0 && tab < int(recordTabCount) && recordTab(tab) != m.recordTab {
-			m.requestNavigation(navigationRequest{kind: navRecordTab, recordTab: recordTab(tab)})
-		}
-		ui.Box(c).Grow(1)
-		coverage, pending, saved := m.workspaceStatusTexts()
-		for _, status := range []string{coverage, pending, saved} {
-			ui.Text(c, status).TextColor(tok.TextMuted).
-				FontSize(t.FontSize * 0.9).SingleLine()
-		}
-		// The title bar owns the record's one export entry; it opens the
-		// modal dialog. A build without a saver still shows it, disabled.
-		m.exportEntryArea(c)
+			title := m.resultsTitle()
+			if m.rec != nil && !m.rec.Shell.StartedAt.IsZero() {
+				title = m.rec.Shell.StartedAt.Local().Format("1 月 2 日 15:04")
+			}
+			pageTitle(c, title).Shrink(1)
+			ui.Box(c).Grow(1)
+			if m.rec != nil && m.rec.ID != string(m.appliedSession) && m.appliedSession != "" && m.exitState != exitRunning {
+				if button(c, "查看本次扫描").Clicked() {
+					m.ShowLive()
+				}
+			}
+			m.exportEntryArea(c)
+		})
+		ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
+			tab := int(m.recordTab)
+			viewSegments(c, &tab, tok, "摘要", "逐件").Bind(&m.workspaceTabsRef)
+			if tab >= 0 && tab < int(recordTabCount) && recordTab(tab) != m.recordTab {
+				m.requestNavigation(navigationRequest{kind: navRecordTab, recordTab: recordTab(tab)})
+			}
+			ui.Box(c).Grow(1)
+			coverage, pending, saved := m.workspaceStatusTexts()
+			if m.rec != nil && m.rec.Interrupted {
+				ui.Textf(c, "中断恢复 %d 条", m.rec.InterruptedCount).TextColor(tok.WarningFG).FontSize(t.FontSize * 12 / 14)
+			}
+			fg, bg := tok.TextSecondary, tok.SurfaceSunken
+			if m.recordCoverage() == record.CoveragePartial {
+				fg, bg = tok.WarningFG, tok.WarningSoft
+			} else if m.recordCoverage() == record.CoverageComplete {
+				fg, bg = tok.SuccessFG, tok.SuccessSoft
+			}
+			ui.Text(c, coverage).FontSize(t.FontSize*12/14).TextColor(fg).Background(bg).Padding(4, 12).Radius(4)
+			ui.Text(c, pending).SingleLine()
+			prefix := ""
+			if saved == "已保存" {
+				prefix = "✓ "
+			}
+			fg, bg = tok.TextSecondary, tok.SurfaceSunken
+			switch saved {
+			case "保存失败", "记录不可读":
+				fg, bg = tok.DangerFG, tok.DangerSoft
+			case "正在保存…", "读取中…":
+				fg, bg = tok.AccentFG, tok.AccentSoft
+			case "未保存修改", "未保存":
+				fg, bg = tok.WarningFG, tok.WarningSoft
+			}
+			ui.Text(c, prefix+saved).FontSize(t.FontSize*12/14).TextColor(fg).Background(bg).Padding(4, 12).Radius(4)
+		})
 	})
 }
 

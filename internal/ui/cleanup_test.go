@@ -101,7 +101,7 @@ func TestRunningCleanupCannotBeReopened(t *testing.T) {
 	tt.Frame()
 
 	// The visible entry is disabled; its click must not replace the prompt.
-	if err := tt.Click("删除这条记录的截图…"); err != nil {
+	if err := tt.Click("删除这条记录的截图"); err != nil {
 		t.Logf("disabled cleanup link click: %v", err)
 	}
 	tt.Frame()
@@ -222,9 +222,7 @@ func TestViewStorageBulkCleanupPreviewsAndIndependentEntries(t *testing.T) {
 		t.Fatalf("the storeroom summary does not show: %q", tt.Texts())
 	}
 
-	if err := tt.Click("删除全部截图…"); err != nil {
-		t.Fatal(err)
-	}
+	clickRevealedSettingsControl(t, tt, 700, "删除全部截图")
 	settle(t, m, q, tt)
 	if !tt.HasText("将删除 2 条记录的截图（4 张，4.0 KB），保留结果、修订与校对状态；待校对 1 项。") {
 		t.Fatalf("the all-screenshots preview does not show: %q", tt.Texts())
@@ -238,9 +236,7 @@ func TestViewStorageBulkCleanupPreviewsAndIndependentEntries(t *testing.T) {
 	// The screenshot entry fails on its own without touching the record
 	// entries, and keeps a retry.
 	svc.deleteErr = errString("截图被占用")
-	if err := tt.Click("删除全部截图…"); err != nil {
-		t.Fatal(err)
-	}
+	clickRevealedSettingsControl(t, tt, 700, "删除全部截图")
 	settle(t, m, q, tt)
 	clickRevealedSettingsControl(t, tt, 700, "确认删除")
 	settle(t, m, q, tt)
@@ -254,9 +250,7 @@ func TestViewStorageBulkCleanupPreviewsAndIndependentEntries(t *testing.T) {
 	settle(t, m, q, tt)
 
 	svc.deleteErr = nil
-	if err := tt.Click("删除全部记录…"); err != nil {
-		t.Fatal(err)
-	}
+	clickRevealedSettingsControl(t, tt, 700, "删除全部记录")
 	settle(t, m, q, tt)
 	if !tt.HasText("将永久删除 2 条记录（共 9.8 KB，其中截图 4 张 4.0 KB）；待校对 1 项。外部导出的 JSON/CSV 不受影响。") {
 		t.Fatalf("the all-records preview does not show: %q", tt.Texts())
@@ -312,9 +306,7 @@ func TestViewCleanupDisabledReasons(t *testing.T) {
 	if !tt2.HasText("扫描会话进行中，结束后才能清理。") {
 		t.Fatalf("the active scan does not block cleanup: %q", tt2.Texts())
 	}
-	if err := tt2.Click("删除全部记录…"); err != nil {
-		t.Fatal(err)
-	}
+	clickRevealedSettingsControl(t, tt2, 700, "删除全部记录")
 	drainAll(t, m2, q2)
 	if _, _, _, allRecords := svc2.cleanupCalls(); allRecords != 0 {
 		t.Fatalf("a disabled bulk entry still deleted: %d", allRecords)
@@ -528,17 +520,13 @@ func TestViewStorageHousekeepingPreviewsAndClears(t *testing.T) {
 	tt := ui.NewTester(m.View, 1020, 900)
 	settle(t, m, q, tt)
 
-	if err := tt.Click("打开数据目录"); err != nil {
-		t.Fatal(err)
-	}
+	clickRevealedSettingsControl(t, tt, 900, "打开数据目录")
 	settle(t, m, q, tt)
 	if opened != 1 || !tt.HasText("已打开数据目录。") {
 		t.Fatalf("opened=%d texts=%q", opened, tt.Texts())
 	}
 
-	if err := tt.Click("清缓存"); err != nil {
-		t.Fatal(err)
-	}
+	clickRevealedSettingsControl(t, tt, 900, "清缓存")
 	settle(t, m, q, tt)
 	if !tt.HasText("将删除缓存 2 个文件（2.0 KB）；历史记录、修订与校对状态不受影响。") {
 		t.Fatalf("cache preview does not show: %q", tt.Texts())
@@ -554,9 +542,7 @@ func TestViewStorageHousekeepingPreviewsAndClears(t *testing.T) {
 		t.Fatalf("cache result does not show: %q", tt.Texts())
 	}
 
-	if err := tt.Click("清旧日志"); err != nil {
-		t.Fatal(err)
-	}
+	clickRevealedSettingsControl(t, tt, 900, "清旧日志")
 	settle(t, m, q, tt)
 	if !tt.HasText("将删除 2 个旧日志备份（3.0 KB）；当前日志文件保留。") {
 		t.Fatalf("log preview does not show: %q", tt.Texts())
@@ -567,9 +553,7 @@ func TestViewStorageHousekeepingPreviewsAndClears(t *testing.T) {
 		t.Fatalf("cancel still cleared logs: %d", logs)
 	}
 
-	if err := tt.Click("清旧日志"); err != nil {
-		t.Fatal(err)
-	}
+	clickRevealedSettingsControl(t, tt, 900, "清旧日志")
 	settle(t, m, q, tt)
 	if err := tt.Click("确认清理"); err != nil {
 		t.Fatal(err)
@@ -590,9 +574,7 @@ func TestViewStorageHousekeepingEmptyAndFailureStates(t *testing.T) {
 	tt := ui.NewTester(m.View, 1020, 900)
 	settle(t, m, q, tt)
 
-	if err := tt.Click("清缓存"); err != nil {
-		t.Fatal(err)
-	}
+	clickRevealedSettingsControl(t, tt, 900, "清缓存")
 	settle(t, m, q, tt)
 	if !tt.HasText("没有可清理的缓存文件。") || m.storagePrompt != nil {
 		t.Fatalf("empty cache state = %q, prompt=%+v", tt.Texts(), m.storagePrompt)
@@ -600,9 +582,7 @@ func TestViewStorageHousekeepingEmptyAndFailureStates(t *testing.T) {
 
 	svc.cachePreview = app.StorageClearPreview{Files: 1, Bytes: 1}
 	svc.cacheClearErr = errString("磁盘忙")
-	if err := tt.Click("清缓存"); err != nil {
-		t.Fatal(err)
-	}
+	clickRevealedSettingsControl(t, tt, 900, "清缓存")
 	settle(t, m, q, tt)
 	if err := tt.Click("确认清理"); err != nil {
 		t.Fatal(err)
@@ -626,9 +606,7 @@ func TestViewOpenDataDirectoryFailure(t *testing.T) {
 	m.page = pageSettings
 	tt := ui.NewTester(m.View, 1020, 900)
 	settle(t, m, q, tt)
-	if err := tt.Click("打开数据目录"); err != nil {
-		t.Fatal(err)
-	}
+	clickRevealedSettingsControl(t, tt, 900, "打开数据目录")
 	settle(t, m, q, tt)
 	if !tt.HasText("打开数据目录失败：没有文件管理器") {
 		t.Fatalf("open failure does not show: %q", tt.Texts())
@@ -675,6 +653,8 @@ func TestViewMissingEvidenceAfterCleanup(t *testing.T) {
 	if !tt.HasText("该记录的截图已删除或缺失，无法显示图像；识别文本与字段数据仍保留。") {
 		t.Fatalf("the evidence area does not explain the missing screenshots: %q", tt.Texts())
 	}
+	tt.Scroll(900, 400, 0, 1200)
+	tt.Frame()
 	if err := tt.Click("原始识别文字与修订（1 条）"); err != nil {
 		t.Fatal(err)
 	}

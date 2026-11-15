@@ -27,6 +27,7 @@ import (
 // builds a fresh one per start); Precheck and Collect run on the
 // producer goroutine in that order.
 type Inventory struct {
+	positionSink func(int)
 	// Layout is the calibrated anchor set; see Layout. Empty or
 	// inconsistent anchors make Precheck fail with anchorsMissing.
 	Layout Layout
@@ -832,6 +833,7 @@ func (run *inventoryRun) topStep(ctx context.Context, timing *positionTiming) er
 // its automatic preparation. The state reset comes first so a failed
 // preparation never inherits another position's bookkeeping.
 func (run *inventoryRun) preparePosition(ctx context.Context, pos int, timing *positionTiming) error {
+	run.inv.reportPosition(0)
 	run.position = pos
 	run.viewport = 0
 	run.visited = make([]bool, len(run.inv.Layout.Slots))
@@ -861,6 +863,7 @@ func (run *inventoryRun) preparePosition(ctx context.Context, pos int, timing *p
 	if err != nil {
 		return err
 	}
+	run.inv.reportPosition(pos)
 	log.Printf("youkai: collect: position %d: wheel selected", pos)
 	started = time.Now()
 	err = run.resetFilters(ctx)
@@ -3751,4 +3754,12 @@ func wrapObservationErr(err error) error {
 		return scan.NewFault(f.Code, faultCause(f))
 	}
 	return scan.NewFault(platform.CodeObservationFailed, err)
+}
+
+// SetPositionSink binds the optional display relay before Precheck/Collect.
+func (inv *Inventory) SetPositionSink(sink func(int)) { inv.positionSink = sink }
+func (inv *Inventory) reportPosition(position int) {
+	if inv.positionSink != nil {
+		inv.positionSink(position)
+	}
 }

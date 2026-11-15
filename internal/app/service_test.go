@@ -22,6 +22,61 @@ import (
 // it stops the session before it ends on its own.
 const slowPace = time.Hour
 
+type displayPositionController struct {
+	*gatedController
+	sink func(int)
+}
+
+func (c *displayPositionController) SetPositionSink(sink func(int)) {
+	c.sink = sink
+	// A producer can report before scan.Start returns and a.kernel commits.
+	sink(1)
+}
+
+func TestDisplayPositionEarlyValueAndLateSessionIsolation(t *testing.T) {
+	controller := &displayPositionController{gatedController: newGatedController()}
+	svc, _ := newTestService(t, newTestPaths(t), staticSource{spec: specOf(controller)}, func() (Recognizer, error) { return newFakeRecognizer(), nil })
+	if _, err := svc.Start(StartRequest{ID: "position-first"}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, time.Second, "capturing", func() bool { return svc.Snapshot().Scan.Phase == scan.PhaseCapturing })
+	if got := svc.Snapshot().DisplayPosition; got != 1 {
+		t.Fatalf("early position lost: %d", got)
+	}
+	oldSink := controller.sink
+	oldSink(0)
+	if svc.Snapshot().DisplayPosition != 0 {
+		t.Fatal("switching did not become unknown")
+	}
+	oldSink(4)
+	if svc.Snapshot().DisplayPosition != 4 {
+		t.Fatal("verified position not relayed")
+	}
+	svc.Stop()
+	waitNotBusy(t, svc)
+	oldSink(6)
+	if svc.Snapshot().DisplayPosition != 0 {
+		t.Fatal("ended session displayed a position")
+	}
+	if _, err := svc.Start(StartRequest{ID: "position-second"}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, time.Second, "second capture", func() bool { return svc.Snapshot().Scan.Phase == scan.PhaseCapturing })
+	defer func() { svc.Stop(); waitNotBusy(t, svc) }()
+	oldSink(6)
+	if svc.Snapshot().DisplayPosition != 1 {
+		t.Fatal("old session polluted the new position")
+	}
+	controller.sink(3)
+	if svc.Snapshot().DisplayPosition != 3 {
+		t.Fatal("current session's position was rejected")
+	}
+	controller.sink(7)
+	if svc.Snapshot().DisplayPosition != 3 {
+		t.Fatal("invalid display position was accepted")
+	}
+}
+
 func TestStartReplayBusyAndFreeSlot(t *testing.T) {
 	paths := newTestPaths(t)
 	source := devFixtureSource(t, 2, slowPace)

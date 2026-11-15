@@ -6,9 +6,8 @@ import mgui "github.com/egoist/mygo/ui"
 // input and the adapter for built-in widgets; app-composed components
 // should read these semantic roles instead of hard-coding hex values.
 //
-// The names here intentionally match docs/design/uiux-2026-10-21/
-// dark-tokens.md. That document is a historical design baseline; the Go
-// tokens and their tests are the source of truth for current values.
+// Values follow the accepted UXM-01 v5 semantic palette. Runtime desktop
+// preferences are applied once by themeState, before any children build.
 type Tokens struct {
 	// Surfaces. Window/content/card/header/control are distinct roles;
 	// sunken is for wells and bars, overlay for floating surfaces.
@@ -36,8 +35,11 @@ type Tokens struct {
 	TextDisabled  mgui.Color
 	TextCode      mgui.Color
 
+	NavActive     mgui.Color
+	NavActiveText mgui.Color
+
 	// Accent is split into foreground and fill. Text/icons use AccentFG;
-	// primary buttons and MyGo's selected row use AccentFill with OnFill.
+	// primary buttons use AccentFill with OnFill; objects use RowSelected.
 	AccentFG          mgui.Color
 	AccentFill        mgui.Color
 	AccentFillHover   mgui.Color
@@ -79,19 +81,7 @@ type Tokens struct {
 	Scrim             mgui.Color
 }
 
-// ApplyTheme copies the runtime theme, applies Youkai's semantic palette,
-// and installs the copy for this frame. It preserves Dark, FontSize,
-// Spacing, Radius and the other runtime metrics; only colors are replaced.
-//
-// It must run before any child widgets are built.
-func ApplyTheme(c *mgui.Context) *Tokens {
-	themed, tok := themeWithTokens(c.Theme(), c.Preferences())
-	c.SetTheme(themed)
-	return tok
-}
-
-// themeWithTokens is the pure part of ApplyTheme, kept separate so tests
-// can verify the mapping without constructing a UI context.
+// themeWithTokens maps the effective v5 palette onto MyGo widgets.
 func themeWithTokens(base *mgui.Theme, prefs mgui.Preferences) (*mgui.Theme, *Tokens) {
 	tok := tokensFor(base.Dark)
 	if prefs.HighContrast {
@@ -141,38 +131,40 @@ func highContrastTokens(t Tokens) Tokens {
 func tokensFor(dark bool) *Tokens {
 	if dark {
 		return &Tokens{
-			SurfaceWindow:   hex("#101318"),
-			SurfaceContent:  hex("#151920"),
-			SurfaceCard:     hex("#1B2029"),
-			SurfaceControl:  hex("#222833"),
-			SurfaceHeader:   hex("#222833"),
-			SurfaceSunken:   hex("#0F1217"),
-			SurfaceOverlay:  hex("#29303C"),
-			SurfaceEvidence: hex("#090C11"),
+			SurfaceWindow:   hex("#080808"),
+			SurfaceContent:  hex("#080808"),
+			SurfaceCard:     hex("#141414"),
+			SurfaceControl:  hex("#1B1B1B"),
+			SurfaceHeader:   hex("#141414"),
+			SurfaceSunken:   hex("#1B1B1B"),
+			SurfaceOverlay:  hex("#222222"),
+			SurfaceEvidence: hex("#1B1B1B"),
 
-			SurfaceHover:    hex("#262D38"),
-			SurfacePressed:  hex("#303845"),
+			SurfaceHover:    hex("#292929"),
+			SurfacePressed:  hex("#333333"),
 			SurfaceDisabled: hex("#1C1C20"),
 
-			BorderSubtle:  hex("#242A34"),
-			BorderDefault: hex("#303845"),
-			BorderStrong:  hex("#46505F"),
+			BorderSubtle:  hex("#2A2A2A"),
+			BorderDefault: hex("#363636"),
+			BorderStrong:  hex("#666666"),
 			BorderControl: hex("#7C8494"),
 
-			TextPrimary:   hex("#F2F4F8"),
-			TextSecondary: hex("#C3C9D3"),
-			TextMuted:     hex("#98A1AE"),
-			TextDisabled:  hex("#6F7886"),
+			TextPrimary:   hex("#EEEEEE"),
+			TextSecondary: hex("#B0B0B0"),
+			TextMuted:     hex("#A0A0A0"),
+			TextDisabled:  hex("#8D8D8D"),
 			TextCode:      hex("#C9D1D9"),
+			NavActive:     hex("#242424"),
+			NavActiveText: hex("#EEEEEE"),
 
-			AccentFG:          hex("#60A5FA"),
-			AccentFill:        hex("#2563EB"),
-			AccentFillHover:   hex("#1D4ED8"),
-			AccentFillPressed: hex("#1E40AF"),
-			AccentOnFill:      hex("#FFFFFF"),
-			AccentSoft:        hex("#1A2440"),
-			AccentSoftHover:   hex("#223454"),
-			AccentBorder:      hex("#35507A"),
+			AccentFG:          hex("#8BABFF"),
+			AccentFill:        hex("#8BABFF"),
+			AccentFillHover:   hex("#A5BEFF"),
+			AccentFillPressed: hex("#759BFA"),
+			AccentOnFill:      hex("#101010"),
+			AccentSoft:        hex("#202B42"),
+			AccentSoftHover:   hex("#2A3854"),
+			AccentBorder:      hex("#425579"),
 
 			DangerFG:     hex("#F87171"),
 			DangerSoft:   hex("#2A1618"),
@@ -190,14 +182,14 @@ func tokensFor(dark bool) *Tokens {
 			SuccessBorder: hex("#245C36"),
 			SuccessStrong: hex("#86EFAC"),
 
-			RowHover:          hex("#262D38"),
-			RowSelected:       hex("#1A2440"),
-			RowSelectedBorder: hex("#60A5FA"),
-			TableHeader:       hex("#222833"),
+			RowHover:          hex("#292929"),
+			RowSelected:       hex("#202B42"),
+			RowSelectedBorder: hex("#8BABFF"),
+			TableHeader:       hex("#1B1B1B"),
 			TableHeaderText:   hex("#98A1AE"),
-			TableBorder:       hex("#242A34"),
-			EvidenceSurface:   hex("#090C11"),
-			EvidenceBorder:    hex("#303845"),
+			TableBorder:       hex("#2A2A2A"),
+			EvidenceSurface:   hex("#1B1B1B"),
+			EvidenceBorder:    hex("#363636"),
 			Inverse:           hex("#F2F4F8"),
 			InverseText:       hex("#101318"),
 			Scrollbar:         mgui.RGBA(255, 255, 255, 0.28),
@@ -208,38 +200,40 @@ func tokensFor(dark bool) *Tokens {
 	}
 
 	return &Tokens{
-		SurfaceWindow:   hex("#FFFFFF"),
-		SurfaceContent:  hex("#FFFFFF"),
+		SurfaceWindow:   hex("#F3F5FA"),
+		SurfaceContent:  hex("#F3F5FA"),
 		SurfaceCard:     hex("#FFFFFF"),
-		SurfaceControl:  hex("#F4F4F5"),
-		SurfaceHeader:   hex("#FAFAFB"),
-		SurfaceSunken:   hex("#F0F0F2"),
+		SurfaceControl:  hex("#FFFFFF"),
+		SurfaceHeader:   hex("#FFFFFF"),
+		SurfaceSunken:   hex("#F7F9FD"),
 		SurfaceOverlay:  hex("#FFFFFF"),
-		SurfaceEvidence: hex("#F4F4F5"),
+		SurfaceEvidence: hex("#F7F9FD"),
 
-		SurfaceHover:    hex("#F4F4F5"),
-		SurfacePressed:  hex("#DDDDE1"),
+		SurfaceHover:    hex("#EAF0FF"),
+		SurfacePressed:  hex("#E2EAF8"),
 		SurfaceDisabled: hex("#F4F4F5"),
 
-		BorderSubtle:  hex("#ECECF0"),
-		BorderDefault: hex("#D9D9DE"),
+		BorderSubtle:  hex("#E6EBF3"),
+		BorderDefault: hex("#DCE3EE"),
 		BorderStrong:  hex("#8A8A93"),
 		BorderControl: hex("#8A8A93"),
 
-		TextPrimary:   hex("#18181B"),
-		TextSecondary: hex("#3F3F46"),
-		TextMuted:     hex("#6B6B73"),
-		TextDisabled:  hex("#8A8A93"),
+		TextPrimary:   hex("#202B40"),
+		TextSecondary: hex("#536177"),
+		TextMuted:     hex("#637187"),
+		TextDisabled:  hex("#7D899C"),
 		TextCode:      hex("#3F3F46"),
+		NavActive:     hex("#EDF2FF"),
+		NavActiveText: hex("#315FE8"),
 
-		AccentFG:          hex("#2563EB"),
-		AccentFill:        hex("#2563EB"),
-		AccentFillHover:   hex("#1D4ED8"),
-		AccentFillPressed: hex("#1E40AF"),
+		AccentFG:          hex("#315FE8"),
+		AccentFill:        hex("#315FE8"),
+		AccentFillHover:   hex("#244FD1"),
+		AccentFillPressed: hex("#2046B8"),
 		AccentOnFill:      hex("#FFFFFF"),
-		AccentSoft:        hex("#EFF6FF"),
-		AccentSoftHover:   hex("#DBEAFE"),
-		AccentBorder:      hex("#BFDBFE"),
+		AccentSoft:        hex("#EDF2FF"),
+		AccentSoftHover:   hex("#E2EAFF"),
+		AccentBorder:      hex("#CCD9FF"),
 
 		DangerFG:     hex("#B91C1C"),
 		DangerSoft:   hex("#FEF2F2"),
@@ -257,14 +251,14 @@ func tokensFor(dark bool) *Tokens {
 		SuccessBorder: hex("#BBF7D0"),
 		SuccessStrong: hex("#166534"),
 
-		RowHover:          hex("#F4F4F5"),
-		RowSelected:       hex("#EFF6FF"),
-		RowSelectedBorder: hex("#2563EB"),
-		TableHeader:       hex("#FAFAFB"),
-		TableHeaderText:   hex("#6B6B73"),
-		TableBorder:       hex("#ECECF0"),
-		EvidenceSurface:   hex("#F4F4F5"),
-		EvidenceBorder:    hex("#D9D9DE"),
+		RowHover:          hex("#F2F6FF"),
+		RowSelected:       hex("#EDF2FF"),
+		RowSelectedBorder: hex("#315FE8"),
+		TableHeader:       hex("#F7F9FD"),
+		TableHeaderText:   hex("#637187"),
+		TableBorder:       hex("#E6EBF3"),
+		EvidenceSurface:   hex("#F7F9FD"),
+		EvidenceBorder:    hex("#DCE3EE"),
 		Inverse:           hex("#18181B"),
 		InverseText:       hex("#FFFFFF"),
 		Scrollbar:         mgui.RGBA(0, 0, 0, 0.32),

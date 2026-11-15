@@ -8,17 +8,11 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-// Settings is a single page of sections with an in-page directory on the
-// left (design 08 §6). The directory disappears in the compact width band;
-// the sections keep their reading order either way (design 09 §2).
-const (
-	settingsTOCWidth         = 150
-	settingsContentMaxWidth  = 720
-	settingsStandardMinWidth = 1120
-)
+// Settings uses all available width for six vertically scrolling sections.
+const settingsSectionInset = 24
 
-// settingsSectionID names one section and its in-page directory entry.
-// Zero means no pending directory jump.
+// settingsSectionID names a section anchor for business entry points.
+// Zero means no pending jump.
 type settingsSectionID int
 
 const (
@@ -31,24 +25,7 @@ const (
 	settingsSectionAbout
 )
 
-// settingsSectionInfo is one directory entry and its section title.
-type settingsSectionInfo struct {
-	id    settingsSectionID
-	title string
-}
-
-// settingsSectionList is the fixed reading and directory order.
-var settingsSectionList = []settingsSectionInfo{
-	{id: settingsSectionGeneral, title: "常规"},
-	{id: settingsSectionShortcuts, title: "快捷键"},
-	{id: settingsSectionStorage, title: "存储与清理"},
-	{id: settingsSectionDiagnostics, title: "诊断"},
-	{id: settingsSectionUpdate, title: "更新"},
-	{id: settingsSectionAbout, title: "关于"},
-}
-
-// settingsSectionRefs are the section anchors the in-page directory
-// scrolls to by measuring their committed boxes.
+// settingsSectionRefs retain the anchors used by business entry points.
 type settingsSectionRefs struct {
 	general     ui.Ref
 	shortcuts   ui.Ref
@@ -77,55 +54,39 @@ func (r *settingsSectionRefs) ref(id settingsSectionID) *ui.Ref {
 	}
 }
 
-// settingsPage is the settings destination: the optional return strip from
-// the prepare check's disk-space entry, the in-page directory in the
-// standard width band, and the six sections in one scrolling column.
+// settingsPage keeps the prepare-check return strip and the six sections
+// in one full-width scrolling column, without an in-page directory.
 func (m *Model) settingsPage(c *ui.Context, t *ui.Theme) {
-	_, tok := themeWithTokens(t, c.Preferences())
+	tok := m.effectiveTokens()
 	m.applySettingsScrollTarget(c)
 	if m.settingsReturnToPrepare {
 		m.settingsReturnStrip(c, tok)
 	}
-	ui.Row(c).Grow(1).FillHeight().AlignItems(ui.Stretch).Gap(t.Space(4)).Children(func() {
-		if m.settingsTableOfContentsVisible() {
-			m.settingsTableOfContents(c, t, tok)
-		}
-		ui.Scroll(c).Grow(1).FillHeight().TrackScroll(&m.settingsScroll).Bind(&m.settingsViewportRef).
+	contentPanel(c, tok).Children(func() {
+		ui.Scroll(c).Grow(1).MinHeight(0).FillWidth().FillHeight().TrackScroll(&m.settingsScroll).Bind(&m.settingsViewportRef).
 			Children(func() {
-				ui.Column(c).MaxWidth(settingsContentMaxWidth).Gap(t.Space(3)).Children(func() {
+				ui.Column(c).FillWidth().Gap(24).Children(func() {
 					m.settingsSection(c, t, settingsSectionGeneral, "常规", func() {
 						m.settingsGeneral(c, t, tok)
 					})
-					ui.Divider(c)
 					m.settingsSection(c, t, settingsSectionShortcuts, "快捷键", func() {
 						m.settingsShortcuts(c, t, tok)
 					})
-					ui.Divider(c)
 					m.settingsSection(c, t, settingsSectionStorage, "存储与清理", func() {
 						m.settingsStorage(c, t, tok)
 					})
-					ui.Divider(c)
 					m.settingsSection(c, t, settingsSectionDiagnostics, "诊断", func() {
 						m.settingsDiagnostics(c, t, tok)
 					})
-					ui.Divider(c)
 					m.settingsSection(c, t, settingsSectionUpdate, "更新", func() {
 						m.updateArea(c, t, tok)
 					})
-					ui.Divider(c)
 					m.settingsSection(c, t, settingsSectionAbout, "关于", func() {
 						m.settingsAbout(c, t, tok)
 					})
 				})
 			})
 	})
-}
-
-// settingsTableOfContentsVisible reports whether the standard width band
-// leaves room for the directory. Before the window reports its content
-// width, the standard design applies.
-func (m *Model) settingsTableOfContentsVisible() bool {
-	return m.contentWidth == 0 || m.contentWidth >= settingsStandardMinWidth
 }
 
 // settingsReturnStrip is the prepare check's entry promise: cleaning up
@@ -139,12 +100,11 @@ func (m *Model) settingsReturnStrip(c *ui.Context, tok *Tokens) {
 		})
 }
 
-// settingsSection builds one titled section and binds the anchor the
-// in-page directory scrolls to.
+// settingsSection retains its inset and jump anchor within the shared panel.
 func (m *Model) settingsSection(c *ui.Context, t *ui.Theme,
 	id settingsSectionID, title string, body func()) {
 	ref := m.settingsSections.ref(id)
-	column := ui.Column(c).Gap(t.Space(1.5))
+	column := ui.Column(c).FillWidth().Padding(settingsSectionInset).Gap(16)
 	if ref != nil {
 		column = column.Bind(ref)
 	}
@@ -190,80 +150,43 @@ func (m *Model) scrollSettingsSection(c *ui.Context, id settingsSectionID) bool 
 	return true
 }
 
-// settingsTableOfContents is the left directory. It is one vertical focus
-// group: Tab enters it, the arrows move between entries, and Enter scrolls
-// to the section. "更新" carries the same new-version dot as the rail.
-func (m *Model) settingsTableOfContents(c *ui.Context, t *ui.Theme, tok *Tokens) {
-	ui.Column(c).Width(settingsTOCWidth).Gap(t.Space(0.5)).
-		FocusGroup(ui.Vertical).Children(func() {
-		for i, section := range settingsSectionList {
-			ui.Row(c).Gap(t.Space(1)).AlignItems(ui.Center).Children(func() {
-				entry := ui.Button(c, section.title).TextColor(tok.TextSecondary).
-					Background(ui.Color{}).Border(0, ui.Color{}).Radius(t.Space(1)).
-					Padding(t.Space(0.75), t.Space(1))
-				if i == 0 {
-					entry = entry.Bind(&m.settingsFirstRef)
-					if m.settingsFocusPending && !m.settingsFocusStorage {
-						entry = entry.Focus()
-						m.settingsFocusPending = false
-					}
-				}
-				if section.id == settingsSectionUpdate && m.updateDotVisible() {
-					updateDot(c, t, tok)
-				}
-				if entry.Clicked() {
-					m.jumpSettingsSection(c, section.id)
-				}
-			})
-		}
-	})
-}
-
-// settingsGeneral holds the close-window preference and the tray-icon hint
-// replay. The default hides to the notification area; the explicit choice
+// settingsGeneral holds appearance and the close-window preference.
+// The default hides to the notification area; the explicit choice
 // runs the stop/save/release wrap-up. Without a tray entry hiding has no way
 // back, so the close option is fixed to the explicit exit and the reason is
 // stated (08 §7).
 func (m *Model) settingsGeneral(c *ui.Context, t *ui.Theme, tok *Tokens) {
+	m.settingsAppearance(c, t, tok)
 	ui.Text(c, "点击窗口的 ✕ 时").TextColor(tok.TextSecondary)
-	compactFocus := m.settingsFocusPending && !m.settingsTableOfContentsVisible()
 	if m.TrayUnavailable() != "" {
 		fixed := string(app.CloseBehaviorExit)
 		ui.RadioGroup(c, func() {
-			radio := ui.Radio(c, &fixed, string(app.CloseBehaviorExit), "停止扫描并退出").
+			ui.Radio(c, &fixed, string(app.CloseBehaviorExit), "停止扫描并退出").
 				Disabled(true)
-			if compactFocus {
-				radio = radio.Bind(&m.settingsFirstRef).Focus()
-				m.settingsFocusPending = false
-			}
 		})
 		ui.Text(c, "通知区域图标不可用。关闭窗口会停止扫描并退出应用。").
 			TextColor(t.TextMuted).FontSize(t.FontSize * 0.9)
 		return
 	}
-	behavior := string(m.CloseBehavior())
-	if behavior != string(app.CloseBehaviorExit) {
-		behavior = string(app.CloseBehaviorHide)
+	selected := 0
+	if m.CloseBehavior() == app.CloseBehaviorExit {
+		selected = 1
 	}
-	ui.RadioGroup(c, func() {
-		ui.Row(c).Gap(t.Space(3)).Children(func() {
-			hide := ui.Radio(c, &behavior, string(app.CloseBehaviorHide), "隐藏到通知区域（默认）")
-			if behavior == string(app.CloseBehaviorHide) && compactFocus {
-				hide = hide.Bind(&m.settingsFirstRef).Focus()
-				m.settingsFocusPending = false
-			}
-			exit := ui.Radio(c, &behavior, string(app.CloseBehaviorExit), "停止扫描并退出")
-			if behavior == string(app.CloseBehaviorExit) && compactFocus {
-				exit = exit.Bind(&m.settingsFirstRef).Focus()
-				m.settingsFocusPending = false
-			}
-		})
+	parts := ui.SegmentedBase(c, &selected, 2)
+	control := parts.Track.Label("关闭行为").AlignSelf(ui.Start).Padding(4).Gap(4).
+		Radius(controlRadius).Background(tok.SurfaceSunken).Border(1, tok.BorderDefault)
+	control.Children(func() {
+		for i, label := range []string{"隐藏到通知区域（默认）", "停止扫描并退出"} {
+			segment := parts.Segment(i).MinHeight(max(40, t.FontSize*1.5+16)).Padding(8, 16).Radius(4)
+			settingsSegment(segment, i == selected, t.Dark, tok).Children(func() { ui.Text(c, label).SingleLine() })
+		}
 	})
-	if chosen := app.CloseBehavior(behavior); chosen != m.CloseBehavior() {
-		m.SetCloseBehavior(chosen)
+	behavior := app.CloseBehaviorHide
+	if selected == 1 {
+		behavior = app.CloseBehaviorExit
 	}
-	if ui.Button(c, "再看一次托盘图标位置提示").Clicked() {
-		m.ShowTrayHint()
+	if behavior != m.CloseBehavior() {
+		m.SetCloseBehavior(behavior)
 	}
 	if m.trayHintErr != "" {
 		ui.Text(c, m.trayHintErr).TextColor(t.Danger).FontSize(t.FontSize * 0.9)
@@ -271,11 +194,43 @@ func (m *Model) settingsGeneral(c *ui.Context, t *ui.Theme, tok *Tokens) {
 	if m.closeBehaviorErr != "" {
 		ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, m.closeBehaviorErr).TextColor(t.Danger).FontSize(t.FontSize * 0.9)
-			if ui.Button(c, "重试").Clicked() {
+			if button(c, "重试").Clicked() {
 				m.retryCloseBehaviorSave()
 			}
 		})
 	}
+}
+
+// settingsSegment keeps the selected face and outline visible even
+// while hovered or pressed. SegmentedBase retains radio and focus semantics.
+func settingsSegment(segment ui.Element, selected, dark bool, tok *Tokens) ui.Element {
+	bg, border, fg := ui.Transparent, ui.Transparent, tok.TextSecondary
+	if selected {
+		bg, border, fg = tok.AccentSoft, tok.AccentFG, tok.AccentFG
+		if dark {
+			bg, border, fg = tok.SurfaceControl.Mix(tok.TextPrimary, .18), tok.BorderControl, tok.TextPrimary
+		}
+	}
+	if segment.IsDisabled() {
+		bg, fg = tok.SurfaceDisabled, tok.TextDisabled
+	} else if selected {
+		if !dark && segment.Pressed() {
+			bg = tok.AccentSoftHover.Mix(tok.AccentFG, .04)
+			border, fg = tok.AccentFillPressed, tok.AccentFillPressed
+		} else if !dark && segment.Hovered() {
+			bg = tok.AccentSoftHover
+			border, fg = tok.AccentFillHover, tok.AccentFillHover
+		} else if segment.Pressed() {
+			bg = bg.Mix(tok.TextPrimary, .12)
+		} else if segment.Hovered() {
+			bg = bg.Mix(tok.TextPrimary, .06)
+		}
+	} else if segment.Pressed() {
+		bg = tok.SurfacePressed
+	} else if segment.Hovered() {
+		bg = tok.SurfaceHover
+	}
+	return segment.Background(bg).Border(1, border).TextColor(fg)
 }
 
 // retryCloseBehaviorSave persists the current close-window preference again
@@ -298,26 +253,35 @@ type settingsShortcut struct {
 	keys    string
 }
 
-// settingsShortcuts lists the registered keys in the design's order,
-// Windows notation throughout. The stop key's context is the registration
+// settingsShortcuts lists one action and one platform-specific key per
+// row. The stop key's context is the registration
 // state the snapshot can prove: held after the platform Open (preparing with
 // a deadline, or capturing), never claimed before Open or during finalizing,
 // the last failure when the session ended with hotkeyUnavailable, and the
 // future registration otherwise. The key text comes from the one notation
 // table, so it stays the platform's binding.
 func (m *Model) settingsShortcuts(c *ui.Context, t *ui.Theme, tok *Tokens) {
-	for i, shortcut := range m.settingsShortcutRows() {
-		if i > 0 {
-			ui.Divider(c)
-		}
-		ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, shortcut.action).TextColor(tok.TextSecondary)
-			ui.Text(c, shortcut.context).TextColor(tok.TextMuted).
-				FontSize(t.FontSize * 0.85)
-			ui.Box(c).Grow(1)
-			ui.Text(c, shortcut.keys).FontWeight(600)
+	// Horizontal scrolling preserves the complete action and key on one
+	// line at large text sizes and narrow windows, without ellipsis.
+	// ScrollHorizontal measures its content with an unbounded width. Give
+	// the list the card's actual available width as a floor, while allowing
+	// its intrinsic width to overflow at narrow widths and large text.
+	width, _ := c.Size()
+	innerWidth := max(0, width-m.railWidth()-m.pageLeftPadding()-m.pagePadding()-2*(settingsSectionInset+1))
+	ui.ScrollHorizontal(c).FillWidth().Focusable().Label("快捷键列表").Children(func() {
+		ui.Column(c).MinWidth(innerWidth).Children(func() {
+			for i, shortcut := range m.settingsShortcutRows() {
+				if i > 0 {
+					ui.Box(c).FillWidth().Height(1).Shrink(0).Background(tok.BorderSubtle)
+				}
+				ui.Row(c).FillWidth().PaddingY(6).Gap(24).AlignItems(ui.Center).Children(func() {
+					ui.Text(c, shortcut.action+"（"+shortcut.context+"）").SingleLine().Shrink(0)
+					ui.Box(c).Grow(1)
+					keycaps(c, shortcut.keys)
+				})
+			}
 		})
-	}
+	})
 }
 
 // stopHotkeyStateText derives the stop hotkey's registration state from the
@@ -350,18 +314,21 @@ func (m *Model) stopHotkeyStateText() string {
 
 func (m *Model) settingsShortcutRows() []settingsShortcut {
 	return []settingsShortcut{
-		{action: "停止扫描", context: m.stopHotkeyStateText(), keys: shortcutStopScan},
+		{action: "停止扫描", context: "全局 · " + m.stopHotkeyStateText(), keys: shortcutStopScan},
 		{action: "开始扫描", context: "扫描准备", keys: shortcutStartScan},
-		{action: "确认并下一项", context: "记录 · 逐件", keys: shortcutConfirmNext},
-		{action: "保存修改", context: "记录 · 逐件，有未保存修改时", keys: shortcutSave},
+		{action: "确认并下一项", context: "待处理件", keys: shortcutConfirmNext},
+		{action: "确认修改", context: "记录 · 修改中", keys: shortcutConfirmNext},
+		{action: "保存修改", context: "待处理件编辑中", keys: shortcutSave},
 		{action: "下一个待处理件", context: "记录 · 逐件", keys: shortcutNextPending},
 		{action: "上一个待处理件", context: "记录 · 逐件", keys: shortcutPreviousPending},
-		{action: "导出…", context: "记录工作区", keys: shortcutExport},
-		{action: "截图放大 / 缩小 / 适合窗口", context: "记录 · 逐件，焦点不在文本框时",
-			keys: shortcutZoomIn + " / " + shortcutZoomOut + " / " + shortcutZoomFit},
-		{action: "在大区域间跳转", context: "任意", keys: shortcutFocusRegion + " / " + shortcutFocusRegionBack},
+		{action: "导出", context: "记录工作区", keys: shortcutExport},
+		{action: "截图放大", context: "逐件 · 非文本框", keys: shortcutZoomIn},
+		{action: "截图缩小", context: "逐件 · 非文本框", keys: shortcutZoomOut},
+		{action: "截图适合窗口", context: "逐件 · 非文本框", keys: shortcutZoomFit},
+		{action: "前往下一区域", context: "页面", keys: shortcutFocusRegion},
+		{action: "返回上一区域", context: "页面", keys: shortcutFocusRegionBack},
 		{action: "打开选中的记录", context: "全部记录", keys: shortcutOpenRecord},
-		{action: "关闭浮层/返回表格", context: "任意", keys: shortcutCloseOverlay},
+		{action: "关闭浮层或返回表格", context: "非文本框", keys: shortcutCloseOverlay},
 	}
 }
 
@@ -407,9 +374,9 @@ func (m *Model) storageActionsRow(c *ui.Context, t *ui.Theme, tok *Tokens) {
 		m.settingsFocusStorage = false
 		m.settingsFocusPending = false
 	}
-	ui.Row(c).Gap(t.Space(1.5)).AlignItems(ui.Center).Wrap().Children(func() {
+	actionRow(c).Wrap().Children(func() {
 		opened := false
-		open := ui.Button(c, "打开数据目录").Disabled(m.cfg.OpenDataDirectory == nil)
+		open := button(c, "打开数据目录").Disabled(m.cfg.OpenDataDirectory == nil)
 		if focusStorage && m.cfg.OpenDataDirectory != nil {
 			open = open.Focus().ScrollIntoView()
 			opened = true
@@ -417,26 +384,26 @@ func (m *Model) storageActionsRow(c *ui.Context, t *ui.Theme, tok *Tokens) {
 		if m.cfg.OpenDataDirectory != nil && open.Clicked() {
 			m.OpenDataDirectory()
 		}
-		cache := ui.Button(c, "清缓存").Disabled(m.storageLoading)
+		cache := button(c, "清缓存").Disabled(m.storageLoading)
 		if focusStorage && !opened {
 			cache = cache.Focus().ScrollIntoView()
 		}
 		if cache.Clicked() {
 			m.RequestCacheClear()
 		}
-		if ui.Button(c, "清旧日志").Disabled(m.storageLoading).Clicked() {
+		if button(c, "清旧日志").Disabled(m.storageLoading).Clicked() {
 			m.RequestOldLogClear()
 		}
 		danger := func(label string, action func()) {
-			button := ui.Button(c, label).TextColor(tok.DangerFG).
+			button := button(c, label).TextColor(tok.DangerFG).
 				Background(tok.SurfaceControl).Border(1, tok.DangerBorder).
 				Disabled(blocked != "")
 			if button.Clicked() {
 				action()
 			}
 		}
-		danger("删除全部截图…", m.RequestAllScreenshotCleanup)
-		danger("删除全部记录…", m.RequestAllRecordCleanup)
+		danger("删除全部截图", m.RequestAllScreenshotCleanup)
+		danger("删除全部记录", m.RequestAllRecordCleanup)
 	})
 	if blocked != "" {
 		ui.Text(c, blocked).TextColor(tok.TextMuted).FontSize(t.FontSize * 0.9)
@@ -447,14 +414,16 @@ func (m *Model) storageActionsRow(c *ui.Context, t *ui.Theme, tok *Tokens) {
 // surface shares (09 §4.6) and states what a copy excludes.
 func (m *Model) settingsDiagnostics(c *ui.Context, t *ui.Theme, tok *Tokens) {
 	ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Wrap().Children(func() {
-		if ui.Button(c, "复制诊断信息").Clicked() {
-			m.copyDiagnostics(c)
-		}
-		if ui.Button(c, "打开诊断目录").Disabled(m.cfg.OpenDiagnosticsDirectory == nil).Clicked() {
-			m.openDiagnosticsDirectory()
-		}
 		ui.Text(c, "复制的内容不包含窗口标题等隐私").TextColor(tok.TextMuted).
 			FontSize(t.FontSize * 0.85)
+		actionRow(c).Grow(1).Children(func() {
+			if button(c, "复制诊断信息").Clicked() {
+				m.copyDiagnostics(c)
+			}
+			if button(c, "打开诊断目录").Disabled(m.cfg.OpenDiagnosticsDirectory == nil).Clicked() {
+				m.openDiagnosticsDirectory()
+			}
+		})
 	})
 	if m.diagnosticsNotice != "" {
 		ui.Text(c, m.diagnosticsNotice).TextColor(tok.TextMuted)
@@ -501,9 +470,11 @@ func (m *Model) settingsAbout(c *ui.Context, t *ui.Theme, tok *Tokens) {
 	ui.Text(c, "youkai "+version).TextColor(tok.TextSecondary)
 	ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
 		ui.Text(c, "以 MIT 许可发布。").TextColor(tok.TextMuted).FontSize(t.FontSize * 0.9)
-		if m.cfg.OpenLicenses != nil && ui.Button(c, "开源许可").Clicked() {
-			m.openLicenses()
-		}
+		actionRow(c).Grow(1).Children(func() {
+			if m.cfg.OpenLicenses != nil && button(c, "开源许可").Clicked() {
+				m.openLicenses()
+			}
+		})
 	})
 	if m.aboutErr != "" {
 		ui.Text(c, m.aboutErr).TextColor(t.Danger).FontSize(t.FontSize * 0.9)

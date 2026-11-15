@@ -456,7 +456,7 @@ func (m *Model) exportDialogTitle() string {
 // without a saver still shows where export lives, disabled.
 func (m *Model) exportEntryArea(c *ui.Context) {
 	blocked := m.exportEntryBlocked()
-	if ui.Button(c, "导出…").Disabled(blocked).Clicked() {
+	if button(c, "导出").Disabled(blocked).Clicked() {
 		m.requestExport()
 	}
 	if blocked {
@@ -476,7 +476,7 @@ func (m *Model) exportDialogView(c *ui.Context, t *ui.Theme) {
 		return
 	}
 	open := true
-	ui.Modal(c, &open, func() {
+	m.modal(c, &open, func() {
 		ui.Column(c).Width(t.Space(120)).Gap(t.Space(2.5)).Children(func() {
 			m.exportDialogContent(c, t)
 		})
@@ -527,13 +527,13 @@ func (m *Model) exportDialogPreExport(c *ui.Context, t *ui.Theme) {
 	// 导出 CSV → 去校对 → 关闭.
 	var closeSlot ui.Element
 	closeShown := false
-	ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
+	actionRow(c).Wrap().Children(func() {
 		ui.Text(c, m.exportDialogTitle()).FontWeight(600).
 			FontSize(t.FontSize * 1.3).Grow(1)
 		if exporting {
 			return
 		}
-		closeSlot = ui.Button(c, "✕").Label("关闭导出对话框").Invisible()
+		closeSlot = button(c, "✕").Label("关闭导出对话框").Invisible()
 		closeShown = true
 	})
 
@@ -547,7 +547,7 @@ func (m *Model) exportDialogPreExport(c *ui.Context, t *ui.Theme) {
 			ui.Text(c, "导出失败："+failure.err.Error()).TextColor(t.Danger)
 			ui.Text(c, "内部记录未受影响。").TextColor(t.TextMuted).
 				FontSize(t.FontSize * 0.9)
-			retry := ui.Button(c, "重试").Disabled(blocked != "")
+			retry := button(c, "重试").Disabled(blocked != "")
 			retry.AutoFocus()
 			if retry.Clicked() {
 				m.startExport(failure.format)
@@ -576,9 +576,9 @@ func (m *Model) exportDialogPreExport(c *ui.Context, t *ui.Theme) {
 		return
 	}
 
-	ui.Row(c).Gap(t.Space(2)).Children(func() {
+	actionRow(c).Wrap().Children(func() {
 		c.Key("export-dialog-json")
-		json := ui.Button(c, "导出 JSON").Grow(1).Disabled(blocked != "")
+		json := button(c, "导出 JSON").Grow(1).Disabled(blocked != "")
 		if !empty && blocked == "" && failure == nil {
 			json.AutoFocus()
 		}
@@ -586,7 +586,7 @@ func (m *Model) exportDialogPreExport(c *ui.Context, t *ui.Theme) {
 			m.exportDialogJSON()
 		}
 		c.Key("export-dialog-csv")
-		csv := ui.Button(c, "导出 CSV").Grow(1).Disabled(blocked != "")
+		csv := button(c, "导出 CSV").Grow(1).Disabled(blocked != "")
 		if csv.Clicked() {
 			m.exportDialogCSV()
 		}
@@ -597,7 +597,7 @@ func (m *Model) exportDialogPreExport(c *ui.Context, t *ui.Theme) {
 
 	if reviewShown {
 		c.Key("export-dialog-review")
-		review := ui.Button(c, "去校对").TextColor(t.Accent).
+		review := button(c, "去校对").TextColor(t.Accent).
 			Background(ui.Color{}).Border(0, ui.Color{}).Padding(0, 0).
 			Disabled(blocked != "").
 			AttachTo(reviewSlot, ui.AnchorCenter, ui.AnchorCenter)
@@ -612,7 +612,7 @@ func (m *Model) exportDialogPreExport(c *ui.Context, t *ui.Theme) {
 	}
 	if closeShown {
 		c.Key("export-dialog-close")
-		close := ui.Button(c, "✕").Label("关闭导出对话框").
+		close := button(c, "✕").Label("关闭导出对话框").
 			AttachTo(closeSlot, ui.AnchorCenter, ui.AnchorCenter)
 		if close.Clicked() {
 			m.closeExportDialog()
@@ -633,8 +633,8 @@ func (m *Model) exportDialogProgress(c *ui.Context, t *ui.Theme) {
 		title = "正在取消……"
 	}
 	ui.Progress(c, -1)
-	ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
-		cancel := ui.Button(c, "取消").Disabled(m.exportDialog.canceled)
+	actionRow(c).Wrap().Children(func() {
+		cancel := button(c, "取消").Disabled(m.exportDialog.canceled)
 		cancel.AutoFocus()
 		if cancel.Clicked() {
 			m.cancelExport()
@@ -676,7 +676,7 @@ func (m *Model) exportDialogSummary(c *ui.Context, t *ui.Theme, empty, blocked, 
 					TextColor(t.TextMuted).FontSize(t.FontSize * 0.9)
 			}
 			if showReview {
-				reviewSlot = ui.Button(c, "去校对").TextColor(t.Accent).
+				reviewSlot = button(c, "去校对").TextColor(t.Accent).
 					Background(ui.Color{}).Border(0, ui.Color{}).Padding(0, 0).
 					Disabled(locked).Invisible()
 				reviewShown = true
@@ -741,7 +741,7 @@ func (m *Model) exportDialogSuccessContent(c *ui.Context, t *ui.Theme) {
 	if o == nil {
 		return
 	}
-	ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
+	actionRow(c).Wrap().Children(func() {
 		ui.Textf(c, "已导出 %s 件", formatCount(int64(o.included))).FontWeight(600).
 			FontSize(t.FontSize * 1.3).Grow(1)
 	})
@@ -753,15 +753,15 @@ func (m *Model) exportDialogSuccessContent(c *ui.Context, t *ui.Theme) {
 	if m.exportDialog.openDirErr != "" {
 		ui.Text(c, m.exportDialog.openDirErr).TextColor(t.Danger)
 	}
-	ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
+	actionRow(c).Wrap().Children(func() {
 		if m.cfg.OpenDownloadsDirectory != nil {
-			open := ui.PrimaryButton(c, "打开下载目录").Grow(1)
+			open := primaryButton(c, "打开下载目录").Grow(1)
 			open.AutoFocus()
 			if open.Clicked() {
 				m.openExportDirectory()
 			}
 		}
-		done := ui.Button(c, "完成")
+		done := button(c, "完成")
 		if m.cfg.OpenDownloadsDirectory == nil {
 			done.AutoFocus()
 		}
@@ -774,7 +774,7 @@ func (m *Model) exportDialogSuccessContent(c *ui.Context, t *ui.Theme) {
 	// revision, including the backfill items the review-count helper
 	// deliberately leaves out.
 	if o.pending == 0 {
-		link := ui.Button(c, "删除这条记录的截图…").TextColor(t.Accent).
+		link := button(c, "删除这条记录的截图").TextColor(t.Accent).
 			Background(ui.Color{}).Border(0, ui.Color{}).Padding(0, 0)
 		if link.Clicked() {
 			m.exportDialogDeleteScreenshots(o.recordID)

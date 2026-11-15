@@ -263,7 +263,7 @@ func (m *Model) updateArea(c *ui.Context, t *ui.Theme, tok *Tokens) {
 		case updateInstalled:
 			ui.Text(c, m.updateStatusText()).TextColor(tok.TextMuted)
 		default:
-			ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
+			actionRow(c).Wrap().Children(func() {
 				ui.Text(c, m.updateStatusText()).TextColor(tok.TextMuted)
 				ui.Box(c).Grow(1)
 				if m.updatesState != updateChecking {
@@ -271,7 +271,7 @@ func (m *Model) updateArea(c *ui.Context, t *ui.Theme, tok *Tokens) {
 					if m.updatesCheckErr != "" {
 						label = "重试检查"
 					}
-					if ui.Button(c, label).Clicked() {
+					if button(c, label).Clicked() {
 						m.CheckUpdates()
 					}
 				}
@@ -298,10 +298,10 @@ func (m *Model) updateAvailableArea(c *ui.Context, t *ui.Theme, tok *Tokens) {
 	if m.updatesInstallErr != "" {
 		label = "重试安装"
 	}
-	ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
+	actionRow(c).Wrap().Children(func() {
 		ui.Text(c, m.updateStatusText()).TextColor(tok.TextMuted)
 		ui.Box(c).Grow(1)
-		button := ui.PrimaryButton(c, label).Disabled(blocked != "")
+		button := primaryButton(c, label).Disabled(blocked != "")
 		if button.Clicked() {
 			m.InstallUpdate()
 		}

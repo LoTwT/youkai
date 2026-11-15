@@ -62,81 +62,40 @@ func openSettings(t *testing.T, m *Model, q *queueUpdater, tt *ui.Tester) {
 	}
 }
 
-// TestSettingsPageSectionsAndDirectory checks the single-page structure:
-// the in-page directory before the sections, the six sections in reading
-// order, and the keyboard entry on the directory (08 §6, 09 §2).
-func TestSettingsPageSectionsAndDirectory(t *testing.T) {
-	m, q, _ := settingsTestModel(t)
-	tt := ui.NewTester(m.View, 1440, 1000)
-	settle(t, m, q, tt)
-	openSettings(t, m, q, tt)
-
-	settings, ok := tt.Find("设置")
-	if !ok {
-		t.Fatal("the settings rail entry is missing")
-	}
-	if settings.X+settings.W > navRailWidth {
-		t.Errorf("the settings entry at %+v leaves the rail", settings)
-	}
-	if settings.Y+settings.H < 1000*0.8 {
-		t.Errorf("the settings entry at %+v is not pinned to the bottom", settings)
-	}
-
-	for _, section := range []string{"常规", "快捷键", "存储与清理", "诊断", "更新", "关于"} {
-		if !tt.HasText(section) {
-			t.Errorf("the settings page does not show the %q section: %q", section, tt.Texts())
+// Settings keeps one full-width reading column at both supported widths.
+// Entry, F6 and Tab all target live controls rather than removed directory entries.
+func TestSettingsPageSectionsAndFocus(t *testing.T) {
+	for _, width := range []int{1440, 1020} {
+		m, q, _ := settingsTestModel(t)
+		m.SetContentSize(width, 900)
+		tt := ui.NewTester(m.View, width, 900)
+		settle(t, m, q, tt)
+		openSettings(t, m, q, tt)
+		for _, section := range []string{"常规", "快捷键", "存储与清理", "诊断", "更新", "关于"} {
+			if got := countText(tt.Texts(), section); got != 1 {
+				t.Errorf("at %d, %s appears %d times, want only its section title", width, section, got)
+			}
 		}
-	}
-	// The directory repeats the section titles, so each title appears twice
-	// in the standard width band; the directory is left of the content.
-	if got := countText(tt.Texts(), "常规"); got != 2 {
-		t.Fatalf("常规 appears %d times, want the directory entry and its title", got)
-	}
-	directory, ok := tt.Find("常规")
-	if !ok {
-		t.Fatal("the in-page directory entry is missing")
-	}
-	content := float32(0)
-	for _, title := range []string{"点击窗口的 ✕ 时", "停止扫描", "打开数据目录", "复制诊断信息"} {
-		rect, ok := tt.Find(title)
-		if !ok {
-			t.Fatalf("%q is missing: %q", title, tt.Texts())
+		if !tt.Focused("跟随系统") {
+			t.Fatalf("at %d, settings entry did not focus the theme buttons", width)
 		}
-		if rect.X > content {
-			content = rect.X
+		tt.Key(ui.Shift, ui.KeyF6)
+		if !tt.Focused("设置") {
+			t.Fatal("Shift+F6 did not reach the global navigation")
 		}
-	}
-	if directory.X >= content {
-		t.Errorf("the directory at %v is not left of the section content at %v", directory, content)
-	}
-	if !tt.Focused("常规") {
-		t.Fatalf("entering settings does not put the keyboard on the directory: %q", tt.Texts())
-	}
-}
-
-// TestSettingsPageCompactHidesDirectory checks the compact band: no
-// in-page directory, and the keyboard lands on the first regular control
-// instead (09 §2).
-func TestSettingsPageCompactHidesDirectory(t *testing.T) {
-	m, q, _ := settingsTestModel(t)
-	m.SetContentSize(1020, 900)
-	tt := ui.NewTester(m.View, 1020, 900)
-	settle(t, m, q, tt)
-	openSettings(t, m, q, tt)
-
-	if m.settingsTableOfContentsVisible() {
-		t.Fatal("the compact width still claims room for the directory")
-	}
-	if got := countText(tt.Texts(), "常规"); got != 1 {
-		t.Fatalf("常规 appears %d times in the compact band, want only the section title", got)
-	}
-	if !tt.Focused("隐藏到通知区域（默认）") {
-		t.Fatalf("the compact entry does not focus the first regular control: %q", tt.Texts())
+		tt.Key(0, ui.KeyF6)
+		if !tt.Focused("跟随系统") {
+			t.Fatal("F6 did not reach the first real settings control")
+		}
+		tt.Key(0, ui.KeyTab)
+		if !tt.Focused("隐藏到通知区域（默认）") {
+			t.Fatal("Tab did not advance from theme to close behavior")
+		}
 	}
 }
 
 // TestSettingsPageShortcuts checks the read-only table: only registered
-// keys, the design's order, Windows notation, and the stop key state.
+// keys, one action per row, platform notation, and the stop key state.
 func TestSettingsPageShortcuts(t *testing.T) {
 	m, q, _ := settingsTestModel(t)
 	tt := ui.NewTester(m.View, 1440, 1000)
@@ -144,35 +103,41 @@ func TestSettingsPageShortcuts(t *testing.T) {
 	openSettings(t, m, q, tt)
 
 	rows := m.settingsShortcutRows()
-	if len(rows) != 11 {
-		t.Fatalf("the shortcut list has %d rows, want 11: %+v", len(rows), rows)
+	if len(rows) != 15 {
+		t.Fatalf("the shortcut list has %d rows, want 15: %+v", len(rows), rows)
 	}
-	if got, want := rows[0], (settingsShortcut{action: "停止扫描", context: "开始扫描时注册", keys: shortcutStopScan}); got != want {
+	if got, want := rows[0], (settingsShortcut{action: "停止扫描", context: "全局 · 开始扫描时注册", keys: shortcutStopScan}); got != want {
 		t.Errorf("the first shortcut row = %+v, want %+v", got, want)
 	}
-	if got, want := rows[10], (settingsShortcut{action: "关闭浮层/返回表格", context: "任意", keys: shortcutCloseOverlay}); got != want {
+	if got, want := rows[14], (settingsShortcut{action: "关闭浮层或返回表格", context: "非文本框", keys: shortcutCloseOverlay}); got != want {
 		t.Errorf("the last shortcut row = %+v, want %+v", got, want)
 	}
 	for _, registered := range []string{
 		"停止扫描", "开始扫描时注册", shortcutStopScan,
-		"开始扫描", "扫描准备", shortcutStartScan,
+		"开始扫描", shortcutStartScan,
 		"确认并下一项", shortcutConfirmNext,
 		"保存修改", shortcutSave,
 		"下一个待处理件", shortcutNextPending,
 		"上一个待处理件", shortcutPreviousPending,
-		"导出…", "记录工作区", shortcutExport,
-		"截图放大 / 缩小 / 适合窗口", shortcutZoomIn, shortcutZoomOut, shortcutZoomFit,
-		"在大区域间跳转", shortcutFocusRegion, shortcutFocusRegionBack,
+		"导出", shortcutExport,
+		"截图放大", "截图缩小", "截图适合窗口", shortcutZoomIn, shortcutZoomOut, shortcutZoomFit,
+		"前往下一区域", "返回上一区域", shortcutFocusRegion, shortcutFocusRegionBack,
 		"打开选中的记录", shortcutOpenRecord,
-		"关闭浮层/返回表格", shortcutCloseOverlay,
+		"关闭浮层或返回表格", shortcutCloseOverlay,
 	} {
-		if !tt.HasText(registered) {
-			t.Errorf("the shortcut list does not show %q: %q", registered, tt.Texts())
+		keys := []string{registered}
+		if strings.Contains(registered, "+") {
+			keys = strings.Split(registered, "+")
+		}
+		for _, key := range keys {
+			if !tt.HasText(key) {
+				t.Errorf("the shortcut list does not show %q from %q: %q", key, registered, tt.Texts())
+			}
 		}
 	}
 	for _, row := range rows {
-		if strings.ContainsAny(row.keys, "⌘⌃⌥⇧↵") {
-			t.Errorf("the shortcut row %+v uses macOS notation; the interface shows Windows keys", row)
+		if strings.Contains(row.keys, " / ") || strings.Contains(row.keys, "\n") {
+			t.Errorf("the shortcut row %+v combines multiple bindings", row)
 		}
 	}
 }
@@ -291,10 +256,9 @@ func TestSettingsStopHotkeyState(t *testing.T) {
 	}
 }
 
-// TestSettingsDirectoryScrollsToSection checks the directory actually
-// moves the content: a section below the fold comes into view when its
-// entry is used.
-func TestSettingsDirectoryScrollsToSection(t *testing.T) {
+// TestSettingsScrollReachesAbout checks the last section remains reachable
+// without the removed directory.
+func TestSettingsScrollReachesAbout(t *testing.T) {
 	m, q, _ := settingsTestModel(t)
 	m.SetContentSize(1180, 600)
 	tt := ui.NewTester(m.View, 1180, 600)
@@ -304,9 +268,7 @@ func TestSettingsDirectoryScrollsToSection(t *testing.T) {
 	if rect, ok := tt.Find("开源许可"); ok && rect.H > 0 && rect.Y >= 0 && rect.Y+rect.H <= 600 {
 		t.Fatalf("the about section already fits; the jump cannot be observed: %+v", rect)
 	}
-	if err := tt.Click("关于"); err != nil {
-		t.Fatal(err)
-	}
+	tt.Scroll(900, 400, 0, 10000)
 	settle(t, m, q, tt)
 	rect, ok := tt.Find("开源许可")
 	if !ok || rect.H == 0 || rect.Y < 0 || rect.Y+rect.H > 600 {
@@ -315,8 +277,7 @@ func TestSettingsDirectoryScrollsToSection(t *testing.T) {
 }
 
 // TestSettingsGeneralClosePreference checks the regular section: both close
-// choices, the persisted change, the tray-hint placeholder and the tray
-// notice.
+// choices, the persisted change, the removed replay entry and the tray notice.
 func TestSettingsGeneralClosePreference(t *testing.T) {
 	var saved []app.CloseBehavior
 	m, q, _ := settingsTestModel(t)
@@ -334,8 +295,8 @@ func TestSettingsGeneralClosePreference(t *testing.T) {
 	if !tt.HasText("隐藏到通知区域（默认）") || !tt.HasText("停止扫描并退出") {
 		t.Fatalf("the close choices are missing: %q", tt.Texts())
 	}
-	if !tt.HasText("再看一次托盘图标位置提示") {
-		t.Fatal("the tray-hint placeholder is missing")
+	if tt.HasText("再看一次托盘图标位置提示") {
+		t.Fatal("the removed tray-hint replay entry is still visible")
 	}
 
 	if err := tt.Click("停止扫描并退出"); err != nil {
@@ -424,7 +385,7 @@ func TestSettingsStorageCopy(t *testing.T) {
 	if !tt.HasText("磁盘可用 5.0 GB / 10.0 GB") {
 		t.Fatalf("the free disk space does not show: %q", tt.Texts())
 	}
-	for _, label := range []string{"打开数据目录", "清缓存", "清旧日志", "删除全部截图…", "删除全部记录…"} {
+	for _, label := range []string{"打开数据目录", "清缓存", "清旧日志", "删除全部截图", "删除全部记录"} {
 		if !tt.HasText(label) {
 			t.Errorf("the storage section does not offer %q", label)
 		}
@@ -446,9 +407,7 @@ func TestSettingsStorageDisabledReasons(t *testing.T) {
 	if !tt2.HasText("扫描会话进行中，结束后才能清理。") {
 		t.Fatalf("the active scan does not block cleanup: %q", tt2.Texts())
 	}
-	if err := tt2.Click("删除全部记录…"); err != nil {
-		t.Fatal(err)
-	}
+	clickRevealedSettingsControl(t, tt2, 1000, "删除全部记录")
 	drainAll(t, m2, q2)
 	if _, _, _, allRecords := svc2.cleanupCalls(); allRecords != 0 {
 		t.Fatalf("a disabled bulk entry still deleted: %d", allRecords)
@@ -464,9 +423,7 @@ func TestSettingsCleanupPromptDefaultsToCancel(t *testing.T) {
 	settle(t, m, q, tt)
 	openSettings(t, m, q, tt)
 
-	if err := tt.Click("删除全部记录…"); err != nil {
-		t.Fatal(err)
-	}
+	clickRevealedSettingsControl(t, tt, 1000, "删除全部记录")
 	settle(t, m, q, tt)
 	want := "将永久删除 2 条记录（共 9.8 KB，其中截图 4 张 4.0 KB）；待校对 1 项。外部导出的 JSON/CSV 不受影响。"
 	if !tt.HasText(want) {
@@ -486,9 +443,7 @@ func TestSettingsCleanupPromptDefaultsToCancel(t *testing.T) {
 	}
 
 	// The deliberate confirm still runs the previewed deletion.
-	if err := tt.Click("删除全部记录…"); err != nil {
-		t.Fatal(err)
-	}
+	clickRevealedSettingsControl(t, tt, 1000, "删除全部记录")
 	settle(t, m, q, tt)
 	if !tt.Focused("取消") {
 		t.Fatal("the reopened confirmation does not take the safe focus")
@@ -533,9 +488,7 @@ func TestSettingsStorageFromPrepareCheck(t *testing.T) {
 		t.Fatalf("the storage action is not visible: %+v", rect)
 	}
 
-	if err := tt.Click("清缓存"); err != nil {
-		t.Fatal(err)
-	}
+	clickRevealedSettingsControl(t, tt, 520, "清缓存")
 	settle(t, m, q, tt)
 	if err := tt.Click("确认清理"); err != nil {
 		t.Fatal(err)
@@ -737,9 +690,7 @@ func TestSettingsDiagnosticsActions(t *testing.T) {
 	if !tt.HasText("复制的内容不包含窗口标题等隐私") {
 		t.Fatalf("the privacy note is missing: %q", tt.Texts())
 	}
-	if err := tt.Click("复制诊断信息"); err != nil {
-		t.Fatal(err)
-	}
+	clickRevealedSettingsControl(t, tt, 1000, "复制诊断信息")
 	settle(t, m, q, tt)
 	want := app.DiagnosticsText(app.DiagnosticsInput{
 		Version: "0.6.0 (build 1021)",
@@ -771,9 +722,7 @@ func TestSettingsDiagnosticsActions(t *testing.T) {
 		t.Fatalf("the copied text leaked private context: %q", tt.Clipboard())
 	}
 
-	if err := tt.Click("打开诊断目录"); err != nil {
-		t.Fatal(err)
-	}
+	clickRevealedSettingsControl(t, tt, 1000, "打开诊断目录")
 	settle(t, m, q, tt)
 	if opened != 1 || !tt.HasText("已打开诊断目录。") {
 		t.Fatalf("opened=%d texts=%q", opened, tt.Texts())
@@ -789,9 +738,7 @@ func TestSettingsOpenDiagnosticsDirectoryFailure(t *testing.T) {
 	settle(t, m, q, tt)
 	openSettings(t, m, q, tt)
 
-	if err := tt.Click("打开诊断目录"); err != nil {
-		t.Fatal(err)
-	}
+	clickRevealedSettingsControl(t, tt, 1000, "打开诊断目录")
 	settle(t, m, q, tt)
 	if !tt.HasText("打开诊断目录失败：没有文件管理器") {
 		t.Fatalf("the directory failure does not show: %q", tt.Texts())
@@ -817,9 +764,7 @@ func TestSettingsAbout(t *testing.T) {
 	if !tt.HasText("以 MIT 许可发布。") {
 		t.Fatalf("the about section does not state the license: %q", tt.Texts())
 	}
-	if err := tt.Click("开源许可"); err != nil {
-		t.Fatal(err)
-	}
+	clickRevealedSettingsControl(t, tt, 1000, "开源许可")
 	settle(t, m, q, tt)
 	if opened != 1 {
 		t.Fatalf("the license action opened %d times, want 1", opened)

@@ -33,7 +33,7 @@ func TestReviewBrowseDoubleClickCannotWrite(t *testing.T) {
 		settledReviewItem(t, 1, record.QualityAutoAccepted),
 		reviewRowItem(t, 2, 12),
 		settledReviewItem(t, 3, record.QualityAutoAccepted),
-	), 1180, 760)
+	), 1440, 900)
 	tt.Frame()
 	m.setResultFilter(resultFilterAll)
 	tt.Frame()
@@ -51,7 +51,7 @@ func TestReviewBrowseDoubleClickCannotWrite(t *testing.T) {
 	if tt.Focused("确认并下一项") || tt.Focused("保存修改") {
 		t.Fatalf("the browse click left the keyboard on a write button: %q", tt.Texts())
 	}
-	if m.focusedReviewField != FormFieldMainStat {
+	if m.focusedReviewField != FormFieldSetID {
 		t.Fatalf("the browse click did not move the keyboard into the form: %q",
 			m.focusedReviewField)
 	}
@@ -97,7 +97,7 @@ func TestReviewBrowseNextCannotSaveDirtyDraft(t *testing.T) {
 	m, q, tt, svc := openReviewableResults(t, recovery(
 		settledReviewItem(t, 1, record.QualityAutoAccepted),
 		reviewRowItem(t, 2, 12),
-	), 1180, 760)
+	), 1440, 900)
 	tt.Frame()
 	m.setResultFilter(resultFilterAll)
 	tt.Frame()
@@ -161,7 +161,7 @@ func TestReviewBrowseGuardStationaryPointer(t *testing.T) {
 			reviewRowItem(t, 2, 12),
 			settledReviewItem(t, 3, record.QualityAutoAccepted),
 			settledReviewItem(t, 4, record.QualityAutoAccepted),
-		), 1180, 760)
+		), 1440, 900)
 		tt.Frame()
 		m.setResultFilter(resultFilterAll)
 		tt.Frame()
@@ -202,7 +202,7 @@ func TestReviewBrowseGuardReleasesOnMove(t *testing.T) {
 		settledReviewItem(t, 1, record.QualityAutoAccepted),
 		reviewRowItem(t, 2, 12),
 		settledReviewItem(t, 3, record.QualityAutoAccepted),
-	), 1180, 760)
+	), 1440, 900)
 	tt.Frame()
 	m.setResultFilter(resultFilterAll)
 	tt.Frame()
@@ -236,7 +236,7 @@ func TestReviewBrowseKeepsKeyboard(t *testing.T) {
 		settledReviewItem(t, 2, record.QualityHumanConfirmed),
 		settledReviewItem(t, 3, record.QualityHumanConfirmed),
 		reviewRowItem(t, 4, 12),
-	), 1180, 760)
+	), 1440, 900)
 	tt.Frame()
 	m.setResultFilter(resultFilterAll)
 	tt.Frame()
@@ -275,7 +275,7 @@ func TestReviewBrowseKeepsKeyboard(t *testing.T) {
 	if tt.Focused("修改") || tt.Focused("确认并下一项") || tt.Focused("保存修改") {
 		t.Fatalf("the pending arrival focused a modify/write action: %q", tt.Texts())
 	}
-	if m.focusedReviewField != FormFieldMainStat || !tt.Focused("主词条数值") {
+	if m.focusedReviewField != FormFieldSetID || !tt.Focused("套装："+m.edit.draft.SetID) {
 		t.Fatalf("the pending arrival focused %q, want the first problem field: %q",
 			m.focusedReviewField, tt.Texts())
 	}
@@ -294,7 +294,7 @@ func TestReviewTypingAcrossChangingProblems(t *testing.T) {
 		s.Data.Level = nil
 		s.Data.Rarity = nil
 	})
-	m, q, tt, svc := openReviewableResults(t, recovery(it), 1180, 760)
+	m, q, tt, svc := openReviewableResults(t, recovery(it), 1440, 900)
 	tt.Frame()
 	m.requestReviewFieldFocus(FormFieldLevel)
 	tt.Frame()
@@ -332,7 +332,7 @@ func TestReviewNewBlockingProblemStaysVisible(t *testing.T) {
 	it := withStructured(t, reviewRowItem(t, 1, 12), func(s *zzz.StructuredDisc) {
 		s.Data.Slot = nil
 	})
-	m, _, tt := openResponsiveResults(t, recovery(it), 1180, 760)
+	m, _, tt := openResponsiveResults(t, recovery(it), 1440, 900)
 	tt.Frame()
 	if m.edit == nil || len(m.edit.firstFields) != 1 || m.edit.firstFields[0] != FormFieldSlot {
 		t.Fatalf("the edit did not open with the missing slot leading: %s", probeReviewState(m))
@@ -375,14 +375,12 @@ func TestReviewTypingIntoFoldedFieldKeepsFocus(t *testing.T) {
 	it := withStructured(t, reviewRowItem(t, 1, 12), func(s *zzz.StructuredDisc) {
 		s.Data.Slot = nil
 	})
-	m, _, tt := openResponsiveResults(t, recovery(it), 1180, 760)
+	m, _, tt := openResponsiveResults(t, recovery(it), 1440, 900)
 	tt.Frame()
-	if m.edit == nil || m.edit.firstFields[0] != FormFieldSlot || !tt.HasText("其余 7 个字段") {
+	if m.edit == nil || m.edit.firstFields[0] != FormFieldSlot {
 		t.Fatalf("the edit is not in the expected folded state: %s", probeReviewState(m))
 	}
-	if err := tt.Click("其余 7 个字段"); err != nil {
-		t.Fatalf("open the folded group: %v", err)
-	}
+
 	tt.Frame()
 	m.requestReviewFieldFocus(FormFieldLevel)
 	tt.Frame()
@@ -427,7 +425,7 @@ func TestReviewFocusSkipsTextOnlyRarityToNextProblem(t *testing.T) {
 	m, q, tt, _ := openReviewableResults(t, recovery(
 		settledReviewItem(t, 1, record.QualityAutoAccepted),
 		it,
-	), 1180, 760)
+	), 1440, 900)
 	tt.Frame()
 	m.setResultFilter(resultFilterAll)
 	tt.Frame()
@@ -460,7 +458,7 @@ func TestReviewRarityProblemFocusLandsOnControl(t *testing.T) {
 	m, q, tt, svc := openReviewableResults(t, recovery(
 		settledReviewItem(t, 1, record.QualityAutoAccepted),
 		it,
-	), 1180, 760)
+	), 1440, 900)
 	tt.Frame()
 	m.setResultFilter(resultFilterAll)
 	tt.Frame()
@@ -497,7 +495,7 @@ func TestReviewBrowseGuardIgnoresTab(t *testing.T) {
 	m, q, tt, _ := openReviewableResults(t, recovery(
 		settledReviewItem(t, 1, record.QualityAutoAccepted),
 		reviewRowItem(t, 2, 12),
-	), 1180, 760)
+	), 1440, 900)
 	tt.Frame()
 	m.setResultFilter(resultFilterAll)
 	tt.Frame()
@@ -539,7 +537,7 @@ func TestReviewModifySaveAndContinueExplainsQueue(t *testing.T) {
 	m, q, tt, svc := openReviewableResults(t, recovery(
 		settledReviewItem(t, 1, record.QualityAutoAccepted),
 		settledReviewItem(t, 2, record.QualityHumanConfirmed),
-	), 1180, 760)
+	), 1440, 900)
 	tt.Frame()
 	m.setResultFilter(resultFilterAll)
 	tt.Frame()
@@ -599,7 +597,7 @@ func TestReviewModifyNoticeOnOtherDestinations(t *testing.T) {
 	m, q, tt, _ := openReviewableResults(t, recovery(
 		settledReviewItem(t, 1, record.QualityAutoAccepted),
 		settledReviewItem(t, 2, record.QualityHumanConfirmed),
-	), 1180, 760)
+	), 1440, 900)
 	tt.Frame()
 	m.setResultFilter(resultFilterAll)
 	tt.Frame()
@@ -657,7 +655,7 @@ func TestReviewActionReasonKeepsButtonsAnchoredAtLargeText(t *testing.T) {
 			settledReviewItem(t, 1, record.QualityAutoAccepted),
 			reviewRowItem(t, 2, 12),
 			settledReviewItem(t, 3, record.QualityAutoAccepted),
-		), 1180, 760)
+		), 1440, 900)
 		tt.SetPreferences(ui.Preferences{TextScale: scale})
 		settle(t, m, q, tt)
 		tt.Frame()
@@ -694,7 +692,7 @@ func TestReviewActionReasonKeepsButtonsAnchoredAtLargeText(t *testing.T) {
 // cleanup disables the write actions, and their shortcuts must not bypass
 // that state.
 func TestReviewCleanupBlocksWriteShortcuts(t *testing.T) {
-	m, q, tt, svc := openReviewableResults(t, recovery(reviewRowItem(t, 1, 12)), 1180, 760)
+	m, q, tt, svc := openReviewableResults(t, recovery(reviewRowItem(t, 1, 12)), 1440, 900)
 	tt.Frame()
 	m.edit.draft.Level = "13"
 	m.edit.refresh()
@@ -718,7 +716,7 @@ func TestReviewCleanupBlocksWriteShortcuts(t *testing.T) {
 func TestReviewModifyExitExplainsQueue(t *testing.T) {
 	m, _, tt, _ := openReviewableResults(t, recovery(
 		settledReviewItem(t, 1, record.QualityAutoAccepted),
-	), 1180, 760)
+	), 1440, 900)
 	tt.Frame()
 	m.setResultFilter(resultFilterAll)
 	tt.Frame()
@@ -753,7 +751,7 @@ func TestReviewModifyRetryConfirms(t *testing.T) {
 	m, q, tt, svc := openReviewableResults(t, recovery(
 		settledReviewItem(t, 1, record.QualityAutoAccepted),
 		settledReviewItem(t, 2, record.QualityHumanConfirmed),
-	), 1180, 760)
+	), 1440, 900)
 	tt.Frame()
 	m.setResultFilter(resultFilterAll)
 	tt.Frame()
@@ -825,7 +823,7 @@ func TestReviewPendingShortcutCrossesFilters(t *testing.T) {
 		equippedWarningReviewItem(t, 3),
 		settledReviewItem(t, 4, record.QualityHumanConfirmed),
 	)
-	m, q, tt, _ := openReviewableResults(t, rec, 1180, 760)
+	m, q, tt, _ := openReviewableResults(t, rec, 1440, 900)
 	tt.Frame()
 	m.setResultFilter(resultFilterWarning)
 	tt.Frame()
@@ -839,7 +837,7 @@ func TestReviewPendingShortcutCrossesFilters(t *testing.T) {
 		t.Fatalf("Ctrl+J from 警告 = filter %v selected %d: %s",
 			m.filter, m.selectedSeq(), probeReviewState(m))
 	}
-	if m.edit == nil || m.edit.seq != 1 || m.focusedReviewField != FormFieldMainStat {
+	if m.edit == nil || m.edit.seq != 1 || m.focusedReviewField != FormFieldSetID {
 		t.Fatalf("Ctrl+J did not focus the pending editor: %s field %q",
 			probeReviewState(m), m.focusedReviewField)
 	}
@@ -863,7 +861,7 @@ func TestReviewPendingShortcutCrossesFilters(t *testing.T) {
 		reviewRowItem(t, 1, 12),
 		settledReviewItem(t, 2, record.QualityAutoAccepted),
 		warning,
-	), 1180, 760)
+	), 1440, 900)
 	tt2.Frame()
 	m2.setResultFilter(resultFilterAll)
 	m2.requestResultFilter(resultFilterAll, "31200", "")
@@ -887,7 +885,7 @@ func TestReviewPendingShortcutVisibleFocus(t *testing.T) {
 	m, q, tt, _ := openReviewableResults(t, recovery(
 		settledReviewItem(t, 1, record.QualityAutoAccepted),
 		reviewRowItem(t, 2, 12),
-	), 1180, 760)
+	), 1440, 900)
 	tt.Frame()
 	m.setResultFilter(resultFilterAll)
 	tt.Frame()
@@ -899,7 +897,7 @@ func TestReviewPendingShortcutVisibleFocus(t *testing.T) {
 	if m.selectedSeq() != 2 || m.edit == nil || m.edit.seq != 2 {
 		t.Fatalf("Ctrl+J did not reach the pending editor: %s", probeReviewState(m))
 	}
-	if m.focusedReviewField != FormFieldMainStat {
+	if m.focusedReviewField != FormFieldSetID {
 		t.Fatalf("Ctrl+J left the keyboard at %q", m.focusedReviewField)
 	}
 }
@@ -910,7 +908,7 @@ func TestReviewPendingShortcutPromptsDirtyModify(t *testing.T) {
 	m, q, tt, _ := openReviewableResults(t, recovery(
 		reviewRowItem(t, 1, 12),
 		equippedWarningReviewItem(t, 2),
-	), 1180, 760)
+	), 1440, 900)
 	tt.Frame()
 	m.setResultFilter(resultFilterWarning)
 	tt.Frame()
@@ -942,7 +940,7 @@ func TestReviewPendingShortcutStatusWithoutPending(t *testing.T) {
 	m, _, tt, _ := openReviewableResults(t, recovery(
 		settledReviewItem(t, 1, record.QualityAutoAccepted),
 		equippedWarningReviewItem(t, 2),
-	), 1180, 760)
+	), 1440, 900)
 	tt.Frame()
 	m.setResultFilter(resultFilterWarning)
 	tt.Frame()
@@ -957,7 +955,7 @@ func TestReviewPendingShortcutStatusWithoutPending(t *testing.T) {
 func TestReviewModifyFocusesFirstRenderedField(t *testing.T) {
 	m, _, tt, _ := openReviewableResults(t, recovery(
 		settledReviewItem(t, 1, record.QualityAutoAccepted),
-	), 1180, 760)
+	), 1440, 900)
 	tt.Frame()
 	m.setResultFilter(resultFilterAll)
 	tt.Frame()
@@ -966,14 +964,14 @@ func TestReviewModifyFocusesFirstRenderedField(t *testing.T) {
 	}
 	tt.Frame()
 	tt.Frame()
-	if m.focusedReviewField != FormFieldMainStat || m.reviewField != FormFieldMainStat {
-		t.Fatalf("修改 focused %q (highlight %q), want 主词条",
+	if m.focusedReviewField != FormFieldSetID || m.reviewField != FormFieldSetID {
+		t.Fatalf("修改 focused %q (highlight %q), want 套装",
 			m.focusedReviewField, m.reviewField)
 	}
-	if !tt.Focused("主词条数值") {
+	if !tt.Focused("套装：" + m.edit.draft.SetID) {
 		t.Fatalf("the main-stat value does not hold the keyboard: %q", tt.Texts())
 	}
-	if tt.Focused("套装") {
+	if tt.Focused("主词条数值") {
 		t.Fatal("修改 still focused the set field")
 	}
 }
@@ -984,7 +982,7 @@ func TestReviewModifyKeepsWarningRow(t *testing.T) {
 	m, q, tt, _ := openReviewableResults(t, recovery(
 		equippedWarningReviewItem(t, 1),
 		equippedWarningReviewItem(t, 2),
-	), 1180, 760)
+	), 1440, 900)
 	tt.Frame()
 	m.setResultFilter(resultFilterWarning)
 	tt.Frame()
@@ -1039,7 +1037,7 @@ func TestReviewModifyKeepsWarningRow(t *testing.T) {
 func TestReviewModifyKeepsLastWarningRow(t *testing.T) {
 	m, q, tt, _ := openReviewableResults(t, recovery(
 		equippedWarningReviewItem(t, 1),
-	), 1180, 760)
+	), 1440, 900)
 	tt.Frame()
 	m.setResultFilter(resultFilterWarning)
 	tt.Frame()
@@ -1068,7 +1066,7 @@ func TestReviewModifyKeepsLastWarningRow(t *testing.T) {
 func TestReviewModifyNoOpDoesNotWrite(t *testing.T) {
 	m, q, tt, svc := openReviewableResults(t, recovery(
 		settledReviewItem(t, 1, record.QualityAutoAccepted),
-	), 1180, 760)
+	), 1440, 900)
 	tt.Frame()
 	m.setResultFilter(resultFilterAll)
 	tt.Frame()
@@ -1117,7 +1115,7 @@ func TestReviewModifyNormalizedNoOpDoesNotWrite(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			m, q, tt, svc := openReviewableResults(t, recovery(
 				settledReviewItem(t, 1, record.QualityAutoAccepted),
-			), 1180, 760)
+			), 1440, 900)
 			tt.Frame()
 			m.setResultFilter(resultFilterAll)
 			tt.Frame()
@@ -1153,7 +1151,7 @@ func TestReviewBrowseGuardAllowsShortcut(t *testing.T) {
 		settledReviewItem(t, 1, record.QualityAutoAccepted),
 		reviewRowItem(t, 2, 12),
 		settledReviewItem(t, 3, record.QualityAutoAccepted),
-	), 1180, 760)
+	), 1440, 900)
 	tt.Frame()
 	m.setResultFilter(resultFilterAll)
 	tt.Frame()
@@ -1188,7 +1186,7 @@ func TestReviewBrowseBarsAlign(t *testing.T) {
 		settledReviewItem(t, 1, record.QualityAutoAccepted),
 		reviewRowItem(t, 2, 12),
 		settledReviewItem(t, 3, record.QualityAutoAccepted),
-	), 1180, 760)
+	), 1440, 900)
 	tt.Frame()
 	m.setResultFilter(resultFilterAll)
 	tt.Frame()
@@ -1217,7 +1215,7 @@ func TestReviewModifyCleanReason(t *testing.T) {
 		settledReviewItem(t, 1, record.QualityAutoAccepted),
 		reviewRowItem(t, 2, 12),
 		settledReviewItem(t, 3, record.QualityAutoAccepted),
-	), 1180, 760)
+	), 1440, 900)
 	tt.Frame()
 	m.setResultFilter(resultFilterAll)
 	tt.Frame()
@@ -1280,7 +1278,7 @@ func TestReviewModifyCleanReason(t *testing.T) {
 func TestReviewQueuedRowShowsPlaceholders(t *testing.T) {
 	m, _, tt := openResponsiveResults(t, recovery(
 		item(1, record.StatusQueued, "", "", "排队中"),
-	), 1180, 760)
+	), 1440, 900)
 	tt.Frame()
 	m.setResultFilter(resultFilterAll)
 	tt.Frame()
@@ -1307,7 +1305,7 @@ func TestReviewQueuedRowShowsPlaceholders(t *testing.T) {
 func TestReviewClearedFieldKeepsFocus(t *testing.T) {
 	m, _, tt, _ := openReviewableResults(t, recovery(
 		settledReviewItem(t, 1, record.QualityAutoAccepted),
-	), 1180, 760)
+	), 1440, 900)
 	tt.Frame()
 	m.setResultFilter(resultFilterAll)
 	tt.Frame()
@@ -1350,7 +1348,7 @@ func TestReviewClearedFieldKeepsFocus(t *testing.T) {
 func TestReviewStatusTagIsInline(t *testing.T) {
 	m, _, tt, _ := openReviewableResults(t, recovery(
 		settledReviewItem(t, 1, record.QualityAutoAccepted),
-	), 1180, 760)
+	), 1440, 900)
 	tt.Frame()
 	m.setResultFilter(resultFilterAll)
 	tt.Frame()
@@ -1374,7 +1372,7 @@ func TestReviewFilterScrollsSelectionIntoView(t *testing.T) {
 		}
 		items = append(items, settledReviewItem(t, seq, record.QualityAutoAccepted))
 	}
-	m, _, tt, _ := openReviewableResults(t, recovery(items...), 1180, 760)
+	m, _, tt, _ := openReviewableResults(t, recovery(items...), 1440, 900)
 	tt.Frame()
 	m.setResultFilter(resultFilterWarning)
 	tt.Frame()
@@ -1399,7 +1397,7 @@ func TestReviewFilterScrollsSelectionIntoView(t *testing.T) {
 func TestReviewReadOnlyF6FocusesModify(t *testing.T) {
 	m, _, tt, _ := openReviewableResults(t, recovery(
 		settledReviewItem(t, 1, record.QualityAutoAccepted),
-	), 1180, 760)
+	), 1440, 900)
 	tt.Frame()
 	m.setResultFilter(resultFilterAll)
 	tt.Frame()

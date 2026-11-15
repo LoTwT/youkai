@@ -395,6 +395,56 @@ func TestDraftKeepsExplicitUnknownSubstats(t *testing.T) {
 	}
 }
 
+func TestUnitPickerValues(t *testing.T) {
+	for _, tc := range []struct{ value, label string }{
+		{"percent", "%"}, {"flat", "固定值"}, {"legacyUnit", "legacyUnit 未知单位"},
+	} {
+		if label := describeUnit(tc.value); label != tc.label {
+			t.Fatalf("unit %q label = %q, want %q", tc.value, label, tc.label)
+		}
+		if value := unitOptionValue(tc.label); value != tc.value {
+			t.Fatalf("unit label %q value = %q, want %q", tc.label, value, tc.value)
+		}
+	}
+	for _, tc := range []struct {
+		attribute *string
+		current   string
+		want      string
+	}{
+		{nil, unreadOption, "|flat|percent"},
+		{stringPtr("health"), "%", "|flat|percent"},
+		{stringPtr("critDamage"), "%", "|percent"},
+		{stringPtr("penetration"), "固定值", "|flat"},
+		{stringPtr("critDamage"), "固定值", "|percent|flat"},
+		{nil, "legacyUnit 未知单位", "|flat|percent|legacyUnit"},
+	} {
+		var values []string
+		for _, label := range unitChoices(tc.attribute, tc.current) {
+			values = append(values, unitOptionValue(label))
+		}
+		if got := strings.Join(values, "|"); got != tc.want {
+			t.Fatalf("unit choices for %v / %q = %q, want %q", tc.attribute, tc.current, got, tc.want)
+		}
+	}
+}
+
+func TestDraftCompactUnitsKeepCanonicalData(t *testing.T) {
+	for _, unit := range []string{"percent", "flat"} {
+		source := completeReviewData(12)
+		source.MainStat.Unit = stringPtr(unit)
+		source.Substats[0].Unit = stringPtr(unit)
+		draft := newEditDraft(source)
+		data, problems := draft.toData(nil)
+		if len(problems) != 0 {
+			t.Fatalf("unit %s round-trip problems: %+v", unit, problems)
+		}
+		if *data.MainStat.Unit != unit || *data.Substats[0].Unit != unit ||
+			*data.Substats[0].Value != "19.2" || *data.Substats[0].EnhancementRolls != 3 {
+			t.Fatalf("unit %s round-trip changed data: %+v", unit, data)
+		}
+	}
+}
+
 func TestDraftRejectsInvalidPresentValues(t *testing.T) {
 	base := editDraft{
 		SetID:           describeSet(31100),
@@ -462,19 +512,19 @@ func TestCatalogChoicesCoverTheFixedTables(t *testing.T) {
 		t.Fatalf("attribute choices = %d, want the unread option and %d attributes",
 			len(attributes), len(reviewAttributes))
 	}
-	units := unitChoices(nil, nil)
+	units := unitChoices(nil, unreadOption)
 	if len(units) != 3 {
 		t.Fatalf("unit choices = %v, want unread, flat and percent", units)
 	}
 	crit := string(zzz.AttrCritRate)
-	if got := unitChoices(&crit, nil); len(got) != 2 {
+	if got := unitChoices(&crit, unreadOption); len(got) != 2 {
 		t.Fatalf("crit-rate units = %v, want unread and percent", got)
 	}
 }
 
 func TestEditSavePersistsRevision(t *testing.T) {
 	m, q, tt, svc := openReviewRecordPage(t, reviewRowItem(t, 1, 12))
-	if !tt.HasText("待校对 1 件") {
+	if !tt.HasText("待处理 1") {
 		t.Fatalf("the pending count does not show: %q", tt.Texts())
 	}
 	tt.Frame()
@@ -526,7 +576,7 @@ func TestEditSavePersistsRevision(t *testing.T) {
 		t.Fatalf("row after save = revision %d quality %q level %q",
 			row.Revision, row.Quality, row.LevelText())
 	}
-	if !tt.HasText("13 级") || !tt.HasText("已保存修订 1。") {
+	if m.selectedRow().LevelText() != "13 级" || m.edit == nil || m.edit.draft.Level != "13" || !tt.HasText("已保存修订 1。") {
 		t.Fatalf("the saved revision does not show: %q", tt.Texts())
 	}
 }
@@ -567,7 +617,7 @@ func TestConfirmAndNextThroughToEmpty(t *testing.T) {
 	if m.selected != 1 {
 		t.Fatalf("the last confirmation moved away from the last item: %d", m.selected)
 	}
-	if !tt.HasText("待校对 0") {
+	if !tt.HasText("待处理 0") {
 		t.Fatalf("the empty pending state does not show: %q", tt.Texts())
 	}
 	if tt.HasText("待校对 0 · 全部可导出") {
@@ -637,7 +687,7 @@ func TestConfirmLastItemStayShowsFinishedReview(t *testing.T) {
 		t.Fatalf("the last confirm-and-stay did not complete: pending %d visible %v",
 			m.pendingItemsCount(), m.completionVisible())
 	}
-	if !tt.HasText("都处理完了") || !tt.HasText("导出…") {
+	if !tt.HasText("都处理完了") || !tt.HasText("导出") {
 		t.Fatalf("the finished review state is missing: %q", tt.Texts())
 	}
 	if tt.HasText("修改") {

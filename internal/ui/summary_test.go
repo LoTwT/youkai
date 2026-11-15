@@ -89,7 +89,7 @@ func TestRecordSummaryConclusionTable(t *testing.T) {
 				shell(completed, record.CoverageComplete, record.SortVerificationVerified, summaryCompletePositions())),
 			wantTitle:      "扫全了，可以直接导出",
 			wantPrimary:    summaryActionExport,
-			wantPrimaryLbl: "导出…",
+			wantPrimaryLbl: "导出",
 			wantSecondary:  []summaryActionKind{summaryActionViewItems},
 		},
 		{
@@ -113,7 +113,7 @@ func TestRecordSummaryConclusionTable(t *testing.T) {
 				})),
 			wantTitle:      "没有扫全：3 号位、5 号位不完整；排序未验证",
 			wantPrimary:    summaryActionExport,
-			wantPrimaryLbl: "导出…",
+			wantPrimaryLbl: "导出",
 			wantSecondary:  []summaryActionKind{summaryActionRescan},
 			wantNotes:      "其余 4 个号位完整",
 		},
@@ -123,7 +123,7 @@ func TestRecordSummaryConclusionTable(t *testing.T) {
 				shell(completed, record.CoveragePartial, record.SortVerificationUnverified, summaryCompletePositions())),
 			wantTitle:      "没有扫全：排序未验证",
 			wantPrimary:    summaryActionExport,
-			wantPrimaryLbl: "导出…",
+			wantPrimaryLbl: "导出",
 			wantSecondary:  []summaryActionKind{summaryActionRescan},
 		},
 		{
@@ -132,7 +132,7 @@ func TestRecordSummaryConclusionTable(t *testing.T) {
 				shell(cancelled, record.CoveragePartial, record.SortVerificationUnverified, truncatedAt3)),
 			wantTitle:      "已手动停止，扫描了 2 个号位",
 			wantPrimary:    summaryActionExport,
-			wantPrimaryLbl: "导出…",
+			wantPrimaryLbl: "导出",
 			wantSecondary:  []summaryActionKind{summaryActionRescan},
 		},
 		{
@@ -206,7 +206,7 @@ func TestRecordSummaryConclusionTable(t *testing.T) {
 			}(),
 			wantTitle:      "扫描中断，只保存了部分结果",
 			wantPrimary:    summaryActionExport,
-			wantPrimaryLbl: "导出…",
+			wantPrimaryLbl: "导出",
 			wantSecondary:  []summaryActionKind{summaryActionViewItems, summaryActionRescan},
 		},
 		{
@@ -258,7 +258,7 @@ func TestRecordSummaryConclusionTable(t *testing.T) {
 			snap:           app.Snapshot{Busy: true, SaveError: "磁盘已满"},
 			wantTitle:      "扫全了，可以直接导出",
 			wantPrimary:    summaryActionExport,
-			wantPrimaryLbl: "导出…",
+			wantPrimaryLbl: "导出",
 			wantSecondary:  []summaryActionKind{summaryActionViewItems},
 		},
 		{
@@ -276,7 +276,7 @@ func TestRecordSummaryConclusionTable(t *testing.T) {
 				shell(completed, record.CoverageUnknown, record.SortVerificationUnknown, nil)),
 			wantTitle:      "扫描结束，无法确认是否扫全",
 			wantPrimary:    summaryActionExport,
-			wantPrimaryLbl: "导出…",
+			wantPrimaryLbl: "导出",
 		},
 	}
 	for _, tc := range cases {
@@ -417,7 +417,7 @@ func TestSummaryTitleDoesNotPromiseBlockedExport(t *testing.T) {
 			m.exportData = nil
 			m.exportBuildErr = "boom"
 		}, reason: "无法生成导出：boom"},
-		{name: "writing", set: func(m *Model) { m.exporting = true }, reason: "正在导出……"},
+		{name: "writing", set: func(m *Model) { m.exporting = true }, reason: "正在导出…"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m, _, tt, _ := openSummaryRecord(t, summaryExportActionRecord(t),
@@ -443,7 +443,7 @@ func TestSummaryTitleDoesNotPromiseBlockedExport(t *testing.T) {
 func TestSummaryExportActionOpensTheOnlyDialog(t *testing.T) {
 	m, _, tt, _ := openSummaryRecord(t, summaryFourClassRecord(t),
 		Config{DirectExportSaver: &fakeDirectExportSaver{}}, 1180, 760)
-	if err := tt.Click("先导出可导出的 2 件…"); err != nil {
+	if err := tt.Click("先导出可导出的 2 件"); err != nil {
 		t.Fatal(err)
 	}
 	tt.Frame()
@@ -818,11 +818,15 @@ func TestViewSummaryDiagnosticsCopyAndOpen(t *testing.T) {
 	if tt.HasText("故障码：focusLost") {
 		t.Fatalf("the fault code shows before the diagnostics section opens: %q", tt.Texts())
 	}
+	tt.Scroll(700, 400, 0, 500)
+	tt.Frame()
 	if err := tt.Click("详情"); err != nil {
 		t.Fatal(err)
 	}
 	settle(t, m, q, tt)
 	tt.Advance(300 * time.Millisecond)
+	tt.Frame()
+	tt.Scroll(700, 400, 0, 500)
 	tt.Frame()
 	if err := tt.Click("诊断信息"); err != nil {
 		t.Fatal(err)
@@ -867,6 +871,8 @@ func TestViewSummaryDetailsShowPositionConclusion(t *testing.T) {
 	m, q, tt, _ := openSummaryRecord(t, rec,
 		Config{DirectExportSaver: &fakeDirectExportSaver{}}, 1180, 900)
 
+	tt.Scroll(700, 400, 0, 500)
+	tt.Frame()
 	if err := tt.Click("详情"); err != nil {
 		t.Fatal(err)
 	}
@@ -925,16 +931,16 @@ func TestViewSummaryEndings(t *testing.T) {
 		primary string
 	}{
 		{"complete and exportable", recordWith(completed, record.CoverageComplete, record.SortVerificationVerified, summaryCompletePositions(), 1),
-			"扫全了，可以直接导出", "导出…"},
+			"扫全了，可以直接导出", "导出"},
 		{"complete with pending", recordWith(completed, record.CoverageComplete, record.SortVerificationVerified, summaryCompletePositions(), 1),
 			"扫全了，还有 1 件待校对", "校对 1 件"},
 		{"partial coverage", recordWith(completed, record.CoveragePartial, record.SortVerificationUnverified, []record.PositionConclusion{
 			{Position: 1, Complete: true}, {Position: 2, Complete: true},
 			{Position: 3, Stage: "filter", ReasonCode: "navigationMismatch"},
 			{Position: 4, Complete: true}, {Position: 5, Stage: "bottom"}, {Position: 6, Complete: true},
-		}, 1), "没有扫全：3 号位、5 号位不完整；排序未验证", "导出…"},
+		}, 1), "没有扫全：3 号位、5 号位不完整；排序未验证", "导出"},
 		{"manual stop", recordWith(cancelled, record.CoveragePartial, record.SortVerificationUnverified, truncatedAt3, 1),
-			"已手动停止，扫描了 2 个号位", "导出…"},
+			"已手动停止，扫描了 2 个号位", "导出"},
 		{"fault", recordWith(failed, record.CoveragePartial, record.SortVerificationUnverified, truncatedAt3, 1),
 			"扫描中途停止：游戏失去了焦点", "修正后重新扫描"},
 		{"zero items", recordWith(pageFault, record.CoverageUnknown, record.SortVerificationUnverified, nil, 0),

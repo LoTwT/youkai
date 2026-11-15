@@ -15,6 +15,25 @@ import (
 // any database.
 const SettingsFileName = "settings.json"
 
+// Appearance overrides only the app's light/dark mode, keeping desktop
+// accessibility preferences. Empty and older settings follow the system.
+type Appearance string
+
+const (
+	AppearanceSystem Appearance = "system"
+	AppearanceLight  Appearance = "light"
+	AppearanceDark   Appearance = "dark"
+)
+
+func (a Appearance) Normalized() Appearance {
+	switch a {
+	case AppearanceLight, AppearanceDark:
+		return a
+	default:
+		return AppearanceSystem
+	}
+}
+
 // CloseBehavior is what clicking the main window's close button does.
 type CloseBehavior string
 
@@ -45,6 +64,7 @@ func (b CloseBehavior) normalize() CloseBehavior {
 
 // Settings are the persisted user preferences.
 type Settings struct {
+	Appearance Appearance `json:"appearance,omitempty"`
 	// CloseBehavior is what closing the window does; empty loads as
 	// CloseBehaviorHide.
 	CloseBehavior CloseBehavior `json:"closeBehavior"`
@@ -56,7 +76,7 @@ type Settings struct {
 
 // DefaultSettings is the behavior of a fresh installation.
 func DefaultSettings() Settings {
-	return Settings{CloseBehavior: CloseBehaviorHide}
+	return Settings{CloseBehavior: CloseBehaviorHide, Appearance: AppearanceSystem}
 }
 
 // LoadSettings reads the preferences under dataRoot. A missing file is the
@@ -77,6 +97,7 @@ func LoadSettings(dataRoot string) (Settings, error) {
 		return DefaultSettings(), fmt.Errorf("app: parse settings %q: %w", path, err)
 	}
 	settings.CloseBehavior = settings.CloseBehavior.normalize()
+	settings.Appearance = settings.Appearance.Normalized()
 	if !settings.CloseBehavior.valid() {
 		return DefaultSettings(), fmt.Errorf("app: settings %q: unknown close behavior %q", path, settings.CloseBehavior)
 	}
@@ -87,6 +108,7 @@ func LoadSettings(dataRoot string) (Settings, error) {
 // temporary file in the same directory is written and renamed over the
 // old one, so a crash mid-write cannot leave a truncated settings file.
 func SaveSettings(dataRoot string, settings Settings) error {
+	settings.Appearance = settings.Appearance.Normalized()
 	settings.CloseBehavior = settings.CloseBehavior.normalize()
 	if !settings.CloseBehavior.valid() {
 		return fmt.Errorf("app: save settings: unknown close behavior %q", settings.CloseBehavior)

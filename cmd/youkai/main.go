@@ -187,6 +187,7 @@ func main() {
 		log.Printf("youkai: settings: %v (using defaults)", err)
 	}
 	log.Printf("youkai: close behavior=%s", settings.CloseBehavior)
+	mygo.Theme.SetSource(mygo.ThemeSource(settings.Appearance.Normalized()))
 
 	// "应用和功能" lists the app from the NSIS-written uninstall entry, and
 	// the in-place updater never refreshes that registry value (MyGo
@@ -290,6 +291,16 @@ func main() {
 		// settings value keeps both preferences, so saving one never erases
 		// the other.
 		CloseBehavior: settings.CloseBehavior,
+		Appearance:    settings.Appearance,
+		SetAppearance: func(appearance app.Appearance) error {
+			mygo.Theme.SetSource(mygo.ThemeSource(appearance))
+			settings.Appearance = appearance
+			err := svc.SaveSettings(settings)
+			if err != nil {
+				log.Printf("youkai: save appearance: %v", err)
+			}
+			return err
+		},
 		SaveCloseBehavior: func(behavior app.CloseBehavior) error {
 			settings.CloseBehavior = behavior
 			err := svc.SaveSettings(settings)
@@ -604,7 +615,7 @@ func installedWindowsSource(host func() (platform.Port, error), getenv func(stri
 	}
 	src := &app.GameScanSource{
 		Port:   port,
-		Hotkey: platform.HotkeySpec{Key: platform.KeyS, Ctrl: true, Alt: true, Shift: true},
+		Hotkey: platform.StopScanHotkey("windows"),
 		Client: record.ClientWindowsLocal,
 		Mode:   "traverse",
 	}
@@ -657,7 +668,7 @@ func gameScanSourceFrom(mode, goos string, getenv func(string) string, host func
 	case "darwin":
 		target = collect.MacCloudTarget
 		client = record.ClientMacOSCloud
-		hotkey = platform.HotkeySpec{Key: platform.KeyS, Ctrl: true, Alt: true, Meta: true}
+		hotkey = platform.StopScanHotkey(goos)
 	case "windows":
 		exe := getenv("YOUKAI_GAME_EXE")
 		kind := getenv("YOUKAI_GAME_CLIENT")
@@ -672,7 +683,7 @@ func gameScanSourceFrom(mode, goos string, getenv func(string) string, host func
 		if kind == "local" {
 			client = record.ClientWindowsLocal
 		}
-		hotkey = platform.HotkeySpec{Key: platform.KeyS, Ctrl: true, Alt: true, Shift: true}
+		hotkey = platform.StopScanHotkey(goos)
 	default:
 		return nil, "", fmt.Errorf("no game platform on %s", goos)
 	}

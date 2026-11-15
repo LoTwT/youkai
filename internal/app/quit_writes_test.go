@@ -140,7 +140,7 @@ func TestQuitRejectsWritesDuringTeardownAndReopensAfterFailure(t *testing.T) {
 
 func TestSettingsUseServiceWriteAdmission(t *testing.T) {
 	svc, _ := reviewService(t, nil, reviewItem(t, 1, reviewData()))
-	settings := Settings{CloseBehavior: CloseBehaviorExit}
+	settings := Settings{CloseBehavior: CloseBehaviorExit, Appearance: AppearanceSystem}
 	if err := svc.SaveSettings(settings); err != nil {
 		t.Fatal(err)
 	}

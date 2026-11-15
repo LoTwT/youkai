@@ -51,6 +51,9 @@ type TargetScanSource interface {
 	NewScanForTarget(TargetCandidate) (ScanSpec, error)
 }
 
+// positionRelay only supplies ephemeral UI progress, never scan control.
+type positionRelay interface{ SetPositionSink(func(int)) }
+
 // scopeRelay is the controller capability that receives the traversal's
 // observed-scope relay; collect.Controller implements it (see its
 // ScopeReporter). The service wires the record deliverer's sink into it
