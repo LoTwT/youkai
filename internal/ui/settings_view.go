@@ -8,17 +8,11 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-// Settings is a single page of sections with an in-page directory on the
-// left (design 08 §6). The directory disappears in the compact width band;
-// the sections keep their reading order either way (design 09 §2).
-const (
-	settingsTOCWidth         = 168
-	settingsContentMaxWidth  = 936
-	settingsStandardMinWidth = 1120
-)
+// Settings uses all available width for six vertically scrolling sections.
+const settingsSectionInset = 24
 
-// settingsSectionID names one section and its in-page directory entry.
-// Zero means no pending directory jump.
+// settingsSectionID names a section anchor for business entry points.
+// Zero means no pending jump.
 type settingsSectionID int
 
 const (
@@ -31,24 +25,7 @@ const (
 	settingsSectionAbout
 )
 
-// settingsSectionInfo is one directory entry and its section title.
-type settingsSectionInfo struct {
-	id    settingsSectionID
-	title string
-}
-
-// settingsSectionList is the fixed reading and directory order.
-var settingsSectionList = []settingsSectionInfo{
-	{id: settingsSectionGeneral, title: "常规"},
-	{id: settingsSectionShortcuts, title: "快捷键"},
-	{id: settingsSectionStorage, title: "存储与清理"},
-	{id: settingsSectionDiagnostics, title: "诊断"},
-	{id: settingsSectionUpdate, title: "更新"},
-	{id: settingsSectionAbout, title: "关于"},
-}
-
-// settingsSectionRefs are the section anchors the in-page directory
-// scrolls to by measuring their committed boxes.
+// settingsSectionRefs retain the anchors used by business entry points.
 type settingsSectionRefs struct {
 	general     ui.Ref
 	shortcuts   ui.Ref
@@ -77,50 +54,37 @@ func (r *settingsSectionRefs) ref(id settingsSectionID) *ui.Ref {
 	}
 }
 
-// settingsPage is the settings destination: the optional return strip from
-// the prepare check's disk-space entry, the in-page directory in the
-// standard width band, and the six sections in one scrolling column.
+// settingsPage keeps the prepare-check return strip and the six sections
+// in one full-width scrolling column, without an in-page directory.
 func (m *Model) settingsPage(c *ui.Context, t *ui.Theme) {
 	tok := m.effectiveTokens()
 	m.applySettingsScrollTarget(c)
 	if m.settingsReturnToPrepare {
 		m.settingsReturnStrip(c, tok)
 	}
-	ui.Row(c).Grow(1).FillHeight().AlignItems(ui.Stretch).Gap(32).Children(func() {
-		if m.settingsTableOfContentsVisible() {
-			m.settingsTableOfContents(c, t, tok)
-		}
-		ui.Scroll(c).Grow(1).FillHeight().TrackScroll(&m.settingsScroll).Bind(&m.settingsViewportRef).
-			Children(func() {
-				ui.Column(c).FillWidth().MaxWidth(settingsContentMaxWidth).Gap(24).Children(func() {
-					m.settingsSection(c, t, settingsSectionGeneral, "常规", func() {
-						m.settingsGeneral(c, t, tok)
-					})
-					m.settingsSection(c, t, settingsSectionShortcuts, "快捷键", func() {
-						m.settingsShortcuts(c, t, tok)
-					})
-					m.settingsSection(c, t, settingsSectionStorage, "存储与清理", func() {
-						m.settingsStorage(c, t, tok)
-					})
-					m.settingsSection(c, t, settingsSectionDiagnostics, "诊断", func() {
-						m.settingsDiagnostics(c, t, tok)
-					})
-					m.settingsSection(c, t, settingsSectionUpdate, "更新", func() {
-						m.updateArea(c, t, tok)
-					})
-					m.settingsSection(c, t, settingsSectionAbout, "关于", func() {
-						m.settingsAbout(c, t, tok)
-					})
+	ui.Scroll(c).Grow(1).FillWidth().FillHeight().TrackScroll(&m.settingsScroll).Bind(&m.settingsViewportRef).
+		Children(func() {
+			ui.Column(c).FillWidth().Gap(24).Children(func() {
+				m.settingsSection(c, t, settingsSectionGeneral, "常规", func() {
+					m.settingsGeneral(c, t, tok)
+				})
+				m.settingsSection(c, t, settingsSectionShortcuts, "快捷键", func() {
+					m.settingsShortcuts(c, t, tok)
+				})
+				m.settingsSection(c, t, settingsSectionStorage, "存储与清理", func() {
+					m.settingsStorage(c, t, tok)
+				})
+				m.settingsSection(c, t, settingsSectionDiagnostics, "诊断", func() {
+					m.settingsDiagnostics(c, t, tok)
+				})
+				m.settingsSection(c, t, settingsSectionUpdate, "更新", func() {
+					m.updateArea(c, t, tok)
+				})
+				m.settingsSection(c, t, settingsSectionAbout, "关于", func() {
+					m.settingsAbout(c, t, tok)
 				})
 			})
-	})
-}
-
-// settingsTableOfContentsVisible reports whether the standard width band
-// leaves room for the directory. Before the window reports its content
-// width, the standard design applies.
-func (m *Model) settingsTableOfContentsVisible() bool {
-	return m.contentWidth == 0 || m.contentWidth >= settingsStandardMinWidth
+		})
 }
 
 // settingsReturnStrip is the prepare check's entry promise: cleaning up
@@ -134,12 +98,11 @@ func (m *Model) settingsReturnStrip(c *ui.Context, tok *Tokens) {
 		})
 }
 
-// settingsSection builds one titled section and binds the anchor the
-// in-page directory scrolls to.
+// settingsSection builds one full-width card and retains its jump anchor.
 func (m *Model) settingsSection(c *ui.Context, t *ui.Theme,
 	id settingsSectionID, title string, body func()) {
 	ref := m.settingsSections.ref(id)
-	column := panel(c, m.effectiveTokens()).Padding(24).Gap(16)
+	column := panel(c, m.effectiveTokens()).FillWidth().Padding(settingsSectionInset).Gap(16)
 	if ref != nil {
 		column = column.Bind(ref)
 	}
@@ -185,66 +148,19 @@ func (m *Model) scrollSettingsSection(c *ui.Context, id settingsSectionID) bool 
 	return true
 }
 
-// settingsTableOfContents is the left directory. It is one vertical focus
-// group: Tab enters it, the arrows move between entries, and Enter scrolls
-// to the section. "更新" carries the same new-version dot as the rail.
-func (m *Model) settingsTableOfContents(c *ui.Context, t *ui.Theme, tok *Tokens) {
-	ui.Column(c).Width(settingsTOCWidth).Gap(t.Space(0.5)).
-		FocusGroup(ui.Vertical).Children(func() {
-		active := settingsSectionGeneral
-		viewport := m.settingsViewportRef.Bounds(c)
-		for _, section := range settingsSectionList {
-			if ref := m.settingsSections.ref(section.id); ref != nil {
-				bounds := ref.Bounds(c)
-				if bounds.H > 0 && bounds.Y <= viewport.Y+40 {
-					active = section.id
-				}
-			}
-		}
-		for i, section := range settingsSectionList {
-			ui.Row(c).Gap(t.Space(1)).AlignItems(ui.Center).Children(func() {
-				bg, fg := ui.Transparent, tok.TextPrimary
-				if section.id == active {
-					bg, fg = tok.AccentSoft, tok.AccentFG
-				}
-				entry := button(c, section.title).Width(settingsTOCWidth).Justify(ui.Start).TextColor(fg).
-					Background(bg).Border(0, ui.Color{}).Radius(t.Space(1)).
-					Padding(t.Space(0.75), t.Space(1))
-				if i == 0 {
-					entry = entry.Bind(&m.settingsFirstRef)
-					if m.settingsFocusPending && !m.settingsFocusStorage {
-						entry = entry.Focus()
-						m.settingsFocusPending = false
-					}
-				}
-				if section.id == settingsSectionUpdate && m.updateDotVisible() {
-					updateDot(c, t, tok)
-				}
-				if entry.Clicked() {
-					m.jumpSettingsSection(c, section.id)
-				}
-			})
-		}
-	})
-}
-
 // settingsGeneral holds the close-window preference and the tray-icon hint
 // replay. The default hides to the notification area; the explicit choice
 // runs the stop/save/release wrap-up. Without a tray entry hiding has no way
 // back, so the close option is fixed to the explicit exit and the reason is
 // stated (08 §7).
 func (m *Model) settingsGeneral(c *ui.Context, t *ui.Theme, tok *Tokens) {
+	m.settingsAppearance(c, t, tok)
 	ui.Text(c, "点击窗口的 ✕ 时").TextColor(tok.TextSecondary)
-	compactFocus := m.settingsFocusPending && !m.settingsTableOfContentsVisible()
 	if m.TrayUnavailable() != "" {
 		fixed := string(app.CloseBehaviorExit)
 		ui.RadioGroup(c, func() {
-			radio := ui.Radio(c, &fixed, string(app.CloseBehaviorExit), "停止扫描并退出").
+			ui.Radio(c, &fixed, string(app.CloseBehaviorExit), "停止扫描并退出").
 				Disabled(true)
-			if compactFocus {
-				radio = radio.Bind(&m.settingsFirstRef).Focus()
-				m.settingsFocusPending = false
-			}
 		})
 		ui.Text(c, "通知区域图标不可用。关闭窗口会停止扫描并退出应用。").
 			TextColor(t.TextMuted).FontSize(t.FontSize * 0.9)
@@ -273,10 +189,6 @@ func (m *Model) settingsGeneral(c *ui.Context, t *ui.Theme, tok *Tokens) {
 			segment.Background(bg).Children(func() { ui.Text(c, label).SingleLine() })
 		}
 	})
-	if compactFocus {
-		control.Bind(&m.settingsFirstRef).Focus()
-		m.settingsFocusPending = false
-	}
 	behavior := app.CloseBehaviorHide
 	if selected == 1 {
 		behavior = app.CloseBehaviorExit
@@ -332,10 +244,15 @@ type settingsShortcut struct {
 func (m *Model) settingsShortcuts(c *ui.Context, t *ui.Theme, tok *Tokens) {
 	// Horizontal scrolling preserves the complete action and key on one
 	// line at large text sizes and narrow windows, without ellipsis.
+	// ScrollHorizontal measures its content with an unbounded width. Give
+	// the list the card's actual available width as a floor, while allowing
+	// its intrinsic width to overflow at narrow widths and large text.
+	width, _ := c.Size()
+	innerWidth := max(0, width-m.railWidth()-2*m.pagePadding()-2*(settingsSectionInset+1))
 	ui.ScrollHorizontal(c).FillWidth().Focusable().Label("快捷键列表").Children(func() {
-		ui.Column(c).FillWidth().Gap(8).Children(func() {
+		ui.Column(c).MinWidth(innerWidth).Gap(8).Children(func() {
 			for _, shortcut := range m.settingsShortcutRows() {
-				ui.Row(c).Gap(24).AlignItems(ui.Center).Children(func() {
+				ui.Row(c).FillWidth().Gap(24).AlignItems(ui.Center).Children(func() {
 					ui.Text(c, shortcut.action+"（"+shortcut.context+"）").SingleLine().Shrink(0)
 					ui.Box(c).Grow(1)
 					keycaps(c, shortcut.keys)

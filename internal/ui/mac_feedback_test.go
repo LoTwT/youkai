@@ -50,6 +50,9 @@ func TestAppearancePickerKeepsDraftAndThemeIdentity(t *testing.T) {
 		t.Fatal("fixture has no editable draft")
 	}
 	m.edit.draft.Level = "13"
+	// Keep the existing draft in memory while exercising the Settings-only entry.
+	m.page = pageSettings
+	tt.Frame()
 	draft, page, config := m.edit, m.page, m.theme.config
 	light, dark := config.Theme(false), config.Theme(true)
 	var saved app.Appearance
@@ -57,9 +60,6 @@ func TestAppearancePickerKeepsDraftAndThemeIdentity(t *testing.T) {
 	tt.SetPreferences(ui.Preferences{TextScale: 1.5, HighContrast: true})
 	tt.SetDark(true)
 	for _, mode := range []app.Appearance{app.AppearanceDark, app.AppearanceLight, app.AppearanceSystem} {
-		if err := tt.Click("主题"); err != nil {
-			t.Fatal(err)
-		}
 		if err := tt.Click(appearanceLabel(mode)); err != nil {
 			t.Fatal(err)
 		}

@@ -89,34 +89,45 @@ func (m *Model) setAppearance(mode app.Appearance) {
 	}
 }
 
-// themePicker uses MyGo's keyboard-accessible Select parts, with the
-// current mode visible beside Settings. It is independent of navigation.
-func (m *Model) themePicker(c *ui.Context, tok *Tokens) {
-	selected := m.appearance
-	sel := ui.SelectBase(c, &selected)
-	b := sel.Trigger.Label("主题").Width(m.railWidth()-24).MinHeight(48).
-		Padding(8).Radius(controlRadius).Background(tok.SurfaceControl).Border(1, tok.BorderDefault)
-	if b.Hovered() {
-		b.Background(tok.SurfaceHover)
+// settingsAppearance is the sole theme entry. SegmentedBase owns native
+// single-selection, keyboard and focus semantics without changing pages.
+func (m *Model) settingsAppearance(c *ui.Context, t *ui.Theme, tok *Tokens) {
+	ui.Text(c, "主题").TextColor(tok.TextSecondary)
+	modes := []app.Appearance{app.AppearanceSystem, app.AppearanceLight, app.AppearanceDark}
+	selected := 0
+	for i, mode := range modes {
+		if mode == m.appearance {
+			selected = i
+		}
 	}
-	b.Children(func() {
-		ui.Column(c).Gap(2).Children(func() {
-			ui.Text(c, "主题").FontWeight(600).SingleLine()
-			ui.Text(c, appearanceLabel(m.appearance)).SingleLine()
-		})
-	})
-	sel.Popup(func(panel ui.Element) {
-		panel.Padding(4).Gap(4).Background(tok.SurfaceOverlay).Border(1, tok.BorderDefault).Radius(controlRadius)
-		for _, mode := range []app.Appearance{app.AppearanceSystem, app.AppearanceLight, app.AppearanceDark} {
-			item := sel.Item(mode).Padding(12, 16).Radius(4)
-			if item.Highlighted() || mode == m.appearance {
-				item.Background(tok.NavActive).TextColor(tok.NavActiveText)
+	parts := ui.SegmentedBase(c, &selected, len(modes))
+	control := parts.Track.Label("主题").AlignSelf(ui.Start).Padding(4).Gap(4).
+		Radius(controlRadius).Background(tok.SurfaceSunken).Border(1, tok.BorderDefault)
+	control.Children(func() {
+		for i, mode := range modes {
+			segment := parts.Segment(i).MinHeight(max(40, t.FontSize*1.5+16)).Padding(8, 16).Radius(4)
+			if i == 0 {
+				segment = segment.Bind(&m.settingsFirstRef)
+				if m.settingsFocusPending && !m.settingsFocusStorage {
+					segment = segment.Focus()
+					m.settingsFocusPending = false
+				}
 			}
-			item.Children(func() { ui.Text(c, appearanceLabel(mode)).SingleLine() })
+			bg := ui.Transparent
+			if i == selected {
+				bg = tok.SurfaceControl
+			}
+			if segment.Hovered() {
+				bg = tok.SurfaceHover
+			}
+			if segment.Pressed() {
+				bg = tok.SurfacePressed
+			}
+			segment.Background(bg).Children(func() { ui.Text(c, appearanceLabel(mode)).SingleLine() })
 		}
 	})
-	if selected != m.appearance {
-		m.setAppearance(selected)
+	if modes[selected] != m.appearance {
+		m.setAppearance(modes[selected])
 	}
 	if m.appearanceErr != "" {
 		ui.Text(c, m.appearanceErr).TextColor(c.Theme().Danger)

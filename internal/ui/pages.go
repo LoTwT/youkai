@@ -60,7 +60,7 @@ func (m *Model) viewPages(c *ui.Context) {
 			m.historyFocusPending = true
 		}
 		if page == pageSettings {
-			// Entering settings puts the keyboard on the in-page directory,
+			// Entering settings puts the keyboard on the first real control,
 			// unless the disk-space entry asked for the storage section.
 			m.settingsFocusPending = true
 		}
@@ -123,7 +123,6 @@ func (m *Model) navRail(c *ui.Context, t *ui.Theme, tok *Tokens) {
 			ui.Box(c).Grow(1)
 			m.navRailItem(c, t, tok, "设置", settingsIcon, page == pageSettings, m.updateDotVisible(), m.showSettingsDestination)
 		})
-		m.themePicker(c, tok)
 	})
 }
 

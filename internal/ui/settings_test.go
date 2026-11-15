@@ -62,76 +62,35 @@ func openSettings(t *testing.T, m *Model, q *queueUpdater, tt *ui.Tester) {
 	}
 }
 
-// TestSettingsPageSectionsAndDirectory checks the single-page structure:
-// the in-page directory before the sections, the six sections in reading
-// order, and the keyboard entry on the directory (08 §6, 09 §2).
-func TestSettingsPageSectionsAndDirectory(t *testing.T) {
-	m, q, _ := settingsTestModel(t)
-	tt := ui.NewTester(m.View, 1440, 1000)
-	settle(t, m, q, tt)
-	openSettings(t, m, q, tt)
-
-	settings, ok := tt.Find("设置")
-	if !ok {
-		t.Fatal("the settings rail entry is missing")
-	}
-	if settings.X+settings.W > navRailWidth {
-		t.Errorf("the settings entry at %+v leaves the rail", settings)
-	}
-	if settings.Y+settings.H < 1000*0.8 {
-		t.Errorf("the settings entry at %+v is not pinned to the bottom", settings)
-	}
-
-	for _, section := range []string{"常规", "快捷键", "存储与清理", "诊断", "更新", "关于"} {
-		if !tt.HasText(section) {
-			t.Errorf("the settings page does not show the %q section: %q", section, tt.Texts())
+// Settings keeps one full-width reading column at both supported widths.
+// Entry, F6 and Tab all target live controls rather than removed directory entries.
+func TestSettingsPageSectionsAndFocus(t *testing.T) {
+	for _, width := range []int{1440, 1020} {
+		m, q, _ := settingsTestModel(t)
+		m.SetContentSize(width, 900)
+		tt := ui.NewTester(m.View, width, 900)
+		settle(t, m, q, tt)
+		openSettings(t, m, q, tt)
+		for _, section := range []string{"常规", "快捷键", "存储与清理", "诊断", "更新", "关于"} {
+			if got := countText(tt.Texts(), section); got != 1 {
+				t.Errorf("at %d, %s appears %d times, want only its section title", width, section, got)
+			}
 		}
-	}
-	// The directory repeats the section titles, so each title appears twice
-	// in the standard width band; the directory is left of the content.
-	if got := countText(tt.Texts(), "常规"); got != 2 {
-		t.Fatalf("常规 appears %d times, want the directory entry and its title", got)
-	}
-	directory, ok := tt.Find("常规")
-	if !ok {
-		t.Fatal("the in-page directory entry is missing")
-	}
-	content := float32(0)
-	for _, title := range []string{"点击窗口的 ✕ 时", "停止扫描（全局 · 开始扫描时注册）", "打开数据目录", "复制诊断信息"} {
-		rect, ok := tt.Find(title)
-		if !ok {
-			t.Fatalf("%q is missing: %q", title, tt.Texts())
+		if !tt.Focused("跟随系统") {
+			t.Fatalf("at %d, settings entry did not focus the theme buttons", width)
 		}
-		if rect.X > content {
-			content = rect.X
+		tt.Key(ui.Shift, ui.KeyF6)
+		if !tt.Focused("设置") {
+			t.Fatal("Shift+F6 did not reach the global navigation")
 		}
-	}
-	if directory.X >= content {
-		t.Errorf("the directory at %v is not left of the section content at %v", directory, content)
-	}
-	if !tt.Focused("常规") {
-		t.Fatalf("entering settings does not put the keyboard on the directory: %q", tt.Texts())
-	}
-}
-
-// TestSettingsPageCompactHidesDirectory checks the compact band: no
-// in-page directory, and the keyboard lands on the first regular control
-// instead (09 §2).
-func TestSettingsPageCompactHidesDirectory(t *testing.T) {
-	m, q, _ := settingsTestModel(t)
-	m.SetContentSize(1020, 900)
-	tt := ui.NewTester(m.View, 1020, 900)
-	settle(t, m, q, tt)
-	openSettings(t, m, q, tt)
-
-	if m.settingsTableOfContentsVisible() {
-		t.Fatal("the compact width still claims room for the directory")
-	}
-	if got := countText(tt.Texts(), "常规"); got != 1 {
-		t.Fatalf("常规 appears %d times in the compact band, want only the section title", got)
-	}
-	if !tt.Focused("隐藏到通知区域（默认）") {
-		t.Fatalf("the compact entry does not focus the first regular control: %q", tt.Texts())
+		tt.Key(0, ui.KeyF6)
+		if !tt.Focused("跟随系统") {
+			t.Fatal("F6 did not reach the first real settings control")
+		}
+		tt.Key(0, ui.KeyTab)
+		if !tt.Focused("隐藏到通知区域（默认）") {
+			t.Fatal("Tab did not advance from theme to close behavior")
+		}
 	}
 }
 
@@ -297,10 +256,9 @@ func TestSettingsStopHotkeyState(t *testing.T) {
 	}
 }
 
-// TestSettingsDirectoryScrollsToSection checks the directory actually
-// moves the content: a section below the fold comes into view when its
-// entry is used.
-func TestSettingsDirectoryScrollsToSection(t *testing.T) {
+// TestSettingsScrollReachesAbout checks the last section remains reachable
+// without the removed directory.
+func TestSettingsScrollReachesAbout(t *testing.T) {
 	m, q, _ := settingsTestModel(t)
 	m.SetContentSize(1180, 600)
 	tt := ui.NewTester(m.View, 1180, 600)
@@ -310,9 +268,7 @@ func TestSettingsDirectoryScrollsToSection(t *testing.T) {
 	if rect, ok := tt.Find("开源许可"); ok && rect.H > 0 && rect.Y >= 0 && rect.Y+rect.H <= 600 {
 		t.Fatalf("the about section already fits; the jump cannot be observed: %+v", rect)
 	}
-	if err := tt.Click("关于"); err != nil {
-		t.Fatal(err)
-	}
+	tt.Scroll(900, 400, 0, 10000)
 	settle(t, m, q, tt)
 	rect, ok := tt.Find("开源许可")
 	if !ok || rect.H == 0 || rect.Y < 0 || rect.Y+rect.H > 600 {

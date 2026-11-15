@@ -481,7 +481,7 @@ func TestViewUpdateInstallFailure(t *testing.T) {
 }
 
 // TestUpdateDotFollowsTheFoundVersion checks the design's only update cue:
-// a dot on the settings rail entry and on the in-page 更新 entry while a
+// a dot on the settings rail entry while a
 // newer version waits, gone when the check is up to date and once the
 // install starts (08 §6).
 func TestUpdateDotFollowsTheFoundVersion(t *testing.T) {
@@ -500,8 +500,8 @@ func TestUpdateDotFollowsTheFoundVersion(t *testing.T) {
 
 	m.CheckUpdates()
 	settle(t, m, q, tt)
-	if got := countText(tt.Texts(), "有新版本"); got != 2 {
-		t.Fatalf("the page shows %d update dots after finding a version, want the rail and directory dots", got)
+	if got := countText(tt.Texts(), "有新版本"); got != 1 {
+		t.Fatalf("the page shows %d update dots after finding a version, want only the rail dot", got)
 	}
 
 	src.check = func(ctx context.Context) (UpdateHandle, error) { return nil, nil }
@@ -514,7 +514,7 @@ func TestUpdateDotFollowsTheFoundVersion(t *testing.T) {
 	src.check = func(ctx context.Context) (UpdateHandle, error) { return found, nil }
 	m.CheckUpdates()
 	settle(t, m, q, tt)
-	if got := countText(tt.Texts(), "有新版本"); got != 2 {
+	if got := countText(tt.Texts(), "有新版本"); got != 1 {
 		t.Fatalf("the found version came back with %d dots", got)
 	}
 	started := make(chan struct{})
