@@ -616,9 +616,9 @@ func (m *Model) registerResultsShortcuts(c *ui.Context) {
 	// Zoom belongs to the review view only and not to a text field: a
 	// focused field keeps its own Ctrl+= undo-like input handling.
 	if !m.textInputFocused {
-		c.OnShortcut(ui.Cmd, ui.KeyEqual, func() { m.zoomCrop(0.25) })
-		c.OnShortcut(ui.Cmd|ui.Shift, ui.KeyEqual, func() { m.zoomCrop(0.25) })
-		c.OnShortcut(ui.Cmd, ui.KeyMinus, func() { m.zoomCrop(-0.25) })
+		c.OnShortcut(ui.Cmd, ui.KeyEqual, func() { m.zoomCrop(reviewZoomStep) })
+		c.OnShortcut(ui.Cmd|ui.Shift, ui.KeyEqual, func() { m.zoomCrop(reviewZoomStep) })
+		c.OnShortcut(ui.Cmd, ui.KeyMinus, func() { m.zoomCrop(-reviewZoomStep) })
 		c.OnShortcut(ui.Cmd, ui.Key0, func() { m.zoomCrop(0) })
 	}
 }

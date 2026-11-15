@@ -491,30 +491,24 @@ func (m *Model) selectedRow() *Row {
 	return &m.rec.Rows[m.selected]
 }
 
+// cropZoomFactor expresses both fit and explicit zoom in fit-size units.
+func (m *Model) cropZoomFactor() float32 {
+	if m.cropZoom == 0 {
+		return 1
+	}
+	return m.cropZoom
+}
+
 // zoomCrop steps the screenshot zoom in or out; reset returns to fitting
 // the screenshot area.
 func (m *Model) zoomCrop(delta float32) {
 	previous := m.cropZoom
-	if delta == 0 {
-		m.cropZoom = 0
-		if previous != 0 && m.cache != nil {
-			m.cache.reset()
+	zoom := float32(0)
+	if delta != 0 {
+		zoom = min(reviewZoomMax, max(reviewZoomStep, m.cropZoomFactor()+delta))
+		if zoom == 1 {
+			zoom = 0
 		}
-		return
-	}
-	zoom := m.cropZoom
-	if zoom <= 0 {
-		zoom = 1
-	}
-	zoom += delta
-	switch {
-	case zoom < 1:
-		zoom = 1
-	case zoom > 4:
-		zoom = 4
-	}
-	if zoom <= 1 {
-		zoom = 0
 	}
 	if zoom == previous {
 		return

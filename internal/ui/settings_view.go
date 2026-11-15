@@ -478,14 +478,16 @@ func (m *Model) storageActionsRow(c *ui.Context, t *ui.Theme, tok *Tokens) {
 // surface shares (09 §4.6) and states what a copy excludes.
 func (m *Model) settingsDiagnostics(c *ui.Context, t *ui.Theme, tok *Tokens) {
 	ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Wrap().Children(func() {
-		if button(c, "复制诊断信息").Clicked() {
-			m.copyDiagnostics(c)
-		}
-		if button(c, "打开诊断目录").Disabled(m.cfg.OpenDiagnosticsDirectory == nil).Clicked() {
-			m.openDiagnosticsDirectory()
-		}
 		ui.Text(c, "复制的内容不包含窗口标题等隐私").TextColor(tok.TextMuted).
 			FontSize(t.FontSize * 0.85)
+		actionRow(c).Grow(1).Children(func() {
+			if button(c, "复制诊断信息").Clicked() {
+				m.copyDiagnostics(c)
+			}
+			if button(c, "打开诊断目录").Disabled(m.cfg.OpenDiagnosticsDirectory == nil).Clicked() {
+				m.openDiagnosticsDirectory()
+			}
+		})
 	})
 	if m.diagnosticsNotice != "" {
 		ui.Text(c, m.diagnosticsNotice).TextColor(tok.TextMuted)
@@ -532,9 +534,11 @@ func (m *Model) settingsAbout(c *ui.Context, t *ui.Theme, tok *Tokens) {
 	ui.Text(c, "youkai "+version).TextColor(tok.TextSecondary)
 	ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
 		ui.Text(c, "以 MIT 许可发布。").TextColor(tok.TextMuted).FontSize(t.FontSize * 0.9)
-		if m.cfg.OpenLicenses != nil && button(c, "开源许可").Clicked() {
-			m.openLicenses()
-		}
+		actionRow(c).Grow(1).Children(func() {
+			if m.cfg.OpenLicenses != nil && button(c, "开源许可").Clicked() {
+				m.openLicenses()
+			}
+		})
 	})
 	if m.aboutErr != "" {
 		ui.Text(c, m.aboutErr).TextColor(t.Danger).FontSize(t.FontSize * 0.9)

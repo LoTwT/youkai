@@ -89,6 +89,14 @@ func (m *Model) reviewCropImageWidth() float32 {
 	return width
 }
 
+// reviewCropWidth applies zoom to the effective fit size, including the
+// profile's default scale and the available width. Every crop therefore
+// grows or shrinks from the size the user is actually looking at.
+func (m *Model) reviewCropWidth(imageWidth int) float32 {
+	fit := min(m.reviewCropImageWidth(), float32(imageWidth)*m.reviewDefaultZoom())
+	return fit * m.cropZoomFactor()
+}
+
 // resultsTitle names what the review area shows: the live session's saved
 // record or a reopened history record, with the recovery mark.
 func (m *Model) resultsTitle() string {
@@ -394,8 +402,7 @@ func reviewCategoryParts(row *Row) (glyph, label string) {
 // the pending position, the filter segments and the "全部件" popover list.
 func (m *Model) reviewCompactStrip(c *ui.Context, t *ui.Theme, visible []int) {
 	tok := m.effectiveTokens()
-	ui.Row(c).Gap(12).Justify(ui.End).
-		AlignItems(ui.Center).Background(tok.SurfaceHeader).Children(func() {
+	actionRow(c).Background(tok.SurfaceHeader).Children(func() {
 		position := resultDisplayIndex(visible, m.selected)
 		back := button(c, "上一件").Disabled(position <= 0)
 		if back.Clicked() {
@@ -406,7 +413,6 @@ func (m *Model) reviewCompactStrip(c *ui.Context, t *ui.Theme, visible []int) {
 		if forward.Clicked() {
 			m.selectAdjacentVisible(1)
 		}
-		ui.Box(c).Grow(1)
 		m.resultsFilterBar(c, t)
 		m.compactItemPopover(c, t, visible)
 	})
@@ -545,12 +551,12 @@ func (m *Model) reviewCropsPane(c *ui.Context, t *ui.Theme, visible []int) {
 func (m *Model) reviewZoomControls(c *ui.Context, t *ui.Theme) {
 	label := "适合"
 	if m.cropZoom > 0 {
-		label = fmt.Sprintf("%d%%", int(m.cropZoom*100+0.5))
+		label = fmt.Sprintf("适合 ×%g", m.cropZoom)
 	}
-	if button(c, "缩小").Disabled(m.cropZoom == 0).Clicked() {
+	if button(c, "缩小").Disabled(m.cropZoomFactor() <= reviewZoomStep).Clicked() {
 		m.zoomCrop(-reviewZoomStep)
 	}
-	if button(c, "放大").Clicked() {
+	if button(c, "放大").Disabled(m.cropZoomFactor() >= reviewZoomMax).Clicked() {
 		m.zoomCrop(reviewZoomStep)
 	}
 	if button(c, label).Clicked() {
@@ -674,9 +680,8 @@ func (m *Model) reviewCropImage(c *ui.Context, t *ui.Theme, evidence *Evidence) 
 		ui.Textf(c, "截图不可用：%v", entry.err).TextColor(t.Danger)
 	default:
 		imageWidth, imageHeight := entry.bitmap.Size()
-		width := min(m.reviewCropImageWidth(), float32(imageWidth)*m.reviewDefaultZoom())
+		width := m.reviewCropWidth(imageWidth)
 		if m.cropZoom > 0 {
-			width = float32(imageWidth) * m.cropZoom
 			entry.bitmap.Pixelated()
 		}
 		if imageWidth <= 0 || imageHeight <= 0 {
@@ -1845,11 +1850,7 @@ func (m *Model) reviewRowHeight(row *Row, role string) float32 {
 			}
 			w, h := entry.bitmap.Size()
 			if w > 0 {
-				zoom := m.reviewDefaultZoom()
-				if m.cropZoom > 0 {
-					zoom = m.cropZoom
-				}
-				width := min(m.reviewCropImageWidth(), float32(w)*zoom)
+				width := m.reviewCropWidth(w)
 				height = max(height, width*float32(h)/float32(w)+44)
 			}
 		}

@@ -1910,3 +1910,96 @@ func TestReviewPageSwitchPromptsDirtyDraft(t *testing.T) {
 	}
 	assertReviewBinding(t, m)
 }
+
+// TestReviewZoomRenderedSize pins the user's visible zoom direction, including
+// crops constrained by the fit width. State-only checks missed this regression.
+func TestReviewZoomRenderedSize(t *testing.T) {
+	for _, test := range []struct {
+		name                                string
+		contentWidth, sourceWidth, fitWidth int
+		keyboard                            bool
+	}{
+		{"standard-buttons", 1440, 100, 150, false},
+		{"compact-shortcuts", 960, 100, 135, true},
+		{"width-constrained", 1440, 400, 0, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			m := &Model{contentWidth: test.contentWidth, contentHeight: 900,
+				rec: &RecordView{ID: "zoom-regression"}, cache: newEvidenceCache(&fakeEvidence{}, 32)}
+			img := image.NewRGBA(image.Rect(0, 0, test.sourceWidth, 20))
+			pixel := color.RGBA{R: 201, G: 32, B: 101, A: 255}
+			for y := range 20 {
+				for x := range test.sourceWidth {
+					img.SetRGBA(x, y, pixel)
+				}
+			}
+			bitmap := ui.NewBitmap(img)
+			tt := ui.NewTester(func(c *ui.Context) {
+				m.registerResultsShortcuts(c)
+				ui.Column(c).Children(func() {
+					ui.Row(c).Children(func() { m.reviewZoomControls(c, c.Theme()) })
+					// Supply the same decoded fixture after invalidation; cache reload
+					// behavior has its own TestZoomModeDropsDecodedCache coverage.
+					m.cache.put(evidenceKey{record: m.rec.ID, id: "line"}, &evidenceEntry{bitmap: bitmap})
+					m.reviewCropImage(c, c.Theme(), &Evidence{ID: "line"})
+				})
+			}, 700, 200)
+			measure := func() int {
+				t.Helper()
+				tt.Frame()
+				tt.Frame()
+				frame := tt.Image()
+				left, right := frame.Bounds().Max.X, -1
+				for y := range frame.Bounds().Dy() {
+					for x := range frame.Bounds().Dx() {
+						if frame.RGBAAt(x, y) == pixel {
+							left = min(left, x)
+							right = max(right, x)
+						}
+					}
+				}
+				if right < left {
+					t.Fatal("the crop was not painted")
+				}
+				return right - left + 1
+			}
+			act := func(label string, key ui.Key) {
+				t.Helper()
+				if test.keyboard {
+					tt.Key(ui.Cmd, key)
+				} else if err := tt.Click(label); err != nil {
+					t.Fatal(err)
+				}
+			}
+			fit := measure()
+			if test.fitWidth > 0 && fit != test.fitWidth {
+				t.Fatalf("fit painted %d px, want %d", fit, test.fitWidth)
+			}
+			act("放大", ui.KeyEqual)
+			larger := measure()
+			if larger <= fit {
+				t.Errorf("first enlarge painted %d -> %d px", fit, larger)
+			}
+			if larger < fit*5/4-1 || larger > fit*5/4+1 {
+				t.Errorf("enlarge painted %d px, want 125%% of %d within 1 px", larger, fit)
+			}
+			act("适合 ×1.25", ui.Key0)
+			if restored := measure(); restored != fit {
+				t.Errorf("restore fit painted %d px, want %d", restored, fit)
+			}
+			act("缩小", ui.KeyMinus)
+			smaller := measure()
+			if smaller >= fit {
+				t.Errorf("first shrink painted %d -> %d px", fit, smaller)
+			}
+			if smaller < fit*3/4-1 || smaller > fit*3/4+1 {
+				t.Errorf("shrink painted %d px, want 75%% of %d within 1 px", smaller, fit)
+			}
+			act("适合 ×0.75", ui.Key0)
+			if restored := measure(); restored != fit {
+				t.Errorf("restore fit after shrink painted %d px, want %d", restored, fit)
+			}
+			t.Logf("painted widths: fit=%d first-enlarge=%d first-shrink=%d restored=%d", fit, larger, smaller, measure())
+		})
+	}
+}
