@@ -69,6 +69,13 @@ func TestThemeLifecyclePreferencesKeepRegisteredPointer(t *testing.T) {
 				if !sameColor(primary, tokensFor(dark).AccentFill) {
 					t.Fatal("Lobe lost the registered brand tokens")
 				}
+				for _, scoped := range []*mgui.Theme{s.table.Theme(dark), s.input.Theme(dark)} {
+					tt := mgui.NewTester(func(c *mgui.Context) { c.SetTheme(scoped); primary = theme.TokensOf(c).Primary }, 32, 32)
+					tt.Frame()
+					if !sameColor(primary, target.Accent) || scoped.FontSize != target.FontSize {
+						t.Fatal("scoped widget theme lost registered brand or runtime metrics")
+					}
+				}
 			}
 		}
 	}

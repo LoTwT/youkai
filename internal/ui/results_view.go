@@ -303,10 +303,10 @@ func (m *Model) reviewItemRow(c *ui.Context, t *ui.Theme, tok *Tokens, visible [
 		ui.Row(c).Gap(t.Space(1)).AlignItems(ui.Center).Children(func() {
 			ui.Textf(c, "#%04d", r.Seq).FontWeight(600).TextColor(tok.TextPrimary).SingleLine().Shrink(1)
 			ui.Box(c).Grow(1)
-			m.reviewCategoryTag(c, t, tok, r, selected)
+			m.reviewCategoryTag(c, t, tok, r)
 		})
 		ui.Text(c, r.labelSetSlot()).FontSize(t.FontSize * reviewHeaderSizeRatio).
-			TextColor(t.TextMuted).SingleLine()
+			TextColor(selectedMuted(t, tok, selected)).SingleLine()
 	})
 }
 
@@ -328,7 +328,7 @@ func (r Row) labelSetSlot() string {
 }
 
 // reviewCategoryTag is the four-class label as text plus shape.
-func (m *Model) reviewCategoryTag(c *ui.Context, t *ui.Theme, tok *Tokens, row *Row, selected bool) {
+func (m *Model) reviewCategoryTag(c *ui.Context, t *ui.Theme, tok *Tokens, row *Row) {
 	glyph, label := reviewCategoryParts(row)
 	if m.recentlyConfirmedNow(row) {
 		glyph, label = "✓", "已确认"
@@ -344,10 +344,10 @@ func (m *Model) reviewCategoryTag(c *ui.Context, t *ui.Theme, tok *Tokens, row *
 	case row.ItemClass == app.ItemClassPendingReview:
 		background, border, text = tok.WarningSoft, tok.WarningBorder, tok.WarningFG
 	case row.ItemClass == app.ItemClassWarning:
-		background, border, text = ui.Transparent, tok.WarningBorder, tok.WarningFG
+		background, border, text = tok.WarningSoft, tok.WarningBorder, tok.WarningFG
 		dashed = true
 	case row.ItemClass == app.ItemClassPassed:
-		background, border, text = ui.Transparent, tok.SuccessBorder, tok.SuccessFG
+		background, border, text = tok.SuccessSoft, tok.SuccessBorder, tok.SuccessFG
 	default:
 		switch row.Status {
 		case record.StatusFailed:
@@ -355,9 +355,6 @@ func (m *Model) reviewCategoryTag(c *ui.Context, t *ui.Theme, tok *Tokens, row *
 		case record.StatusUnprocessed:
 			dashed = true
 		}
-	}
-	if selected {
-		background, border, text = tok.AccentSoft, tok.AccentBorder, tok.AccentFG
 	}
 	tag := ui.Row(c).Shrink(0).Padding(t.Space(0.25), t.Space(1)).Gap(t.Space(0.5)).
 		AlignItems(ui.Center).Background(background).Border(1, border).
@@ -508,10 +505,10 @@ func (m *Model) compactItemRow(c *ui.Context, t *ui.Theme, visible []int, row in
 			ui.Textf(c, "#%04d", r.Seq).FontWeight(600).TextColor(tok.TextPrimary).
 				SingleLine().Shrink(1)
 			ui.Box(c).Grow(1)
-			m.reviewCategoryTag(c, t, tok, r, selected)
+			m.reviewCategoryTag(c, t, tok, r)
 		})
 		ui.Text(c, r.labelSetSlot()).FontSize(t.FontSize * reviewHeaderSizeRatio).
-			TextColor(t.TextMuted).SingleLine()
+			TextColor(selectedMuted(t, tok, selected)).SingleLine()
 	})
 }
 
@@ -654,11 +651,11 @@ func (m *Model) reviewCrop(c *ui.Context, t *ui.Theme, row *Row, crop *reviewCro
 			if number := reviewRoleNumber(crop.role()); number != "" {
 				fieldNumber(c, number, highlighted, tok)
 			}
-			ui.Text(c, label).FontSize(t.FontSize * 12 / 14).TextColor(t.TextMuted)
+			ui.Text(c, label).FontSize(t.FontSize * 12 / 14).TextColor(selectedMuted(t, tok, highlighted))
 		})
 		if crop.evidence == nil {
 			ui.Text(c, "这一行缺少截图。").FontSize(t.FontSize * reviewHeaderSizeRatio).
-				TextColor(t.TextMuted)
+				TextColor(selectedMuted(t, tok, highlighted))
 			return
 		}
 		m.reviewCropImage(c, t, crop.evidence)
@@ -906,7 +903,7 @@ func (m *Model) reviewFormHeader(c *ui.Context, t *ui.Theme, row *Row, editing b
 		// A settled item's state is its status tag or warning band; only a
 		// pending item needs the category tag here (wireframes 07, 13, 14).
 		if status == "" && row.ItemClass != app.ItemClassWarning {
-			m.reviewCategoryTag(c, t, tok, row, false)
+			m.reviewCategoryTag(c, t, tok, row)
 		}
 		if !editing && m.canModifyRow(row) {
 			modify := button(c, "修改").Key("review-modify").Shrink(0).Disabled(m.reviewActionsBlocked())
@@ -1006,7 +1003,7 @@ func (m *Model) reviewEditField(c *ui.Context, t *ui.Theme, row *Row, field Form
 					fieldNumber(c, number, reviewFieldShows(field, m.reviewField), m.effectiveTokens())
 				}
 			}
-			ui.Text(c, formFieldLabel(field)).TextColor(t.TextMuted)
+			ui.Text(c, formFieldLabel(field)).TextColor(selectedMuted(t, m.effectiveTokens(), reviewFieldShows(field, m.reviewField)))
 			if hasProblem {
 				m.reviewProblemTag(c, t, problem)
 			}
@@ -1078,12 +1075,12 @@ func (m *Model) reviewFieldControl(c *ui.Context, t *ui.Theme, row *Row, field F
 		m.noteReviewControlFocus(field, input.FocusWithin())
 	case FormFieldLevel:
 		ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
-			input := m.noteTextInputFocus(ui.TextInput(c, &draft.Level).Width(110).
+			input := m.noteTextInputFocus(m.reviewTextInput(c, &draft.Level, 110).
 				Placeholder("0–15").Disabled(m.reviewActionsBlocked()).
 				Label("等级"))
 			input = m.reviewFocus(field, input)
 			m.noteReviewControlFocus(field, input.FocusWithin())
-			ui.Text(c, "级").TextColor(t.TextMuted)
+			ui.Text(c, "级").TextColor(selectedMuted(t, m.effectiveTokens(), reviewFieldShows(field, m.reviewField)))
 		})
 	case FormFieldMainStat:
 		ui.Row(c).Gap(t.Space(1)).AlignItems(ui.Center).Children(func() {
@@ -1091,8 +1088,7 @@ func (m *Model) reviewFieldControl(c *ui.Context, t *ui.Theme, row *Row, field F
 				attributeChoices(attributeTextValue(draft.MainAttribute))).
 				Width(reviewMainAttributeWidth).Shrink(1).Disabled(m.reviewActionsBlocked()).Label("主词条类型")
 			m.noteTextInputFocus(attribute)
-			value := m.noteTextInputFocus(ui.TextInput(c, &draft.MainValue).
-				Width(reviewMainValueWidth).Shrink(1).Placeholder("数值").Disabled(m.reviewActionsBlocked()).Label("主词条数值"))
+			value := m.noteTextInputFocus(m.reviewTextInput(c, &draft.MainValue, reviewMainValueWidth).Placeholder("数值").Disabled(m.reviewActionsBlocked()).Label("主词条数值"))
 			// The value control is the main-stat field's focus target; the
 			// one-shot request also highlights its field so the form does not
 			// ask for it again next frame.
@@ -1230,7 +1226,8 @@ func (m *Model) reviewReadOnlyField(c *ui.Context, t *ui.Theme, row *Row, field 
 					fieldNumber(c, number, reviewFieldShows(field, m.reviewField), m.effectiveTokens())
 				}
 			}
-			ui.Text(c, formFieldLabel(field)).Width(72).TextColor(t.TextMuted)
+			ui.Text(c, formFieldLabel(field)).Width(72).
+				TextColor(selectedMuted(t, m.effectiveTokens(), reviewFieldShows(field, m.reviewField)))
 			if hasProblem {
 				m.reviewProblemTag(c, t, kind)
 			}
@@ -1637,7 +1634,7 @@ func (m *Model) editSubstats(c *ui.Context, t *ui.Theme, edit *editState) {
 			block.Children(func() {
 				ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 					fieldNumber(c, fmt.Sprintf("%02d", index+4), reviewFieldShows(field, m.reviewField), m.effectiveTokens())
-					ui.Textf(c, "副词条 %d", index+1).TextColor(t.TextMuted)
+					ui.Textf(c, "副词条 %d", index+1).TextColor(selectedMuted(t, m.effectiveTokens(), reviewFieldShows(substatFormField(index), m.reviewField)))
 				})
 				remove = m.editSubstatRow(c, t, index)
 			})
@@ -1696,10 +1693,10 @@ func (m *Model) editSubstatRow(c *ui.Context, t *ui.Theme, index int) bool {
 			}
 		})
 		ui.Row(c).Gap(8).Wrap().AlignItems(ui.Center).Children(func() {
-			value := m.noteTextInputFocus(ui.TextInput(c, &sub.Value).Width(90).Placeholder("数值").Disabled(m.reviewActionsBlocked()).Label("副词条数值"))
+			value := m.noteTextInputFocus(m.reviewTextInput(c, &sub.Value, 90).Placeholder("数值").Disabled(m.reviewActionsBlocked()).Label("副词条数值"))
 			unit := ui.Select(c, &sub.Unit, unitChoices(attributeTextValue(sub.Attribute), sub.Unit)).Width(120).Disabled(m.reviewActionsBlocked()).Label("副词条单位")
-			ui.Text(c, "强化").TextColor(t.TextMuted)
-			rolls := m.noteTextInputFocus(ui.TextInput(c, &sub.Rolls).Width(60).Placeholder("档位").Disabled(m.reviewActionsBlocked()).Label("强化档位"))
+			ui.Text(c, "强化").TextColor(selectedMuted(t, m.effectiveTokens(), reviewFieldShows(field, m.reviewField)))
+			rolls := m.noteTextInputFocus(m.reviewTextInput(c, &sub.Rolls, 60).Placeholder("档位").Disabled(m.reviewActionsBlocked()).Label("强化档位"))
 			m.noteReviewControlFocus(field, value.FocusWithin() || unit.FocusWithin() || rolls.FocusWithin())
 		})
 	})
@@ -1915,7 +1912,7 @@ func (m *Model) reviewReadOnlySubstat(c *ui.Context, t *ui.Theme, row *Row, inde
 	block.Children(func() {
 		ui.Row(c).Gap(8).AlignItems(ui.Start).Children(func() {
 			fieldNumber(c, fmt.Sprintf("%02d", index+4), reviewFieldShows(field, m.reviewField), m.effectiveTokens())
-			ui.Textf(c, "副词条 %d", index+1).TextColor(t.TextMuted).Shrink(0)
+			ui.Textf(c, "副词条 %d", index+1).TextColor(selectedMuted(t, m.effectiveTokens(), reviewFieldShows(substatFormField(index), m.reviewField))).Shrink(0)
 			ui.Text(c, value).Grow(1).MinWidth(0)
 		})
 	})

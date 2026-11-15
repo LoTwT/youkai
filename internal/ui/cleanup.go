@@ -626,7 +626,9 @@ func (m *Model) cleanupPromptArea(c *ui.Context, t *ui.Theme) {
 			if cancel.Clicked() {
 				m.CancelCleanup()
 			}
-			confirm := button(c, "确认删除").Disabled(p.running || p.previewing || !p.ready)
+			tok := m.effectiveTokens()
+			confirm := button(c, "确认删除").TextColor(tok.DangerFG).Border(1, tok.DangerBorder).
+				Disabled(p.running || p.previewing || !p.ready)
 			if confirm.Clicked() {
 				m.ConfirmCleanup()
 			}

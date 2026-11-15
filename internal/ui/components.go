@@ -36,6 +36,46 @@ func pageTitle(c *ui.Context, title string) ui.Element {
 func button(c *ui.Context, label string) ui.Element        { return styledButton(c, label, false) }
 func primaryButton(c *ui.Context, label string) ui.Element { return styledButton(c, label, true) }
 
+// viewSegments preserves MyGo Segmented's metrics and native radio group,
+// while sharing the persistent-selection colors used by settings.
+func viewSegments(c *ui.Context, selected *int, tok *Tokens, labels ...string) ui.Element {
+	t := c.Theme()
+	parts := ui.SegmentedBase(c, selected, len(labels))
+	track := parts.Track.AlignItems(ui.Stretch).Padding(t.Space(.5)).Gap(t.Space(.5)).
+		Radius(t.Radius).Background(t.Surface).Border(1, t.Border)
+	track.Children(func() {
+		for i, label := range labels {
+			segment := parts.Segment(i).Padding(t.Space(1), t.Space(3)).Gap(t.Space(1.5)).
+				Radius(max(t.Radius-t.Space(.5), 0))
+			if i == *selected {
+				segment.Shadow(0, 1, 2, 0, ui.RGBA(0, 0, 0, .12))
+			}
+			// Reserve the selected outline inside the original padding.
+			settingsSegment(segment, i == *selected, t.Dark, tok).
+				Padding(t.Space(1)-1, t.Space(3)-1).
+				Children(func() { ui.Text(c, label).SingleLine() })
+		}
+	})
+	return track
+}
+
+// reviewTextInput scopes only the editable box. MyGo retains its editor,
+// IME and paint-time invalid > focus > hover border precedence.
+func (m *Model) reviewTextInput(c *ui.Context, value *string, width float32) ui.Element {
+	var input ui.Element
+	ui.Themed(c, m.theme.input.Theme(c.Theme().Dark)).Background(ui.Transparent).Width(width).Shrink(1).Children(func() {
+		input = ui.TextInput(c, value).FillWidth()
+	})
+	return input
+}
+
+func selectedMuted(t *ui.Theme, tok *Tokens, selected bool) ui.Color {
+	if selected && !t.Dark {
+		return tok.TextSecondary
+	}
+	return tok.TextMuted
+}
+
 // Lobe supplies the button surface; metrics and semantic colors follow the
 // effective application theme. Select, text inputs, keycaps and protected
 // dialogs remain MyGo compositions because Lobe fixes their internal sizes.

@@ -389,6 +389,17 @@ func TestHistoryDamagedRowTimeIsMuted(t *testing.T) {
 		t.Fatalf("the damaged row's time is not muted: normal min %d, damaged min %d",
 			normalMin, damagedMin)
 	}
+	// Choosing a special cell must replace its muted foreground along
+	// with the row face; the old on-accent white disappears on a pale row.
+	tt.Key(0, ui.KeyEnd)
+	tt.Frame()
+	if m.historyRow != 2 {
+		t.Fatal("keyboard did not choose the damaged row")
+	}
+	chosenMin := minLuminanceInRect(tt.Image(), damaged)
+	if chosenMin > normalMin+10 {
+		t.Fatalf("selected damaged time lost the readable body foreground: %d vs %d", chosenMin, normalMin)
+	}
 }
 
 // TestHistoryNumberColumnsDashDamagedRow checks that a damaged row shows

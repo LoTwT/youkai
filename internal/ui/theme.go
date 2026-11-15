@@ -6,11 +6,13 @@ import (
 	"github.com/lobehub/lobe-mygo/pkg/theme"
 )
 
-// themeState owns exactly one Lobe Config for this model's lifetime. Lobe
+// themeState owns stable Lobe Configs for this model's lifetime. Lobe
 // resolves tokens by Theme pointer, so preferences update the registered
 // objects in place, always from unscaled base values.
 type themeState struct {
 	config      *theme.Config
+	table       *theme.Config
+	input       *theme.Config
 	light, dark ui.Theme
 	tokens      Tokens
 }
@@ -31,7 +33,8 @@ func newThemeState() *themeState {
 		l.FontSize = 14
 	}
 	config := theme.NewConfig(light, dark)
-	return &themeState{config: config, light: *config.Theme(false), dark: *config.Theme(true)}
+	return &themeState{config: config, table: theme.NewConfig(light, dark), input: theme.NewConfig(light, dark),
+		light: *config.Theme(false), dark: *config.Theme(true)}
 }
 
 func (s *themeState) effective(runtime *ui.Theme, prefs ui.Preferences) (*ui.Theme, *Tokens) {
@@ -46,6 +49,14 @@ func (s *themeState) effective(runtime *ui.Theme, prefs ui.Preferences) (*ui.The
 	effective, tok := themeWithTokens(effective, prefs)
 	target := s.config.Theme(runtime.Dark)
 	*target = *effective
+	// Keep scoped themes registered with Lobe too. Only Table's selection
+	// and TextInput's baseline border differ; brand actions keep their tokens.
+	table := s.table.Theme(runtime.Dark)
+	*table = *effective
+	table.Accent, table.AccentText = tok.RowSelected, tok.TextPrimary
+	input := s.input.Theme(runtime.Dark)
+	*input = *effective
+	input.Border = tok.BorderControl
 	s.tokens = *tok
 	return target, &s.tokens
 }
@@ -113,7 +124,7 @@ func (m *Model) settingsAppearance(c *ui.Context, t *ui.Theme, tok *Tokens) {
 					m.settingsFocusPending = false
 				}
 			}
-			settingsSegment(segment, i == selected, tok).Children(func() { ui.Text(c, appearanceLabel(mode)).SingleLine() })
+			settingsSegment(segment, i == selected, t.Dark, tok).Children(func() { ui.Text(c, appearanceLabel(mode)).SingleLine() })
 		}
 	})
 	if modes[selected] != m.appearance {

@@ -57,7 +57,7 @@ func (m *Model) recordWorkspaceHeader(c *ui.Context, t *ui.Theme, tok *Tokens) {
 		})
 		ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
 			tab := int(m.recordTab)
-			ui.Segmented(c, &tab, "摘要", "逐件").Bind(&m.workspaceTabsRef)
+			viewSegments(c, &tab, tok, "摘要", "逐件").Bind(&m.workspaceTabsRef)
 			if tab >= 0 && tab < int(recordTabCount) && recordTab(tab) != m.recordTab {
 				m.requestNavigation(navigationRequest{kind: navRecordTab, recordTab: recordTab(tab)})
 			}
@@ -78,7 +78,16 @@ func (m *Model) recordWorkspaceHeader(c *ui.Context, t *ui.Theme, tok *Tokens) {
 			if saved == "已保存" {
 				prefix = "✓ "
 			}
-			ui.Text(c, prefix+saved).FontSize(t.FontSize*12/14).TextColor(tok.TextSecondary).Background(tok.AccentSoft).Padding(4, 12).Radius(4)
+			fg, bg = tok.TextSecondary, tok.SurfaceSunken
+			switch saved {
+			case "保存失败", "记录不可读":
+				fg, bg = tok.DangerFG, tok.DangerSoft
+			case "正在保存…", "读取中…":
+				fg, bg = tok.AccentFG, tok.AccentSoft
+			case "未保存修改", "未保存":
+				fg, bg = tok.WarningFG, tok.WarningSoft
+			}
+			ui.Text(c, prefix+saved).FontSize(t.FontSize*12/14).TextColor(fg).Background(bg).Padding(4, 12).Radius(4)
 		})
 	})
 }

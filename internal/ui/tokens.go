@@ -39,7 +39,7 @@ type Tokens struct {
 	NavActiveText mgui.Color
 
 	// Accent is split into foreground and fill. Text/icons use AccentFG;
-	// primary buttons and MyGo's selected row use AccentFill with OnFill.
+	// primary buttons use AccentFill with OnFill; objects use RowSelected.
 	AccentFG          mgui.Color
 	AccentFill        mgui.Color
 	AccentFillHover   mgui.Color

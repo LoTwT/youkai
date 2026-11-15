@@ -176,7 +176,7 @@ func (m *Model) settingsGeneral(c *ui.Context, t *ui.Theme, tok *Tokens) {
 	control.Children(func() {
 		for i, label := range []string{"隐藏到通知区域（默认）", "停止扫描并退出"} {
 			segment := parts.Segment(i).MinHeight(max(40, t.FontSize*1.5+16)).Padding(8, 16).Radius(4)
-			settingsSegment(segment, i == selected, tok).Children(func() { ui.Text(c, label).SingleLine() })
+			settingsSegment(segment, i == selected, t.Dark, tok).Children(func() { ui.Text(c, label).SingleLine() })
 		}
 	})
 	behavior := app.CloseBehaviorHide
@@ -199,17 +199,26 @@ func (m *Model) settingsGeneral(c *ui.Context, t *ui.Theme, tok *Tokens) {
 	}
 }
 
-// settingsSegment keeps the selected neutral face and outline visible even
+// settingsSegment keeps the selected face and outline visible even
 // while hovered or pressed. SegmentedBase retains radio and focus semantics.
-func settingsSegment(segment ui.Element, selected bool, tok *Tokens) ui.Element {
+func settingsSegment(segment ui.Element, selected, dark bool, tok *Tokens) ui.Element {
 	bg, border, fg := ui.Transparent, ui.Transparent, tok.TextSecondary
 	if selected {
-		bg, border, fg = tok.SurfaceControl.Mix(tok.TextPrimary, .18), tok.BorderStrong, tok.TextPrimary
+		bg, border, fg = tok.AccentSoft, tok.AccentFG, tok.AccentFG
+		if dark {
+			bg, border, fg = tok.SurfaceControl.Mix(tok.TextPrimary, .18), tok.BorderControl, tok.TextPrimary
+		}
 	}
 	if segment.IsDisabled() {
 		bg, fg = tok.SurfaceDisabled, tok.TextDisabled
 	} else if selected {
-		if segment.Pressed() {
+		if !dark && segment.Pressed() {
+			bg = tok.AccentSoftHover.Mix(tok.AccentFG, .04)
+			border, fg = tok.AccentFillPressed, tok.AccentFillPressed
+		} else if !dark && segment.Hovered() {
+			bg = tok.AccentSoftHover
+			border, fg = tok.AccentFillHover, tok.AccentFillHover
+		} else if segment.Pressed() {
 			bg = bg.Mix(tok.TextPrimary, .12)
 		} else if segment.Hovered() {
 			bg = bg.Mix(tok.TextPrimary, .06)

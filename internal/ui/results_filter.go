@@ -320,7 +320,7 @@ func (m *Model) resultsFilterBar(c *ui.Context, t *ui.Theme) {
 		labels[i] = filter.label()
 	}
 	choice := m.reviewFilterChoice()
-	ui.Segmented(c, choice, labels...).Bind(&m.reviewFilterRef)
+	viewSegments(c, choice, m.effectiveTokens(), labels...).Bind(&m.reviewFilterRef)
 	if *choice >= 0 && *choice < len(resultFilterOrder) && resultFilterOrder[*choice] != m.filter {
 		m.setResultFilter(resultFilterOrder[*choice])
 	}

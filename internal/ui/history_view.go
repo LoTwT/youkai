@@ -95,12 +95,15 @@ func (m *Model) historyContent(c *ui.Context, t *ui.Theme, tok *Tokens) {
 	m.prepareHistoryList(entries)
 
 	columns := historyColumnsFor(m.contentWidth)
-	table := ui.Table(c, &m.historyList, columns, len(entries), func(row, col int) {
-		if row < 0 || row >= len(entries) || col < 0 || col >= len(columns) {
-			return
-		}
-		m.historyCell(c, t, tok, entries[row], row, columns[col])
-	}).Fill().MinHeight(0)
+	var table ui.Element
+	ui.Themed(c, m.theme.table.Theme(t.Dark)).Background(ui.Transparent).Fill().MinHeight(0).Children(func() {
+		table = ui.Table(c, &m.historyList, columns, len(entries), func(row, col int) {
+			if row < 0 || row >= len(entries) || col < 0 || col >= len(columns) {
+				return
+			}
+			m.historyCell(c, c.Theme(), tok, entries[row], row, columns[col])
+		}).Fill().MinHeight(0)
+	})
 	if table.Submitted() {
 		m.openHistoryRow(m.historyRow)
 	}
@@ -233,7 +236,13 @@ func (m *Model) historyCell(c *ui.Context, t *ui.Theme, tok *Tokens, entry Histo
 // historyTimeCell is the row's first cell. Its height keeps the design's
 // comfortable rows instead of the toolkit's minimum.
 func (m *Model) historyTimeCell(c *ui.Context, t *ui.Theme, tok *Tokens, entry HistoryEntry, latest, chosen bool) {
-	ui.Row(c).Height(t.Space(8)).AlignItems(ui.Center).Children(func() {
+	cell := ui.Row(c).Height(t.Space(8)).AlignItems(ui.Center)
+	if chosen {
+		cell.DrawOver(func(p *ui.Painter, r ui.Rect) {
+			p.Fill(ui.Rect{X: r.X - t.Space(2), Y: r.Y, W: 3, H: r.H}, tok.RowSelectedBorder, 0)
+		})
+	}
+	cell.Children(func() {
 		ui.Row(c).Gap(t.Space(1)).AlignItems(ui.Center).Children(func() {
 			text := ui.Text(c, historyTimeText(entry)).SingleLine()
 			if latest && !entry.Unreadable {
@@ -242,7 +251,7 @@ func (m *Model) historyTimeCell(c *ui.Context, t *ui.Theme, tok *Tokens, entry H
 			if entry.Unreadable {
 				// 线框 10 keeps a damaged row's time muted: its reason, not
 				// its date, is what the user needs from the row.
-				text.TextColor(colorWhenChosen(chosen, tok.TextMuted, t.AccentText))
+				text.TextColor(colorWhenChosen(chosen, tok.TextMuted, tok.TextPrimary))
 			}
 			if entry.ID != "" && entry.ID == string(m.appliedSession) {
 				ui.Text(c, "本次").FontSize(t.FontSize*0.75).TextColor(tok.AccentFG).
@@ -286,11 +295,6 @@ func (m *Model) historyResultCell(c *ui.Context, t *ui.Theme, tok *Tokens, entry
 			if result.tone == recordToneDanger {
 				bg, fg = tok.DangerSoft, tok.DangerFG
 			}
-			if chosen {
-				// The accent-filled selected row would swallow the soft
-				// badge colors; the tag keeps its text and loses the face.
-				bg, fg = ui.Color{}, t.AccentText
-			}
 			ui.Text(c, result.tag).SingleLine().FontSize(t.FontSize*0.75).FontWeight(600).
 				TextColor(fg).Background(bg).Padding(0, t.Space(0.75)).Radius(t.Space(0.75))
 		}
@@ -300,11 +304,11 @@ func (m *Model) historyResultCell(c *ui.Context, t *ui.Theme, tok *Tokens, entry
 		}
 		switch result.tone {
 		case recordToneMuted:
-			text.TextColor(colorWhenChosen(chosen, tok.TextMuted, t.AccentText))
+			text.TextColor(colorWhenChosen(chosen, tok.TextMuted, tok.TextPrimary))
 		case recordToneWarning:
-			text.TextColor(colorWhenChosen(chosen, tok.WarningFG, t.AccentText))
+			text.TextColor(colorWhenChosen(chosen, tok.WarningFG, tok.TextPrimary))
 		case recordToneDanger:
-			text.TextColor(colorWhenChosen(chosen, t.Danger, t.AccentText))
+			text.TextColor(colorWhenChosen(chosen, t.Danger, tok.TextPrimary))
 		}
 	})
 }
@@ -313,7 +317,7 @@ func (m *Model) historyResultCell(c *ui.Context, t *ui.Theme, tok *Tokens, entry
 // a damaged record needs; strong marks the latest row.
 func (m *Model) historyNumberCell(c *ui.Context, t *ui.Theme, tok *Tokens, entry HistoryEntry, count int64, unreadable, strong, chosen bool) {
 	if unreadable {
-		ui.Text(c, "—").TextColor(colorWhenChosen(chosen, tok.TextMuted, t.AccentText))
+		ui.Text(c, "—").TextColor(colorWhenChosen(chosen, tok.TextMuted, tok.TextPrimary))
 		return
 	}
 	text := ui.Text(c, formatCount(count)).SingleLine()
@@ -326,20 +330,20 @@ func (m *Model) historyNumberCell(c *ui.Context, t *ui.Theme, tok *Tokens, entry
 // nothing has no pending work to count, so it shows the design's dash.
 func (m *Model) historyPendingCell(c *ui.Context, t *ui.Theme, tok *Tokens, entry HistoryEntry, chosen bool) {
 	if entry.Unreadable || entry.CapturedCount == 0 {
-		ui.Text(c, "—").TextColor(colorWhenChosen(chosen, tok.TextMuted, t.AccentText))
+		ui.Text(c, "—").TextColor(colorWhenChosen(chosen, tok.TextMuted, tok.TextPrimary))
 		return
 	}
 	pending := entry.Counts.Pending()
 	text := ui.Text(c, formatCount(pending)).SingleLine()
 	if pending > 0 {
-		text.TextColor(colorWhenChosen(chosen, tok.WarningFG, t.AccentText)).FontWeight(600)
+		text.TextColor(colorWhenChosen(chosen, tok.WarningFG, tok.TextPrimary)).FontWeight(600)
 	}
 }
 
 // historyMergedCountsCell is the compact tier's "待处理 / 可导出".
 func (m *Model) historyMergedCountsCell(c *ui.Context, t *ui.Theme, tok *Tokens, entry HistoryEntry, latest, chosen bool) {
 	if entry.Unreadable {
-		ui.Text(c, "—").TextColor(colorWhenChosen(chosen, tok.TextMuted, t.AccentText))
+		ui.Text(c, "—").TextColor(colorWhenChosen(chosen, tok.TextMuted, tok.TextPrimary))
 		return
 	}
 	pending := "—"
@@ -356,7 +360,7 @@ func (m *Model) historyMergedCountsCell(c *ui.Context, t *ui.Theme, tok *Tokens,
 // checkpoint cannot be read, which the wireframe's damaged row shows.
 func (m *Model) historySizeCell(c *ui.Context, t *ui.Theme, tok *Tokens, entry HistoryEntry, chosen bool) {
 	ui.Text(c, formatBytes(entry.TotalBytes)).SingleLine().
-		TextColor(colorWhenChosen(chosen, tok.TextMuted, t.AccentText))
+		TextColor(colorWhenChosen(chosen, tok.TextMuted, tok.TextPrimary))
 }
 
 // historyActionCell is the row's ⋯ trigger. 打开 is not an inline button:
@@ -611,13 +615,12 @@ func historyTimeText(entry HistoryEntry) string {
 	return entry.SavedAt.In(time.Local).Format("1 月 2 日 15:04")
 }
 
-// colorWhenChosen keeps secondary text readable on the accent-filled
-// selected row: the design requires pure white there, not the muted role.
-func colorWhenChosen(chosen bool, muted, onAccent ui.Color) ui.Color {
+// colorWhenChosen keeps special cell text readable on the selected object.
+func colorWhenChosen(chosen bool, normal, selected ui.Color) ui.Color {
 	if chosen {
-		return onAccent
+		return selected
 	}
-	return muted
+	return normal
 }
 
 // formatCount writes an integer with thousands separators, as the design's
