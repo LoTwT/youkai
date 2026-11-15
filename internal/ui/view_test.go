@@ -403,8 +403,8 @@ func TestViewStructuredFormAndScreenshots(t *testing.T) {
 	tt.Frame()
 	for _, want := range []string{
 		"套装", "31100 河豚电音", "稀有度", "S", "槽位", "1 号位",
-		"等级", "级", "主词条", "health 生命值", "flat 固定值",
-		"副词条", "critDamage 暴击伤害", "percent 百分比",
+		"等级", "级", "主词条", "health 生命值", "固定值",
+		"副词条", "critDamage 暴击伤害", "%",
 		"管理状态", "装备",
 	} {
 		if !tt.HasText(want) {

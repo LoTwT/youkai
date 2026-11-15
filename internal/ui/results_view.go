@@ -1098,7 +1098,7 @@ func (m *Model) reviewFieldControl(c *ui.Context, t *ui.Theme, row *Row, field F
 			// ask for it again next frame.
 			value = m.reviewFocus(field, value)
 			unit := ui.Select(c, &draft.MainUnit,
-				unitChoices(attributeTextValue(draft.MainAttribute), attributeTextValue(draft.MainUnit))).
+				unitChoices(attributeTextValue(draft.MainAttribute), draft.MainUnit)).
 				Width(reviewMainUnitWidth).Shrink(1).Disabled(m.reviewActionsBlocked()).Label("主词条单位")
 			m.mainUnitBounds = unit.Bounds()
 			m.noteReviewControlFocus(field, attribute.FocusWithin() || value.FocusWithin() || unit.FocusWithin())
@@ -1697,7 +1697,7 @@ func (m *Model) editSubstatRow(c *ui.Context, t *ui.Theme, index int) bool {
 		})
 		ui.Row(c).Gap(8).Wrap().AlignItems(ui.Center).Children(func() {
 			value := m.noteTextInputFocus(ui.TextInput(c, &sub.Value).Width(90).Placeholder("数值").Disabled(m.reviewActionsBlocked()).Label("副词条数值"))
-			unit := ui.Select(c, &sub.Unit, unitChoices(attributeTextValue(sub.Attribute), attributeTextValue(sub.Unit))).Width(120).Disabled(m.reviewActionsBlocked()).Label("副词条单位")
+			unit := ui.Select(c, &sub.Unit, unitChoices(attributeTextValue(sub.Attribute), sub.Unit)).Width(120).Disabled(m.reviewActionsBlocked()).Label("副词条单位")
 			ui.Text(c, "强化").TextColor(t.TextMuted)
 			rolls := m.noteTextInputFocus(ui.TextInput(c, &sub.Rolls).Width(60).Placeholder("档位").Disabled(m.reviewActionsBlocked()).Label("强化档位"))
 			m.noteReviewControlFocus(field, value.FocusWithin() || unit.FocusWithin() || rolls.FocusWithin())
