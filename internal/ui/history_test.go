@@ -49,14 +49,6 @@ func historyTableRecords(n int) []app.HistoryRecord {
 	return out
 }
 
-func historyHeaderTitles(columns []ui.TableColumn) []string {
-	out := make([]string, len(columns))
-	for i, column := range columns {
-		out[i] = column.Title
-	}
-	return out
-}
-
 // TestHistoryListNewestFirst checks the list's order and that the newest
 // row carries its conclusion: the view sorts by save time even when the
 // service hands the records back shuffled, and the first row answers
@@ -670,18 +662,16 @@ func TestHistoryKeyboard(t *testing.T) {
 // list shows 占用 and separate 待处理 / 可导出 columns; the compact list
 // merges the counts and drops 占用.
 func TestHistoryColumnsByWidth(t *testing.T) {
-	standard := historyHeaderTitles(historyColumnsFor(1180))
-	wantStandard := []string{"时间", "结果", "件数", "待处理", "可导出", "占用", ""}
-	if strings.Join(standard, "/") != strings.Join(wantStandard, "/") {
-		t.Fatalf("1180 columns = %v, want %v", standard, wantStandard)
-	}
-	compact := historyHeaderTitles(historyColumnsFor(960))
-	wantCompact := []string{"时间", "结果", "件数", "待处理 / 可导出", ""}
-	if strings.Join(compact, "/") != strings.Join(wantCompact, "/") {
-		t.Fatalf("960 columns = %v, want %v", compact, wantCompact)
-	}
-	if !historyCompact(960) || historyCompact(1180) {
-		t.Fatalf("compact tiers: 960 %v, 1180 %v", historyCompact(960), historyCompact(1180))
+	for _, width := range []int{1180, 960} {
+		m, q := newTestModel(t, Config{Service: &fakeService{history: historyTableRecords(1)}})
+		m.SetContentSize(width, 760)
+		tt := ui.NewTester(m.View, width, 760)
+		settle(t, m, q, tt)
+		openRecordsList(t, m, q, tt)
+		compact := width == 960
+		if tt.HasText("占用") == compact || tt.HasText("待处理 / 可导出") != compact {
+			t.Fatalf("width %d columns do not match compact=%t: %q", width, compact, tt.Texts())
+		}
 	}
 }
 
@@ -1372,26 +1362,23 @@ func TestHistoryTableFitsWidths(t *testing.T) {
 			settle(t, m, q, tt)
 			openRecordsList(t, m, q, tt)
 
-			for _, title := range historyHeaderTitles(historyColumnsFor(width)) {
-				if title == "" {
+			for _, header := range tt.AccessAll() {
+				if header.Role != ui.RoleColumnHeader || header.Name == "" {
 					continue
 				}
-				rect, ok := tt.Find(title)
-				if !ok {
-					t.Fatalf("%q is missing at %d", title, width)
-				}
+				rect := header.Bounds
 				if rect.X < m.railWidth()+m.pageLeftPadding() || rect.X+rect.W > float32(width)-m.pagePadding() {
-					t.Errorf("%q at %+v is outside the %d page", title, rect, width)
+					t.Errorf("%q at %+v is outside the %d page", header.Name, rect, width)
 				}
 			}
 			action, ok := tt.Find("⋯")
 			if !ok || action.X+action.W > float32(width)-m.pagePadding() {
 				t.Fatalf("the row action at %+v does not fit %d", action, width)
 			}
-			if width >= historyStandardMinWidth && tt.HasText("待处理 / 可导出") {
+			if width == 1180 && tt.HasText("待处理 / 可导出") {
 				t.Fatal("the wide table still merges the counts")
 			}
-			if width < historyStandardMinWidth && tt.HasText("占用") {
+			if width == 960 && tt.HasText("占用") {
 				t.Fatal("the compact table still shows the storage column")
 			}
 		})

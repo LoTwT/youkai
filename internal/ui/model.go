@@ -436,10 +436,11 @@ type Model struct {
 	// The history table's choice, place and row menu. historyRow indexes
 	// the visible (date-filtered) entries; the ListState keeps the scroll
 	// and the keyboard choice. Only one row's popover menu is open at once.
-	historyList     ui.ListState
-	historyRow      int
-	historyMenuID   string
-	historyMenuOpen bool
+	historyList          ui.ListState
+	historyCompactLayout bool
+	historyRow           int
+	historyMenuID        string
+	historyMenuOpen      bool
 	// historyFocusPending moves the keyboard to the first row when the
 	// records list is entered (08 §5). lastPage detects that entry.
 	historyFocusPending bool
