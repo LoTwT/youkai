@@ -2,6 +2,12 @@
 
 更新日期：2026-11-14。本文维护环境要求与本仓库当前实际可用的开发命令；范围与里程碑安排见[实施清单](specs/scanner-implementation-plan.md)，构建与分发决策见 [T7](specs/t7-public-release-acceptance.md)。
 
+## 第五版原生界面
+
+UXM-01 的主题、组件选择与布局由 [第五版视觉规则](design/uiux-2026-11/13-v5-visual-system.md) 维护。Lobe 固定到 `v0.0.0-20261110162706-5e5fea5ef9e2`，不升级 MyGo 或其他依赖；新增许可随 `resources/licenses/` 分发。
+
+相关本地检查沿用 `go test ./internal/ui ./internal/app ./cmd/youkai`、`go vet ./...`、`go tool mygo vet .` 和 Windows x64 交叉编译。主题指针与偏好、真实号位事件时机/迟到隔离和响应布局只补必要断言；既有保存、导出、清理、虚拟化测试继续复用。临时产品 Model 渲染入口与唯一 App.Name 预览构建不进入产品源码，不新增测试运行时或生产开关。软件渲染不是 Windows 实测，完整安装/升级验收仍另行安排。
+
 ## 环境要求
 
 | 工具 | 要求与用途 |

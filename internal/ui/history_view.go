@@ -64,7 +64,7 @@ func historyColumnsFor(contentWidth int) []ui.TableColumn {
 // the first row with the 本次 badge; it opens the same record workspace as
 // any other row, so one record never has two editable copies.
 func (m *Model) historyPage(c *ui.Context, t *ui.Theme) {
-	_, tok := themeWithTokens(t, c.Preferences())
+	tok := m.effectiveTokens()
 	m.historyHeader(c, t, tok)
 	m.historyNotices(c, t)
 
@@ -89,8 +89,7 @@ func (m *Model) historyPage(c *ui.Context, t *ui.Theme) {
 	m.settleHistoryRow(len(entries))
 	m.prepareHistoryList(entries)
 
-	ui.Column(c).Grow(1).MinWidth(0).Background(tok.SurfaceCard).
-		Border(1, tok.TableBorder).Radius(t.Space(1.5)).Clip().Children(func() {
+	panel(c, tok).Grow(1).MinWidth(0).Clip().Children(func() {
 		columns := historyColumnsFor(m.contentWidth)
 		table := ui.Table(c, &m.historyList, columns, len(entries), func(row, col int) {
 			if row < 0 || row >= len(entries) || col < 0 || col >= len(columns) {
@@ -119,7 +118,7 @@ func (m *Model) historyPage(c *ui.Context, t *ui.Theme) {
 func (m *Model) historyHeader(c *ui.Context, t *ui.Theme, tok *Tokens) {
 	m.settleHistoryFilterRange()
 	ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, "记录").FontWeight(600).FontSize(t.FontSize * 1.15)
+		ui.Text(c, "记录").FontWeight(600).FontSize(t.FontSize * 24 / 14)
 		if len(m.history) > 0 {
 			count := fmt.Sprintf("%d 条", len(m.history))
 			if m.historyLoading {
@@ -144,7 +143,7 @@ func (m *Model) historyHeader(c *ui.Context, t *ui.Theme, tok *Tokens) {
 			m.clampHistoryFilter(false)
 		}
 		if m.historyFilterActive && len(m.visibleHistory()) > 0 {
-			if ui.Button(c, "清除筛选").Clicked() {
+			if button(c, "清除筛选").Clicked() {
 				m.resetHistoryFilter()
 			}
 		}
@@ -158,13 +157,13 @@ func (m *Model) historyEmptyState(c *ui.Context, t *ui.Theme, tok *Tokens, filte
 	ui.Column(c).Grow(1).Justify(ui.Center).AlignItems(ui.Center).Gap(t.Space(2)).Children(func() {
 		if filtered {
 			ui.Text(c, "没有符合条件的记录").TextColor(tok.TextMuted)
-			if ui.Button(c, "清除筛选").Clicked() {
+			if button(c, "清除筛选").Clicked() {
 				m.resetHistoryFilter()
 			}
 			return
 		}
 		ui.Text(c, "还没有扫描记录").TextColor(tok.TextMuted)
-		if ui.Button(c, "去扫描页开始扫描").Clicked() {
+		if button(c, "去扫描页开始扫描").Clicked() {
 			m.showScanDestination()
 		}
 	})
@@ -408,7 +407,7 @@ func (m *Model) historyRowMenu(c *ui.Context, t *ui.Theme, tok *Tokens, anchor u
 				if reason != "" {
 					color = tok.TextMuted
 				}
-				m.historyMenuItem(c, t, "删除记录…", color, reason != "", true, func() {
+				m.historyMenuItem(c, t, "删除记录", color, reason != "", true, func() {
 					m.RequestRecordCleanup(entry.ID)
 				})
 				if reason != "" {
@@ -425,11 +424,11 @@ func (m *Model) historyRowMenu(c *ui.Context, t *ui.Theme, tok *Tokens, anchor u
 			if exportReason != "" {
 				exportColor = tok.TextMuted
 			}
-			m.historyMenuItem(c, t, "导出…", exportColor, exportReason != "", false, func() {
+			m.historyMenuItem(c, t, "导出", exportColor, exportReason != "", false, func() {
 				m.openHistoryExport(entry)
 			})
 			ui.Divider(c)
-			screenshotLabel := "删除截图…"
+			screenshotLabel := "删除截图"
 			if historyCompact(m.contentWidth) {
 				// Compact hides 占用; its number stays in the delete item.
 				screenshotLabel += "（" + formatBytes(entry.TotalBytes) + "）"
@@ -442,7 +441,7 @@ func (m *Model) historyRowMenu(c *ui.Context, t *ui.Theme, tok *Tokens, anchor u
 			m.historyMenuItem(c, t, screenshotLabel, deleteColor, reason != "", false, func() {
 				m.RequestScreenshotCleanup(entry.ID)
 			})
-			m.historyMenuItem(c, t, "删除记录…", deleteColor, reason != "", false, func() {
+			m.historyMenuItem(c, t, "删除记录", deleteColor, reason != "", false, func() {
 				m.RequestRecordCleanup(entry.ID)
 			})
 			if exportReason != "" {

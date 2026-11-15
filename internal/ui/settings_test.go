@@ -155,19 +155,25 @@ func TestSettingsPageShortcuts(t *testing.T) {
 	}
 	for _, registered := range []string{
 		"停止扫描", "开始扫描时注册", shortcutStopScan,
-		"开始扫描", "扫描准备", shortcutStartScan,
+		"开始扫描", shortcutStartScan,
 		"确认并下一项", shortcutConfirmNext,
 		"保存修改", shortcutSave,
 		"下一个待处理件", shortcutNextPending,
 		"上一个待处理件", shortcutPreviousPending,
-		"导出…", "记录工作区", shortcutExport,
+		"导出", shortcutExport,
 		"截图放大 / 缩小 / 适合窗口", shortcutZoomIn, shortcutZoomOut, shortcutZoomFit,
 		"在大区域间跳转", shortcutFocusRegion, shortcutFocusRegionBack,
 		"打开选中的记录", shortcutOpenRecord,
 		"关闭浮层/返回表格", shortcutCloseOverlay,
 	} {
-		if !tt.HasText(registered) {
-			t.Errorf("the shortcut list does not show %q: %q", registered, tt.Texts())
+		keys := []string{registered}
+		if strings.Contains(registered, "+") {
+			keys = strings.Split(registered, "+")
+		}
+		for _, key := range keys {
+			if !tt.HasText(key) {
+				t.Errorf("the shortcut list does not show %q from %q: %q", key, registered, tt.Texts())
+			}
 		}
 	}
 	for _, row := range rows {
@@ -424,7 +430,7 @@ func TestSettingsStorageCopy(t *testing.T) {
 	if !tt.HasText("磁盘可用 5.0 GB / 10.0 GB") {
 		t.Fatalf("the free disk space does not show: %q", tt.Texts())
 	}
-	for _, label := range []string{"打开数据目录", "清缓存", "清旧日志", "删除全部截图…", "删除全部记录…"} {
+	for _, label := range []string{"打开数据目录", "清缓存", "清旧日志", "删除全部截图", "删除全部记录"} {
 		if !tt.HasText(label) {
 			t.Errorf("the storage section does not offer %q", label)
 		}
@@ -446,9 +452,7 @@ func TestSettingsStorageDisabledReasons(t *testing.T) {
 	if !tt2.HasText("扫描会话进行中，结束后才能清理。") {
 		t.Fatalf("the active scan does not block cleanup: %q", tt2.Texts())
 	}
-	if err := tt2.Click("删除全部记录…"); err != nil {
-		t.Fatal(err)
-	}
+	clickRevealedSettingsControl(t, tt2, 1000, "删除全部记录")
 	drainAll(t, m2, q2)
 	if _, _, _, allRecords := svc2.cleanupCalls(); allRecords != 0 {
 		t.Fatalf("a disabled bulk entry still deleted: %d", allRecords)
@@ -464,9 +468,7 @@ func TestSettingsCleanupPromptDefaultsToCancel(t *testing.T) {
 	settle(t, m, q, tt)
 	openSettings(t, m, q, tt)
 
-	if err := tt.Click("删除全部记录…"); err != nil {
-		t.Fatal(err)
-	}
+	clickRevealedSettingsControl(t, tt, 1000, "删除全部记录")
 	settle(t, m, q, tt)
 	want := "将永久删除 2 条记录（共 9.8 KB，其中截图 4 张 4.0 KB）；待校对 1 项。外部导出的 JSON/CSV 不受影响。"
 	if !tt.HasText(want) {
@@ -486,9 +488,7 @@ func TestSettingsCleanupPromptDefaultsToCancel(t *testing.T) {
 	}
 
 	// The deliberate confirm still runs the previewed deletion.
-	if err := tt.Click("删除全部记录…"); err != nil {
-		t.Fatal(err)
-	}
+	clickRevealedSettingsControl(t, tt, 1000, "删除全部记录")
 	settle(t, m, q, tt)
 	if !tt.Focused("取消") {
 		t.Fatal("the reopened confirmation does not take the safe focus")
@@ -533,9 +533,7 @@ func TestSettingsStorageFromPrepareCheck(t *testing.T) {
 		t.Fatalf("the storage action is not visible: %+v", rect)
 	}
 
-	if err := tt.Click("清缓存"); err != nil {
-		t.Fatal(err)
-	}
+	clickRevealedSettingsControl(t, tt, 520, "清缓存")
 	settle(t, m, q, tt)
 	if err := tt.Click("确认清理"); err != nil {
 		t.Fatal(err)
@@ -737,9 +735,7 @@ func TestSettingsDiagnosticsActions(t *testing.T) {
 	if !tt.HasText("复制的内容不包含窗口标题等隐私") {
 		t.Fatalf("the privacy note is missing: %q", tt.Texts())
 	}
-	if err := tt.Click("复制诊断信息"); err != nil {
-		t.Fatal(err)
-	}
+	clickRevealedSettingsControl(t, tt, 1000, "复制诊断信息")
 	settle(t, m, q, tt)
 	want := app.DiagnosticsText(app.DiagnosticsInput{
 		Version: "0.6.0 (build 1021)",
@@ -771,9 +767,7 @@ func TestSettingsDiagnosticsActions(t *testing.T) {
 		t.Fatalf("the copied text leaked private context: %q", tt.Clipboard())
 	}
 
-	if err := tt.Click("打开诊断目录"); err != nil {
-		t.Fatal(err)
-	}
+	clickRevealedSettingsControl(t, tt, 1000, "打开诊断目录")
 	settle(t, m, q, tt)
 	if opened != 1 || !tt.HasText("已打开诊断目录。") {
 		t.Fatalf("opened=%d texts=%q", opened, tt.Texts())
@@ -789,9 +783,7 @@ func TestSettingsOpenDiagnosticsDirectoryFailure(t *testing.T) {
 	settle(t, m, q, tt)
 	openSettings(t, m, q, tt)
 
-	if err := tt.Click("打开诊断目录"); err != nil {
-		t.Fatal(err)
-	}
+	clickRevealedSettingsControl(t, tt, 1000, "打开诊断目录")
 	settle(t, m, q, tt)
 	if !tt.HasText("打开诊断目录失败：没有文件管理器") {
 		t.Fatalf("the directory failure does not show: %q", tt.Texts())
@@ -817,9 +809,7 @@ func TestSettingsAbout(t *testing.T) {
 	if !tt.HasText("以 MIT 许可发布。") {
 		t.Fatalf("the about section does not state the license: %q", tt.Texts())
 	}
-	if err := tt.Click("开源许可"); err != nil {
-		t.Fatal(err)
-	}
+	clickRevealedSettingsControl(t, tt, 1000, "开源许可")
 	settle(t, m, q, tt)
 	if opened != 1 {
 		t.Fatalf("the license action opened %d times, want 1", opened)

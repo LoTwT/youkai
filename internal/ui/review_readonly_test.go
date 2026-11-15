@@ -88,7 +88,7 @@ func TestReviewReadOnlyPassedForm(t *testing.T) {
 	m, _, tt, _ := openReviewableResults(t, recovery(
 		settledReviewItem(t, 1, record.QualityAutoAccepted),
 		settledReviewItem(t, 2, record.QualityHumanConfirmed),
-	), 1180, 760)
+	), 1440, 900)
 	tt.Frame()
 	m.setResultFilter(resultFilterAll)
 	tt.Frame()
@@ -127,7 +127,7 @@ func TestReviewReadOnlyPassedForm(t *testing.T) {
 // form starts on 修改, and a warning item also highlights its warning
 // field's crop on entry (08 §3.3).
 func TestReviewReadOnlyEntryFocus(t *testing.T) {
-	m, _, tt, _ := openReviewableResults(t, recovery(settledReviewItem(t, 1, record.QualityAutoAccepted)), 1180, 760)
+	m, _, tt, _ := openReviewableResults(t, recovery(settledReviewItem(t, 1, record.QualityAutoAccepted)), 1440, 900)
 	tt.Frame()
 	m.openSummaryClass(app.ItemClassPassed)
 	tt.Frame()
@@ -154,7 +154,7 @@ func TestReviewReadOnlyEntryFocus(t *testing.T) {
 // read-only state: Ctrl+Enter and Ctrl+S must not reach the service, and
 // the status bar must not advertise them.
 func TestReviewReadOnlyShortcutsDoNotWrite(t *testing.T) {
-	m, q, tt, svc := openReviewableResults(t, recovery(settledReviewItem(t, 1, record.QualityAutoAccepted)), 1180, 760)
+	m, q, tt, svc := openReviewableResults(t, recovery(settledReviewItem(t, 1, record.QualityAutoAccepted)), 1440, 900)
 	tt.Frame()
 	m.setResultFilter(resultFilterAll)
 	tt.Frame()
@@ -189,7 +189,7 @@ func TestReviewReadOnlyBrowsing(t *testing.T) {
 		settledReviewItem(t, 1, record.QualityAutoAccepted),
 		settledReviewItem(t, 2, record.QualityHumanConfirmed),
 		equippedWarningReviewItem(t, 3),
-	), 1180, 760)
+	), 1440, 900)
 	tt.Frame()
 	m.setResultFilter(resultFilterAll)
 	tt.Frame()
@@ -229,7 +229,7 @@ func TestReviewReadOnlyBrowsing(t *testing.T) {
 // 08 §3.4: the read-only item keeps the same row-crop list, and choosing a
 // field highlights its crop.
 func TestReviewReadOnlyCropListAndFieldHighlight(t *testing.T) {
-	m, _, tt := openResponsiveResults(t, recovery(roledSettledItem(t, 1)), 1180, 760)
+	m, _, tt := openResponsiveResults(t, recovery(roledSettledItem(t, 1)), 1440, 900)
 	tt.Frame()
 	m.setResultFilter(resultFilterAll)
 	tt.Frame()
@@ -267,7 +267,7 @@ func TestReviewReadOnlyCtrlJStillReachesPending(t *testing.T) {
 		settledReviewItem(t, 1, record.QualityAutoAccepted),
 		reviewRowItem(t, 2, 12),
 		settledReviewItem(t, 3, record.QualityHumanConfirmed),
-	), 1180, 760)
+	), 1440, 900)
 	tt.Frame()
 	m.setResultFilter(resultFilterAll)
 	tt.Frame()
@@ -290,7 +290,7 @@ func TestReviewReadOnlyCtrlJStillReachesPending(t *testing.T) {
 // bottom bar to 确认修改 / 取消修改, focuses the first field, and 确认修改
 // re-confirms the item in place. Ctrl+S is not a write key in this flow.
 func TestReviewModifyFlow(t *testing.T) {
-	m, q, tt, svc := openReviewableResults(t, recovery(settledReviewItem(t, 1, record.QualityAutoAccepted)), 1180, 760)
+	m, q, tt, svc := openReviewableResults(t, recovery(settledReviewItem(t, 1, record.QualityAutoAccepted)), 1440, 900)
 	tt.Frame()
 	m.setResultFilter(resultFilterAll)
 	tt.Frame()
@@ -312,7 +312,7 @@ func TestReviewModifyFlow(t *testing.T) {
 			t.Fatalf("the modify bar still shows %q: %q", unwanted, tt.Texts())
 		}
 	}
-	if m.focusedReviewField != FormFieldMainStat {
+	if m.focusedReviewField != FormFieldSetID {
 		t.Fatalf("修改 did not focus the form's first field: %q", m.focusedReviewField)
 	}
 	if status := m.resultShortcutText(); strings.Contains(status, shortcutConfirmNext) {
@@ -359,7 +359,7 @@ func TestReviewModifyFlow(t *testing.T) {
 // TestReviewModifyCancelDiscards checks 取消修改: no revision is written
 // and the item returns to its read-only text with the old values.
 func TestReviewModifyCancelDiscards(t *testing.T) {
-	m, q, tt, svc := openReviewableResults(t, recovery(settledReviewItem(t, 1, record.QualityAutoAccepted)), 1180, 760)
+	m, q, tt, svc := openReviewableResults(t, recovery(settledReviewItem(t, 1, record.QualityAutoAccepted)), 1440, 900)
 	tt.Frame()
 	m.setResultFilter(resultFilterAll)
 	tt.Frame()
@@ -389,7 +389,7 @@ func TestReviewModifyCancelDiscards(t *testing.T) {
 // TestReviewModifySaveFailureKeepsInput covers F-20: a failed save keeps
 // the item, the draft byte-for-byte and the retry action in place.
 func TestReviewModifySaveFailureKeepsInput(t *testing.T) {
-	m, q, tt, svc := openReviewableResults(t, recovery(settledReviewItem(t, 1, record.QualityAutoAccepted)), 1180, 760)
+	m, q, tt, svc := openReviewableResults(t, recovery(settledReviewItem(t, 1, record.QualityAutoAccepted)), 1440, 900)
 	tt.Frame()
 	m.setResultFilter(resultFilterAll)
 	tt.Frame()
@@ -446,7 +446,7 @@ func TestReviewModifyKeepsOriginalOutcome(t *testing.T) {
 	backfilled.Status = record.StatusFailed
 	backfilled.Failure = "识别超时"
 	backfilled.Revision = 1
-	m, q, tt, _ := openReviewableResults(t, recovery(backfilled), 1180, 760)
+	m, q, tt, _ := openReviewableResults(t, recovery(backfilled), 1440, 900)
 	tt.Frame()
 	m.setResultFilter(resultFilterAll)
 	tt.Frame()
@@ -491,7 +491,7 @@ func TestReviewModifyKeepsOriginalOutcome(t *testing.T) {
 // 08 §3.3: the warning field leads with its "!" marker and the optional
 // value, and the notice band above the form is not an error style.
 func TestReviewWarningReadOnly(t *testing.T) {
-	m, _, tt, _ := openReviewableResults(t, recovery(equippedWarningReviewItem(t, 1)), 1180, 760)
+	m, _, tt, _ := openReviewableResults(t, recovery(equippedWarningReviewItem(t, 1)), 1440, 900)
 	tt.Frame()
 	m.setResultFilter(resultFilterWarning)
 	tt.Frame()
@@ -511,7 +511,7 @@ func TestReviewWarningReadOnly(t *testing.T) {
 		}
 	}
 
-	equipped, ok := tt.Find("未识别（可留空导出）")
+	_, ok := tt.Find("未识别（可留空导出）")
 	if !ok {
 		t.Fatalf("the equipped value is missing: %q", tt.Texts())
 	}
@@ -519,8 +519,9 @@ func TestReviewWarningReadOnly(t *testing.T) {
 	if !ok {
 		t.Fatalf("the set value is missing: %q", tt.Texts())
 	}
-	if equipped.Y >= set.Y {
-		t.Fatalf("the warning field is not first: equipped y=%v set y=%v", equipped.Y, set.Y)
+	noticeRect, _ := tt.Find(warningNotice(m.selectedRow()))
+	if noticeRect.Y >= set.Y {
+		t.Fatalf("the warning notice is not above the cards: notice y=%v set y=%v", noticeRect.Y, set.Y)
 	}
 
 	// The notice band uses the control surface, not the danger surface:
@@ -531,9 +532,9 @@ func TestReviewWarningReadOnly(t *testing.T) {
 	}
 	x, y := int(text.X+text.W/2), int(text.Y)-3
 	got := tt.Image().RGBAAt(x, y)
-	if got != rgba(tokensFor(false).SurfaceControl) {
+	if got != rgba(tokensFor(false).WarningSoft) {
 		t.Fatalf("the notice band background = %v, want %v",
-			got, rgba(tokensFor(false).SurfaceControl))
+			got, rgba(tokensFor(false).WarningSoft))
 	}
 	if got == rgba(tokensFor(false).DangerSoft) {
 		t.Fatal("the notice band uses the danger surface")
@@ -544,7 +545,7 @@ func TestReviewWarningReadOnly(t *testing.T) {
 // filling the agent and confirming turns the item into a passed, human
 // confirmed one and removes the warning from the counts.
 func TestReviewWarningModifyFixesWarning(t *testing.T) {
-	m, q, tt, _ := openReviewableResults(t, recovery(equippedWarningReviewItem(t, 1)), 1180, 760)
+	m, q, tt, _ := openReviewableResults(t, recovery(equippedWarningReviewItem(t, 1)), 1440, 900)
 	tt.Frame()
 	m.setResultFilter(resultFilterWarning)
 	tt.Frame()

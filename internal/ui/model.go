@@ -321,8 +321,12 @@ const (
 // records; its state is confined to the UI thread (see the package
 // comment).
 type Model struct {
-	cfg Config
-	upd Updater
+	pairedHeightIdentity reviewHeightIdentity
+	pairedHeights        map[string]float32
+	pairedMeasureReady   bool
+	cfg                  Config
+	theme                *themeState
+	upd                  Updater
 
 	// wg tracks the model-spawned background work; view tests wait on it
 	// to know a click's asynchronous work has settled.
@@ -637,11 +641,12 @@ func New(cfg Config) *Model {
 	}
 	m := &Model{
 		cfg:            cfg,
+		theme:          newThemeState(),
 		source:         cfg.ScanSource,
 		page:           pageScan,
 		recordTab:      recordTabSummary,
-		contentWidth:   1180,
-		contentHeight:  760,
+		contentWidth:   1440,
+		contentHeight:  900,
 		cache:          newEvidenceCache(cfg.Evidence, limit),
 		historyRow:     -1,
 		historyLoading: true,
@@ -662,7 +667,7 @@ func New(cfg Config) *Model {
 
 // SetContentSize records the page area for responsive layout. The entry
 // point calls it once at ready and again from Window.OnResize. The review
-// view has two width profiles — standard (with the 240-DIP item list) and
+// view has two width profiles — standard (with the 256-DIP item list) and
 // compact (the list in the top strip) — but both keep the screenshots and
 // the form side by side (09 §2).
 func (m *Model) SetContentSize(width, height int) {

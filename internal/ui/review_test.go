@@ -178,9 +178,9 @@ func TestReviewLayoutProfiles(t *testing.T) {
 		width, height int
 		standard      bool
 	}{
-		{"standard-1180", 1180, 760, true},
-		{"standard-1120", 1120, 700, true},
-		{"compact-1119", 1119, 700, false},
+		{"standard-1440", 1440, 900, true},
+		{"standard-1376", 1376, 900, true},
+		{"compact-1375", 1375, 900, false},
 		{"compact-1000", 1000, 700, false},
 		{"compact-short-960", 960, 640, false},
 	}
@@ -194,7 +194,7 @@ func TestReviewLayoutProfiles(t *testing.T) {
 			if layout.Crops < reviewMinCropsWidth-0.5 {
 				t.Fatalf("screenshot width = %v, want ≥ %v", layout.Crops, reviewMinCropsWidth)
 			}
-			if layout.Form < reviewFormWidth-0.5 || layout.Form > reviewFormWidth+0.5 {
+			if layout.Form < m.reviewFormWidth()-0.5 || layout.Form > m.reviewFormWidth()+0.5 {
 				t.Fatalf("form width = %v, want %v", layout.Form, reviewFormWidth)
 			}
 			if tc.standard {
@@ -222,10 +222,10 @@ func TestReviewLayoutProfiles(t *testing.T) {
 // item list is in the strip.
 func TestReviewCompactStripAtMinimumWindow(t *testing.T) {
 	m, q, tt := openResponsiveResults(t, manyPendingRecord(t, 3), 960, 640)
-	if m.reviewLayout.Crops < reviewMinCropsWidth || m.reviewLayout.Form < reviewFormWidth {
+	if m.reviewLayout.Crops < reviewMinCropsWidth || m.reviewLayout.Form < m.reviewFormWidth() {
 		t.Fatalf("960×640 layout = %+v", m.reviewLayout)
 	}
-	if !tt.HasText("截图（逐行）") || !tt.HasText("确认并下一项") {
+	if !tt.HasText("截图") || !tt.HasText("确认并下一项") {
 		t.Fatalf("the screenshot or form is missing at 960×640: %q", tt.Texts())
 	}
 	if !tt.HasText("待处理 1 / 3") {
@@ -234,7 +234,7 @@ func TestReviewCompactStripAtMinimumWindow(t *testing.T) {
 	tt.SetSize(1000, 700)
 	m.SetContentSize(1000, 700)
 	settle(t, m, q, tt)
-	if m.reviewLayout.Crops < reviewMinCropsWidth || m.reviewLayout.Form < reviewFormWidth {
+	if m.reviewLayout.Crops < reviewMinCropsWidth || m.reviewLayout.Form < m.reviewFormWidth() {
 		t.Fatalf("1000-wide layout = %+v", m.reviewLayout)
 	}
 }
@@ -242,7 +242,7 @@ func TestReviewCompactStripAtMinimumWindow(t *testing.T) {
 // TestReviewFilterSegments checks the three segments and the category
 // labels, including the two backfill reasons.
 func TestReviewFilterSegments(t *testing.T) {
-	m, _, tt := openResponsiveResults(t, pendingReviewRecord(t), 1180, 760)
+	m, _, tt := openResponsiveResults(t, pendingReviewRecord(t), 1440, 900)
 	if m.filter != resultFilterPending {
 		t.Fatalf("the view starts on %v, want pending", m.filter)
 	}
@@ -279,7 +279,7 @@ func TestReviewConfirmKeepsRowAndMovesFocus(t *testing.T) {
 		s.Data.ManagementState = nil
 		s.Validation = zzz.Validation{Status: zzz.ValidationUnavailable, Issues: []zzz.Issue{}}
 	})
-	m, q, tt, _ := openReviewableResults(t, recovery(first, second), 1180, 760)
+	m, q, tt, _ := openReviewableResults(t, recovery(first, second), 1440, 900)
 	if m.selected != 0 {
 		t.Fatalf("initial selection = %d", m.selected)
 	}
@@ -322,8 +322,8 @@ func TestReviewSaveFailureKeepsInput(t *testing.T) {
 		return app.ItemRevisionResult{}, fmt.Errorf("磁盘空间不足")
 	}
 	m, q := newTestModel(t, Config{Service: svc})
-	m.SetContentSize(1180, 760)
-	tt := ui.NewTester(m.View, 1180, 760)
+	m.SetContentSize(1440, 900)
+	tt := ui.NewTester(m.View, 1440, 900)
 	settle(t, m, q, tt)
 	m.histChoice = historyLabel(t, m, "rec")
 	m.OpenHistory()
@@ -363,7 +363,7 @@ func TestReviewFieldClickHighlightsCrop(t *testing.T) {
 		roledItem(t, 1, roles, []string{"detailAvatar", "qualityBadge"}, []string{"河豚电音", "15", "19.2%", "9.6%", "3%", "19", "112"}),
 	}
 	rec := recovery(items...)
-	m, _, tt := openResponsiveResults(t, rec, 1180, 760)
+	m, _, tt := openResponsiveResults(t, rec, 1440, 900)
 	// The roles are real but the payload has no structured interpretation,
 	// so the item is still a pending backfill.
 	if !tt.HasText("套装") || !tt.HasText("副词条 4") || !tt.HasText("装备者头像") || !tt.HasText("稀有度") {
@@ -389,7 +389,7 @@ func TestReviewFieldClickHighlightsCrop(t *testing.T) {
 	noRoles.Observed = []byte(`{"lines":[{},{"},{"}]}`)
 	noRoles.Data = []byte(`{"lines":[{},{},{}]}`)
 	noRoles.EvidenceIDs = []string{"000001-line0", "000001-line1", "000001-line2"}
-	m2, _, tt2 := openResponsiveResults(t, recovery(noRoles), 1180, 760)
+	m2, _, tt2 := openResponsiveResults(t, recovery(noRoles), 1440, 900)
 	if !tt2.HasText("这件缺少行角色，截图按采集顺序列出。") {
 		t.Fatalf("the fallback note is missing: %q", tt2.Texts())
 	}
@@ -406,7 +406,7 @@ func TestReviewMissingImagePerRow(t *testing.T) {
 	first := roledItem(t, 1, []string{"name", "level"}, nil, []string{"套装", "15"})
 	second := roledItem(t, 2, []string{"name", "level"}, nil, []string{"套装", "15"})
 	second.EvidenceIDs = []string{"000002-line0"} // the level crop is missing
-	m, _, tt := openResponsiveResults(t, recovery(first, second), 1180, 760)
+	m, _, tt := openResponsiveResults(t, recovery(first, second), 1440, 900)
 	m.requestNavigation(navigationRequest{kind: navSelect, seq: 2})
 	tt.Frame()
 	tt.Frame()
@@ -422,7 +422,7 @@ func TestReviewMissingImagePerRow(t *testing.T) {
 // confirmed completion and checks it joins the export.
 func TestReviewBackfillKeepsOriginalOutcome(t *testing.T) {
 	failed := item(1, record.StatusFailed, "", "识别超时", "失败一")
-	m, q, tt, svc := openReviewableResults(t, recovery(failed), 1180, 760)
+	m, q, tt, svc := openReviewableResults(t, recovery(failed), 1440, 900)
 	saves := 0
 	inner := svc.saveFn
 	svc.saveFn = func(recordID string, sequence, expectedRevision int64, edit app.ItemRevisionEdit) (app.ItemRevisionResult, error) {
@@ -485,7 +485,7 @@ func TestReviewBackfillKeepsOriginalOutcome(t *testing.T) {
 // TestReviewShortcutsZoomAndWalk checks Ctrl+J / Ctrl+Shift+J and the
 // screenshot zoom keys.
 func TestReviewShortcutsZoomAndWalk(t *testing.T) {
-	m, q, tt := openResponsiveResults(t, manyPendingRecord(t, 3), 1180, 760)
+	m, q, tt := openResponsiveResults(t, manyPendingRecord(t, 3), 1440, 900)
 	tt.Key(ui.Cmd, ui.KeyJ)
 	drainAll(t, m, q)
 	if m.selected != 1 {
@@ -519,7 +519,7 @@ func TestReviewShortcutsZoomAndWalk(t *testing.T) {
 // TestReviewUnsavedDialog checks the unsaved-changes dialog's title,
 // buttons and default focus.
 func TestReviewUnsavedDialog(t *testing.T) {
-	m, q, tt := openResponsiveResults(t, manyPendingRecord(t, 2), 1180, 760)
+	m, q, tt := openResponsiveResults(t, manyPendingRecord(t, 2), 1440, 900)
 	m.edit.draft.Level = "11"
 	tt.Frame()
 	m.requestNavigation(navigationRequest{kind: navSelect, seq: 2})
@@ -566,8 +566,8 @@ func TestReviewEvidenceCacheStaysBounded(t *testing.T) {
 	}
 	evidence := &fakeEvidence{images: images}
 	m, q := newTestModel(t, Config{Service: svc, Evidence: evidence, EvidenceCacheLimit: 8})
-	m.SetContentSize(1180, 760)
-	tt := ui.NewTester(m.View, 1180, 760)
+	m.SetContentSize(1440, 900)
+	tt := ui.NewTester(m.View, 1440, 900)
 	settle(t, m, q, tt)
 	m.histChoice = historyLabel(t, m, "rec")
 	m.OpenHistory()
@@ -592,7 +592,7 @@ func TestReviewF6CyclesRegions(t *testing.T) {
 		s.Data.ManagementState = nil
 		s.Validation = zzz.Validation{Status: zzz.ValidationUnavailable, Issues: []zzz.Issue{}}
 	})
-	m, _, tt := openResponsiveResults(t, recovery(reviewRowItem(t, 1, 15), second), 1180, 760)
+	m, _, tt := openResponsiveResults(t, recovery(reviewRowItem(t, 1, 15), second), 1440, 900)
 	// The view starts in the form; F6 wraps to the list.
 	tt.Key(0, ui.KeyF6)
 	tt.Frame()
@@ -635,8 +635,8 @@ func TestReviewFieldScrollsToCrop(t *testing.T) {
 		loads: map[string]*record.Recovery{"rec": rec},
 	}
 	m, q := newTestModel(t, Config{Service: svc, Evidence: &fakeEvidence{images: images}})
-	m.SetContentSize(1180, 760)
-	tt := ui.NewTester(m.View, 1180, 760)
+	m.SetContentSize(1440, 900)
+	tt := ui.NewTester(m.View, 1440, 900)
 	settle(t, m, q, tt)
 	m.histChoice = historyLabel(t, m, "rec")
 	m.OpenHistory()
@@ -681,7 +681,7 @@ func tallBitmap(seed int) *ui.Bitmap {
 func TestReviewConfirmNextReachesBackfill(t *testing.T) {
 	first := reviewRowItem(t, 1, 15)
 	failed := item(2, record.StatusFailed, "", "识别超时", "失败")
-	m, q, tt, _ := openReviewableResults(t, recovery(first, failed), 1180, 760)
+	m, q, tt, _ := openReviewableResults(t, recovery(first, failed), 1440, 900)
 	m.saveEdit(reviewConfirmNext, nil)
 	drainAll(t, m, q)
 	tt.Frame()
@@ -702,7 +702,7 @@ func TestReviewConfirmNextReachesBackfill(t *testing.T) {
 func TestReviewSubstatGroupHasCrops(t *testing.T) {
 	roles := []string{"name", "level", "main", "sub1", "sub2", "sub3", "sub4"}
 	item := roledItem(t, 1, roles, nil, []string{"a", "b", "c", "d", "e", "f", "g"})
-	m, _, tt := openResponsiveResults(t, recovery(item), 1180, 760)
+	m, _, tt := openResponsiveResults(t, recovery(item), 1440, 900)
 	if got := EvidenceRolesForField(FormFieldSubstats); len(got) != 4 {
 		t.Fatalf("substat group roles = %v, want sub1..sub4", got)
 	}
@@ -728,7 +728,7 @@ func TestReviewSubstatRowFocus(t *testing.T) {
 		second.Value = stringPtr("")
 		s.Data.Substats = append(s.Data.Substats, second)
 	})
-	m, _, tt := openResponsiveResults(t, recovery(item), 1180, 760)
+	m, _, tt := openResponsiveResults(t, recovery(item), 1440, 900)
 	m.requestReviewFieldFocus(FormFieldSubstat2)
 	tt.Frame()
 	tt.Frame()
@@ -744,7 +744,7 @@ func TestReviewSubstatRowFocus(t *testing.T) {
 // TestReviewFacetFilters checks the set and slot facets narrow the visible
 // rows without changing the record-wide segment counts.
 func TestReviewFacetFilters(t *testing.T) {
-	m, _, tt := openResponsiveResults(t, responsiveResultRecord(t), 1180, 760)
+	m, _, tt := openResponsiveResults(t, responsiveResultRecord(t), 1440, 900)
 	if !tt.HasText("全部套装") || !tt.HasText("全部槽位") {
 		t.Fatalf("the facet controls are missing: %q", tt.Texts())
 	}
@@ -829,7 +829,7 @@ func TestReviewCompactPopoverVirtualizesRows(t *testing.T) {
 // text grow with the desktop text scale instead of clipping the row.
 func TestReviewRowsFollowTextScale(t *testing.T) {
 	open := func(scale float32) (*Model, *ui.Tester) {
-		m, q, tt := openResponsiveResults(t, manyPendingRecord(t, 20), 1180, 760)
+		m, q, tt := openResponsiveResults(t, manyPendingRecord(t, 20), 1440, 900)
 		if scale != 1 {
 			tt.SetPreferences(ui.Preferences{TextScale: scale})
 			settle(t, m, q, tt)
@@ -881,7 +881,7 @@ func TestReviewRarityProblemsDedupeByCode(t *testing.T) {
 			Severity: zzz.SeverityWarning, Message: "本次捕获没有已验证的 S 稀有度证据，rarity 保留为 null",
 		}}
 	})
-	_, _, tt := openResponsiveResults(t, recovery(item), 1180, 760)
+	_, _, tt := openResponsiveResults(t, recovery(item), 1440, 900)
 	texts := strings.Join(tt.Texts(), "\n")
 	if strings.Count(texts, "稀有度保持未读取") != 1 {
 		t.Fatalf("the rarity problem is not shown once: %q", texts)
@@ -897,7 +897,7 @@ func TestReviewRarityProblemsDedupeByCode(t *testing.T) {
 func TestReviewMappedFieldWithoutCropExplains(t *testing.T) {
 	roles := []string{"name", "level", "main", "sub1", "sub2", "sub3", "sub4"}
 	item := roledItem(t, 1, roles, nil, []string{"a", "b", "c", "d", "e", "f", "g"})
-	m, _, tt := openResponsiveResults(t, recovery(item), 1180, 760)
+	m, _, tt := openResponsiveResults(t, recovery(item), 1440, 900)
 	m.selectReviewField(FormFieldEquipped)
 	tt.Frame()
 	tt.Frame()
@@ -921,8 +921,8 @@ func TestReviewFilterStateBelongsToOpenRecord(t *testing.T) {
 		},
 	}
 	m, q := newTestModel(t, Config{Service: svc})
-	m.SetContentSize(1180, 760)
-	tt := ui.NewTester(m.View, 1180, 760)
+	m.SetContentSize(1440, 900)
+	tt := ui.NewTester(m.View, 1440, 900)
 	settle(t, m, q, tt)
 	m.Apply(snap("s1", 1, false, scan.PhaseEnded,
 		scan.Counts{Captured: 4, Produced: 2}, 4, false, ""))
@@ -981,8 +981,8 @@ func TestZoomModeDropsDecodedCache(t *testing.T) {
 		loads: map[string]*record.Recovery{"rec": recovery(item)},
 	}
 	m, q := newTestModel(t, Config{Service: svc, Evidence: &fakeEvidence{images: images}})
-	m.SetContentSize(1180, 760)
-	tt := ui.NewTester(m.View, 1180, 760)
+	m.SetContentSize(1440, 900)
+	tt := ui.NewTester(m.View, 1440, 900)
 	settle(t, m, q, tt)
 	m.histChoice = historyLabel(t, m, "rec")
 	m.OpenHistory()
@@ -1009,7 +1009,7 @@ func TestZoomModeDropsDecodedCache(t *testing.T) {
 // TestRecordClassCountsMatchExportSummary pins the one four-class source:
 // built rows and the export snapshot must agree once both are ready.
 func TestRecordClassCountsMatchExportSummary(t *testing.T) {
-	m, _, tt := openResponsiveResults(t, responsiveResultRecord(t), 1180, 760)
+	m, _, tt := openResponsiveResults(t, responsiveResultRecord(t), 1440, 900)
 	tt.Frame()
 	if m.exportData == nil {
 		t.Fatal("the export snapshot is missing")
@@ -1040,7 +1040,7 @@ func TestReviewCountsFollowBackfillState(t *testing.T) {
 		return item
 	}
 
-	m, _, tt := openResponsiveResults(t, recovery(backfill(record.QualityNeedsReview)), 1180, 760)
+	m, _, tt := openResponsiveResults(t, recovery(backfill(record.QualityNeedsReview)), 1440, 900)
 	tt.Frame()
 	if counts := m.recordCounts(); counts.Failed != 0 || counts.Pending != 1 || counts.Exportable != 0 {
 		t.Fatalf("saved backfill counts = %+v, want pending review only", counts)
@@ -1049,7 +1049,7 @@ func TestReviewCountsFollowBackfillState(t *testing.T) {
 		t.Fatalf("saved backfill pending text = %q", got)
 	}
 
-	m, _, tt = openResponsiveResults(t, recovery(backfill(record.QualityHumanConfirmed)), 1180, 760)
+	m, _, tt = openResponsiveResults(t, recovery(backfill(record.QualityHumanConfirmed)), 1440, 900)
 	tt.Frame()
 	if counts := m.recordCounts(); counts.Failed != 0 || counts.Pending != 0 || counts.Exportable != 1 {
 		t.Fatalf("confirmed backfill counts = %+v, want one exportable", counts)
@@ -1062,7 +1062,7 @@ func TestReviewCountsFollowBackfillState(t *testing.T) {
 // TestWorkspaceSavedStateIncludesReviewSave checks the title bar follows a
 // revision save in flight and a failed revision save.
 func TestWorkspaceSavedStateIncludesReviewSave(t *testing.T) {
-	m, _, _ := openResponsiveResults(t, recovery(reviewRowItem(t, 1, 15)), 1180, 760)
+	m, _, _ := openResponsiveResults(t, recovery(reviewRowItem(t, 1, 15)), 1440, 900)
 	m.reviewSaving = true
 	if _, _, saved := m.workspaceStatusTexts(); saved != "正在保存…" {
 		t.Fatalf("saving title = %q, want 正在保存…", saved)
@@ -1077,7 +1077,7 @@ func TestWorkspaceSavedStateIncludesReviewSave(t *testing.T) {
 // TestLiveScanDoesNotShowFinishedReview checks the completion surface waits
 // for the live scan to end and save.
 func TestLiveScanDoesNotShowFinishedReview(t *testing.T) {
-	m, _, tt := openResponsiveResults(t, recovery(confirmedReviewItem(t, 1, 12)), 1180, 760)
+	m, _, tt := openResponsiveResults(t, recovery(confirmedReviewItem(t, 1, 12)), 1440, 900)
 	m.rec.Live = true
 	m.snap = snap("rec", 1, true, scan.PhaseCapturing, scan.Counts{Captured: 1, Produced: 1}, 1, false, "")
 	tt.Frame()
@@ -1089,7 +1089,7 @@ func TestLiveScanDoesNotShowFinishedReview(t *testing.T) {
 // TestReviewFacetFilterFitsList checks the two standard facets stack inside
 // the 240-DIP list column instead of clipping the slot picker.
 func TestReviewFacetFilterFitsList(t *testing.T) {
-	_, _, tt := openResponsiveResults(t, pendingReviewRecord(t), 1180, 760)
+	_, _, tt := openResponsiveResults(t, pendingReviewRecord(t), 1440, 900)
 	tt.Frame()
 	set, ok := tt.Find("全部套装")
 	if !ok {
@@ -1134,7 +1134,7 @@ func TestReviewProblemsDedupeByCode(t *testing.T) {
 // TestReviewSelectedRowNumberReadable checks the selected row's sequence
 // number keeps a dark foreground on the light selected background.
 func TestReviewSelectedRowNumberReadable(t *testing.T) {
-	_, _, tt := openResponsiveResults(t, manyPendingRecord(t, 5), 1180, 760)
+	_, _, tt := openResponsiveResults(t, manyPendingRecord(t, 5), 1440, 900)
 	tt.Frame()
 	rect, ok := tt.Find("#0001")
 	if !ok {
@@ -1163,7 +1163,7 @@ func countDarkPixels(img *image.RGBA, r ui.Rect) int {
 // inside the 400-DIP form at 960. The constants are the actual widths the
 // row uses, so mutating them back to the old values fails here.
 func TestReviewFormControlsFitMinimumWidth(t *testing.T) {
-	const formInner = reviewFormWidth - 2*16 - 2*8
+	const formInner = 400 - 2*16 - 2*12
 	total := float32(reviewMainAttributeWidth + reviewMainValueWidth + reviewMainUnitWidth + 2*8)
 	if total > formInner {
 		t.Fatalf("main-stat row width %.0f exceeds the form inner width %.0f", total, float32(formInner))
@@ -1174,7 +1174,7 @@ func TestReviewFormControlsFitMinimumWidth(t *testing.T) {
 	m.formExtrasOpen = true
 	tt.Frame()
 	tt.Frame()
-	const formRight = 960 - reviewPagePadding
+	const formRight = 960 - compactPageInset
 	if m.mainUnitBounds.W <= 0 || m.mainUnitBounds.X+m.mainUnitBounds.W > formRight {
 		t.Fatalf("rendered main-stat unit bounds = %+v, form right %d", m.mainUnitBounds, formRight)
 	}
@@ -1183,7 +1183,7 @@ func TestReviewFormControlsFitMinimumWidth(t *testing.T) {
 // TestReviewFacetChangePromptsForDirtyDraft checks a facet change that
 // would leave the edited row goes through the unsaved-changes prompt.
 func TestReviewFacetChangePromptsForDirtyDraft(t *testing.T) {
-	m, q, tt, _ := openReviewableResults(t, responsiveResultRecord(t), 1180, 760)
+	m, q, tt, _ := openReviewableResults(t, responsiveResultRecord(t), 1440, 900)
 	defer assertReviewBinding(t, m)
 	tt.Frame()
 	seq := m.selectedSeq()
@@ -1211,7 +1211,7 @@ func TestReviewFacetChangePromptsForDirtyDraft(t *testing.T) {
 // TestReviewFacetChangePromptsAfterFailedSave checks the failure band and
 // its input survive a facet change that would leave the row.
 func TestReviewFacetChangePromptsAfterFailedSave(t *testing.T) {
-	m, q, tt, svc := openReviewableResults(t, responsiveResultRecord(t), 1180, 760)
+	m, q, tt, svc := openReviewableResults(t, responsiveResultRecord(t), 1440, 900)
 	defer assertReviewBinding(t, m)
 	tt.Frame()
 	svc.saveFn = func(string, int64, int64, app.ItemRevisionEdit) (app.ItemRevisionResult, error) {
@@ -1248,7 +1248,7 @@ func TestReviewFacetChangePromptsAfterFailedSave(t *testing.T) {
 // TestReviewSegmentChangePromptsFromAllToPending checks a real 全部 →
 // 待处理 click with a dirty passed-row editor.
 func TestReviewSegmentChangePromptsFromAllToPending(t *testing.T) {
-	m, q, tt, _ := openReviewableResults(t, pendingReviewRecord(t), 1180, 760)
+	m, q, tt, _ := openReviewableResults(t, pendingReviewRecord(t), 1440, 900)
 	defer assertReviewBinding(t, m)
 	tt.Frame()
 	if err := tt.Click("全部"); err != nil {
@@ -1281,7 +1281,7 @@ func TestReviewSegmentChangePromptsFromAllToPending(t *testing.T) {
 // TestReviewSegmentChangePromptsPendingToWarning covers the path that
 // previously popped only because the frame still used the old visible list.
 func TestReviewSegmentChangePromptsPendingToWarning(t *testing.T) {
-	m, q, tt, _ := openReviewableResults(t, pendingReviewRecord(t), 1180, 760)
+	m, q, tt, _ := openReviewableResults(t, pendingReviewRecord(t), 1440, 900)
 	defer assertReviewBinding(t, m)
 	tt.Frame()
 	m.edit.draft.Level = "11"
@@ -1314,7 +1314,7 @@ func probeReviewState(m *Model) string {
 // TestWorkspaceUnsavedTitle checks the dirty editor takes the title's save
 // slot, after a failed save and before the ordinary saved state.
 func TestWorkspaceUnsavedTitle(t *testing.T) {
-	m, _, _ := openResponsiveResults(t, recovery(reviewRowItem(t, 1, 15)), 1180, 760)
+	m, _, _ := openResponsiveResults(t, recovery(reviewRowItem(t, 1, 15)), 1440, 900)
 	m.edit.draft.Level = "11"
 	m.edit.refresh()
 	if _, _, saved := m.workspaceStatusTexts(); saved != "未保存修改" {
@@ -1329,7 +1329,7 @@ func TestWorkspaceUnsavedTitle(t *testing.T) {
 // TestReviewSaveFailureStateSetAndCleared covers the real set, retry and
 // clear paths of reviewSaveFailed (L5).
 func TestReviewSaveFailureStateSetAndCleared(t *testing.T) {
-	m, q, tt, svc := openReviewableResults(t, manyPendingRecord(t, 2), 1180, 760)
+	m, q, tt, svc := openReviewableResults(t, manyPendingRecord(t, 2), 1440, 900)
 	tt.Frame()
 	good := svc.saveFn
 	svc.saveFn = func(string, int64, int64, app.ItemRevisionEdit) (app.ItemRevisionResult, error) {
@@ -1365,7 +1365,7 @@ func TestReviewSaveFailureStateSetAndCleared(t *testing.T) {
 // back to its saved value, then the retry is a no-op that still clears the
 // previous failure.
 func TestReviewRevertAfterFailedSaveClearsFailure(t *testing.T) {
-	m, q, tt, svc := openReviewableResults(t, manyPendingRecord(t, 2), 1180, 760)
+	m, q, tt, svc := openReviewableResults(t, manyPendingRecord(t, 2), 1440, 900)
 	tt.Frame()
 	original := m.edit.draft.Level
 	svc.saveFn = func(string, int64, int64, app.ItemRevisionEdit) (app.ItemRevisionResult, error) {
@@ -1392,7 +1392,7 @@ func TestReviewRevertAfterFailedSaveClearsFailure(t *testing.T) {
 // TestReviewConflictClearsFailure covers L2: the conflict is resolved by a
 // reload, so the failure title must not outlive it.
 func TestReviewConflictClearsFailure(t *testing.T) {
-	m, q, _, svc := openReviewableResults(t, manyPendingRecord(t, 1), 1180, 760)
+	m, q, _, svc := openReviewableResults(t, manyPendingRecord(t, 1), 1440, 900)
 	svc.saveFn = func(string, int64, int64, app.ItemRevisionEdit) (app.ItemRevisionResult, error) {
 		return app.ItemRevisionResult{}, fmt.Errorf("stale: %w", record.ErrRevisionConflict)
 	}
@@ -1410,7 +1410,7 @@ func TestReviewConflictClearsFailure(t *testing.T) {
 // TestReviewFilterPromptSaveAppliesAfterSuccess checks the deferred
 // filter request really runs after a successful save.
 func TestReviewFilterPromptSaveAppliesAfterSuccess(t *testing.T) {
-	m, q, tt, _ := openReviewableResults(t, responsiveResultRecord(t), 1180, 760)
+	m, q, tt, _ := openReviewableResults(t, responsiveResultRecord(t), 1440, 900)
 	defer assertReviewBinding(t, m)
 	tt.Frame()
 	m.edit.draft.Level = "11"
@@ -1462,7 +1462,7 @@ func TestHistoryEmptyPendingTextWithDirtyEditor(t *testing.T) {
 // TestEnsureReviewEditKeepsDirtyDraft checks the render path never replaces
 // a dirty editor when a row is requested directly.
 func TestEnsureReviewEditKeepsDirtyDraft(t *testing.T) {
-	m, _, _, _ := openReviewableResults(t, manyPendingRecord(t, 2), 1180, 760)
+	m, _, _, _ := openReviewableResults(t, manyPendingRecord(t, 2), 1440, 900)
 	m.edit.draft.Level = "11"
 	m.edit.refresh()
 	seq := m.edit.seq
@@ -1512,7 +1512,7 @@ func reviewWarningItem(t *testing.T, seq int64) record.ItemRecord {
 // TestReviewReloadFailureKeepsDirtyDraft covers L11's silent-loss path: a
 // failed refresh must keep the typed draft (writes stay blocked by recErr).
 func TestReviewReloadFailureKeepsDirtyDraft(t *testing.T) {
-	m, q, tt, svc := openReviewableResults(t, recovery(reviewRowItem(t, 1, 12)), 1180, 760)
+	m, q, tt, svc := openReviewableResults(t, recovery(reviewRowItem(t, 1, 12)), 1440, 900)
 	tt.Frame()
 	if m.edit == nil {
 		t.Fatal("the pending row did not open its editor")
@@ -1536,7 +1536,7 @@ func TestReviewReloadFailureKeepsDirtyDraft(t *testing.T) {
 // TestReviewFormBlockedWhileCleanupRuns covers L11: deletion reloads the
 // open record, so the form must be read-only while that deletion runs.
 func TestReviewFormBlockedWhileCleanupRuns(t *testing.T) {
-	m, _, tt, _ := openReviewableResults(t, recovery(reviewRowItem(t, 1, 12)), 1180, 760)
+	m, _, tt, _ := openReviewableResults(t, recovery(reviewRowItem(t, 1, 12)), 1440, 900)
 	tt.Frame()
 	if m.edit == nil {
 		t.Fatal("the pending row did not open its editor")
@@ -1556,7 +1556,7 @@ func TestReviewFormBlockedWhileCleanupRuns(t *testing.T) {
 // TestReviewCleanEditorClearedWhenFilterHasNoRows covers L9: an empty
 // segment must not leave a clean editor and its save hint behind.
 func TestReviewCleanEditorClearedWhenFilterHasNoRows(t *testing.T) {
-	m, _, tt, _ := openReviewableResults(t, recovery(reviewRowItem(t, 1, 12)), 1180, 760)
+	m, _, tt, _ := openReviewableResults(t, recovery(reviewRowItem(t, 1, 12)), 1440, 900)
 	tt.Frame()
 	if m.edit == nil {
 		m.startEdit()
@@ -1624,7 +1624,7 @@ func TestReviewFilterChangeClearsCleanEditor(t *testing.T) {
 	m, q, tt, svc := openReviewableResults(t, recovery(
 		reviewRowItem(t, 1, 12),
 		reviewWarningItem(t, 2),
-	), 1180, 760)
+	), 1440, 900)
 	tt.Frame()
 	if m.edit == nil || m.edit.seq != 1 {
 		t.Fatalf("the pending row did not open its editor: %+v", m.edit)
@@ -1653,7 +1653,7 @@ func TestReviewFilterChangeClearsCleanEditor(t *testing.T) {
 // TestReviewConfirmedDraftFacetPrompts covers M2: a confirmed item's dirty
 // draft must prompt, not remain attached to a list that no longer shows it.
 func TestReviewConfirmedDraftFacetPrompts(t *testing.T) {
-	m, q, tt, _ := openReviewableResults(t, pendingReviewRecord(t), 1180, 760)
+	m, q, tt, _ := openReviewableResults(t, pendingReviewRecord(t), 1440, 900)
 	defer assertReviewBinding(t, m)
 	tt.Frame()
 	m.confirmCurrentStay()
@@ -1693,7 +1693,7 @@ func TestReviewConfirmedDraftFacetPrompts(t *testing.T) {
 
 // TestReviewEmptyFacetDoesNotStrandDraft covers M2's empty-filter trap.
 func TestReviewEmptyFacetDoesNotStrandDraft(t *testing.T) {
-	m, _, tt, _ := openReviewableResults(t, pendingReviewRecord(t), 1180, 760)
+	m, _, tt, _ := openReviewableResults(t, pendingReviewRecord(t), 1440, 900)
 	defer assertReviewBinding(t, m)
 	tt.Frame()
 	m.edit.draft.Level = "11"
@@ -1721,7 +1721,7 @@ func TestReviewEmptyFacetDoesNotStrandDraft(t *testing.T) {
 // TestReviewSummaryCountPromptsDirtyDraft checks the summary count entry
 // uses the same navigation guard.
 func TestReviewSummaryCountPromptsDirtyDraft(t *testing.T) {
-	m, _, tt, _ := openReviewableResults(t, pendingReviewRecord(t), 1180, 760)
+	m, _, tt, _ := openReviewableResults(t, pendingReviewRecord(t), 1440, 900)
 	defer assertReviewBinding(t, m)
 	tt.Frame()
 	m.edit.draft.Level = "11"
@@ -1744,7 +1744,7 @@ func TestReviewCompactWalkPromptsDirtyDraft(t *testing.T) {
 	m.edit.draft.Level = "11"
 	m.edit.refresh()
 	tt.Frame()
-	if err := tt.Click("›"); err != nil {
+	if err := tt.Click("下一件"); err != nil {
 		t.Fatalf("click compact next: %v", err)
 	}
 	tt.Frame()
@@ -1758,7 +1758,7 @@ func TestReviewCompactWalkPromptsDirtyDraft(t *testing.T) {
 // a dirty selection must not move even if the filter field is changed by a
 // stray caller. It catches removal of settleResultSelection's protection.
 func TestSettleResultSelectionHonorsDirtyBinding(t *testing.T) {
-	m, _, _, _ := openReviewableResults(t, pendingReviewRecord(t), 1180, 760)
+	m, _, _, _ := openReviewableResults(t, pendingReviewRecord(t), 1440, 900)
 	m.edit.draft.Level = "11"
 	m.edit.refresh()
 	seq := m.selectedSeq()
@@ -1771,7 +1771,7 @@ func TestSettleResultSelectionHonorsDirtyBinding(t *testing.T) {
 
 // TestReviewFilterRejectsWhileSaving checks the save-in-flight refusal.
 func TestReviewFilterRejectsWhileSaving(t *testing.T) {
-	m, _, _, _ := openReviewableResults(t, pendingReviewRecord(t), 1180, 760)
+	m, _, _, _ := openReviewableResults(t, pendingReviewRecord(t), 1440, 900)
 	m.reviewSaving = true
 	m.requestResultFilter(resultFilterWarning, "", "")
 	if m.filter != resultFilterPending || m.reviewErr == "" {
@@ -1782,7 +1782,7 @@ func TestReviewFilterRejectsWhileSaving(t *testing.T) {
 // TestReviewFilterSyncsTableSelected checks the table selection pointer
 // follows every applied filter so a later click cannot target a stale row.
 func TestReviewFilterSyncsTableSelected(t *testing.T) {
-	m, _, tt, _ := openReviewableResults(t, pendingReviewRecord(t), 1180, 760)
+	m, _, tt, _ := openReviewableResults(t, pendingReviewRecord(t), 1440, 900)
 	tt.Frame()
 	// Choose a row that is not first in the target segment, so the sync is
 	// observable rather than accidentally already correct.
@@ -1802,7 +1802,7 @@ func TestReviewFilterSyncsTableSelected(t *testing.T) {
 // TestReviewStayKeepsFailureBand covers L7: choosing 留在这里 after a
 // failed save must keep the reason and retry affordance.
 func TestReviewStayKeepsFailureBand(t *testing.T) {
-	m, q, tt, svc := openReviewableResults(t, pendingReviewRecord(t), 1180, 760)
+	m, q, tt, svc := openReviewableResults(t, pendingReviewRecord(t), 1440, 900)
 	tt.Frame()
 	svc.saveFn = func(string, int64, int64, app.ItemRevisionEdit) (app.ItemRevisionResult, error) {
 		return app.ItemRevisionResult{}, fmt.Errorf("磁盘已满")
@@ -1855,7 +1855,7 @@ func TestReviewCompactPromptClosesPopover(t *testing.T) {
 // TestReviewWriteRejectsDisconnectedEditor checks the write guards: a
 // stale editor cannot save or confirm another selected row.
 func TestReviewWriteRejectsDisconnectedEditor(t *testing.T) {
-	m, q, tt, svc := openReviewableResults(t, manyPendingRecord(t, 2), 1180, 760)
+	m, q, tt, svc := openReviewableResults(t, manyPendingRecord(t, 2), 1440, 900)
 	tt.Frame()
 	m.edit.draft.Level = "11"
 	m.edit.refresh()
@@ -1874,7 +1874,7 @@ func TestReviewWriteRejectsDisconnectedEditor(t *testing.T) {
 // conditional: a filter that keeps the edited row visible applies without a
 // pointless prompt.
 func TestReviewFilterAppliesWhenSelectedStaysVisible(t *testing.T) {
-	m, _, tt, _ := openReviewableResults(t, pendingReviewRecord(t), 1180, 760)
+	m, _, tt, _ := openReviewableResults(t, pendingReviewRecord(t), 1440, 900)
 	tt.Frame()
 	m.edit.draft.Level = "11"
 	m.edit.refresh()
@@ -1895,7 +1895,7 @@ func TestReviewFilterAppliesWhenSelectedStaysVisible(t *testing.T) {
 // TestReviewPageSwitchPromptsDirtyDraft checks destination changes use the
 // same guard as filters and selection.
 func TestReviewPageSwitchPromptsDirtyDraft(t *testing.T) {
-	m, _, tt, _ := openReviewableResults(t, pendingReviewRecord(t), 1180, 760)
+	m, _, tt, _ := openReviewableResults(t, pendingReviewRecord(t), 1440, 900)
 	tt.Frame()
 	m.edit.draft.Level = "11"
 	m.edit.refresh()

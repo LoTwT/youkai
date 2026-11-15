@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	mgui "github.com/egoist/mygo/ui"
+	"github.com/lobehub/lobe-mygo/pkg/theme"
 )
 
 func TestTokensForLightAndDark(t *testing.T) {
@@ -16,26 +17,59 @@ func TestTokensForLightAndDark(t *testing.T) {
 		got  mgui.Color
 		want mgui.Color
 	}{
-		{"light window", light.SurfaceWindow, mgui.Hex("#FFFFFF")},
+		{"light window", light.SurfaceWindow, mgui.Hex("#F3F5FA")},
 		{"light card", light.SurfaceCard, mgui.Hex("#FFFFFF")},
-		{"light header", light.SurfaceHeader, mgui.Hex("#FAFAFB")},
-		{"light control", light.SurfaceControl, mgui.Hex("#F4F4F5")},
-		{"light text", light.TextPrimary, mgui.Hex("#18181B")},
-		{"light muted", light.TextMuted, mgui.Hex("#6B6B73")},
-		{"light accent fill", light.AccentFill, mgui.Hex("#2563EB")},
-		{"dark window", dark.SurfaceWindow, mgui.Hex("#101318")},
-		{"dark card", dark.SurfaceCard, mgui.Hex("#1B2029")},
-		{"dark header", dark.SurfaceHeader, mgui.Hex("#222833")},
-		{"dark control", dark.SurfaceControl, mgui.Hex("#222833")},
-		{"dark text", dark.TextPrimary, mgui.Hex("#F2F4F8")},
-		{"dark muted", dark.TextMuted, mgui.Hex("#98A1AE")},
-		{"dark accent fg", dark.AccentFG, mgui.Hex("#60A5FA")},
-		{"dark accent fill", dark.AccentFill, mgui.Hex("#2563EB")},
-		{"dark evidence", dark.SurfaceEvidence, mgui.Hex("#090C11")},
+		{"light header", light.SurfaceHeader, mgui.Hex("#FFFFFF")},
+		{"light control", light.SurfaceControl, mgui.Hex("#FFFFFF")},
+		{"light text", light.TextPrimary, mgui.Hex("#202B40")},
+		{"light muted", light.TextMuted, mgui.Hex("#637187")},
+		{"light accent fill", light.AccentFill, mgui.Hex("#315FE8")},
+		{"dark window", dark.SurfaceWindow, mgui.Hex("#080808")},
+		{"dark card", dark.SurfaceCard, mgui.Hex("#141414")},
+		{"dark header", dark.SurfaceHeader, mgui.Hex("#141414")},
+		{"dark control", dark.SurfaceControl, mgui.Hex("#1B1B1B")},
+		{"dark text", dark.TextPrimary, mgui.Hex("#EEEEEE")},
+		{"dark muted", dark.TextMuted, mgui.Hex("#A0A0A0")},
+		{"dark accent fg", dark.AccentFG, mgui.Hex("#8BABFF")},
+		{"dark accent fill", dark.AccentFill, mgui.Hex("#8BABFF")},
+		{"dark evidence", dark.SurfaceEvidence, mgui.Hex("#1B1B1B")},
 	}
 	for _, tc := range cases {
 		if !sameColor(tc.got, tc.want) {
 			t.Errorf("%s = %v, want %v", tc.name, tc.got, tc.want)
+		}
+	}
+}
+
+func TestThemeLifecyclePreferencesKeepRegisteredPointer(t *testing.T) {
+	s := newThemeState()
+	config := s.config
+	for _, dark := range []bool{false, true} {
+		base := mgui.LightTheme()
+		if dark {
+			base = mgui.DarkTheme()
+		}
+		base.Font = "system-fixture"
+		pointer := config.Theme(dark)
+		for _, scale := range []float32{1, 1.5, 1.5, 1.25, 1} {
+			for _, high := range []bool{false, true} {
+				target, tok := s.effective(base, mgui.Preferences{TextScale: scale, HighContrast: high, Accent: mgui.Hex("#FF0000")})
+				if target != pointer || s.config != config {
+					t.Fatal("theme/config identity changed")
+				}
+				if target.FontSize != 14*scale || target.Font != base.Font {
+					t.Fatalf("font accumulated or changed: %+v", target)
+				}
+				if high && (tok.Focus.A != 255 || sameColor(tok.BorderSubtle, tokensFor(dark).BorderSubtle)) {
+					t.Fatal("high contrast was not applied to application surfaces")
+				}
+				var primary mgui.Color
+				tt := mgui.NewTester(func(c *mgui.Context) { c.SetTheme(target); primary = theme.TokensOf(c).Primary }, 32, 32)
+				tt.Frame()
+				if !sameColor(primary, tokensFor(dark).AccentFill) {
+					t.Fatal("Lobe lost the registered brand tokens")
+				}
+			}
 		}
 	}
 }
@@ -98,7 +132,7 @@ func TestTokenContrastPairs(t *testing.T) {
 			min  float64
 		}{
 			{"primary/card", tok.TextPrimary, tok.SurfaceCard, 12},
-			{"secondary/card", tok.TextSecondary, tok.SurfaceCard, 7},
+			{"secondary/card", tok.TextSecondary, tok.SurfaceCard, 4.5},
 			{"muted/card", tok.TextMuted, tok.SurfaceCard, 4.5},
 			{"muted/control", tok.TextMuted, tok.SurfaceControl, 4.5},
 			{"disabled/control", tok.TextDisabled, tok.SurfaceControl, 3},

@@ -459,12 +459,12 @@ func (m *Model) ensureReviewFieldRendered(field FormField) {
 	}
 }
 
-// firstReviewField is the field the form starts on: the first problem
-// field in form order, else the form's first rendered field. The editor
-// renders reviewFieldOrder when nothing is wrong, so the fallback must be
-// that first field rather than the read-only form's leading set field
-// (08 §3.4).
+// firstReviewField targets the first problem in a pending item. A deliberate
+// modification and a form without problems start at the first rendered field.
 func (m *Model) firstReviewField() FormField {
+	if m.edit != nil && m.edit.modify {
+		return FormFieldSetID
+	}
 	row := m.selectedRow()
 	if row == nil {
 		return reviewFieldOrder[0]
@@ -480,7 +480,7 @@ func (m *Model) firstReviewField() FormField {
 			return field
 		}
 	}
-	return reviewFieldOrder[0]
+	return pairedFormFields[0]
 }
 
 // selectedRow is the open record's chosen row, or nil.

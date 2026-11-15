@@ -2,12 +2,12 @@ package main
 
 import "github.com/egoist/mygo"
 
-// The main window's hard bounds (design 09 §1, R-12): 1180 × 760 DIP by
+// The main window's hard bounds (design 09 §1, R-12): 1440 × 900 DIP by
 // default, 960 × 640 DIP at minimum, 92% of a smaller work area, and a
 // minimum that yields when the work area cannot hold it.
 const (
-	windowDefaultWidth  = 1180
-	windowDefaultHeight = 760
+	windowDefaultWidth  = 1440
+	windowDefaultHeight = 900
 	windowMinWidth      = 960
 	windowMinHeight     = 640
 	windowWorkAreaScale = 0.92
@@ -27,7 +27,7 @@ type windowPlacement struct {
 
 // windowPlacementFor returns the main window's default and minimum sizes
 // for a display work area in DIPs. The default size falls back to 92% of
-// the work area when the work area is smaller than 1180 × 760; it never
+// the work area when the work area is smaller than 1440 × 900; it never
 // drops below the minimum. A work area that cannot even hold the minimum
 // reduces the minimum to itself, and the content scrolls (design 09 §1).
 func windowPlacementFor(workArea mygo.Rectangle) windowPlacement {

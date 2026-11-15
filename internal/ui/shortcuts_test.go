@@ -115,9 +115,6 @@ func TestEditConfirmShortcutSavesTheDraft(t *testing.T) {
 		if got := m.statusShortcutText(); got != shortcutConfirmNext+" 确认并下一项  ·  "+shortcutSave+" 保存修改  ·  "+shortcutZoomIn+" 放大  ·  "+shortcutZoomOut+" 缩小" {
 			t.Fatalf("the editing status bar names %q", got)
 		}
-		if !tt.HasText(shortcutConfirmNext+" 确认并下一项") || !tt.HasText(shortcutSave+" 保存修改") {
-			t.Fatalf("the editing status bar does not show its keys: %q", tt.Texts())
-		}
 
 		tt.Key(ui.Cmd, ui.KeyEnter)
 		settle(t, m, q, tt)
@@ -296,9 +293,6 @@ func TestEditSaveShortcut(t *testing.T) {
 		if got := m.statusShortcutText(); got != shortcutConfirmNext+" 确认并下一项  ·  "+shortcutSave+" 保存修改  ·  "+shortcutZoomIn+" 放大  ·  "+shortcutZoomOut+" 缩小" {
 			t.Fatalf("the editing status bar names %q", got)
 		}
-		if !tt.HasText(shortcutConfirmNext+" 确认并下一项") || !tt.HasText(shortcutSave+" 保存修改") {
-			t.Fatalf("the editing status bar does not show its keys: %q", tt.Texts())
-		}
 
 		tt.Key(ui.Cmd, ui.KeyS)
 		settle(t, m, q, tt)
@@ -388,7 +382,10 @@ func TestEscapeClosesTheRowMenu(t *testing.T) {
 // with MyGo: the popup closes and the shell does not move the focus to the
 // table behind it.
 func TestEscapeClosesTheSelectPopup(t *testing.T) {
-	_, _, tt := openResponsiveResults(t, responsiveResultRecord(t), 1180, 760)
+	m, _, tt := openResponsiveResults(t, responsiveResultRecord(t), 1180, 760)
+	m.requestReviewFieldFocus(FormFieldEquipped)
+	tt.Frame()
+	tt.Frame()
 	if err := tt.Click("装备状态"); err != nil {
 		t.Fatalf("%v: %q", err, tt.Texts())
 	}

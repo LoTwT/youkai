@@ -474,7 +474,7 @@ func TestCatalogChoicesCoverTheFixedTables(t *testing.T) {
 
 func TestEditSavePersistsRevision(t *testing.T) {
 	m, q, tt, svc := openReviewRecordPage(t, reviewRowItem(t, 1, 12))
-	if !tt.HasText("待校对 1 件") {
+	if !tt.HasText("待处理 1") {
 		t.Fatalf("the pending count does not show: %q", tt.Texts())
 	}
 	tt.Frame()
@@ -526,7 +526,7 @@ func TestEditSavePersistsRevision(t *testing.T) {
 		t.Fatalf("row after save = revision %d quality %q level %q",
 			row.Revision, row.Quality, row.LevelText())
 	}
-	if !tt.HasText("13 级") || !tt.HasText("已保存修订 1。") {
+	if m.selectedRow().LevelText() != "13 级" || m.edit == nil || m.edit.draft.Level != "13" || !tt.HasText("已保存修订 1。") {
 		t.Fatalf("the saved revision does not show: %q", tt.Texts())
 	}
 }
@@ -567,7 +567,7 @@ func TestConfirmAndNextThroughToEmpty(t *testing.T) {
 	if m.selected != 1 {
 		t.Fatalf("the last confirmation moved away from the last item: %d", m.selected)
 	}
-	if !tt.HasText("待校对 0") {
+	if !tt.HasText("待处理 0") {
 		t.Fatalf("the empty pending state does not show: %q", tt.Texts())
 	}
 	if tt.HasText("待校对 0 · 全部可导出") {
@@ -637,7 +637,7 @@ func TestConfirmLastItemStayShowsFinishedReview(t *testing.T) {
 		t.Fatalf("the last confirm-and-stay did not complete: pending %d visible %v",
 			m.pendingItemsCount(), m.completionVisible())
 	}
-	if !tt.HasText("都处理完了") || !tt.HasText("导出…") {
+	if !tt.HasText("都处理完了") || !tt.HasText("导出") {
 		t.Fatalf("the finished review state is missing: %q", tt.Texts())
 	}
 	if tt.HasText("修改") {

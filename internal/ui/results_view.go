@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"math"
 	"slices"
 	"strconv"
 	"strings"
@@ -12,19 +13,19 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-// The review layout's fixed metrics (08 §3.1, 09 §2): a 240-DIP item list,
-// a 400-DIP form and the screenshots in between, never under 360 DIP. The
+// The review layout's fixed metrics (08 §3.1, 09 §2): a 256-DIP item list,
+// a 488/400-DIP form and screenshots between, never under 360 DIP. The
 // standard profile shows the list as a column; the compact profile folds it
 // into the top strip. Both keep screenshots and form side by side.
 const (
-	reviewListWidth     = 240
-	reviewFormWidth     = 400
+	reviewListWidth     = 256
+	reviewFormWidth     = 488
 	reviewMinCropsWidth = 360
-	reviewStandardWidth = 1120
+	reviewStandardWidth = 1376
 	reviewListRowHeight = 52
-	reviewPagePadding   = 12
-	reviewPanePaddingX  = 12
-	reviewPanePaddingY  = 10
+	reviewPagePadding   = 32
+	reviewPanePaddingX  = 16
+	reviewPanePaddingY  = 16
 	reviewCropImageMin  = 120
 	reviewZoomStep      = 0.25
 	reviewZoomMax       = 4
@@ -46,7 +47,7 @@ type reviewLayoutWidths struct {
 	ListFocused bool
 }
 
-// reviewStandard reports the standard width profile (window ≥ 1120 DIP):
+// reviewStandard reports the standard width profile (client area ≥ 1376 DIP):
 // the item list is its own column. Below it the compact profile puts the
 // list into the top strip.
 func (m *Model) reviewStandard() bool {
@@ -56,7 +57,7 @@ func (m *Model) reviewStandard() bool {
 // reviewInnerWidth is the width the page leaves for its panes: the window
 // less the navigation rail and the page padding.
 func (m *Model) reviewInnerWidth() float32 {
-	width := float32(m.contentWidth) - navRailWidth - 2*reviewPagePadding
+	width := float32(m.contentWidth) - m.railWidth() - 2*m.pagePadding()
 	if width < 0 {
 		return 0
 	}
@@ -69,9 +70,9 @@ func (m *Model) reviewInnerWidth() float32 {
 func (m *Model) reviewCropsWidth() float32 {
 	width := m.reviewInnerWidth()
 	if m.reviewStandard() {
-		width -= reviewListWidth + 1
+		width -= reviewListWidth + columnGap
 	}
-	width -= reviewFormWidth + 1
+	width -= m.reviewFormWidth() + columnGap
 	if width < reviewMinCropsWidth {
 		width = reviewMinCropsWidth
 
@@ -134,6 +135,9 @@ func (m *Model) resultsArea(c *ui.Context, t *ui.Theme) {
 		}
 		if m.rec == nil || len(m.rec.Rows) == 0 {
 			ui.Text(c, m.emptyResultsText()).TextColor(t.TextMuted)
+			if m.completionVisible() {
+				ui.Text(c, m.completionStatusText()).TextColor(t.TextMuted)
+			}
 			return
 		}
 		m.reviewArea(c, t)
@@ -142,10 +146,14 @@ func (m *Model) resultsArea(c *ui.Context, t *ui.Theme) {
 
 // reviewArea is the three-region review. The list is a column at standard
 // widths and a top strip at compact widths; the screenshot pane and the
-// 400-DIP form keep their places at every width.
+// 488/400-DIP form keep their places at every width.
 func (m *Model) reviewArea(c *ui.Context, t *ui.Theme) {
 	visible := m.visibleResultRows()
 	m.settleResultSelection()
+	if row := m.selectedRow(); row != nil {
+		m.ensureReviewEdit(row)
+	}
+	m.preparePairedHeights(m.selectedRow())
 	if m.reviewField == "" {
 		if row := m.selectedRow(); row != nil && m.reviewRowEditable(row) {
 			// Entering the review (or returning to it) starts on the first
@@ -154,22 +162,24 @@ func (m *Model) reviewArea(c *ui.Context, t *ui.Theme) {
 			m.requestReviewFieldFocus("")
 		}
 	}
-	ui.Column(c).Grow(1).FillHeight().MinHeight(0).Children(func() {
+	ui.Column(c).Grow(1).FillHeight().MinHeight(0).Gap(16).Children(func() {
+		m.reviewFormNotices(c, t)
 		if !m.reviewStandard() {
 			m.reviewCompactStrip(c, t, visible)
-			ui.Divider(c)
 		}
-		ui.Row(c).Grow(1).FillHeight().MinHeight(0).Children(func() {
+		ui.Row(c).Grow(1).FillHeight().MinHeight(0).Gap(columnGap).Children(func() {
 			if m.reviewStandard() {
 				m.reviewListPane(c, t, visible)
-				ui.Divider(c)
 			}
 			m.reviewCropsPane(c, t, visible)
-			ui.Divider(c)
 			m.reviewFormPane(c, t, visible)
 		})
 	})
 	m.recordReviewLayout(c)
+	if !m.pairedMeasureReady {
+		m.pairedMeasureReady = true
+		c.AnimationFrame()
+	}
 }
 
 // recordReviewLayout stores the pane widths the frame laid out, for the
@@ -180,7 +190,7 @@ func (m *Model) recordReviewLayout(c *ui.Context) {
 		layout.List = m.reviewListRef.Bounds(c).W
 		layout.ListFocused = m.list.Focused(c)
 	}
-	layout.Crops = m.reviewCropsRef.Bounds(c).W
+	layout.Crops = m.reviewCropsRef.Bounds(c).W + 2*reviewPanePaddingX + 2
 	layout.Form = m.reviewFormRef.Bounds(c).W
 	if layout.List == 0 && layout.Crops == 0 && layout.Form == 0 {
 		return
@@ -190,20 +200,23 @@ func (m *Model) recordReviewLayout(c *ui.Context) {
 
 // reviewListPane is the standard profile's item list column.
 func (m *Model) reviewListPane(c *ui.Context, t *ui.Theme, visible []int) {
-	_, tok := themeWithTokens(t, c.Preferences())
-	ui.Column(c).Width(reviewListWidth).Shrink(0).FillHeight().MinHeight(0).
-		Background(tok.SurfaceContent).Bind(&m.reviewListRef).Children(func() {
-		ui.Column(c).Padding(reviewPanePaddingY, reviewPanePaddingX).Gap(t.Space(1)).
-			Children(func() {
-				m.resultsFilterBar(c, t)
-				m.resultsFacetFilters(c, t, reviewListWidth-2*reviewPanePaddingX)
+	tok := m.effectiveTokens()
+	panel(c, tok).Width(reviewListWidth).Shrink(0).FillHeight().MinHeight(0).Padding(16).Gap(12).Bind(&m.reviewListRef).Children(func() {
+		ui.Column(c).Gap(12).Children(func() {
+			ui.Row(c).MinHeight(panelHeaderHeight).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, "驱动盘").FontWeight(600)
+				ui.Box(c).Grow(1)
+				ui.Textf(c, "%d 件", len(visible)).TextColor(t.TextMuted)
 			})
+			m.resultsFilterBar(c, t)
+			m.resultsFacetFilters(c, t, reviewListWidth-2*reviewPanePaddingX)
+		})
 		ui.Divider(c)
 		if len(visible) == 0 {
 			ui.Column(c).Grow(1).Padding(t.Space(2), reviewPanePaddingX).Gap(t.Space(1)).
 				Children(func() {
 					ui.Text(c, m.filteredEmptyText()).TextColor(t.TextMuted)
-					if m.hasResultFacets() && ui.Button(c, "清除筛选").Clicked() {
+					if m.hasResultFacets() && button(c, "清除筛选").Clicked() {
 						m.clearResultFacets()
 					}
 				})
@@ -380,16 +393,16 @@ func reviewCategoryParts(row *Row) (glyph, label string) {
 // reviewCompactStrip is the compact profile's top bar: previous / next,
 // the pending position, the filter segments and the "全部件" popover list.
 func (m *Model) reviewCompactStrip(c *ui.Context, t *ui.Theme, visible []int) {
-	_, tok := themeWithTokens(t, c.Preferences())
-	ui.Row(c).Padding(t.Space(1.5), reviewPanePaddingX).Gap(t.Space(1.5)).
+	tok := m.effectiveTokens()
+	ui.Row(c).Gap(12).Justify(ui.End).
 		AlignItems(ui.Center).Background(tok.SurfaceHeader).Children(func() {
 		position := resultDisplayIndex(visible, m.selected)
-		back := ui.Button(c, "‹").Disabled(position <= 0)
+		back := button(c, "上一件").Disabled(position <= 0)
 		if back.Clicked() {
 			m.selectAdjacentVisible(-1)
 		}
 		ui.Text(c, m.compactPositionText(visible)).FontWeight(600).SingleLine().Shrink(1)
-		forward := ui.Button(c, "›").Disabled(position < 0 || position >= len(visible)-1)
+		forward := button(c, "下一件").Disabled(position < 0 || position >= len(visible)-1)
 		if forward.Clicked() {
 			m.selectAdjacentVisible(1)
 		}
@@ -400,10 +413,10 @@ func (m *Model) reviewCompactStrip(c *ui.Context, t *ui.Theme, visible []int) {
 }
 
 // compactItemPopover is the "全部件" popover: the same rows as the standard
-// list, without the 240-DIP column. It carries the set/slot facets and uses
+// list, without the 256-DIP column. It carries the set/slot facets and uses
 // a virtualized List, so 10,000 rows build only the visible frame.
 func (m *Model) compactItemPopover(c *ui.Context, t *ui.Theme, visible []int) {
-	anchor := ui.Button(c, "全部件 ▾").Bind(&m.reviewCompactRef)
+	anchor := button(c, "全部件 ▾").Bind(&m.reviewCompactRef)
 	if anchor.Clicked() {
 		m.compactListOpen = !m.compactListOpen
 		if m.compactListOpen {
@@ -471,7 +484,7 @@ func (m *Model) compactItemRow(c *ui.Context, t *ui.Theme, visible []int, row in
 	if row < 0 || row >= len(visible) {
 		return
 	}
-	_, tok := themeWithTokens(t, c.Preferences())
+	tok := m.effectiveTokens()
 	r := &m.rec.Rows[visible[row]]
 	selected := row == m.tableSelected
 	background, border := ui.Transparent, ui.Transparent
@@ -501,25 +514,24 @@ func (m *Model) compactItemRow(c *ui.Context, t *ui.Theme, visible []int, row in
 // field highlights its crops and scrolls the first into view; a record
 // without line roles falls back to capture order without a highlight.
 func (m *Model) reviewCropsPane(c *ui.Context, t *ui.Theme, visible []int) {
-	_, tok := themeWithTokens(t, c.Preferences())
+	tok := m.effectiveTokens()
 	row := m.selectedRow()
-	ui.Column(c).Grow(1).Shrink(1).MinWidth(reviewMinCropsWidth).FillHeight().MinHeight(0).
-		Background(tok.SurfaceContent).Children(func() {
-		ui.Row(c).Padding(t.Space(2), reviewPanePaddingX).Gap(t.Space(2)).
+	panel(c, tok).Grow(1).Shrink(1).MinWidth(reviewMinCropsWidth).FillHeight().MinHeight(0).
+		Padding(16).Gap(12).Background(tok.SurfaceSunken).Children(func() {
+		ui.Row(c).MinHeight(panelHeaderHeight).Gap(12).
 			AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "截图（逐行）").FontWeight(600).SingleLine()
+			ui.Text(c, "截图").FontWeight(600).SingleLine()
 			ui.Box(c).Grow(1)
 			if row != nil {
 				m.reviewZoomControls(c, t)
 			}
 		})
-		ui.Divider(c)
 		scroll := ui.ScrollBoth(c).Grow(1).FillHeight().MinHeight(0).Bind(&m.reviewCropsRef)
 		if m.reviewRegion == reviewRegionCrops {
 			scroll.Focus()
 		}
 		scroll.Children(func() {
-			ui.Column(c).Padding(reviewPanePaddingY, reviewPanePaddingX).Gap(t.Space(2)).Children(func() {
+			ui.Column(c).Gap(8).Children(func() {
 				m.reviewCropList(c, t, row)
 			})
 		})
@@ -535,13 +547,13 @@ func (m *Model) reviewZoomControls(c *ui.Context, t *ui.Theme) {
 	if m.cropZoom > 0 {
 		label = fmt.Sprintf("%d%%", int(m.cropZoom*100+0.5))
 	}
-	if ui.Button(c, "缩小").Disabled(m.cropZoom == 0).Clicked() {
+	if button(c, "缩小").Disabled(m.cropZoom == 0).Clicked() {
 		m.zoomCrop(-reviewZoomStep)
 	}
-	if ui.Button(c, "放大").Clicked() {
+	if button(c, "放大").Clicked() {
 		m.zoomCrop(reviewZoomStep)
 	}
-	if ui.Button(c, label).Clicked() {
+	if button(c, label).Clicked() {
 		m.zoomCrop(0)
 	}
 }
@@ -619,25 +631,25 @@ func (m *Model) reviewCropList(c *ui.Context, t *ui.Theme, row *Row) {
 // reviewCrop is one crop block: its Chinese role label and the image, or
 // the missing-image note that belongs to this row alone.
 func (m *Model) reviewCrop(c *ui.Context, t *ui.Theme, row *Row, crop *reviewCropRow, highlighted, scrollIntoView bool) {
-	_, tok := themeWithTokens(t, c.Preferences())
-	background := tok.SurfaceContent
-	border := ui.Transparent
+	tok := m.effectiveTokens()
+	background := tok.SurfaceCard
+	border := tok.BorderSubtle
 	if highlighted {
 		background, border = tok.AccentSoft, tok.AccentBorder
 	}
-	block := ui.Column(c).Gap(t.Space(1)).Padding(t.Space(1)).
-		Background(background).Border(1, border).Radius(t.Space(1))
+	block := ui.Column(c).Gap(8).Padding(8).MinHeight(m.reviewRowHeight(row, crop.role())).
+		Background(background).Border(1, border).Radius(controlRadius)
 	if scrollIntoView {
 		block = block.ScrollIntoView()
 	}
 	block.Children(func() {
 		label := crop.roleLabel()
-		text := ui.Text(c, label).FontSize(t.FontSize * reviewHeaderSizeRatio).SingleLine()
-		if highlighted {
-			text.TextColor(tok.AccentFG).FontWeight(600)
-		} else {
-			text.TextColor(t.TextMuted)
-		}
+		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+			if number := reviewRoleNumber(crop.role()); number != "" {
+				fieldNumber(c, number, highlighted, tok)
+			}
+			ui.Text(c, label).FontSize(t.FontSize * 12 / 14).TextColor(t.TextMuted)
+		})
 		if crop.evidence == nil {
 			ui.Text(c, "这一行缺少截图。").FontSize(t.FontSize * reviewHeaderSizeRatio).
 				TextColor(t.TextMuted)
@@ -657,16 +669,16 @@ func (m *Model) reviewCropImage(c *ui.Context, t *ui.Theme, evidence *Evidence) 
 	entry := m.evidenceFor(m.rec.ID, evidence.ID)
 	switch {
 	case entry == nil:
-		ui.Text(c, "截图加载中……").TextColor(t.TextMuted)
+		ui.Text(c, "截图加载中…").TextColor(t.TextMuted)
 	case entry.err != nil:
 		ui.Textf(c, "截图不可用：%v", entry.err).TextColor(t.Danger)
 	default:
-		width := m.reviewCropImageWidth()
+		imageWidth, imageHeight := entry.bitmap.Size()
+		width := min(m.reviewCropImageWidth(), float32(imageWidth)*m.reviewDefaultZoom())
 		if m.cropZoom > 0 {
-			width *= m.cropZoom
+			width = float32(imageWidth) * m.cropZoom
 			entry.bitmap.Pixelated()
 		}
-		imageWidth, imageHeight := entry.bitmap.Size()
 		if imageWidth <= 0 || imageHeight <= 0 {
 			return
 		}
@@ -778,10 +790,10 @@ func (m *Model) highlightedCropRoles(row *Row, rolesComplete bool) map[string]bo
 	return set
 }
 
-// reviewFormPane is the 400-DIP form. Its content scrolls inside the pane;
+// reviewFormPane is the 488/400-DIP form. Its content scrolls inside the pane;
 // the action bar stays fixed at the bottom at every height.
 func (m *Model) reviewFormPane(c *ui.Context, t *ui.Theme, visible []int) {
-	_, tok := themeWithTokens(t, c.Preferences())
+	tok := m.effectiveTokens()
 	row := m.selectedRow()
 	// A click inside this frame may request a new focus (修改 opens the
 	// editor with its first field focused). Only the requests that were
@@ -794,17 +806,19 @@ func (m *Model) reviewFormPane(c *ui.Context, t *ui.Theme, visible []int) {
 	if m.filter == resultFilterPending && m.reviewSettled() {
 		row = nil
 	}
-	ui.Column(c).Width(reviewFormWidth).Shrink(0).FillHeight().MinHeight(0).
-		Background(tok.SurfaceContent).Bind(&m.reviewFormRef).Children(func() {
-		ui.Scroll(c).Grow(1).MinHeight(0).Children(func() {
-			ui.Column(c).Padding(reviewPanePaddingY, t.Space(4)).Gap(t.Space(2.5)).Children(func() {
+	panel(c, tok).Width(m.reviewFormWidth()).Shrink(0).FillHeight().MinHeight(0).Padding(16).Gap(12).Bind(&m.reviewFormRef).Children(func() {
+		if row != nil {
+			m.ensureReviewEdit(row)
+			m.reviewFormHeader(c, t, row, m.reviewEditing(row))
+		}
+		ui.ScrollBoth(c).Grow(1).MinHeight(0).Children(func() {
+			ui.Column(c).Width(m.reviewFormWidth() - 2*reviewPanePaddingX - 2).Gap(8).Children(func() {
 				if row == nil {
 					m.reviewEmptyForm(c, t, visible)
 					return
 				}
 				m.ensureReviewEdit(row)
 				editing := m.reviewEditing(row)
-				m.reviewFormHeader(c, t, row, editing)
 				if editing {
 					m.reviewEditForm(c, t, row)
 				} else {
@@ -823,7 +837,6 @@ func (m *Model) reviewFormPane(c *ui.Context, t *ui.Theme, visible []int) {
 			m.focusModifyRequested = false
 		}
 		if row != nil {
-			ui.Divider(c)
 			m.reviewActionBar(c, t, row)
 		}
 	})
@@ -847,7 +860,7 @@ func (m *Model) reviewEmptyForm(c *ui.Context, t *ui.Theme, visible []int) {
 		}
 		blocked := m.exportEntryBlocked()
 		ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
-			if ui.PrimaryButton(c, "导出…").Disabled(blocked).Clicked() {
+			if primaryButton(c, "导出").Disabled(blocked).Clicked() {
 				m.requestExport()
 			}
 			if blocked {
@@ -857,18 +870,18 @@ func (m *Model) reviewEmptyForm(c *ui.Context, t *ui.Theme, visible []int) {
 				}
 			}
 		})
-		if ui.Button(c, "删除这条记录的截图…").Disabled(m.cleanupRunning()).Clicked() {
+		if button(c, "删除这条记录的截图").Disabled(m.cleanupRunning()).Clicked() {
 			m.RequestScreenshotCleanup(m.rec.ID)
 		}
 		return
 	}
 	ui.Text(c, m.filteredEmptyText()).TextColor(t.TextMuted)
 	if m.hasResultFacets() {
-		if ui.Button(c, "清除筛选").Clicked() {
+		if button(c, "清除筛选").Clicked() {
 			m.clearResultFacets()
 		}
 	}
-	if ui.Button(c, "显示全部").Clicked() {
+	if button(c, "显示全部").Clicked() {
 		m.setResultFilter(resultFilterAll)
 	}
 	_ = visible
@@ -880,10 +893,10 @@ func (m *Model) reviewEmptyForm(c *ui.Context, t *ui.Theme, visible []int) {
 // passed row's status tag names whether the revision was auto accepted or
 // human confirmed.
 func (m *Model) reviewFormHeader(c *ui.Context, t *ui.Theme, row *Row, editing bool) {
-	_, tok := themeWithTokens(t, c.Preferences())
+	tok := m.effectiveTokens()
 	status := passedStatusLabel(row)
-	ui.Row(c).Gap(t.Space(1)).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, resultDetailTitle(row)).FontWeight(600).SingleLine().Shrink(1)
+	ui.Row(c).MinHeight(panelHeaderHeight).Gap(t.Space(1)).AlignItems(ui.Center).Children(func() {
+		ui.Text(c, strings.TrimSuffix(resultDetailTitle(row), " · "+row.LevelText())).FontWeight(600).SingleLine().Shrink(1)
 		ui.Box(c).Grow(1)
 		// A settled item's state is its status tag or warning band; only a
 		// pending item needs the category tag here (wireframes 07, 13, 14).
@@ -891,7 +904,7 @@ func (m *Model) reviewFormHeader(c *ui.Context, t *ui.Theme, row *Row, editing b
 			m.reviewCategoryTag(c, t, tok, row, false)
 		}
 		if !editing && m.canModifyRow(row) {
-			modify := ui.Button(c, "修改").Key("review-modify").Shrink(0).Disabled(m.reviewActionsBlocked())
+			modify := button(c, "修改").Key("review-modify").Shrink(0).Disabled(m.reviewActionsBlocked())
 			if m.focusModifyRequested {
 				modify.Focus()
 			}
@@ -900,37 +913,7 @@ func (m *Model) reviewFormHeader(c *ui.Context, t *ui.Theme, row *Row, editing b
 			}
 		}
 	})
-	if status != "" {
-		m.reviewPassedTag(c, t, tok, status)
-	}
-	if notice := backfillNotice(row); notice != "" {
-		ui.Text(c, notice).FontSize(t.FontSize * reviewHeaderSizeRatio).TextColor(t.Warning)
-	}
-	if notice := warningNotice(row); notice != "" {
-		ui.Column(c).Padding(t.Space(1.5), t.Space(2)).Gap(t.Space(0.5)).
-			Background(t.Surface).Radius(t.Radius).Children(func() {
-			ui.Text(c, notice).FontSize(t.FontSize * reviewHeaderSizeRatio)
-		})
-	}
-	if m.reviewErr != "" {
-		ui.Column(c).Padding(t.Space(1.5), t.Space(2)).Gap(t.Space(1)).
-			Background(tok.DangerSoft).Border(1, tok.DangerBorder).Radius(t.Radius).Children(func() {
-			ui.Row(c).Gap(t.Space(1)).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, "没有保存："+m.reviewErr).TextColor(t.Danger).Shrink(1)
-				retry := ui.Button(c, m.retryActionLabel()).Key("review-retry").
-					Disabled(m.reviewSaving)
-				if retry.Clicked() {
-					m.saveEdit(m.retryAction(), nil)
-				}
-			})
-		})
-	}
-	if m.loading {
-		ui.Text(c, "正在加载最新检查点，加载完成前不能编辑、保存或确认。").TextColor(t.TextMuted)
-	}
-	if m.exportBusy() {
-		ui.Text(c, "正在导出，完成前不能编辑或确认。").TextColor(t.TextMuted)
-	}
+
 }
 
 // passedStatusLabel names a passed item's confirmation quality (08 §3.4).
@@ -973,60 +956,21 @@ func (m *Model) retryActionLabel() string {
 	}
 }
 
-// reviewEditForm is the editable form: problem fields first with their
-// reasons, the rest folded away, then the raw text and revision history.
-// The leading field list is the one the edit opened with: a problem that
-// appears or clears while the user types must not move the field out from
-// under the keyboard or into the folded group (M5).
+// reviewEditForm keeps the full form in stable evidence order. Problems
+// stay with their fields while strings, candidates and revisions retain
+// their original editor semantics.
 func (m *Model) reviewEditForm(c *ui.Context, t *ui.Theme, row *Row) {
 	if m.edit == nil {
 		return
 	}
 	m.edit.refresh()
 	problems := m.reviewProblems(row)
-	first := m.edit.firstFields
-	// A blocking problem that appears while the user types stays in its
-	// folded group: moving the field would remove the caret mid-input (M-A).
-	// Open the group instead, so the error is visible and F6 can focus the
-	// rendered control (PR-19b review).
-	if len(first) > 0 && !m.formExtrasOpen {
-		for _, problem := range problems {
-			if problem.Kind != reviewProblemBlocking {
-				continue
-			}
-			field := canonicalFormField(problem.Field)
-			if field != "" && !reviewFieldInLeading(first, field) {
-				m.formExtrasOpen = true
-				break
-			}
+	for _, field := range pairedFormFields {
+		if field == FormFieldSubstats {
+			m.editSubstats(c, t, m.edit)
+			continue
 		}
-	}
-	rest := make([]FormField, 0, len(reviewFieldOrder))
-	for _, field := range reviewFieldOrder {
-		if !slices.Contains(first, field) {
-			rest = append(rest, field)
-		}
-	}
-	for _, field := range first {
 		m.reviewEditField(c, t, row, field, problems)
-	}
-	if len(rest) > 0 {
-		if len(first) == 0 {
-			// Nothing was wrong when the edit opened: with no problem field
-			// to lead with, the rest of the form is the form.
-			for _, field := range rest {
-				m.reviewEditField(c, t, row, field, problems)
-			}
-		} else {
-			label := fmt.Sprintf("其余 %d 个字段", len(rest))
-			ui.Collapsible(c, label, &m.formExtrasOpen, func() {
-				ui.Column(c).Gap(t.Space(2)).Children(func() {
-					for _, field := range rest {
-						m.reviewEditField(c, t, row, field, problems)
-					}
-				})
-			})
-		}
 	}
 	m.rawTextArea(c, t, row)
 }
@@ -1048,14 +992,16 @@ func (m *Model) reviewEditField(c *ui.Context, t *ui.Theme, row *Row, field Form
 		return
 	}
 	problem, hasProblem := reviewProblemKindFor(problems, field)
-	block := ui.Column(c).Gap(t.Space(1)).Padding(t.Space(0.5), 0)
-	if reviewFieldShows(field, m.reviewField) {
-		block = block.Padding(t.Space(1)).Background(t.Surface).Radius(t.Radius)
-	}
+	block := m.reviewFieldCard(c, t, row, field)
 	block.OnClick(func() { m.selectReviewField(field) })
 	block.Children(func() {
 		ui.Row(c).Gap(t.Space(1)).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, formFieldLabel(field)).Width(100).TextColor(t.TextMuted)
+			if roles := EvidenceRolesForField(field); len(roles) > 0 {
+				if number := reviewRoleNumber(roles[0]); number != "" {
+					fieldNumber(c, number, reviewFieldShows(field, m.reviewField), m.effectiveTokens())
+				}
+			}
+			ui.Text(c, formFieldLabel(field)).TextColor(t.TextMuted)
 			if hasProblem {
 				m.reviewProblemTag(c, t, problem)
 			}
@@ -1074,7 +1020,7 @@ func (m *Model) reviewEditField(c *ui.Context, t *ui.Theme, row *Row, field Form
 
 // reviewProblemTag is the small "需确认" / "!" marker beside a field label.
 func (m *Model) reviewProblemTag(c *ui.Context, t *ui.Theme, kind reviewProblemKind) {
-	_, tok := themeWithTokens(t, c.Preferences())
+	tok := m.effectiveTokens()
 	if kind == reviewProblemWarning {
 		ui.Text(c, "!").FontSize(t.FontSize*0.85).FontWeight(600).TextColor(tok.WarningFG).
 			Border(1, tok.WarningBorder).Padding(0, t.Space(0.75)).BorderStyle(ui.BorderDashed).
@@ -1098,7 +1044,7 @@ func (m *Model) reviewFieldControl(c *ui.Context, t *ui.Theme, row *Row, field F
 		return
 	}
 	draft := &m.edit.draft
-	width := float32(reviewFormWidth - 2*reviewPanePaddingX - 14)
+	width := m.reviewFormWidth() - 2*reviewPanePaddingX - 40
 	switch field {
 	case FormFieldSetID:
 		input := ui.Select(c, &draft.SetID, setChoices(currentID(draft.SetID))).
@@ -1126,11 +1072,14 @@ func (m *Model) reviewFieldControl(c *ui.Context, t *ui.Theme, row *Row, field F
 		input = m.reviewFocus(field, input)
 		m.noteReviewControlFocus(field, input.FocusWithin())
 	case FormFieldLevel:
-		input := m.noteTextInputFocus(ui.TextInput(c, &draft.Level).Width(110).
-			Placeholder("0–15").Disabled(m.reviewActionsBlocked()).
-			Label("等级"))
-		input = m.reviewFocus(field, input)
-		m.noteReviewControlFocus(field, input.FocusWithin())
+		ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
+			input := m.noteTextInputFocus(ui.TextInput(c, &draft.Level).Width(110).
+				Placeholder("0–15").Disabled(m.reviewActionsBlocked()).
+				Label("等级"))
+			input = m.reviewFocus(field, input)
+			m.noteReviewControlFocus(field, input.FocusWithin())
+			ui.Text(c, "级").TextColor(t.TextMuted)
+		})
 	case FormFieldMainStat:
 		ui.Row(c).Gap(t.Space(1)).AlignItems(ui.Center).Children(func() {
 			attribute := ui.Select(c, &draft.MainAttribute,
@@ -1161,7 +1110,7 @@ func (m *Model) reviewFieldControl(c *ui.Context, t *ui.Theme, row *Row, field F
 		input = m.reviewFocus(field, input)
 		m.noteReviewControlFocus(field, input.FocusWithin())
 	case FormFieldEquipped:
-		ui.Row(c).Gap(t.Space(1)).AlignItems(ui.Center).Children(func() {
+		ui.Row(c).Gap(8).Wrap().AlignItems(ui.Center).Children(func() {
 			state := ui.Select(c, &draft.EquippedState,
 				equippedChoices(optionValue(draft.EquippedState))).
 				Width(150).Disabled(m.reviewActionsBlocked()).Label("装备状态")
@@ -1231,8 +1180,8 @@ func containsString(values []string, want string) bool {
 }
 
 // reviewReadOnlyForm is a settled item's form. Every field is text; the
-// header's 修改 action opens the editor. A warning field leads the form
-// with its "!" marker and says what exporting will do (08 §3.3, §3.4).
+// header's 修改 action opens the editor. Warning fields keep their stable
+// position, their "!" marker and their export explanation (08 §3.3, §3.4).
 func (m *Model) reviewReadOnlyForm(c *ui.Context, t *ui.Theme, row *Row) {
 	problems := m.reviewProblems(row)
 	if !m.canModifyRow(row) {
@@ -1242,46 +1191,41 @@ func (m *Model) reviewReadOnlyForm(c *ui.Context, t *ui.Theme, row *Row) {
 	}
 	ui.Column(c).Gap(t.Space(1.5)).Children(func() {
 		for _, field := range readOnlyFormFields(problems) {
+			if field == FormFieldSubstats {
+				texts, known := row.SubstatTexts()
+				if known && len(texts) > 0 {
+					for index, value := range texts {
+						m.reviewReadOnlySubstat(c, t, row, index, value)
+					}
+					continue
+				}
+			}
 			m.reviewReadOnlyField(c, t, row, field, problems)
 		}
 		m.rawTextArea(c, t, row)
 	})
 }
 
-// readOnlyFormFields puts the fields carrying a problem first, then the
-// rest in the form's reading order (08 §3.3). Each field appears once.
+// readOnlyFormFields keeps the v5 evidence reading order, regardless of
+// warnings. Each field appears once.
 func readOnlyFormFields(problems []reviewProblem) []FormField {
-	base := []FormField{
-		FormFieldSetID, FormFieldRarity, FormFieldSlot, FormFieldLevel,
-		FormFieldMainStat, FormFieldSubstats, FormFieldManagementState,
-		FormFieldEquipped,
-	}
-	out := make([]FormField, 0, len(base))
-	seen := make(map[FormField]bool, len(base))
-	for _, field := range problemFields(problems) {
-		if !seen[field] {
-			seen[field] = true
-			out = append(out, field)
-		}
-	}
-	for _, field := range base {
-		if !seen[field] {
-			seen[field] = true
-			out = append(out, field)
-		}
-	}
-	return out
+	return append([]FormField(nil), pairedFormFields...)
 }
 
 // reviewReadOnlyField is one label/value line of the read-only form. The
 // whole block selects the field, which highlights its screenshot crop.
 func (m *Model) reviewReadOnlyField(c *ui.Context, t *ui.Theme, row *Row, field FormField, problems []reviewProblem) {
 	kind, hasProblem := reviewProblemKindFor(problems, field)
-	block := ui.Column(c).Gap(t.Space(0.5))
+	block := m.reviewFieldCard(c, t, row, field)
 	block.OnClick(func() { m.selectReviewField(field) })
 	block.Children(func() {
 		ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Start).Children(func() {
-			ui.Text(c, formFieldLabel(field)).Width(100).TextColor(t.TextMuted)
+			if roles := EvidenceRolesForField(field); len(roles) > 0 {
+				if number := reviewRoleNumber(roles[0]); number != "" {
+					fieldNumber(c, number, reviewFieldShows(field, m.reviewField), m.effectiveTokens())
+				}
+			}
+			ui.Text(c, formFieldLabel(field)).Width(72).TextColor(t.TextMuted)
 			if hasProblem {
 				m.reviewProblemTag(c, t, kind)
 			}
@@ -1296,7 +1240,7 @@ func (m *Model) reviewReadOnlyField(c *ui.Context, t *ui.Theme, row *Row, field 
 				// an unexplained blank line (L2).
 				value = "—"
 			}
-			ui.Text(c, value)
+			ui.Text(c, value).Grow(1).MinWidth(0)
 		})
 	})
 }
@@ -1332,7 +1276,7 @@ func readOnlyFieldValue(row *Row, field FormField, kind reviewProblemKind, hasPr
 // browsing (上一件 / 下一件); 修改 then switches to 确认修改 / 取消修改
 // (08 §3.4). A pending item's editor keeps 确认并下一项 / 保存修改.
 func (m *Model) reviewActionBar(c *ui.Context, t *ui.Theme, row *Row) {
-	ui.Column(c).Padding(t.Space(2), t.Space(4)).Gap(t.Space(1)).Children(func() {
+	ui.Column(c).Gap(8).Children(func() {
 		if row == nil {
 			return
 		}
@@ -1365,12 +1309,12 @@ func (m *Model) reviewEditActions(c *ui.Context, t *ui.Theme, row *Row) {
 	// so a reason that wraps at a larger text size grows upward instead of
 	// moving the buttons (PR-19b, 09 §1).
 	reviewActionReason(c, t, reason)
-	ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
+	actionRow(c).Children(func() {
 		confirmLabel := "确认并下一项"
 		if m.reviewErr != "" && m.lastAction == reviewConfirmNext {
 			confirmLabel = "重试确认并下一项"
 		}
-		confirm := m.reviewWriteButton(ui.PrimaryButton(c, confirmLabel).Key("review-confirm-next").
+		confirm := m.reviewWriteButton(primaryButton(c, confirmLabel).Key("review-confirm-next").
 			Disabled(blocked != "" || m.reviewActionsBlocked()), guarded)
 		if confirm.Clicked() && !guarded {
 			m.saveEdit(reviewConfirmNext, nil)
@@ -1379,7 +1323,7 @@ func (m *Model) reviewEditActions(c *ui.Context, t *ui.Theme, row *Row) {
 		if m.reviewErr != "" && m.lastAction == reviewSave {
 			saveLabel = "重试保存"
 		}
-		save := m.reviewWriteButton(ui.Button(c, saveLabel).Key("review-save").
+		save := m.reviewWriteButton(button(c, saveLabel).Key("review-save").
 			Disabled(!m.edit.canSave() || m.reviewActionsBlocked()), guarded)
 		if save.Clicked() && !guarded {
 			m.saveEdit(reviewSave, nil)
@@ -1402,17 +1346,17 @@ func (m *Model) reviewModifyActions(c *ui.Context, t *ui.Theme, row *Row) {
 		reason = reviewBrowseGuardReason
 	}
 	reviewActionReason(c, t, reason)
-	ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
+	actionRow(c).Children(func() {
 		confirmLabel := "确认修改"
 		if m.reviewErr != "" && m.lastAction == reviewConfirmModify {
 			confirmLabel = "重试确认修改"
 		}
-		confirm := m.reviewWriteButton(ui.PrimaryButton(c, confirmLabel).Key("review-confirm-modify").
+		confirm := m.reviewWriteButton(primaryButton(c, confirmLabel).Key("review-confirm-modify").
 			Disabled(disabled), guarded)
 		if confirm.Clicked() && !guarded {
 			m.saveEdit(reviewConfirmModify, nil)
 		}
-		cancel := ui.Button(c, "取消修改").Key("review-cancel-modify").
+		cancel := button(c, "取消修改").Key("review-cancel-modify").
 			Disabled(m.reviewActionsBlocked())
 		if cancel.Clicked() {
 			m.cancelEdit()
@@ -1494,13 +1438,13 @@ func (m *Model) reviewBrowseActions(c *ui.Context, t *ui.Theme) {
 	// reason line is above the buttons for the same bottom-anchored layout
 	// as the editor bars.
 	reviewActionReason(c, t, "")
-	ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
-		previous := ui.Button(c, "‹ 上一件").Key("review-prev").
+	actionRow(c).Children(func() {
+		previous := button(c, "‹ 上一件").Key("review-prev").
 			Disabled(m.reviewSaving || index <= 0)
 		if previous.Clicked() && m.selectAdjacentVisible(-1) {
 			m.markReviewBrowse(previous)
 		}
-		next := ui.Button(c, "下一件 ›").Key("review-next").
+		next := button(c, "下一件 ›").Key("review-next").
 			Disabled(m.reviewSaving || index < 0 || index+1 >= len(visible))
 		if next.Clicked() && m.selectAdjacentVisible(1) {
 			m.markReviewBrowse(next)
@@ -1545,9 +1489,8 @@ func (m *Model) navigationPrompt(c *ui.Context, t *ui.Theme) {
 		return
 	}
 	open := true
-	ui.Modal(c, &open, func() {
-		ui.Column(c).Width(420).Gap(t.Space(2)).Padding(t.Space(4)).
-			Background(t.Background).Border(1, t.Border).Radius(t.Radius).Children(func() {
+	m.modal(c, &open, func() {
+		ui.Column(c).Width(420).Gap(16).Children(func() {
 			seq := m.editSeqForPrompt()
 			_, failedConfirm := m.failedConfirmationAction()
 			title := "有未保存的修改"
@@ -1577,14 +1520,14 @@ func (m *Model) navigationPrompt(c *ui.Context, t *ui.Theme) {
 				ui.Text(c, "保存后这件退回待校对，确认前不会导出。").TextColor(t.Warning).
 					FontSize(t.FontSize * 0.9)
 			}
-			ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
-				if ui.PrimaryButton(c, "保存并继续").Disabled(m.reviewActionsBlocked()).Clicked() {
+			actionRow(c).Children(func() {
+				if primaryButton(c, "保存并继续").Disabled(m.reviewActionsBlocked()).Clicked() {
 					m.promptSaveAndContinue()
 				}
-				if ui.Button(c, "放弃修改").Disabled(m.reviewSaving).Clicked() {
+				if button(c, "放弃修改").Disabled(m.reviewSaving).Clicked() {
 					m.promptDiscardAndContinue()
 				}
-				stay := ui.Button(c, "留在这里").Disabled(m.reviewSaving).AutoFocus()
+				stay := button(c, "留在这里").Disabled(m.reviewSaving).AutoFocus()
 				if stay.Clicked() {
 					m.promptStay()
 				}
@@ -1679,36 +1622,49 @@ func firstCheckProblem(check app.DataCheck) string {
 // distinction.
 func (m *Model) editSubstats(c *ui.Context, t *ui.Theme, edit *editState) {
 	draft := &edit.draft
-	ui.Column(c).Grow(1).Gap(t.Space(1)).Children(func() {
-		unknown := !draft.SubstatsKnown
-		unknownBox := ui.Checkbox(c, &unknown, "数量未读取").Disabled(m.reviewActionsBlocked())
-		if m.focusReviewField == FormFieldSubstats {
-			m.selectReviewField(FormFieldSubstats)
-			unknownBox.Focus()
-		}
-		if unknown != !draft.SubstatsKnown {
-			draft.SubstatsKnown = !unknown
-			if !draft.SubstatsKnown {
-				draft.Substats = nil
-			}
-		}
-		if !draft.SubstatsKnown {
-			return
-		}
-		for i := range draft.Substats {
-			if m.editSubstatRow(c, t, i) {
-				draft.Substats = append(draft.Substats[:i], draft.Substats[i+1:]...)
+	row := m.selectedRow()
+	if draft.SubstatsKnown {
+		for index := range draft.Substats {
+			field := substatFormField(index)
+			remove := false
+			block := m.reviewFieldCard(c, t, row, field)
+			block.OnClick(func() { m.selectReviewField(field) })
+			block.Children(func() {
+				ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+					fieldNumber(c, fmt.Sprintf("%02d", index+4), reviewFieldShows(field, m.reviewField), m.effectiveTokens())
+					ui.Textf(c, "副词条 %d", index+1).TextColor(t.TextMuted)
+				})
+				remove = m.editSubstatRow(c, t, index)
+			})
+			if remove {
+				draft.Substats = append(draft.Substats[:index], draft.Substats[index+1:]...)
 				break
 			}
 		}
-		if len(draft.Substats) == 0 {
-			ui.Text(c, "无（确认没有可见副词条）").TextColor(t.TextMuted)
+	}
+	ui.Column(c).Gap(8).Padding(8, 0).Children(func() {
+		unknown := !draft.SubstatsKnown
+		box := ui.Checkbox(c, &unknown, "数量未读取").Disabled(m.reviewActionsBlocked())
+		if m.focusReviewField == FormFieldSubstats {
+			m.selectReviewField(FormFieldSubstats)
+			box.Focus()
 		}
-		if ui.Button(c, "添加副词条").Disabled(len(draft.Substats) >= 4 || m.reviewSaving).Clicked() {
-			draft.Substats = append(draft.Substats, substatDraft{
-				Attribute: unreadOption,
-				Unit:      unreadOption,
-			})
+		if unknown != !draft.SubstatsKnown {
+			draft.SubstatsKnown = !unknown
+			if unknown {
+				draft.Substats = nil
+			}
+		}
+		if draft.SubstatsKnown {
+			if len(draft.Substats) == 0 {
+				ui.Text(c, "无（确认没有可见副词条）").TextColor(t.TextMuted)
+			}
+			if button(c, "添加副词条").Disabled(len(draft.Substats) >= 4 || m.reviewActionsBlocked()).Clicked() {
+				draft.Substats = append(draft.Substats, substatDraft{Attribute: unreadOption, Unit: unreadOption})
+			}
+		}
+		if text := reviewProblemText(m.reviewProblems(row), FormFieldSubstats); text != "" {
+			ui.Text(c, text).FontSize(t.FontSize * 12 / 14).TextColor(t.Warning)
 		}
 	})
 }
@@ -1716,31 +1672,31 @@ func (m *Model) editSubstats(c *ui.Context, t *ui.Theme, edit *editState) {
 // editSubstatRow renders one substat's pickers and decimal boxes. It
 // reports whether the row's delete button was clicked.
 func (m *Model) editSubstatRow(c *ui.Context, t *ui.Theme, index int) bool {
-	draft := &m.edit.draft
-	sub := &draft.Substats[index]
+	sub := &m.edit.draft.Substats[index]
 	field := substatFormField(index)
 	remove := false
 	if m.focusReviewField == field {
 		m.selectReviewField(field)
 	}
-	ui.Row(c).Gap(t.Space(1)).AlignItems(ui.Center).Children(func() {
-		ui.Textf(c, "%d", index+1).Width(16).TextColor(t.TextMuted)
-		attribute := ui.Select(c, &sub.Attribute, attributeChoices(attributeTextValue(sub.Attribute))).
-			Width(116).Disabled(m.reviewActionsBlocked()).Label("副词条类型")
-		if m.focusReviewField == field {
-			attribute.Focus()
-		}
-		value := m.noteTextInputFocus(ui.TextInput(c, &sub.Value).Width(60).Placeholder("数值").
-			Disabled(m.reviewActionsBlocked()).Label("副词条数值"))
-		unit := ui.Select(c, &sub.Unit, unitChoices(attributeTextValue(sub.Attribute), attributeTextValue(sub.Unit))).
-			Width(96).Disabled(m.reviewActionsBlocked()).Label("副词条单位")
-		rolls := m.noteTextInputFocus(ui.TextInput(c, &sub.Rolls).Width(34).Placeholder("强化").
-			Disabled(m.reviewActionsBlocked()).Label("强化档位"))
-		m.noteReviewControlFocus(field, attribute.FocusWithin() || value.FocusWithin() ||
-			unit.FocusWithin() || rolls.FocusWithin())
-		if ui.Button(c, "×").Width(24).Disabled(m.reviewActionsBlocked()).Clicked() {
-			remove = true
-		}
+	ui.Column(c).Gap(8).MinWidth(0).Children(func() {
+		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+
+			attribute := ui.Select(c, &sub.Attribute, attributeChoices(attributeTextValue(sub.Attribute))).Grow(1).MinWidth(0).Disabled(m.reviewActionsBlocked()).Label("副词条类型")
+			if m.focusReviewField == field {
+				attribute.Focus()
+			}
+			m.noteReviewControlFocus(field, attribute.FocusWithin())
+			if button(c, "×").Width(32).Disabled(m.reviewActionsBlocked()).Clicked() {
+				remove = true
+			}
+		})
+		ui.Row(c).Gap(8).Wrap().AlignItems(ui.Center).Children(func() {
+			value := m.noteTextInputFocus(ui.TextInput(c, &sub.Value).Width(90).Placeholder("数值").Disabled(m.reviewActionsBlocked()).Label("副词条数值"))
+			unit := ui.Select(c, &sub.Unit, unitChoices(attributeTextValue(sub.Attribute), attributeTextValue(sub.Unit))).Width(120).Disabled(m.reviewActionsBlocked()).Label("副词条单位")
+			ui.Text(c, "强化").TextColor(t.TextMuted)
+			rolls := m.noteTextInputFocus(ui.TextInput(c, &sub.Rolls).Width(60).Placeholder("档位").Disabled(m.reviewActionsBlocked()).Label("强化档位"))
+			m.noteReviewControlFocus(field, value.FocusWithin() || unit.FocusWithin() || rolls.FocusWithin())
+		})
 	})
 	return remove
 }
@@ -1800,5 +1756,166 @@ func (m *Model) substatValue(c *ui.Context, t *ui.Theme, row *Row) {
 				ui.Textf(c, "%d. %s", i+1, text)
 			}
 		}
+	})
+}
+
+func (m *Model) reviewFormNotices(c *ui.Context, t *ui.Theme) {
+	row := m.selectedRow()
+	if row == nil {
+		return
+	}
+	tok := m.effectiveTokens()
+	status := passedStatusLabel(row)
+
+	if status != "" {
+		m.reviewPassedTag(c, t, tok, status)
+	}
+	if notice := backfillNotice(row); notice != "" {
+		ui.Text(c, notice).FontSize(t.FontSize * reviewHeaderSizeRatio).TextColor(t.Warning)
+	}
+	if notice := warningNotice(row); notice != "" {
+		ui.Column(c).Padding(t.Space(1.5), t.Space(2)).Gap(t.Space(0.5)).
+			Background(tok.WarningSoft).Border(1, tok.WarningBorder).Radius(controlRadius).Children(func() {
+			ui.Text(c, notice).TextColor(tok.WarningFG).FontSize(t.FontSize * reviewHeaderSizeRatio)
+		})
+	}
+	if m.reviewErr != "" {
+		ui.Column(c).Padding(t.Space(1.5), t.Space(2)).Gap(t.Space(1)).
+			Background(tok.DangerSoft).Border(1, tok.DangerBorder).Radius(t.Radius).Children(func() {
+			ui.Row(c).Gap(t.Space(1)).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, "没有保存："+m.reviewErr).TextColor(t.Danger).Shrink(1)
+				retry := button(c, m.retryActionLabel()).Key("review-retry").
+					Disabled(m.reviewSaving)
+				if retry.Clicked() {
+					m.saveEdit(m.retryAction(), nil)
+				}
+			})
+		})
+	}
+	if m.loading {
+		ui.Text(c, "正在加载最新检查点，加载完成前不能编辑、保存或确认。").TextColor(t.TextMuted)
+	}
+	if m.exportBusy() {
+		ui.Text(c, "正在导出，完成前不能编辑或确认。").TextColor(t.TextMuted)
+	}
+}
+
+func (m *Model) reviewFormWidth() float32 {
+	if m.reviewStandard() {
+		return reviewFormWidth
+	}
+	return 400
+}
+func (m *Model) reviewDefaultZoom() float32 {
+	if m.reviewStandard() {
+		return 1.5
+	}
+	return 1.35
+}
+func widthForSubstat(m *Model) float32 { return m.reviewFormWidth() - 2*reviewPanePaddingX - 24 }
+func reviewRoleNumber(role string) string {
+	switch role {
+	case "name":
+		return "01"
+	case "level":
+		return "02"
+	case "main":
+		return "03"
+	case "sub1":
+		return "04"
+	case "sub2":
+		return "05"
+	case "sub3":
+		return "06"
+	case "sub4":
+		return "07"
+	}
+	return ""
+}
+func (m *Model) reviewRowHeight(row *Row, role string) float32 {
+	height := float32(72) * max(1, m.textScale)
+	if row != nil && m.rec != nil {
+		for _, ev := range row.Evidence {
+			if ev.Role != role {
+				continue
+			}
+			entry := m.cache.entries[evidenceKey{record: m.rec.ID, id: ev.ID}]
+			if entry == nil || entry.bitmap == nil {
+				continue
+			}
+			w, h := entry.bitmap.Size()
+			if w > 0 {
+				zoom := m.reviewDefaultZoom()
+				if m.cropZoom > 0 {
+					zoom = m.cropZoom
+				}
+				width := min(m.reviewCropImageWidth(), float32(w)*zoom)
+				height = max(height, width*float32(h)/float32(w)+44)
+			}
+		}
+	}
+	return float32(math.Ceil(float64(max(height, m.pairedHeights[role]))/4) * 4)
+}
+func (m *Model) reviewFieldCard(c *ui.Context, t *ui.Theme, row *Row, field FormField) ui.Element {
+	tok := m.effectiveTokens()
+	selected := reviewFieldShows(field, m.reviewField)
+	bg, border := tok.SurfaceCard, tok.BorderSubtle
+	if selected {
+		bg, border = tok.AccentSoft, tok.AccentFG
+	}
+	role := ""
+	if roles := EvidenceRolesForField(field); len(roles) > 0 {
+		role = roles[0]
+	}
+	identity := m.pairedHeightIdentity
+	block := ui.Column(c).Key(reviewFieldKey{identity.record, identity.seq, field, identity.editing}).FillWidth().MinWidth(0).Gap(8).Padding(12).MinHeight(m.reviewRowHeight(row, role)).Background(bg).Border(1, border).Radius(controlRadius)
+	if bounds := block.Bounds(); m.pairedMeasureReady && role != "" && bounds.H > m.pairedHeights[role]+.5 {
+		m.pairedHeights[role] = float32(math.Ceil(float64(bounds.H)/4) * 4)
+		c.AnimationFrame()
+	}
+	return block
+}
+
+// Paired evidence fields lead both forms. Less frequent identity and state
+// fields remain fully editable below them, with their original candidates.
+var pairedFormFields = []FormField{FormFieldSetID, FormFieldLevel, FormFieldMainStat, FormFieldSubstats, FormFieldRarity, FormFieldSlot, FormFieldManagementState, FormFieldEquipped}
+
+type reviewHeightIdentity struct {
+	record      string
+	seq         int64
+	width       int
+	scale, zoom float32
+	editing     bool
+}
+type reviewFieldKey struct {
+	record   string
+	sequence int64
+	field    FormField
+	editing  bool
+}
+
+func (m *Model) preparePairedHeights(row *Row) {
+	identity := reviewHeightIdentity{width: m.contentWidth, scale: m.textScale, zoom: m.cropZoom}
+	if row != nil && m.rec != nil {
+		identity.record = m.rec.ID
+		identity.seq = row.Seq
+		identity.editing = m.reviewEditing(row)
+	}
+	if identity != m.pairedHeightIdentity || m.pairedHeights == nil {
+		m.pairedHeightIdentity = identity
+		m.pairedHeights = make(map[string]float32, 7)
+		m.pairedMeasureReady = false
+	}
+}
+func (m *Model) reviewReadOnlySubstat(c *ui.Context, t *ui.Theme, row *Row, index int, value string) {
+	field := substatFormField(index)
+	block := m.reviewFieldCard(c, t, row, field)
+	block.OnClick(func() { m.selectReviewField(field) })
+	block.Children(func() {
+		ui.Row(c).Gap(8).AlignItems(ui.Start).Children(func() {
+			fieldNumber(c, fmt.Sprintf("%02d", index+4), reviewFieldShows(field, m.reviewField), m.effectiveTokens())
+			ui.Textf(c, "副词条 %d", index+1).TextColor(t.TextMuted).Shrink(0)
+			ui.Text(c, value).Grow(1).MinWidth(0)
+		})
 	})
 }

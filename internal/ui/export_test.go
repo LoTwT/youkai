@@ -550,7 +550,7 @@ func TestExportDialogShowsCountsFormatDifferenceAndSuccess(t *testing.T) {
 		opened++
 		return nil
 	}
-	if err := f.tt.Click("导出…"); err != nil {
+	if err := f.tt.Click("导出"); err != nil {
 		t.Fatalf("click the title-bar entry: %v", err)
 	}
 	f.tt.Frame()
@@ -608,7 +608,7 @@ func TestExportDialogShowsCountsFormatDifferenceAndSuccess(t *testing.T) {
 		!f.tt.HasText("完成") || !f.tt.HasText("rec.youkai.json") {
 		t.Fatalf("the success state is incomplete: %q", f.tt.Texts())
 	}
-	if f.tt.HasText("删除这条记录的截图…") {
+	if f.tt.HasText("删除这条记录的截图") {
 		t.Fatal("a record with a pending item offered screenshot deletion")
 	}
 	if err := f.tt.Click("打开下载目录"); err != nil {
@@ -821,7 +821,7 @@ func TestRowExportDoesNotFollowAPageSwitch(t *testing.T) {
 
 	m.openHistoryMenu("r01")
 	tt.Frame()
-	if err := tt.Click("导出…"); err != nil {
+	if err := tt.Click("导出"); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -938,7 +938,7 @@ func TestExportDialogEmptyStateFocusesReviewAndWritesAnEmptyFile(t *testing.T) {
 	if !f.tt.HasText("已导出 0 件") {
 		t.Fatalf("the empty success state is missing: %q", f.tt.Texts())
 	}
-	if f.tt.HasText("删除这条记录的截图…") {
+	if f.tt.HasText("删除这条记录的截图") {
 		t.Fatal("a record with a pending item offered screenshot deletion")
 	}
 
@@ -1057,7 +1057,7 @@ func TestExportDuringReviewSaveKeepsDraft(t *testing.T) {
 				t.Fatal("the review save did not start")
 			}
 			if entry == "click" {
-				if err := f.tt.Click("导出…"); err != nil {
+				if err := f.tt.Click("导出"); err != nil {
 					t.Fatalf("click export: %v", err)
 				}
 			} else {
@@ -1422,11 +1422,11 @@ func TestExportDialogOffersScreenshotDeletionWhenNothingIsPending(t *testing.T) 
 		t.Fatalf("click 导出 JSON: %v", err)
 	}
 	settle(t, f.m, f.q, f.tt)
-	if !f.tt.HasText("删除这条记录的截图…") {
+	if !f.tt.HasText("删除这条记录的截图") {
 		t.Fatalf("the screenshot-deletion link is missing: %q", f.tt.Texts())
 	}
-	if err := f.tt.Click("删除这条记录的截图…"); err != nil {
-		t.Fatalf("click 删除这条记录的截图…: %v", err)
+	if err := f.tt.Click("删除这条记录的截图"); err != nil {
+		t.Fatalf("click 删除这条记录的截图: %v", err)
 	}
 	settle(t, f.m, f.q, f.tt)
 	if f.m.exportDialog.open {
@@ -1465,8 +1465,8 @@ func TestExportScreenshotLinkDropsOrdinaryReviewNotice(t *testing.T) {
 		t.Fatalf("click 导出 JSON: %v", err)
 	}
 	settle(t, f.m, f.q, f.tt)
-	if err := f.tt.Click("删除这条记录的截图…"); err != nil {
-		t.Fatalf("click 删除这条记录的截图…: %v", err)
+	if err := f.tt.Click("删除这条记录的截图"); err != nil {
+		t.Fatalf("click 删除这条记录的截图: %v", err)
 	}
 	settle(t, f.m, f.q, f.tt)
 

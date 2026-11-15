@@ -14,9 +14,9 @@ import (
 // person still has to handle, the exportable items carrying a warning, and
 // every captured item.
 var resultFilterOrder = []resultFilter{
-	resultFilterPending,
-	resultFilterWarning,
 	resultFilterAll,
+	resultFilterWarning,
+	resultFilterPending,
 }
 
 func (f resultFilter) label() string {

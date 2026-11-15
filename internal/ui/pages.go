@@ -4,6 +4,7 @@ import (
 	"github.com/LoTwT/youkai/internal/app"
 	"github.com/LoTwT/youkai/internal/scan"
 	"github.com/egoist/mygo/ui"
+	"github.com/lobehub/lobe-mygo/pkg/lucide"
 )
 
 // Page is the shell's destination. The navigation rail has exactly three:
@@ -22,17 +23,17 @@ const (
 	pageSettings
 )
 
-// The navigation rail's fixed metrics: 64-DIP rail with 52-DIP items and a
+// The navigation rail's fixed metrics: 160/128-DIP sidebar with horizontal items and a
 // 20-DIP icon, settings pinned to the bottom (design 07 §3.1, wireframe 01).
 const (
-	navRailWidth     = 64
-	navRailItemWidth = 52
+	navRailWidth     = 160
+	navRailItemWidth = 136
 )
 
 var (
-	scanIcon     = ui.MustParseSVG([]byte(`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3"/><circle cx="12" cy="12" r="3"/></svg>`))
-	recordsIcon  = ui.MustParseSVG([]byte(`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h14a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z"/><path d="M8 9h8M8 13h8M8 17h5"/></svg>`))
-	settingsIcon = ui.MustParseSVG([]byte(`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M4 12h16M4 17h16"/><circle cx="9" cy="7" r="2"/><circle cx="15" cy="12" r="2"/><circle cx="10" cy="17" r="2"/></svg>`))
+	scanIcon     = lucide.ScanLine()
+	recordsIcon  = lucide.Files()
+	settingsIcon = lucide.Settings()
 )
 
 // displayPage is the destination the shell renders. The page starts on
@@ -47,10 +48,10 @@ func (m *Model) displayPage() Page {
 	}
 }
 
-// viewPages is the shell: the 64-DIP navigation rail, the current page's
-// body and actions, and the shared status bar.
+// viewPages is the shell: the 160/128-DIP navigation sidebar, the current page's
+// body, fixed page actions and guarded dialogs.
 func (m *Model) viewPages(c *ui.Context) {
-	tok := ApplyTheme(c)
+	tok := m.applyTheme(c)
 	t := c.Theme()
 	page := m.displayPage()
 	if page != m.lastPage {
@@ -90,15 +91,11 @@ func (m *Model) viewPages(c *ui.Context) {
 		m.historyMenuOpen = false
 	}
 
-	ui.Row(c).Fill().Children(func() {
+	ui.Row(c).Fill().Background(tok.SurfaceContent).Children(func() {
 		m.navRail(c, t, tok)
-		ui.Divider(c)
 		ui.Column(c).Grow(1).FillHeight().Children(func() {
 			m.pageBody(c, t, tok)
-			m.pageActions(c, t, tok)
 			m.reviewNoticePage(c, t)
-			ui.Divider(c)
-			m.pageStatusBar(c, t)
 		})
 	})
 	// The export modal and the unsaved-changes dialog both cover the
@@ -109,18 +106,19 @@ func (m *Model) viewPages(c *ui.Context) {
 	m.exitDialogView(c, t)
 }
 
-// navRail is the three-destination rail: icon above label, the active
+// navRail is the three-destination rail: icon to the left of its label, the active
 // destination with the accent-soft face, and settings pinned to the
 // bottom. The rail is built first, so Tab reaches it before any page
 // content; inside it Up and Down move the focus between the destinations
 // and Enter visits them (design 09 §4.4).
 func (m *Model) navRail(c *ui.Context, t *ui.Theme, tok *Tokens) {
 	page := m.displayPage()
-	onRecords := page == pageResults || page == pageHistory
-	ui.Column(c).Width(navRailWidth).FillHeight().Background(tok.SurfaceWindow).
-		Padding(t.Space(2.5), 0).Gap(t.Space(1.5)).AlignItems(ui.Center).FocusGroup(ui.Vertical).Children(func() {
+	ui.Column(c).Width(m.railWidth()).Shrink(0).FillHeight().Background(tok.SurfaceContent).
+		Padding(16, 12).Gap(8).FocusGroup(ui.Vertical).Children(func() {
+		ui.Text(c, "妖").FontSize(t.FontSize * 20 / 14).FontWeight(700).AlignSelf(ui.Center)
+		ui.Box(c).Height(16)
 		m.navRailItem(c, t, tok, "扫描", scanIcon, page == pageScan, false, m.showScanDestination)
-		m.navRailItem(c, t, tok, "记录", recordsIcon, onRecords, false, m.showRecordsDestination)
+		m.navRailItem(c, t, tok, "记录", recordsIcon, page == pageResults || page == pageHistory, false, m.showRecordsDestination)
 		ui.Box(c).Grow(1)
 		m.navRailItem(c, t, tok, "设置", settingsIcon, page == pageSettings, m.updateDotVisible(), m.showSettingsDestination)
 	})
@@ -130,13 +128,12 @@ func (m *Model) navRail(c *ui.Context, t *ui.Theme, tok *Tokens) {
 // accent-soft face and the accent foreground, and its ref lets F6 return
 // the keyboard to the rail.
 func (m *Model) navRailItem(c *ui.Context, t *ui.Theme, tok *Tokens, label string, icon *ui.SVG, active, showDot bool, action func()) {
-	bg, fg := tok.SurfaceWindow, tok.TextSecondary
+	bg, fg := tok.SurfaceContent, tok.TextPrimary
 	if active {
 		bg, fg = tok.AccentSoft, tok.AccentFG
 	}
-	item := ui.Button(c, "").Label(label).Background(bg).TextColor(fg).
-		Border(0, ui.Color{}).Radius(t.Space(2)).
-		Width(navRailItemWidth).Padding(t.Space(1.75), 0)
+	item := ui.ButtonBase(c).Label(label).Background(bg).TextColor(fg).Border(0, ui.Transparent).
+		Radius(4).Width(m.railWidth() - 24).MinHeight(max(48, t.FontSize*1.5+20)).Padding(12)
 	if active {
 		item = item.Bind(&m.railActiveRef)
 	}
@@ -144,14 +141,12 @@ func (m *Model) navRailItem(c *ui.Context, t *ui.Theme, tok *Tokens, label strin
 		action()
 	}
 	item.Children(func() {
-		ui.Column(c).Gap(t.Space(0.5)).AlignItems(ui.Center).Children(func() {
-			ui.Icon(c, icon).Size(t.Space(5), t.Space(5)).TextColor(fg)
-			ui.Row(c).Gap(t.Space(0.75)).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, label).FontSize(t.FontSize * 0.8).TextColor(fg).SingleLine()
-				if showDot {
-					updateDot(c, t, tok)
-				}
-			})
+		ui.Row(c).FillWidth().Gap(12).AlignItems(ui.Center).Children(func() {
+			ui.Icon(c, icon).Size(20, 20).TextColor(fg)
+			ui.Text(c, label).FontSize(t.FontSize).FontWeight(600).TextColor(fg).SingleLine()
+			if showDot {
+				updateDot(c, t, tok)
+			}
 		})
 	})
 }
@@ -212,25 +207,25 @@ func (m *Model) pageBody(c *ui.Context, t *ui.Theme, tok *Tokens) {
 	case pageResults:
 		m.recordWorkspace(c, t)
 	case pageHistory:
-		// The records table owns its vertical scrolling; an outer scroll
-		// would give the List an unbounded height and defeat row snapping.
-		ui.Column(c).Grow(1).FillHeight().Padding(t.Space(3), t.Space(3)).Children(func() {
-			m.historyPage(c, t)
-		})
+		ui.Column(c).Grow(1).FillHeight().MinHeight(0).Padding(m.pagePadding()).Gap(24).Children(func() { m.historyPage(c, t) })
 	case pageSettings:
-		ui.Column(c).Grow(1).FillHeight().Padding(t.Space(3), t.Space(3)).Gap(t.Space(2)).Children(func() {
+		ui.Column(c).Grow(1).FillHeight().MinHeight(0).Padding(m.pagePadding()).Gap(24).Children(func() {
+			ui.Text(c, "设置").FontSize(t.FontSize * 24 / 14).FontWeight(700)
 			m.settingsPage(c, t)
 		})
 	default:
-		ui.Column(c).Grow(1).FillHeight().Padding(t.Space(3), t.Space(3)).Children(func() {
-			ui.Scroll(c).Grow(1).MinHeight(0).Children(func() {
-				ui.Column(c).Gap(t.Space(2)).Children(func() {
-					m.scanArea(c, t, tok)
-					if m.exitState != exitIdle {
-						ui.Divider(c)
-						m.exitArea(c, t)
-					}
+		ui.Column(c).Grow(1).FillHeight().MinHeight(0).Padding(m.pagePadding()).Gap(16).Children(func() {
+			m.scanHeader(c, t)
+			panel(c, tok).Grow(1).MinHeight(0).Children(func() {
+				ui.Scroll(c).Grow(1).MinHeight(0).Children(func() {
+					ui.Column(c).Padding(panelInset).Gap(16).Children(func() {
+						m.scanArea(c, t, tok)
+						if m.exitState != exitIdle {
+							m.exitArea(c, t)
+						}
+					})
 				})
+				m.pageActions(c, t, tok)
 			})
 		})
 	}
@@ -240,22 +235,25 @@ func (m *Model) pageBody(c *ui.Context, t *ui.Theme, tok *Tokens) {
 // left, the current reason and the last start failure beside 开始扫描 on the
 // right, or 停止扫描 while a session runs. The bar takes its content height
 // instead of a fixed one so the minimum window keeps every line and the
-// button visible (08 §1.3; T-08 may only wrap or drop the estimate).
+// button visible (08 §1.3; v5 removes the estimate).
 func (m *Model) pageActions(c *ui.Context, t *ui.Theme, tok *Tokens) {
 	if m.displayPage() != pageScan {
 		return
 	}
 	ui.Divider(c)
-	ui.Row(c).Background(tok.SurfaceHeader).Padding(t.Space(1.5), t.Space(3)).
+	ui.Row(c).Background(tok.SurfaceHeader).Padding(24).
 		AlignItems(ui.Center).Gap(t.Space(3)).Children(func() {
-		ui.Column(c).Grow(1).Gap(t.Space(0.5)).Children(func() {
-			ui.Text(c, "中途停止 "+shortcutStopScan).FontSize(t.FontSize * 0.85).TextColor(t.TextMuted)
-			ui.Text(c, "点开始后 30 秒内保持游戏在前台，扫描期间不要操作游戏").
-				FontSize(t.FontSize * 0.85).TextColor(t.TextMuted)
-			ui.Text(c, m.estimateText()).FontSize(t.FontSize * 0.85).TextColor(t.TextMuted)
+		ui.Column(c).Grow(1).Basis(0).MinWidth(0).Gap(t.Space(0.5)).Children(func() {
+			if !m.snap.Busy || m.snap.Scan.Phase == scan.PhasePreparing {
+				ui.Text(c, "中途停止 "+shortcutStopScan).FontSize(t.FontSize * 12 / 14).TextColor(t.TextMuted)
+				ui.Text(c, "点开始后 30 秒内保持游戏在前台，扫描期间不要操作游戏").FontSize(t.FontSize * 12 / 14).TextColor(t.TextMuted)
+			} else if m.snap.Scan.Phase == scan.PhaseCapturing {
+				ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() { ui.Text(c, "停止热键").FontWeight(600); keycaps(c, shortcutStopScan) })
+				ui.Text(c, "点击窗口本身也会让游戏失焦而停止").FontSize(t.FontSize * 12 / 14).TextColor(t.TextMuted)
+			}
 		})
 		if m.snap.Busy || m.startReqID != "" {
-			button := ui.Button(c, "停止扫描").TextColor(t.Danger).Bind(&m.scanActionRef)
+			button := button(c, "停止扫描").TextColor(t.Danger).Bind(&m.scanActionRef)
 			if button.Clicked() {
 				m.Stop()
 			}
@@ -266,7 +264,7 @@ func (m *Model) pageActions(c *ui.Context, t *ui.Theme, tok *Tokens) {
 		if reason != "" || failure != "" {
 			// The current reason and the past failure are separate slots:
 			// both may show at once, and each may wrap inside the bar.
-			ui.Column(c).Gap(t.Space(0.5)).AlignItems(ui.End).Children(func() {
+			ui.Column(c).Grow(1).Basis(0).MinWidth(0).Gap(t.Space(0.5)).AlignItems(ui.End).Children(func() {
 				if reason != "" {
 					ui.Text(c, reason).TextColor(t.TextMuted).FontSize(t.FontSize * 0.9)
 				}
@@ -275,7 +273,7 @@ func (m *Model) pageActions(c *ui.Context, t *ui.Theme, tok *Tokens) {
 				}
 			})
 		}
-		button := ui.PrimaryButton(c, "开始扫描").Disabled(!m.scanStartReady()).Bind(&m.scanActionRef)
+		button := primaryButton(c, "开始扫描").Disabled(!m.scanStartReady()).Bind(&m.scanActionRef)
 		if button.Clicked() {
 			m.requestScanStart()
 		}
@@ -332,8 +330,7 @@ func (m *Model) statusShortcutText() string {
 			return m.resultShortcutText()
 		}
 	case pageScan:
-		// The bottom action bar already names the stop hotkey and the
-		// estimate; 09 §5.3 keeps further shortcut hints out of the page.
+		// The bottom action bar already names the stop hotkey; 09 §5.3 keeps further shortcut hints out of the page.
 		return ""
 	}
 	// The records list names no keys: 09 §5.3 keeps shortcut hints out of

@@ -20,3 +20,8 @@
 ## 构建时链接的库
 
 以下组件不作为独立文件随包分发，编译链接进 Youkai 可执行文件：MyGo 原生 UI 框架（MIT，<https://github.com/egoist/mygo>）；Go 标准库与工具链（BSD 风格许可，<https://go.dev/LICENSE>）；Go 绑定 onnxruntime_go v1.38.0（MIT，<https://github.com/yalue/onnxruntime_go>）。
+
+## 第五版原生界面组件
+
+- Lobe MyGo：`github.com/lobehub/lobe-mygo v0.0.0-20261110162706-5e5fea5ef9e2`，提交 `5e5fea5ef9e225f79564770ef18f6d293a2e5d4a`。本应用链接其 theme、action 与 lucide 包，采用 MIT 许可，原文见随包 `licenses/lobe-mygo-LICENSE.txt`。来源：<https://github.com/lobehub/lobe-mygo/tree/5e5fea5ef9e225f79564770ef18f6d293a2e5d4a>。
+- Lucide 图标：固定于上述 Lobe 提交，采用 ISC 许可；其中派生自 Feather 的图标另含 Cole Bemis 的 MIT 声明。上游完整声明见随包 `licenses/lucide-LICENSE.txt`。未使用的二维码组件没有链接进应用。

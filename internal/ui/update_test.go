@@ -67,6 +67,8 @@ func openUpdateSettingsAt(t *testing.T, m *Model, q *queueUpdater, width, height
 	m.SetContentSize(width, height)
 	tt := ui.NewTester(m.View, width, height)
 	settle(t, m, q, tt)
+	m.settingsScrollTarget = settingsSectionUpdate
+	tt.Frame()
 	return tt
 }
 
@@ -133,9 +135,7 @@ func TestViewUpdateCheckFlow(t *testing.T) {
 	src.check = func(ctx context.Context) (UpdateHandle, error) {
 		return nil, context.DeadlineExceeded
 	}
-	if err := tt.Click("检查更新"); err != nil {
-		t.Fatal(err)
-	}
+	clickRevealedSettingsControl(t, tt, 1200, "检查更新")
 	settle(t, m, q, tt)
 	if !tt.HasText("检查更新失败：context deadline exceeded") {
 		t.Error("the check failure does not show as it is")
@@ -355,9 +355,7 @@ func TestViewUpdateInstallForbiddenWhileScanning(t *testing.T) {
 	if !tt.HasText("扫描会话进行中，等其结束并保存完成后再安装更新。") {
 		t.Error("the running session does not explain the refused install")
 	}
-	if err := tt.Click("安装并重启"); err != nil {
-		t.Fatal(err)
-	}
+	clickRevealedSettingsControl(t, tt, 1200, "安装并重启")
 	settle(t, m, q, tt)
 	if found.installs != 0 {
 		t.Fatalf("the install ran during a scan: %d", found.installs)
@@ -380,9 +378,7 @@ func TestViewUpdateInstallForbiddenWhileScanning(t *testing.T) {
 	if !tt.HasText("有保存失败的扫描结果待重试保存，先完成保存再安装更新。") {
 		t.Error("the pending save retry does not explain the refused install")
 	}
-	if err := tt.Click("安装并重启"); err != nil {
-		t.Fatal(err)
-	}
+	clickRevealedSettingsControl(t, tt, 1200, "安装并重启")
 	settle(t, m, q, tt)
 	if found.installs != 0 {
 		t.Fatalf("the install ran while a save retry was due: %d", found.installs)
@@ -397,9 +393,7 @@ func TestViewUpdateInstallForbiddenWhileScanning(t *testing.T) {
 	if tt.HasText("等保存完成后再安装更新。") {
 		t.Error("a settled session still blocks the install")
 	}
-	if err := tt.Click("安装并重启"); err != nil {
-		t.Fatal(err)
-	}
+	clickRevealedSettingsControl(t, tt, 1200, "安装并重启")
 	settle(t, m, q, tt)
 	if found.installs != 1 {
 		t.Fatalf("the install did not run once on the settled session: %d", found.installs)
@@ -451,9 +445,7 @@ func TestViewUpdateInstallFailure(t *testing.T) {
 	m.CheckUpdates()
 	settle(t, m, q, tt)
 
-	if err := tt.Click("安装并重启"); err != nil {
-		t.Fatal(err)
-	}
+	clickRevealedSettingsControl(t, tt, 1200, "安装并重启")
 	settle(t, m, q, tt)
 	if !tt.HasText("安装更新失败：install boom。应用继续运行当前版本，可重试安装。") {
 		t.Error("the install failure does not show as it is")
@@ -539,9 +531,7 @@ func TestUpdateDotFollowsTheFoundVersion(t *testing.T) {
 		<-release
 		return nil
 	}
-	if err := tt.Click("安装并重启"); err != nil {
-		t.Fatal(err)
-	}
+	clickRevealedSettingsControl(t, tt, 1200, "安装并重启")
 	select {
 	case <-started:
 	case <-time.After(5 * time.Second):
@@ -584,9 +574,7 @@ func TestUpdateInstallCancellationClearsTheServiceFlag(t *testing.T) {
 	tt := openUpdateSettings(t, m, q)
 	m.CheckUpdates()
 	settle(t, m, q, tt)
-	if err := tt.Click("安装并重启"); err != nil {
-		t.Fatal(err)
-	}
+	clickRevealedSettingsControl(t, tt, 1200, "安装并重启")
 	settle(t, m, q, tt)
 	if got := svc.updateInstallingCalls(); len(got) != 2 || !got[0] || got[1] {
 		t.Fatalf("the service saw %v, want the install published then cleared", got)

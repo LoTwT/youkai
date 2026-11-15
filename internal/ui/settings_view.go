@@ -2,6 +2,7 @@ package ui
 
 import (
 	"strconv"
+	"strings"
 
 	"github.com/LoTwT/youkai/internal/app"
 	"github.com/LoTwT/youkai/internal/scan"
@@ -12,8 +13,8 @@ import (
 // left (design 08 §6). The directory disappears in the compact width band;
 // the sections keep their reading order either way (design 09 §2).
 const (
-	settingsTOCWidth         = 150
-	settingsContentMaxWidth  = 720
+	settingsTOCWidth         = 168
+	settingsContentMaxWidth  = 936
 	settingsStandardMinWidth = 1120
 )
 
@@ -81,38 +82,33 @@ func (r *settingsSectionRefs) ref(id settingsSectionID) *ui.Ref {
 // the prepare check's disk-space entry, the in-page directory in the
 // standard width band, and the six sections in one scrolling column.
 func (m *Model) settingsPage(c *ui.Context, t *ui.Theme) {
-	_, tok := themeWithTokens(t, c.Preferences())
+	tok := m.effectiveTokens()
 	m.applySettingsScrollTarget(c)
 	if m.settingsReturnToPrepare {
 		m.settingsReturnStrip(c, tok)
 	}
-	ui.Row(c).Grow(1).FillHeight().AlignItems(ui.Stretch).Gap(t.Space(4)).Children(func() {
+	ui.Row(c).Grow(1).FillHeight().AlignItems(ui.Stretch).Gap(32).Children(func() {
 		if m.settingsTableOfContentsVisible() {
 			m.settingsTableOfContents(c, t, tok)
 		}
 		ui.Scroll(c).Grow(1).FillHeight().TrackScroll(&m.settingsScroll).Bind(&m.settingsViewportRef).
 			Children(func() {
-				ui.Column(c).MaxWidth(settingsContentMaxWidth).Gap(t.Space(3)).Children(func() {
+				ui.Column(c).FillWidth().MaxWidth(settingsContentMaxWidth).Gap(24).Children(func() {
 					m.settingsSection(c, t, settingsSectionGeneral, "常规", func() {
 						m.settingsGeneral(c, t, tok)
 					})
-					ui.Divider(c)
 					m.settingsSection(c, t, settingsSectionShortcuts, "快捷键", func() {
 						m.settingsShortcuts(c, t, tok)
 					})
-					ui.Divider(c)
 					m.settingsSection(c, t, settingsSectionStorage, "存储与清理", func() {
 						m.settingsStorage(c, t, tok)
 					})
-					ui.Divider(c)
 					m.settingsSection(c, t, settingsSectionDiagnostics, "诊断", func() {
 						m.settingsDiagnostics(c, t, tok)
 					})
-					ui.Divider(c)
 					m.settingsSection(c, t, settingsSectionUpdate, "更新", func() {
 						m.updateArea(c, t, tok)
 					})
-					ui.Divider(c)
 					m.settingsSection(c, t, settingsSectionAbout, "关于", func() {
 						m.settingsAbout(c, t, tok)
 					})
@@ -144,7 +140,7 @@ func (m *Model) settingsReturnStrip(c *ui.Context, tok *Tokens) {
 func (m *Model) settingsSection(c *ui.Context, t *ui.Theme,
 	id settingsSectionID, title string, body func()) {
 	ref := m.settingsSections.ref(id)
-	column := ui.Column(c).Gap(t.Space(1.5))
+	column := panel(c, m.effectiveTokens()).Padding(24).Gap(16)
 	if ref != nil {
 		column = column.Bind(ref)
 	}
@@ -196,10 +192,24 @@ func (m *Model) scrollSettingsSection(c *ui.Context, id settingsSectionID) bool 
 func (m *Model) settingsTableOfContents(c *ui.Context, t *ui.Theme, tok *Tokens) {
 	ui.Column(c).Width(settingsTOCWidth).Gap(t.Space(0.5)).
 		FocusGroup(ui.Vertical).Children(func() {
+		active := settingsSectionGeneral
+		viewport := m.settingsViewportRef.Bounds(c)
+		for _, section := range settingsSectionList {
+			if ref := m.settingsSections.ref(section.id); ref != nil {
+				bounds := ref.Bounds(c)
+				if bounds.H > 0 && bounds.Y <= viewport.Y+40 {
+					active = section.id
+				}
+			}
+		}
 		for i, section := range settingsSectionList {
 			ui.Row(c).Gap(t.Space(1)).AlignItems(ui.Center).Children(func() {
-				entry := ui.Button(c, section.title).TextColor(tok.TextSecondary).
-					Background(ui.Color{}).Border(0, ui.Color{}).Radius(t.Space(1)).
+				bg, fg := ui.Transparent, tok.TextPrimary
+				if section.id == active {
+					bg, fg = tok.AccentSoft, tok.AccentFG
+				}
+				entry := button(c, section.title).Width(settingsTOCWidth).Justify(ui.Start).TextColor(fg).
+					Background(bg).Border(0, ui.Color{}).Radius(t.Space(1)).
 					Padding(t.Space(0.75), t.Space(1))
 				if i == 0 {
 					entry = entry.Bind(&m.settingsFirstRef)
@@ -241,37 +251,34 @@ func (m *Model) settingsGeneral(c *ui.Context, t *ui.Theme, tok *Tokens) {
 			TextColor(t.TextMuted).FontSize(t.FontSize * 0.9)
 		return
 	}
-	behavior := string(m.CloseBehavior())
-	if behavior != string(app.CloseBehaviorExit) {
-		behavior = string(app.CloseBehaviorHide)
+	selected := 0
+	if m.CloseBehavior() == app.CloseBehaviorExit {
+		selected = 1
 	}
-	ui.RadioGroup(c, func() {
-		ui.Row(c).Gap(t.Space(3)).Children(func() {
-			hide := ui.Radio(c, &behavior, string(app.CloseBehaviorHide), "隐藏到通知区域（默认）")
-			if behavior == string(app.CloseBehaviorHide) && compactFocus {
-				hide = hide.Bind(&m.settingsFirstRef).Focus()
-				m.settingsFocusPending = false
-			}
-			exit := ui.Radio(c, &behavior, string(app.CloseBehaviorExit), "停止扫描并退出")
-			if behavior == string(app.CloseBehaviorExit) && compactFocus {
-				exit = exit.Bind(&m.settingsFirstRef).Focus()
-				m.settingsFocusPending = false
-			}
-		})
+	control := ui.Segmented(c, &selected, "隐藏到通知区域（默认）", "停止扫描并退出")
+	if compactFocus {
+		control.Bind(&m.settingsFirstRef).Focus()
+		m.settingsFocusPending = false
+	}
+	behavior := app.CloseBehaviorHide
+	if selected == 1 {
+		behavior = app.CloseBehaviorExit
+	}
+	if behavior != m.CloseBehavior() {
+		m.SetCloseBehavior(behavior)
+	}
+	actionRow(c).Children(func() {
+		if button(c, "再看一次托盘图标位置提示").Clicked() {
+			m.ShowTrayHint()
+		}
 	})
-	if chosen := app.CloseBehavior(behavior); chosen != m.CloseBehavior() {
-		m.SetCloseBehavior(chosen)
-	}
-	if ui.Button(c, "再看一次托盘图标位置提示").Clicked() {
-		m.ShowTrayHint()
-	}
 	if m.trayHintErr != "" {
 		ui.Text(c, m.trayHintErr).TextColor(t.Danger).FontSize(t.FontSize * 0.9)
 	}
 	if m.closeBehaviorErr != "" {
 		ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, m.closeBehaviorErr).TextColor(t.Danger).FontSize(t.FontSize * 0.9)
-			if ui.Button(c, "重试").Clicked() {
+			if button(c, "重试").Clicked() {
 				m.retryCloseBehaviorSave()
 			}
 		})
@@ -306,17 +313,39 @@ type settingsShortcut struct {
 // future registration otherwise. The key text comes from the one notation
 // table, so it stays the platform's binding.
 func (m *Model) settingsShortcuts(c *ui.Context, t *ui.Theme, tok *Tokens) {
-	for i, shortcut := range m.settingsShortcutRows() {
-		if i > 0 {
-			ui.Divider(c)
-		}
-		ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, shortcut.action).TextColor(tok.TextSecondary)
-			ui.Text(c, shortcut.context).TextColor(tok.TextMuted).
-				FontSize(t.FontSize * 0.85)
-			ui.Box(c).Grow(1)
-			ui.Text(c, shortcut.keys).FontWeight(600)
+	rows := m.settingsShortcutRows()
+	group := func(title string, icon *ui.SVG, indices []int) {
+		ui.Column(c).Padding(16).Gap(16).Radius(8).Background(tok.SurfaceSunken).Children(func() {
+			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+				ui.Icon(c, icon).Size(16, 16).TextColor(tok.AccentFG)
+				ui.Text(c, title).FontWeight(600).TextColor(tok.AccentFG)
+			})
+			for _, index := range indices {
+				shortcut := rows[index]
+				ui.Row(c).Gap(12).AlignItems(ui.Center).Tooltip(shortcut.context).Children(func() {
+					ui.Text(c, strings.TrimSuffix(shortcut.action, "…")).Grow(1).Basis(0).MinWidth(0)
+					ui.Column(c).Gap(8).Children(func() {
+						for _, keys := range strings.Split(shortcut.keys, " / ") {
+							keycaps(c, keys)
+						}
+					})
+				})
+				if index == 0 {
+					ui.Text(c, shortcut.context).FontSize(t.FontSize * 12 / 14).TextColor(tok.TextMuted)
+				}
+			}
 		})
+	}
+	left := func() { group("扫描", scanIcon, []int{1, 0}); group("查看与导航", recordsIcon, []int{8, 9, 10}) }
+	right := func() { group("记录校对", recordsIcon, []int{2, 3, 4, 5, 6}); group("截图", scanIcon, []int{7}) }
+	if m.contentWidth >= 1120 && t.FontSize <= 17 {
+		ui.Row(c).Gap(16).AlignItems(ui.Start).Children(func() {
+			ui.Column(c).Grow(1).Basis(0).MinWidth(0).Gap(16).Children(left)
+			ui.Column(c).Grow(1).Basis(0).MinWidth(0).Gap(16).Children(right)
+		})
+	} else {
+		left()
+		right()
 	}
 }
 
@@ -356,7 +385,7 @@ func (m *Model) settingsShortcutRows() []settingsShortcut {
 		{action: "保存修改", context: "记录 · 逐件，有未保存修改时", keys: shortcutSave},
 		{action: "下一个待处理件", context: "记录 · 逐件", keys: shortcutNextPending},
 		{action: "上一个待处理件", context: "记录 · 逐件", keys: shortcutPreviousPending},
-		{action: "导出…", context: "记录工作区", keys: shortcutExport},
+		{action: "导出", context: "记录工作区", keys: shortcutExport},
 		{action: "截图放大 / 缩小 / 适合窗口", context: "记录 · 逐件，焦点不在文本框时",
 			keys: shortcutZoomIn + " / " + shortcutZoomOut + " / " + shortcutZoomFit},
 		{action: "在大区域间跳转", context: "任意", keys: shortcutFocusRegion + " / " + shortcutFocusRegionBack},
@@ -407,9 +436,9 @@ func (m *Model) storageActionsRow(c *ui.Context, t *ui.Theme, tok *Tokens) {
 		m.settingsFocusStorage = false
 		m.settingsFocusPending = false
 	}
-	ui.Row(c).Gap(t.Space(1.5)).AlignItems(ui.Center).Wrap().Children(func() {
+	actionRow(c).Wrap().Children(func() {
 		opened := false
-		open := ui.Button(c, "打开数据目录").Disabled(m.cfg.OpenDataDirectory == nil)
+		open := button(c, "打开数据目录").Disabled(m.cfg.OpenDataDirectory == nil)
 		if focusStorage && m.cfg.OpenDataDirectory != nil {
 			open = open.Focus().ScrollIntoView()
 			opened = true
@@ -417,26 +446,28 @@ func (m *Model) storageActionsRow(c *ui.Context, t *ui.Theme, tok *Tokens) {
 		if m.cfg.OpenDataDirectory != nil && open.Clicked() {
 			m.OpenDataDirectory()
 		}
-		cache := ui.Button(c, "清缓存").Disabled(m.storageLoading)
+		cache := button(c, "清缓存").Disabled(m.storageLoading)
 		if focusStorage && !opened {
 			cache = cache.Focus().ScrollIntoView()
 		}
 		if cache.Clicked() {
 			m.RequestCacheClear()
 		}
-		if ui.Button(c, "清旧日志").Disabled(m.storageLoading).Clicked() {
+		if button(c, "清旧日志").Disabled(m.storageLoading).Clicked() {
 			m.RequestOldLogClear()
 		}
+	})
+	actionRow(c).Wrap().Children(func() {
 		danger := func(label string, action func()) {
-			button := ui.Button(c, label).TextColor(tok.DangerFG).
+			button := button(c, label).TextColor(tok.DangerFG).
 				Background(tok.SurfaceControl).Border(1, tok.DangerBorder).
 				Disabled(blocked != "")
 			if button.Clicked() {
 				action()
 			}
 		}
-		danger("删除全部截图…", m.RequestAllScreenshotCleanup)
-		danger("删除全部记录…", m.RequestAllRecordCleanup)
+		danger("删除全部截图", m.RequestAllScreenshotCleanup)
+		danger("删除全部记录", m.RequestAllRecordCleanup)
 	})
 	if blocked != "" {
 		ui.Text(c, blocked).TextColor(tok.TextMuted).FontSize(t.FontSize * 0.9)
@@ -447,10 +478,10 @@ func (m *Model) storageActionsRow(c *ui.Context, t *ui.Theme, tok *Tokens) {
 // surface shares (09 §4.6) and states what a copy excludes.
 func (m *Model) settingsDiagnostics(c *ui.Context, t *ui.Theme, tok *Tokens) {
 	ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Wrap().Children(func() {
-		if ui.Button(c, "复制诊断信息").Clicked() {
+		if button(c, "复制诊断信息").Clicked() {
 			m.copyDiagnostics(c)
 		}
-		if ui.Button(c, "打开诊断目录").Disabled(m.cfg.OpenDiagnosticsDirectory == nil).Clicked() {
+		if button(c, "打开诊断目录").Disabled(m.cfg.OpenDiagnosticsDirectory == nil).Clicked() {
 			m.openDiagnosticsDirectory()
 		}
 		ui.Text(c, "复制的内容不包含窗口标题等隐私").TextColor(tok.TextMuted).
@@ -501,7 +532,7 @@ func (m *Model) settingsAbout(c *ui.Context, t *ui.Theme, tok *Tokens) {
 	ui.Text(c, "youkai "+version).TextColor(tok.TextSecondary)
 	ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
 		ui.Text(c, "以 MIT 许可发布。").TextColor(tok.TextMuted).FontSize(t.FontSize * 0.9)
-		if m.cfg.OpenLicenses != nil && ui.Button(c, "开源许可").Clicked() {
+		if m.cfg.OpenLicenses != nil && button(c, "开源许可").Clicked() {
 			m.openLicenses()
 		}
 	})

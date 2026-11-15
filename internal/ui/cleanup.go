@@ -370,15 +370,15 @@ func (m *Model) storagePromptArea(c *ui.Context, t *ui.Theme) {
 		} else if p.ready {
 			ui.Text(c, storagePromptText(p))
 		}
-		ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
+		actionRow(c).Wrap().Children(func() {
 			// The prompt opens on its safe choice: Enter never clears
 			// anything until the user deliberately moves to confirm.
-			cancel := ui.Button(c, "取消").Disabled(p.running)
+			cancel := button(c, "取消").Disabled(p.running)
 			cancel.AutoFocus()
 			if cancel.Clicked() {
 				m.CancelStorageClear()
 			}
-			confirm := ui.Button(c, "确认清理").Disabled(p.running || p.previewing || !p.ready)
+			confirm := button(c, "确认清理").Disabled(p.running || p.previewing || !p.ready)
 			if confirm.Clicked() {
 				m.ConfirmStorageClear()
 			}
@@ -618,15 +618,15 @@ func (m *Model) cleanupPromptArea(c *ui.Context, t *ui.Theme) {
 			ui.Textf(c, "其中 %d 条记录无法读取，待校对数量不完整。", p.preview.Unreadable).
 				TextColor(t.TextMuted).FontSize(t.FontSize * 0.9)
 		}
-		ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
+		actionRow(c).Wrap().Children(func() {
 			// The destructive confirmation opens on 取消, so a stray Enter
 			// closes it instead of deleting anything.
-			cancel := ui.Button(c, "取消").Disabled(p.running)
+			cancel := button(c, "取消").Disabled(p.running)
 			cancel.AutoFocus()
 			if cancel.Clicked() {
 				m.CancelCleanup()
 			}
-			confirm := ui.Button(c, "确认删除").Disabled(p.running || p.previewing || !p.ready)
+			confirm := button(c, "确认删除").Disabled(p.running || p.previewing || !p.ready)
 			if confirm.Clicked() {
 				m.ConfirmCleanup()
 			}

@@ -77,39 +77,30 @@ func (m *Model) recordSummary(c *ui.Context, t *ui.Theme) {
 		return
 	}
 	if m.rec == nil {
-		ui.Scroll(c).Grow(1).Children(func() {
-			ui.Column(c).Gap(t.Space(2)).Padding(t.Space(3)).Children(func() {
-				m.summaryNotices(c, t)
-				ui.Text(c, m.emptyResultsText()).TextColor(t.TextMuted)
-			})
-		})
+		ui.Text(c, m.emptyResultsText()).TextColor(t.TextMuted)
 		return
 	}
 	conclusion := m.recordSummaryConclusion()
-	body := func(withActions bool) {
-		m.summaryNotices(c, t)
-		m.summaryConclusionArea(c, t, conclusion, withActions)
-		m.summaryCountsGrid(c, t)
-		m.summaryDetailsArea(c, t)
-	}
-
-	if m.contentHeight > 0 && m.contentHeight < summaryFixedActionsHeight {
-		ui.Column(c).Grow(1).Children(func() {
-			ui.Scroll(c).Grow(1).Children(func() {
-				ui.Column(c).Gap(t.Space(2)).Padding(t.Space(3)).Children(func() {
-					body(false)
+	ui.Column(c).Grow(1).MinHeight(0).Gap(24).Children(func() {
+		ui.Scroll(c).Grow(1).MinHeight(0).Children(func() {
+			ui.Column(c).Gap(24).Children(func() {
+				m.summaryNotices(c, t)
+				panel(c, m.effectiveTokens()).Padding(32).Gap(24).Children(func() {
+					ui.Row(c).Gap(24).AlignItems(ui.Start).Children(func() {
+						ui.Column(c).Grow(1).Basis(0).MinWidth(0).Children(func() { m.summaryConclusionArea(c, t, conclusion, false) })
+						m.summaryExportCount(c, t)
+					})
+					ui.Divider(c)
+					m.summaryCountsGrid(c, t)
+					if m.recordCoverage() == record.CoveragePartial {
+						ui.Text(c, m.summaryCoverageLine()).TextColor(t.Warning)
+						m.summaryPositions(c, t)
+					}
 				})
-			})
-			ui.Row(c).Padding(t.Space(2), t.Space(3)).AlignItems(ui.Center).Children(func() {
-				m.summaryActions(c, t, conclusion)
+				m.summaryDetailsArea(c, t)
 			})
 		})
-		return
-	}
-	ui.Scroll(c).Grow(1).Children(func() {
-		ui.Column(c).Gap(t.Space(2)).Padding(t.Space(3)).Children(func() {
-			body(true)
-		})
+		m.summaryActions(c, t, conclusion)
 	})
 }
 
@@ -131,7 +122,7 @@ func (m *Model) summaryNotices(c *ui.Context, t *ui.Theme) {
 // summaryConclusionArea renders the conclusion title, its optional
 // supplement and (at full height) the action row.
 func (m *Model) summaryConclusionArea(c *ui.Context, t *ui.Theme, conclusion summaryConclusion, withActions bool) {
-	ui.Column(c).Gap(t.Space(1)).Children(func() {
+	ui.Column(c).Gap(12).Children(func() {
 		if conclusion.Eyebrow != "" {
 			ui.Text(c, conclusion.Eyebrow).TextColor(t.TextMuted).FontSize(t.FontSize * 0.8)
 		}
@@ -148,21 +139,21 @@ func (m *Model) summaryConclusionArea(c *ui.Context, t *ui.Theme, conclusion sum
 	})
 }
 
-// summaryActions renders the primary action first (leftmost and first in tab
+// summaryActions renders the primary action first within the right-aligned group (first in tab
 // order) and the secondary actions after it. A disabled action keeps its
 // place and explains why.
 func (m *Model) summaryActions(c *ui.Context, t *ui.Theme, conclusion summaryConclusion) {
 	ui.Column(c).Gap(t.Space(1)).Children(func() {
-		ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
+		actionRow(c).Wrap().Children(func() {
 			if conclusion.Primary.Kind != summaryActionNone {
-				primary := ui.PrimaryButton(c, conclusion.Primary.Label).
+				primary := primaryButton(c, conclusion.Primary.Label).
 					Disabled(conclusion.Primary.disabled())
 				if primary.Clicked() {
 					m.performSummaryAction(c, conclusion.Primary.Kind)
 				}
 			}
 			for _, action := range conclusion.Secondary {
-				button := ui.Button(c, action.Label).Disabled(action.disabled())
+				button := button(c, action.Label).Disabled(action.disabled())
 				if button.Clicked() {
 					m.performSummaryAction(c, action.Kind)
 				}
@@ -318,7 +309,7 @@ func (m *Model) summaryCountsGrid(c *ui.Context, t *ui.Theme) {
 	}
 	if m.contentWidth >= summaryWideMinWidth {
 		width := m.summaryCountCellWidth(t, 4)
-		ui.Row(c).Gap(t.Space(2)).Children(func() {
+		ui.Row(c).Gap(12).Children(func() {
 			for _, cell := range cells {
 				m.summaryCountCell(c, t, width, cell.label, cell.count, cell.class, m.summaryCellAttention(cell.class, counts))
 			}
@@ -327,7 +318,7 @@ func (m *Model) summaryCountsGrid(c *ui.Context, t *ui.Theme) {
 	}
 	width := m.summaryCountCellWidth(t, 2)
 	for i := 0; i < len(cells); i += 2 {
-		ui.Row(c).Gap(t.Space(2)).Children(func() {
+		ui.Row(c).Gap(12).Children(func() {
 			for _, cell := range cells[i:min(i+2, len(cells))] {
 				m.summaryCountCell(c, t, width, cell.label, cell.count, cell.class, m.summaryCellAttention(cell.class, counts))
 			}
@@ -340,8 +331,8 @@ func (m *Model) summaryCountsGrid(c *ui.Context, t *ui.Theme) {
 // two in the compact layout). The inner width is the window minus the rail,
 // its divider and the summary padding.
 func (m *Model) summaryCountCellWidth(t *ui.Theme, columns int) float32 {
-	inner := float32(m.contentWidth) - navRailWidth - 1 - 2*t.Space(3)
-	gaps := t.Space(2) * float32(columns-1)
+	inner := float32(m.contentWidth) - m.railWidth() - 2*m.pagePadding() - 64
+	gaps := float32(12) * float32(columns-1)
 	width := (inner - gaps) / float32(columns)
 	if width < 1 {
 		return 1
@@ -354,7 +345,7 @@ func (m *Model) summaryCountCellWidth(t *ui.Theme, columns int) float32 {
 // browser even without color; a zero count stays plain but still opens the
 // filtered empty view.
 func (m *Model) summaryCountCell(c *ui.Context, t *ui.Theme, width float32, label string, count int64, class app.ItemClass, attention bool) {
-	_, tok := themeWithTokens(t, c.Preferences())
+	tok := m.effectiveTokens()
 	display := label
 	if count > 0 {
 		display += " ›"
@@ -363,12 +354,18 @@ func (m *Model) summaryCountCell(c *ui.Context, t *ui.Theme, width float32, labe
 	if attention {
 		border, borderWidth = tok.BorderStrong, 2
 	}
-	cell := ui.Button(c, "").Label(fmt.Sprintf("%s，%s 件", label, formatCount(count))).
-		Width(width).Padding(t.Space(2), t.Space(2.5)).
-		Background(tok.SurfaceCard).Border(borderWidth, border).Radius(t.Space(1.5))
+	background := tok.SurfaceCard
+	if class == app.ItemClassWarning {
+		background = tok.WarningSoft
+	} else if class == app.ItemClassPassed {
+		background = tok.SuccessSoft
+	}
+	cell := ui.ButtonBase(c).Label(fmt.Sprintf("%s，%s 件", label, formatCount(count))).
+		Width(width).MinHeight(max(100, t.FontSize*4+32)).Padding(16).
+		Background(background).Border(borderWidth, border).Radius(controlRadius)
 	cell.Children(func() {
 		ui.Column(c).FillWidth().AlignItems(ui.Start).Gap(t.Space(0.5)).Children(func() {
-			ui.Text(c, formatCount(count)).FontSize(t.FontSize * 1.5).FontWeight(600)
+			ui.Text(c, formatCount(count)).FontSize(t.FontSize * 2).FontWeight(700).TextColor(summaryClassColor(tok, class))
 			ui.Text(c, display).TextColor(tok.TextMuted).FontSize(t.FontSize * 0.9)
 		})
 	})
@@ -395,9 +392,8 @@ func (m *Model) summaryCellAttention(class app.ItemClass, counts app.ItemClassCo
 // position conclusions, count breakdown, session ending, duration,
 // screenshot footprint and management entry, and the fault diagnostics.
 func (m *Model) summaryDetailsArea(c *ui.Context, t *ui.Theme) {
-	_, tok := themeWithTokens(t, c.Preferences())
-	ui.Column(c).Background(tok.SurfaceCard).Border(1, tok.BorderSubtle).
-		Radius(t.Space(1.5)).Padding(t.Space(1.5), t.Space(2)).Children(func() {
+	tok := m.effectiveTokens()
+	panel(c, tok).Padding(24).Children(func() {
 		ui.Collapsible(c, "详情", &m.summaryDetailsOpen, func() {
 			ui.Column(c).Gap(t.Space(1)).Padding(t.Space(1), t.Space(0.5)).Children(func() {
 				ui.Text(c, m.summaryCoverageLine()).TextColor(tok.TextSecondary)
@@ -433,7 +429,7 @@ func (m *Model) summaryCoverageLine() string {
 // record without the typed ledger or the legacy observed scope says it
 // cannot list the slots instead of inventing six complete ones.
 func (m *Model) summaryPositions(c *ui.Context, t *ui.Theme) {
-	_, tok := themeWithTokens(t, c.Preferences())
+	tok := m.effectiveTokens()
 	outcomes, known := app.PositionOutcomesOf(m.rec.Shell)
 	if !known {
 		ui.Text(c, "号位：记录没有保存号位结论，无法列出").TextColor(tok.TextMuted)
@@ -596,14 +592,14 @@ func summaryDurationText(d time.Duration) string {
 // (P-13): "管理截图" opens the measured confirmation, which keeps the record,
 // revisions and review state.
 func (m *Model) summaryScreenshotRow(c *ui.Context, t *ui.Theme) {
-	_, tok := themeWithTokens(t, c.Preferences())
+	tok := m.effectiveTokens()
 	ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
 		ui.Text(c, m.summaryScreenshotLine()).TextColor(tok.TextSecondary)
 		if !m.summaryCanManageScreenshots() {
 			return
 		}
 		reason := m.cleanupBlockedReason()
-		button := ui.Button(c, "管理截图").Disabled(reason != "")
+		button := button(c, "管理截图").Disabled(reason != "")
 		if button.Clicked() {
 			m.RequestScreenshotCleanup(m.rec.ID)
 		}
@@ -658,17 +654,17 @@ func (m *Model) summaryDiagnosticsArea(c *ui.Context, t *ui.Theme) {
 	if !m.summaryHasDiagnostics() {
 		return
 	}
-	_, tok := themeWithTokens(t, c.Preferences())
+	tok := m.effectiveTokens()
 	ui.Collapsible(c, "诊断信息", &m.summaryDiagnosticsOpen, func() {
 		ui.Column(c).Gap(t.Space(1)).Children(func() {
 			ui.Text(c, m.summaryDiagnosticsLine()).TextColor(tok.TextMuted).
 				FontSize(t.FontSize * 0.9)
 			ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
-				if ui.Button(c, "复制诊断信息").Clicked() {
+				if button(c, "复制诊断信息").Clicked() {
 					m.copySummaryDiagnostics(c)
 				}
 				if m.cfg.OpenDiagnosticsDirectory != nil {
-					if ui.Button(c, "打开诊断目录").Clicked() {
+					if button(c, "打开诊断目录").Clicked() {
 						if err := m.cfg.OpenDiagnosticsDirectory(); err != nil {
 							m.summaryDiagnosticsErr = "打开诊断目录失败：" + err.Error()
 						} else {
@@ -739,7 +735,7 @@ func (m *Model) summaryDiagnosticsText() string {
 // cannot be read.
 func (m *Model) summaryUnreadable(c *ui.Context, t *ui.Theme) {
 	ui.Scroll(c).Grow(1).Children(func() {
-		ui.Column(c).Gap(t.Space(2)).Padding(t.Space(3)).Children(func() {
+		ui.Column(c).Gap(24).Children(func() {
 			m.summaryNotices(c, t)
 			ui.Text(c, "记录读取失败").FontSize(t.FontSize * 1.7).FontWeight(600).TextColor(t.Danger)
 			ui.Text(c, m.recErr).TextColor(t.TextMuted)
@@ -747,7 +743,7 @@ func (m *Model) summaryUnreadable(c *ui.Context, t *ui.Theme) {
 				return
 			}
 			reason := m.cleanupBlockedReason()
-			button := ui.Button(c, "删除记录…").Disabled(reason != "")
+			button := button(c, "删除记录").Disabled(reason != "")
 			if button.Clicked() {
 				m.performSummaryAction(c, summaryActionDeleteRecord)
 			}
@@ -1208,7 +1204,7 @@ func (m *Model) pendingSecondary(counts app.ItemClassCounts, offerExport bool) [
 	}
 	if offerExport && counts.Exportable() > 0 {
 		action := m.exportAction()
-		action.Label = fmt.Sprintf("先导出可导出的 %s 件…", formatCount(counts.Exportable()))
+		action.Label = fmt.Sprintf("先导出可导出的 %s 件", formatCount(counts.Exportable()))
 		secondary = append(secondary, action)
 	}
 	return secondary
@@ -1226,7 +1222,7 @@ func (m *Model) exportAction() summaryAction {
 	if reason == "" && m.exportEntryBlocked() {
 		reason = "结果尚未加载，不能导出。"
 	}
-	return summaryAction{Kind: summaryActionExport, Label: "导出…", DisabledReason: reason}
+	return summaryAction{Kind: summaryActionExport, Label: "导出", DisabledReason: reason}
 }
 
 // rescanAction returns to the scan page's preparation checklist. The design's
@@ -1244,4 +1240,30 @@ func (m *Model) viewItemsAction() summaryAction {
 		Kind:  summaryActionViewItems,
 		Label: fmt.Sprintf("查看已采集的 %s 件", formatCount(int64(len(m.rec.Rows)))),
 	}
+}
+
+func summaryClassColor(tok *Tokens, class app.ItemClass) ui.Color {
+	switch class {
+	case app.ItemClassPassed:
+		return tok.SuccessFG
+	case app.ItemClassWarning:
+		return tok.WarningFG
+	default:
+		return tok.TextPrimary
+	}
+}
+func (m *Model) summaryExportCount(c *ui.Context, t *ui.Theme) {
+	counts := m.recordCounts()
+	tok := m.effectiveTokens()
+	ui.Column(c).MinWidth(128).AlignItems(ui.End).Gap(8).Children(func() {
+		value := "—"
+		if counts.ExportKnown {
+			value = formatCount(int64(counts.Exportable))
+		}
+		ui.Text(c, value).FontSize(t.FontSize * 48 / 14).FontWeight(700).TextColor(tok.AccentFG)
+		ui.Text(c, "件可导出").TextColor(tok.TextSecondary)
+		if counts.ExportKnown && counts.Captured > counts.Exportable {
+			ui.Textf(c, "排除 %d 件", counts.Captured-counts.Exportable).FontSize(t.FontSize * 12 / 14).TextColor(tok.TextSecondary)
+		}
+	})
 }

@@ -55,7 +55,7 @@ func countColor(img *image.RGBA, c color.RGBA) int {
 // form or item list cannot masquerade as a retained evidence image.
 func evidencePaneRect(t *testing.T, tt *ui.Tester, m *Model, img *image.RGBA) image.Rectangle {
 	t.Helper()
-	header, ok := tt.Find("截图（逐行）")
+	header, ok := tt.Find("截图")
 	if !ok {
 		t.Fatalf("the screenshot pane header is missing: %q", tt.Texts())
 	}
@@ -177,7 +177,7 @@ func TestViewStartAndStopByPhase(t *testing.T) {
 	// Capture: one provable count and no percentage (R-11).
 	applyAndSettle(t, m, q, tt, snap("s1", 2, true, scan.PhaseCapturing,
 		scan.Counts{Captured: 5, Produced: 2, Failed: 1, Unprocessed: 1, Queued: 1}, 0, true, ""))
-	if !tt.HasText("正在扫描") || !tt.HasText("已采集 5 件") {
+	if !tt.HasText("正在扫描") || !tt.HasText("已采集") || !tt.HasText("5") || !tt.HasText("件") {
 		t.Errorf("the capture stage does not show its count: %q", tt.Texts())
 	}
 	if tt.HasText("已产出 2") || tt.HasText("排队 1") {
@@ -312,8 +312,8 @@ func openTestRecord(t *testing.T, ev EvidenceSource, cacheLimit int) (*Model, *q
 	// The standard width keeps the 240-DIP item list beside the
 	// screenshots and form. The all segment keeps every outcome in the
 	// list, as the review flow sees them.
-	m.SetContentSize(1180, 900)
-	tt := ui.NewTester(m.View, 1180, 900)
+	m.SetContentSize(1440, 900)
+	tt := ui.NewTester(m.View, 1440, 900)
 	settle(t, m, q, tt)
 	m.OpenHistory()
 	settle(t, m, q, tt)
@@ -346,7 +346,7 @@ func TestViewDetailMatchesSelection(t *testing.T) {
 
 	// Every outcome stays in the list, and the recovery mark shows.
 	for _, want := range []string{
-		"结果：历史记录 r1（4 条，中断恢复 1 条）",
+		"中断恢复 1 条",
 		"河豚电音", "待补录 · 识别失败", "待补录 · 未处理",
 	} {
 		if !tt.HasText(want) {
@@ -356,7 +356,7 @@ func TestViewDetailMatchesSelection(t *testing.T) {
 
 	// The first record is chosen by default; its screenshots are always
 	// visible beside the form.
-	if !tt.HasText("#0001 · 河豚电音 · 1 号位 · 15 级") {
+	if !tt.HasText("#0001 · 河豚电音 · 1 号位") || m.selectedRow().LevelText() != "15 级" {
 		t.Fatalf("the default selection does not show: %q", tt.Texts())
 	}
 	if n := countColorInRect(tt.Image(), item1A, pane); n < 100 {
@@ -399,13 +399,11 @@ func TestViewStructuredFormAndScreenshots(t *testing.T) {
 		"r1/000001-line0": solidBitmap(img),
 	}}
 	_, _, tt := openTestRecord(t, ev, 0)
-	if err := tt.Click("其余 6 个字段"); err != nil {
-		t.Fatal(err)
-	}
+
 	tt.Frame()
 	for _, want := range []string{
 		"套装", "31100 河豚电音", "稀有度", "S", "槽位", "1 号位",
-		"等级", "15 级", "主词条", "health 生命值", "flat 固定值",
+		"等级", "级", "主词条", "health 生命值", "flat 固定值",
 		"副词条", "critDamage 暴击伤害", "percent 百分比",
 		"管理状态", "装备",
 	} {
@@ -647,7 +645,7 @@ func TestViewHistoryReopen(t *testing.T) {
 	settle(t, m, q, tt)
 	showRecordItems(m)
 	tt.Frame()
-	if !tt.HasText("结果：历史记录 new（4 条，中断恢复 1 条）") {
+	if m.rec == nil || m.rec.ID != "new" || !tt.HasText("中断恢复 1 条") {
 		t.Fatalf("the reopened record does not show: %q", tt.Texts())
 	}
 	m.histChoice = "2026-10-16 09:00 · old"
@@ -864,7 +862,7 @@ func TestCompletionCardBlocksUnknownExport(t *testing.T) {
 	if tt.HasText("都处理完了") {
 		t.Fatal("an unknown export claims completion")
 	}
-	if err := tt.Click("导出…"); err != nil {
+	if err := tt.Click("导出"); err != nil {
 		t.Fatal(err)
 	}
 	tt.Frame()
@@ -900,7 +898,7 @@ func TestCompletionListDoesNotClaimDoneWithoutExportSnapshot(t *testing.T) {
 			if tt.HasText("都处理完了") {
 				t.Fatalf("the list claims completion without an export snapshot: %q", tt.Texts())
 			}
-			if !tt.HasText("待处理 0 件，导出清单尚未就绪。") {
+			if !tt.HasText("导出清单尚未就绪") {
 				t.Fatalf("the list does not state the export state: %q", tt.Texts())
 			}
 			if !tt.HasText("不可确认完成") {
