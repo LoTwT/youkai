@@ -35,6 +35,9 @@ type Tokens struct {
 	TextDisabled  mgui.Color
 	TextCode      mgui.Color
 
+	NavActive     mgui.Color
+	NavActiveText mgui.Color
+
 	// Accent is split into foreground and fill. Text/icons use AccentFG;
 	// primary buttons and MyGo's selected row use AccentFill with OnFill.
 	AccentFG          mgui.Color
@@ -151,6 +154,8 @@ func tokensFor(dark bool) *Tokens {
 			TextMuted:     hex("#A0A0A0"),
 			TextDisabled:  hex("#8D8D8D"),
 			TextCode:      hex("#C9D1D9"),
+			NavActive:     hex("#242424"),
+			NavActiveText: hex("#EEEEEE"),
 
 			AccentFG:          hex("#8BABFF"),
 			AccentFill:        hex("#8BABFF"),
@@ -218,6 +223,8 @@ func tokensFor(dark bool) *Tokens {
 		TextMuted:     hex("#637187"),
 		TextDisabled:  hex("#7D899C"),
 		TextCode:      hex("#3F3F46"),
+		NavActive:     hex("#EDF2FF"),
+		NavActiveText: hex("#315FE8"),
 
 		AccentFG:          hex("#315FE8"),
 		AccentFill:        hex("#315FE8"),

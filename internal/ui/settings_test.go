@@ -97,7 +97,7 @@ func TestSettingsPageSectionsAndDirectory(t *testing.T) {
 		t.Fatal("the in-page directory entry is missing")
 	}
 	content := float32(0)
-	for _, title := range []string{"点击窗口的 ✕ 时", "停止扫描", "打开数据目录", "复制诊断信息"} {
+	for _, title := range []string{"点击窗口的 ✕ 时", "停止扫描（全局 · 开始扫描时注册）", "打开数据目录", "复制诊断信息"} {
 		rect, ok := tt.Find(title)
 		if !ok {
 			t.Fatalf("%q is missing: %q", title, tt.Texts())
@@ -136,7 +136,7 @@ func TestSettingsPageCompactHidesDirectory(t *testing.T) {
 }
 
 // TestSettingsPageShortcuts checks the read-only table: only registered
-// keys, the design's order, Windows notation, and the stop key state.
+// keys, one action per row, platform notation, and the stop key state.
 func TestSettingsPageShortcuts(t *testing.T) {
 	m, q, _ := settingsTestModel(t)
 	tt := ui.NewTester(m.View, 1440, 1000)
@@ -144,13 +144,13 @@ func TestSettingsPageShortcuts(t *testing.T) {
 	openSettings(t, m, q, tt)
 
 	rows := m.settingsShortcutRows()
-	if len(rows) != 11 {
-		t.Fatalf("the shortcut list has %d rows, want 11: %+v", len(rows), rows)
+	if len(rows) != 15 {
+		t.Fatalf("the shortcut list has %d rows, want 15: %+v", len(rows), rows)
 	}
-	if got, want := rows[0], (settingsShortcut{action: "停止扫描", context: "开始扫描时注册", keys: shortcutStopScan}); got != want {
+	if got, want := rows[0], (settingsShortcut{action: "停止扫描", context: "全局 · 开始扫描时注册", keys: shortcutStopScan}); got != want {
 		t.Errorf("the first shortcut row = %+v, want %+v", got, want)
 	}
-	if got, want := rows[10], (settingsShortcut{action: "关闭浮层/返回表格", context: "任意", keys: shortcutCloseOverlay}); got != want {
+	if got, want := rows[14], (settingsShortcut{action: "关闭浮层或返回表格", context: "非文本框", keys: shortcutCloseOverlay}); got != want {
 		t.Errorf("the last shortcut row = %+v, want %+v", got, want)
 	}
 	for _, registered := range []string{
@@ -161,10 +161,10 @@ func TestSettingsPageShortcuts(t *testing.T) {
 		"下一个待处理件", shortcutNextPending,
 		"上一个待处理件", shortcutPreviousPending,
 		"导出", shortcutExport,
-		"截图放大 / 缩小 / 适合窗口", shortcutZoomIn, shortcutZoomOut, shortcutZoomFit,
-		"在大区域间跳转", shortcutFocusRegion, shortcutFocusRegionBack,
+		"截图放大", "截图缩小", "截图适合窗口", shortcutZoomIn, shortcutZoomOut, shortcutZoomFit,
+		"前往下一区域", "返回上一区域", shortcutFocusRegion, shortcutFocusRegionBack,
 		"打开选中的记录", shortcutOpenRecord,
-		"关闭浮层/返回表格", shortcutCloseOverlay,
+		"关闭浮层或返回表格", shortcutCloseOverlay,
 	} {
 		keys := []string{registered}
 		if strings.Contains(registered, "+") {
@@ -177,8 +177,8 @@ func TestSettingsPageShortcuts(t *testing.T) {
 		}
 	}
 	for _, row := range rows {
-		if strings.ContainsAny(row.keys, "⌘⌃⌥⇧↵") {
-			t.Errorf("the shortcut row %+v uses macOS notation; the interface shows Windows keys", row)
+		if strings.Contains(row.keys, " / ") || strings.Contains(row.keys, "\n") {
+			t.Errorf("the shortcut row %+v combines multiple bindings", row)
 		}
 	}
 }

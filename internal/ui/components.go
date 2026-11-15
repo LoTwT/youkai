@@ -19,7 +19,19 @@ const (
 	columnGap         = 24
 	controlGap        = 12
 	panelHeaderHeight = 40
+	pageHeaderHeight  = 48
 )
+
+// pageHeader reserves the same title baseline and body start even when
+// trailing controls disappear. Its minimum grows with desktop text size.
+func pageHeader(c *ui.Context) ui.Element {
+	return ui.Row(c).MinHeight(max(pageHeaderHeight, c.Theme().FontSize*1.5+24)).
+		Shrink(0).Gap(12).AlignItems(ui.Center)
+}
+
+func pageTitle(c *ui.Context, title string) ui.Element {
+	return ui.Text(c, title).FontSize(c.Theme().FontSize * 24 / 14).FontWeight(700).SingleLine()
+}
 
 func button(c *ui.Context, label string) ui.Element        { return styledButton(c, label, false) }
 func primaryButton(c *ui.Context, label string) ui.Element { return styledButton(c, label, true) }
@@ -77,7 +89,7 @@ func actionRow(c *ui.Context) ui.Element {
 
 func keycaps(c *ui.Context, keys string) {
 	t := c.Theme()
-	ui.Row(c).Gap(4).AlignItems(ui.Center).Children(func() {
+	ui.Row(c).Shrink(0).Gap(4).AlignItems(ui.Center).Children(func() {
 		for _, sequence := range strings.Split(keys, " / ") {
 			if sequence != strings.Split(keys, " / ")[0] {
 				ui.Text(c, "/").TextColor(t.TextMuted)

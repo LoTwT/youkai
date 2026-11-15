@@ -2,7 +2,6 @@ package ui
 
 import (
 	"strconv"
-	"strings"
 
 	"github.com/LoTwT/youkai/internal/app"
 	"github.com/LoTwT/youkai/internal/scan"
@@ -255,7 +254,25 @@ func (m *Model) settingsGeneral(c *ui.Context, t *ui.Theme, tok *Tokens) {
 	if m.CloseBehavior() == app.CloseBehaviorExit {
 		selected = 1
 	}
-	control := ui.Segmented(c, &selected, "隐藏到通知区域（默认）", "停止扫描并退出")
+	parts := ui.SegmentedBase(c, &selected, 2)
+	control := parts.Track.Label("关闭行为").AlignSelf(ui.Start).Padding(4).Gap(4).
+		Radius(controlRadius).Background(tok.SurfaceSunken).Border(1, tok.BorderDefault)
+	control.Children(func() {
+		for i, label := range []string{"隐藏到通知区域（默认）", "停止扫描并退出"} {
+			segment := parts.Segment(i).MinHeight(max(40, t.FontSize*1.5+16)).Padding(8, 16).Radius(4)
+			bg := ui.Transparent
+			if i == selected {
+				bg = tok.SurfaceControl
+			}
+			if segment.Hovered() {
+				bg = tok.SurfaceHover
+			}
+			if segment.Pressed() {
+				bg = tok.SurfacePressed
+			}
+			segment.Background(bg).Children(func() { ui.Text(c, label).SingleLine() })
+		}
+	})
 	if compactFocus {
 		control.Bind(&m.settingsFirstRef).Focus()
 		m.settingsFocusPending = false
@@ -305,48 +322,27 @@ type settingsShortcut struct {
 	keys    string
 }
 
-// settingsShortcuts lists the registered keys in the design's order,
-// Windows notation throughout. The stop key's context is the registration
+// settingsShortcuts lists one action and one platform-specific key per
+// row. The stop key's context is the registration
 // state the snapshot can prove: held after the platform Open (preparing with
 // a deadline, or capturing), never claimed before Open or during finalizing,
 // the last failure when the session ended with hotkeyUnavailable, and the
 // future registration otherwise. The key text comes from the one notation
 // table, so it stays the platform's binding.
 func (m *Model) settingsShortcuts(c *ui.Context, t *ui.Theme, tok *Tokens) {
-	rows := m.settingsShortcutRows()
-	group := func(title string, icon *ui.SVG, indices []int) {
-		ui.Column(c).Padding(16).Gap(16).Radius(8).Background(tok.SurfaceSunken).Children(func() {
-			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-				ui.Icon(c, icon).Size(16, 16).TextColor(tok.AccentFG)
-				ui.Text(c, title).FontWeight(600).TextColor(tok.AccentFG)
-			})
-			for _, index := range indices {
-				shortcut := rows[index]
-				ui.Row(c).Gap(12).AlignItems(ui.Center).Tooltip(shortcut.context).Children(func() {
-					ui.Text(c, strings.TrimSuffix(shortcut.action, "…")).Grow(1).Basis(0).MinWidth(0)
-					ui.Column(c).Gap(8).Children(func() {
-						for _, keys := range strings.Split(shortcut.keys, " / ") {
-							keycaps(c, keys)
-						}
-					})
+	// Horizontal scrolling preserves the complete action and key on one
+	// line at large text sizes and narrow windows, without ellipsis.
+	ui.ScrollHorizontal(c).FillWidth().Focusable().Label("快捷键列表").Children(func() {
+		ui.Column(c).FillWidth().Gap(8).Children(func() {
+			for _, shortcut := range m.settingsShortcutRows() {
+				ui.Row(c).Gap(24).AlignItems(ui.Center).Children(func() {
+					ui.Text(c, shortcut.action+"（"+shortcut.context+"）").SingleLine().Shrink(0)
+					ui.Box(c).Grow(1)
+					keycaps(c, shortcut.keys)
 				})
-				if index == 0 {
-					ui.Text(c, shortcut.context).FontSize(t.FontSize * 12 / 14).TextColor(tok.TextMuted)
-				}
 			}
 		})
-	}
-	left := func() { group("扫描", scanIcon, []int{1, 0}); group("查看与导航", recordsIcon, []int{8, 9, 10}) }
-	right := func() { group("记录校对", recordsIcon, []int{2, 3, 4, 5, 6}); group("截图", scanIcon, []int{7}) }
-	if m.contentWidth >= 1120 && t.FontSize <= 17 {
-		ui.Row(c).Gap(16).AlignItems(ui.Start).Children(func() {
-			ui.Column(c).Grow(1).Basis(0).MinWidth(0).Gap(16).Children(left)
-			ui.Column(c).Grow(1).Basis(0).MinWidth(0).Gap(16).Children(right)
-		})
-	} else {
-		left()
-		right()
-	}
+	})
 }
 
 // stopHotkeyStateText derives the stop hotkey's registration state from the
@@ -379,18 +375,21 @@ func (m *Model) stopHotkeyStateText() string {
 
 func (m *Model) settingsShortcutRows() []settingsShortcut {
 	return []settingsShortcut{
-		{action: "停止扫描", context: m.stopHotkeyStateText(), keys: shortcutStopScan},
+		{action: "停止扫描", context: "全局 · " + m.stopHotkeyStateText(), keys: shortcutStopScan},
 		{action: "开始扫描", context: "扫描准备", keys: shortcutStartScan},
-		{action: "确认并下一项", context: "记录 · 逐件", keys: shortcutConfirmNext},
-		{action: "保存修改", context: "记录 · 逐件，有未保存修改时", keys: shortcutSave},
+		{action: "确认并下一项", context: "待处理件", keys: shortcutConfirmNext},
+		{action: "确认修改", context: "记录 · 修改中", keys: shortcutConfirmNext},
+		{action: "保存修改", context: "待处理件编辑中", keys: shortcutSave},
 		{action: "下一个待处理件", context: "记录 · 逐件", keys: shortcutNextPending},
 		{action: "上一个待处理件", context: "记录 · 逐件", keys: shortcutPreviousPending},
 		{action: "导出", context: "记录工作区", keys: shortcutExport},
-		{action: "截图放大 / 缩小 / 适合窗口", context: "记录 · 逐件，焦点不在文本框时",
-			keys: shortcutZoomIn + " / " + shortcutZoomOut + " / " + shortcutZoomFit},
-		{action: "在大区域间跳转", context: "任意", keys: shortcutFocusRegion + " / " + shortcutFocusRegionBack},
+		{action: "截图放大", context: "逐件 · 非文本框", keys: shortcutZoomIn},
+		{action: "截图缩小", context: "逐件 · 非文本框", keys: shortcutZoomOut},
+		{action: "截图适合窗口", context: "逐件 · 非文本框", keys: shortcutZoomFit},
+		{action: "前往下一区域", context: "页面", keys: shortcutFocusRegion},
+		{action: "返回上一区域", context: "页面", keys: shortcutFocusRegionBack},
 		{action: "打开选中的记录", context: "全部记录", keys: shortcutOpenRecord},
-		{action: "关闭浮层/返回表格", context: "任意", keys: shortcutCloseOverlay},
+		{action: "关闭浮层或返回表格", context: "非文本框", keys: shortcutCloseOverlay},
 	}
 }
 
@@ -456,8 +455,6 @@ func (m *Model) storageActionsRow(c *ui.Context, t *ui.Theme, tok *Tokens) {
 		if button(c, "清旧日志").Disabled(m.storageLoading).Clicked() {
 			m.RequestOldLogClear()
 		}
-	})
-	actionRow(c).Wrap().Children(func() {
 		danger := func(label string, action func()) {
 			button := button(c, label).TextColor(tok.DangerFG).
 				Background(tok.SurfaceControl).Border(1, tok.DangerBorder).

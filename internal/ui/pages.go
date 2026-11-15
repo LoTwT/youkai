@@ -114,13 +114,16 @@ func (m *Model) viewPages(c *ui.Context) {
 func (m *Model) navRail(c *ui.Context, t *ui.Theme, tok *Tokens) {
 	page := m.displayPage()
 	ui.Column(c).Width(m.railWidth()).Shrink(0).FillHeight().Background(tok.SurfaceContent).
-		Padding(16, 12).Gap(8).FocusGroup(ui.Vertical).Children(func() {
+		Padding(16, 12).Gap(8).Children(func() {
 		ui.Text(c, "妖").FontSize(t.FontSize * 20 / 14).FontWeight(700).AlignSelf(ui.Center)
 		ui.Box(c).Height(16)
-		m.navRailItem(c, t, tok, "扫描", scanIcon, page == pageScan, false, m.showScanDestination)
-		m.navRailItem(c, t, tok, "记录", recordsIcon, page == pageResults || page == pageHistory, false, m.showRecordsDestination)
-		ui.Box(c).Grow(1)
-		m.navRailItem(c, t, tok, "设置", settingsIcon, page == pageSettings, m.updateDotVisible(), m.showSettingsDestination)
+		ui.Column(c).Grow(1).FillWidth().Gap(8).FocusGroup(ui.Vertical).Children(func() {
+			m.navRailItem(c, t, tok, "扫描", scanIcon, page == pageScan, false, m.showScanDestination)
+			m.navRailItem(c, t, tok, "记录", recordsIcon, page == pageResults || page == pageHistory, false, m.showRecordsDestination)
+			ui.Box(c).Grow(1)
+			m.navRailItem(c, t, tok, "设置", settingsIcon, page == pageSettings, m.updateDotVisible(), m.showSettingsDestination)
+		})
+		m.themePicker(c, tok)
 	})
 }
 
@@ -130,10 +133,16 @@ func (m *Model) navRail(c *ui.Context, t *ui.Theme, tok *Tokens) {
 func (m *Model) navRailItem(c *ui.Context, t *ui.Theme, tok *Tokens, label string, icon *ui.SVG, active, showDot bool, action func()) {
 	bg, fg := tok.SurfaceContent, tok.TextPrimary
 	if active {
-		bg, fg = tok.AccentSoft, tok.AccentFG
+		bg, fg = tok.NavActive, tok.NavActiveText
 	}
 	item := ui.ButtonBase(c).Label(label).Background(bg).TextColor(fg).Border(0, ui.Transparent).
 		Radius(4).Width(m.railWidth() - 24).MinHeight(max(48, t.FontSize*1.5+20)).Padding(12)
+	if item.Hovered() {
+		item.Background(tok.SurfaceHover)
+	}
+	if item.Pressed() {
+		item.Background(tok.SurfacePressed)
+	}
 	if active {
 		item = item.Bind(&m.railActiveRef)
 	}
@@ -207,10 +216,10 @@ func (m *Model) pageBody(c *ui.Context, t *ui.Theme, tok *Tokens) {
 	case pageResults:
 		m.recordWorkspace(c, t)
 	case pageHistory:
-		ui.Column(c).Grow(1).FillHeight().MinHeight(0).Padding(m.pagePadding()).Gap(24).Children(func() { m.historyPage(c, t) })
+		ui.Column(c).Grow(1).FillHeight().MinHeight(0).Padding(m.pagePadding()).Gap(16).Children(func() { m.historyPage(c, t) })
 	case pageSettings:
-		ui.Column(c).Grow(1).FillHeight().MinHeight(0).Padding(m.pagePadding()).Gap(24).Children(func() {
-			ui.Text(c, "设置").FontSize(t.FontSize * 24 / 14).FontWeight(700)
+		ui.Column(c).Grow(1).FillHeight().MinHeight(0).Padding(m.pagePadding()).Gap(16).Children(func() {
+			pageHeader(c).Children(func() { pageTitle(c, "设置") })
 			m.settingsPage(c, t)
 		})
 	default:

@@ -194,6 +194,10 @@ type Config struct {
 	// CloseBehavior is the persisted preference loaded at startup; empty
 	// means CloseBehaviorHide.
 	CloseBehavior app.CloseBehavior
+	// Appearance is the saved light/dark override. Applying it never
+	// navigates away from the current page or replaces this Model.
+	Appearance    app.Appearance
+	SetAppearance func(app.Appearance) error
 	// SaveCloseBehavior persists a preference change from the window. Nil
 	// keeps changes in memory only (tests and builds without a data root).
 	SaveCloseBehavior func(app.CloseBehavior) error
@@ -579,6 +583,8 @@ type Model struct {
 	// must not hide the only way back into the app.
 	closeBehavior    app.CloseBehavior
 	closeBehaviorErr string
+	appearance       app.Appearance
+	appearanceErr    string
 	// trayUnavailable is the tray creation failure the entry point reported;
 	// empty while the tray exists. The close option then reads as the fixed
 	// stop-and-exit behavior and the first-hide hint never appears.
@@ -652,6 +658,7 @@ func New(cfg Config) *Model {
 		historyLoading: true,
 		targetChoice:   -1,
 		closeBehavior:  closeBehavior,
+		appearance:     cfg.Appearance.Normalized(),
 		trayHintSeen:   cfg.TrayHintSeen,
 	}
 	if cfg.Updates != nil {

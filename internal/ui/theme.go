@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"github.com/LoTwT/youkai/internal/app"
 	"github.com/egoist/mygo/ui"
 	"github.com/lobehub/lobe-mygo/pkg/theme"
 )
@@ -53,9 +54,74 @@ func (m *Model) applyTheme(c *ui.Context) *Tokens {
 	if m.theme == nil {
 		m.theme = newThemeState()
 	}
-	target, tok := m.theme.effective(c.Theme(), c.Preferences())
+	runtime := *c.Theme()
+	switch m.appearance {
+	case app.AppearanceLight:
+		runtime.Dark = false
+	case app.AppearanceDark:
+		runtime.Dark = true
+	}
+	target, tok := m.theme.effective(&runtime, c.Preferences())
 	c.SetTheme(target)
 	return tok
 }
 
 func (m *Model) effectiveTokens() *Tokens { return &m.theme.tokens }
+
+func appearanceLabel(mode app.Appearance) string {
+	switch mode {
+	case app.AppearanceLight:
+		return "浅色"
+	case app.AppearanceDark:
+		return "深色"
+	default:
+		return "跟随系统"
+	}
+}
+
+func (m *Model) setAppearance(mode app.Appearance) {
+	m.appearance = mode.Normalized()
+	m.appearanceErr = ""
+	if m.cfg.SetAppearance != nil {
+		if err := m.cfg.SetAppearance(m.appearance); err != nil {
+			m.appearanceErr = "保存主题失败：" + err.Error()
+		}
+	}
+}
+
+// themePicker uses MyGo's keyboard-accessible Select parts, with the
+// current mode visible beside Settings. It is independent of navigation.
+func (m *Model) themePicker(c *ui.Context, tok *Tokens) {
+	selected := m.appearance
+	sel := ui.SelectBase(c, &selected)
+	b := sel.Trigger.Label("主题").Width(m.railWidth()-24).MinHeight(48).
+		Padding(8).Radius(controlRadius).Background(tok.SurfaceControl).Border(1, tok.BorderDefault)
+	if b.Hovered() {
+		b.Background(tok.SurfaceHover)
+	}
+	b.Children(func() {
+		ui.Column(c).Gap(2).Children(func() {
+			ui.Text(c, "主题").FontWeight(600).SingleLine()
+			ui.Text(c, appearanceLabel(m.appearance)).SingleLine()
+		})
+	})
+	sel.Popup(func(panel ui.Element) {
+		panel.Padding(4).Gap(4).Background(tok.SurfaceOverlay).Border(1, tok.BorderDefault).Radius(controlRadius)
+		for _, mode := range []app.Appearance{app.AppearanceSystem, app.AppearanceLight, app.AppearanceDark} {
+			item := sel.Item(mode).Padding(12, 16).Radius(4)
+			if item.Highlighted() || mode == m.appearance {
+				item.Background(tok.NavActive).TextColor(tok.NavActiveText)
+			}
+			item.Children(func() { ui.Text(c, appearanceLabel(mode)).SingleLine() })
+		}
+	})
+	if selected != m.appearance {
+		m.setAppearance(selected)
+	}
+	if m.appearanceErr != "" {
+		ui.Text(c, m.appearanceErr).TextColor(c.Theme().Danger)
+		if button(c, "重试主题保存").Clicked() {
+			m.setAppearance(m.appearance)
+		}
+	}
+}

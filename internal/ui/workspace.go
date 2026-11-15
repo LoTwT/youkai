@@ -38,7 +38,7 @@ func (m *Model) recordWorkspace(c *ui.Context, t *ui.Theme) {
 // pending, saved) and the export entry that opens the modal dialog.
 func (m *Model) recordWorkspaceHeader(c *ui.Context, t *ui.Theme, tok *Tokens) {
 	ui.Column(c).Gap(16).Children(func() {
-		ui.Row(c).Gap(16).AlignItems(ui.Center).Children(func() {
+		pageHeader(c).Children(func() {
 			if button(c, "‹ 全部记录").Clicked() {
 				m.navigatePage(pageHistory)
 			}
@@ -46,7 +46,7 @@ func (m *Model) recordWorkspaceHeader(c *ui.Context, t *ui.Theme, tok *Tokens) {
 			if m.rec != nil && !m.rec.Shell.StartedAt.IsZero() {
 				title = m.rec.Shell.StartedAt.Local().Format("1 月 2 日 15:04")
 			}
-			ui.Text(c, title).FontSize(t.FontSize * 24 / 14).FontWeight(700).SingleLine().Shrink(1)
+			pageTitle(c, title).Shrink(1)
 			ui.Box(c).Grow(1)
 			if m.rec != nil && m.rec.ID != string(m.appliedSession) && m.appliedSession != "" && m.exitState != exitRunning {
 				if button(c, "查看本次扫描").Clicked() {

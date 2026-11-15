@@ -115,22 +115,27 @@ MyGo 使用 MinWidth、MinHeight 和 StateKey="main"；首次默认 1440 × 900�
 
 ### 4.5 快捷键
 
-快捷键文字按平台显示。首版只有 Windows，所以界面上只出现 Windows 写法；修饰键写 `Ctrl`、`Alt`、`Shift`，用 `+` 连接，不出现 `⌘⌃⌥⇧`（H1；D-02 已由 PR-17 关闭）。写法集中在一处生成，mac 后续版本再接入（[06 §3 第 7 条](06-proposals-and-phase2.md#3-给第二阶段的输入)）。
+2026-11-15 用户 Mac 实机反馈要求当前运行平台显示真实键名，取代只显示 Windows 文案的旧呈现条款。MyGo `ui.Cmd` 在 Mac 为 `Command`、Windows 为 `Ctrl`。设置单栏每行只对应一个动作和一个组合，不使用分组卡、tooltip 或多行堆叠；作用域同行简短呈现。所有可见扫描、工具栏、禁用/状态文案共用 `shortcut_text.go`，不修改真实绑定来迁就文案，不新增未注册的 `Ctrl+Q`。
 
-| 操作 | Windows | 作用范围 | 与现状的差异 |
+| 操作 | Windows | Mac | 作用范围 |
 | --- | --- | --- | --- |
-| 停止扫描 | `Ctrl+Alt+Shift+S` | 全局，仅扫描期间注册 | 不变 |
-| 开始扫描 | `Ctrl+R` | 扫描页，且准备检查全部满足时 | 不变（现有 `⌘R`） |
-| 确认并下一项 | `Ctrl+Enter` | 逐件视图 | 不变（现有 `⌘↵`） |
-| 保存修改 | `Ctrl+S` | 逐件视图，有未保存修改时；已通过 / 警告件的修改流只有“确认修改”，不绑定 `Ctrl+S` | 不变；修改流例外见 [08 §3.4](08-screens.md#34-已通过的件与浏览时的修改) |
-| 下一个 / 上一个待处理件 | `Ctrl+J` / `Ctrl+Shift+J` | 逐件视图；当前筛选没有待处理件时切到“待处理”并选中 | 新增“上一个” |
-| 导出 | `Ctrl+E` | 记录工作区 | 新增 |
-| 截图放大 / 缩小 / 适合窗口 | `Ctrl+=` / `Ctrl+-` / `Ctrl+0` | 逐件视图，焦点不在文本框时 | 新增 |
-| 在大区域间跳转 | `F6` / `Shift+F6` | 任意 | 新增 |
-| 打开选中的记录 | `Enter` | 记录列表 | 不变 |
-| 关闭弹出层 | `Esc` | 任意 | 不变 |
+| 停止扫描 | `Ctrl+Alt+Shift+S` | `Control+Option+Command+S` | 全局；仅平台会话持有时注册，设置显示实际注册状态 |
+| 开始扫描 | `Ctrl+R` | `Command+R` | 扫描准备全部满足时 |
+| 确认并下一项 | `Ctrl+Enter` | `Command+Enter` | 逐件待处理件 |
+| 确认修改 | `Ctrl+Enter` | `Command+Enter` | 逐件已通过 / 警告件修改中 |
+| 保存修改 | `Ctrl+S` | `Command+S` | 逐件待处理件编辑中；已通过 / 警告件修改流不绑定 |
+| 下一个待处理件 | `Ctrl+J` | `Command+J` | 逐件；必要时切回待处理筛选 |
+| 上一个待处理件 | `Ctrl+Shift+J` | `Command+Shift+J` | 逐件；必要时切回待处理筛选 |
+| 导出 | `Ctrl+E` | `Command+E` | 记录工作区 |
+| 截图放大 | `Ctrl+=` | `Command+=` | 逐件，焦点不在文本框时 |
+| 截图缩小 | `Ctrl+-` | `Command+-` | 逐件，焦点不在文本框时 |
+| 截图适合窗口 | `Ctrl+0` | `Command+0` | 逐件，焦点不在文本框时 |
+| 前往下一区域 | `F6` | `F6` | 页面；逐件在列表、截图、表单间移动 |
+| 返回上一区域 | `Shift+F6` | `Shift+F6` | 页面；逐件反向移动 |
+| 打开选中的记录 | `Enter` | `Enter` | 记录列表 |
+| 关闭浮层或返回表格 | `Esc` | `Esc` | 浮层优先；文本框保留焦点 |
 
-MyGo 的 `Cmd` 修饰键在 Windows 上对应 `Ctrl`（`ui/keys.go:110-112`；现有 `internal/ui/shortcuts.go:13` 以 `ui.Cmd` 注册 `⌘R`），因此绑定不需要按平台分写，只有显示文字需要。
+停止组合由 `platform.StopScanHotkey` 保持原有逐平台 HotkeySpec，入口实际注册和文案使用同一份 spec，不能把 Mac 的额外 Control / Option 简单替成 Command。主题选择是导航组之后的独立 Tab 停靠点，三个目的地的方向键行为保持不变。
 
 ### 4.6 诊断信息的折叠
 

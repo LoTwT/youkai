@@ -117,8 +117,8 @@ func (m *Model) historyPage(c *ui.Context, t *ui.Theme) {
 // every record.
 func (m *Model) historyHeader(c *ui.Context, t *ui.Theme, tok *Tokens) {
 	m.settleHistoryFilterRange()
-	ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, "记录").FontWeight(600).FontSize(t.FontSize * 24 / 14)
+	pageHeader(c).Children(func() {
+		pageTitle(c, "记录")
 		if len(m.history) > 0 {
 			count := fmt.Sprintf("%d 条", len(m.history))
 			if m.historyLoading {

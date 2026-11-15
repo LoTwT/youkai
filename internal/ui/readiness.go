@@ -1217,8 +1217,8 @@ func (m *Model) scanSaveFailureArea(c *ui.Context, t *ui.Theme) {
 }
 
 func (m *Model) scanHeader(c *ui.Context, t *ui.Theme) {
-	ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, "扫描").FontSize(t.FontSize * 24 / 14).FontWeight(700)
+	pageHeader(c).Children(func() {
+		pageTitle(c, "扫描")
 		ui.Box(c).Grow(1)
 		if m.snap.Busy {
 			return

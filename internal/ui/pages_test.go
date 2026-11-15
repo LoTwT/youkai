@@ -83,7 +83,12 @@ func TestNavRailIsTheFirstTabGroup(t *testing.T) {
 	if m.displayPage() != pageHistory {
 		t.Fatalf("Enter on 记录 shows page %v, want the records list", m.displayPage())
 	}
-	// The rail is one Tab stop; the page content follows it.
+	// Appearance is a separate Tab stop so its arrow keys can operate the
+	// selector without trapping navigation among the three destinations.
+	tt.Key(0, ui.KeyTab)
+	if !tt.Focused("主题") {
+		t.Fatal("Tab after the destinations did not reach appearance")
+	}
 	tt.Key(0, ui.KeyTab)
 	if !tt.Focused("去扫描页开始扫描") {
 		t.Fatalf("Tab after the rail did not reach the page content: %q", tt.Texts())
