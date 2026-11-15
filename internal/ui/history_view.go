@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -9,52 +10,65 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-// The records list has two width tiers (09 §2): standard from a 1120-DIP
-// window, compact from the 960-DIP minimum. Compact hides the storage
-// column and merges 待处理 and 可导出 into one. The model's content width is
-// the window's client area, so the tier compares it with the window width.
+// Keep native Table's shared header/cell padding aligned with the v5 grid.
+// MyGo 0.9.0 supplies 10 horizontal / 6 vertical DIP per cell; the body
+// adds 2 and the header sets its horizontal padding to 12.
 const (
-	historyStandardMinWidth = 1120
-	historyTimeWidth        = 168
-	historyActionWidth      = 48
-	historyCountWidth       = 88
-	historyCompactCount     = 80
-	historyMergedWidth      = 132
+	historyPanelInset = 24
+	historyCellInset  = 12
+	historyCellExtra  = 2
 )
 
-// historyColumnsStandard is the standard tier: 时间 / 结果 / 件数 /
-// 待处理 / 可导出 / 占用 / ⋯. 结果 takes the room the fixed columns leave.
-var historyColumnsStandard = []ui.TableColumn{
-	{Title: "时间", Width: historyTimeWidth, Fixed: true},
-	{Title: "结果", MinWidth: 220, Fixed: true},
-	{Title: "件数", Width: historyCountWidth, Align: ui.End, Fixed: true},
-	{Title: "待处理", Width: historyCountWidth, Align: ui.End, Fixed: true},
-	{Title: "可导出", Width: historyCountWidth, Align: ui.End, Fixed: true},
-	{Title: "占用", Width: 96, Align: ui.End, Fixed: true},
-	{ID: "actions", Title: "", Width: historyActionWidth, Align: ui.End, Fixed: true},
-}
-
-// historyColumnsCompact is the compact tier: 占用 moves into the row
-// menu's delete entry and 待处理 / 可导出 share one column.
-var historyColumnsCompact = []ui.TableColumn{
-	{Title: "时间", Width: historyTimeWidth, Fixed: true},
-	{Title: "结果", MinWidth: 200, Fixed: true},
-	{Title: "件数", Width: historyCompactCount, Align: ui.End, Fixed: true},
-	{Title: "待处理 / 可导出", Width: historyMergedWidth, Align: ui.End, Fixed: true},
-	{ID: "actions", Title: "", Width: historyActionWidth, Align: ui.End, Fixed: true},
-}
-
-// historyCompact reports the compact tier from the window width (09 §2).
-func historyCompact(contentWidth int) bool {
-	return contentWidth < historyStandardMinWidth
-}
-
-// historyColumnsFor returns the table columns for the current window.
-func historyColumnsFor(contentWidth int) []ui.TableColumn {
-	if historyCompact(contentWidth) {
-		return historyColumnsCompact
+// historyColumns measures the effective system font, not the unscaled
+// window width. Only a few representative strings are shaped, even in a
+// large history. The result uses the remaining width and may wrap, while
+// timestamps and numbers keep their complete values.
+func (m *Model) historyColumns(c *ui.Context, entries []HistoryEntry) []ui.TableColumn {
+	t := c.Theme()
+	measure := func(text string, size float32) float32 {
+		w, _ := c.MeasureText(0, ui.Span{Text: text, Size: size, Weight: 600, Features: "tnum"})
+		return w
 	}
-	return historyColumnsStandard
+	round := func(v float32) float32 { return float32(math.Ceil(float64(v)/4)) * 4 }
+	columnWidth := func(minimum float32, labels ...string) float32 {
+		w := minimum
+		for _, label := range labels {
+			w = max(w, round(measure(label, t.FontSize)+2*historyCellInset))
+		}
+		return w
+	}
+	var largestCount, largestBytes int64
+	for _, entry := range entries {
+		largestCount = max(largestCount, entry.CapturedCount, entry.Counts.Pending(), entry.Counts.Exportable())
+		largestBytes = max(largestBytes, entry.TotalBytes)
+	}
+	// Reserve the widest tabular digits for the largest displayed count.
+	digits := strings.Repeat("8", len(strconv.FormatInt(largestCount, 10)))
+	number, _ := strconv.ParseInt(digits, 10, 64)
+	count := columnWidth(72, "待处理", formatCount(number))
+	timeWidth := round(max(200, measure("12 月 28 日 23:59", t.FontSize)+8+measure("本次", t.FontSize*12/14)+2*historyCellInset))
+	resultWidth := columnWidth(240, "正常结束 · 没有采集到驱动盘")
+	// A smaller value just below a unit boundary can be wider than the
+	// largest value (1024.0 MB versus 2.0 GB after decimal rounding).
+	size := columnWidth(88, "1024.0 KB", "1024.0 MB", "1024.0 GB", "1024.0 TB", formatBytes(largestBytes))
+	const action = 48
+	available := float32(m.contentWidth) - m.railWidth() - m.pageLeftPadding() - m.pagePadding() - 2*(historyPanelInset+1)
+	m.historyCompactLayout = m.contentWidth < 1120 || available < timeWidth+resultWidth+3*count+size+action
+	columns := []ui.TableColumn{
+		{Title: "时间", Width: timeWidth, Fixed: true},
+		{Title: "结果", MinWidth: resultWidth, Fixed: true},
+		{Title: "件数", Width: count, Align: ui.End, Fixed: true},
+	}
+	if m.historyCompactLayout {
+		merged := columnWidth(132, "待处理 / 可导出", formatCount(number)+" / "+formatCount(number))
+		columns = append(columns, ui.TableColumn{Title: "待处理 / 可导出", Width: merged, Align: ui.End, Fixed: true})
+	} else {
+		columns = append(columns,
+			ui.TableColumn{Title: "待处理", Width: count, Align: ui.End, Fixed: true},
+			ui.TableColumn{Title: "可导出", Width: count, Align: ui.End, Fixed: true},
+			ui.TableColumn{Title: "占用", Width: size, Align: ui.End, Fixed: true})
+	}
+	return append(columns, ui.TableColumn{ID: "actions", Width: action, Align: ui.End, Fixed: true})
 }
 
 // historyPage is the records destination: the title, the date filter, the
@@ -67,7 +81,7 @@ func (m *Model) historyPage(c *ui.Context, t *ui.Theme) {
 	tok := m.effectiveTokens()
 	m.historyHeader(c, t, tok)
 	m.historyNotices(c, t)
-	contentPanel(c, tok).Children(func() {
+	contentPanel(c, tok).Padding(historyPanelInset).Children(func() {
 		m.historyContent(c, t, tok)
 	})
 }
@@ -75,10 +89,10 @@ func (m *Model) historyPage(c *ui.Context, t *ui.Theme) {
 func (m *Model) historyContent(c *ui.Context, t *ui.Theme, tok *Tokens) {
 	switch {
 	case m.historyLoading && len(m.history) == 0:
-		ui.Text(c, "正在读取记录……").Padding(panelInset).TextColor(tok.TextMuted)
+		ui.Text(c, "正在读取记录……").TextColor(tok.TextMuted)
 		return
 	case m.histErr != "":
-		ui.Text(c, "历史记录读取失败："+m.histErr).Padding(panelInset).TextColor(t.Danger)
+		ui.Text(c, "历史记录读取失败："+m.histErr).TextColor(t.Danger)
 		return
 	case len(m.history) == 0:
 		m.historyEmptyState(c, t, tok, false)
@@ -94,14 +108,17 @@ func (m *Model) historyContent(c *ui.Context, t *ui.Theme, tok *Tokens) {
 	m.settleHistoryRow(len(entries))
 	m.prepareHistoryList(entries)
 
-	columns := historyColumnsFor(m.contentWidth)
+	columns := m.historyColumns(c, entries)
 	var table ui.Element
 	ui.Themed(c, m.theme.table.Theme(t.Dark)).Background(ui.Transparent).Fill().MinHeight(0).Children(func() {
 		table = ui.Table(c, &m.historyList, columns, len(entries), func(row, col int) {
 			if row < 0 || row >= len(entries) || col < 0 || col >= len(columns) {
 				return
 			}
-			m.historyCell(c, c.Theme(), tok, entries[row], row, columns[col])
+			column := columns[col]
+			ui.Row(c).FillWidth().MinHeight(36).Padding(historyCellExtra).AlignItems(ui.Center).Justify(column.Align).Children(func() {
+				m.historyCell(c, c.Theme(), tok, entries[row], row, column)
+			})
 		}).Fill().MinHeight(0)
 	})
 	if table.Submitted() {
@@ -180,6 +197,7 @@ func (m *Model) historyEmptyState(c *ui.Context, t *ui.Theme, tok *Tokens, filte
 // filter change keeps the scroll anchored to a record rather than a row.
 func (m *Model) prepareHistoryList(entries []HistoryEntry) {
 	m.historyList.Selected = &m.historyRow
+	m.historyList.HeaderCell = func(cell ui.Element, _ int) { cell.Padding(4, historyCellInset) }
 	m.historyList.Key = func(row int) any {
 		if row < 0 || row >= len(entries) {
 			return row
@@ -239,12 +257,12 @@ func (m *Model) historyTimeCell(c *ui.Context, t *ui.Theme, tok *Tokens, entry H
 	cell := ui.Row(c).Height(t.Space(8)).AlignItems(ui.Center)
 	if chosen {
 		cell.DrawOver(func(p *ui.Painter, r ui.Rect) {
-			p.Fill(ui.Rect{X: r.X - t.Space(2), Y: r.Y, W: 3, H: r.H}, tok.RowSelectedBorder, 0)
+			p.Fill(ui.Rect{X: r.X - historyCellInset, Y: r.Y, W: 4, H: r.H}, tok.RowSelectedBorder, 0)
 		})
 	}
 	cell.Children(func() {
-		ui.Row(c).Gap(t.Space(1)).AlignItems(ui.Center).Children(func() {
-			text := ui.Text(c, historyTimeText(entry)).SingleLine()
+		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+			text := ui.Text(c, historyTimeText(entry)).SingleLine().Shrink(0).FontFeatures("tnum")
 			if latest && !entry.Unreadable {
 				text.FontWeight(600)
 			}
@@ -254,8 +272,7 @@ func (m *Model) historyTimeCell(c *ui.Context, t *ui.Theme, tok *Tokens, entry H
 				text.TextColor(colorWhenChosen(chosen, tok.TextMuted, tok.TextPrimary))
 			}
 			if entry.ID != "" && entry.ID == string(m.appliedSession) {
-				ui.Text(c, "本次").FontSize(t.FontSize*0.75).TextColor(tok.AccentFG).
-					Background(tok.AccentSoft).Padding(0, t.Space(0.5)).Radius(t.Space(0.75))
+				ui.Text(c, "本次").SingleLine().Shrink(0).FontSize(t.FontSize * 12 / 14).TextColor(tok.TextSecondary)
 			}
 		})
 	})
@@ -289,16 +306,16 @@ func (m *Model) historyResultFor(entry HistoryEntry) recordConclusion {
 // historyResultCell draws the tag and the conclusion.
 func (m *Model) historyResultCell(c *ui.Context, t *ui.Theme, tok *Tokens, entry HistoryEntry, latest, chosen bool) {
 	result := m.historyResultFor(entry)
-	ui.Row(c).Gap(t.Space(1)).AlignItems(ui.Center).Children(func() {
+	ui.Row(c).FillWidth().MinWidth(0).Gap(8).AlignItems(ui.Center).Children(func() {
 		if result.tag != "" {
 			bg, fg := tok.WarningSoft, tok.WarningFG
 			if result.tone == recordToneDanger {
 				bg, fg = tok.DangerSoft, tok.DangerFG
 			}
-			ui.Text(c, result.tag).SingleLine().FontSize(t.FontSize*0.75).FontWeight(600).
-				TextColor(fg).Background(bg).Padding(0, t.Space(0.75)).Radius(t.Space(0.75))
+			ui.Text(c, result.tag).SingleLine().Shrink(0).FontSize(t.FontSize*12/14).FontWeight(600).
+				TextColor(fg).Background(bg).Padding(0, 4).Radius(4)
 		}
-		text := ui.Text(c, result.text).SingleLine()
+		text := ui.Text(c, result.text).MinWidth(0)
 		if latest {
 			text.FontWeight(600)
 		}
@@ -320,7 +337,7 @@ func (m *Model) historyNumberCell(c *ui.Context, t *ui.Theme, tok *Tokens, entry
 		ui.Text(c, "—").TextColor(colorWhenChosen(chosen, tok.TextMuted, tok.TextPrimary))
 		return
 	}
-	text := ui.Text(c, formatCount(count)).SingleLine()
+	text := ui.Text(c, formatCount(count)).SingleLine().FontFeatures("tnum")
 	if strong && count != 0 {
 		text.FontWeight(600)
 	}
@@ -334,7 +351,7 @@ func (m *Model) historyPendingCell(c *ui.Context, t *ui.Theme, tok *Tokens, entr
 		return
 	}
 	pending := entry.Counts.Pending()
-	text := ui.Text(c, formatCount(pending)).SingleLine()
+	text := ui.Text(c, formatCount(pending)).SingleLine().FontFeatures("tnum")
 	if pending > 0 {
 		text.TextColor(colorWhenChosen(chosen, tok.WarningFG, tok.TextPrimary)).FontWeight(600)
 	}
@@ -350,7 +367,7 @@ func (m *Model) historyMergedCountsCell(c *ui.Context, t *ui.Theme, tok *Tokens,
 	if entry.CapturedCount > 0 {
 		pending = formatCount(entry.Counts.Pending())
 	}
-	text := ui.Text(c, pending+" / "+formatCount(entry.Counts.Exportable())).SingleLine()
+	text := ui.Text(c, pending+" / "+formatCount(entry.Counts.Exportable())).SingleLine().FontFeatures("tnum")
 	if latest {
 		text.FontWeight(600)
 	}
@@ -359,7 +376,7 @@ func (m *Model) historyMergedCountsCell(c *ui.Context, t *ui.Theme, tok *Tokens,
 // historySizeCell is 占用. A record stays measurable even when its
 // checkpoint cannot be read, which the wireframe's damaged row shows.
 func (m *Model) historySizeCell(c *ui.Context, t *ui.Theme, tok *Tokens, entry HistoryEntry, chosen bool) {
-	ui.Text(c, formatBytes(entry.TotalBytes)).SingleLine().
+	ui.Text(c, formatBytes(entry.TotalBytes)).SingleLine().FontFeatures("tnum").
 		TextColor(colorWhenChosen(chosen, tok.TextMuted, tok.TextPrimary))
 }
 
@@ -436,7 +453,7 @@ func (m *Model) historyRowMenu(c *ui.Context, t *ui.Theme, tok *Tokens, anchor u
 			})
 			ui.Divider(c)
 			screenshotLabel := "删除截图"
-			if historyCompact(m.contentWidth) {
+			if m.historyCompactLayout {
 				// Compact hides 占用; its number stays in the delete item.
 				screenshotLabel += "（" + formatBytes(entry.TotalBytes) + "）"
 			}
