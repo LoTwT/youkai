@@ -9,8 +9,8 @@ import (
 )
 
 // Target discovery (P-01). The installed Windows source starts only the
-// game window the user confirmed, so the checklist's target row lists the
-// discovered windows and the start stays disabled until one is chosen. Hide
+// selected game window. A unique initial candidate is selected directly;
+// multiple candidates require an explicit choice before starting. Hide
 // and replace are handled fail-closed: a refresh keeps the choice only when
 // the same window instance is still present (same handle and process
 // instance).

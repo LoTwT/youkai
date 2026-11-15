@@ -62,39 +62,23 @@ func TestViewTargetNotFound(t *testing.T) {
 	}
 }
 
-// TestViewSingleCandidateNeedsConfirmation: the unique window is shown but
-// not chosen; the user confirms it before the start carries it.
-func TestViewSingleCandidateNeedsConfirmation(t *testing.T) {
+// A unique window is selected without input; only an explicit start sends it.
+func TestViewSingleCandidateSelected(t *testing.T) {
 	cand := testTarget(0xB0ABE, 42, `C:\Games\ZZZ\ZenlessZoneZero.exe`)
 	svc := &fakeService{targets: []app.TargetCandidate{cand}}
 	m, q := newTestModel(t, Config{Service: svc, ScanSource: targetSource()})
 	tt := ui.NewTester(m.View, 1020, 700)
 	settle(t, m, q, tt)
 
-	if !tt.HasText("已找到 1 个窗口 → 请确认要扫描的一个") {
-		t.Fatalf("the candidate count does not show: %q", tt.Texts())
-	}
 	label := targetLabel(cand)
 	if !tt.HasText(label) {
 		t.Fatalf("the unique candidate is not shown: %q", tt.Texts())
 	}
-	if !tt.HasText("请先确认要扫描的游戏窗口。") {
-		t.Fatalf("the unconfirmed-target reason does not show: %q", tt.Texts())
-	}
-	if err := tt.Click("开始扫描"); err != nil {
-		t.Fatal(err)
-	}
-	drainAll(t, m, q)
 	if len(svc.starts) != 0 {
-		t.Fatalf("an unconfirmed start was issued: %+v", svc.starts)
+		t.Fatalf("selecting the unique candidate started a scan: %+v", svc.starts)
 	}
-
-	if err := tt.Click(label); err != nil {
-		t.Fatalf("click the candidate: %v", err)
-	}
-	settle(t, m, q, tt)
-	if m.targetChoice != 0 {
-		t.Fatalf("target choice = %d, want 0", m.targetChoice)
+	if !m.scanStartReady() {
+		t.Fatalf("unique candidate is not ready: %s", m.scanStartBlockedReason())
 	}
 	if err := tt.Click("开始扫描"); err != nil {
 		t.Fatal(err)
@@ -104,8 +88,91 @@ func TestViewSingleCandidateNeedsConfirmation(t *testing.T) {
 		t.Fatalf("starts = %d, want one: %+v", len(svc.starts), svc.starts)
 	}
 	req := svc.lastStart()
-	if req.Target == nil || req.Target.Handle != cand.Handle || req.Target.PID != cand.PID {
-		t.Fatalf("the start did not carry the confirmed candidate: %+v", req.Target)
+	if req.Target == nil || *req.Target != cand {
+		t.Fatalf("the start did not carry the full selected identity: %+v", req.Target)
+	}
+}
+
+// Process start time, PID, HWND and executable are all part of the choice.
+// Once invalidated, repeated refreshes must not silently select a replacement.
+func TestSelectedTargetIdentityChangeRequiresChoice(t *testing.T) {
+	original := testTarget(1, 42, `C:\Games\ZZZ\ZenlessZoneZero.exe`)
+	for _, field := range []string{"process start", "PID", "HWND", "executable", "disappeared"} {
+		t.Run(field, func(t *testing.T) {
+			replacement := original
+			switch field {
+			case "process start":
+				replacement.ProcessStartedAt = original.ProcessStartedAt.Add(time.Second)
+			case "PID":
+				replacement.PID++
+			case "HWND":
+				replacement.Handle++
+			case "executable":
+				replacement.ExecutablePath = `D:\Games\ZZZ\ZenlessZoneZero.exe`
+			}
+			svc := &fakeService{targets: []app.TargetCandidate{original}}
+			m, q := newTestModel(t, Config{Service: svc, ScanSource: targetSource()})
+			tt := ui.NewTester(m.View, 1020, 700)
+			settle(t, m, q, tt)
+			// Select on the old implementation too, so this pins invalidation independently.
+			m.targetChoice = 0
+			if field == "disappeared" {
+				svc.targets = nil
+				m.refreshReadiness()
+				settle(t, m, q, tt)
+				if m.targetReady() {
+					t.Fatal("vanished target remains ready")
+				}
+			}
+			svc.targets = []app.TargetCandidate{replacement}
+			for i := 0; i < 2; i++ {
+				m.refreshReadiness()
+				settle(t, m, q, tt)
+				if m.targetReady() {
+					t.Fatal("refresh silently selected a replacement instance")
+				}
+			}
+			if !tt.HasText("为什么：原目标已失效，请重新选择游戏窗口。") {
+				t.Fatal("replacement requires a choice without explaining the invalidation")
+			}
+			if err := tt.Click(targetLabel(replacement)); err != nil {
+				t.Fatal(err)
+			}
+			settle(t, m, q, tt)
+			if !m.scanStartReady() {
+				t.Fatal("explicit replacement selection is not ready")
+			}
+		})
+	}
+}
+
+func TestUniqueTargetSelectionKeepsReadinessGuards(t *testing.T) {
+	cand := testTarget(1, 42, `C:\Games\ZZZ\ZenlessZoneZero.exe`)
+	for _, check := range []app.ReadinessCheck{
+		{Item: app.ReadinessAdministrator, Verdict: app.ReadinessUnsatisfied,
+			Current: "target=high self=medium", FaultCode: "integrityMismatch"},
+		{Item: app.ReadinessGameResolution, Verdict: app.ReadinessUnsatisfied,
+			Current: "2560x1440", Required: "1920x1080", FaultCode: "clientTierNotOpened"},
+	} {
+		t.Run(string(check.Item), func(t *testing.T) {
+			svc := &fakeService{targets: []app.TargetCandidate{cand}, readiness: readinessWith(check)}
+			m, q := newTestModel(t, Config{Service: svc, ScanSource: targetSource()})
+			tt := ui.NewTester(m.View, 1020, 700)
+			settle(t, m, q, tt)
+			if m.chosenTarget() == nil {
+				t.Fatal("unique candidate not selected")
+			}
+			if m.scanStartReady() {
+				t.Fatal("selection bypassed a readiness failure")
+			}
+			if err := tt.Click("开始扫描"); err != nil {
+				t.Fatal(err)
+			}
+			settle(t, m, q, tt)
+			if len(svc.starts) != 0 {
+				t.Fatal("disabled start issued a request")
+			}
+		})
 	}
 }
 

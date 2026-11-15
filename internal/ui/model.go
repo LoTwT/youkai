@@ -104,9 +104,9 @@ type ScanSourceInfo struct {
 	// Reason explains why starts are impossible when Available is false.
 	Reason string
 	// TargetSelection means the source discovers game windows and starts
-	// only the candidate the user confirms (P-01). The prepare area then
-	// lists the candidates and the start stays disabled until one is
-	// chosen; a single candidate is shown for confirmation too.
+	// only the selected candidate (P-01). A unique initial candidate is
+	// selected automatically; ambiguity or an invalidated choice requires
+	// an explicit selection before starting.
 	TargetSelection bool
 }
 
@@ -376,6 +376,10 @@ type Model struct {
 	targetsAccessDenied int
 	targetsUnreadable   int
 	targetChoice        int
+	// An invalidated instance or an explicit change requires a fresh choice,
+	// even if a later discovery has only one candidate.
+	targetNeedsChoice bool
+	targetInvalidated bool
 
 	// The read-only preparation check (R-01). The report is kept while a
 	// newer pass runs, so the checklist never blanks out between checks;
