@@ -67,13 +67,18 @@ func (m *Model) historyPage(c *ui.Context, t *ui.Theme) {
 	tok := m.effectiveTokens()
 	m.historyHeader(c, t, tok)
 	m.historyNotices(c, t)
+	contentPanel(c, tok).Children(func() {
+		m.historyContent(c, t, tok)
+	})
+}
 
+func (m *Model) historyContent(c *ui.Context, t *ui.Theme, tok *Tokens) {
 	switch {
 	case m.historyLoading && len(m.history) == 0:
-		ui.Text(c, "正在读取记录……").TextColor(tok.TextMuted)
+		ui.Text(c, "正在读取记录……").Padding(panelInset).TextColor(tok.TextMuted)
 		return
 	case m.histErr != "":
-		ui.Text(c, "历史记录读取失败："+m.histErr).TextColor(t.Danger)
+		ui.Text(c, "历史记录读取失败："+m.histErr).Padding(panelInset).TextColor(t.Danger)
 		return
 	case len(m.history) == 0:
 		m.historyEmptyState(c, t, tok, false)
@@ -89,27 +94,25 @@ func (m *Model) historyPage(c *ui.Context, t *ui.Theme) {
 	m.settleHistoryRow(len(entries))
 	m.prepareHistoryList(entries)
 
-	panel(c, tok).Grow(1).MinWidth(0).Clip().Children(func() {
-		columns := historyColumnsFor(m.contentWidth)
-		table := ui.Table(c, &m.historyList, columns, len(entries), func(row, col int) {
-			if row < 0 || row >= len(entries) || col < 0 || col >= len(columns) {
-				return
-			}
-			m.historyCell(c, t, tok, entries[row], row, columns[col])
-		}).Fill().MinHeight(0)
-		if table.Submitted() {
-			m.openHistoryRow(m.historyRow)
+	columns := historyColumnsFor(m.contentWidth)
+	table := ui.Table(c, &m.historyList, columns, len(entries), func(row, col int) {
+		if row < 0 || row >= len(entries) || col < 0 || col >= len(columns) {
+			return
 		}
-		// Shift+F10 and the menu key open the chosen row's menu while the
-		// table or one of its rows holds the keyboard (08 §5).
-		if m.historyList.Shortcut(c, ui.Shift, ui.KeyF10) ||
-			m.historyList.Shortcut(c, 0, ui.KeyContextMenu) {
-			m.openSelectedHistoryMenu()
-		}
-		if m.historyFocusPending && m.historyList.Focus(c) {
-			m.historyFocusPending = false
-		}
-	})
+		m.historyCell(c, t, tok, entries[row], row, columns[col])
+	}).Fill().MinHeight(0)
+	if table.Submitted() {
+		m.openHistoryRow(m.historyRow)
+	}
+	// Shift+F10 and the menu key open the chosen row's menu while the
+	// table or one of its rows holds the keyboard (08 §5).
+	if m.historyList.Shortcut(c, ui.Shift, ui.KeyF10) ||
+		m.historyList.Shortcut(c, 0, ui.KeyContextMenu) {
+		m.openSelectedHistoryMenu()
+	}
+	if m.historyFocusPending && m.historyList.Focus(c) {
+		m.historyFocusPending = false
+	}
 }
 
 // historyHeader is the page title and its date filter. The filter uses

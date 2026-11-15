@@ -48,9 +48,8 @@ func TestTrayHintAcknowledgementKeepsUnsavedExitPrompt(t *testing.T) {
 	}
 }
 
-// TestFirstHideHintOnceAndReplay checks the first close's hint, its
-// persistence, the second close's silence, and the settings replay.
-func TestFirstHideHintOnceAndReplay(t *testing.T) {
+// TestFirstHideHintOnce checks the first close's hint and persistence.
+func TestFirstHideHintOnce(t *testing.T) {
 	var saved []bool
 	hides := 0
 	m, q := newTestModel(t, Config{
@@ -65,16 +64,11 @@ func TestFirstHideHintOnceAndReplay(t *testing.T) {
 	if !m.FirstHideHintDue() {
 		t.Fatal("a fresh model already considers the hint seen")
 	}
-	if !tt.HasText("再看一次托盘图标位置提示") {
-		t.Fatal("settings has no tray-hint replay entry")
-	}
-
 	m.ShowFirstHideHint()
 	tt.Frame()
 	for _, want := range []string{
 		"youkai 会继续在后台运行",
 		"图标在任务栏右侧的通知区域",
-		"之后可在 设置 › 常规 重看",
 		"知道了",
 	} {
 		if !tt.HasText(want) {
@@ -97,25 +91,6 @@ func TestFirstHideHintOnceAndReplay(t *testing.T) {
 	}
 	if tt.HasText("youkai 会继续在后台运行") {
 		t.Fatal("the dismissed hint stayed visible")
-	}
-
-	// The settings entry reopens the hint without hiding the window.
-	if err := tt.Click("再看一次托盘图标位置提示"); err != nil {
-		t.Fatal(err)
-	}
-	tt.Frame()
-	if !tt.HasText("youkai 会继续在后台运行") {
-		t.Fatal("the settings replay did not open the hint")
-	}
-	if err := tt.Click("知道了"); err != nil {
-		t.Fatal(err)
-	}
-	tt.Frame()
-	if hides != 1 {
-		t.Fatalf("the replay hid the window: hides=%d", hides)
-	}
-	if tt.HasText("youkai 会继续在后台运行") {
-		t.Fatal("the replayed hint stayed visible")
 	}
 }
 

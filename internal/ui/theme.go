@@ -113,17 +113,7 @@ func (m *Model) settingsAppearance(c *ui.Context, t *ui.Theme, tok *Tokens) {
 					m.settingsFocusPending = false
 				}
 			}
-			bg := ui.Transparent
-			if i == selected {
-				bg = tok.SurfaceControl
-			}
-			if segment.Hovered() {
-				bg = tok.SurfaceHover
-			}
-			if segment.Pressed() {
-				bg = tok.SurfacePressed
-			}
-			segment.Background(bg).Children(func() { ui.Text(c, appearanceLabel(mode)).SingleLine() })
+			settingsSegment(segment, i == selected, tok).Children(func() { ui.Text(c, appearanceLabel(mode)).SingleLine() })
 		}
 	})
 	if modes[selected] != m.appearance {

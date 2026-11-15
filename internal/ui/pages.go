@@ -224,7 +224,7 @@ func (m *Model) pageBody(c *ui.Context, t *ui.Theme, tok *Tokens) {
 	default:
 		ui.Column(c).Grow(1).FillHeight().MinHeight(0).Padding(m.pagePadding()).Gap(16).Children(func() {
 			m.scanHeader(c, t)
-			panel(c, tok).Grow(1).MinHeight(0).Children(func() {
+			contentPanel(c, tok).Children(func() {
 				ui.Scroll(c).Grow(1).MinHeight(0).Children(func() {
 					ui.Column(c).Padding(panelInset).Gap(16).Children(func() {
 						m.scanArea(c, t, tok)

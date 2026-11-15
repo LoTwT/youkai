@@ -277,8 +277,7 @@ func TestSettingsScrollReachesAbout(t *testing.T) {
 }
 
 // TestSettingsGeneralClosePreference checks the regular section: both close
-// choices, the persisted change, the tray-hint placeholder and the tray
-// notice.
+// choices, the persisted change, the removed replay entry and the tray notice.
 func TestSettingsGeneralClosePreference(t *testing.T) {
 	var saved []app.CloseBehavior
 	m, q, _ := settingsTestModel(t)
@@ -296,8 +295,8 @@ func TestSettingsGeneralClosePreference(t *testing.T) {
 	if !tt.HasText("隐藏到通知区域（默认）") || !tt.HasText("停止扫描并退出") {
 		t.Fatalf("the close choices are missing: %q", tt.Texts())
 	}
-	if !tt.HasText("再看一次托盘图标位置提示") {
-		t.Fatal("the tray-hint placeholder is missing")
+	if tt.HasText("再看一次托盘图标位置提示") {
+		t.Fatal("the removed tray-hint replay entry is still visible")
 	}
 
 	if err := tt.Click("停止扫描并退出"); err != nil {

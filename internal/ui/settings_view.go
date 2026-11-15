@@ -148,8 +148,8 @@ func (m *Model) scrollSettingsSection(c *ui.Context, id settingsSectionID) bool 
 	return true
 }
 
-// settingsGeneral holds the close-window preference and the tray-icon hint
-// replay. The default hides to the notification area; the explicit choice
+// settingsGeneral holds appearance and the close-window preference.
+// The default hides to the notification area; the explicit choice
 // runs the stop/save/release wrap-up. Without a tray entry hiding has no way
 // back, so the close option is fixed to the explicit exit and the reason is
 // stated (08 §7).
@@ -176,17 +176,7 @@ func (m *Model) settingsGeneral(c *ui.Context, t *ui.Theme, tok *Tokens) {
 	control.Children(func() {
 		for i, label := range []string{"隐藏到通知区域（默认）", "停止扫描并退出"} {
 			segment := parts.Segment(i).MinHeight(max(40, t.FontSize*1.5+16)).Padding(8, 16).Radius(4)
-			bg := ui.Transparent
-			if i == selected {
-				bg = tok.SurfaceControl
-			}
-			if segment.Hovered() {
-				bg = tok.SurfaceHover
-			}
-			if segment.Pressed() {
-				bg = tok.SurfacePressed
-			}
-			segment.Background(bg).Children(func() { ui.Text(c, label).SingleLine() })
+			settingsSegment(segment, i == selected, tok).Children(func() { ui.Text(c, label).SingleLine() })
 		}
 	})
 	behavior := app.CloseBehaviorHide
@@ -196,11 +186,6 @@ func (m *Model) settingsGeneral(c *ui.Context, t *ui.Theme, tok *Tokens) {
 	if behavior != m.CloseBehavior() {
 		m.SetCloseBehavior(behavior)
 	}
-	actionRow(c).Children(func() {
-		if button(c, "再看一次托盘图标位置提示").Clicked() {
-			m.ShowTrayHint()
-		}
-	})
 	if m.trayHintErr != "" {
 		ui.Text(c, m.trayHintErr).TextColor(t.Danger).FontSize(t.FontSize * 0.9)
 	}
@@ -212,6 +197,29 @@ func (m *Model) settingsGeneral(c *ui.Context, t *ui.Theme, tok *Tokens) {
 			}
 		})
 	}
+}
+
+// settingsSegment keeps the selected neutral face and outline visible even
+// while hovered or pressed. SegmentedBase retains radio and focus semantics.
+func settingsSegment(segment ui.Element, selected bool, tok *Tokens) ui.Element {
+	bg, border, fg := ui.Transparent, ui.Transparent, tok.TextSecondary
+	if selected {
+		bg, border, fg = tok.SurfaceControl.Mix(tok.TextPrimary, .18), tok.BorderStrong, tok.TextPrimary
+	}
+	if segment.IsDisabled() {
+		bg, fg = tok.SurfaceDisabled, tok.TextDisabled
+	} else if selected {
+		if segment.Pressed() {
+			bg = bg.Mix(tok.TextPrimary, .12)
+		} else if segment.Hovered() {
+			bg = bg.Mix(tok.TextPrimary, .06)
+		}
+	} else if segment.Pressed() {
+		bg = tok.SurfacePressed
+	} else if segment.Hovered() {
+		bg = tok.SurfaceHover
+	}
+	return segment.Background(bg).Border(1, border).TextColor(fg)
 }
 
 // retryCloseBehaviorSave persists the current close-window preference again
@@ -250,9 +258,12 @@ func (m *Model) settingsShortcuts(c *ui.Context, t *ui.Theme, tok *Tokens) {
 	width, _ := c.Size()
 	innerWidth := max(0, width-m.railWidth()-2*m.pagePadding()-2*(settingsSectionInset+1))
 	ui.ScrollHorizontal(c).FillWidth().Focusable().Label("快捷键列表").Children(func() {
-		ui.Column(c).MinWidth(innerWidth).Gap(8).Children(func() {
-			for _, shortcut := range m.settingsShortcutRows() {
-				ui.Row(c).FillWidth().Gap(24).AlignItems(ui.Center).Children(func() {
+		ui.Column(c).MinWidth(innerWidth).Children(func() {
+			for i, shortcut := range m.settingsShortcutRows() {
+				if i > 0 {
+					ui.Box(c).FillWidth().Height(1).Shrink(0).Background(tok.BorderSubtle)
+				}
+				ui.Row(c).FillWidth().PaddingY(6).Gap(24).AlignItems(ui.Center).Children(func() {
 					ui.Text(c, shortcut.action+"（"+shortcut.context+"）").SingleLine().Shrink(0)
 					ui.Box(c).Grow(1)
 					keycaps(c, shortcut.keys)

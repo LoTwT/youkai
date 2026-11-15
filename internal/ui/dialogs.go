@@ -6,9 +6,8 @@ import (
 )
 
 // trayHintDialogView is the first-hide hint (08 §9, P-10/R-18). It appears
-// before the first close hides the window and on the settings page's replay
-// entry. Escape closes it without acknowledging, so the next close asks
-// again.
+// before the first close hides the window. Escape closes it without
+// acknowledging, so the next close asks again.
 func (m *Model) trayHintDialogView(c *ui.Context, t *ui.Theme) {
 	if !m.trayHintOpen {
 		return
@@ -30,9 +29,6 @@ func (m *Model) trayHintDialogView(c *ui.Context, t *ui.Theme) {
 				ui.Text(c, m.trayHintErr).TextColor(t.Danger).FontSize(t.FontSize * 0.9)
 			}
 			actionRow(c).Wrap().Children(func() {
-				ui.Text(c, "之后可在 设置 › 常规 重看").TextColor(t.TextMuted).
-					FontSize(t.FontSize * 0.9)
-				ui.Box(c).Grow(1)
 				if primaryButton(c, "知道了").Clicked() {
 					m.acknowledgeTrayHint()
 				}

@@ -83,6 +83,12 @@ func panel(c *ui.Context, tok *Tokens) ui.Element {
 		Shadow(0, 2, 6, 0, color.Alpha(near)).Shadow(0, 8, 24, 0, color.Alpha(far))
 }
 
+// contentPanel contains page content, including full-bleed children such as
+// the scan action bar. Clip uses the panel's inner rounded border in MyGo.
+func contentPanel(c *ui.Context, tok *Tokens) ui.Element {
+	return panel(c, tok).Grow(1).MinWidth(0).MinHeight(0).Clip()
+}
+
 func actionRow(c *ui.Context) ui.Element {
 	return ui.Row(c).Gap(controlGap).AlignItems(ui.Center).Justify(ui.End).AlignSelf(ui.Stretch)
 }
