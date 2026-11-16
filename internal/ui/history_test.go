@@ -672,6 +672,12 @@ func TestHistoryColumnsByWidth(t *testing.T) {
 		if tt.HasText("占用") == compact || tt.HasText("待处理 / 可导出") != compact {
 			t.Fatalf("width %d columns do not match compact=%t: %q", width, compact, tt.Texts())
 		}
+		_, statusColumn := tt.AccessByRole(ui.RoleColumnHeader, "状态")
+		_, explanationColumn := tt.AccessByRole(ui.RoleColumnHeader, "结果说明")
+		_, mergedColumn := tt.AccessByRole(ui.RoleColumnHeader, "状态 / 结果说明")
+		if statusColumn == compact || explanationColumn == compact || mergedColumn != compact || !tt.HasText("完成") {
+			t.Fatalf("width %d lost its short status or explanation column: %q", width, tt.Texts())
+		}
 	}
 }
 

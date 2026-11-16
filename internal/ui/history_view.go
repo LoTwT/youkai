@@ -9,7 +9,6 @@ import (
 
 	"github.com/LoTwT/youkai/internal/record"
 	"github.com/egoist/mygo/ui"
-	"github.com/lobehub/lobe-mygo/pkg/lucide"
 )
 
 // Keep native Table's shared header/cell padding aligned with the v5 grid.
@@ -19,20 +18,6 @@ const (
 	historyPanelInset = 24
 	historyCellInset  = 12
 	historyCellExtra  = 2
-)
-
-var (
-	historyWarningIcon     = lucide.AlertTriangle()
-	historyErrorIcon       = lucide.CircleX()
-	historyCompletedIcon   = lucide.CircleCheck()
-	historyRunningIcon     = lucide.LoaderCircle()
-	historyStoppedIcon     = lucide.Square()
-	historyPendingIcon     = lucide.ClipboardList()
-	historyInterruptedIcon = lucide.CirclePause()
-	historyUnreadableIcon  = lucide.FileX2()
-	historySaveFailedIcon  = lucide.SaveOff()
-	historyEmptyIcon       = lucide.PackageOpen()
-	historyUnknownIcon     = lucide.CircleHelp()
 )
 
 // historyColumns measures the effective system font, not the unscaled
@@ -63,18 +48,24 @@ func (m *Model) historyColumns(c *ui.Context, entries []HistoryEntry) []ui.Table
 	number, _ := strconv.ParseInt(digits, 10, 64)
 	count := columnWidth(72, "待处理", formatCount(number))
 	timeWidth := round(max(200, measure("12 月 28 日 23:59", t.FontSize)+8+measure("本次", t.FontSize*12/14)+2*historyCellInset))
+	statusWidth := columnWidth(64, "状态", "保存失败", "准备失败", "覆盖未知", "手动停止", "部分覆盖")
 	resultWidth := columnWidth(240, "正常结束 · 没有采集到驱动盘")
 	// A smaller value just below a unit boundary can be wider than the
 	// largest value (1024.0 MB versus 2.0 GB after decimal rounding).
 	size := columnWidth(88, "1024.0 KB", "1024.0 MB", "1024.0 GB", "1024.0 TB", formatBytes(largestBytes))
 	const action = 48
 	available := float32(m.contentWidth) - m.railWidth() - m.pageLeftPadding() - m.pagePadding() - 2*(historyPanelInset+1)
-	m.historyCompactLayout = m.contentWidth < 1120 || available < timeWidth+resultWidth+3*count+size+action
-	columns := []ui.TableColumn{
-		{Title: "时间", Width: timeWidth, Fixed: true},
-		{Title: "结果", MinWidth: resultWidth, Fixed: true},
-		{Title: "件数", Width: count, Align: ui.End, Fixed: true},
+	m.historyCompactLayout = m.contentWidth < 1120 || available < timeWidth+statusWidth+resultWidth+3*count+size+action
+	columns := []ui.TableColumn{{Title: "时间", Width: timeWidth, Fixed: true}}
+	resultTitle := "结果说明"
+	if m.historyCompactLayout {
+		resultTitle = "状态 / 结果说明"
+	} else {
+		columns = append(columns, ui.TableColumn{Title: "状态", Width: statusWidth, Fixed: true})
 	}
+	columns = append(columns,
+		ui.TableColumn{ID: "result", Title: resultTitle, MinWidth: resultWidth, Fixed: true},
+		ui.TableColumn{Title: "件数", Width: count, Align: ui.End, Fixed: true})
 	if m.historyCompactLayout {
 		merged := columnWidth(132, "待处理 / 可导出", formatCount(number)+" / "+formatCount(number))
 		columns = append(columns, ui.TableColumn{Title: "待处理 / 可导出", Width: merged, Align: ui.End, Fixed: true})
@@ -89,7 +80,7 @@ func (m *Model) historyColumns(c *ui.Context, entries []HistoryEntry) []ui.Table
 
 // historyPage is the records destination: the title, the date filter, the
 // record table and its row menu. The newest record is first and carries
-// its conclusion in the 结果 column, so a returning user finds last time's
+// its status and explanation, so a returning user finds last time's
 // scan without reading counts (07 §4, 08 §5). The live session appears as
 // the first row with the 本次 badge; it opens the same record workspace as
 // any other row, so one record never has two editable copies.
@@ -250,8 +241,17 @@ func (m *Model) historyCell(c *ui.Context, t *ui.Theme, tok *Tokens, entry Histo
 	switch id {
 	case "时间":
 		m.historyTimeCell(c, t, tok, entry, latest, chosen)
-	case "结果":
-		m.historyResultCell(c, t, tok, entry, latest, chosen)
+	case "状态":
+		ui.Text(c, m.historyStatusFor(entry)).SingleLine().TextColor(tok.TextPrimary)
+	case "result":
+		if m.historyCompactLayout {
+			ui.Column(c).FillWidth().MinWidth(0).Gap(4).Children(func() {
+				ui.Text(c, m.historyStatusFor(entry)).SingleLine().TextColor(tok.TextPrimary)
+				m.historyResultCell(c, tok, entry, latest)
+			})
+		} else {
+			m.historyResultCell(c, tok, entry, latest)
+		}
 	case "件数":
 		m.historyNumberCell(c, t, tok, entry, entry.CapturedCount, entry.Unreadable, latest, chosen)
 	case "待处理":
@@ -319,18 +319,14 @@ func (m *Model) historyResultFor(entry HistoryEntry) recordConclusion {
 	return recordConclusionFor(m.historyConclusionInput(entry))
 }
 
-// The list needs a gold/red hue distinction in addition to contrast. Keep
-// this pair local: other screens still consume the shared semantic tokens.
-func historyResultInks(tok *Tokens, dark bool) (warning, danger ui.Color) {
-	if dark {
-		return tok.WarningStrong, tok.DangerStrong
-	}
-	return hex("#856500"), hex("#C5221F")
+func (m *Model) historyStatusFor(entry HistoryEntry) string {
+	return historyStatus(recordOutcomeFor(m.historyConclusionInput(entry)))
 }
 
-// Icons consume the existing outcome and facts, never localized wording.
-// Empty records retain their real termination, including manual stops.
-func historyResultIcon(out recordOutcome, result recordConclusion) (*ui.SVG, string) {
+// A presentation-only short status consumes the shared outcome and facts.
+// Zero-item endings retain their termination; preparing failures never imply
+// that a scan started. The shared explanation and persisted record stay intact.
+func historyStatus(out recordOutcome) string {
 	kind, in := out.Kind, out.Input
 	if kind == recordOutcomeEmpty {
 		switch {
@@ -347,7 +343,7 @@ func historyResultIcon(out recordOutcome, result recordConclusion) (*ui.SVG, str
 			case record.TerminationFailed:
 				kind = recordOutcomeFault
 			case record.TerminationCompleted:
-				return historyEmptyIcon, "未采集"
+				return "无采集"
 			default:
 				kind = recordOutcomeUnknown
 			}
@@ -355,67 +351,48 @@ func historyResultIcon(out recordOutcome, result recordConclusion) (*ui.SVG, str
 	}
 	switch kind {
 	case recordOutcomeUnreadable:
-		return historyUnreadableIcon, "记录不可读"
+		return "不可读"
 	case recordOutcomeSaveFailed:
-		return historySaveFailedIcon, "保存失败"
+		return "保存失败"
 	case recordOutcomeRunning:
-		return historyRunningIcon, "进行中"
+		return "进行中"
 	case recordOutcomeInterrupted:
-		return historyInterruptedIcon, "中断"
+		return "中断"
 	case recordOutcomeFault:
-		return historyErrorIcon, "错误"
+		if in.CapturedCount == 0 && terminationNotStarted(in.Termination) {
+			return "准备失败"
+		}
+		return "失败"
 	case recordOutcomeCancelled:
-		return historyStoppedIcon, "手动停止"
+		if in.CapturedCount == 0 && terminationNotStarted(in.Termination) {
+			return "未开始"
+		}
+		return "手动停止"
 	case recordOutcomeCompleted:
 		switch {
-		case result.tone == recordToneWarning:
-			return historyWarningIcon, "警告"
-		case result.tone == recordToneMuted:
-			return historyUnknownIcon, "覆盖未知"
+		case in.Coverage == record.CoveragePartial:
+			return "部分覆盖"
+		case in.Coverage != record.CoverageComplete:
+			return "覆盖未知"
 		case in.Counts.Pending() > 0:
-			return historyPendingIcon, "待处理"
+			return "待处理"
+		case in.Counts.Warning > 0:
+			return "警告"
 		default:
-			return historyCompletedIcon, "完成"
+			return "完成"
 		}
 	default:
-		return historyUnknownIcon, "状态未知"
+		return "未知"
 	}
 }
 
-// historyResultCell draws the tag and the conclusion.
-func (m *Model) historyResultCell(c *ui.Context, t *ui.Theme, tok *Tokens, entry HistoryEntry, latest, chosen bool) {
-	out := recordOutcomeFor(m.historyConclusionInput(entry))
-	result := recordListConclusion(out)
-	warning, danger := historyResultInks(tok, t.Dark)
-	fg, bg := warning, tok.WarningSoft
-	if result.tone == recordToneDanger {
-		fg, bg = danger, tok.DangerSoft
+// The explanation is ordinary body text in every state, with no result tag,
+// icon or colored surface. The native table still owns selection and focus.
+func (m *Model) historyResultCell(c *ui.Context, tok *Tokens, entry HistoryEntry, latest bool) {
+	text := ui.Text(c, m.historyResultFor(entry).text).MinWidth(0).TextColor(tok.TextPrimary)
+	if latest {
+		text.FontWeight(600)
 	}
-	semantic := result.tone == recordToneWarning || result.tone == recordToneDanger
-	ink := colorWhenChosen(chosen, tok.TextSecondary, tok.TextPrimary)
-	if semantic {
-		ink = fg
-	} else if result.tone == recordToneMuted {
-		ink = colorWhenChosen(chosen, tok.TextMuted, tok.TextPrimary)
-	}
-	icon, label := historyResultIcon(out, result)
-	ui.Row(c).FillWidth().MinWidth(0).Gap(8).AlignItems(ui.Center).Children(func() {
-		ui.Icon(c, icon).Size(20, 20).Shrink(0).TextColor(ink).Role(ui.RoleImage).Label(label)
-		text := ui.Text(c, result.text).MinWidth(0)
-		if latest || semantic {
-			text.FontWeight(600)
-		}
-		switch result.tone {
-		case recordToneMuted:
-			text.TextColor(colorWhenChosen(chosen, tok.TextMuted, tok.TextPrimary))
-		case recordToneWarning, recordToneDanger:
-			text.TextColor(fg)
-		}
-		if result.tag != "" {
-			ui.Text(c, result.tag).SingleLine().Shrink(0).FontSize(t.FontSize*12/14).FontWeight(600).
-				TextColor(fg).Background(bg).Padding(0, 4).Radius(4)
-		}
-	})
 }
 
 // historyNumberCell draws one integer column. unreadable renders the dash
@@ -439,10 +416,9 @@ func (m *Model) historyPendingCell(c *ui.Context, t *ui.Theme, tok *Tokens, entr
 		return
 	}
 	pending := entry.Counts.Pending()
-	text := ui.Text(c, formatCount(pending)).SingleLine().FontFeatures("tnum")
+	text := ui.Text(c, formatCount(pending)).SingleLine().FontFeatures("tnum").TextColor(tok.TextPrimary)
 	if pending > 0 {
-		warning, _ := historyResultInks(tok, t.Dark)
-		text.TextColor(warning).FontWeight(600)
+		text.FontWeight(600)
 	}
 }
 
@@ -699,12 +675,9 @@ func (m *Model) historyStatusText() string {
 // historyRowLabel is the assistive-technology name of one row: the same
 // conclusion and accounting the visible cells carry.
 func historyRowLabel(m *Model, entry HistoryEntry) string {
-	if entry.Unreadable {
-		return historyTimeText(entry) + " · 记录不可读"
-	}
 	result := m.historyResultFor(entry)
-	label := historyTimeText(entry) + " · " + result.text
-	if entry.CapturedCount > 0 {
+	label := historyTimeText(entry) + " · " + m.historyStatusFor(entry) + " · " + result.text
+	if !entry.Unreadable && entry.CapturedCount > 0 {
 		label += fmt.Sprintf(" · 件数 %s · 待处理 %s · 可导出 %s",
 			formatCount(entry.CapturedCount), formatCount(entry.Counts.Pending()),
 			formatCount(entry.Counts.Exportable()))
