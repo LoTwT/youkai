@@ -75,10 +75,25 @@ func (m *Model) historyColumns(c *ui.Context, entries []HistoryEntry) []ui.Table
 // any other row, so one record never has two editable copies.
 func (m *Model) historyPage(c *ui.Context, t *ui.Theme) {
 	tok := m.effectiveTokens()
-	m.historyHeader(c, t, tok)
+	ui.Column(c).FillWidth().Disabled(m.historyOpen != nil).DimDisabled(false).Children(func() {
+		m.historyHeader(c, t, tok)
+	})
 	m.historyNotices(c, t)
 	contentPanel(c, tok).Padding(historyPanelInset).Children(func() {
-		m.historyContent(c, t, tok)
+		ui.Column(c).Fill().MinWidth(0).MinHeight(0).Disabled(m.historyOpen != nil).DimDisabled(false).Children(func() {
+			m.historyContent(c, t, tok)
+		})
+		if m.historyOpen != nil {
+			ui.Column(c).Absolute().Top(0).Right(0).Bottom(0).Left(0).
+				Background(tok.Scrim).Center().Children(func() {
+				ui.Column(c).Padding(24).Gap(16).Radius(panelRadius).Background(tok.SurfaceOverlay).Children(func() {
+					ui.Text(c, "正在读取记录…")
+					if button(c, "取消打开").Clicked() {
+						m.cancelHistoryOpen()
+					}
+				})
+			})
+		}
 	})
 }
 
@@ -119,16 +134,16 @@ func (m *Model) historyContent(c *ui.Context, t *ui.Theme, tok *Tokens) {
 			})
 		}).Fill().MinWidth(0).MinHeight(0).KeepScrollbars(true)
 	})
-	if table.Submitted() {
+	if table.Submitted() && m.historyOpen == nil {
 		m.openHistoryRow(m.historyRow)
 	}
 	// Shift+F10 and the menu key open the chosen row's menu while the
 	// table or one of its rows holds the keyboard (08 §5).
-	if m.historyList.Shortcut(c, ui.Shift, ui.KeyF10) ||
-		m.historyList.Shortcut(c, 0, ui.KeyContextMenu) {
+	if m.historyOpen == nil && (m.historyList.Shortcut(c, ui.Shift, ui.KeyF10) ||
+		m.historyList.Shortcut(c, 0, ui.KeyContextMenu)) {
 		m.openSelectedHistoryMenu()
 	}
-	if m.historyFocusPending && m.historyList.Focus(c) {
+	if m.historyOpen == nil && m.historyFocusPending && m.historyList.Focus(c) {
 		m.historyFocusPending = false
 	}
 }
@@ -530,7 +545,7 @@ func (m *Model) historyMenuItem(c *ui.Context, t *ui.Theme, label string, color 
 
 // openHistoryMenu opens the row menu for one record.
 func (m *Model) openHistoryMenu(id string) {
-	if id == "" {
+	if id == "" || m.historyOpen != nil {
 		return
 	}
 	m.historyMenuID = id
@@ -590,13 +605,13 @@ func (m *Model) historyExportBlockedReason(entry HistoryEntry) string {
 // Opening the record through requestNavigation keeps the existing
 // save/discard prompt in front of a dirty draft.
 func (m *Model) openHistoryExport(entry HistoryEntry) {
-	if entry.Unreadable || m.historyExportBlockedReason(entry) != "" {
+	if m.historyOpen != nil || entry.Unreadable || m.historyExportBlockedReason(entry) != "" {
 		return
 	}
 	m.closeHistoryMenu()
 	m.historyMenuID = ""
 	m.histChoice = entry.Label
-	if m.recordIsOpen(entry.ID) && m.recErr == "" {
+	if m.recordIsReady(entry.ID) {
 		m.page = pageResults
 		// The target is already the open record; the title bar's own
 		// export entry handles its draft and blocked states.
@@ -615,6 +630,14 @@ func (m *Model) openHistoryExport(entry HistoryEntry) {
 // historyNotices shows the cleanup outcome and a pending per-record
 // cleanup confirmation.
 func (m *Model) historyNotices(c *ui.Context, t *ui.Theme) {
+	if failed := m.historyOpenFailed; failed != nil && m.historyOpenError != "" {
+		ui.Row(c).FillWidth().Gap(12).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, "打开记录 "+failed.id+" 失败："+m.historyOpenError).Grow(1).TextColor(t.Danger)
+			if button(c, "重试打开").Clicked() {
+				m.requestNavigation(navigationRequest{kind: navOpenRecord, recordID: failed.id, exportAfterLoad: failed.exportAfterLoad})
+			}
+		})
+	}
 	if m.cleanupNotice != "" {
 		ui.Text(c, m.cleanupNotice)
 	}
@@ -683,6 +706,9 @@ func formatCount(n int64) string {
 
 // openHistoryRow opens the visible row the table selected.
 func (m *Model) openHistoryRow(row int) {
+	if m.historyOpen != nil {
+		return
+	}
 	entries := m.visibleHistory()
 	if row < 0 || row >= len(entries) {
 		return
@@ -696,6 +722,9 @@ func (m *Model) openHistoryRow(row int) {
 // already open keeps its state. A damaged record cannot be opened; its row
 // menu only deletes it.
 func (m *Model) openHistoryEntry(entry HistoryEntry) {
+	if m.historyOpen != nil {
+		return
+	}
 	m.closeHistoryMenu()
 	m.historyMenuID = ""
 	if entry.Unreadable {

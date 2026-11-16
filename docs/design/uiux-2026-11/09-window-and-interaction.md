@@ -133,7 +133,7 @@ MyGo 使用 MinWidth、MinHeight 和 StateKey="main"；首次默认 1440 × 900�
 | 前往下一区域 | `F6` | `F6` | 页面；逐件在列表、截图、表单间移动 |
 | 返回上一区域 | `Shift+F6` | `Shift+F6` | 页面；逐件反向移动 |
 | 打开选中的记录 | `Enter` | `Enter` | 记录列表 |
-| 关闭浮层或返回表格 | `Esc` | `Esc` | 浮层优先；文本框保留焦点 |
+| 关闭浮层或返回表格 | `Esc` | `Esc` | 浮层优先；列表打开记录的等待中取消打开并保留位置，其他文本框保留焦点 |
 
 停止组合由 `platform.StopScanHotkey` 保持原有逐平台 HotkeySpec，入口实际注册和文案使用同一份 spec，不能把 Mac 的额外 Control / Option 简单替成 Command。主题单选按钮组只在设置 › 常规，进入设置及 F6 前进时到达该真实控件，Tab 再进入关闭行为；全局三个目的地的方向键行为保持不变。
 

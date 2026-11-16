@@ -1200,8 +1200,8 @@ func TestHistoryRowExportLoadFailureDoesNotOpenDialog(t *testing.T) {
 		t.Fatalf("a failed row load kept its deferred dialog: id=%q open=%t",
 			m.exportAfterLoadID, m.exportDialog.open)
 	}
-	if !strings.Contains(m.recErr, "checkpoint missing") {
-		t.Fatalf("the row load failure is not shown: %q", m.recErr)
+	if m.displayPage() != pageHistory || !strings.Contains(m.historyOpenError, "checkpoint missing") {
+		t.Fatalf("the row load failure is not shown in the list: page=%v error=%q", m.displayPage(), m.historyOpenError)
 	}
 }
 

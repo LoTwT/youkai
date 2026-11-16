@@ -651,6 +651,9 @@ func (m *Model) clearReviewNotice() {
 // requestNavigation runs a navigation at once, or holds it behind a
 // prompt while the editor has unsaved input.
 func (m *Model) requestNavigation(req navigationRequest) {
+	if req.kind == navOpenRecord && m.historyOpen != nil {
+		return
+	}
 	if m.exitState == exitRunning || m.exitState == exitDone {
 		return
 	}
@@ -682,6 +685,7 @@ func (m *Model) requestNavigation(req navigationRequest) {
 func (m *Model) runNavigation(req navigationRequest) {
 	m.navPrompt = nil
 	if req.kind != navOpenRecord {
+		m.cancelHistoryOpen()
 		// A row export waits for only the record it asked for. Leaving the
 		// workspace (or opening the title bar's dialog) must not let that
 		// load pop the dialog over another page.
@@ -724,7 +728,6 @@ func (m *Model) runNavigation(req navigationRequest) {
 	case navRecordTab:
 		m.showRecordTab(req.recordTab)
 	case navOpenRecord:
-		m.page = pageResults
 		m.performOpenRecord(req.recordID, req.exportAfterLoad)
 	case navPage:
 		if m.displayPage() == pageResults {

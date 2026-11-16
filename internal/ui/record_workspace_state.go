@@ -533,6 +533,7 @@ func (m *Model) captureResultPlace() {
 // caller settles any draft before opening another record. The bumped load
 // version discards responses still in flight for the previous record.
 func (m *Model) showRecord(id string, live bool) {
+	m.cancelHistoryOpen()
 	if m.exportAfterLoadID != id {
 		m.exportAfterLoadID = ""
 	}
@@ -598,18 +599,10 @@ func (m *Model) reloadRecord(id string, live bool) {
 	m.recLoad++
 	version := m.recLoad
 	load := newRecordLoad()
-	if m.recordReads == nil {
-		m.recordReads = make(map[int64]*recordLoad)
-	}
-	m.recordReads[version] = load
 	// A result notification waiting for this record's final generation
 	// follows a restarted load: every read after the wrap-up is final, and
 	// the old callback would otherwise never match.
-	if state := m.notifySessions[scan.ID(id)]; state != nil && state.pending != nil &&
-		state.pending.loadVersion != 0 {
-		state.pending.loadVersion = version
-		state.pending.load = load
-	}
+	m.trackRecordRead(id, version, load)
 	m.loading = true
 	m.goAsync(func() {
 		rec, err := m.cfg.Service.LoadRecord(id)
@@ -653,9 +646,13 @@ func (m *Model) reloadRecord(id string, live bool) {
 // The chosen row follows its capture sequence across a reload; a vanished
 // selection falls back to the same position, then to the first row.
 func (m *Model) applyLoadedRecord(id string, rec *record.Recovery, live bool) {
+	m.installPreparedRecord(prepareRecord(id, rec, live))
+}
+
+func (m *Model) installPreparedRecord(prepared preparedRecord) {
 	previous := m.selected
 	sequence := m.selectedSeq()
-	view := BuildRecordView(id, rec, live)
+	view := prepared.view
 	selected := view.RowOf(sequence)
 	if selected < 0 && previous >= 0 && previous < len(view.Rows) {
 		selected = previous
@@ -664,13 +661,12 @@ func (m *Model) applyLoadedRecord(id string, rec *record.Recovery, live bool) {
 		selected = 0
 	}
 
-	export, buildErr := resultExport(rec)
 	m.rec = view
-	m.recData = rec
+	m.recData = prepared.recovery
 	m.recErr = ""
 	m.loading = false
-	m.exportData = export
-	m.exportBuildErr = buildErr
+	m.exportData = prepared.export
+	m.exportBuildErr = prepared.exportErr
 	// A reload is a refresh: confirmed rows no longer linger in the
 	// pending segment.
 	m.recentlyConfirmed = nil
@@ -691,7 +687,7 @@ func (m *Model) applyLoadedRecord(id string, rec *record.Recovery, live bool) {
 	if m.scroll > 0 {
 		m.list.ScrollTo(m.scroll, ui.Start)
 	}
-	if m.exportAfterLoadID == id {
+	if m.exportAfterLoadID == view.ID {
 		m.exportAfterLoadID = ""
 		if m.displayPage() == pageResults {
 			m.openExportDialog()

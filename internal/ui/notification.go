@@ -119,6 +119,7 @@ func (m *Model) OpenNotification(recordID string) {
 		// already open: requestNavigation owns the dirty/save prompt and the
 		// record-tab switch, so it cannot discard an editor that the click
 		// should have asked about.
+		m.cancelHistoryOpen()
 		m.page = pageResults
 		m.requestNavigation(navigationRequest{kind: navRecordTab, recordTab: recordTabSummary})
 		return

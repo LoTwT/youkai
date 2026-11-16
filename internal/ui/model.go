@@ -412,10 +412,14 @@ type Model struct {
 	// prepareTimerArmed keeps one countdown redraw in flight.
 	prepareTimerArmed bool
 
-	history        []HistoryEntry
-	histChoice     string
-	histErr        string
-	historyLoading bool
+	history           []HistoryEntry
+	histChoice        string
+	histErr           string
+	historyLoading    bool
+	historyOpenSerial int64
+	historyOpen       *historyOpen
+	historyOpenFailed *historyOpen
+	historyOpenError  string
 	// historyLoadSeq identifies the newest load; a late result from an
 	// older load must not replace its list or clear its loading state.
 	historyLoadSeq uint64
@@ -904,8 +908,9 @@ func (m *Model) ShowLive() {
 	if m.appliedSession == "" || m.exitState == exitRunning || m.exitState == exitDone {
 		return
 	}
-	m.page = pageResults
+	m.cancelHistoryOpen()
 	if m.liveRecordOpen() && m.recErr == "" {
+		m.page = pageResults
 		// Returning from settings or the records list still starts a new
 		// visit: a confirmed-and-stayed row leaves the pending segment and
 		// the detail follows the rows the filter shows.
@@ -1145,8 +1150,15 @@ func (m *Model) openRecord(id string) {
 	if id == "" || m.exitState == exitRunning || m.exitState == exitDone {
 		return
 	}
-	m.page = pageResults
-	if m.recordIsOpen(id) && m.recErr == "" {
+	if m.historyOpen != nil || m.exitIntent != exitIntentNone || m.navPrompt != nil {
+		return
+	}
+	if m.reviewSaving {
+		m.reviewErr = "正在保存，完成前不能切换。"
+		return
+	}
+	if m.recordIsReady(id) {
+		m.page = pageResults
 		// Entering from the list is a new visit: the previous visit's
 		// confirmed-and-stayed rows leave the pending segment, so the
 		// selection is checked against the rows the filters still show.
@@ -1167,6 +1179,11 @@ func (m *Model) performOpenRecord(id string, exportAfterLoad bool) {
 	if id == "" {
 		return
 	}
+	if m.displayPage() == pageHistory {
+		m.beginHistoryOpen(id, m.recordIsLive(id), exportAfterLoad)
+		return
+	}
+	m.page = pageResults
 	if exportAfterLoad {
 		m.exportAfterLoadID = id
 	} else {
@@ -1209,6 +1226,7 @@ func (m *Model) Start() {
 	if !m.canStart() {
 		return
 	}
+	m.cancelHistoryOpen()
 	m.page = pageScan
 	if m.startReqID == "" {
 		m.startSerial++
@@ -1502,6 +1520,7 @@ func (m *Model) requestExit(force bool) {
 	if m.exitState == exitRunning || m.exitState == exitDone {
 		return
 	}
+	m.cancelHistoryOpen()
 	if force {
 		m.exitIntent = exitIntentForce
 	} else if m.exitIntent == exitIntentNone {
