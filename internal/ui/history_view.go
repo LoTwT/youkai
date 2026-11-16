@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/egoist/mygo/ui"
+	"github.com/lobehub/lobe-mygo/pkg/lucide"
 )
 
 // Keep native Table's shared header/cell padding aligned with the v5 grid.
@@ -17,6 +18,11 @@ const (
 	historyPanelInset = 24
 	historyCellInset  = 12
 	historyCellExtra  = 2
+)
+
+var (
+	historyWarningIcon = lucide.AlertTriangle()
+	historyErrorIcon   = lucide.CircleX()
 )
 
 // historyColumns measures the effective system font, not the unscaled
@@ -306,26 +312,32 @@ func (m *Model) historyResultFor(entry HistoryEntry) recordConclusion {
 // historyResultCell draws the tag and the conclusion.
 func (m *Model) historyResultCell(c *ui.Context, t *ui.Theme, tok *Tokens, entry HistoryEntry, latest, chosen bool) {
 	result := m.historyResultFor(entry)
+	// Selection changes the row face, not the result's severity. Strong
+	// semantic ink and distinct SVG shapes stay legible at larger text sizes.
+	fg, bg := tok.WarningStrong, tok.WarningSoft
+	icon, label := historyWarningIcon, "警告"
+	if result.tone == recordToneDanger {
+		fg, bg = tok.DangerStrong, tok.DangerSoft
+		icon, label = historyErrorIcon, "错误"
+	}
+	semantic := result.tone == recordToneWarning || result.tone == recordToneDanger
 	ui.Row(c).FillWidth().MinWidth(0).Gap(8).AlignItems(ui.Center).Children(func() {
+		if semantic {
+			ui.Icon(c, icon).Size(20, 20).Shrink(0).TextColor(fg).Role(ui.RoleImage).Label(label)
+		}
 		if result.tag != "" {
-			bg, fg := tok.WarningSoft, tok.WarningFG
-			if result.tone == recordToneDanger {
-				bg, fg = tok.DangerSoft, tok.DangerFG
-			}
 			ui.Text(c, result.tag).SingleLine().Shrink(0).FontSize(t.FontSize*12/14).FontWeight(600).
 				TextColor(fg).Background(bg).Padding(0, 4).Radius(4)
 		}
 		text := ui.Text(c, result.text).MinWidth(0)
-		if latest {
+		if latest || semantic {
 			text.FontWeight(600)
 		}
 		switch result.tone {
 		case recordToneMuted:
 			text.TextColor(colorWhenChosen(chosen, tok.TextMuted, tok.TextPrimary))
-		case recordToneWarning:
-			text.TextColor(colorWhenChosen(chosen, tok.WarningFG, tok.TextPrimary))
-		case recordToneDanger:
-			text.TextColor(colorWhenChosen(chosen, t.Danger, tok.TextPrimary))
+		case recordToneWarning, recordToneDanger:
+			text.TextColor(fg)
 		}
 	})
 }
@@ -353,7 +365,7 @@ func (m *Model) historyPendingCell(c *ui.Context, t *ui.Theme, tok *Tokens, entr
 	pending := entry.Counts.Pending()
 	text := ui.Text(c, formatCount(pending)).SingleLine().FontFeatures("tnum")
 	if pending > 0 {
-		text.TextColor(colorWhenChosen(chosen, tok.WarningFG, tok.TextPrimary)).FontWeight(600)
+		text.TextColor(tok.WarningStrong).FontWeight(600)
 	}
 }
 
