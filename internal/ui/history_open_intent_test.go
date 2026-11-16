@@ -233,24 +233,22 @@ func TestHistoryOpenCancellationKeepsOldWorkspaceRefresh(t *testing.T) {
 	}
 }
 
-func TestHistoryOpenLiveGrowthKeepsItsReadGeneration(t *testing.T) {
+func TestHistoryOpenLiveProgressDoesNotRestartRead(t *testing.T) {
 	m, q, _, svc, gates := gatedHistoryModel(t)
 	m.appliedSession = scan.ID("r01")
 	m.snap = openCapturing("r01", 1, 1)
 	m.openRecord("r01")
 	<-gates["r01"].started
-	// The workspace still belongs to the old record, so growth cannot
-	// refresh this target until the pending navigation commits.
-	m.Apply(openCapturing("r01", 2, 2))
+	// Ordinary progress at the same saved checkpoint does not restart a
+	// pending read. Only saved growth/finalization requires catch-up.
+	m.Apply(openCapturing("r01", 2, 1))
 	gates["r01"].unblock()
 	drainAll(t, m, q)
 	if !m.recordIsReady("r01") || !m.rec.Live || m.liveSavedShown != 1 {
-		t.Fatal("prepared live read claimed a newer saved generation")
+		t.Fatal("prepared live read lost its saved generation")
 	}
-	m.Apply(openCapturing("r01", 3, 2))
-	drainAll(t, m, q)
-	if recordLoadCount(svc, "r01") != 2 || m.liveSavedShown != 2 {
-		t.Fatal("live growth was lost after prepared navigation")
+	if recordLoadCount(svc, "r01") != 1 {
+		t.Fatal("unchanged checkpoint caused an unnecessary reread")
 	}
 }
 

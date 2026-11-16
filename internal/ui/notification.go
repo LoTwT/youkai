@@ -108,6 +108,10 @@ func (m *Model) OpenNotification(recordID string) {
 	if m.exitState == exitRunning || m.exitState == exitDone {
 		return
 	}
+	// External navigation supersedes the list's blocked row activation.
+	// Keep export deferral above and the normal draft/save/exit guards in
+	// the routed navigation below; a late list read no longer owns it.
+	m.cancelHistoryOpen()
 	if m.appliedSession == scan.ID(recordID) && m.snap.Busy {
 		// A dirty editor keeps its own prompt; the notification must not
 		// discard the draft just to reveal the wrap-up.
@@ -119,7 +123,6 @@ func (m *Model) OpenNotification(recordID string) {
 		// already open: requestNavigation owns the dirty/save prompt and the
 		// record-tab switch, so it cannot discard an editor that the click
 		// should have asked about.
-		m.cancelHistoryOpen()
 		m.page = pageResults
 		m.requestNavigation(navigationRequest{kind: navRecordTab, recordTab: recordTabSummary})
 		return

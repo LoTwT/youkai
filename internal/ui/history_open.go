@@ -23,6 +23,20 @@ type preparedRecord struct {
 	exportErr string
 }
 
+// Saved item growth and a completed wrap-up both publish checkpoints.
+// A final checkpoint can change termination/revision without adding items.
+// This stamp is captured and compared only on the UI thread; ordinary
+// progress snapshots do not cause rereads.
+type historyLiveCheckpoint struct {
+	savedCount int
+	final      bool
+}
+
+func historyLiveCheckpointFor(snap app.Snapshot) historyLiveCheckpoint {
+	return historyLiveCheckpoint{snap.SavedCount,
+		!snap.Busy && snap.Scan.Phase == scan.PhaseEnded && !snap.SavePending && snap.SaveError == ""}
+}
+
 func prepareRecord(id string, rec *record.Recovery, live bool) preparedRecord {
 	export, exportErr := resultExport(rec)
 	return preparedRecord{recovery: rec, view: BuildRecordView(id, rec, live), export: export, exportErr: exportErr}
@@ -51,7 +65,7 @@ func (m *Model) beginHistoryOpen(id string, live, exportAfterLoad bool) {
 	m.closeHistoryMenu()
 	m.historyMenuID = ""
 	version := m.recLoad
-	savedShown := m.snap.SavedCount
+	checkpoint := historyLiveCheckpointFor(m.snap)
 	// Workspace versions are positive. Negative tokens let notifications
 	// follow this read without invalidating a refresh of the old workspace.
 	readVersion := -intent.token
@@ -75,22 +89,32 @@ func (m *Model) beginHistoryOpen(id string, live, exportAfterLoad bool) {
 			if m.historyOpen == nil || m.historyOpen.token != intent.token {
 				return
 			}
-			m.cancelHistoryOpen()
 			if m.displayPage() != pageHistory || m.recLoad != version ||
 				m.exitIntent != exitIntentNone || m.exitState == exitRunning || m.exitState == exitDone {
+				m.cancelHistoryOpen()
 				return
 			}
 			if err != nil {
+				m.cancelHistoryOpen()
 				m.historyOpenError = err.Error()
 				m.historyOpenFailed = &intent
 				return
 			}
+			if live && historyLiveCheckpointFor(m.snap) != checkpoint {
+				// The latest accepted service event may be the last one.
+				// Keep waiting in the list and read after that checkpoint;
+				// never install/export the older prepared generation first.
+				// Only a changed checkpoint stamp schedules another async
+				// read, so stable progress cannot create a retry loop.
+				m.historyOpen = nil
+				m.beginHistoryOpen(id, live, intent.exportAfterLoad)
+				return
+			}
+			m.cancelHistoryOpen()
 			m.showRecord(id, live)
 			m.recordTab = recordTabSummary
 			if live {
-				// Growth while this read was pending still needs a refresh;
-				// this generation cannot claim a later snapshot's saved count.
-				m.liveSavedShown = savedShown
+				m.liveSavedShown = checkpoint.savedCount
 			}
 			m.installPreparedRecord(prepared)
 			m.page = pageResults

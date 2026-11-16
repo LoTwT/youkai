@@ -800,7 +800,11 @@ func (m *Model) Apply(snap app.Snapshot) {
 	// on screen and loads the live record afresh when the user returns.
 	reloadedLive := false
 	var finalLoadVersion int64
-	if m.rec != nil && m.rec.Live && snap.SessionID != "" &&
+	// A list-open owns its target until preparation catches this snapshot.
+	// Refreshing an old workspace placeholder here would invalidate that
+	// read or navigate to details before its final generation is ready.
+	pendingLiveOpen := m.historyOpen != nil && m.historyOpen.id == string(snap.SessionID)
+	if !pendingLiveOpen && m.rec != nil && m.rec.Live && snap.SessionID != "" &&
 		m.rec.ID == string(snap.SessionID) && snap.SavedCount > m.liveSavedShown {
 		dirtyActive := m.editingDirty() || m.reviewSaving
 		if !dirtyActive {
@@ -820,14 +824,14 @@ func (m *Model) Apply(snap app.Snapshot) {
 			// A preparation-stage refusal never opened input and never
 			// operated the game; it remains on the scan page with its cause
 			// instead of posing as a completed zero-item scan (08 §1.2).
-			if m.liveRecordOpen() && !m.editingDirty() && !m.reviewSaving {
+			if !pendingLiveOpen && m.liveRecordOpen() && !m.editingDirty() && !m.reviewSaving {
 				m.openRecordWorkspace()
 			}
 		}
 		m.loadHistory()
 		m.refreshStorage()
 		m.loadDurationEstimate()
-		if !reloadedLive {
+		if !reloadedLive && !pendingLiveOpen {
 			if m.rec != nil && m.rec.Live && m.rec.ID == string(snap.SessionID) {
 				dirtyActive := m.editingDirty() || m.reviewSaving
 				if !dirtyActive {
