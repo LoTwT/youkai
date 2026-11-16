@@ -658,65 +658,26 @@ func TestHistoryKeyboard(t *testing.T) {
 	}
 }
 
-// TestHistoryColumnsByWidth guards the two tiers of 09 §2: the standard
-// list shows 占用 and separate 待处理 / 可导出 columns; the compact list
-// merges the counts and drops 占用.
+// Every width retains the same independent columns; the native table can
+// scroll when its measured minimum content width exceeds the viewport.
 func TestHistoryColumnsByWidth(t *testing.T) {
-	for _, width := range []int{1180, 960} {
+	for _, width := range []int{1440, 946} {
 		m, q := newTestModel(t, Config{Service: &fakeService{history: historyTableRecords(1)}})
-		m.SetContentSize(width, 760)
-		tt := ui.NewTester(m.View, width, 760)
+		m.SetContentSize(width, 634)
+		tt := ui.NewTesterWith(m.View, width, 634, ui.TesterOptions{Preferences: ui.Preferences{TextScale: 1.2, ReduceMotion: true}})
 		settle(t, m, q, tt)
 		openRecordsList(t, m, q, tt)
-		compact := width == 960
-		if tt.HasText("占用") == compact || tt.HasText("待处理 / 可导出") != compact {
-			t.Fatalf("width %d columns do not match compact=%t: %q", width, compact, tt.Texts())
+		tt.Scroll(float32(width)/2, 250, 10000, 0)
+		var headers []string
+		for _, node := range tt.AccessAll() {
+			if node.Role == ui.RoleColumnHeader {
+				headers = append(headers, node.Name)
+			}
 		}
-		_, statusColumn := tt.AccessByRole(ui.RoleColumnHeader, "状态")
-		_, explanationColumn := tt.AccessByRole(ui.RoleColumnHeader, "结果说明")
-		_, mergedColumn := tt.AccessByRole(ui.RoleColumnHeader, "状态 / 结果说明")
-		if statusColumn == compact || explanationColumn == compact || mergedColumn != compact || !tt.HasText("完成") {
-			t.Fatalf("width %d lost its short status or explanation column: %q", width, tt.Texts())
+		want := []string{"时间", "状态", "结果说明", "件数", "待处理", "可导出", "占用", ""}
+		if strings.Join(headers, "|") != strings.Join(want, "|") {
+			t.Errorf("width %d headers = %q, want all independent columns", width, headers)
 		}
-	}
-}
-
-// TestHistoryCompactMovesStorageIntoTheMenu checks the compact tier's
-// trade: 占用 leaves the table and its number appears in the screenshot
-// deletion entry, while the standard tier keeps both (09 §2).
-func TestHistoryCompactMovesStorageIntoTheMenu(t *testing.T) {
-	for _, tc := range []struct {
-		name    string
-		width   int
-		storage bool
-	}{
-		{"standard", 1180, true},
-		{"compact", 960, false},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			svc := &fakeService{history: historyTableRecords(1)}
-			m, q := newTestModel(t, Config{Service: svc, DirectExportSaver: &fakeDirectExportSaver{}})
-			m.SetContentSize(tc.width, 760)
-			tt := ui.NewTester(m.View, tc.width, 760)
-			settle(t, m, q, tt)
-			openRecordsList(t, m, q, tt)
-
-			if got := tt.HasText("占用"); got != tc.storage {
-				t.Fatalf("占用 shown = %v, want %v", got, tc.storage)
-			}
-			if tt.HasText("待处理 / 可导出") == tc.storage {
-				t.Fatalf("merged counts shown = %v at %d", tt.HasText("待处理 / 可导出"), tc.width)
-			}
-			m.openHistoryMenu("r01")
-			tt.Frame()
-			want := "删除截图"
-			if !tc.storage {
-				want += "（1.0 MB）"
-			}
-			if !tt.HasText(want) {
-				t.Fatalf("the delete entry does not show %q: %q", want, tt.Texts())
-			}
-		})
 	}
 }
 
@@ -1355,39 +1316,72 @@ func TestHistoryRowExportSettlesDirtyDraftFirst(t *testing.T) {
 	}
 }
 
-// TestHistoryTableFitsWidths guards the two tiers' geometry: every header
-// and the row action stay inside the page at the default and minimum
-// window sizes, without horizontal scrolling.
-func TestHistoryTableFitsWidths(t *testing.T) {
-	for _, width := range []int{1180, 960} {
-		t.Run(fmt.Sprintf("%d", width), func(t *testing.T) {
-			svc := &fakeService{history: historyTableRecords(3)}
-			m, q := newTestModel(t, Config{Service: svc, DirectExportSaver: &fakeDirectExportSaver{}})
-			m.SetContentSize(width, 760)
-			tt := ui.NewTester(m.View, width, 760)
-			settle(t, m, q, tt)
-			openRecordsList(t, m, q, tt)
-
-			for _, header := range tt.AccessAll() {
-				if header.Role != ui.RoleColumnHeader || header.Name == "" {
-					continue
-				}
-				rect := header.Bounds
-				if rect.X < m.railWidth()+m.pageLeftPadding() || rect.X+rect.W > float32(width)-m.pagePadding() {
-					t.Errorf("%q at %+v is outside the %d page", header.Name, rect, width)
-				}
-			}
-			action, ok := tt.Find("⋯")
-			if !ok || action.X+action.W > float32(width)-m.pagePadding() {
-				t.Fatalf("the row action at %+v does not fit %d", action, width)
-			}
-			if width == 1180 && tt.HasText("待处理 / 可导出") {
-				t.Fatal("the wide table still merges the counts")
-			}
-			if width == 960 && tt.HasText("占用") {
-				t.Fatal("the compact table still shows the storage column")
-			}
-		})
+// Real pointer scrolling reaches the storage/actions columns and returns to
+// time; menus, keyboard selection and vertical scrolling remain usable.
+func TestHistoryTableScrollsToRightColumnsAndBack(t *testing.T) {
+	const width, height = 946, 634
+	m, q := newTestModel(t, Config{Service: &fakeService{history: historyTableRecords(30)}})
+	m.SetContentSize(width, height)
+	tt := ui.NewTesterWith(m.View, width, height, ui.TesterOptions{Preferences: ui.Preferences{TextScale: 1.2, ReduceMotion: true}})
+	settle(t, m, q, tt)
+	openRecordsList(t, m, q, tt)
+	left, ok := tt.AccessByRole(ui.RoleColumnHeader, "时间")
+	if !ok {
+		t.Fatal("time header missing")
+	}
+	tt.Scroll(width/2, 250, 10000, 0)
+	right := float32(width) - m.pagePadding() - historyPanelInset - 1
+	storage, ok := tt.AccessByRole(ui.RoleColumnHeader, "占用")
+	if !ok || storage.Bounds.X < m.railWidth() || storage.Bounds.X+storage.Bounds.W > right+.5 {
+		t.Fatalf("storage is not visible after horizontal scroll: %+v", storage.Bounds)
+	}
+	value, ok := tt.Find("1.0 MB")
+	if !ok || value.X < storage.Bounds.X || value.X+value.W > storage.Bounds.X+storage.Bounds.W {
+		t.Fatalf("storage value %+v is not aligned with visible header %+v", value, storage.Bounds)
+	}
+	action, ok := tt.Find("⋯")
+	if !ok || action.X+action.W > right || action.X < m.railWidth() {
+		t.Fatalf("right-side row action is clipped: %+v", action)
+	}
+	tt.Key(0, ui.KeyDown)
+	if m.historyRow != 1 {
+		t.Fatal("keyboard selection failed while scrolled right")
+	}
+	if err := tt.Click("更多操作 " + historyTimeText(m.history[0])); err != nil {
+		t.Fatal(err)
+	}
+	if !m.historyMenuOpen || m.historyMenuID != "r01" || !tt.HasText("删除截图") || tt.HasText("删除截图（1.0 MB）") {
+		t.Fatal("visible row action did not open the unchanged menu")
+	}
+	tt.Key(0, ui.KeyEscape)
+	tt.Frame()
+	tt.Scroll(width/2, 250, -10000, 0)
+	back, ok := tt.AccessByRole(ui.RoleColumnHeader, "时间")
+	if !ok || back.Bounds.X < left.Bounds.X-.5 || back.Bounds.X > left.Bounds.X+.5 {
+		t.Fatalf("horizontal return failed: initial %+v, returned %+v", left.Bounds, back.Bounds)
+	}
+	before, ok := tt.Find(historyTimeText(m.history[5]))
+	if !ok {
+		t.Fatal("vertical reference row missing")
+	}
+	tt.Scroll(width/2, 250, 0, 144)
+	after, ok := tt.Find(historyTimeText(m.history[5]))
+	head, _ := tt.AccessByRole(ui.RoleColumnHeader, "时间")
+	if !ok || after.Y > before.Y-100 || head.Bounds.Y != left.Bounds.Y {
+		t.Fatal("vertical scroll or fixed header regressed")
+	}
+	// Escape returned focus to the menu button; click a visible row to
+	// return the keyboard to the table before testing Home/End.
+	if err := tt.Click(historyTimeText(m.history[5])); err != nil {
+		t.Fatal(err)
+	}
+	tt.Key(0, ui.KeyEnd)
+	if m.historyRow != 29 {
+		t.Fatal("End did not reach the final record")
+	}
+	tt.Key(0, ui.KeyHome)
+	if m.historyRow != 0 {
+		t.Fatal("Home did not return to the first record")
 	}
 }
 

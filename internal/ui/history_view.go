@@ -53,29 +53,18 @@ func (m *Model) historyColumns(c *ui.Context, entries []HistoryEntry) []ui.Table
 	// A smaller value just below a unit boundary can be wider than the
 	// largest value (1024.0 MB versus 2.0 GB after decimal rounding).
 	size := columnWidth(88, "1024.0 KB", "1024.0 MB", "1024.0 GB", "1024.0 TB", formatBytes(largestBytes))
-	const action = 48
-	available := float32(m.contentWidth) - m.railWidth() - m.pageLeftPadding() - m.pagePadding() - 2*(historyPanelInset+1)
-	m.historyCompactLayout = m.contentWidth < 1120 || available < timeWidth+statusWidth+resultWidth+3*count+size+action
-	columns := []ui.TableColumn{{Title: "时间", Width: timeWidth, Fixed: true}}
-	resultTitle := "结果说明"
-	if m.historyCompactLayout {
-		resultTitle = "状态 / 结果说明"
-	} else {
-		columns = append(columns, ui.TableColumn{Title: "状态", Width: statusWidth, Fixed: true})
+	// Native Table sums these minimums into its scrollable row width and
+	// keeps headers in step with the rows. No viewport width removes a column.
+	return []ui.TableColumn{
+		{Title: "时间", Width: timeWidth, Fixed: true},
+		{Title: "状态", Width: statusWidth, Fixed: true},
+		{ID: "result", Title: "结果说明", MinWidth: resultWidth, Fixed: true},
+		{Title: "件数", Width: count, Align: ui.End, Fixed: true},
+		{Title: "待处理", Width: count, Align: ui.End, Fixed: true},
+		{Title: "可导出", Width: count, Align: ui.End, Fixed: true},
+		{Title: "占用", Width: size, Align: ui.End, Fixed: true},
+		{ID: "actions", Width: 48, Align: ui.End, Fixed: true},
 	}
-	columns = append(columns,
-		ui.TableColumn{ID: "result", Title: resultTitle, MinWidth: resultWidth, Fixed: true},
-		ui.TableColumn{Title: "件数", Width: count, Align: ui.End, Fixed: true})
-	if m.historyCompactLayout {
-		merged := columnWidth(132, "待处理 / 可导出", formatCount(number)+" / "+formatCount(number))
-		columns = append(columns, ui.TableColumn{Title: "待处理 / 可导出", Width: merged, Align: ui.End, Fixed: true})
-	} else {
-		columns = append(columns,
-			ui.TableColumn{Title: "待处理", Width: count, Align: ui.End, Fixed: true},
-			ui.TableColumn{Title: "可导出", Width: count, Align: ui.End, Fixed: true},
-			ui.TableColumn{Title: "占用", Width: size, Align: ui.End, Fixed: true})
-	}
-	return append(columns, ui.TableColumn{ID: "actions", Width: action, Align: ui.End, Fixed: true})
 }
 
 // historyPage is the records destination: the title, the date filter, the
@@ -117,7 +106,9 @@ func (m *Model) historyContent(c *ui.Context, t *ui.Theme, tok *Tokens) {
 
 	columns := m.historyColumns(c, entries)
 	var table ui.Element
-	ui.Themed(c, m.theme.table.Theme(t.Dark)).Background(ui.Transparent).Fill().MinHeight(0).Children(func() {
+	// The viewport must shrink independently of the header/row minimums;
+	// otherwise an oversized table is merely clipped by the outer panel.
+	ui.Themed(c, m.theme.table.Theme(t.Dark)).Background(ui.Transparent).Fill().MinWidth(0).MinHeight(0).Children(func() {
 		table = ui.Table(c, &m.historyList, columns, len(entries), func(row, col int) {
 			if row < 0 || row >= len(entries) || col < 0 || col >= len(columns) {
 				return
@@ -126,7 +117,7 @@ func (m *Model) historyContent(c *ui.Context, t *ui.Theme, tok *Tokens) {
 			ui.Row(c).FillWidth().MinHeight(36).Padding(historyCellExtra).AlignItems(ui.Center).Justify(column.Align).Children(func() {
 				m.historyCell(c, c.Theme(), tok, entries[row], row, column)
 			})
-		}).Fill().MinHeight(0)
+		}).Fill().MinWidth(0).MinHeight(0).KeepScrollbars(true)
 	})
 	if table.Submitted() {
 		m.openHistoryRow(m.historyRow)
@@ -244,14 +235,7 @@ func (m *Model) historyCell(c *ui.Context, t *ui.Theme, tok *Tokens, entry Histo
 	case "状态":
 		ui.Text(c, m.historyStatusFor(entry)).SingleLine().TextColor(tok.TextPrimary)
 	case "result":
-		if m.historyCompactLayout {
-			ui.Column(c).FillWidth().MinWidth(0).Gap(4).Children(func() {
-				ui.Text(c, m.historyStatusFor(entry)).SingleLine().TextColor(tok.TextPrimary)
-				m.historyResultCell(c, tok, entry, latest)
-			})
-		} else {
-			m.historyResultCell(c, tok, entry, latest)
-		}
+		m.historyResultCell(c, tok, entry, latest)
 	case "件数":
 		m.historyNumberCell(c, t, tok, entry, entry.CapturedCount, entry.Unreadable, latest, chosen)
 	case "待处理":
@@ -260,8 +244,6 @@ func (m *Model) historyCell(c *ui.Context, t *ui.Theme, tok *Tokens, entry Histo
 		m.historyNumberCell(c, t, tok, entry, entry.Counts.Exportable(), entry.Unreadable, latest, chosen)
 	case "占用":
 		m.historySizeCell(c, t, tok, entry, chosen)
-	case "待处理 / 可导出":
-		m.historyMergedCountsCell(c, t, tok, entry, latest, chosen)
 	case "actions":
 		m.historyActionCell(c, t, tok, entry, row)
 	}
@@ -422,22 +404,6 @@ func (m *Model) historyPendingCell(c *ui.Context, t *ui.Theme, tok *Tokens, entr
 	}
 }
 
-// historyMergedCountsCell is the compact tier's "待处理 / 可导出".
-func (m *Model) historyMergedCountsCell(c *ui.Context, t *ui.Theme, tok *Tokens, entry HistoryEntry, latest, chosen bool) {
-	if entry.Unreadable {
-		ui.Text(c, "—").TextColor(colorWhenChosen(chosen, tok.TextMuted, tok.TextPrimary))
-		return
-	}
-	pending := "—"
-	if entry.CapturedCount > 0 {
-		pending = formatCount(entry.Counts.Pending())
-	}
-	text := ui.Text(c, pending+" / "+formatCount(entry.Counts.Exportable())).SingleLine().FontFeatures("tnum")
-	if latest {
-		text.FontWeight(600)
-	}
-}
-
 // historySizeCell is 占用. A record stays measurable even when its
 // checkpoint cannot be read, which the wireframe's damaged row shows.
 func (m *Model) historySizeCell(c *ui.Context, t *ui.Theme, tok *Tokens, entry HistoryEntry, chosen bool) {
@@ -517,17 +483,12 @@ func (m *Model) historyRowMenu(c *ui.Context, t *ui.Theme, tok *Tokens, anchor u
 				m.openHistoryExport(entry)
 			})
 			ui.Divider(c)
-			screenshotLabel := "删除截图"
-			if m.historyCompactLayout {
-				// Compact hides 占用; its number stays in the delete item.
-				screenshotLabel += "（" + formatBytes(entry.TotalBytes) + "）"
-			}
 			reason := m.historyDeleteBlockedReason(entry)
 			deleteColor := t.Danger
 			if reason != "" {
 				deleteColor = tok.TextMuted
 			}
-			m.historyMenuItem(c, t, screenshotLabel, deleteColor, reason != "", false, func() {
+			m.historyMenuItem(c, t, "删除截图", deleteColor, reason != "", false, func() {
 				m.RequestScreenshotCleanup(entry.ID)
 			})
 			m.historyMenuItem(c, t, "删除记录", deleteColor, reason != "", false, func() {

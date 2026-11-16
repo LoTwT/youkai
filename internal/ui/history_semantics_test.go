@@ -120,18 +120,18 @@ func TestHistoryTextStatuses(t *testing.T) {
 	}
 }
 
-// Both column tiers retain neutral text and the native selected face while
+// Both viewport widths retain neutral text and the native selected face while
 // the keyboard moves between ordinary, partial and failed records.
 func TestHistoryTextResultsSurviveSelection(t *testing.T) {
-	for _, width := range []int{1440, 960} {
+	for _, width := range []int{1440, 946} {
 		t.Run(fmt.Sprint(width), func(t *testing.T) {
 			m, q := newTestModel(t, Config{Service: &fakeService{history: historySemanticRecords()}})
 			m.SetContentSize(width, 800)
 			tt := ui.NewTesterWith(m.View, width, 800, ui.TesterOptions{Preferences: ui.Preferences{TextScale: 1.2, ReduceMotion: true}})
 			settle(t, m, q, tt)
 			openRecordsList(t, m, q, tt)
-			if width == 960 && !tt.HasText("状态 / 结果说明") {
-				t.Fatal("compact table lost its merged status/explanation column")
+			if _, ok := tt.AccessByRole(ui.RoleColumnHeader, "状态"); !ok {
+				t.Fatal("independent status column missing")
 			}
 			for selected := 0; selected < 3; selected++ {
 				if selected > 0 {

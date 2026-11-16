@@ -93,7 +93,13 @@ func (m *Model) viewPages(c *ui.Context) {
 
 	ui.Row(c).Fill().Background(tok.SurfaceContent).Children(func() {
 		m.navRail(c, t, tok)
-		ui.Column(c).Grow(1).FillHeight().Children(func() {
+		body := ui.Column(c).Grow(1).FillHeight()
+		if page == pageHistory {
+			// Allocate the records viewport from the window, not the
+			// table's intrinsic column width; the table owns overflow.
+			body.Basis(0).MinWidth(0)
+		}
+		body.Children(func() {
 			m.pageBody(c, t, tok)
 			m.reviewNoticePage(c, t)
 		})
