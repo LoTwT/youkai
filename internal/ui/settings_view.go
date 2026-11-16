@@ -65,7 +65,7 @@ func (m *Model) settingsPage(c *ui.Context, t *ui.Theme) {
 	contentPanel(c, tok).Children(func() {
 		ui.Scroll(c).Grow(1).MinHeight(0).FillWidth().FillHeight().TrackScroll(&m.settingsScroll).Bind(&m.settingsViewportRef).
 			Children(func() {
-				ui.Column(c).FillWidth().Gap(24).Children(func() {
+				ui.Column(c).FillWidth().Gap(8).Children(func() {
 					m.settingsSection(c, t, settingsSectionGeneral, "常规", func() {
 						m.settingsGeneral(c, t, tok)
 					})
@@ -104,7 +104,7 @@ func (m *Model) settingsReturnStrip(c *ui.Context, tok *Tokens) {
 func (m *Model) settingsSection(c *ui.Context, t *ui.Theme,
 	id settingsSectionID, title string, body func()) {
 	ref := m.settingsSections.ref(id)
-	column := ui.Column(c).FillWidth().Padding(settingsSectionInset).Gap(16)
+	column := ui.Column(c).FillWidth().Padding(12, settingsSectionInset).Gap(16)
 	if ref != nil {
 		column = column.Bind(ref)
 	}
@@ -270,15 +270,13 @@ func (m *Model) settingsShortcuts(c *ui.Context, t *ui.Theme, tok *Tokens) {
 	innerWidth := max(0, width-m.railWidth()-m.pageLeftPadding()-m.pagePadding()-2*(settingsSectionInset+1))
 	ui.ScrollHorizontal(c).FillWidth().Focusable().Label("快捷键列表").Children(func() {
 		ui.Column(c).MinWidth(innerWidth).Children(func() {
-			for i, shortcut := range m.settingsShortcutRows() {
-				if i > 0 {
-					ui.Box(c).FillWidth().Height(1).Shrink(0).Background(tok.BorderSubtle)
-				}
-				ui.Row(c).FillWidth().PaddingY(6).Gap(24).AlignItems(ui.Center).Children(func() {
+			for _, shortcut := range m.settingsShortcutRows() {
+				ui.Row(c).FillWidth().MinHeight(48).PaddingY(12).Gap(24).AlignItems(ui.Center).Children(func() {
 					ui.Text(c, shortcut.action+"（"+shortcut.context+"）").SingleLine().Shrink(0)
 					ui.Box(c).Grow(1)
 					keycaps(c, shortcut.keys)
 				})
+				ui.Box(c).FillWidth().Height(1).Shrink(0).Background(tok.BorderSubtle)
 			}
 		})
 	})
