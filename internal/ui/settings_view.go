@@ -350,12 +350,39 @@ func (m *Model) storageSummaryRow(c *ui.Context, t *ui.Theme, tok *Tokens) {
 	case m.storageErr != "":
 		ui.Text(c, "占用读取失败："+m.storageErr).TextColor(t.Danger)
 	case m.storage != nil:
-		ui.Row(c).FillWidth().Wrap().GapX(t.Space(2)).GapY(t.Space(1)).AlignItems(ui.Center).Children(func() {
-			for _, group := range m.storageBreakdownGroups() {
-				ui.Text(c, group).NoWrap().Shrink(0).TextColor(tok.TextSecondary)
+		metrics := m.storageMetrics()
+		width, _ := c.Size()
+		innerWidth := max(0, width-m.railWidth()-m.pageLeftPadding()-m.pagePadding()-2*(settingsSectionInset+1))
+		gap := t.Space(6)
+		// A readable column has room to separate its label, capacity and count.
+		// Measure the actual strings too, so large counts or text scale can
+		// move the grid to fewer columns without truncating a measurement.
+		minWidth := t.FontSize * (160.0 / 14)
+		for _, metric := range metrics {
+			for _, text := range []string{metric.label, metric.capacity, metric.count} {
+				w, _ := c.MeasureText(0, ui.Span{Text: text, Size: t.FontSize})
+				minWidth = max(minWidth, w)
 			}
-			ui.Text(c, m.storageDiskText()).NoWrap().Shrink(0).TextColor(tok.TextMuted).
-				FontSize(t.FontSize * 0.9)
+		}
+		columns := 4
+		for columns > 1 && float32(columns)*minWidth+float32(columns-1)*gap > innerWidth {
+			columns /= 2
+		}
+		ui.Column(c).FillWidth().Gap(t.Space(4)).Children(func() {
+			for i := 0; i < len(metrics); i += columns {
+				ui.Row(c).FillWidth().Gap(gap).AlignItems(ui.Start).Children(func() {
+					for _, metric := range metrics[i:min(i+columns, len(metrics))] {
+						ui.Column(c).Grow(1).Basis(0).MinWidth(0).Gap(t.Space(1)).Children(func() {
+							ui.Text(c, metric.label).NoWrap().TextColor(tok.TextSecondary)
+							ui.Text(c, metric.capacity).NoWrap()
+							if metric.count != "" {
+								ui.Text(c, metric.count).NoWrap().TextColor(tok.TextMuted).FontSize(t.FontSize * 0.9)
+							}
+						})
+					}
+				})
+			}
+			ui.Text(c, m.storageDiskText()).NoWrap().TextColor(tok.TextMuted).FontSize(t.FontSize * 0.9)
 		})
 	}
 }
@@ -533,10 +560,15 @@ func (m *Model) returnToPrepareCheck() {
 	m.page = pageScan
 }
 
-// storageBreakdownGroups keeps each category's quantities together so the
-// layout can wrap between measurements without separating numbers and units.
-// The record count stays with its data size, distinct from screenshots.
-func (m *Model) storageBreakdownGroups() []string {
+type storageMetric struct {
+	label    string
+	capacity string
+	count    string
+}
+
+// storageMetrics separates each category's label, primary capacity and
+// optional count without changing the measured scope or byte formatting.
+func (m *Model) storageMetrics() []storageMetric {
 	usage := m.storage
 	if usage == nil {
 		return nil
@@ -545,11 +577,11 @@ func (m *Model) storageBreakdownGroups() []string {
 	if dataBytes < 0 {
 		dataBytes = 0
 	}
-	return []string{
-		"记录 " + formatBytes(dataBytes) + "（" + strconv.Itoa(usage.Records) + " 条）",
-		"截图 " + strconv.Itoa(usage.EvidenceFiles) + " 张 " + formatBytes(usage.EvidenceBytes),
-		"缓存 " + formatBytes(usage.CacheBytes),
-		"日志 " + formatBytes(usage.LogBytes),
+	return []storageMetric{
+		{"记录", formatBytes(dataBytes), strconv.Itoa(usage.Records) + " 条"},
+		{"截图", formatBytes(usage.EvidenceBytes), strconv.Itoa(usage.EvidenceFiles) + " 张"},
+		{"缓存", formatBytes(usage.CacheBytes), ""},
+		{"日志", formatBytes(usage.LogBytes), ""},
 	}
 }
 

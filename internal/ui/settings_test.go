@@ -382,7 +382,7 @@ func TestSettingsStorageCopy(t *testing.T) {
 	settle(t, m, q, tt)
 	openSettings(t, m, q, tt)
 
-	for _, want := range []string{"记录 5.8 KB（2 条）", "截图 4 张 4.0 KB", "缓存 1.0 KB", "日志 2.0 KB"} {
+	for _, want := range []string{"记录", "5.8 KB", "2 条", "截图", "4.0 KB", "4 张", "缓存", "1.0 KB", "日志", "2.0 KB"} {
 		if !tt.HasText(want) {
 			t.Fatalf("the storeroom measurement %q does not show: %q", want, tt.Texts())
 		}

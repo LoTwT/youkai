@@ -218,7 +218,7 @@ func TestViewStorageBulkCleanupPreviewsAndIndependentEntries(t *testing.T) {
 	tt := ui.NewTester(m.View, 1020, 700)
 	settle(t, m, q, tt)
 
-	for _, group := range []string{"记录 5.8 KB（2 条）", "截图 4 张 4.0 KB", "缓存 1.0 KB", "日志 2.0 KB"} {
+	for _, group := range []string{"记录", "5.8 KB", "2 条", "截图", "4.0 KB", "4 张", "缓存", "1.0 KB", "日志", "2.0 KB"} {
 		if !tt.HasText(group) {
 			t.Fatalf("the storeroom measurement %q does not show: %q", group, tt.Texts())
 		}
@@ -634,15 +634,20 @@ func TestViewOpenDataDirectoryFailure(t *testing.T) {
 }
 
 func TestViewStorageUsageFailureDoesNotShowStaleNumbers(t *testing.T) {
-	svc := &fakeService{storageErr: errString("权限不足")}
+	svc := &fakeService{storage: app.StorageUsage{CacheBytes: 1024}}
 	m, q := newTestModel(t, Config{Service: svc, DirectExportSaver: &fakeDirectExportSaver{}})
 	m.page = pageSettings
 	tt := ui.NewTester(m.View, 1020, 700)
 	settle(t, m, q, tt)
+	if !tt.HasText("1.0 KB") {
+		t.Fatal("successful storage measurement is missing")
+	}
+	m.storageErr = "权限不足"
+	tt.Frame()
 	if !tt.HasText("占用读取失败：权限不足") {
 		t.Fatalf("the storage failure does not show: %q", tt.Texts())
 	}
-	if tt.HasText("缓存 0 B") {
+	if tt.HasText("1.0 KB") {
 		t.Fatalf("a failed measurement still shows numbers: %q", tt.Texts())
 	}
 }

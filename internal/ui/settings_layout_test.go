@@ -2,45 +2,72 @@ package ui
 
 import (
 	"math"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/LoTwT/youkai/internal/app"
 	"github.com/egoist/mygo/ui"
 )
 
-// Long storage measurements must stay whole and within the visible page;
-// only the space between independent measurements may wrap.
+// Metrics distribute the available width and switch to fewer columns before
+// complete measurements or counts stop fitting at the user's text scale.
 func TestSettingsStorageGroupsStayReadable(t *testing.T) {
-	groups := []string{"记录 92.8 MB（10 条）", "截图 40938 张 127.7 MB", "缓存 0 B", "日志 35.8 MB", "磁盘可用 366.4 GB / 929.8 GB"}
-	for _, size := range []struct{ width, height int }{{946, 634}, {1440, 900}} {
-		m, q, svc := settingsTestModel(t)
-		svc.storage = app.StorageUsage{Records: 10, RecordBytes: 231211008, EvidenceBytes: 133903155,
-			EvidenceFiles: 40938, CacheBytes: 0, LogBytes: 37539021,
-			DiskFreeBytes: 393419004314, DiskTotalBytes: 998365134029, DiskSpaceKnown: true}
-		unwrapped := map[string]ui.Rect{}
-		tt := ui.NewTesterWith(func(c *ui.Context) {
-			m.View(c)
-			for i, group := range groups {
-				fontSize := float32(16.8) // Existing 14 DIP body text at the reported 120% setting.
-				if i == len(groups)-1 {
-					fontSize *= .9 // The disk summary retains its existing secondary text size.
+	capacities := []string{"92.8 MB", "127.7 MB", "0 B", "35.8 MB"}
+	for _, size := range []struct{ width, height, columns int }{{1440, 900, 4}, {946, 634, 2}, {600, 900, 1}} {
+		t.Run(strconv.Itoa(size.width), func(t *testing.T) {
+			m, q, svc := settingsTestModel(t)
+			m.SetContentSize(size.width, size.height)
+			svc.storage = app.StorageUsage{Records: 10, RecordBytes: 231211008, EvidenceBytes: 133903155,
+				EvidenceFiles: 40938, CacheBytes: 0, LogBytes: 37539021,
+				DiskFreeBytes: 393419004314, DiskTotalBytes: 998365134029, DiskSpaceKnown: true}
+			unwrapped := map[string]ui.Rect{}
+			tt := ui.NewTesterWith(func(c *ui.Context) {
+				m.View(c)
+				for _, value := range append(append([]string{}, capacities...), "10 条", "40938 张", "磁盘可用 366.4 GB / 929.8 GB") {
+					fontSize := c.Theme().FontSize
+					if value == "10 条" || value == "40938 张" || strings.HasPrefix(value, "磁盘") {
+						fontSize *= .9
+					}
+					w, h := c.MeasureText(0, ui.Span{Text: value, Size: fontSize})
+					unwrapped[value] = ui.Rect{W: w, H: h}
 				}
-				w, h := c.MeasureText(0, ui.Span{Text: group, Size: fontSize})
-				unwrapped[group] = ui.Rect{W: w, H: h}
+			}, size.width, size.height, ui.TesterOptions{Preferences: ui.Preferences{TextScale: 1.2, ReduceMotion: true}})
+			settle(t, m, q, tt)
+			openSettings(t, m, q, tt)
+			m.settingsScrollTarget = settingsSectionStorage
+			tt.Frame()
+			tt.Frame()
+			for value, want := range unwrapped {
+				bounds, ok := tt.Find(value)
+				if !ok || bounds.W+.5 < want.W || bounds.H > want.H+.5 || bounds.X < 0 || bounds.X+bounds.W > float32(size.width) {
+					t.Errorf("measurement %q is missing, wrapped or clipped: bounds=%+v unwrapped=%+v", value, bounds, want)
+				}
 			}
-		}, size.width, size.height, ui.TesterOptions{Preferences: ui.Preferences{TextScale: 1.2, ReduceMotion: true}})
-		settle(t, m, q, tt)
-		openSettings(t, m, q, tt)
-		m.settingsScrollTarget = settingsSectionStorage
-		tt.Frame()
-		tt.Frame()
-		for _, group := range groups {
-			bounds, ok := tt.Find(group)
-			want := unwrapped[group]
-			if !ok || bounds.W+.5 < want.W || bounds.H > want.H+.5 || bounds.X < 0 || bounds.X+bounds.W > float32(size.width) {
-				t.Errorf("at %d, measurement %q is missing, wrapped or clipped: bounds=%+v unwrapped=%+v", size.width, group, bounds, want)
+			first, ok := tt.Find(capacities[0])
+			if !ok {
+				t.Fatal("missing record capacity")
 			}
-		}
+			right := float32(size.width) - m.pagePadding() - 25
+			step := (right - first.X + 24) / float32(size.columns)
+			for i, capacity := range capacities {
+				bounds, _ := tt.Find(capacity)
+				wantX := first.X + float32(i%size.columns)*step
+				if math.Abs(float64(bounds.X-wantX)) > 1 || (i < size.columns && math.Abs(float64(bounds.Y-first.Y)) > .5) || (i >= size.columns && bounds.Y <= first.Y) {
+					t.Errorf("capacity %q is not in the expected %d-column grid: %+v, first=%+v wantX=%v", capacity, size.columns, bounds, first, wantX)
+				}
+			}
+			disk, _ := tt.Find("磁盘可用 366.4 GB / 929.8 GB")
+			last, _ := tt.Find(capacities[3])
+			if disk.X != first.X || disk.Y <= last.Y+last.H {
+				t.Errorf("disk must occupy its own row below all four metrics: disk=%+v last=%+v", disk, last)
+			}
+			for _, label := range []string{"记录", "截图", "缓存", "日志"} {
+				if !tt.HasText(label) {
+					t.Errorf("missing metric label %q", label)
+				}
+			}
+		})
 	}
 }
 
