@@ -350,10 +350,11 @@ func (m *Model) storageSummaryRow(c *ui.Context, t *ui.Theme, tok *Tokens) {
 	case m.storageErr != "":
 		ui.Text(c, "占用读取失败："+m.storageErr).TextColor(t.Danger)
 	case m.storage != nil:
-		ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, m.storageBreakdownText()).TextColor(tok.TextSecondary)
-			ui.Box(c).Grow(1)
-			ui.Text(c, m.storageDiskText()).TextColor(tok.TextMuted).
+		ui.Row(c).FillWidth().Wrap().GapX(t.Space(2)).GapY(t.Space(1)).AlignItems(ui.Center).Children(func() {
+			for _, group := range m.storageBreakdownGroups() {
+				ui.Text(c, group).NoWrap().Shrink(0).TextColor(tok.TextSecondary)
+			}
+			ui.Text(c, m.storageDiskText()).NoWrap().Shrink(0).TextColor(tok.TextMuted).
 				FontSize(t.FontSize * 0.9)
 		})
 	}
@@ -532,21 +533,24 @@ func (m *Model) returnToPrepareCheck() {
 	m.page = pageScan
 }
 
-// storageBreakdownText renders the four category sizes. The record count is
-// shown with its data size so "记录" is not mistaken for the screenshots.
-func (m *Model) storageBreakdownText() string {
+// storageBreakdownGroups keeps each category's quantities together so the
+// layout can wrap between measurements without separating numbers and units.
+// The record count stays with its data size, distinct from screenshots.
+func (m *Model) storageBreakdownGroups() []string {
 	usage := m.storage
 	if usage == nil {
-		return ""
+		return nil
 	}
 	dataBytes := usage.RecordBytes - usage.EvidenceBytes
 	if dataBytes < 0 {
 		dataBytes = 0
 	}
-	return "记录 " + formatBytes(dataBytes) + "（" + strconv.Itoa(usage.Records) + " 条）" +
-		" · 截图 " + strconv.Itoa(usage.EvidenceFiles) + " 张 " + formatBytes(usage.EvidenceBytes) +
-		" · 缓存 " + formatBytes(usage.CacheBytes) +
-		" · 日志 " + formatBytes(usage.LogBytes)
+	return []string{
+		"记录 " + formatBytes(dataBytes) + "（" + strconv.Itoa(usage.Records) + " 条）",
+		"截图 " + strconv.Itoa(usage.EvidenceFiles) + " 张 " + formatBytes(usage.EvidenceBytes),
+		"缓存 " + formatBytes(usage.CacheBytes),
+		"日志 " + formatBytes(usage.LogBytes),
+	}
 }
 
 // storageDiskText renders the data volume's free and total space; unknown

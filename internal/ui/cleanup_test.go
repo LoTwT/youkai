@@ -218,8 +218,10 @@ func TestViewStorageBulkCleanupPreviewsAndIndependentEntries(t *testing.T) {
 	tt := ui.NewTester(m.View, 1020, 700)
 	settle(t, m, q, tt)
 
-	if !tt.HasText("记录 5.8 KB（2 条） · 截图 4 张 4.0 KB · 缓存 1.0 KB · 日志 2.0 KB") {
-		t.Fatalf("the storeroom summary does not show: %q", tt.Texts())
+	for _, group := range []string{"记录 5.8 KB（2 条）", "截图 4 张 4.0 KB", "缓存 1.0 KB", "日志 2.0 KB"} {
+		if !tt.HasText(group) {
+			t.Fatalf("the storeroom measurement %q does not show: %q", group, tt.Texts())
+		}
 	}
 
 	clickRevealedSettingsControl(t, tt, 700, "删除全部截图")

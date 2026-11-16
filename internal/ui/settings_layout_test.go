@@ -8,6 +8,42 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
+// Long storage measurements must stay whole and within the visible page;
+// only the space between independent measurements may wrap.
+func TestSettingsStorageGroupsStayReadable(t *testing.T) {
+	groups := []string{"记录 92.8 MB（10 条）", "截图 40938 张 127.7 MB", "缓存 0 B", "日志 35.8 MB", "磁盘可用 366.4 GB / 929.8 GB"}
+	for _, size := range []struct{ width, height int }{{946, 634}, {1440, 900}} {
+		m, q, svc := settingsTestModel(t)
+		svc.storage = app.StorageUsage{Records: 10, RecordBytes: 231211008, EvidenceBytes: 133903155,
+			EvidenceFiles: 40938, CacheBytes: 0, LogBytes: 37539021,
+			DiskFreeBytes: 393419004314, DiskTotalBytes: 998365134029, DiskSpaceKnown: true}
+		unwrapped := map[string]ui.Rect{}
+		tt := ui.NewTesterWith(func(c *ui.Context) {
+			m.View(c)
+			for i, group := range groups {
+				fontSize := float32(16.8) // Existing 14 DIP body text at the reported 120% setting.
+				if i == len(groups)-1 {
+					fontSize *= .9 // The disk summary retains its existing secondary text size.
+				}
+				w, h := c.MeasureText(0, ui.Span{Text: group, Size: fontSize})
+				unwrapped[group] = ui.Rect{W: w, H: h}
+			}
+		}, size.width, size.height, ui.TesterOptions{Preferences: ui.Preferences{TextScale: 1.2, ReduceMotion: true}})
+		settle(t, m, q, tt)
+		openSettings(t, m, q, tt)
+		m.settingsScrollTarget = settingsSectionStorage
+		tt.Frame()
+		tt.Frame()
+		for _, group := range groups {
+			bounds, ok := tt.Find(group)
+			want := unwrapped[group]
+			if !ok || bounds.W+.5 < want.W || bounds.H > want.H+.5 || bounds.X < 0 || bounds.X+bounds.W > float32(size.width) {
+				t.Errorf("at %d, measurement %q is missing, wrapped or clipped: bounds=%+v unwrapped=%+v", size.width, group, bounds, want)
+			}
+		}
+	}
+}
+
 // Check the actual key bounds: filling only the horizontal viewport leaves
 // its unconstrained content at its intrinsic width.
 func TestSettingsShortcutsFillAvailableWidth(t *testing.T) {
