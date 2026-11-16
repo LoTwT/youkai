@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -71,10 +72,13 @@ func TestSettingsPageSectionsAndFocus(t *testing.T) {
 		tt := ui.NewTester(m.View, width, 900)
 		settle(t, m, q, tt)
 		openSettings(t, m, q, tt)
-		for _, section := range []string{"常规", "快捷键", "存储与清理", "诊断", "更新", "关于"} {
+		for _, section := range []string{"常规", "快捷键", "存储与清理", "诊断", "更新"} {
 			if got := countText(tt.Texts(), section); got != 1 {
 				t.Errorf("at %d, %s appears %d times, want only its section title", width, section, got)
 			}
+		}
+		if tt.HasText("关于") {
+			t.Fatal("settings still has a duplicate about section")
 		}
 		if !tt.Focused("跟随系统") {
 			t.Fatalf("at %d, settings entry did not focus the theme buttons", width)
@@ -256,9 +260,9 @@ func TestSettingsStopHotkeyState(t *testing.T) {
 	}
 }
 
-// TestSettingsScrollReachesAbout checks the last section remains reachable
+// TestSettingsScrollReachesLicenses checks the last entry remains reachable
 // without the removed directory.
-func TestSettingsScrollReachesAbout(t *testing.T) {
+func TestSettingsScrollReachesLicenses(t *testing.T) {
 	m, q, _ := settingsTestModel(t)
 	m.SetContentSize(1180, 600)
 	tt := ui.NewTester(m.View, 1180, 600)
@@ -266,13 +270,13 @@ func TestSettingsScrollReachesAbout(t *testing.T) {
 	openSettings(t, m, q, tt)
 
 	if rect, ok := tt.Find("开源许可"); ok && rect.H > 0 && rect.Y >= 0 && rect.Y+rect.H <= 600 {
-		t.Fatalf("the about section already fits; the jump cannot be observed: %+v", rect)
+		t.Fatalf("the license entry already fits; scrolling cannot be observed: %+v", rect)
 	}
 	tt.Scroll(900, 400, 0, 10000)
 	settle(t, m, q, tt)
 	rect, ok := tt.Find("开源许可")
 	if !ok || rect.H == 0 || rect.Y < 0 || rect.Y+rect.H > 600 {
-		t.Fatalf("the about section did not come into view: %+v", rect)
+		t.Fatalf("the license entry did not come into view: %+v", rect)
 	}
 }
 
@@ -690,7 +694,13 @@ func TestSettingsDiagnosticsActions(t *testing.T) {
 	if !tt.HasText("复制的内容不包含窗口标题等隐私") {
 		t.Fatalf("the privacy note is missing: %q", tt.Texts())
 	}
-	clickRevealedSettingsControl(t, tt, 1000, "复制诊断信息")
+	m.settingsScrollTarget = settingsSectionDiagnostics
+	tt.Frame()
+	tt.Frame()
+	beforeUpdate, _ := tt.Find("更新")
+	if err := tt.Click("复制诊断信息"); err != nil {
+		t.Fatal(err)
+	}
 	settle(t, m, q, tt)
 	want := app.DiagnosticsText(app.DiagnosticsInput{
 		Version: "0.6.0 (build 1021)",
@@ -709,8 +719,12 @@ func TestSettingsDiagnosticsActions(t *testing.T) {
 	if got := tt.Clipboard(); got != want {
 		t.Fatalf("the clipboard holds %q, want %q", got, want)
 	}
-	if !tt.HasText("已复制诊断信息。") {
-		t.Fatalf("the copy result does not show: %q", tt.Texts())
+	if _, ok := tt.AccessByRole(ui.RoleButton, "已复制诊断信息"); !ok || tt.HasText("已复制诊断信息。") {
+		t.Fatalf("the copy result is not contained in its button: %q", tt.Texts())
+	}
+	afterUpdate, _ := tt.Find("更新")
+	if afterUpdate.Y != beforeUpdate.Y || !tt.Focused("已复制诊断信息") {
+		t.Fatal("copy feedback moved the next section or lost keyboard focus")
 	}
 	if !strings.Contains(tt.Clipboard(), "（构建 83ba00c）") {
 		t.Fatalf("the copied text does not name the build commit: %q", tt.Clipboard())
@@ -724,7 +738,7 @@ func TestSettingsDiagnosticsActions(t *testing.T) {
 
 	clickRevealedSettingsControl(t, tt, 1000, "打开诊断目录")
 	settle(t, m, q, tt)
-	if opened != 1 || !tt.HasText("已打开诊断目录。") {
+	if opened != 1 || tt.HasText("已打开诊断目录。") {
 		t.Fatalf("opened=%d texts=%q", opened, tt.Texts())
 	}
 }
@@ -743,30 +757,67 @@ func TestSettingsOpenDiagnosticsDirectoryFailure(t *testing.T) {
 	if !tt.HasText("打开诊断目录失败：没有文件管理器") {
 		t.Fatalf("the directory failure does not show: %q", tt.Texts())
 	}
+	m.cfg.OpenDiagnosticsDirectory = func() error { return nil }
+	if err := tt.Click("打开诊断目录"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
+	if tt.HasText("打开诊断目录失败：没有文件管理器") || tt.HasText("已打开诊断目录。") {
+		t.Fatalf("successful retry left redundant directory feedback: %q", tt.Texts())
+	}
 }
 
-// TestSettingsAbout checks the version and the bundled open-source notice
-// action.
-func TestSettingsAbout(t *testing.T) {
-	opened := 0
+// A rejected clipboard write must not claim success; the same focused button retries.
+func TestSettingsDiagnosticsCopyFailureCanRetry(t *testing.T) {
 	m, q, _ := settingsTestModel(t)
-	m.cfg.OpenLicenses = func() error {
-		opened++
-		return nil
-	}
 	tt := ui.NewTester(m.View, 1440, 1000)
 	settle(t, m, q, tt)
 	openSettings(t, m, q, tt)
-
-	if !tt.HasText("youkai 0.6.0 (build 1021)") {
-		t.Fatalf("the about section does not name the version: %q", tt.Texts())
-	}
-	if !tt.HasText("以 MIT 许可发布。") {
-		t.Fatalf("the about section does not state the license: %q", tt.Texts())
-	}
-	clickRevealedSettingsControl(t, tt, 1000, "开源许可")
+	tt.FailClipboard(errString("剪贴板被占用"))
+	clickRevealedSettingsControl(t, tt, 1000, "复制诊断信息")
 	settle(t, m, q, tt)
-	if opened != 1 {
-		t.Fatalf("the license action opened %d times, want 1", opened)
+	if !tt.HasText("复制诊断信息失败：剪贴板被占用") || tt.Clipboard() != "" || tt.HasText("已复制诊断信息") {
+		t.Fatalf("failed copy claimed success or hid the reason: %q", tt.Texts())
+	}
+	tt.FailClipboard(nil)
+	tt.Key(0, ui.KeyEnter)
+	settle(t, m, q, tt)
+	if !tt.Focused("已复制诊断信息") || tt.HasText("复制诊断信息失败：剪贴板被占用") || !strings.Contains(tt.Clipboard(), "youkai 诊断信息") {
+		t.Fatalf("keyboard copy retry did not recover: %q", tt.Texts())
+	}
+}
+
+// Licenses remain available below Update even in builds without automatic updates.
+func TestSettingsLicensesRemainReachableWithoutAbout(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		t.Run(fmt.Sprint("updates=", enabled), func(t *testing.T) {
+			opened := 0
+			m, q := newTestModel(t, Config{Service: &fakeService{}, Updates: &fakeUpdates{enabled: enabled}, AppVersion: "0.6.0",
+				OpenLicenses: func() error {
+					opened++
+					if opened == 1 {
+						return errString("许可文件暂时不可用")
+					}
+					return nil
+				}})
+			tt := ui.NewTester(m.View, 1440, 1000)
+			settle(t, m, q, tt)
+			openSettings(t, m, q, tt)
+			if tt.HasText("关于") || tt.HasText("以 MIT 许可发布。") || tt.HasText("youkai 0.6.0") || !tt.HasText("当前版本 0.6.0") {
+				t.Fatalf("settings retained duplicate about content or lost the current version: %q", tt.Texts())
+			}
+			clickRevealedSettingsControl(t, tt, 1000, "开源许可")
+			settle(t, m, q, tt)
+			license, _ := tt.Find("开源许可")
+			failure, ok := tt.Find("打开开源许可失败：许可文件暂时不可用")
+			if opened != 1 || !ok || failure.Y < license.Y || failure.Y > license.Y+license.H+32 {
+				t.Fatalf("license failure is not beside the reachable entry: opened=%d entry=%+v error=%+v", opened, license, failure)
+			}
+			tt.Key(0, ui.KeyEnter)
+			settle(t, m, q, tt)
+			if opened != 2 || tt.HasText("打开开源许可失败：许可文件暂时不可用") {
+				t.Fatalf("keyboard license retry did not recover: opened=%d texts=%q", opened, tt.Texts())
+			}
+		})
 	}
 }
