@@ -187,6 +187,8 @@ func (m *Model) exportBlockedReasonWithDraft(blockDirty bool) string {
 		return "扫描尚未收尾，结束后可导出已保存的固定修订。"
 	case m.rec.Live && (m.snap.SavePending || m.snap.SaveError != ""):
 		return "扫描结果尚未保存，保存完成后才能导出。"
+	case m.liveWorkspaceNeedsRefresh():
+		return "正在加载最新检查点，加载完成前不能导出。"
 	case m.exportBuildErr != "":
 		return "无法生成导出：" + m.exportBuildErr
 	case m.exportData == nil:

@@ -1237,16 +1237,21 @@ func (m *Model) nextPendingAfter(seq int64) int {
 	return -1
 }
 
-// catchUpLive reloads the live record when a scan saved new content while
-// an edit kept the results area from reloading.
+// catchUpLive resumes data refresh after navigation or editing deferred it.
+// It grants no navigation rights and coalesces an already-current read.
 func (m *Model) catchUpLive() {
-	if m.rec == nil || !m.rec.Live || m.rec.ID == "" || m.rec.ID != string(m.appliedSession) {
+	if !m.liveWorkspaceNeedsRefresh() || m.editingDirty() || m.reviewSaving ||
+		m.exitIntent != exitIntentNone || m.exitState == exitRunning || m.exitState == exitDone {
 		return
 	}
-	if m.snap.SavedCount > m.liveSavedShown {
-		m.liveSavedShown = m.snap.SavedCount
-		m.reloadRecord(m.rec.ID, true)
+	if m.historyOpen != nil && m.historyOpen.id == m.rec.ID {
+		return // The valid pending open is preparing this target (R1).
 	}
+	if m.loading && m.liveReadCheckpoint == historyLiveCheckpointFor(m.snap) {
+		return
+	}
+	m.liveSavedShown = m.snap.SavedCount
+	m.reloadRecord(m.rec.ID, true)
 }
 
 // validationStatusText renders a validation status.

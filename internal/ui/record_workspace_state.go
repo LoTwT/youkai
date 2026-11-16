@@ -49,9 +49,15 @@ type recordWorkspaceState struct {
 	rec     *RecordView
 	recData *record.Recovery
 	recErr  string
-	// liveSavedShown is the live record's saved count the workspace last
-	// loaded from disk.
+	// liveSavedShown coalesces saved-growth requests; actual installed
+	// freshness is tracked separately by liveCheckpoint below.
 	liveSavedShown int
+	// These stamps belong to data ownership, not a list navigation token.
+	// Only installation advances liveCheckpoint. liveReadCheckpoint lets a
+	// cancelled open resume a deferred refresh without duplicating a read
+	// already fetching the latest accepted checkpoint.
+	liveCheckpoint     historyLiveCheckpoint
+	liveReadCheckpoint historyLiveCheckpoint
 
 	// The browser state: segment, set/slot facets, the chosen row and its
 	// stable capture sequence, and the first visible row. The item list is
@@ -533,7 +539,9 @@ func (m *Model) captureResultPlace() {
 // caller settles any draft before opening another record. The bumped load
 // version discards responses still in flight for the previous record.
 func (m *Model) showRecord(id string, live bool) {
-	m.cancelHistoryOpen()
+	// Replacing the workspace transfers data ownership to the new record;
+	// there is no old workspace left to refresh after revoking navigation.
+	m.historyOpen = nil
 	if m.exportAfterLoadID != id {
 		m.exportAfterLoadID = ""
 	}
@@ -599,6 +607,10 @@ func (m *Model) reloadRecord(id string, live bool) {
 	m.recLoad++
 	version := m.recLoad
 	load := newRecordLoad()
+	checkpoint := historyLiveCheckpointFor(m.snap)
+	if live {
+		m.liveReadCheckpoint = checkpoint
+	}
 	// A result notification waiting for this record's final generation
 	// follows a restarted load: every read after the wrap-up is final, and
 	// the old callback would otherwise never match.
@@ -612,6 +624,16 @@ func (m *Model) reloadRecord(id string, live bool) {
 				// A newer record or load owns the workspace. The read is
 				// still a valid final generation for a notification that
 				// waits on it.
+				m.settleResultFromRecord(scan.ID(id), version)
+				delete(m.recordReads, version)
+				return
+			}
+			if live && m.recordIsLive(id) && checkpoint != historyLiveCheckpointFor(m.snap) {
+				// A newer accepted checkpoint owns the data even if the list
+				// navigation that deferred its refresh was cancelled. Never
+				// let this older read turn the workspace ready again.
+				m.loading = false
+				m.catchUpLive()
 				m.settleResultFromRecord(scan.ID(id), version)
 				delete(m.recordReads, version)
 				return
@@ -665,6 +687,9 @@ func (m *Model) installPreparedRecord(prepared preparedRecord) {
 	m.recData = prepared.recovery
 	m.recErr = ""
 	m.loading = false
+	if view.Live && m.recordIsLive(view.ID) {
+		m.liveCheckpoint = historyLiveCheckpointFor(m.snap)
+	}
 	m.exportData = prepared.export
 	m.exportBuildErr = prepared.exportErr
 	// A reload is a refresh: confirmed rows no longer linger in the

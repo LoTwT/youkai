@@ -905,15 +905,16 @@ func (m *Model) beginSession(id, replacedSession string) {
 }
 
 // ShowLive opens the current (or last) scan's record, after a reopened
-// history record replaced it. An already open live record starts a new
-// visit without reloading; otherwise the record loads from disk after any
-// draft settles.
+// history record replaced it. A fresh live workspace starts a new visit;
+// a retained stale workspace first resumes its checkpoint refresh without
+// dropping a dirty draft. Another record waits for any draft to settle.
 func (m *Model) ShowLive() {
 	if m.appliedSession == "" || m.exitState == exitRunning || m.exitState == exitDone {
 		return
 	}
 	m.cancelHistoryOpen()
 	if m.liveRecordOpen() && m.recErr == "" {
+		m.catchUpLive()
 		m.page = pageResults
 		// Returning from settings or the records list still starts a new
 		// visit: a confirmed-and-stayed row leaves the pending segment and
@@ -1524,12 +1525,12 @@ func (m *Model) requestExit(force bool) {
 	if m.exitState == exitRunning || m.exitState == exitDone {
 		return
 	}
-	m.cancelHistoryOpen()
 	if force {
 		m.exitIntent = exitIntentForce
 	} else if m.exitIntent == exitIntentNone {
 		m.exitIntent = exitIntentNormal
 	}
+	m.cancelHistoryOpen()
 	if m.navPrompt != nil {
 		if m.navPrompt.kind != navExit {
 			m.navPrompt = &navigationRequest{kind: navExit}

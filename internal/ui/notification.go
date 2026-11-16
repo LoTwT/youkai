@@ -119,6 +119,7 @@ func (m *Model) OpenNotification(recordID string) {
 		return
 	}
 	if m.recordIsOpen(recordID) && m.recErr == "" {
+		m.catchUpLive()
 		// A notification click is a navigation even when the record is
 		// already open: requestNavigation owns the dirty/save prompt and the
 		// record-tab switch, so it cannot discard an editor that the click

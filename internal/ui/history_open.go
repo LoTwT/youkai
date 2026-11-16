@@ -43,13 +43,20 @@ func prepareRecord(id string, rec *record.Recovery, live bool) preparedRecord {
 }
 
 func (m *Model) recordIsReady(id string) bool {
-	return m.recordIsOpen(id) && m.recData != nil && !m.loading && m.recErr == ""
+	return m.recordIsOpen(id) && m.recData != nil && !m.loading && m.recErr == "" && !m.liveWorkspaceNeedsRefresh()
+}
+
+func (m *Model) liveWorkspaceNeedsRefresh() bool {
+	return m.liveRecordOpen() && m.liveCheckpoint != historyLiveCheckpointFor(m.snap)
 }
 
 func (m *Model) cancelHistoryOpen() {
 	if m.historyOpen != nil {
 		m.historyOpen = nil
 		m.historyFocusPending = true
+		// Cancelling transfers no navigation rights to a read. The retained
+		// workspace still owns any accepted checkpoint it has not installed.
+		m.catchUpLive()
 	}
 }
 
@@ -110,7 +117,9 @@ func (m *Model) beginHistoryOpen(id string, live, exportAfterLoad bool) {
 				m.beginHistoryOpen(id, live, intent.exportAfterLoad)
 				return
 			}
-			m.cancelHistoryOpen()
+			// This prepared installation takes over the workspace's data
+			// responsibility; do not start a redundant refresh of its old view.
+			m.historyOpen = nil
 			m.showRecord(id, live)
 			m.recordTab = recordTabSummary
 			if live {
