@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/LoTwT/youkai/internal/record"
 	"github.com/egoist/mygo/ui"
 	"github.com/lobehub/lobe-mygo/pkg/lucide"
 )
@@ -21,8 +22,17 @@ const (
 )
 
 var (
-	historyWarningIcon = lucide.AlertTriangle()
-	historyErrorIcon   = lucide.CircleX()
+	historyWarningIcon     = lucide.AlertTriangle()
+	historyErrorIcon       = lucide.CircleX()
+	historyCompletedIcon   = lucide.CircleCheck()
+	historyRunningIcon     = lucide.LoaderCircle()
+	historyStoppedIcon     = lucide.Square()
+	historyPendingIcon     = lucide.ClipboardList()
+	historyInterruptedIcon = lucide.CirclePause()
+	historyUnreadableIcon  = lucide.FileX2()
+	historySaveFailedIcon  = lucide.SaveOff()
+	historyEmptyIcon       = lucide.PackageOpen()
+	historyUnknownIcon     = lucide.CircleHelp()
 )
 
 // historyColumns measures the effective system font, not the unscaled
@@ -309,26 +319,88 @@ func (m *Model) historyResultFor(entry HistoryEntry) recordConclusion {
 	return recordConclusionFor(m.historyConclusionInput(entry))
 }
 
+// The list needs a gold/red hue distinction in addition to contrast. Keep
+// this pair local: other screens still consume the shared semantic tokens.
+func historyResultInks(tok *Tokens, dark bool) (warning, danger ui.Color) {
+	if dark {
+		return tok.WarningStrong, tok.DangerStrong
+	}
+	return hex("#856500"), hex("#C5221F")
+}
+
+// Icons consume the existing outcome and facts, never localized wording.
+// Empty records retain their real termination, including manual stops.
+func historyResultIcon(out recordOutcome, result recordConclusion) (*ui.SVG, string) {
+	kind, in := out.Kind, out.Input
+	if kind == recordOutcomeEmpty {
+		switch {
+		case in.Interrupted:
+			kind = recordOutcomeInterrupted
+		case in.Termination == nil:
+			kind = recordOutcomeUnknown
+		default:
+			switch in.Termination.Kind {
+			case record.TerminationInterrupted:
+				kind = recordOutcomeInterrupted
+			case record.TerminationCancelled:
+				kind = recordOutcomeCancelled
+			case record.TerminationFailed:
+				kind = recordOutcomeFault
+			case record.TerminationCompleted:
+				return historyEmptyIcon, "未采集"
+			default:
+				kind = recordOutcomeUnknown
+			}
+		}
+	}
+	switch kind {
+	case recordOutcomeUnreadable:
+		return historyUnreadableIcon, "记录不可读"
+	case recordOutcomeSaveFailed:
+		return historySaveFailedIcon, "保存失败"
+	case recordOutcomeRunning:
+		return historyRunningIcon, "进行中"
+	case recordOutcomeInterrupted:
+		return historyInterruptedIcon, "中断"
+	case recordOutcomeFault:
+		return historyErrorIcon, "错误"
+	case recordOutcomeCancelled:
+		return historyStoppedIcon, "手动停止"
+	case recordOutcomeCompleted:
+		switch {
+		case result.tone == recordToneWarning:
+			return historyWarningIcon, "警告"
+		case result.tone == recordToneMuted:
+			return historyUnknownIcon, "覆盖未知"
+		case in.Counts.Pending() > 0:
+			return historyPendingIcon, "待处理"
+		default:
+			return historyCompletedIcon, "完成"
+		}
+	default:
+		return historyUnknownIcon, "状态未知"
+	}
+}
+
 // historyResultCell draws the tag and the conclusion.
 func (m *Model) historyResultCell(c *ui.Context, t *ui.Theme, tok *Tokens, entry HistoryEntry, latest, chosen bool) {
-	result := m.historyResultFor(entry)
-	// Selection changes the row face, not the result's severity. Strong
-	// semantic ink and distinct SVG shapes stay legible at larger text sizes.
-	fg, bg := tok.WarningStrong, tok.WarningSoft
-	icon, label := historyWarningIcon, "警告"
+	out := recordOutcomeFor(m.historyConclusionInput(entry))
+	result := recordListConclusion(out)
+	warning, danger := historyResultInks(tok, t.Dark)
+	fg, bg := warning, tok.WarningSoft
 	if result.tone == recordToneDanger {
-		fg, bg = tok.DangerStrong, tok.DangerSoft
-		icon, label = historyErrorIcon, "错误"
+		fg, bg = danger, tok.DangerSoft
 	}
 	semantic := result.tone == recordToneWarning || result.tone == recordToneDanger
+	ink := colorWhenChosen(chosen, tok.TextSecondary, tok.TextPrimary)
+	if semantic {
+		ink = fg
+	} else if result.tone == recordToneMuted {
+		ink = colorWhenChosen(chosen, tok.TextMuted, tok.TextPrimary)
+	}
+	icon, label := historyResultIcon(out, result)
 	ui.Row(c).FillWidth().MinWidth(0).Gap(8).AlignItems(ui.Center).Children(func() {
-		if semantic {
-			ui.Icon(c, icon).Size(20, 20).Shrink(0).TextColor(fg).Role(ui.RoleImage).Label(label)
-		}
-		if result.tag != "" {
-			ui.Text(c, result.tag).SingleLine().Shrink(0).FontSize(t.FontSize*12/14).FontWeight(600).
-				TextColor(fg).Background(bg).Padding(0, 4).Radius(4)
-		}
+		ui.Icon(c, icon).Size(20, 20).Shrink(0).TextColor(ink).Role(ui.RoleImage).Label(label)
 		text := ui.Text(c, result.text).MinWidth(0)
 		if latest || semantic {
 			text.FontWeight(600)
@@ -338,6 +410,10 @@ func (m *Model) historyResultCell(c *ui.Context, t *ui.Theme, tok *Tokens, entry
 			text.TextColor(colorWhenChosen(chosen, tok.TextMuted, tok.TextPrimary))
 		case recordToneWarning, recordToneDanger:
 			text.TextColor(fg)
+		}
+		if result.tag != "" {
+			ui.Text(c, result.tag).SingleLine().Shrink(0).FontSize(t.FontSize*12/14).FontWeight(600).
+				TextColor(fg).Background(bg).Padding(0, 4).Radius(4)
 		}
 	})
 }
@@ -365,7 +441,8 @@ func (m *Model) historyPendingCell(c *ui.Context, t *ui.Theme, tok *Tokens, entr
 	pending := entry.Counts.Pending()
 	text := ui.Text(c, formatCount(pending)).SingleLine().FontFeatures("tnum")
 	if pending > 0 {
-		text.TextColor(tok.WarningStrong).FontWeight(600)
+		warning, _ := historyResultInks(tok, t.Dark)
+		text.TextColor(warning).FontWeight(600)
 	}
 }
 
