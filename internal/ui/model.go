@@ -104,9 +104,9 @@ type ScanSourceInfo struct {
 	// Reason explains why starts are impossible when Available is false.
 	Reason string
 	// TargetSelection means the source discovers game windows and starts
-	// only the candidate the user confirms (P-01). The prepare area then
-	// lists the candidates and the start stays disabled until one is
-	// chosen; a single candidate is shown for confirmation too.
+	// only the selected candidate (P-01). A unique initial candidate is
+	// selected automatically; ambiguity or an invalidated choice requires
+	// an explicit selection before starting.
 	TargetSelection bool
 }
 
@@ -376,6 +376,10 @@ type Model struct {
 	targetsAccessDenied int
 	targetsUnreadable   int
 	targetChoice        int
+	// An invalidated instance or an explicit change requires a fresh choice,
+	// even if a later discovery has only one candidate.
+	targetNeedsChoice bool
+	targetInvalidated bool
 
 	// The read-only preparation check (R-01). The report is kept while a
 	// newer pass runs, so the checklist never blanks out between checks;
@@ -451,12 +455,13 @@ type Model struct {
 	// exact). A finished scan never asks whether to keep its screenshots
 	// (P-13); the summary's detail area and the cleanup entries are the
 	// only places screenshots are managed.
-	cleanup        *cleanupPrompt
-	cleanupNotice  string
-	storage        *app.StorageUsage
-	storageErr     string
-	storageLoading bool
-	storagePrompt  *storagePrompt
+	cleanup          *cleanupPrompt
+	cleanupNotice    string
+	dataDirectoryErr string
+	storage          *app.StorageUsage
+	storageErr       string
+	storageLoading   bool
+	storagePrompt    *storagePrompt
 
 	// exporting is the shared export slot: one export runs at a time. Its
 	// frozen snapshot lives in the open record's workspace; exportOutcome
@@ -504,10 +509,10 @@ type Model struct {
 	settingsScrollTarget    settingsSectionID
 	settingsScroll          ui.ScrollState
 	settingsViewportRef     ui.Ref
-	// Diagnostics results and the about section's license failure.
+	// Diagnostics results and the bundled license entry's failure.
 	diagnosticsNotice string
 	diagnosticsErr    string
-	aboutErr          string
+	licensesErr       string
 
 	// contentWidth/contentHeight track the page area so the shell can
 	// switch the results split orientation at narrow widths.

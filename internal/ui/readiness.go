@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -188,21 +189,26 @@ func (m *Model) scheduleReadinessCheck() {
 
 // applyReadinessTargets replaces the candidate list from the same pass and
 // keeps the choice only when the same window instance is still present. A
-// vanished or restarted window clears the choice so the user confirms again.
+// vanished or restarted window requires a fresh choice. Only an initial
+// unambiguous discovery is selected automatically.
 func (m *Model) applyReadinessTargets(report app.ReadinessReport) {
 	chosen := m.chosenTarget()
 	m.targets = report.Candidates
 	m.targetsAccessDenied = report.AccessDeniedWindows
 	m.targetsUnreadable = report.UnreadableGameWindows
 	m.targetChoice = -1
-	if chosen == nil {
-		return
-	}
-	for i, candidate := range m.targets {
-		if sameTarget(*chosen, candidate) {
-			m.targetChoice = i
-			return
+	if chosen != nil {
+		for i, candidate := range m.targets {
+			if sameTarget(*chosen, candidate) {
+				m.targetChoice = i
+				return
+			}
 		}
+		m.targetNeedsChoice = true
+		m.targetInvalidated = true
+	}
+	if len(m.targets) == 1 && !m.targetNeedsChoice {
+		m.targetChoice = 0
 	}
 }
 
@@ -301,7 +307,7 @@ func (m *Model) readinessRow(check app.ReadinessCheck) readinessRow {
 	case app.ReadinessDisplayScale:
 		row = readinessDisplayScaleRow(check)
 	case app.ReadinessStopHotkey:
-		row = readinessAfterStartRow(check, "停止热键", "开始后若热键被占用，会回到这里并说明。")
+		row = readinessAfterStartRow(check, "停止热键", shortcutStopScan)
 	case app.ReadinessDiskSpace:
 		row = readinessDiskSpaceRow(check)
 	case app.ReadinessRecognitionResources:
@@ -379,9 +385,8 @@ func (m *Model) waitingForGame() bool {
 		m.targetsAccessDenied == 0 && m.targetsUnreadable == 0
 }
 
-// targetReadinessRow merges the check with the discovered candidates. The
-// unique candidate is shown for confirmation too (P-01), and a confirmed
-// window keeps a 更换目标 action.
+// targetReadinessRow merges the check with the discovered candidates. A
+// selected window shows its actual identity and keeps a 更换目标 action.
 func (m *Model) targetReadinessRow(check app.ReadinessCheck) readinessRow {
 	row := readinessRow{item: check.Item, title: "目标客户端", status: readinessSatisfied}
 	if !m.source.TargetSelection {
@@ -402,18 +407,16 @@ func (m *Model) targetReadinessRow(check app.ReadinessCheck) readinessRow {
 	}
 	switch {
 	case len(m.targets) > 0 && m.chosenTarget() != nil:
-		row.value = "已确认：" + targetExecutableName(*m.chosenTarget())
+		row.value = targetLabel(*m.chosenTarget())
 		row.why, row.how = readinessParts(check)
 		row.action = readinessActionChangeTarget
 	case len(m.targets) == 1:
 		row.status = readinessConfirm
 		row.value = "已找到 1 个窗口 → 请确认要扫描的一个"
-		row.how = "唯一候选也需要确认；确认后点“开始扫描”。"
 		row.action = readinessActionChooseTarget
 	case len(m.targets) > 1:
 		row.status = readinessConfirm
 		row.value = fmt.Sprintf("找到 %d 个窗口 → 请选择要扫描的一个", len(m.targets))
-		row.how = "不会替你选择；选中后点“开始扫描”。"
 		row.action = readinessActionChooseTarget
 	case m.targetsAccessDenied > 0 && m.targetNeedsElevation():
 		// P-05: the permission row carries the full explanation and the
@@ -446,6 +449,9 @@ func (m *Model) targetReadinessRow(check app.ReadinessCheck) readinessRow {
 		row.value = "未找到《绝区零》窗口 → 启动游戏并打开驱动盘仓库页"
 		row.how = "找到后点“重新检查”。"
 	}
+	if m.targetInvalidated && row.action == readinessActionChooseTarget {
+		row.why = "原目标已失效，请重新选择游戏窗口。"
+	}
 	return row
 }
 
@@ -455,17 +461,6 @@ func (m *Model) targetReadinessRow(check app.ReadinessCheck) readinessRow {
 func (m *Model) targetNeedsElevation() bool {
 	check := m.readinessCheck(app.ReadinessAdministrator)
 	return check.Verdict == app.ReadinessUnsatisfied && check.FaultCode == "integrityMismatch"
-}
-
-func targetExecutableName(candidate app.TargetCandidate) string {
-	path := strings.TrimSpace(candidate.ExecutablePath)
-	if path == "" {
-		return "游戏窗口"
-	}
-	if i := strings.LastIndexAny(path, `\/`); i >= 0 && i+1 < len(path) {
-		return path[i+1:]
-	}
-	return path
 }
 
 func readinessAdministratorRow(check app.ReadinessCheck) readinessRow {
@@ -572,13 +567,12 @@ func readinessDisplayScaleRow(check app.ReadinessCheck) readinessRow {
 	return row
 }
 
-func readinessAfterStartRow(check app.ReadinessCheck, title, how string) readinessRow {
+func readinessAfterStartRow(check app.ReadinessCheck, title, value string) readinessRow {
 	return readinessRow{
 		item:   check.Item,
 		title:  title,
 		status: readinessAfterStart,
-		value:  "点开始后检查",
-		how:    how,
+		value:  value,
 	}
 }
 
@@ -995,8 +989,6 @@ func (m *Model) readinessChecklist(c *ui.Context, t *ui.Theme, tok *Tokens) {
 		if m.diagnosticsErr != "" {
 			ui.Text(c, m.diagnosticsErr).TextColor(t.Danger).FontSize(t.FontSize * 0.9)
 		}
-		ui.Text(c, "范围：S 级 · 1–6 号位 · 保存在本机").TextColor(t.TextMuted).
-			FontSize(t.FontSize * 0.9)
 	})
 }
 
@@ -1016,7 +1008,10 @@ func (m *Model) readinessRowView(c *ui.Context, t *ui.Theme, tok *Tokens, row re
 	ui.Column(c).Gap(8).Padding(16, 0).Children(func() {
 		ui.Row(c).Gap(16).MinHeight(24).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, glyph).TextColor(color).Width(24).Shrink(0)
-			ui.Text(c, row.title).Width(t.FontSize * 148 / 14).Shrink(0)
+			// Reserve the full longest label using the actual runtime font and
+			// text scale. The current-value column receives the remaining width.
+			labelWidth, _ := c.MeasureText(0, ui.Span{Text: "游戏页面、遮挡、独占全屏", Size: t.FontSize})
+			ui.Text(c, row.title).Width(float32(math.Ceil(float64(labelWidth)/4)) * 4).Shrink(0)
 			ui.Text(c, row.value).Grow(1).Basis(0).MinWidth(0)
 			if label, ok := readinessActionLabel(row.action); ok {
 				action := button(c, label)
@@ -1075,11 +1070,13 @@ func (m *Model) runReadinessAction(c *ui.Context, action readinessActionKind) {
 		// like a new confirmation; the past event belongs to that choice.
 		m.startErr = ""
 		m.targetChoice = -1
+		m.targetNeedsChoice = true
 	}
 }
 
 // readinessTargetChoices is the in-row radio list replacing PR-05's
-// temporary prepare-area list. A single candidate is listed too (P-01).
+// temporary prepare-area list. A single candidate appears only when a
+// previous instance was invalidated or the user explicitly changes target.
 func (m *Model) readinessTargetChoices(c *ui.Context, primary bool) {
 	before := m.targetChoice
 	ui.RadioGroup(c, func() {
@@ -1095,6 +1092,8 @@ func (m *Model) readinessTargetChoices(c *ui.Context, primary bool) {
 		}
 	}).Label("目标客户端")
 	if m.targetChoice != before {
+		m.targetNeedsChoice = false
+		m.targetInvalidated = false
 		// Confirming the window lets the remaining rows judge that window
 		// instead of staying unknown (R-01). The start is not blocked by
 		// this refresh; the session's own precheck remains authoritative.

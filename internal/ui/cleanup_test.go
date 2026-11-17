@@ -218,8 +218,10 @@ func TestViewStorageBulkCleanupPreviewsAndIndependentEntries(t *testing.T) {
 	tt := ui.NewTester(m.View, 1020, 700)
 	settle(t, m, q, tt)
 
-	if !tt.HasText("记录 5.8 KB（2 条） · 截图 4 张 4.0 KB · 缓存 1.0 KB · 日志 2.0 KB") {
-		t.Fatalf("the storeroom summary does not show: %q", tt.Texts())
+	for _, group := range []string{"记录", "5.8 KB", "2条", "截图", "4.0 KB", "4张", "缓存", "1.0 KB", "日志", "2.0 KB"} {
+		if !tt.HasText(group) {
+			t.Fatalf("the storeroom measurement %q does not show: %q", group, tt.Texts())
+		}
 	}
 
 	clickRevealedSettingsControl(t, tt, 700, "删除全部截图")
@@ -509,10 +511,14 @@ func TestViewStorageHousekeepingPreviewsAndClears(t *testing.T) {
 		storage:      app.StorageUsage{Records: 1, CacheBytes: 2048, LogBytes: 3072},
 	}
 	opened := 0
+	openFails := false
 	m, q := newTestModel(t, Config{
 		Service: svc,
 		OpenDataDirectory: func() error {
 			opened++
+			if openFails {
+				return errString("没有文件管理器")
+			}
 			return nil
 		},
 	})
@@ -522,7 +528,7 @@ func TestViewStorageHousekeepingPreviewsAndClears(t *testing.T) {
 
 	clickRevealedSettingsControl(t, tt, 900, "打开数据目录")
 	settle(t, m, q, tt)
-	if opened != 1 || !tt.HasText("已打开数据目录。") {
+	if opened != 1 || tt.HasText("已打开数据目录。") {
 		t.Fatalf("opened=%d texts=%q", opened, tt.Texts())
 	}
 
@@ -540,6 +546,20 @@ func TestViewStorageHousekeepingPreviewsAndClears(t *testing.T) {
 	}
 	if !tt.HasText("已清理缓存 2 个文件（2.0 KB）；历史记录与校对状态不受影响。") {
 		t.Fatalf("cache result does not show: %q", tt.Texts())
+	}
+	openFails = true
+	clickRevealedSettingsControl(t, tt, 900, "打开数据目录")
+	settle(t, m, q, tt)
+	if !tt.HasText("打开数据目录失败：没有文件管理器") || !tt.HasText("已清理缓存 2 个文件（2.0 KB）；历史记录与校对状态不受影响。") {
+		t.Fatalf("directory failure hid the error or replaced the cleanup result: %q", tt.Texts())
+	}
+	openFails = false
+	if err := tt.Click("打开数据目录"); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
+	if opened != 3 || tt.HasText("打开数据目录失败：没有文件管理器") || tt.HasText("已打开数据目录。") || !tt.HasText("已清理缓存 2 个文件（2.0 KB）；历史记录与校对状态不受影响。") {
+		t.Fatalf("directory retry left redundant feedback or lost the cleanup result: opened=%d texts=%q", opened, tt.Texts())
 	}
 
 	clickRevealedSettingsControl(t, tt, 900, "清旧日志")
@@ -614,15 +634,20 @@ func TestViewOpenDataDirectoryFailure(t *testing.T) {
 }
 
 func TestViewStorageUsageFailureDoesNotShowStaleNumbers(t *testing.T) {
-	svc := &fakeService{storageErr: errString("权限不足")}
+	svc := &fakeService{storage: app.StorageUsage{CacheBytes: 1024}}
 	m, q := newTestModel(t, Config{Service: svc, DirectExportSaver: &fakeDirectExportSaver{}})
 	m.page = pageSettings
 	tt := ui.NewTester(m.View, 1020, 700)
 	settle(t, m, q, tt)
+	if !tt.HasText("1.0 KB") {
+		t.Fatal("successful storage measurement is missing")
+	}
+	m.storageErr = "权限不足"
+	tt.Frame()
 	if !tt.HasText("占用读取失败：权限不足") {
 		t.Fatalf("the storage failure does not show: %q", tt.Texts())
 	}
-	if tt.HasText("缓存 0 B") {
+	if tt.HasText("1.0 KB") {
 		t.Fatalf("a failed measurement still shows numbers: %q", tt.Texts())
 	}
 }
