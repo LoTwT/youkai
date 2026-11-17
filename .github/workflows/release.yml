@@ -302,6 +302,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Verify the assets and publish the release
         # Only after the Windows job built, verified and uploaded: check
         # that the release holds every artifact — the installer, and the
@@ -351,20 +353,23 @@ jobs:
               exit 1
             fi
           done
+          # Replace the marked downloads section on re-runs and retain
+          # the original notes, linking the actual uploaded installer.
+          gh api "repos/$repo/releases/tags/$tag" > "$dir/release.json"
+          node scripts/generate-release-downloads.mjs "$dir/release.json" > "$dir/notes.md"
           # Test-channel releases publish as ordinary releases — the MyGo
           # updater only accepts published, non-draft, non-prerelease
           # releases — but never as the repository's latest, which the
           # stable channel reads. The stable release becomes the latest.
           if [ "$channel" = "test" ]; then
-            body=$(gh release view "$tag" --repo "$repo" --json body -q .body)
-            notes=$(printf '测试版，勿用：此版本只用于自动更新渠道的联调，正式使用请安装最新正式版。\n\n%s' "$body")
             gh release edit "$tag" --repo "$repo" \
               --draft=false --prerelease=false --latest=false \
               --title "Youkai ${version}（测试版，勿用）" \
-              --notes "$notes"
+              --notes-file "$dir/notes.md"
           else
             gh release edit "$tag" --repo "$repo" \
               --draft=false --prerelease=false --latest=true \
-              --title "Youkai $version"
+              --title "Youkai $version" \
+              --notes-file "$dir/notes.md"
           fi
           echo "published $tag on the $channel channel (latest: $([ "$channel" = stable ] && echo yes || echo no))"

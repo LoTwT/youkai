@@ -1,6 +1,6 @@
 # 发布与自动更新
 
-更新日期：2026-11-14。本文维护 youkai 的版本规则、两条发布渠道、打标签与发布步骤、更新密钥管理与发布后验证（含升级实测清单）；日常构建命令见[开发指南](development.md)，交付门槛见 [T7](specs/t7-public-release-acceptance.md)，自动更新的范围与规则见[架构第 6 节](specs/scanner-architecture.md#6-首版功能范围)。发布由 `LoTwT/youkai` 的 GitHub Releases 承担，也是 MyGo 内置更新的下载源（MyGo v0.9.0，行为依据其 `docs/updates.md`、`docs/github-actions.md` 与 `internal/update`）。
+更新日期：2026-11-17。本文维护 youkai 的版本规则、两条发布渠道、打标签与发布步骤、更新密钥管理与发布后验证（含升级实测清单）；日常构建命令见[开发指南](development.md)，交付门槛见 [T7](specs/t7-public-release-acceptance.md)，自动更新的范围与规则见[架构第 6 节](specs/scanner-architecture.md#6-首版功能范围)。发布由 `LoTwT/youkai` 的 GitHub Releases 承担，也是 MyGo 内置更新的下载源（MyGo v0.9.0，行为依据其 `docs/updates.md`、`docs/github-actions.md` 与 `internal/update`）。
 
 2026-11-03 用户决定首版只支持 Windows 本地客户端：发布流程只构建并发布 Windows 版，不发布 macOS DMG；macOS 仍作为开发平台使用，macOS 发布留待后续版本。T7 的交付形式与架构 §6/§7 中的双平台表述已同步（首版范围见[架构第 6 节](specs/scanner-architecture.md#6-首版功能范围)）；本文只记录发布流程的现状，交付门槛见 [T7：构建打包与交付验收](specs/t7-public-release-acceptance.md)。
 
@@ -40,7 +40,7 @@
 3. `Release` workflow（[release.yml](../.github/workflows/release.yml)）自动执行：
    1. **草稿 job**：校验标签（`test-v`/`v` + `major.minor.patch`）、CHANGELOG 小节与 `updates` 配置，创建该标签的草稿 Release（Windows job 上传到该草稿）。
    2. **Windows job**：写入版本与渠道前缀 → fetchdeps → 取 VC++ 运行库 → `CGO_ENABLED=1 go run ./tools/mygobuild -platform windows/amd64`（私钥经 `MYGO_UPDATER_PRIVATE_KEY`，`GH_TOKEN` 供差量计算）→ 校验打包布局与更新档案（清单版本与归档 URL 必须指向本标签）→ 在打包产物上运行识别自检并断言 `updates=enabled` → 校验 `SHA256SUMS` 后上传安装包、更新归档、可选差量、`install.ps1` 和摘要，最后上传更新清单。
-   3. **发布 job**（Windows job 成功后）：校验 Release 资产齐全（安装包、Windows 的更新归档与清单；差量为可选），下载清单核对其版本与标签一致，然后把草稿发布：测试渠道 `--draft=false --prerelease=false --latest=false` 并改标题为“Youkai <版本>（测试版，勿用）”、说明前加警示；正式渠道 `--draft=false --prerelease=false --latest=true`，标题“Youkai <版本>”。
+   3. **发布 job**（Windows job 成功后）：校验 Release 资产齐全（安装包、Windows 的更新归档与清单；差量为可选），下载清单核对其版本与标签一致，再由 [generate-release-downloads.mjs](../scripts/generate-release-downloads.mjs) 根据实际资产 URL 在说明顶部生成 Windows x64 安装包下载表格、可折叠的安装提示与 `SHA256SUMS` 链接，原有说明保留在“更新内容”下；重跑会替换带标记的下载区块，避免重复添加下载信息与测试警示。然后把草稿发布：测试渠道 `--draft=false --prerelease=false --latest=false` 并改标题为“Youkai <版本>（测试版，勿用）”、说明前加警示；正式渠道 `--draft=false --prerelease=false --latest=true`，标题“Youkai <版本>”。
 4. 失败处理：构建失败可用 "Re-run failed jobs" 重跑，重跑以 `--clobber` 覆盖同一草稿里的同名资产；草稿 job 幂等（Release 已存在则不重建）。标签或 CHANGELOG 问题需改标签（删远端标签重打）或补小节后重新推送标签触发。
    - `test-v0.0.1` 即由此走过一遭：发布 job 的资产校验按带空格的本地名比对而失败（GitHub 存储名空格转 `.`，见下文 Release 资产一览；重跑执行的是标签提交里的同一份校验，必然再败），草稿与两平台 job 均已成功。主会话核对两份更新清单（`version` 均为 0.0.1、归档 `url` 指向 `test-v0.0.1`）后，按 workflow 原有发布步参数手动完成了发布（`--draft=false --prerelease=false --latest=false`、标题“Youkai 0.0.1（测试版，勿用）”、说明前加警示）。该校验缺陷已修正为按存储名比对（自 `0.0.2` 起的标签包含修正），后续发布不再需要此类手动补救。
 5. **首次发布需重点看**：`MYGO_UPDATER_PRIVATE_KEY` 是否就位（否则产物校验步失败，报缺更新档案）；Windows 的 NSIS 是否成功下载（缺安装包会在校验步失败）；差量计算对首版只会记 "no version is published yet"（正常，不是失败）；发布 job 的资产清单是否与下表一致；发布后 latest 是否指向正式版。
