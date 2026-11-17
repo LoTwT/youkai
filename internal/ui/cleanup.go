@@ -324,11 +324,10 @@ func (m *Model) OpenDataDirectory() {
 	if m.cfg.OpenDataDirectory == nil {
 		return
 	}
+	m.dataDirectoryErr = ""
 	if err := m.cfg.OpenDataDirectory(); err != nil {
-		m.cleanupNotice = "打开数据目录失败：" + err.Error()
-		return
+		m.dataDirectoryErr = "打开数据目录失败：" + err.Error()
 	}
-	m.cleanupNotice = "已打开数据目录。"
 }
 
 func storageClearNothingNotice(target storageClearTarget) string {

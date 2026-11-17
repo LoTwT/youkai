@@ -8,7 +8,7 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-// Settings uses all available width for six vertically scrolling sections.
+// Settings uses all available width for five vertically scrolling sections.
 const settingsSectionInset = 24
 
 // settingsSectionID names a section anchor for business entry points.
@@ -22,7 +22,6 @@ const (
 	settingsSectionStorage
 	settingsSectionDiagnostics
 	settingsSectionUpdate
-	settingsSectionAbout
 )
 
 // settingsSectionRefs retain the anchors used by business entry points.
@@ -32,7 +31,6 @@ type settingsSectionRefs struct {
 	storage     ui.Ref
 	diagnostics ui.Ref
 	update      ui.Ref
-	about       ui.Ref
 }
 
 func (r *settingsSectionRefs) ref(id settingsSectionID) *ui.Ref {
@@ -47,14 +45,12 @@ func (r *settingsSectionRefs) ref(id settingsSectionID) *ui.Ref {
 		return &r.diagnostics
 	case settingsSectionUpdate:
 		return &r.update
-	case settingsSectionAbout:
-		return &r.about
 	default:
 		return nil
 	}
 }
 
-// settingsPage keeps the prepare-check return strip and the six sections
+// settingsPage keeps the prepare-check return strip and the five sections
 // in one full-width scrolling column, without an in-page directory.
 func (m *Model) settingsPage(c *ui.Context, t *ui.Theme) {
 	tok := m.effectiveTokens()
@@ -65,7 +61,7 @@ func (m *Model) settingsPage(c *ui.Context, t *ui.Theme) {
 	contentPanel(c, tok).Children(func() {
 		ui.Scroll(c).Grow(1).MinHeight(0).FillWidth().FillHeight().TrackScroll(&m.settingsScroll).Bind(&m.settingsViewportRef).
 			Children(func() {
-				ui.Column(c).FillWidth().Gap(24).Children(func() {
+				ui.Column(c).FillWidth().Gap(8).Children(func() {
 					m.settingsSection(c, t, settingsSectionGeneral, "常规", func() {
 						m.settingsGeneral(c, t, tok)
 					})
@@ -80,9 +76,7 @@ func (m *Model) settingsPage(c *ui.Context, t *ui.Theme) {
 					})
 					m.settingsSection(c, t, settingsSectionUpdate, "更新", func() {
 						m.updateArea(c, t, tok)
-					})
-					m.settingsSection(c, t, settingsSectionAbout, "关于", func() {
-						m.settingsAbout(c, t, tok)
+						m.settingsLicenses(c, t, tok)
 					})
 				})
 			})
@@ -104,7 +98,7 @@ func (m *Model) settingsReturnStrip(c *ui.Context, tok *Tokens) {
 func (m *Model) settingsSection(c *ui.Context, t *ui.Theme,
 	id settingsSectionID, title string, body func()) {
 	ref := m.settingsSections.ref(id)
-	column := ui.Column(c).FillWidth().Padding(settingsSectionInset).Gap(16)
+	column := ui.Column(c).FillWidth().Padding(12, settingsSectionInset).Gap(16)
 	if ref != nil {
 		column = column.Bind(ref)
 	}
@@ -270,15 +264,13 @@ func (m *Model) settingsShortcuts(c *ui.Context, t *ui.Theme, tok *Tokens) {
 	innerWidth := max(0, width-m.railWidth()-m.pageLeftPadding()-m.pagePadding()-2*(settingsSectionInset+1))
 	ui.ScrollHorizontal(c).FillWidth().Focusable().Label("快捷键列表").Children(func() {
 		ui.Column(c).MinWidth(innerWidth).Children(func() {
-			for i, shortcut := range m.settingsShortcutRows() {
-				if i > 0 {
-					ui.Box(c).FillWidth().Height(1).Shrink(0).Background(tok.BorderSubtle)
-				}
-				ui.Row(c).FillWidth().PaddingY(6).Gap(24).AlignItems(ui.Center).Children(func() {
+			for _, shortcut := range m.settingsShortcutRows() {
+				ui.Row(c).FillWidth().MinHeight(48).PaddingY(12).Gap(24).AlignItems(ui.Center).Children(func() {
 					ui.Text(c, shortcut.action+"（"+shortcut.context+"）").SingleLine().Shrink(0)
 					ui.Box(c).Grow(1)
 					keycaps(c, shortcut.keys)
 				})
+				ui.Box(c).FillWidth().Height(1).Shrink(0).Background(tok.BorderSubtle)
 			}
 		})
 	})
@@ -339,6 +331,9 @@ func (m *Model) settingsShortcutRows() []settingsShortcut {
 func (m *Model) settingsStorage(c *ui.Context, t *ui.Theme, tok *Tokens) {
 	m.storageSummaryRow(c, t, tok)
 	m.storageActionsRow(c, t, tok)
+	if m.dataDirectoryErr != "" {
+		ui.Text(c, m.dataDirectoryErr).TextColor(t.Danger)
+	}
 	if m.cleanupNotice != "" {
 		ui.Text(c, m.cleanupNotice)
 	}
@@ -355,11 +350,41 @@ func (m *Model) storageSummaryRow(c *ui.Context, t *ui.Theme, tok *Tokens) {
 	case m.storageErr != "":
 		ui.Text(c, "占用读取失败："+m.storageErr).TextColor(t.Danger)
 	case m.storage != nil:
-		ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, m.storageBreakdownText()).TextColor(tok.TextSecondary)
-			ui.Box(c).Grow(1)
-			ui.Text(c, m.storageDiskText()).TextColor(tok.TextMuted).
-				FontSize(t.FontSize * 0.9)
+		metrics := m.storageMetrics()
+		gap := t.Space(6)
+		// Keep complete numeric columns aligned while the category column
+		// absorbs the remaining width, as in the full-width shortcut list.
+		capacityWidth, countWidth := t.FontSize*(128.0/14), t.FontSize*(112.0/14)
+		for _, metric := range metrics {
+			w, _ := c.MeasureText(0, ui.Span{Text: metric.capacity, Size: t.FontSize})
+			capacityWidth = max(capacityWidth, w)
+			w, _ = c.MeasureText(0, ui.Span{Text: metric.count, Size: t.FontSize})
+			countWidth = max(countWidth, w)
+		}
+		ui.Column(c).FillWidth().Gap(t.Space(4)).Children(func() {
+			ui.Column(c).FillWidth().Children(func() {
+				row := func(label, capacity, count string, header bool) {
+					color := tok.TextPrimary
+					if header {
+						color = tok.TextMuted
+					}
+					ui.Row(c).FillWidth().MinHeight(40).PaddingY(t.Space(2)).Gap(gap).AlignItems(ui.Center).Children(func() {
+						ui.Text(c, label).NoWrap().Grow(1).Basis(0).TextColor(color)
+						ui.Text(c, capacity).NoWrap().Width(capacityWidth).Shrink(0).TextAlign(ui.End).TextColor(color)
+						ui.Text(c, count).NoWrap().Width(countWidth).Shrink(0).TextAlign(ui.End).TextColor(color)
+					})
+					ui.Box(c).FillWidth().Height(1).Shrink(0).Background(tok.BorderSubtle)
+				}
+				row("类别", "占用", "数量", true)
+				for _, metric := range metrics {
+					count := metric.count
+					if count == "" {
+						count = "—"
+					}
+					row(metric.label, metric.capacity, count, false)
+				}
+			})
+			ui.Text(c, m.storageDiskText()).NoWrap().TextColor(tok.TextMuted).FontSize(t.FontSize * 0.9)
 		})
 	}
 }
@@ -417,7 +442,11 @@ func (m *Model) settingsDiagnostics(c *ui.Context, t *ui.Theme, tok *Tokens) {
 		ui.Text(c, "复制的内容不包含窗口标题等隐私").TextColor(tok.TextMuted).
 			FontSize(t.FontSize * 0.85)
 		actionRow(c).Grow(1).Children(func() {
-			if button(c, "复制诊断信息").Clicked() {
+			label := "复制诊断信息"
+			if m.diagnosticsNotice != "" {
+				label = "已复制诊断信息"
+			}
+			if button(c, label).Key("settings-copy-diagnostics").Clicked() {
 				m.copyDiagnostics(c)
 			}
 			if button(c, "打开诊断目录").Disabled(m.cfg.OpenDiagnosticsDirectory == nil).Clicked() {
@@ -425,9 +454,6 @@ func (m *Model) settingsDiagnostics(c *ui.Context, t *ui.Theme, tok *Tokens) {
 			}
 		})
 	})
-	if m.diagnosticsNotice != "" {
-		ui.Text(c, m.diagnosticsNotice).TextColor(tok.TextMuted)
-	}
 	if m.diagnosticsErr != "" {
 		ui.Text(c, m.diagnosticsErr).TextColor(t.Danger)
 	}
@@ -443,48 +469,55 @@ func (m *Model) copyDiagnostics(c *ui.Context) {
 		m.diagnosticsErr = "没有可复制的诊断信息。"
 		return
 	}
-	c.WriteClipboard(text)
 	m.diagnosticsErr = ""
-	m.diagnosticsNotice = "已复制诊断信息。"
+	m.diagnosticsNotice = ""
+	c.WriteClipboardThen(text, func(err error) {
+		if err != nil {
+			m.diagnosticsErr = "复制诊断信息失败：" + err.Error()
+			return
+		}
+		m.diagnosticsNotice = "已复制诊断信息。"
+	})
 }
 
 func (m *Model) openDiagnosticsDirectory() {
 	if m.cfg.OpenDiagnosticsDirectory == nil {
 		return
 	}
+	m.diagnosticsNotice = ""
 	if err := m.cfg.OpenDiagnosticsDirectory(); err != nil {
-		m.diagnosticsNotice = ""
 		m.diagnosticsErr = "打开诊断目录失败：" + err.Error()
 		return
 	}
 	m.diagnosticsErr = ""
-	m.diagnosticsNotice = "已打开诊断目录。"
 }
 
-// settingsAbout names the build and links the bundled third-party notices.
-func (m *Model) settingsAbout(c *ui.Context, t *ui.Theme, tok *Tokens) {
-	version := m.appVersion
-	if version == "" {
-		version = "未知"
+// settingsLicenses stays outside updateArea's disabled-update early return.
+func (m *Model) settingsLicenses(c *ui.Context, t *ui.Theme, tok *Tokens) {
+	if m.cfg.OpenLicenses == nil {
+		return
 	}
-	ui.Text(c, "youkai "+version).TextColor(tok.TextSecondary)
-	ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, "以 MIT 许可发布。").TextColor(tok.TextMuted).FontSize(t.FontSize * 0.9)
-		actionRow(c).Grow(1).Children(func() {
-			if m.cfg.OpenLicenses != nil && button(c, "开源许可").Clicked() {
-				m.openLicenses()
-			}
-		})
-	})
-	if m.aboutErr != "" {
-		ui.Text(c, m.aboutErr).TextColor(t.Danger).FontSize(t.FontSize * 0.9)
+	entry := ui.ButtonBase(c).Label("开源许可").AlignSelf(ui.Start).
+		MinHeight(max(32, t.FontSize*1.5+8)).Padding(4, 8).Radius(4).
+		FontSize(t.FontSize * 0.9).TextColor(tok.TextSecondary)
+	if entry.Pressed() {
+		entry.Background(tok.SurfacePressed)
+	} else if entry.Hovered() {
+		entry.Background(tok.SurfaceHover)
+	}
+	entry.Children(func() { ui.Text(c, "开源许可").SingleLine() })
+	if entry.Clicked() {
+		m.openLicenses()
+	}
+	if m.licensesErr != "" {
+		ui.Text(c, m.licensesErr).TextColor(t.Danger).FontSize(t.FontSize * 0.9)
 	}
 }
 
 func (m *Model) openLicenses() {
-	m.aboutErr = ""
+	m.licensesErr = ""
 	if err := m.cfg.OpenLicenses(); err != nil {
-		m.aboutErr = "打开开源许可失败：" + err.Error()
+		m.licensesErr = "打开开源许可失败：" + err.Error()
 	}
 }
 
@@ -513,7 +546,8 @@ func (m *Model) leaveSettingsPage() {
 	m.settingsScrollTarget = settingsSectionNone
 	m.diagnosticsNotice = ""
 	m.diagnosticsErr = ""
-	m.aboutErr = ""
+	m.dataDirectoryErr = ""
+	m.licensesErr = ""
 }
 
 // returnToPrepareCheck completes the disk-space entry's promise after a
@@ -528,21 +562,29 @@ func (m *Model) returnToPrepareCheck() {
 	m.page = pageScan
 }
 
-// storageBreakdownText renders the four category sizes. The record count is
-// shown with its data size so "记录" is not mistaken for the screenshots.
-func (m *Model) storageBreakdownText() string {
+type storageMetric struct {
+	label    string
+	capacity string
+	count    string
+}
+
+// storageMetrics separates each category's label, primary capacity and
+// optional count without changing the measured scope or byte formatting.
+func (m *Model) storageMetrics() []storageMetric {
 	usage := m.storage
 	if usage == nil {
-		return ""
+		return nil
 	}
 	dataBytes := usage.RecordBytes - usage.EvidenceBytes
 	if dataBytes < 0 {
 		dataBytes = 0
 	}
-	return "记录 " + formatBytes(dataBytes) + "（" + strconv.Itoa(usage.Records) + " 条）" +
-		" · 截图 " + strconv.Itoa(usage.EvidenceFiles) + " 张 " + formatBytes(usage.EvidenceBytes) +
-		" · 缓存 " + formatBytes(usage.CacheBytes) +
-		" · 日志 " + formatBytes(usage.LogBytes)
+	return []storageMetric{
+		{"记录", formatBytes(dataBytes), strconv.Itoa(usage.Records) + "条"},
+		{"截图", formatBytes(usage.EvidenceBytes), strconv.Itoa(usage.EvidenceFiles) + "张"},
+		{"缓存", formatBytes(usage.CacheBytes), ""},
+		{"日志", formatBytes(usage.LogBytes), ""},
+	}
 }
 
 // storageDiskText renders the data volume's free and total space; unknown
