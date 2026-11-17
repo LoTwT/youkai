@@ -351,11 +351,9 @@ func (m *Model) storageSummaryRow(c *ui.Context, t *ui.Theme, tok *Tokens) {
 		ui.Text(c, "占用读取失败："+m.storageErr).TextColor(t.Danger)
 	case m.storage != nil:
 		metrics := m.storageMetrics()
-		width, _ := c.Size()
-		innerWidth := max(0, width-m.railWidth()-m.pageLeftPadding()-m.pagePadding()-2*(settingsSectionInset+1))
 		gap := t.Space(6)
-		// Keep numeric columns aligned without stretching this small table
-		// across the whole window. Measure full values before sizing columns.
+		// Keep complete numeric columns aligned while the category column
+		// absorbs the remaining width, as in the full-width shortcut list.
 		capacityWidth, countWidth := t.FontSize*(128.0/14), t.FontSize*(112.0/14)
 		for _, metric := range metrics {
 			w, _ := c.MeasureText(0, ui.Span{Text: metric.capacity, Size: t.FontSize})
@@ -363,9 +361,8 @@ func (m *Model) storageSummaryRow(c *ui.Context, t *ui.Theme, tok *Tokens) {
 			w, _ = c.MeasureText(0, ui.Span{Text: metric.count, Size: t.FontSize})
 			countWidth = max(countWidth, w)
 		}
-		tableWidth := min(innerWidth, max(t.FontSize*(480.0/14), capacityWidth+countWidth+2*gap+t.FontSize*4))
 		ui.Column(c).FillWidth().Gap(t.Space(4)).Children(func() {
-			ui.Column(c).Width(tableWidth).Children(func() {
+			ui.Column(c).FillWidth().Children(func() {
 				row := func(label, capacity, count string, header bool) {
 					color := tok.TextPrimary
 					if header {

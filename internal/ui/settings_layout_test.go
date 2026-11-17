@@ -33,6 +33,15 @@ func TestSettingsStorageGroupsStayReadable(t *testing.T) {
 			}, size.width, size.height, ui.TesterOptions{Preferences: ui.Preferences{TextScale: 1.2, ReduceMotion: true}})
 			settle(t, m, q, tt)
 			openSettings(t, m, q, tt)
+			// Read the reference viewport while visible; offscreen clipped
+			// accessibility bounds may have zero width after scrolling away.
+			m.settingsScrollTarget = settingsSectionShortcuts
+			tt.Frame()
+			tt.Frame()
+			shortcuts, shortcutsOK := tt.Find("快捷键列表")
+			if !shortcutsOK || shortcuts.W == 0 {
+				t.Fatal("missing visible shortcut width reference")
+			}
 			m.settingsScrollTarget = settingsSectionStorage
 			tt.Frame()
 			tt.Frame()
@@ -48,6 +57,10 @@ func TestSettingsStorageGroupsStayReadable(t *testing.T) {
 			if !ok || categoryHeader.X+categoryHeader.W >= capacityHeader.X {
 				t.Fatal("category column overlaps capacity")
 			}
+			if math.Abs(float64(categoryHeader.X-shortcuts.X)) > .5 || math.Abs(float64(countHeader.X+countHeader.W-shortcuts.X-shortcuts.W)) > .5 {
+				t.Errorf("storage table does not share shortcut list edges: category=%+v count=%+v shortcuts=%+v", categoryHeader, countHeader, shortcuts)
+			}
+			t.Logf("storage edges %.1f..%.1f; shortcut edges %.1f..%.1f", categoryHeader.X, countHeader.X+countHeader.W, shortcuts.X, shortcuts.X+shortcuts.W)
 			previousY := capacityHeader.Y
 			for i, value := range []string{"92.8 MB", "127.7 MB", "0 B", "35.8 MB"} {
 				bounds, ok := tt.Find(value)
