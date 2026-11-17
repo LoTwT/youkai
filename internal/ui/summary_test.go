@@ -659,6 +659,8 @@ func TestViewSummaryCountsOpenFilteredItems(t *testing.T) {
 // collapsed and no stale diagnostics error.
 func TestSummaryDisclosuresFollowTheOpenRecord(t *testing.T) {
 	m := summaryModel(summaryView(1, app.ItemClassCounts{Passed: 1}, record.SessionShell{}), app.Snapshot{})
+	// Reuse is for a ready workspace, including its loaded checkpoint.
+	m.recData = recovery(item(1, record.StatusProduced, "", ""))
 	m.summaryDetailsOpen = true
 	m.summaryDiagnosticsOpen = true
 	m.summaryDiagnosticsErr = "旧错误"

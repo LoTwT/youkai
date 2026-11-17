@@ -416,10 +416,14 @@ type Model struct {
 	// prepareTimerArmed keeps one countdown redraw in flight.
 	prepareTimerArmed bool
 
-	history        []HistoryEntry
-	histChoice     string
-	histErr        string
-	historyLoading bool
+	history           []HistoryEntry
+	histChoice        string
+	histErr           string
+	historyLoading    bool
+	historyOpenSerial int64
+	historyOpen       *historyOpen
+	historyOpenFailed *historyOpen
+	historyOpenError  string
 	// historyLoadSeq identifies the newest load; a late result from an
 	// older load must not replace its list or clear its loading state.
 	historyLoadSeq uint64
@@ -801,7 +805,11 @@ func (m *Model) Apply(snap app.Snapshot) {
 	// on screen and loads the live record afresh when the user returns.
 	reloadedLive := false
 	var finalLoadVersion int64
-	if m.rec != nil && m.rec.Live && snap.SessionID != "" &&
+	// A list-open owns its target until preparation catches this snapshot.
+	// Refreshing an old workspace placeholder here would invalidate that
+	// read or navigate to details before its final generation is ready.
+	pendingLiveOpen := m.historyOpen != nil && m.historyOpen.id == string(snap.SessionID)
+	if !pendingLiveOpen && m.rec != nil && m.rec.Live && snap.SessionID != "" &&
 		m.rec.ID == string(snap.SessionID) && snap.SavedCount > m.liveSavedShown {
 		dirtyActive := m.editingDirty() || m.reviewSaving
 		if !dirtyActive {
@@ -821,14 +829,14 @@ func (m *Model) Apply(snap app.Snapshot) {
 			// A preparation-stage refusal never opened input and never
 			// operated the game; it remains on the scan page with its cause
 			// instead of posing as a completed zero-item scan (08 §1.2).
-			if m.liveRecordOpen() && !m.editingDirty() && !m.reviewSaving {
+			if !pendingLiveOpen && m.liveRecordOpen() && !m.editingDirty() && !m.reviewSaving {
 				m.openRecordWorkspace()
 			}
 		}
 		m.loadHistory()
 		m.refreshStorage()
 		m.loadDurationEstimate()
-		if !reloadedLive {
+		if !reloadedLive && !pendingLiveOpen {
 			if m.rec != nil && m.rec.Live && m.rec.ID == string(snap.SessionID) {
 				dirtyActive := m.editingDirty() || m.reviewSaving
 				if !dirtyActive {
@@ -902,15 +910,17 @@ func (m *Model) beginSession(id, replacedSession string) {
 }
 
 // ShowLive opens the current (or last) scan's record, after a reopened
-// history record replaced it. An already open live record starts a new
-// visit without reloading; otherwise the record loads from disk after any
-// draft settles.
+// history record replaced it. A fresh live workspace starts a new visit;
+// a retained stale workspace first resumes its checkpoint refresh without
+// dropping a dirty draft. Another record waits for any draft to settle.
 func (m *Model) ShowLive() {
 	if m.appliedSession == "" || m.exitState == exitRunning || m.exitState == exitDone {
 		return
 	}
-	m.page = pageResults
+	m.cancelHistoryOpen()
 	if m.liveRecordOpen() && m.recErr == "" {
+		m.catchUpLive()
+		m.page = pageResults
 		// Returning from settings or the records list still starts a new
 		// visit: a confirmed-and-stayed row leaves the pending segment and
 		// the detail follows the rows the filter shows.
@@ -1150,8 +1160,15 @@ func (m *Model) openRecord(id string) {
 	if id == "" || m.exitState == exitRunning || m.exitState == exitDone {
 		return
 	}
-	m.page = pageResults
-	if m.recordIsOpen(id) && m.recErr == "" {
+	if m.historyOpen != nil || m.exitIntent != exitIntentNone || m.navPrompt != nil {
+		return
+	}
+	if m.reviewSaving {
+		m.reviewErr = "正在保存，完成前不能切换。"
+		return
+	}
+	if m.recordIsReady(id) {
+		m.page = pageResults
 		// Entering from the list is a new visit: the previous visit's
 		// confirmed-and-stayed rows leave the pending segment, so the
 		// selection is checked against the rows the filters still show.
@@ -1172,6 +1189,11 @@ func (m *Model) performOpenRecord(id string, exportAfterLoad bool) {
 	if id == "" {
 		return
 	}
+	if m.displayPage() == pageHistory {
+		m.beginHistoryOpen(id, m.recordIsLive(id), exportAfterLoad)
+		return
+	}
+	m.page = pageResults
 	if exportAfterLoad {
 		m.exportAfterLoadID = id
 	} else {
@@ -1214,6 +1236,7 @@ func (m *Model) Start() {
 	if !m.canStart() {
 		return
 	}
+	m.cancelHistoryOpen()
 	m.page = pageScan
 	if m.startReqID == "" {
 		m.startSerial++
@@ -1512,6 +1535,7 @@ func (m *Model) requestExit(force bool) {
 	} else if m.exitIntent == exitIntentNone {
 		m.exitIntent = exitIntentNormal
 	}
+	m.cancelHistoryOpen()
 	if m.navPrompt != nil {
 		if m.navPrompt.kind != navExit {
 			m.navPrompt = &navigationRequest{kind: navExit}

@@ -48,7 +48,9 @@ func (m *Model) focusPageContent(c *ui.Context, direction int) {
 			m.focusNavRail(c)
 			return
 		}
-		m.historyList.Focus(c)
+		if m.historyOpen == nil {
+			m.historyList.Focus(c)
+		}
 	case pageScan:
 		if direction < 0 {
 			m.focusNavRail(c)
@@ -123,6 +125,10 @@ func (m *Model) requestScanStart() {
 // menu normally closes in its PopoverBase before this runs; the explicit
 // check keeps the state honest if its overlay was already gone.
 func (m *Model) handleEscapeShortcut(c *ui.Context) {
+	if m.historyOpen != nil {
+		m.cancelHistoryOpen()
+		return
+	}
 	if m.historyMenuOpen {
 		m.closeHistoryMenu()
 		return

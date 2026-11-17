@@ -49,9 +49,15 @@ type recordWorkspaceState struct {
 	rec     *RecordView
 	recData *record.Recovery
 	recErr  string
-	// liveSavedShown is the live record's saved count the workspace last
-	// loaded from disk.
+	// liveSavedShown coalesces saved-growth requests; actual installed
+	// freshness is tracked separately by liveCheckpoint below.
 	liveSavedShown int
+	// These stamps belong to data ownership, not a list navigation token.
+	// Only installation advances liveCheckpoint. liveReadCheckpoint lets a
+	// cancelled open resume a deferred refresh without duplicating a read
+	// already fetching the latest accepted checkpoint.
+	liveCheckpoint     historyLiveCheckpoint
+	liveReadCheckpoint historyLiveCheckpoint
 
 	// The browser state: segment, set/slot facets, the chosen row and its
 	// stable capture sequence, and the first visible row. The item list is
@@ -533,6 +539,9 @@ func (m *Model) captureResultPlace() {
 // caller settles any draft before opening another record. The bumped load
 // version discards responses still in flight for the previous record.
 func (m *Model) showRecord(id string, live bool) {
+	// Replacing the workspace transfers data ownership to the new record;
+	// there is no old workspace left to refresh after revoking navigation.
+	m.historyOpen = nil
 	if m.exportAfterLoadID != id {
 		m.exportAfterLoadID = ""
 	}
@@ -598,18 +607,14 @@ func (m *Model) reloadRecord(id string, live bool) {
 	m.recLoad++
 	version := m.recLoad
 	load := newRecordLoad()
-	if m.recordReads == nil {
-		m.recordReads = make(map[int64]*recordLoad)
+	checkpoint := historyLiveCheckpointFor(m.snap)
+	if live {
+		m.liveReadCheckpoint = checkpoint
 	}
-	m.recordReads[version] = load
 	// A result notification waiting for this record's final generation
 	// follows a restarted load: every read after the wrap-up is final, and
 	// the old callback would otherwise never match.
-	if state := m.notifySessions[scan.ID(id)]; state != nil && state.pending != nil &&
-		state.pending.loadVersion != 0 {
-		state.pending.loadVersion = version
-		state.pending.load = load
-	}
+	m.trackRecordRead(id, version, load)
 	m.loading = true
 	m.goAsync(func() {
 		rec, err := m.cfg.Service.LoadRecord(id)
@@ -619,6 +624,16 @@ func (m *Model) reloadRecord(id string, live bool) {
 				// A newer record or load owns the workspace. The read is
 				// still a valid final generation for a notification that
 				// waits on it.
+				m.settleResultFromRecord(scan.ID(id), version)
+				delete(m.recordReads, version)
+				return
+			}
+			if live && m.recordIsLive(id) && checkpoint != historyLiveCheckpointFor(m.snap) {
+				// A newer accepted checkpoint owns the data even if the list
+				// navigation that deferred its refresh was cancelled. Never
+				// let this older read turn the workspace ready again.
+				m.loading = false
+				m.catchUpLive()
 				m.settleResultFromRecord(scan.ID(id), version)
 				delete(m.recordReads, version)
 				return
@@ -653,9 +668,13 @@ func (m *Model) reloadRecord(id string, live bool) {
 // The chosen row follows its capture sequence across a reload; a vanished
 // selection falls back to the same position, then to the first row.
 func (m *Model) applyLoadedRecord(id string, rec *record.Recovery, live bool) {
+	m.installPreparedRecord(prepareRecord(id, rec, live))
+}
+
+func (m *Model) installPreparedRecord(prepared preparedRecord) {
 	previous := m.selected
 	sequence := m.selectedSeq()
-	view := BuildRecordView(id, rec, live)
+	view := prepared.view
 	selected := view.RowOf(sequence)
 	if selected < 0 && previous >= 0 && previous < len(view.Rows) {
 		selected = previous
@@ -664,13 +683,15 @@ func (m *Model) applyLoadedRecord(id string, rec *record.Recovery, live bool) {
 		selected = 0
 	}
 
-	export, buildErr := resultExport(rec)
 	m.rec = view
-	m.recData = rec
+	m.recData = prepared.recovery
 	m.recErr = ""
 	m.loading = false
-	m.exportData = export
-	m.exportBuildErr = buildErr
+	if view.Live && m.recordIsLive(view.ID) {
+		m.liveCheckpoint = historyLiveCheckpointFor(m.snap)
+	}
+	m.exportData = prepared.export
+	m.exportBuildErr = prepared.exportErr
 	// A reload is a refresh: confirmed rows no longer linger in the
 	// pending segment.
 	m.recentlyConfirmed = nil
@@ -691,7 +712,7 @@ func (m *Model) applyLoadedRecord(id string, rec *record.Recovery, live bool) {
 	if m.scroll > 0 {
 		m.list.ScrollTo(m.scroll, ui.Start)
 	}
-	if m.exportAfterLoadID == id {
+	if m.exportAfterLoadID == view.ID {
 		m.exportAfterLoadID = ""
 		if m.displayPage() == pageResults {
 			m.openExportDialog()

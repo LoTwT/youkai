@@ -148,6 +148,7 @@ func (m *Model) showRecordTab(tab recordTab) {
 // the view: it never activates the window, so a scan that finished in the
 // background stays in the background (C-09).
 func (m *Model) openRecordWorkspace() {
+	m.cancelHistoryOpen()
 	m.page = pageResults
 	m.showRecordTab(recordTabSummary)
 }
