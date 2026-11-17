@@ -407,25 +407,18 @@ func TestReadinessFocusRules(t *testing.T) {
 	})
 }
 
-// TestReadinessTargetConfirmationFocus: a unique candidate still needs the
-// user's confirmation, and the radio receives the first-entry focus.
-func TestReadinessTargetConfirmationFocus(t *testing.T) {
+// A unique candidate leaves the first-entry focus on the explicit start.
+func TestReadinessUniqueTargetFocusesStart(t *testing.T) {
 	cand := testTarget(0xB0ABE, 42, `C:\Games\ZZZ\ZenlessZoneZero.exe`)
 	svc := &fakeService{targets: []app.TargetCandidate{cand}}
 	m, q := newTestModel(t, Config{Service: svc, ScanSource: targetSource()})
 	tt := ui.NewTester(m.View, 1020, 700)
 	settle(t, m, q, tt)
-	if !tt.HasText("已找到 1 个窗口 → 请确认要扫描的一个") {
-		t.Fatalf("the unique candidate is not offered for confirmation: %q", tt.Texts())
+	if !tt.Focused("开始扫描") {
+		t.Fatalf("the selected candidate did not leave focus on start: %q", tt.Texts())
 	}
-	if !tt.Focused(targetLabel(cand)) {
-		t.Fatalf("the candidate radio does not take the first-entry focus: %q", tt.Texts())
-	}
-	if m.scanStartReady() {
-		t.Fatal("the start is offered before the candidate is confirmed")
-	}
-	if !tt.HasText("请先确认要扫描的游戏窗口。") {
-		t.Fatalf("the start does not explain the missing confirmation: %q", tt.Texts())
+	if !m.scanStartReady() {
+		t.Fatal("the unique candidate still requires confirmation")
 	}
 }
 
