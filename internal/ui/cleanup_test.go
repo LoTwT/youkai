@@ -218,7 +218,7 @@ func TestViewStorageBulkCleanupPreviewsAndIndependentEntries(t *testing.T) {
 	tt := ui.NewTester(m.View, 1020, 700)
 	settle(t, m, q, tt)
 
-	for _, group := range []string{"记录", "5.8 KB", "2 条", "截图", "4.0 KB", "4 张", "缓存", "1.0 KB", "日志", "2.0 KB"} {
+	for _, group := range []string{"记录", "5.8 KB", "2条", "截图", "4.0 KB", "4张", "缓存", "1.0 KB", "日志", "2.0 KB"} {
 		if !tt.HasText(group) {
 			t.Fatalf("the storeroom measurement %q does not show: %q", group, tt.Texts())
 		}
