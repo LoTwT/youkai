@@ -1,20 +1,72 @@
 import { readFileSync } from "node:fs";
 
-const release = JSON.parse(readFileSync(process.argv[2], "utf8"));
+let repoArg = null;
+let tagArg = null;
+let releasePath = null;
+const args = process.argv.slice(2);
+for (let i = 0; i < args.length; i++) {
+  const arg = args[i];
+  if (arg === "--repo") {
+    repoArg = args[++i];
+    if (!repoArg) throw new Error("--repo requires owner/repo");
+  } else if (arg === "--tag") {
+    tagArg = args[++i];
+    if (!tagArg) throw new Error("--tag requires a release tag");
+  } else if (arg.startsWith("--")) {
+    throw new Error(`Unknown option: ${arg}`);
+  } else if (releasePath === null) {
+    releasePath = arg;
+  } else {
+    throw new Error(`Unexpected argument: ${arg}`);
+  }
+}
+if (!releasePath) {
+  throw new Error(
+    "Usage: node scripts/generate-release-downloads.mjs [--repo owner/repo] [--tag tag] <release.json>",
+  );
+}
+
+const release = JSON.parse(readFileSync(releasePath, "utf8"));
 const match = /^(test-v|v)(\d+\.\d+\.\d+)$/.exec(release.tag_name);
 if (!match) throw new Error(`Unsupported release tag: ${release.tag_name}`);
 
 const [, prefix, version] = match;
+const tag = tagArg ?? release.tag_name;
+if (tag !== release.tag_name) {
+  throw new Error(`Release tag ${release.tag_name} does not match expected tag ${tag}`);
+}
+const repo = repoArg ?? repoFromRelease(release);
+const [owner, name] = parseRepo(repo);
+// Draft assets can carry /releases/download/untagged-…/ browser URLs. Build
+// the public URL from the verified repository, tag and stored asset name.
+const downloadBase = `https://github.com/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/releases/download/${encodeURIComponent(tag)}`;
+
+function repoFromRelease(release) {
+  const parsed = /^https:\/\/api\.github\.com\/repos\/([^/]+)\/([^/]+)\/releases\/\d+$/.exec(
+    release.url ?? "",
+  );
+  if (!parsed) {
+    throw new Error("Cannot determine the repository; pass --repo owner/repo");
+  }
+  return `${parsed[1]}/${parsed[2]}`;
+}
+
+function parseRepo(repo) {
+  const parsed = /^([^/]+)\/([^/]+)$/.exec(repo);
+  if (!parsed) throw new Error(`Invalid repository: ${repo}`);
+  return [parsed[1], parsed[2]];
+}
+
 const start = "<!-- youkai-downloads:start -->";
 const end = "<!-- youkai-downloads:end -->";
 const testWarning = "测试版，勿用：此版本只用于自动更新渠道的联调，正式使用请安装最新正式版。";
 
-function download(name) {
-  const asset = release.assets.find((asset) => asset.name === name);
-  if (!asset?.browser_download_url) {
-    throw new Error(`Missing download asset: ${name}`);
+function download(assetName) {
+  const asset = release.assets.find((asset) => asset.name === assetName);
+  if (!asset) {
+    throw new Error(`Missing download asset: ${assetName}`);
   }
-  return asset.browser_download_url;
+  return `${downloadBase}/${encodeURIComponent(assetName)}`;
 }
 
 let body = release.body ?? "";
