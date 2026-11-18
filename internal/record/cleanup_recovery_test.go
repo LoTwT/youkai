@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -1068,6 +1069,27 @@ func TestDeleteEvidenceSymlinkLoopKeepsOrphanRemoval(t *testing.T) {
 	}
 }
 
+// verifyHopFixture proves that path reaches want through the platform's
+// native path resolution. Windows cannot open this POSIX symlink-then-..
+// shape, so skip only that specific fixture there; a missing link, wrong
+// bytes or any error other than Windows' file-not-found still fails.
+func verifyHopFixture(t *testing.T, path string, want []byte) {
+	t.Helper()
+	if _, err := os.Lstat(path); err != nil {
+		t.Fatalf("fixture link %s: %v", path, err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		if runtime.GOOS == "windows" && errors.Is(err, fs.ErrNotExist) {
+			t.Skipf("fixture link %s requires symlink-then-.. resolution, which Windows cannot open: %v", path, err)
+		}
+		t.Fatalf("fixture link %s is unreadable: %v", path, err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("fixture link %s = %q, want %q", path, got, want)
+	}
+}
+
 // A link target such as holder/hop/../target.png must resolve exactly as
 // the system resolves it: hop is followed first, so the parent is the
 // evidence directory, not holder. Lexical cleaning would look for
@@ -1115,6 +1137,7 @@ func TestDeleteEvidenceSymlinkHopParentResolution(t *testing.T) {
 			if err := os.Symlink(linkTarget, filepath.Join(evidenceDir, "detail-1.png")); err != nil {
 				t.Skipf("symlinks unavailable: %v", err)
 			}
+			verifyHopFixture(t, filepath.Join(evidenceDir, "detail-1.png"), content)
 
 			sum := sha256.Sum256(content)
 			ev := EvidenceFile{
