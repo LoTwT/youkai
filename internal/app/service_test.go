@@ -14,6 +14,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LoTwT/youkai/internal/game/zzz/collect"
+	"github.com/LoTwT/youkai/internal/platform"
+	"github.com/LoTwT/youkai/internal/platform/platformfake"
 	"github.com/LoTwT/youkai/internal/record"
 	"github.com/LoTwT/youkai/internal/scan"
 )
@@ -386,6 +389,83 @@ func TestSaveFailureStopsCollectionAndFinalRetryReconciles(t *testing.T) {
 		rec.Checkpoint.Session.Termination.Kind != record.TerminationFailed ||
 		rec.Checkpoint.Session.Termination.Code != scan.CodeStorageFailure {
 		t.Fatalf("termination = %+v, want failed/storageFailure", rec.Checkpoint.Session.Termination)
+	}
+}
+
+// scopeSaveTraversal reports an observed scope after its precheck and
+// records whether Collect ran; its Collect would dispatch input, so a
+// Prepare fault must leave both counters zero.
+type scopeSaveTraversal struct {
+	scope    json.RawMessage
+	collect  int
+	dispatch int
+}
+
+func (t *scopeSaveTraversal) Precheck(context.Context, platform.Session) error { return nil }
+
+func (t *scopeSaveTraversal) Collect(ctx context.Context, sess platform.Session, h *scan.ControllerHandle) error {
+	t.collect++
+	sess.Dispatch(platform.InputOp{Kind: platform.InputClick, Geometry: 1})
+	t.dispatch++
+	return nil
+}
+
+func (t *scopeSaveTraversal) ObservedScope() json.RawMessage { return t.scope }
+
+// TestFirstScopeSaveFailureFailsPrepareAndFinalRetryPersists injects a
+// failure of the very first checkpoint — the observed-scope save after the
+// traversal precheck. The session must report storageFailure in the
+// preparing phase, never open input, and the wrap-up's retry must still
+// persist the observed range and the termination.
+func TestFirstScopeSaveFailureFailsPrepareAndFinalRetryPersists(t *testing.T) {
+	paths := newTestPaths(t)
+	trav := &scopeSaveTraversal{scope: json.RawMessage(`{"kind":"zzzInventory","page":"warehouse","coverage":"unknown"}`)}
+	sess := platformfake.NewSession()
+	port := &platformfake.Port{NewSession: func() *platformfake.Session { return sess }}
+	ctrl := &collect.Controller{
+		Port: port, Target: platform.TargetSpec{BundleID: "com.example.game"},
+		Hotkey:    platform.HotkeySpec{Key: platform.KeyS},
+		Traversal: func() collect.Traversal { return trav },
+	}
+	store := newFlakyStore(t, paths.Data)
+	store.failOn = func(call int) bool { return call == 1 }
+	svc := newServiceWithStore(t, paths, store, staticSource{spec: specOf(ctrl)},
+		func() (Recognizer, error) { return newFakeRecognizer(), nil })
+
+	out, err := svc.Start(StartRequest{ID: "r1"})
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	snap := waitNotBusy(t, svc)
+	if snap.Scan.End != scan.EndFailed {
+		t.Fatalf("end = %s, want failed after the first checkpoint failure", snap.Scan.End)
+	}
+	if snap.Scan.Trigger == nil || snap.Scan.Trigger.Code != scan.CodeStorageFailure ||
+		snap.Scan.Trigger.Phase != scan.PhasePreparing {
+		t.Fatalf("trigger = %+v, want storageFailure in preparing", snap.Scan.Trigger)
+	}
+	if trav.collect != 0 || trav.dispatch != 0 {
+		t.Fatalf("collect ran %d times with %d dispatches; input must never open", trav.collect, trav.dispatch)
+	}
+	if ops := sess.DispatchedOps(); len(ops) != 0 {
+		t.Fatalf("the first checkpoint failure dispatched input: %+v", ops)
+	}
+	// The wrap-up retried the failed save (the second call succeeds): the
+	// observed range and the storage termination are durable.
+	rec, err := svc.LoadRecord(string(out.SessionID))
+	if err != nil {
+		t.Fatalf("LoadRecord: %v", err)
+	}
+	if !jsonEq(rec.Checkpoint.Session.ObservedScope, trav.scope) {
+		t.Fatalf("observed scope = %s, want %s", rec.Checkpoint.Session.ObservedScope, trav.scope)
+	}
+	term := rec.Checkpoint.Session.Termination
+	if term == nil || term.Kind != record.TerminationFailed || term.Code != scan.CodeStorageFailure ||
+		term.Phase != record.PhasePreparing {
+		t.Fatalf("termination = %+v, want failed/storageFailure/preparing", term)
+	}
+	if rec.Checkpoint.Session.EndedAt == nil {
+		t.Fatal("the final retry did not persist the end time")
 	}
 }
 

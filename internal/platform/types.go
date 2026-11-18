@@ -320,15 +320,21 @@ const (
 // InputResult is the outcome of one input operation.
 type InputResult struct {
 	Status InputStatus
-	// Denial is set when Status is notDispatched or failed: the fault
-	// that refused the operation (focusLost, staleGeometry,
+	// Denial is set when Status is notDispatched or failed, and on an
+	// aborted partial whose drag stopped because a live premise failed:
+	// the fault that refused the operation (focusLost, staleGeometry,
 	// permitClosed, inputBlocked, …).
 	Denial *Fault
 	// Aborted reports that a drag stopped mid-way because the kernel's
-	// input permission closed: the release was dispatched and the
-	// platform's own presses left the ledger, but the operation did not
-	// reach its destination.
+	// input permission closed or a live input premise failed: the
+	// operation did not reach its destination. The abort's release is
+	// attempted but may fail; ReleaseFault then carries that failure and
+	// the platform's own press stays ledgered for the stop-time release.
 	Aborted bool
+	// ReleaseFault is the abort release's failure, when there was one. It
+	// is kept apart from Denial so the reason the drag stopped is not
+	// replaced by the release refusal.
+	ReleaseFault *Fault
 	// EventsPlanned and EventsPosted count the events of the operation:
 	// planned before dispatch, posted what actually ran.
 	EventsPlanned, EventsPosted int

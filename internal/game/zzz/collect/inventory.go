@@ -3693,10 +3693,10 @@ func (run *inventoryRun) observeReady(ctx context.Context) error {
 // contract: posted and unaborted partial proceed to effect verification
 // — only the page evidence confirms an effect, never the dispatch
 // result; notDispatched and failed carry the platform's refusal and
-// stop the session; an aborted drag means the input gate closed
-// mid-operation — the stop path is already running, so the machine
-// unwinds without dispatching anything further (T5: the platform never
-// replays).
+// stop the session; an aborted drag means the input gate closed or a
+// live premise failed mid-operation — the stop path is already running,
+// so the machine unwinds without dispatching anything further (T5: the
+// platform never replays).
 func (run *inventoryRun) dispatchOutcome(ctx context.Context, res platform.InputResult) error {
 	switch res.Status {
 	case platform.InputPosted:
@@ -3706,6 +3706,12 @@ func (run *inventoryRun) dispatchOutcome(ctx context.Context, res platform.Input
 		if res.Aborted {
 			if err := ctx.Err(); err != nil {
 				return err
+			}
+			if res.Denial != nil {
+				// The live premise that failed mid-drag owns the
+				// diagnostic; falling back to permitClosed would hide
+				// focusLost, targetLost or staleGeometry.
+				return scan.NewFault(res.Denial.Code, faultCause(res.Denial))
 			}
 			return scan.NewFault(platform.CodePermitClosed, errors.New(
 				"collect: the drag aborted because the input gate closed"))
