@@ -18,8 +18,23 @@
 # signatures, the recognition self-test and the updater state of the built
 # artifact) before uploading; the publish job runs only after the Windows
 # build succeeded, verifies the release's assets are complete, and
-# publishes the draft for the channel. Failed jobs can be re-run: they
-# replace their assets in the same draft (--clobber).
+# publishes the draft for the channel. Only a draft is mutable: failed jobs
+# can be re-run against the same tag's draft, replacing its assets
+# (--clobber), while a published release is never touched again. Release
+# state comes from the paginated release list (which includes drafts to
+# push access), never from /releases/tags/{tag}: GitHub documents that
+# endpoint as returning a published release only. Every list entry is
+# validated before a tag is treated as absent; latest reads require a
+# completed curl transfer (exit 0 and Content-Length agreement) before the
+# HTTP status or body is interpreted. A 404 additionally requires a complete
+# GitHub Not Found error body and a list whose public non-prerelease objects
+# are all legal test tags (drafts and prereleases excluded); unknown public
+# tags, contradictory or malformed state fail closed. A 200 latest tag must
+# also agree with the same validated list. Same-tag runs are serialized by the
+# workflow concurrency group; stable publish
+# jobs additionally share one job-level group so the latest read/compare/
+# edit is one interval across tags, while test publishes stay independent
+# and builds are not serialized.
 #
 # Versions come from the tags: the source mygo.json stays at its
 # development version, and the Windows job writes the tag's version and
@@ -39,6 +54,13 @@ on:
 
 permissions:
   contents: write # the draft release, the uploads to it, and publishing it
+
+# Re-runs for the same tag queue instead of racing each other's release
+# state. Different tags stay independent here; the publish job adds a
+# stable-only job-level group for the latest read/compare/edit.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   draft-release:
@@ -81,16 +103,41 @@ jobs:
             echo "ERROR: mygo.json must carry updates.publicKey and updates.github (\"LoTwT/youkai\") for release builds"
             exit 1
           fi
-      - name: Create the draft release
+      - name: Create or reuse the draft release
         # The Windows job uploads into this draft only after its local
         # artifact checks and recognition self-test have all succeeded.
+        # An existing draft for the same tag is reused so failed jobs can be
+        # re-run; a published release is final and fails here before any
+        # later job can touch it. The lookup reads the paginated release
+        # list (drafts included to push access); any unreadable or malformed
+        # state fails closed instead of creating a release.
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if ! gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
-            gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
-              --draft --verify-tag --title "$GITHUB_REF_NAME" --generate-notes
-          fi
+          set -eu
+          tag="$GITHUB_REF_NAME"
+          repo="$GITHUB_REPOSITORY"
+          state=$(bash scripts/release-state.sh tag "$tag") || {
+            echo "ERROR: cannot determine whether release $tag exists; refusing to create or reuse it."
+            exit 1
+          }
+          case "$(printf '%s\n' "$state" | jq -r '.state')" in
+            absent)
+              gh release create "$tag" --repo "$repo" \
+                --draft --verify-tag --title "$tag" --generate-notes
+              ;;
+            release)
+              if [ "$(printf '%s\n' "$state" | jq -r '.release.draft')" != "true" ]; then
+                echo "ERROR: release $tag is already published; this workflow only creates or reuses drafts and never modifies a published release. Publish a new version instead."
+                exit 1
+              fi
+              echo "reusing the existing draft release $tag"
+              ;;
+            *)
+              echo "ERROR: unexpected state for release $tag; refusing to continue."
+              exit 1
+              ;;
+          esac
 
   windows:
     name: Build and upload (windows/amd64)
@@ -293,6 +340,16 @@ jobs:
           for delta in "$dir"/youkai-*-to-"${RELEASE_VERSION}"-windows-amd64.delta; do
             if [ -f "$delta" ]; then set -- "$@" "$delta"; fi
           done
+          # The uploads below replace same-named assets (--clobber), which is
+          # only safe while the release is still the draft this workflow
+          # created. Read the draft through the list endpoint (the tag
+          # endpoint only guarantees published releases) immediately before
+          # writing; an absent, published, unreadable or malformed release
+          # fails closed without replacing public artifacts.
+          bash scripts/release-state.sh draft "$GITHUB_REF_NAME" > /dev/null || {
+            echo "ERROR: release $GITHUB_REF_NAME is not a readable draft; refusing to upload."
+            exit 1
+          }
           gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --clobber "$@"
           gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --clobber "$manifest"
 
@@ -301,6 +358,15 @@ jobs:
     needs: windows
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    concurrency:
+      # All stable publishes share one group: the latest read, comparison
+      # and edit then form one mutually exclusive interval across tags.
+      # Test publishes keep a per-tag group, and queue: max leaves different
+      # releases pending instead of canceling them. Builds stay outside this
+      # group and keep running per tag.
+      group: ${{ startsWith(github.ref_name, 'test-v') && format('release-publish-test-{0}', github.ref) || 'release-publish-stable' }}
+      cancel-in-progress: false
+      queue: max
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -321,7 +387,36 @@ jobs:
           esac
           version="${tag#"$prefix"}"
           repo="${GITHUB_REPOSITORY}"
-          assets=$(gh release view "$tag" --repo "$repo" --json assets -q '.assets[].name')
+          dir=$(mktemp -d)
+          trap 'rm -rf "$dir"' EXIT
+          # One validated list read supplies the draft object and the
+          # published-state facts used for the latest decision. The helper
+          # only interprets latest after a completed curl transfer; a 404
+          # also needs a complete GitHub Not Found body and a list whose
+          # public non-prerelease objects are all legal test tags. Unknown
+          # or contradictory state fails before this job can edit.
+          facts=$(bash scripts/release-state.sh publish "$tag" "$channel") || {
+            echo "ERROR: cannot read a consistent draft and latest state for $tag; refusing to verify or publish."
+            exit 1
+          }
+          release=$(printf '%s\n' "$facts" | jq -c '.release') || {
+            echo "ERROR: release state for $tag has no release object."
+            exit 1
+          }
+          make_latest=$(printf '%s\n' "$facts" | jq -r '.make_latest') || {
+            echo "ERROR: release state for $tag has no latest decision."
+            exit 1
+          }
+          case "$make_latest" in
+            true|false) ;;
+            *) echo "ERROR: release state for $tag returned an invalid latest decision."; exit 1 ;;
+          esac
+          printf '%s\n' "$release" > "$dir/release.json"
+          release_id=$(printf '%s' "$release" | jq -r '.id')
+          case "$release_id" in
+            ''|*[!0-9]*) echo "ERROR: release $tag has no numeric release id"; exit 1 ;;
+          esac
+          assets=$(printf '%s' "$release" | jq -r '.assets[].name')
           # MyGo v0.7+ uses the ASCII slug in installer asset names.
           need=(
             "youkai-setup-$version-amd64.exe"
@@ -344,8 +439,14 @@ jobs:
             exit 1
           fi
           # The manifests the apps download must serve the tag's version.
-          dir=$(mktemp -d)
-          gh release download "$tag" --repo "$repo" --pattern 'update-*.json' --dir "$dir" --clobber
+          # Read the manifest through its asset ID: gh release download's
+          # tag lookup is published-only as well.
+          asset_id=$(printf '%s' "$release" | jq -r '.assets[] | select(.name == "update-windows-amd64.json") | .id')
+          case "$asset_id" in
+            ''|*[!0-9]*) echo "ERROR: release $tag has no usable update-windows-amd64.json asset id"; exit 1 ;;
+          esac
+          gh api "repos/$repo/releases/assets/$asset_id" \
+            -H "Accept: application/octet-stream" > "$dir/update-windows-amd64.json"
           for target in windows-amd64; do
             got=$(jq -r '.version' "$dir/update-$target.json")
             if [ "$got" != "$version" ]; then
@@ -353,23 +454,41 @@ jobs:
               exit 1
             fi
           done
-          # Replace the marked downloads section on re-runs and retain
-          # the original notes, linking the actual uploaded installer.
-          gh api "repos/$repo/releases/tags/$tag" > "$dir/release.json"
-          node scripts/generate-release-downloads.mjs "$dir/release.json" > "$dir/notes.md"
+          # Generate the notes from the same draft object read above. The
+          # generator builds public download URLs from the verified repo,
+          # tag and asset names instead of a draft's untagged URL.
+          node scripts/generate-release-downloads.mjs \
+            --repo "$repo" --tag "$tag" "$dir/release.json" > "$dir/notes.md"
+          # A published release is final: this step may only edit the same
+          # draft it just read. Re-read immediately before writing so a
+          # partial job re-run cannot rewrite public notes or move "latest".
+          current=$(bash scripts/release-state.sh draft "$tag") || {
+            echo "ERROR: release $tag is no longer a readable draft; refusing to modify it."
+            exit 1
+          }
+          current_id=$(printf '%s\n' "$current" | jq -r '.release.id')
+          if [ "$current_id" != "$release_id" ]; then
+            echo "ERROR: release $tag changed while publishing (id $release_id -> $current_id); refusing to modify it."
+            exit 1
+          fi
           # Test-channel releases publish as ordinary releases — the MyGo
           # updater only accepts published, non-draft, non-prerelease
           # releases — but never as the repository's latest, which the
-          # stable channel reads. The stable release becomes the latest.
+          # stable channel reads. make_latest came from the helper's
+          # validated latest decision; a stable release only claims latest
+          # when no higher published stable version exists.
           if [ "$channel" = "test" ]; then
-            gh release edit "$tag" --repo "$repo" \
-              --draft=false --prerelease=false --latest=false \
-              --title "Youkai ${version}（测试版，勿用）" \
-              --notes-file "$dir/notes.md"
+            title="Youkai ${version}（测试版，勿用）"
           else
-            gh release edit "$tag" --repo "$repo" \
-              --draft=false --prerelease=false --latest=true \
-              --title "Youkai $version" \
-              --notes-file "$dir/notes.md"
+            title="Youkai $version"
           fi
-          echo "published $tag on the $channel channel (latest: $([ "$channel" = stable ] && echo yes || echo no))"
+          # Edit the exact release read above, not a tag that could resolve
+          # to another object. The fields match the previous release-edit
+          # arguments, including the test/stable latest choice.
+          jq -n --arg name "$title" --arg body "$(cat "$dir/notes.md")" \
+            --arg make_latest "$make_latest" \
+            '{name: $name, body: $body, draft: false, prerelease: false, make_latest: $make_latest}' \
+            > "$dir/publish.json"
+          gh api -X PATCH "repos/$repo/releases/$release_id" \
+            --input "$dir/publish.json" > /dev/null
+          echo "published $tag on the $channel channel (latest: $make_latest)"
