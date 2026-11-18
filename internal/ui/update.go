@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/LoTwT/youkai/internal/app"
 	"github.com/LoTwT/youkai/internal/scan"
 	"github.com/egoist/mygo/ui"
 )
@@ -133,10 +134,12 @@ func (m *Model) CheckUpdates() {
 // InstallUpdate installs the update a check found. A scan session that
 // still holds the active slot — running, wrapping up, or waiting for a
 // save retry — forbids the install (2026-10-17 决定：扫描进行中不安装，收尾
-// 保存后再装); the view explains why next to the disabled button, and this
-// guard repeats the rule so nothing reaches Install behind the UI's back.
-// The click only schedules the download; the app keeps running until the
-// entry point relaunches it after a successful install.
+// 保存后再装); the view explains why next to the disabled button, and the
+// service's BeginUpdateInstall takes the same rule at the admission
+// boundary so a lagging snapshot cannot admit an install beside an
+// already accepted scan. The click only schedules the download; the app
+// keeps running until the entry point relaunches it after a successful
+// install.
 func (m *Model) InstallUpdate() {
 	if m.updatesState != updateAvailable || m.updatesHandle == nil {
 		return
@@ -144,14 +147,29 @@ func (m *Model) InstallUpdate() {
 	if m.updateBlockedReason() != "" {
 		return
 	}
+	// The service takes the install at the same boundary as Start. The
+	// snapshot above can lag an accepted or wrapping-up scan; without this
+	// admission the install would begin beside it and the restart would
+	// cut that session short. The call only locks the service's short state
+	// mutex, so it stays safe on the UI thread.
+	if err := m.cfg.Service.BeginUpdateInstall(); err != nil {
+		// Read the authoritative state so the area explains the real
+		// blocker instead of the stale snapshot that let the click through.
+		// A closed admission after an exit becomes updateBlockedReason's
+		// reason, so this path sets no install error that would promise a
+		// retry.
+		m.applyLatestSnapshot()
+		if m.updateBlockedReason() == "" {
+			m.updatesInstallErr = "更新安装未能开始，请等扫描保存完成后再试。"
+		}
+		return
+	}
 	m.updatesState = updateInstalling
 	m.updatesInstallErr = ""
 	m.updatesProgress = 0
-	// Publish the install to the service before any download work: new
-	// starts are refused from this moment, and the restart at the end is
-	// the only way out. A failed or cancelled install must clear it again.
-	m.cfg.Service.SetUpdateInstalling(true)
 	handle := m.updatesHandle
+	settled := make(chan struct{})
+	m.updatesInstallSettled = settled
 	m.goAsync(func() {
 		err := handle.Install(context.Background(), func(downloaded, total int64) {
 			// Progress arrives on this goroutine; only the fraction moves,
@@ -166,15 +184,22 @@ func (m *Model) InstallUpdate() {
 			if err != nil {
 				// The app keeps running the current version; the update
 				// stays found, so the button offers the install again. The
-				// service must accept starts again too.
-				m.cfg.Service.SetUpdateInstalling(false)
+				// service must admit scans again too.
+				m.cfg.Service.EndUpdateInstall()
 				m.updatesState = updateAvailable
 				m.updatesInstallErr = err.Error()
-				return
+			} else {
+				m.updatesState = updateInstalled
+				if m.cfg.OnUpdateInstalled != nil {
+					m.cfg.OnUpdateInstalled()
+				}
 			}
-			m.updatesState = updateInstalled
-			if m.cfg.OnUpdateInstalled != nil {
-				m.cfg.OnUpdateInstalled()
+			// Close only after the outcome — including the restart request
+			// — is on the UI thread: an exit that is waiting for this
+			// install must not quit before OnUpdateInstalled recorded it.
+			close(settled)
+			if m.updatesInstallSettled == settled {
+				m.updatesInstallSettled = nil
 			}
 		})
 	})
@@ -183,15 +208,22 @@ func (m *Model) InstallUpdate() {
 // updateBlockedReason explains why the found update may not install now,
 // empty when it may: an active scan session (its wrap-up, and a failed
 // save awaiting retry, keep the slot busy), content still to be written,
-// or the explicit exit in progress. A scan that starts while a download is
-// already running is not blocked here — the restart runs the normal quit
-// sequence, which stops and saves it like any other quit.
+// or an exit that already closed the service's admission. A scan cannot
+// start while an install runs: BeginUpdateInstall admits the install at
+// the same service boundary that would accept the start, and Start refuses
+// until the restart.
 func (m *Model) updateBlockedReason() string {
 	switch {
-	case m.exitState == exitRunning:
+	case m.exitState == exitRunning || m.exitState == exitDone:
 		return "正在退出应用，不能安装更新。"
 	case m.snap.SaveError != "":
 		return "有保存失败的扫描结果待重试保存，先完成保存再安装更新。"
+	case m.snap.StartBlocked == app.StartBlockedQuitting:
+		// The explicit exit closed admission for this run, even when a
+		// failed wrap-up or a later successful save retry returned the
+		// interface to idle. The service will refuse every install until
+		// the process restarts, so no retry can succeed here.
+		return "退出清理没有完成，不能再安装更新；请退出 youkai 后重新打开。"
 	case m.snap.Busy:
 		if m.snap.Scan.Phase == scan.PhaseFinalizing {
 			return "扫描正在收尾保存，等保存完成后再安装更新。"
@@ -244,7 +276,8 @@ func updateDot(c *ui.Context, t *ui.Theme, tok *Tokens) {
 // updateArea is the settings update section: the running version, the state
 // of the last check, the found version with its notes, the one primary
 // action (安装并重启 while a version waits, 检查更新 otherwise) and every
-// honest failure with its retry. Builds without updates say so once.
+// honest failure with its retry while the service can still admit an
+// install. Builds without updates say so once.
 func (m *Model) updateArea(c *ui.Context, t *ui.Theme, tok *Tokens) {
 	if m.appVersion != "" {
 		ui.Text(c, "当前版本 "+m.appVersion).TextColor(tok.TextMuted)
@@ -284,7 +317,14 @@ func (m *Model) updateArea(c *ui.Context, t *ui.Theme, tok *Tokens) {
 			ui.Text(c, "检查更新失败："+m.updatesCheckErr).TextColor(t.Danger)
 		}
 		if m.updatesInstallErr != "" {
-			ui.Text(c, "安装更新失败："+m.updatesInstallErr+"。应用继续运行当前版本，可重试安装。").TextColor(t.Danger)
+			// A failure stays visible, but the promise of a retry only
+			// holds while no other state blocks the install; the service's
+			// closed admission after an exit, for one, cannot reopen here.
+			text := "安装更新失败：" + m.updatesInstallErr + "。应用继续运行当前版本，可重试安装。"
+			if m.updateBlockedReason() != "" {
+				text = "安装更新失败：" + m.updatesInstallErr + "。应用继续运行当前版本。"
+			}
+			ui.Text(c, text).TextColor(t.Danger)
 		}
 	})
 }
@@ -295,7 +335,10 @@ func (m *Model) updateArea(c *ui.Context, t *ui.Theme, tok *Tokens) {
 func (m *Model) updateAvailableArea(c *ui.Context, t *ui.Theme, tok *Tokens) {
 	blocked := m.updateBlockedReason()
 	label := "安装并重启"
-	if m.updatesInstallErr != "" {
+	// Only a retry that can actually start is called 重试安装; an install
+	// blocked by a scan or by the service's closed admission keeps the
+	// ordinary label beside its reason.
+	if m.updatesInstallErr != "" && blocked == "" {
 		label = "重试安装"
 	}
 	actionRow(c).Wrap().Children(func() {

@@ -98,6 +98,9 @@ type fakeService struct {
 	retries int
 	quits   int
 	quitFn  func() error
+	// exitPreparations counts PrepareExplicitExit calls; tests assert the
+	// exit closes admission before its pending-work wait.
+	exitPreparations int
 
 	targets             []app.TargetCandidate
 	targetsAccessDenied int
@@ -114,6 +117,8 @@ type fakeService struct {
 	estimateCalls  int
 
 	updateInstalling []bool
+	beginUpdateErr   error
+	snapshot         app.Snapshot
 
 	list      []record.RecordInfo
 	history   []app.HistoryRecord
@@ -295,7 +300,9 @@ func (f *fakeService) Stop() {
 }
 
 func (f *fakeService) Snapshot() app.Snapshot {
-	return app.Snapshot{}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.snapshot
 }
 
 func (f *fakeService) RetrySave() error {
@@ -540,12 +547,43 @@ func (f *fakeService) Quit() error {
 	return nil
 }
 
-// SetUpdateInstalling records the install publication the update flow owns
-// (M-2); the sequence tells a start from a failed install's clear.
-func (f *fakeService) SetUpdateInstalling(installing bool) {
+// PrepareExplicitExit records the exit's early admission closure.
+func (f *fakeService) PrepareExplicitExit() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.updateInstalling = append(f.updateInstalling, installing)
+	f.exitPreparations++
+}
+
+// quitCount reads the recorded Quit calls without racing a blocked exit.
+func (f *fakeService) quitCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.quits
+}
+
+func (f *fakeService) exitPreparationCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.exitPreparations
+}
+
+// BeginUpdateInstall records an admitted install (M-2); the sequence tells
+// a start from a failed install's clear. beginUpdateErr refuses it the way
+// the real service refuses a session that already occupies the slot.
+func (f *fakeService) BeginUpdateInstall() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.beginUpdateErr != nil {
+		return f.beginUpdateErr
+	}
+	f.updateInstalling = append(f.updateInstalling, true)
+	return nil
+}
+
+func (f *fakeService) EndUpdateInstall() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.updateInstalling = append(f.updateInstalling, false)
 }
 
 func (f *fakeService) updateInstallingCalls() []bool {
@@ -591,7 +629,9 @@ func solidBitmap(c color.RGBA) *ui.Bitmap {
 	return ui.NewBitmap(img)
 }
 
-// snap builds a service snapshot for a session at one revision.
+// snap builds a service snapshot for a session at one revision of the
+// service's global revision counter: a new session's snapshots continue
+// above the previous session's, as the real service publishes them.
 func snap(session string, rev uint64, busy bool, phase scan.Phase, counts scan.Counts,
 	saved int, pending bool, saveErr string) app.Snapshot {
 	return app.Snapshot{

@@ -93,6 +93,18 @@ func TestTraversalFaultCausesKeepCodeOnce(t *testing.T) {
 			},
 		},
 		{
+			name: "aborted drag premise denial",
+			run: func(t *testing.T) error {
+				t.Helper()
+				run := &inventoryRun{}
+				return run.dispatchOutcome(context.Background(), platform.InputResult{
+					Status:  platform.InputPartial,
+					Aborted: true,
+					Denial:  problem,
+				})
+			},
+		},
+		{
 			name: "observation error fault",
 			run: func(t *testing.T) error {
 				t.Helper()

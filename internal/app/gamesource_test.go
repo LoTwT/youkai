@@ -263,8 +263,14 @@ func TestGameScanSourceStopBeforeCommitIsKept(t *testing.T) {
 	if final.End != scan.EndCancelled {
 		t.Fatalf("the early stop must be applied at commit, got end %s", final.End)
 	}
-	if !sess.IsClosed() {
-		t.Fatal("the platform session must close through the release")
+	// The gate keeps the producer from preparing before the commit, so a
+	// stop accepted in this window never opens the platform session at
+	// all; nothing is left to release.
+	if port.OpenCount() != 0 {
+		t.Fatalf("a stop before commit opened the platform session %d times", port.OpenCount())
+	}
+	if sess.IsClosed() {
+		t.Fatal("a platform session that never opened must not be closed")
 	}
 }
 

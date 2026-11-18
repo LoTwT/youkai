@@ -356,6 +356,7 @@ func (a *WinAdapter) Open(ctx context.Context, cfg SessionConfig) (Session, erro
 	actor := windows.NewInputActor(a.natives.Send, s.precheck)
 	actor.SetSleep(a.sleep)
 	actor.SetStepGate(func() bool { return cfg.Gate.InputPermitted() })
+	actor.SetStepPrecheck(s.checkStepPremises)
 	s.actor = actor
 	return s, nil
 }
@@ -830,8 +831,11 @@ func (s *winSession) Frame(ctx context.Context, req FrameRequest) (Frame, error)
 }
 
 // Dispatch implements Session: observe (re-measure), precheck, gate,
-// act. The actor re-runs the precheck inside its serial section as
-// defense in depth.
+// act. A drag's first batch is gated like its interpolated steps: inside
+// the actor's serial section the live premises are re-verified at the
+// actual start point (fresh measurement) and the gate is checked again
+// after that check before any event is inserted. Other operations keep
+// the entry precheck contract.
 func (s *winSession) Dispatch(op InputOp) InputResult {
 	started := s.adapter.now()
 	deny := func(f *Fault) InputResult {
@@ -924,6 +928,52 @@ func (s *winSession) Dispatch(op InputOp) InputResult {
 	return mapWinResult(res, started, s.adapter.now())
 }
 
+// checkStepPremises re-verifies the live premises at the exact screen
+// point of the next interpolated drag move. The shared InputPrecheck
+// reads the tracked geometry and hit-tests the request's press point;
+// during a multi-batch drag both are stale — the watcher may not tick
+// between steps, and the point actually inserted changes every step.
+// ObserveTarget re-measures the client area here, so a 1 px move bumps the
+// geometry version even when the watcher has not run, and the hit test
+// covers the point about to receive motion.
+func (s *winSession) checkStepPremises(req windows.InputRequest, at windows.PixelPoint) error {
+	obs := s.observe()
+	if obs.fault != nil {
+		return obs.fault
+	}
+	if !obs.obs.Matched {
+		return &windows.PrecheckError{Code: windows.PrecheckTargetGone,
+			Detail: "the locked target no longer matches its identity"}
+	}
+	if !obs.obs.Foreground {
+		return &windows.PrecheckError{Code: windows.PrecheckFocusLost,
+			Detail: fmt.Sprintf("foreground window is %d, target is %d", obs.obs.ForegroundHWND, s.locked.HWND)}
+	}
+	if obs.obs.Minimized {
+		return &windows.PrecheckError{Code: windows.PrecheckMinimized, Detail: "target window is minimized"}
+	}
+	geo := obs.obs.Geometry
+	if obs.obs.GeometryChanged || req.GeometryVersion != windows.GeometryVersion(geo.Version) {
+		return &windows.PrecheckError{Code: windows.PrecheckStaleGeometry,
+			Detail: fmt.Sprintf("request geometry version %d, current version %d; the client area moved or resized during the drag",
+				req.GeometryVersion, geo.Version)}
+	}
+	if !geo.Client.Contains(at) {
+		return &windows.PrecheckError{Code: windows.PrecheckPointOutside,
+			Detail: fmt.Sprintf("drag move point %v outside client rect %v", at, geo.Client)}
+	}
+	hit := s.adapter.natives.FG.HitWindow(at)
+	if hit == 0 {
+		return &windows.PrecheckError{Code: windows.PrecheckOccluded,
+			Detail: fmt.Sprintf("hit test at drag move point %v returned no window", at)}
+	}
+	if root := s.adapter.natives.FG.RootOf(hit); root != s.locked.HWND {
+		return &windows.PrecheckError{Code: windows.PrecheckOccluded,
+			Detail: fmt.Sprintf("drag move point %v is covered by window %d (root %d), not target %d", at, hit, root, s.locked.HWND)}
+	}
+	return nil
+}
+
 // precheckFault maps a PrecheckFunc refusal to the port's vocabulary.
 func precheckFault(err error, at time.Time) *Fault {
 	var pe *windows.PrecheckError
@@ -957,6 +1007,7 @@ func mapWinResult(res windows.InputResult, started, finished time.Time) InputRes
 		EventsPlanned: res.EventsPlanned,
 		EventsPosted:  res.EventsInserted,
 		Aborted:       res.Aborted,
+		ReleaseFault:  releaseFailureFault(res.ReleaseErr),
 		StartedAt:     started,
 		FinishedAt:    finished,
 	}
@@ -979,6 +1030,20 @@ func mapWinResult(res windows.InputResult, started, finished time.Time) InputRes
 		out.Denial = precheckResultFault(res.Err)
 	}
 	return out
+}
+
+// releaseFailureFault maps the abort release's failure. A UIPI-shaped
+// zero delivery keeps its own code; any other insertion failure is an
+// input failure. Nil means the release was inserted.
+func releaseFailureFault(err error) *Fault {
+	if err == nil {
+		return nil
+	}
+	var pf *windows.PlatformFault
+	if errors.As(err, &pf) && pf.Code == windows.CodeInputBlocked {
+		return NewFault(CodeInputBlocked, faultMessage(err))
+	}
+	return NewFault(CodeInputFailed, faultMessage(err))
 }
 
 // precheckResultFault maps the actor's refusal error; a closed

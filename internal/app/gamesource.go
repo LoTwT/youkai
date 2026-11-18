@@ -60,7 +60,7 @@ type positionRelay interface{ SetPositionSink(func(int)) }
 // before the session starts, so the range the precheck actually
 // observed reaches the session's record (T5 §3).
 type scopeRelay interface {
-	SetScopeSink(func(json.RawMessage))
+	SetScopeSink(func(json.RawMessage) error)
 }
 
 // GameScanSource supplies scans that run against a real game window

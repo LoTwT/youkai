@@ -271,8 +271,10 @@ const (
 	StateDelivered InputState = "delivered"
 	// StatePartialDelivered: some but not all events were inserted; the
 	// held ledger records whatever is still down. An aborted drag also
-	// reports this state with Aborted set: its posted events all ran,
-	// but the operation stopped short of its destination.
+	// reports this state with Aborted set: the inserted events ran, but
+	// the operation stopped short of its destination. The abort's release
+	// may itself be refused (ReleaseErr), in which case the button stays
+	// in the held ledger for the stop-time retry.
 	StatePartialDelivered InputState = "partialDelivered"
 	// StateBlocked: SendInput inserted nothing and the system reported
 	// access denial — the shape a UIPI permission mismatch takes. The
@@ -318,9 +320,11 @@ type InputResult struct {
 	EventsPlanned  int
 	EventsInserted int
 	// Aborted reports that a drag stopped mid-way because the step gate
-	// (the kernel's input permission) closed: the release was inserted
-	// and the button left the ledger, but the operation did not reach
-	// its destination.
+	// (the kernel's input permission) closed or a live input premise
+	// failed: the operation did not reach its destination. Err keeps the
+	// refusal (a PrecheckError for the premise case). The abort's release
+	// is attempted, but it may fail too; ReleaseErr records that failure
+	// and the button stays in the held ledger for the stop-time retry.
 	Aborted bool
 	// EffectUnverified is always true: SendInput counts insertion into
 	// the system stream, never what the game did with the events.
@@ -328,6 +332,11 @@ type InputResult struct {
 	// HeldAfter lists the keys/buttons still down after this request.
 	HeldAfter []HeldKey
 	Err       error
+	// ReleaseErr is the failure to insert the abort's release; nil when
+	// the release was inserted or no abort release was due. It never
+	// replaces Err: the reason the drag stopped remains the primary
+	// diagnostic.
+	ReleaseErr error
 }
 
 // Sender inserts events into the system input stream. The Win32
@@ -353,6 +362,15 @@ type Sender interface {
 // pretending atomicity.
 type PrecheckFunc func(req InputRequest) error
 
+// StepPrecheckFunc re-verifies the live premises for one interpolated
+// drag move at the exact screen point that will be inserted. Unlike
+// PrecheckFunc it must re-measure the client geometry instead of trusting
+// the tracker's cached observation: the watcher may not tick between two
+// steps. It runs inside the actor's serial section after the first step
+// gate check; a failure aborts the drag, attempts the release, and keeps
+// the error as the result's primary refusal.
+type StepPrecheckFunc func(req InputRequest, at PixelPoint) error
+
 // InputActor is the serial executor of bounded short operations: one
 // operation runs at a time, permission is closed in sync with the
 // dispatch entry so a queued next operation can never slip past a
@@ -365,17 +383,21 @@ type PrecheckFunc func(req InputRequest) error
 //
 // A click holds its press for the op's Hold interval, delivered as two
 // SendInput batches — [move, down], a pause, [up] — so the stop path
-// waits at most one hold. A drag delivers [move, down], then one batch
-// per interpolated move with a step-gate check between steps, then [up];
-// a closed gate aborts the drag with the release inserted and Aborted
-// set, so a stop waits at most one step interval.
+// waits at most one hold. A drag runs the gate and live-premise check at
+// its actual start point before pressing, delivers [move, down], then one
+// batch per interpolated move with the same checks between steps, then
+// [up]; a closed gate or a failed premise aborts the drag with Aborted set
+// and the release attempted. The release may itself be refused; ReleaseErr
+// records that and the held ledger keeps the button for the stop-time
+// retry, so a stop waits at most one step interval.
 //
-// The actor is pure logic over the injected Sender and PrecheckFunc; the
-// Win32 wiring is in the //go:build windows files.
+// The actor is pure logic over the injected Sender, PrecheckFunc and
+// StepPrecheckFunc; the Win32 wiring is in the //go:build windows files.
 type InputActor struct {
 	mu          sync.Mutex
 	send        Sender
 	precheck    PrecheckFunc
+	stepCheck   StepPrecheckFunc
 	sleep       func(time.Duration)
 	stepGate    func() bool
 	permitted   bool
@@ -415,6 +437,18 @@ func (a *InputActor) SetStepGate(gate func() bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.stepGate = gate
+}
+
+// SetStepPrecheck installs the per-move live-premise check. It receives
+// the request and the exact interpolated point the actor is about to
+// insert, and must re-measure rather than trust cached geometry. A
+// failure aborts the drag and keeps the error as the result's primary
+// refusal. Without it the actor falls back to the entry precheck for each
+// step, preserving the caller's contract.
+func (a *InputActor) SetStepPrecheck(check StepPrecheckFunc) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.stepCheck = check
 }
 
 // LastPostAt returns when the last event insertion succeeded; the zero
@@ -520,21 +554,51 @@ func (a *InputActor) Dispatch(req InputRequest) InputResult {
 		}
 		return res
 	}
-	if a.precheck != nil {
-		if err := a.precheck(req); err != nil {
-			res.State = StateNotDispatched
-			res.Err = err
-			return res
+	// permissionClosed keeps the "input permission closed:" prefix the
+	// port maps to permitClosed, including when only the kernel gate
+	// (not this actor's ClosePermission) closed.
+	permissionClosed := func() error {
+		if a.closeReason != "" {
+			return fmt.Errorf("input permission closed: %s", a.closeReason)
+		}
+		return errors.New("input permission closed: the kernel's input permission closed")
+	}
+	// dragStepCheck is the live premise check shared by a drag's first
+	// batch and every interpolated step. The adapter's step check
+	// re-measures; a caller without one falls back to the entry precheck.
+	dragStepCheck := func(at PixelPoint) error {
+		if a.stepCheck != nil {
+			return a.stepCheck(req, at)
+		}
+		if a.precheck != nil {
+			return a.precheck(req)
+		}
+		return nil
+	}
+	// Other operations keep the entry precheck contract. A drag runs the
+	// live check at its actual start point inside the serial section
+	// instead, so its first batch has the same guarantees as the steps.
+	if req.Op.Kind != OpDrag {
+		if a.precheck != nil {
+			if err := a.precheck(req); err != nil {
+				res.State = StateNotDispatched
+				res.Err = err
+				return res
+			}
 		}
 	}
 
 	// sendBatch inserts one batch, folding its accepted prefix into the
 	// ledger and the counters; blockedSeen marks the UIPI shape.
+	// batchFailure keeps the failed batch's own reason so an abort release
+	// can report it without replacing the reason the drag stopped.
 	blockedSeen := false
+	var batchFailure error
 	sendBatch := func(events []InputEvent) bool {
 		if len(events) == 0 {
 			return true
 		}
+		batchFailure = nil
 		accepted, blocked, err := a.send.SendInput(events)
 		res.EventsPlanned += len(events)
 		res.EventsInserted += accepted
@@ -548,12 +612,16 @@ func (a *InputActor) Dispatch(req InputRequest) InputResult {
 			res.Err = NewFault(CodeInputBlocked,
 				"SendInput inserted no events and the system reported access denial; the target likely runs at a higher privilege level (UIPI)",
 				nil, PhaseDispatch, time.Now(), 0)
+			batchFailure = res.Err
 			applyHeld(events[:accepted], &a.held)
 			return false
 		case accepted < len(events):
 			applyHeld(events[:accepted], &a.held)
-			if err != nil && res.Err == nil {
-				res.Err = err
+			if err != nil {
+				batchFailure = err
+				if res.Err == nil {
+					res.Err = err
+				}
 			}
 			return false
 		default:
@@ -568,8 +636,24 @@ func (a *InputActor) Dispatch(req InputRequest) InputResult {
 			{Kind: EventMouseDown, Button: op.Button},
 		})
 	}
-	releaseUp := func(op InputOp) {
-		sendBatch([]InputEvent{{Kind: EventMouseUp, Button: op.Button}})
+	// releaseUp inserts the release of a press. For an aborted drag the
+	// release may itself be refused (zero delivery) after the permission
+	// premise failed; that failure belongs in ReleaseErr while Err keeps
+	// the abort's reason. The held ledger keeps whatever was not inserted,
+	// so Close retries it.
+	releaseUp := func(op InputOp, abortRelease bool) {
+		reason := res.Err
+		if sendBatch([]InputEvent{{Kind: EventMouseUp, Button: op.Button}}) {
+			return
+		}
+		if !abortRelease {
+			return
+		}
+		res.ReleaseErr = batchFailure
+		if res.ReleaseErr == nil {
+			res.ReleaseErr = errors.New("the abort release was not inserted")
+		}
+		res.Err = reason
 	}
 
 	switch req.Op.Kind {
@@ -581,8 +665,28 @@ func (a *InputActor) Dispatch(req InputRequest) InputResult {
 			break
 		}
 		a.sleep(hold)
-		releaseUp(req.Op)
+		releaseUp(req.Op, false)
 	case OpDrag:
+		// The first batch is a conclusion like every later move: check
+		// the live premises at the actual start point (fresh measurement
+		// in the adapter), then re-check permission after that possibly
+		// blocking work. Any failure before the press is notDispatched
+		// with zero events — nothing was pressed, so nothing is released.
+		if a.stepGate != nil && !a.stepGate() {
+			res.State = StateNotDispatched
+			res.Err = permissionClosed()
+			return res
+		}
+		if err := dragStepCheck(req.Op.Point); err != nil {
+			res.State = StateNotDispatched
+			res.Err = err
+			return res
+		}
+		if a.stepGate != nil && !a.stepGate() {
+			res.State = StateNotDispatched
+			res.Err = permissionClosed()
+			return res
+		}
 		if !pressDown(req.Op) {
 			break
 		}
@@ -593,14 +697,37 @@ func (a *InputActor) Dispatch(req InputRequest) InputResult {
 				res.Aborted = true
 				break
 			}
-			if !sendBatch([]InputEvent{{Kind: EventMouseMove, Point: LerpPoint(req.Op.Point, req.Op.To, i, steps)}}) {
+			// A drag spans several SendInput batches across up to
+			// MaxDragDuration. The entry check and the cached geometry
+			// are stale by the first interpolated move: re-verify the
+			// live premises at the exact point about to be inserted, so a
+			// window that moved between observation ticks or covers only
+			// this point cannot keep receiving motion. The release below
+			// still runs, and the refusal is kept for the caller's
+			// diagnostic.
+			stepPoint := LerpPoint(req.Op.Point, req.Op.To, i, steps)
+			if stepErr := dragStepCheck(stepPoint); stepErr != nil {
+				res.Aborted = true
+				if res.Err == nil {
+					res.Err = stepErr
+				}
+				break
+			}
+			// The step precheck can close the permission (a stop arriving
+			// during observation). Re-check the gate after the precheck so
+			// a closed permission never inserts one more move.
+			if a.stepGate != nil && !a.stepGate() {
+				res.Aborted = true
+				break
+			}
+			if !sendBatch([]InputEvent{{Kind: EventMouseMove, Point: stepPoint}}) {
 				break
 			}
 		}
 		if !res.Aborted {
 			a.sleep(interval)
 		}
-		releaseUp(req.Op)
+		releaseUp(req.Op, res.Aborted)
 	case OpKeyPress:
 		events, err := ExpandOp(req.Op)
 		if err != nil {
@@ -624,12 +751,13 @@ func (a *InputActor) Dispatch(req InputRequest) InputResult {
 	}
 
 	switch {
+	case res.Aborted:
+		// The drag stopped short of its destination: partial is the honest
+		// state even when the abort's release was refused too (ReleaseErr)
+		// and the button remains in the held ledger for Close to retry.
+		res.State = StatePartialDelivered
 	case blockedSeen:
 		res.State = StateBlocked
-	case res.Aborted:
-		// The posted events all ran, but the drag stopped short of its
-		// destination: partial is the honest state.
-		res.State = StatePartialDelivered
 	case res.EventsInserted >= res.EventsPlanned && res.EventsPlanned > 0:
 		res.State = StateDelivered
 	case res.EventsInserted == 0:

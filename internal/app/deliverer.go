@@ -355,16 +355,18 @@ func applyTerminalLocked(item *record.ItemRecord, rec scan.Record) error {
 // stable PositionLedger, and persists with the very next checkpoint, so
 // the observed range survives a crash right after the precheck. A
 // report that is not a JSON document is refused, not silently dropped:
-// the record only keeps what verifies.
-func (d *recordDeliverer) observeScope(raw json.RawMessage) {
+// the record only keeps what verifies. The returned error is the
+// unresolved persistence failure; Prepare turns the first one into a
+// storage fault before any input is permitted.
+func (d *recordDeliverer) observeScope(raw json.RawMessage) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.finished {
-		return
+		return d.saveErr
 	}
 	if len(raw) == 0 || !json.Valid(raw) || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
 		d.saveErr = fmt.Errorf("app: record %s: observed scope is not a JSON document: %q", d.recordID, raw)
-		return
+		return d.saveErr
 	}
 	d.shell.ObservedScope = append(json.RawMessage(nil), raw...)
 	if status, ok := observedCoverage(raw); ok {
@@ -384,6 +386,7 @@ func (d *recordDeliverer) observeScope(raw json.RawMessage) {
 	if d.saveErr == nil {
 		d.sinceSave = 0
 	}
+	return d.saveErr
 }
 
 // observedCoverage reads the coverage conclusion the traversal wrote into

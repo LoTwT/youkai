@@ -97,6 +97,68 @@ type nccCandidate struct {
 	std float64
 }
 
+// correlationAt computes the zero-mean normalized correlation of the two
+// frames' list viewports and the after-support's grayscale std at one exact
+// displacement dy, sampling at the calibrated steps. The dynamic
+// selection-border strips of both frames are masked out of the comparison:
+// the border's glow animates independently of the list and must not count as
+// content change. A uniform support has no correlation to measure and
+// reports ok=false, so the information gate can reject it.
+func (m *ScrollEvidenceMatcher) correlationAt(before, after *image.RGBA, dy int, mask []image.Rectangle) (ncc, std float64, ok bool) {
+	r := m.L.ListViewport
+	inMask := func(x, y int) bool {
+		for _, rect := range mask {
+			if x >= rect.Min.X && x < rect.Max.X && y >= rect.Min.Y && y < rect.Max.Y {
+				return true
+			}
+		}
+		return false
+	}
+	var n int
+	var sumA, sumB, sumAA, sumBB, sumAB float64
+	for y := r.Min.Y; y < r.Max.Y; y += m.C.ScrollStepY {
+		beforeY := y + dy
+		if beforeY < r.Min.Y || beforeY >= r.Max.Y {
+			continue
+		}
+		for x := r.Min.X; x < r.Max.X; x += m.C.ScrollStepX {
+			if inMask(x, y) || inMask(x, beforeY) {
+				continue
+			}
+			a := float64(grayAt(before, x, beforeY))
+			b := float64(grayAt(after, x, y))
+			n++
+			sumA += a
+			sumB += b
+			sumAA += a * a
+			sumBB += b * b
+			sumAB += a * b
+		}
+	}
+	if n < m.C.ScrollMinSamples {
+		return 0, 0, false
+	}
+	varA := float64(n)*sumAA - sumA*sumA
+	varB := float64(n)*sumBB - sumB*sumB
+	if varA <= 0 || varB <= 0 {
+		return 0, 0, false
+	}
+	return (float64(n)*sumAB - sumA*sumB) / math.Sqrt(varA*varB),
+		math.Sqrt(varB / float64(n*n)), true
+}
+
+// zeroShiftCounterEvidence reports whether the pair's zero-shift correlation
+// is below the stationary floor on a support informative enough for that
+// correlation to be movement evidence. It is the signal the MAD shortcut
+// cannot see and is shared by the stillness proof and the wait's motion clock.
+func (m *ScrollEvidenceMatcher) zeroShiftCounterEvidence(before, after *image.RGBA, mask []image.Rectangle) (counter bool, ncc, std float64) {
+	ncc, std, ok := m.correlationAt(before, after, 0, mask)
+	if !ok {
+		return false, 0, 0
+	}
+	return std >= m.C.ScrollInfoStdMin && ncc < m.C.ScrollStationaryNCC, ncc, std
+}
+
 // rowCorrelations computes the zero-mean normalized correlation of the two
 // frames' list viewports at every whole-row candidate, sampling at the
 // calibrated steps. The dynamic selection-border strips of both frames are
@@ -108,16 +170,7 @@ type nccCandidate struct {
 // a windowed best would let a sub-row creep (a settling animation) borrow
 // the stationary verdict of a neighbouring shift.
 func (m *ScrollEvidenceMatcher) rowCorrelations(before, after *image.RGBA, mask []image.Rectangle) map[int]nccCandidate {
-	r := m.L.ListViewport
 	out := make(map[int]nccCandidate, 2*m.C.ScrollMaxRows+1)
-	inMask := func(x, y int) bool {
-		for _, rect := range mask {
-			if x >= rect.Min.X && x < rect.Max.X && y >= rect.Min.Y && y < rect.Max.Y {
-				return true
-			}
-		}
-		return false
-	}
 	for row := -m.C.ScrollMaxRows; row <= m.C.ScrollMaxRows; row++ {
 		window := m.C.ScrollRowTolerance
 		if row == 0 {
@@ -125,40 +178,10 @@ func (m *ScrollEvidenceMatcher) rowCorrelations(before, after *image.RGBA, mask 
 		}
 		best := nccCandidate{ncc: math.Inf(-1)}
 		for dy := row*m.L.RowPitch - window; dy <= row*m.L.RowPitch+window; dy++ {
-			var n int
-			var sumA, sumB, sumAA, sumBB, sumAB float64
-			for y := r.Min.Y; y < r.Max.Y; y += m.C.ScrollStepY {
-				beforeY := y + dy
-				if beforeY < r.Min.Y || beforeY >= r.Max.Y {
-					continue
-				}
-				for x := r.Min.X; x < r.Max.X; x += m.C.ScrollStepX {
-					if inMask(x, y) || inMask(x, beforeY) {
-						continue
-					}
-					a := float64(grayAt(before, x, beforeY))
-					b := float64(grayAt(after, x, y))
-					n++
-					sumA += a
-					sumB += b
-					sumAA += a * a
-					sumBB += b * b
-					sumAB += a * b
-				}
-			}
-			if n < m.C.ScrollMinSamples {
+			ncc, std, ok := m.correlationAt(before, after, dy, mask)
+			if !ok {
 				continue
 			}
-			// Zero-mean normalized correlation over the n samples.
-			varA := float64(n)*sumAA - sumA*sumA
-			varB := float64(n)*sumBB - sumB*sumB
-			if varA <= 0 || varB <= 0 {
-				// A uniform support has no correlation to measure; leave the
-				// candidate at -inf so the information gate rejects it.
-				continue
-			}
-			ncc := (float64(n)*sumAB - sumA*sumB) / math.Sqrt(varA*varB)
-			std := math.Sqrt(varB / float64(n*n))
 			if ncc > best.ncc {
 				best = nccCandidate{ncc: ncc, std: std}
 			}
@@ -252,15 +275,38 @@ func nccVerdict(cands map[int]nccCandidate, chosen int) (best float64, gap float
 	return comp.chosen, comp.gap, true
 }
 
+// stationaryEvidence reports whether the zero-shift candidate passes the
+// stationary correlation, competition-margin and information gates. It is the
+// single definition of normalized stillness shared by MatchScroll's Stationary
+// verdict and the traversal's zero-displacement proofs; a repeated-row list
+// can tie the zero candidate with a neighbouring row, and that tie (gap below
+// the margin) is not proof of stillness.
+func (m *ScrollEvidenceMatcher) stationaryEvidence(cands map[int]nccCandidate) (nccCandidate, nccCompetition, bool) {
+	cand, have := cands[0]
+	if !have {
+		return nccCandidate{}, nccCompetition{}, false
+	}
+	comp, ok := nccCompetitionAt(cands, 0)
+	if !ok {
+		return nccCandidate{}, nccCompetition{}, false
+	}
+	if cand.ncc < m.C.ScrollStationaryNCC || comp.gap < m.C.ScrollNCCMargin || cand.std < m.C.ScrollInfoStdMin {
+		return cand, comp, false
+	}
+	return cand, comp, true
+}
+
 // MatchScroll implements Matcher with the stage 2 evidence model. The
 // verdict order is:
 //
 //  1. Pixel-identical frames are stationary (the wrapped matcher's
 //     zero-shift MAD; it also covers uniform content the normalized path
-//     must refuse).
+//     must refuse), unless the selection box or the scrollbar verifiably
+//     moved. Repeated rows can make a whole-row move almost invisible to
+//     this MAD, so the primary evidence must be allowed to veto it.
 //  2. Stillness by normalized correlation, gated by the information floor
-//     and the candidate competition, unless the selection box verifiably
-//     moved (a moved selection contradicts stillness).
+//     and the candidate competition, unless the selection box or the
+//     scrollbar verifiably moved (either contradicts stillness).
 //  3. The selection box's displacement, corroborated by the normalized
 //     feature at the named row. The named row must clear the correlation
 //     and information floors, and no candidate may beat it by more than the
@@ -309,6 +355,20 @@ func (m *ScrollEvidenceMatcher) MatchScroll(before, after platform.Frame) Scroll
 	thumbBStart, thumbBEnd, thumbBOK := m.thumbSegment(before.Image)
 	thumbAStart, thumbAEnd, thumbAOK := m.thumbSegment(after.Image)
 
+	// The selection pair's displacement claim and the scrollbar's movement
+	// evidence are needed before the MAD stillness shortcut: on a list whose
+	// rows repeat, a real whole-row move can leave the zero-shift MAD far
+	// below the stationary threshold, and only the anchors name it.
+	selRows, selRowsOK := 0, false
+	if selB >= 0 && selA >= 0 {
+		selRows, selRowsOK = m.selectionRows(selB, selA)
+	}
+	selectionStill := selB >= 0 && selA >= 0 && selB == selA
+	selectionMoved := selRowsOK && selRows != 0
+	thumbMoved := m.thumbMoved(
+		thumbReading{start: thumbBStart, end: thumbBEnd, ok: thumbBOK},
+		thumbReading{start: thumbAStart, end: thumbAEnd, ok: thumbAOK})
+
 	metrics := &ScrollMetrics{
 		Err0:            err0,
 		SelectionBefore: selB,
@@ -316,20 +376,15 @@ func (m *ScrollEvidenceMatcher) MatchScroll(before, after platform.Frame) Scroll
 	}
 
 	// 1) Pixel-identical frames prove stillness directly, uniform content
-	// included (the normalized path refuses it by design).
-	if err0 < m.C.ScrollStationaryMax {
+	// included (the normalized path refuses it by design). A definite
+	// selection or thumb movement vetoes that proof: repeated rows make a
+	// whole-row move nearly invisible to this MAD, so the primary evidence
+	// must decide instead of being skipped here.
+	if err0 < m.C.ScrollStationaryMax && !selectionMoved && !thumbMoved {
 		return ScrollMatch{Stationary: true, Metrics: metrics, Evidence: fmt.Sprintf(
 			"frames %d → %d: list viewport error at zero displacement %.2f < %.1f — the list did not move",
 			before.ID, after.ID, err0, m.C.ScrollStationaryMax)}
 	}
-
-	// The selection pair's displacement claim.
-	selRows, selRowsOK := 0, false
-	if selB >= 0 && selA >= 0 {
-		selRows, selRowsOK = m.selectionRows(selB, selA)
-	}
-	selectionStill := selB >= 0 && selA >= 0 && selB == selA
-	selectionMoved := selRowsOK && selRows != 0
 
 	// 2) and the shared normalized-feature search.
 	var mask []image.Rectangle
@@ -367,14 +422,12 @@ func (m *ScrollEvidenceMatcher) MatchScroll(before, after platform.Frame) Scroll
 	}
 
 	// 2) Stillness by normalized correlation. A selection pair that verifiably
-	// moved contradicts stillness; a same-slot pair is consistent with it.
-	if cand, have := cands[0]; have && !selectionMoved {
-		if _, gap, ok := nccVerdict(cands, 0); ok &&
-			cand.ncc >= m.C.ScrollStationaryNCC && gap >= m.C.ScrollNCCMargin && cand.std >= m.C.ScrollInfoStdMin {
-			return ScrollMatch{Stationary: true, Metrics: metrics, Evidence: fmt.Sprintf(
-				"frames %d → %d: same content by normalized correlation (ncc %.3f ≥ %.2f, runner-up gap %.3f ≥ %.2f, info std %.1f) with zero-shift error %.2f — the list did not move; %s",
-				before.ID, after.ID, cand.ncc, m.C.ScrollStationaryNCC, gap, m.C.ScrollNCCMargin, cand.std, err0, thumbNote)}
-		}
+	// moved contradicts stillness; a measurable thumb movement is the
+	// independent contradiction. A same-slot pair is consistent with it.
+	if cand, comp, ok := m.stationaryEvidence(cands); ok && !selectionMoved && !thumbMoved {
+		return ScrollMatch{Stationary: true, Metrics: metrics, Evidence: fmt.Sprintf(
+			"frames %d → %d: same content by normalized correlation (ncc %.3f ≥ %.2f, runner-up gap %.3f ≥ %.2f, info std %.1f) with zero-shift error %.2f — the list did not move; %s",
+			before.ID, after.ID, cand.ncc, m.C.ScrollStationaryNCC, comp.gap, m.C.ScrollNCCMargin, cand.std, err0, thumbNote)}
 	}
 
 	// 3) The selection box's displacement: the primary evidence, corroborated
@@ -558,6 +611,158 @@ func (m *ScrollEvidenceMatcher) displaced(beforeID, afterID uint64, rows int, ba
 	}
 }
 
+// zeroDisplacementProven reports whether before → after proves the list
+// stayed at the same position strongly enough to rebase a scroll retry or to
+// accept a settling confirmation. It is the shared zero-displacement
+// semantics behind those decisions:
+//
+//   - the same immutable frame content proves it directly;
+//   - a definite selection-box displacement or scrollbar translation vetoes
+//     it (the scrollbar must move at both edges by the same measurable
+//     travel; a single edge changing while the other stays is a boundary
+//     measurement artifact, such as the Windows bottom capture reading the
+//     thumb's leading edge two pixels low);
+//   - a readable selection box on the same slot with a zero-shift error
+//     below the stationary threshold, no definite thumb translation and no
+//     information-rich normalized movement counter-evidence proves it: the
+//     border follows its item through a drag, so a whole-row move would move
+//     the border's slot (or make the border unreadable); the normalized
+//     zero-shift check still rejects a sub-row creep that stays inside the
+//     probe and under the MAD threshold;
+//   - otherwise a unique zero-shift normalized candidate must pass the
+//     stationary correlation, competition-margin and information floors. A
+//     repeated-row tie leaves the zero candidate indistinguishable from a
+//     whole-row move and proves nothing.
+//
+// A zero-shift MAD alone — even exactly zero — never proves stillness here:
+// on repeated rows a real whole-row move can keep it at (or near) zero. That
+// also makes the MAD-only Stationary verdict insufficient for a retry
+// baseline, even though it remains a valid deadline verdict.
+func (m *ScrollEvidenceMatcher) zeroDisplacementProven(before, after platform.Frame) (bool, string) {
+	if sameFrameContent(before, after) {
+		return true, "the same immutable frame content"
+	}
+	if m == nil || m.PixelMatcher == nil || !m.valid {
+		return false, "scroll evidence matcher: the layout or calibration is incomplete"
+	}
+	if !m.frameFits(before) || !m.frameFits(after) {
+		return false, fmt.Sprintf("frames %d → %d are not the calibrated display configuration", before.ID, after.ID)
+	}
+	err0, ok := m.zeroShiftError(before.Image, after.Image)
+	if !ok {
+		return false, fmt.Sprintf("frames %d → %d have too few comparable list samples", before.ID, after.ID)
+	}
+
+	selB := m.selectionAnchor(before.Image)
+	selA := m.selectionAnchor(after.Image)
+	thumbBStart, thumbBEnd, thumbBOK := m.thumbSegment(before.Image)
+	thumbAStart, thumbAEnd, thumbAOK := m.thumbSegment(after.Image)
+	beforeThumb := thumbReading{start: thumbBStart, end: thumbBEnd, ok: thumbBOK}
+	afterThumb := thumbReading{start: thumbAStart, end: thumbAEnd, ok: thumbAOK}
+
+	selectionMoved := false
+	if selB >= 0 && selA >= 0 {
+		if rows, ok := m.selectionRows(selB, selA); ok && rows != 0 {
+			selectionMoved = true
+		}
+	}
+	if selectionMoved {
+		return false, fmt.Sprintf(
+			"frames %d → %d: the selection box moved (slot %d → %d), so the list did not stay at one position (zero-shift error %.2f)",
+			before.ID, after.ID, selB, selA, err0)
+	}
+	if m.thumbMoved(beforeThumb, afterThumb) {
+		return false, fmt.Sprintf(
+			"frames %d → %d: the scrollbar thumb verifiably travelled (%d–%d → %d–%d), so the list may have moved (zero-shift error %.2f)",
+			before.ID, after.ID, thumbBStart, thumbBEnd, thumbAStart, thumbAEnd, err0)
+	}
+	// The masked border strips are shared by the same-slot check's movement
+	// counter-evidence and the full normalized candidates below.
+	var mask []image.Rectangle
+	for _, slot := range []int{selB, selA} {
+		if slot >= 0 {
+			mask = append(mask, m.L.BorderRect(slot))
+		}
+	}
+	if selB >= 0 && selA == selB && err0 < m.C.ScrollStationaryMax {
+		// A same-slot border with a low MAD is not enough on its own: a
+		// sub-row creep (8/16px of a settling animation) can stay inside the
+		// border probe and below the MAD threshold while the zero-shift
+		// correlation collapses on an information-rich support. That
+		// correlation is the movement counter-evidence the wait already uses
+		// to start its motion clock; the proof must honour it too.
+		if counter, ncc, std := m.zeroShiftCounterEvidence(before.Image, after.Image, mask); counter {
+			return false, fmt.Sprintf(
+				"frames %d → %d: the selection box stayed on slot %d and the zero-shift MAD is below %.1f, but the information-rich zero-shift correlation %.3f < %.2f (info std %.1f) is movement counter-evidence — the list moved sub-row",
+				before.ID, after.ID, selB, m.C.ScrollStationaryMax, ncc, m.C.ScrollStationaryNCC, std)
+		}
+		return true, fmt.Sprintf(
+			"frames %d → %d: the selection box stayed on slot %d with no measurable thumb travel and a zero-shift error below the stationary threshold; the border follows its item, so a whole-row move would have changed the slot (zero-shift error %.2f)",
+			before.ID, after.ID, selB, err0)
+	}
+
+	cands := m.rowCorrelations(before.Image, after.Image, mask)
+	if cand, comp, ok := m.stationaryEvidence(cands); ok {
+		return true, fmt.Sprintf(
+			"frames %d → %d: the unique zero-shift candidate passes the stationary gates (ncc %.3f ≥ %.2f, runner-up gap %.3f ≥ %.2f, info std %.1f ≥ %.1f; zero-shift error %.2f)",
+			before.ID, after.ID, cand.ncc, m.C.ScrollStationaryNCC, comp.gap, m.C.ScrollNCCMargin,
+			cand.std, m.C.ScrollInfoStdMin, err0)
+	}
+	if cand, have := cands[0]; have {
+		comp, _ := nccCompetitionAt(cands, 0)
+		return false, fmt.Sprintf(
+			"frames %d → %d: no zero-displacement proof (zero-shift error %.2f; ncc %.3f vs %.2f, runner-up gap %.3f vs %.2f, info std %.1f vs %.1f; selection before %d after %d)",
+			before.ID, after.ID, err0, cand.ncc, m.C.ScrollStationaryNCC, comp.gap, m.C.ScrollNCCMargin,
+			cand.std, m.C.ScrollInfoStdMin, selB, selA)
+	}
+	return false, fmt.Sprintf(
+		"frames %d → %d: no zero-displacement proof (zero-shift error %.2f; no normalized candidate could be measured; selection before %d after %d)",
+		before.ID, after.ID, err0, selB, selA)
+}
+
+// zeroShiftMovement reports whether before → after carries observable
+// movement evidence that the MAD-level Stationary shortcut cannot see: a
+// definite selection or thumb translation, or an information-rich zero-shift
+// correlation below the stationary floor. The wait keeps its "unmoved" fact
+// false after this returns true; a later frame returning to the baseline does
+// not erase the observation.
+func (m *ScrollEvidenceMatcher) zeroShiftMovement(before, after platform.Frame) (bool, string) {
+	if m == nil || m.PixelMatcher == nil || !m.valid {
+		return false, "scroll evidence matcher: the layout or calibration is incomplete"
+	}
+	if !m.frameFits(before) || !m.frameFits(after) {
+		return false, fmt.Sprintf("frames %d → %d are not the calibrated display configuration", before.ID, after.ID)
+	}
+	selB := m.selectionAnchor(before.Image)
+	selA := m.selectionAnchor(after.Image)
+	if selB >= 0 && selA >= 0 {
+		if rows, ok := m.selectionRows(selB, selA); ok && rows != 0 {
+			return true, fmt.Sprintf("frames %d → %d: the selection box moved (slot %d → %d)",
+				before.ID, after.ID, selB, selA)
+		}
+	}
+	thumbBStart, thumbBEnd, thumbBOK := m.thumbSegment(before.Image)
+	thumbAStart, thumbAEnd, thumbAOK := m.thumbSegment(after.Image)
+	if m.thumbMoved(
+		thumbReading{start: thumbBStart, end: thumbBEnd, ok: thumbBOK},
+		thumbReading{start: thumbAStart, end: thumbAEnd, ok: thumbAOK}) {
+		return true, fmt.Sprintf("frames %d → %d: the scrollbar thumb verifiably travelled (%d–%d → %d–%d)",
+			before.ID, after.ID, thumbBStart, thumbBEnd, thumbAStart, thumbAEnd)
+	}
+	var mask []image.Rectangle
+	for _, slot := range []int{selB, selA} {
+		if slot >= 0 {
+			mask = append(mask, m.L.BorderRect(slot))
+		}
+	}
+	if counter, ncc, std := m.zeroShiftCounterEvidence(before.Image, after.Image, mask); counter {
+		return true, fmt.Sprintf(
+			"frames %d → %d: the information-rich zero-shift correlation %.3f < %.2f (info std %.1f) contradicts stillness",
+			before.ID, after.ID, ncc, m.C.ScrollStationaryNCC, std)
+	}
+	return false, fmt.Sprintf("frames %d → %d: no observable movement counter-evidence", before.ID, after.ID)
+}
+
 // thumbFullSlack is how far a thumb may fall short of the track's full
 // length and still count as filling it. A genuinely full thumb spans the
 // whole track (a list with nothing below the viewport); the slack only
@@ -571,6 +776,50 @@ const thumbFullSlack = 8
 type thumbReading struct {
 	start, end int
 	ok         bool
+}
+
+// thumbTranslation returns the thumb's signed travel when both segment edges
+// moved in the same direction; the smaller magnitude is the travel both edges
+// agree on. A single edge changing while the other stays is a boundary or
+// measurement artifact, not travel: the Windows bottom capture reads the
+// thumb's leading edge two pixels low while its trailing edge and the list
+// pixels stay put (368–931 → 370–931). A real translation moves both edges
+// together, so only that shape is definite movement evidence.
+func thumbTranslation(before, after thumbReading) (travel int, ok bool) {
+	if !before.ok || !after.ok {
+		return 0, false
+	}
+	startTravel := after.start - before.start
+	endTravel := after.end - before.end
+	if startTravel == 0 || endTravel == 0 {
+		return 0, false
+	}
+	if (startTravel < 0) != (endTravel < 0) {
+		return 0, false
+	}
+	if absInt(endTravel) < absInt(startTravel) {
+		return endTravel, true
+	}
+	return startTravel, true
+}
+
+// thumbMoved reports whether two readable thumb segments prove the thumb
+// travelled along the track by at least the calibrated movement floor. It is
+// direction-independent: any measurable travel contradicts a claim that the
+// list stayed put. The travel must show at both edges (see thumbTranslation);
+// a lone edge change is not definite movement. A thumb that fills the track
+// has nothing to travel over, so its jitter proves nothing and is ignored.
+func (m *ScrollEvidenceMatcher) thumbMoved(before, after thumbReading) bool {
+	if !before.ok || !after.ok {
+		return false
+	}
+	trackLen := m.L.ScrollTrack.Dy()
+	thumbLen := float64(before.end-before.start+1+after.end-after.start+1) / 2
+	if thumbLen >= float64(trackLen)-thumbFullSlack {
+		return false
+	}
+	travel, translated := thumbTranslation(before, after)
+	return translated && absInt(travel) >= m.C.ScrollbarMoveMin
 }
 
 // thumbTravel is the scrollbar's independently measured travel for a claimed

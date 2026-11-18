@@ -74,9 +74,12 @@ type Controller struct {
 	// precheck succeeded and again after Collect — the application's
 	// record wiring persists it as the session's observed range (T5 §3).
 	// It runs on the producer goroutine; a traversal without the
-	// capability or with an empty report never triggers it. Wire it via
-	// SetScopeSink before the session starts.
-	OnScopeObserved func(scope json.RawMessage)
+	// capability or with an empty report never triggers it. A non-nil
+	// error means the first report could not be persisted: Prepare fails
+	// with a storage fault before input permission opens. The post-collect
+	// report stays best-effort; the final checkpoint carries the same
+	// state. Wire it via SetScopeSink before the session starts.
+	OnScopeObserved func(scope json.RawMessage) error
 
 	// PrepareBudget bounds the whole preparation wait; zero takes the
 	// default. ObserveEvery paces the wait loop; zero takes the default.
@@ -251,7 +254,12 @@ func (c *Controller) Prepare(ctx context.Context, h *scan.ControllerHandle) erro
 				if err := trav.Precheck(ctx, sess); err != nil {
 					return err
 				}
-				c.relayScope(trav)
+				if err := c.relayScope(trav); err != nil {
+					// The observed range is part of the record the session
+					// promises. Failing here stops before input permission
+					// opens, so a storage fault cannot turn into game input.
+					return scan.NewFault(scan.CodeStorageFailure, err)
+				}
 				return nil
 			}
 			if fault, ok := portFault(err); ok {
@@ -294,7 +302,7 @@ func (c *Controller) Prepare(ctx context.Context, h *scan.ControllerHandle) erro
 // right after the scan source handed over the spec). The field is
 // written before the kernel starts the producer goroutine and only read
 // there, so no synchronization is needed.
-func (c *Controller) SetScopeSink(sink func(json.RawMessage)) { c.OnScopeObserved = sink }
+func (c *Controller) SetScopeSink(sink func(json.RawMessage) error) { c.OnScopeObserved = sink }
 
 // newTraversal builds this session's traversal. A client-area factory is
 // called only after the baseline was accepted; the measured size is the
@@ -327,18 +335,20 @@ func (c *Controller) newTraversal(sess platform.Session) (Traversal, error) {
 // relayScope hands the traversal's observed-scope report (T5 §3) to the
 // application's sink. It runs after a successful precheck and again after
 // Collect, on the producer goroutine; the later report carries the sort
-// and coverage facts the traversal established while running.
-func (c *Controller) relayScope(trav Traversal) {
+// and coverage facts the traversal established while running. The error is
+// only actionable before collection: Prepare turns it into a storage fault.
+func (c *Controller) relayScope(trav Traversal) error {
 	if c.OnScopeObserved == nil {
-		return
+		return nil
 	}
 	r, ok := trav.(ScopeReporter)
 	if !ok {
-		return
+		return nil
 	}
 	if scope := r.ObservedScope(); len(scope) > 0 {
-		c.OnScopeObserved(scope)
+		return c.OnScopeObserved(scope)
 	}
+	return nil
 }
 
 // Collect implements scan.Controller: the traversal runs the collection
@@ -355,7 +365,12 @@ func (c *Controller) Collect(ctx context.Context, h *scan.ControllerHandle) erro
 		return errors.New("collect: collect called without a prepared session")
 	}
 	err := trav.Collect(ctx, sess, h)
-	c.relayScope(trav)
+	// The final report is best-effort: the traversal has ended and the
+	// final checkpoint will persist the same observed scope. A save
+	// failure is already visible through the record's save status.
+	if relayErr := c.relayScope(trav); relayErr != nil {
+		log.Printf("youkai: collect: final observed scope was not saved: %v", relayErr)
+	}
 	return err
 }
 
