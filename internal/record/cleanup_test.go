@@ -77,8 +77,8 @@ func TestDeleteEvidenceWritesNewGenerationAndKeepsReviewState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DeleteEvidence: %v", err)
 	}
-	if removal.Generation != 2 {
-		t.Errorf("generation = %d, want 2", removal.Generation)
+	if removal.Generation != 3 {
+		t.Errorf("generation = %d, want 3", removal.Generation)
 	}
 	if removal.RemovedFiles != 2 || removal.EvidenceFiles != 2 {
 		t.Errorf("files = %d/%d removed, want 2/2", removal.RemovedFiles, removal.EvidenceFiles)
@@ -91,8 +91,8 @@ func TestDeleteEvidenceWritesNewGenerationAndKeepsReviewState(t *testing.T) {
 	}
 
 	rec := mustLoad(t, st, id)
-	if rec.Checkpoint.SavedRevision != 2 {
-		t.Errorf("saved revision = %d, want 2", rec.Checkpoint.SavedRevision)
+	if rec.Checkpoint.SavedRevision != 3 {
+		t.Errorf("saved revision = %d, want 3", rec.Checkpoint.SavedRevision)
 	}
 	if len(rec.Checkpoint.Evidence) != 0 {
 		t.Errorf("evidence index = %v, want empty", rec.Checkpoint.Evidence)
@@ -132,8 +132,8 @@ func TestDeleteEvidenceWritesNewGenerationAndKeepsReviewState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SaveRevision after evidence deletion: %v", err)
 	}
-	if gen != 3 {
-		t.Errorf("revision generation = %d, want 3", gen)
+	if gen != 4 {
+		t.Errorf("revision generation = %d, want 4", gen)
 	}
 	after := mustLoad(t, st, id)
 	if got := after.Checkpoint.Items[0]; got.Revision != 2 || got.Quality != QualityNeedsReview {
@@ -168,8 +168,8 @@ func TestDeleteEvidenceCheckpointFailureKeepsFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("retry DeleteEvidence: %v", err)
 	}
-	if removal.Generation != 2 || removal.RemovedFiles != 2 {
-		t.Errorf("retry = generation %d, %d files; want 2 and 2", removal.Generation, removal.RemovedFiles)
+	if removal.Generation != 3 || removal.RemovedFiles != 2 {
+		t.Errorf("retry = generation %d, %d files; want 3 and 2", removal.Generation, removal.RemovedFiles)
 	}
 }
 
@@ -183,8 +183,8 @@ func TestDeleteEvidenceFileFailureLeavesLoadableRecordAndRetry(t *testing.T) {
 	if !errors.Is(err, errFaultRemove) {
 		t.Fatalf("DeleteEvidence = %v, want the remove failure", err)
 	}
-	if removal.Generation != 2 {
-		t.Errorf("generation = %d, want the checkpoint saved before the file failed", removal.Generation)
+	if removal.Generation != 3 {
+		t.Errorf("generation = %d, want the checkpoint pair saved before the file failed", removal.Generation)
 	}
 	if len(removal.Leftovers) != 1 || removal.Leftovers[0] != "detail-1" {
 		t.Errorf("leftovers = %v, want [detail-1]", removal.Leftovers)
@@ -194,7 +194,7 @@ func TestDeleteEvidenceFileFailureLeavesLoadableRecordAndRetry(t *testing.T) {
 	}
 	// The record is loadable because the saved generation no longer
 	// references the surviving file.
-	if rec := mustLoad(t, st, id); rec.Checkpoint.SavedRevision != 2 || len(rec.Checkpoint.Evidence) != 0 {
+	if rec := mustLoad(t, st, id); rec.Checkpoint.SavedRevision != 3 || len(rec.Checkpoint.Evidence) != 0 {
 		t.Errorf("record after partial deletion = revision %d, %d evidence",
 			rec.Checkpoint.SavedRevision, len(rec.Checkpoint.Evidence))
 	}
@@ -289,8 +289,8 @@ func TestDeleteEvidenceDoesNotFollowEvidenceSymlinks(t *testing.T) {
 		t.Errorf("evidence symlink was removed: %v", err)
 	}
 	// The record still loads: only the indexed evidence mattered.
-	if rec := mustLoad(t, st, id); rec.Checkpoint.SavedRevision != 2 {
-		t.Errorf("saved revision = %d, want 2", rec.Checkpoint.SavedRevision)
+	if rec := mustLoad(t, st, id); rec.Checkpoint.SavedRevision != 3 {
+		t.Errorf("saved revision = %d, want 3", rec.Checkpoint.SavedRevision)
 	}
 }
 
@@ -314,10 +314,9 @@ func TestDeleteEvidenceRefusesSymlinkedEvidenceDirectory(t *testing.T) {
 	if after := readEvidenceFile(t, root, id, "detail-1.png"); !bytes.Equal(before, after) {
 		t.Error("evidence behind the symlink was changed or deleted")
 	}
-	// The checkpoint written before the refusal no longer cites the
-	// screenshots, so the record still loads; only the external files
-	// were left alone.
-	if rec := mustLoad(t, st, id); rec.Checkpoint.SavedRevision != 2 || len(rec.Checkpoint.Evidence) != 0 {
+	// Nothing was deleted, so nothing was persisted: the record keeps its
+	// original evidence-citing generation and the external files.
+	if rec := mustLoad(t, st, id); rec.Checkpoint.SavedRevision != 1 || len(rec.Checkpoint.Evidence) != 2 {
 		t.Errorf("record after refused file deletion = revision %d, %d evidence",
 			rec.Checkpoint.SavedRevision, len(rec.Checkpoint.Evidence))
 	}
