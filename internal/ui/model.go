@@ -386,6 +386,11 @@ type Model struct {
 	targetsAccessDenied int
 	targetsUnreadable   int
 	targetChoice        int
+	// targetSerial increments whenever the confirmed window changes or is
+	// retired. A readiness pass freezes its target and this token on the
+	// UI thread; a report that lands after a newer choice must not rewrite
+	// that choice with the older pass's view.
+	targetSerial int
 	// An invalidated instance or an explicit change requires a fresh choice,
 	// even if a later discovery has only one candidate.
 	targetNeedsChoice bool

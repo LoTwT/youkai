@@ -84,19 +84,33 @@ var readinessItems = []app.ReadinessItem{
 }
 
 // refreshReadiness starts one read-only pass with the confirmed target, if
-// any. Results land through update; a serial discards a pass that a newer
-// refresh superseded.
+// any. The candidate is frozen on the UI thread before the worker starts:
+// the worker must never read the candidate slice or its index while the
+// user changes the target. A serial discards a pass that a newer refresh
+// superseded, and a selection token discards a pass that judged a target
+// the user has since replaced.
 func (m *Model) refreshReadiness() {
 	if !m.source.Available || m.upd == nil {
 		return
 	}
 	m.readinessSerial++
 	serial := m.readinessSerial
+	target := m.chosenTarget()
+	selection := m.targetSerial
 	m.readinessLoading = true
 	m.goAsync(func() {
-		report := m.cfg.Service.CheckReadiness(m.chosenTarget())
+		report := m.cfg.Service.CheckReadiness(target)
 		m.update(func() {
 			if serial != m.readinessSerial {
+				return
+			}
+			if selection != m.targetSerial {
+				// The report judged the target the user changed while this
+				// pass ran. Applying its candidates and target row could
+				// clear or reorder the newer choice; a fresh pass for the
+				// current selection owns that state instead.
+				m.readinessLoading = false
+				m.refreshReadiness()
 				return
 			}
 			m.readinessLoading = false
@@ -1070,6 +1084,7 @@ func (m *Model) runReadinessAction(c *ui.Context, action readinessActionKind) {
 		// like a new confirmation; the past event belongs to that choice.
 		m.startErr = ""
 		m.targetChoice = -1
+		m.targetSerial++
 		m.targetNeedsChoice = true
 	}
 }
@@ -1094,6 +1109,7 @@ func (m *Model) readinessTargetChoices(c *ui.Context, primary bool) {
 	if m.targetChoice != before {
 		m.targetNeedsChoice = false
 		m.targetInvalidated = false
+		m.targetSerial++
 		// Confirming the window lets the remaining rows judge that window
 		// instead of staying unknown (R-01). The start is not blocked by
 		// this refresh; the session's own precheck remains authoritative.
