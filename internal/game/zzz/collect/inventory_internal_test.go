@@ -1095,6 +1095,7 @@ func TestScrollRetryAfterVerdictDoesNotDumpPreviousAttempt(t *testing.T) {
 	}
 	m := &scrollScriptMatcher{rows: l.Rows, columns: l.Columns, verdict: map[scrollPair]ScrollMatch{
 		{1, 2}: {Stationary: true, Evidence: "scripted stationary"},
+		{1, 3}: {Stationary: true, Evidence: "scripted still baseline"},
 	}}
 	dir := t.TempDir()
 	run := newScriptedScrollRun(l, view, m, dir, 1, 40*time.Millisecond)
@@ -1554,6 +1555,7 @@ func TestScrollRetryUnmovedUsesFreshBase(t *testing.T) {
 	}
 	m := &scrollScriptMatcher{rows: l.Rows, columns: l.Columns, verdict: map[scrollPair]ScrollMatch{
 		{1, 2}: {Stationary: true, Evidence: "scripted stationary"},
+		{1, 3}: {Stationary: true, Evidence: "scripted still baseline"},
 		{3, 4}: displacedScan(l, 4),
 		{4, 5}: {Stationary: true, Evidence: "scripted settled"},
 		{4, 6}: {Stationary: true, Evidence: "scripted settled"},
@@ -1584,6 +1586,7 @@ func TestScrollFailureKeepsEveryAttemptDiagnostics(t *testing.T) {
 	}
 	m := &scrollScriptMatcher{rows: l.Rows, columns: l.Columns, verdict: map[scrollPair]ScrollMatch{
 		{1, 2}: {Stationary: true, Evidence: "scripted stationary"},
+		{1, 3}: {Stationary: true, Evidence: "scripted still baseline"},
 		{3, 4}: {Stationary: true, Evidence: "scripted stationary"},
 	}}
 	dir := t.TempDir()
