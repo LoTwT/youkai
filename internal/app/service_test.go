@@ -614,14 +614,121 @@ func TestStartBlockedOnlyReportsSaveRetryAfterTheWrapUpFails(t *testing.T) {
 	}
 }
 
+// TestBeginUpdateInstallRefusedDuringFinalSave holds the wrap-up at its
+// final checkpoint: the session still occupies the slot while the save
+// runs, so the install must wait for that save exactly as it waits for a
+// running scan.
+func TestBeginUpdateInstallRefusedDuringFinalSave(t *testing.T) {
+	paths := newTestPaths(t)
+	gate := newAdmitThenGateController()
+	store := newGatedSaveStore(t, paths.Data)
+	t.Cleanup(store.releaseSave)
+	svc := newServiceWithStore(t, paths, store, staticSource{spec: specOf(gate)},
+		func() (Recognizer, error) { return newFakeRecognizer(), nil })
+
+	if _, err := svc.Start(StartRequest{ID: "r1"}); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	waitFor(t, 30*time.Second, "the admitted observation", func() bool {
+		return svc.Snapshot().Scan.Counts.Captured == 1
+	})
+	close(gate.gate)
+	select {
+	case <-store.entered:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the final save did not start")
+	}
+	if err := svc.BeginUpdateInstall(); err == nil {
+		t.Fatal("the install began while the final save was running")
+	}
+	store.releaseSave()
+	waitNotBusy(t, svc)
+	if err := svc.BeginUpdateInstall(); err != nil {
+		t.Fatalf("begin the install after the final save: %v", err)
+	}
+	svc.EndUpdateInstall()
+}
+
+// gatedSaveStore blocks the first checkpoint save, so a test can hold a
+// session in its finalization at the save. It releases exactly once, and
+// the cleanup release keeps an early failure from hanging the test.
+type gatedSaveStore struct {
+	recordStore
+	entered     chan struct{}
+	release     chan struct{}
+	enterOnce   sync.Once
+	releaseOnce sync.Once
+}
+
+func newGatedSaveStore(t *testing.T, root string) *gatedSaveStore {
+	t.Helper()
+	store, err := record.Open(root)
+	if err != nil {
+		t.Fatalf("record.Open: %v", err)
+	}
+	return &gatedSaveStore{
+		recordStore: store,
+		entered:     make(chan struct{}),
+		release:     make(chan struct{}),
+	}
+}
+
+func (s *gatedSaveStore) SaveCheckpoint(recordID string, cp record.Checkpoint) (int64, error) {
+	s.enterOnce.Do(func() {
+		close(s.entered)
+		<-s.release
+	})
+	return s.recordStore.SaveCheckpoint(recordID, cp)
+}
+
+func (s *gatedSaveStore) releaseSave() { s.releaseOnce.Do(func() { close(s.release) }) }
+
+// TestBeginUpdateInstallRefusedWhileSaveRetryPending covers the other
+// half of the wrap-up contention: a failed final save keeps the slot
+// occupied until a retry persists it, so the install waits for the retry
+// and is admitted only after that save succeeds.
+func TestBeginUpdateInstallRefusedWhileSaveRetryPending(t *testing.T) {
+	paths := newTestPaths(t)
+	gate := newAdmitThenGateController()
+	store := newFlakyStore(t, paths.Data)
+	store.failOn = func(int) bool { return true }
+	svc := newServiceWithStore(t, paths, store, staticSource{spec: specOf(gate)},
+		func() (Recognizer, error) { return newFakeRecognizer(), nil })
+
+	if _, err := svc.Start(StartRequest{ID: "r1"}); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	waitFor(t, 30*time.Second, "the admitted observation", func() bool {
+		return svc.Snapshot().Scan.Counts.Captured == 1
+	})
+	close(gate.gate)
+	waitFor(t, 30*time.Second, "the failed final save", func() bool {
+		return svc.Snapshot().FinalSaveFailures == 1
+	})
+	if err := svc.BeginUpdateInstall(); err == nil {
+		t.Fatal("the install began while a save retry was pending")
+	}
+	store.heal()
+	if err := svc.RetrySave(); err != nil {
+		t.Fatalf("retry the final save: %v", err)
+	}
+	waitNotBusy(t, svc)
+	if err := svc.BeginUpdateInstall(); err != nil {
+		t.Fatalf("begin the install after the retry settled: %v", err)
+	}
+	svc.EndUpdateInstall()
+}
+
 // TestStartRefusedWhileInstallingUpdate pins M-2: the snapshot reason and
-// the start refusal agree, and clearing the install restores starts.
+// the start refusal agree, and releasing the install restores starts.
 func TestStartRefusedWhileInstallingUpdate(t *testing.T) {
 	paths := newTestPaths(t)
 	source := devFixtureSource(t, 1, 0)
 	svc, _ := newTestService(t, paths, source, func() (Recognizer, error) { return newFakeRecognizer(), nil })
 
-	svc.SetUpdateInstalling(true)
+	if err := svc.BeginUpdateInstall(); err != nil {
+		t.Fatalf("begin the install: %v", err)
+	}
 	if _, err := svc.Start(StartRequest{ID: "r1"}); err == nil || !strings.Contains(err.Error(), "update install") {
 		t.Fatalf("start while installing = %v, want the update-install refusal", err)
 	}
@@ -631,17 +738,19 @@ func TestStartRefusedWhileInstallingUpdate(t *testing.T) {
 	if records, err := svc.ListRecords(); err != nil || len(records) != 0 {
 		t.Fatalf("records after the refused start = %+v err %v, want none", records, err)
 	}
-	svc.SetUpdateInstalling(false)
+	svc.EndUpdateInstall()
 	if _, err := svc.Start(StartRequest{ID: "r1"}); err != nil {
 		t.Fatalf("start after the install ended: %v", err)
 	}
 	waitNotBusy(t, svc)
 }
 
-// TestStartCommitRefusedByUpdateInstallDuringPreparation pins L-1: an
-// update install published while the accepted placeholder runs its slow
-// preparation refuses the commit, and the slot rolls back cleanly.
-func TestStartCommitRefusedByUpdateInstallDuringPreparation(t *testing.T) {
+// TestBeginUpdateInstallRefusedWhileStartPrepares pins the other side of
+// the shared admission boundary: an accepted start holds the slot from
+// its placeholder on, and an install that reaches the service before the
+// UI saw that session is refused rather than running beside it. Once the
+// session settles, the install is admitted and refuses starts itself.
+func TestBeginUpdateInstallRefusedWhileStartPrepares(t *testing.T) {
 	paths := newTestPaths(t)
 	source := devFixtureSource(t, 1, 0)
 	loaded := make(chan struct{})
@@ -661,33 +770,202 @@ func TestStartCommitRefusedByUpdateInstallDuringPreparation(t *testing.T) {
 	waitFor(t, 10*time.Second, "the accepted placeholder", func() bool {
 		return svc.Snapshot().SessionID != ""
 	})
-	// The placeholder is still in its slow preparation; the install
-	// begins before the commit re-check runs.
-	svc.SetUpdateInstalling(true)
-	if snap := svc.Snapshot(); !snap.Busy || snap.StartBlocked != StartBlockedUpdateInstall {
-		t.Fatalf("placeholder snapshot while installing = %+v, want busy with the install reason", snap)
+	if err := svc.BeginUpdateInstall(); err == nil {
+		t.Fatal("the install began beside an accepted scan")
+	}
+	if snap := svc.Snapshot(); !snap.Busy || snap.StartBlocked != StartBlockedOccupied {
+		t.Fatalf("placeholder snapshot = %+v, want busy and still occupied", snap)
 	}
 	close(loaded)
 	res := <-started
-	if res.err == nil || !strings.Contains(res.err.Error(), "update install") {
-		t.Fatalf("start whose commit met the install = %+v err %v, want the update-install refusal", res.out, res.err)
+	if res.err != nil {
+		t.Fatalf("start: %v", res.err)
 	}
-	// The refusal discarded the record and released the slot and the scan
-	// occupancy.
-	snap := svc.Snapshot()
-	if snap.SessionID != "" || snap.Busy || snap.StartBlocked != StartBlockedUpdateInstall {
-		t.Fatalf("snapshot after the refused commit = %+v, want no session and the install reason", snap)
+	// The session ends and saves; only now may the install begin.
+	svc.Stop()
+	waitNotBusy(t, svc)
+	if err := svc.BeginUpdateInstall(); err != nil {
+		t.Fatalf("begin the install after the session settled: %v", err)
 	}
-	if records, err := svc.ListRecords(); err != nil || len(records) != 0 {
-		t.Fatalf("records after the refused commit = %+v err %v, want none", records, err)
+	if _, err := svc.Start(StartRequest{ID: "r2"}); err == nil || !strings.Contains(err.Error(), "update install") {
+		t.Fatalf("start during the admitted install = %v, want the update-install refusal", err)
 	}
-	// Clearing the install frees the service again, including the scan
-	// occupancy the rolled-back start held.
-	svc.SetUpdateInstalling(false)
-	if _, err := svc.Start(StartRequest{ID: "r1"}); err != nil {
+	svc.EndUpdateInstall()
+	if _, err := svc.Start(StartRequest{ID: "r2"}); err != nil {
 		t.Fatalf("start after the install ended: %v", err)
 	}
 	waitNotBusy(t, svc)
+}
+
+// TestStartCommittedAfterExitNeverOpensInput pins the admission gate: a
+// start parked before its record exists must not begin controller work
+// when the explicit exit closes admission and the final commit then
+// refuses the session. The producer's Prepare runs only after the kernel
+// is attached; a refusal cancels it while the gate is still shut.
+func TestStartCommittedAfterExitNeverOpensInput(t *testing.T) {
+	paths := newTestPaths(t)
+	setScanLockBase(t, t.TempDir())
+	store := newBlockingCreateStore(t, paths.Data)
+	dataLock, err := AcquireDataRootLock(paths.Data)
+	if err != nil {
+		t.Fatalf("acquire data-root lock: %v", err)
+	}
+	controller := &admissionRecordingController{}
+	svc, err := NewService(Config{
+		Paths:         paths,
+		DataLock:      dataLock,
+		Source:        staticSource{spec: specOf(controller)},
+		Store:         store,
+		NewRecognizer: func() (Recognizer, error) { return newFakeRecognizer(), nil },
+	})
+	if err != nil {
+		dataLock.Close()
+		t.Fatalf("NewService: %v", err)
+	}
+	t.Cleanup(func() {
+		// Release the store first: a failure before it could otherwise
+		// leave Quit waiting on a start blocked inside CreateRecord.
+		store.releaseCreate()
+		_ = svc.Quit()
+		_ = dataLock.Close()
+	})
+
+	started := make(chan error, 1)
+	go func() {
+		_, err := svc.Start(StartRequest{ID: "gate"})
+		started <- err
+	}()
+	select {
+	case <-store.entered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the start did not reach record creation")
+	}
+
+	// The exit closes admission while the start is parked before its
+	// kernel exists; releasing the record creation lets the start reach
+	// its final commit check.
+	svc.PrepareExplicitExit()
+	store.releaseCreate()
+	select {
+	case err := <-started:
+		if err == nil || !strings.Contains(err.Error(), "quitting") {
+			t.Fatalf("start after the exit = %v, want the quitting refusal", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the refused start did not return")
+	}
+
+	if prepared := controller.prepared.Load(); prepared != 0 {
+		t.Fatalf("the refused start ran controller Prepare %d times", prepared)
+	}
+	if collected := controller.collected.Load(); collected != 0 {
+		t.Fatalf("the refused start ran controller Collect %d times", collected)
+	}
+	if controller.inputSeen.Load() {
+		t.Fatal("the refused start observed input permission")
+	}
+	if snap := svc.Snapshot(); snap.SessionID != "" || snap.Busy || snap.Scan.InputOpened || snap.Scan.InputPermitted {
+		t.Fatalf("the refused start left a session with input: %+v", snap)
+	}
+	records, err := svc.ListRecords()
+	if err != nil || len(records) != 0 {
+		t.Fatalf("records after the refused start = %+v err %v, want none", records, err)
+	}
+	scanLock, err := dataLock.AcquireScanLock()
+	if err != nil {
+		t.Fatalf("the refused start kept the scan occupancy: %v", err)
+	}
+	if err := scanLock.Close(); err != nil {
+		t.Fatalf("release the reacquired scan occupancy: %v", err)
+	}
+	if err := svc.Quit(); err != nil {
+		t.Fatalf("quit after the refused start: %v", err)
+	}
+}
+
+// blockingCreateStore holds the first record creation, the window in
+// which a start has been accepted but its kernel does not exist yet.
+type blockingCreateStore struct {
+	recordStore
+	entered     chan struct{}
+	release     chan struct{}
+	enterOnce   sync.Once
+	releaseOnce sync.Once
+}
+
+func newBlockingCreateStore(t *testing.T, root string) *blockingCreateStore {
+	t.Helper()
+	store, err := record.Open(root)
+	if err != nil {
+		t.Fatalf("record.Open: %v", err)
+	}
+	return &blockingCreateStore{
+		recordStore: store,
+		entered:     make(chan struct{}),
+		release:     make(chan struct{}),
+	}
+}
+
+func (s *blockingCreateStore) CreateRecord(id string) error {
+	s.enterOnce.Do(func() {
+		close(s.entered)
+		<-s.release
+	})
+	return s.recordStore.CreateRecord(id)
+}
+
+func (s *blockingCreateStore) releaseCreate() { s.releaseOnce.Do(func() { close(s.release) }) }
+
+// admissionRecordingController records whether the producer ever started
+// and whether it ever saw input permission.
+type admissionRecordingController struct {
+	prepared  atomic.Int32
+	collected atomic.Int32
+	inputSeen atomic.Bool
+}
+
+func (c *admissionRecordingController) Prepare(context.Context, *scan.ControllerHandle) error {
+	c.prepared.Add(1)
+	return nil
+}
+
+func (c *admissionRecordingController) Collect(ctx context.Context, h *scan.ControllerHandle) error {
+	c.collected.Add(1)
+	if h.InputPermitted() {
+		c.inputSeen.Store(true)
+	}
+	return ctx.Err()
+}
+
+// TestPrepareExplicitExitStopsInputBeforeQuit covers the service half of
+// the explicit exit's ordering: the UI closes admission before waiting for
+// update or export work, so the scan must stop input at once and no new
+// start may be admitted while the wrap-up is still pending.
+func TestPrepareExplicitExitStopsInputBeforeQuit(t *testing.T) {
+	paths := newTestPaths(t)
+	gate := newGatedController()
+	svc, _ := newTestService(t, paths, staticSource{spec: specOf(gate)},
+		func() (Recognizer, error) { return newFakeRecognizer(), nil })
+
+	if _, err := svc.Start(StartRequest{ID: "r1"}); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	waitFor(t, 10*time.Second, "the capturing session", func() bool {
+		snap := svc.Snapshot()
+		return snap.Scan.Phase == scan.PhaseCapturing && snap.Scan.InputPermitted
+	})
+
+	svc.PrepareExplicitExit()
+	waitFor(t, 10*time.Second, "the stopped input and closed admission", func() bool {
+		snap := svc.Snapshot()
+		return !snap.Scan.InputPermitted && snap.StartBlocked == StartBlockedQuitting
+	})
+	if _, err := svc.Start(StartRequest{ID: "r2"}); err == nil || !strings.Contains(err.Error(), "quitting") {
+		t.Fatalf("start after the exit preparation = %v, want the quitting refusal", err)
+	}
+	if err := svc.Quit(); err != nil {
+		t.Fatalf("quit after the exit preparation: %v", err)
+	}
 }
 
 // TestStartBlockedNamesTheServiceBlock pins R-14's service half: an
@@ -733,26 +1011,30 @@ func TestStartBlockedNamesTheServiceBlock(t *testing.T) {
 }
 
 // TestUpdateInstallingBlocksStarts pins R-14's update-install reason: the
-// update flow publishes its install, the snapshot explains the block, and
-// only a change bumps the revision.
+// update flow takes the install admission, the snapshot explains the
+// block, and only a change bumps the revision.
 func TestUpdateInstallingBlocksStarts(t *testing.T) {
 	paths := newTestPaths(t)
 	svc, _ := newTestService(t, paths, nil, func() (Recognizer, error) { return newFakeRecognizer(), nil })
 
 	before := svc.Snapshot().Revision
-	svc.SetUpdateInstalling(true)
+	if err := svc.BeginUpdateInstall(); err != nil {
+		t.Fatalf("begin the install: %v", err)
+	}
 	snap := svc.Snapshot()
 	if snap.StartBlocked != StartBlockedUpdateInstall {
 		t.Fatalf("StartBlocked while installing = %q, want %q", snap.StartBlocked, StartBlockedUpdateInstall)
 	}
 	if snap.Revision == before {
-		t.Fatal("publishing the install did not bump the revision")
+		t.Fatal("beginning the install did not bump the revision")
 	}
-	svc.SetUpdateInstalling(true)
+	if err := svc.BeginUpdateInstall(); err != nil {
+		t.Fatalf("repeat the install admission: %v", err)
+	}
 	if again := svc.Snapshot(); again.Revision != snap.Revision {
-		t.Fatalf("a repeated install report bumped the revision from %d to %d", snap.Revision, again.Revision)
+		t.Fatalf("a repeated install admission bumped the revision from %d to %d", snap.Revision, again.Revision)
 	}
-	svc.SetUpdateInstalling(false)
+	svc.EndUpdateInstall()
 	if got := svc.Snapshot().StartBlocked; got != StartBlockedNone {
 		t.Fatalf("StartBlocked after the install ended = %q, want none", got)
 	}
