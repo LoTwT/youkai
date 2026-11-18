@@ -123,6 +123,7 @@ go build -o winprobe.exe ./tools/winprobe
 | 命令 | 用途 |
 | --- | --- |
 | `gofmt -l .` | 格式检查，无输出即通过。 |
+| `go run ./tools/iconassets` | 从已选原稿生成应用、Windows 托盘与 macOS 菜单栏图标；资源与消费者见 [T1 图标约定](specs/t1-mygo-ui-distribution.md#应用与托盘图标)。 |
 | `go vet ./...` | Go 静态检查。 |
 | `go build ./...` | 编译全部包。 |
 | `go test ./...` | 运行测试；`internal/recognition` 与 `internal/app` 的集成测试在 OCR 资源缺失时自动跳过，本地需先运行 fetchdeps。 |

@@ -69,6 +69,38 @@ func TestCompleteTemplateConversion(t *testing.T) {
 	}
 }
 
+func TestNSISAppIconsPreserveTemplateBinding(t *testing.T) {
+	up := fixture(t, "nsi")
+	header := "BrandingText \" \"\n"
+	for _, path := range []string{"/fixture/mygo-build/installer.ico", `C:\Users\Example\Temp\mygo-build\installer.ico`} {
+		t.Run(path, func(t *testing.T) {
+			icons := "!define MUI_ICON \"" + path + "\"\n!define MUI_UNICON \"" + path + "\"\n"
+			withIcons := strings.Replace(up, header, header+icons, 1)
+			got, err := convertNSIS(withIcons)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(got, icons) || unsafeControl(got) {
+				t.Fatal("icons must survive conversion with both safe process checks")
+			}
+			for name, mutation := range map[string]string{
+				"missing uninstall icon": strings.Replace(withIcons, "!define MUI_UNICON \""+path+"\"\n", "", 1),
+				"different icon paths":   strings.Replace(withIcons, "!define MUI_UNICON \""+path, "!define MUI_UNICON \"/other/installer.ico", 1),
+				"extra icon directives":  withIcons + icons,
+				"relocated icon pair":    strings.Replace(withIcons, header+icons, icons+header, 1),
+				"other icon filename":    strings.ReplaceAll(withIcons, "installer.ico", "other.ico"),
+				"extra command":          strings.Replace(withIcons, header, header+"!system 'unexpected'\n", 1),
+			} {
+				t.Run(name, func(t *testing.T) {
+					if _, err := convertNSIS(mutation); err == nil {
+						t.Fatal("icon slot accepted template drift")
+					}
+				})
+			}
+		})
+	}
+}
+
 func TestPS1FullControlAndFailure(t *testing.T) {
 	up := fixture(t, "ps1")
 	if !unsafeControl(up) {

@@ -31,6 +31,13 @@ func once(s, old, replacement string) (string, error) {
 // byte, including complete functions, section structure and hooks, is bound.
 func normalizeNSIS(s string) string {
 	s = strings.TrimPrefix(s, "\ufeff")
+	// Config.Icon adds exactly this adjacent pair at the BrandingText slot.
+	// Normalize it only when both declarations use the same generated ICO;
+	// missing, mismatched, relocated or extra directives stay in the digest.
+	icons := regexp.MustCompile(`(?m)^BrandingText " "\n!define MUI_ICON "([^"\r\n]+[/\\]installer\.ico)"\n!define MUI_UNICON "([^"\r\n]+[/\\]installer\.ico)"\n`)
+	if match := icons.FindStringSubmatch(s); match != nil && match[1] == match[2] {
+		s = strings.Replace(s, match[0], "BrandingText \" \"\n", 1)
+	}
 	for _, pair := range [][2]string{
 		{`(?m)^OutFile "[^\r\n]+"$`, `OutFile "@OUT@"`},
 		{`(?m)^  File(?: /r)? "[^\r\n]+"\n`, "@FILES@\n"},

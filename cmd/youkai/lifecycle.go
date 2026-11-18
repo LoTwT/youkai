@@ -180,8 +180,12 @@ func (l *windowLifecycle) CreateTray() {
 	if l.tray != nil {
 		return
 	}
+	icon := trayIconPNG
+	if runtime.GOOS == "darwin" {
+		icon = trayTemplateIconPNG
+	}
 	tray, err := l.newTray(mygo.TrayOptions{
-		Icon: trayIconPNG,
+		Icon: icon,
 		// macOS tints a template image to match the menu bar; elsewhere the
 		// icon keeps its own colors.
 		IconIsTemplate: runtime.GOOS == "darwin",
@@ -408,11 +412,17 @@ func (l *windowLifecycle) Notify(n ui.Notification) {
 		l.firstNotification.Close()
 		l.firstNotification = nil
 	}
-	note := l.newNotification(mygo.NotificationOptions{
+	opts := mygo.NotificationOptions{
 		ID:    n.ID,
 		Title: n.Title,
 		Body:  n.Body,
-	})
+	}
+	// Windows treats Image as the balloon icon, including when the tray is
+	// unavailable. On macOS it would add an unrelated content attachment.
+	if runtime.GOOS == "windows" {
+		opts.Image = appIconPNG
+	}
+	note := l.newNotification(opts)
 	if n.Segment == ui.NotificationInputStopped {
 		// Register before Show: on macOS Show waits on the main thread and
 		// keeps processing events, so the result segment can arrive while
