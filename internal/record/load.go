@@ -8,8 +8,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
+	"syscall"
 )
 
 // ErrNoValidCheckpoint is reported when a record holds no generation that
@@ -17,6 +20,19 @@ import (
 // outcome, not a guess: the caller shows that recovery is impossible
 // instead of a fabricated partial state.
 var ErrNoValidCheckpoint = errors.New("no verifiable checkpoint")
+
+// errGenerationUnusable marks a generation that is definitively not a
+// recoverable backup: the file or one of its evidence files is gone, or
+// its content is malformed or fails verification. An error without this
+// marker is an undecided I/O failure; callers that decide whether evidence
+// may be deleted must not treat it as "no backup".
+var errGenerationUnusable = errors.New("checkpoint generation is unusable")
+
+// unusableGeneration wraps one definite failure so callers can tell it
+// apart from an undecided I/O error without losing the cause.
+func unusableGeneration(err error) error {
+	return fmt.Errorf("%w: %w", errGenerationUnusable, err)
+}
 
 // Recovery is the outcome of loading a record's newest verifiable
 // checkpoint.
@@ -88,8 +104,44 @@ func (s *Store) loadCheckpointLocked(recordID string, state *recordState) (*Chec
 			// Unusable: fall back to the previous generation. The
 			// reason is not surfaced per generation — the outcome the
 			// caller branches on is which generation, if any,
-			// verified.
+			// verified. A generation this process once recorded as
+			// valid can fail verification later (a lost unsynced write,
+			// external damage); drop the stale verdict so retention
+			// never keeps it in preference to one that still verifies.
+			delete(state.valid, g.revision)
 			continue
+		}
+		state.valid[g.revision] = true
+		return cp, nil
+	}
+	return nil, fmt.Errorf("record: load %q: %w after %d generation(s)",
+		recordID, ErrNoValidCheckpoint, len(gens))
+}
+
+// loadCheckpointForCleanupLocked returns the newest checkpoint that is
+// safe to use as the base of an evidence removal. Unlike
+// loadCheckpointLocked, an undecided I/O error on a newer generation
+// aborts instead of falling back: a later successful read of that
+// generation must not leave the cleanup writing the older result it
+// already chose. Definitively unusable generations are still skipped, so
+// the normal fallback contract and old-record compatibility are
+// unchanged. Callers hold mu.
+func (s *Store) loadCheckpointForCleanupLocked(recordID string, state *recordState) (*Checkpoint, error) {
+	gens, err := s.generations(recordID)
+	if err != nil {
+		return nil, err
+	}
+	for _, g := range gens {
+		cp, err := s.readGeneration(recordID, g)
+		if err != nil {
+			if errors.Is(err, errGenerationUnusable) {
+				// Definitively not recoverable; fall back as usual.
+				delete(state.valid, g.revision)
+				continue
+			}
+			// Undecided: selecting an older result now could overwrite a
+			// newer one that proves readable a moment later.
+			return nil, fmt.Errorf("read checkpoint generation %d: %w", g.revision, err)
 		}
 		state.valid[g.revision] = true
 		return cp, nil
@@ -149,11 +201,17 @@ func (s *Store) readGenerationDocument(recordID string, g generation) (*Checkpoi
 	path := filepath.Join(s.checkpointsDir(recordID), g.name)
 	file, err := s.fs.OpenFile(path, os.O_RDONLY, 0)
 	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, unusableGeneration(err)
+		}
+		// Any other open failure is undecided: the generation may still
+		// be a recoverable backup once the I/O fault clears.
 		return nil, err
 	}
 	data, err := io.ReadAll(file)
 	if err != nil {
 		_ = file.Close()
+		// A read failure is undecided for the same reason.
 		return nil, err
 	}
 	if err := file.Close(); err != nil {
@@ -165,23 +223,68 @@ func (s *Store) readGenerationDocument(recordID string, g generation) (*Checkpoi
 	// format, only ever written by the store itself, that residual
 	// looseness is corruption tolerance, not a contract — the public
 	// scan.json parser will need the stricter machinery.
+	// Everything below reads only the already-captured bytes, so a
+	// decoding or validation failure is a definite content defect rather
+	// than an undecided I/O error.
 	var cp Checkpoint
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&cp); err != nil {
-		return nil, err
+		return nil, unusableGeneration(err)
 	}
 	var trailing json.RawMessage
 	if err := dec.Decode(&trailing); err != io.EOF {
-		return nil, errors.New("trailing content after the checkpoint document")
+		return nil, unusableGeneration(errors.New("trailing content after the checkpoint document"))
 	}
 	if err := cp.validate(); err != nil {
-		return nil, err
+		return nil, unusableGeneration(err)
 	}
 	if cp.SavedRevision != g.revision {
-		return nil, fmt.Errorf("saved revision %d does not match file name %d", cp.SavedRevision, g.revision)
+		return nil, unusableGeneration(fmt.Errorf("saved revision %d does not match file name %d", cp.SavedRevision, g.revision))
 	}
 	return &cp, nil
+}
+
+// evidencePathUnreadableLocked reports whether path is definitively not a
+// readable regular file: missing, a directory or another special file, or
+// an unresolvable symbolic-link loop. The query goes through the same
+// system stat call that the later open uses, so symlinks followed through
+// components such as "hop/.." resolve exactly as the reader will see them;
+// lexical joining or cleaning could fold a component before its link was
+// followed. Permission and transient I/O failures remain undecided errors.
+// Callers hold mu.
+func (s *Store) evidencePathUnreadableLocked(path string) (bool, error) {
+	info, err := s.fs.Stat(path)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return true, nil
+		}
+		if isUnresolvableLinkError(err) {
+			return true, nil
+		}
+		return false, err
+	}
+	return !info.Mode().IsRegular(), nil
+}
+
+// isUnresolvableLinkError reports an error that proves the filesystem
+// cannot resolve a symbolic-link loop. Windows reports ERROR_CANT_RESOLVE_FILENAME
+// (1921) or, on some filesystems, ERROR_TOO_MANY_LINKS (1142); the syscall
+// package does not export either Win32 code, so they are named here. The
+// runtime guard keeps the numeric values from matching an unrelated Unix
+// error.
+func isUnresolvableLinkError(err error) bool {
+	if errors.Is(err, syscall.ELOOP) {
+		return true
+	}
+	if runtime.GOOS != "windows" {
+		return false
+	}
+	const (
+		errorCantResolveFilename = syscall.Errno(1921)
+		errorTooManyLinks        = syscall.Errno(1142)
+	)
+	return errors.Is(err, errorCantResolveFilename) || errors.Is(err, errorTooManyLinks)
 }
 
 // verifyEvidence re-reads every indexed evidence file and checks both
@@ -191,24 +294,38 @@ func (s *Store) readGenerationDocument(recordID string, g generation) (*Checkpoi
 // M3 scale will tell whether digest caching is warranted.
 func (s *Store) verifyEvidence(recordID string, index []EvidenceFile) error {
 	for _, ev := range index {
-		file, err := s.fs.OpenFile(s.evidencePath(recordID, ev.ID), os.O_RDONLY, 0)
+		path := s.evidencePath(recordID, ev.ID)
+		unreadable, err := s.evidencePathUnreadableLocked(path)
 		if err != nil {
+			// Undecided: the file may become readable again.
+			return fmt.Errorf("evidence %q: %w", ev.ID, err)
+		}
+		if unreadable {
+			return unusableGeneration(fmt.Errorf("evidence %q is not a readable regular file", ev.ID))
+		}
+		file, err := s.fs.OpenFile(path, os.O_RDONLY, 0)
+		if err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				return unusableGeneration(fmt.Errorf("evidence %q: %w", ev.ID, err))
+			}
+			// Undecided: the file may become readable again.
 			return fmt.Errorf("evidence %q: %w", ev.ID, err)
 		}
 		hasher := sha256.New()
 		size, err := io.Copy(hasher, file)
 		closeErr := file.Close()
 		if err != nil {
+			// Undecided read failures must not be taken for corruption.
 			return fmt.Errorf("evidence %q: read: %w", ev.ID, err)
 		}
 		if closeErr != nil {
 			return fmt.Errorf("evidence %q: close: %w", ev.ID, closeErr)
 		}
 		if size != ev.ByteLength {
-			return fmt.Errorf("evidence %q: %d bytes on disk, want %d", ev.ID, size, ev.ByteLength)
+			return unusableGeneration(fmt.Errorf("evidence %q: %d bytes on disk, want %d", ev.ID, size, ev.ByteLength))
 		}
 		if hex.EncodeToString(hasher.Sum(nil)) != ev.SHA256 {
-			return fmt.Errorf("evidence %q: digest mismatch", ev.ID)
+			return unusableGeneration(fmt.Errorf("evidence %q: digest mismatch", ev.ID))
 		}
 	}
 	return nil

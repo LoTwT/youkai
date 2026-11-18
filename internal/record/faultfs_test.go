@@ -40,6 +40,10 @@ type faultOp uint8
 
 const (
 	faultCreate faultOp = iota + 1
+	faultOpen
+	faultStat
+	faultLstat
+	faultEvalSymlinks
 	faultWrite
 	faultSync
 	faultSyncDir
@@ -58,11 +62,32 @@ type faultRule struct {
 	// at all — the first write fails outright, like a full disk at the
 	// moment of the first block.
 	budget int64
+	// after lets the first after matching operations succeed. It covers
+	// a second read of a file whose first read must verify, such as a
+	// cleanup re-opening a checkpoint it already loaded.
+	after int
+	// times limits the failure to the first times matching operations
+	// after the allowed prefix; zero means no limit.
+	times int
+	// seen counts the matching operations consulted for this rule.
+	seen int
 }
 
 // inject fails every matching operation with err.
 func (f *faultFS) inject(op faultOp, path string, err error) {
 	f.rules = append(f.rules, faultRule{op: op, path: path, err: err, budget: -1})
+}
+
+// injectAfter lets the first after matching operations succeed, then
+// fails every one after them.
+func (f *faultFS) injectAfter(op faultOp, path string, after int, err error) {
+	f.rules = append(f.rules, faultRule{op: op, path: path, err: err, budget: -1, after: after})
+}
+
+// injectFirst fails the first count matching operations, then lets the
+// fault clear. It models a transient error that a retry does not see.
+func (f *faultFS) injectFirst(op faultOp, path string, count int, err error) {
+	f.rules = append(f.rules, faultRule{op: op, path: path, err: err, budget: -1, times: count})
 }
 
 // injectShortWrite lets a matching file receive at most budget bytes in
@@ -78,18 +103,46 @@ func (f *faultFS) clear() {
 
 func (f *faultFS) rule(op faultOp, path string) *faultRule {
 	for i := range f.rules {
-		if f.rules[i].op == op && strings.HasSuffix(path, f.rules[i].path) {
-			return &f.rules[i]
+		if f.rules[i].op != op || !strings.HasSuffix(path, f.rules[i].path) {
+			continue
 		}
+		f.rules[i].seen++
+		if f.rules[i].seen <= f.rules[i].after {
+			continue
+		}
+		if f.rules[i].times > 0 && f.rules[i].seen > f.rules[i].after+f.rules[i].times {
+			continue
+		}
+		return &f.rules[i]
 	}
 	return nil
 }
 
 func (f *faultFS) MkdirAll(dir string, perm fs.FileMode) error { return f.inner.MkdirAll(dir, perm) }
 
-func (f *faultFS) Stat(path string) (fs.FileInfo, error) { return f.inner.Stat(path) }
+func (f *faultFS) Stat(path string) (fs.FileInfo, error) {
+	f.recordEvent(faultStat, path)
+	if r := f.rule(faultStat, path); r != nil {
+		return nil, r.err
+	}
+	return f.inner.Stat(path)
+}
 
-func (f *faultFS) Lstat(path string) (fs.FileInfo, error) { return f.inner.Lstat(path) }
+func (f *faultFS) Lstat(path string) (fs.FileInfo, error) {
+	f.recordEvent(faultLstat, path)
+	if r := f.rule(faultLstat, path); r != nil {
+		return nil, r.err
+	}
+	return f.inner.Lstat(path)
+}
+
+func (f *faultFS) EvalSymlinks(path string) (string, error) {
+	f.recordEvent(faultEvalSymlinks, path)
+	if r := f.rule(faultEvalSymlinks, path); r != nil {
+		return "", r.err
+	}
+	return f.inner.EvalSymlinks(path)
+}
 
 func (f *faultFS) ReadDir(dir string) ([]fs.DirEntry, error) {
 	if r := f.rule(faultReadDir, dir); r != nil {
@@ -170,6 +223,11 @@ func (f *faultFS) OpenFile(path string, flag int, perm fs.FileMode) (File, error
 		if r := f.rule(faultCreate, path); r != nil {
 			return nil, r.err
 		}
+	} else {
+		f.recordEvent(faultOpen, path)
+		if r := f.rule(faultOpen, path); r != nil {
+			return nil, r.err
+		}
 	}
 	file, err := f.inner.OpenFile(path, flag, perm)
 	if err != nil {
@@ -236,6 +294,7 @@ func (f *faultFile) Close() error {
 // The injected failures the tests distinguish by errors.Is.
 var (
 	errFaultCreate  = errors.New("fault: create refused")
+	errFaultOpen    = errors.New("fault: open refused")
 	errFaultWrite   = errors.New("fault: write failed")
 	errDiskFull     = errors.New("fault: no space left on device")
 	errFaultSync    = errors.New("fault: sync failed")
