@@ -87,8 +87,8 @@ func TestServiceDeleteScreenshotsKeepsRecordData(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DeleteRecordScreenshots: %v", err)
 	}
-	if removal.Generation != 2 || removal.RemovedFiles != 2 {
-		t.Errorf("removal = %+v, want generation 2 and two files", removal)
+	if removal.Generation != 3 || removal.RemovedFiles != 2 {
+		t.Errorf("removal = %+v, want generation 3 (the retained pair) and two files", removal)
 	}
 	if got := svc.Snapshot().Revision; got <= before {
 		t.Errorf("snapshot revision after cleanup = %d, want above %d", got, before)

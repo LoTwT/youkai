@@ -661,10 +661,11 @@ func TestScopeRelayAfterPrecheck(t *testing.T) {
 		Hotkey:    platform.HotkeySpec{Key: platform.KeyS},
 		Traversal: func() collect.Traversal { return trav },
 	}
-	ctrl.SetScopeSink(func(scope json.RawMessage) {
+	ctrl.SetScopeSink(func(scope json.RawMessage) error {
 		mu.Lock()
 		defer mu.Unlock()
 		relayed = append(relayed, append(json.RawMessage(nil), scope...))
+		return nil
 	})
 	snap := kernelSession(t, ctrl)
 	if snap.End != scan.EndCompleted {
@@ -682,6 +683,35 @@ func TestScopeRelayAfterPrecheck(t *testing.T) {
 	}
 }
 
+func TestScopeRelayFirstSaveFailureStopsBeforeCollect(t *testing.T) {
+	// The first observed-scope report's persistence failure must stop the
+	// session in Prepare: the storage fault is reported before input
+	// permission opens, so Collect never runs and no input is dispatched.
+	trav := &scopeReportingTraversal{scope: json.RawMessage(`{"kind":"zzzInventory","coverage":"unknown"}`)}
+	sess := readySession()
+	port := &platformfake.Port{NewSession: func() *platformfake.Session { return sess }}
+	saveErr := errors.New("injected checkpoint save failure")
+	ctrl := &collect.Controller{
+		Port: port, Target: platform.TargetSpec{BundleID: "com.example.game"},
+		Hotkey:    platform.HotkeySpec{Key: platform.KeyS},
+		Traversal: func() collect.Traversal { return trav },
+	}
+	ctrl.SetScopeSink(func(json.RawMessage) error { return saveErr })
+	snap := kernelSession(t, ctrl)
+	if snap.End != scan.EndFailed {
+		t.Fatalf("end = %s, want failed after the storage fault", snap.End)
+	}
+	if snap.Trigger == nil || snap.Trigger.Code != scan.CodeStorageFailure || snap.Trigger.Phase != scan.PhasePreparing {
+		t.Fatalf("trigger = %+v, want storageFailure in preparing", snap.Trigger)
+	}
+	if got, want := trav.snapshot(), []string{"precheck", "observedScope"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("traversal events = %v, want %v (Collect must not run)", got, want)
+	}
+	if ops := sess.DispatchedOps(); len(ops) != 0 {
+		t.Fatalf("a storage fault in Prepare dispatched input: %+v", ops)
+	}
+}
+
 func TestScopeRelayNegativePaths(t *testing.T) {
 	// A traversal without the ScopeReporter capability never fires the
 	// sink; the observe-only session holds until cancelled.
@@ -695,10 +725,11 @@ func TestScopeRelayNegativePaths(t *testing.T) {
 			Hotkey:    platform.HotkeySpec{Key: platform.KeyS},
 			Traversal: func() collect.Traversal { return collect.ObserveOnly{} },
 		}
-		ctrl.SetScopeSink(func(json.RawMessage) {
+		ctrl.SetScopeSink(func(json.RawMessage) error {
 			mu.Lock()
 			defer mu.Unlock()
 			relayed++
+			return nil
 		})
 		kernel, err := scan.Start(scan.Config{
 			ID: scan.ID("collect-scope-none"), Capacity: 2, Workers: 1,
@@ -745,10 +776,11 @@ func TestScopeRelayNegativePaths(t *testing.T) {
 					Hotkey:    platform.HotkeySpec{Key: platform.KeyS},
 					Traversal: func() collect.Traversal { return tc.trav },
 				}
-				ctrl.SetScopeSink(func(json.RawMessage) {
+				ctrl.SetScopeSink(func(json.RawMessage) error {
 					mu.Lock()
 					defer mu.Unlock()
 					relayed++
+					return nil
 				})
 				snap := kernelSession(t, ctrl)
 				if tc.fails && snap.End != scan.EndFailed {

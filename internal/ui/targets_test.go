@@ -712,6 +712,140 @@ func TestViewStartRefusalGenericFallback(t *testing.T) {
 	}
 }
 
+// A readiness pass freezes the confirmed target on the UI thread. Changing
+// target while the worker runs must not make the worker read the new index,
+// and the late report must not select a window for the choice the user just
+// retired: a fresh pass for the current selection owns that state.
+func TestReadinessChangeTargetRetiresInFlightPass(t *testing.T) {
+	first := testTarget(1, 42, `C:\Games\A\ZenlessZoneZero.exe`)
+	second := testTarget(2, 77, `D:\Games\B\ZenlessZoneZero.exe`)
+	report := fakeReadyReport([]app.TargetCandidate{first, second}, 0, 0)
+	svc := &fakeService{targets: []app.TargetCandidate{first, second}}
+	m, q := newTestModel(t, Config{Service: svc, ScanSource: targetSource()})
+	tt := ui.NewTester(m.View, 1020, 700)
+	settle(t, m, q, tt)
+	if err := tt.Click(targetLabel(first)); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
+	if m.chosenTarget() == nil || m.chosenTarget().Handle != first.Handle {
+		t.Fatalf("the first window was not chosen: %+v", m.chosenTarget())
+	}
+
+	entered := make(chan *app.TargetCandidate, 4)
+	release := make(chan struct{})
+	svc.mu.Lock()
+	svc.readinessFn = func(target *app.TargetCandidate) app.ReadinessReport {
+		entered <- target
+		if target != nil && sameTarget(*target, first) {
+			<-release
+		}
+		return report
+	}
+	svc.mu.Unlock()
+
+	m.refreshReadiness()
+	var frozen *app.TargetCandidate
+	select {
+	case frozen = <-entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the readiness pass did not start")
+	}
+	if frozen == nil || !sameTarget(*frozen, first) {
+		t.Fatalf("the worker did not receive the frozen target: %+v", frozen)
+	}
+
+	// The user retires the choice while that pass is still in flight.
+	if err := tt.Click("更换目标"); err != nil {
+		t.Fatal(err)
+	}
+	if m.targetChoice != -1 || m.chosenTarget() != nil || !m.targetNeedsChoice {
+		t.Fatalf("更换目标 did not retire the choice: choice=%d chosen=%+v needs=%v",
+			m.targetChoice, m.chosenTarget(), m.targetNeedsChoice)
+	}
+	close(release)
+	settle(t, m, q, tt)
+
+	if m.targetChoice != -1 || m.chosenTarget() != nil {
+		t.Fatalf("the late pass restored a retired choice: choice=%d chosen=%+v", m.targetChoice, m.chosenTarget())
+	}
+	if !m.targetNeedsChoice {
+		t.Fatal("the late pass cleared the fresh-choice requirement")
+	}
+	// The landing pass judged the retired target, so it started a fresh
+	// pass with no target instead of applying the stale report.
+	select {
+	case target := <-entered:
+		if target != nil {
+			t.Fatalf("the fresh pass received %+v, want no target after 更换目标", target)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("the stale landing did not start a pass for the current selection")
+	}
+}
+
+// A pass that started for the old window must not undo a new confirmation:
+// the user's actual 更换目标 and second choice win over the late result.
+func TestReadinessLatePassKeepsNewlyConfirmedTarget(t *testing.T) {
+	first := testTarget(1, 42, `C:\Games\A\ZenlessZoneZero.exe`)
+	second := testTarget(2, 77, `D:\Games\B\ZenlessZoneZero.exe`)
+	report := fakeReadyReport([]app.TargetCandidate{first, second}, 0, 0)
+	svc := &fakeService{targets: []app.TargetCandidate{first, second}}
+	m, q := newTestModel(t, Config{Service: svc, ScanSource: targetSource()})
+	tt := ui.NewTester(m.View, 1020, 700)
+	settle(t, m, q, tt)
+	if err := tt.Click(targetLabel(first)); err != nil {
+		t.Fatal(err)
+	}
+	settle(t, m, q, tt)
+
+	entered := make(chan *app.TargetCandidate, 4)
+	release := make(chan struct{})
+	svc.mu.Lock()
+	svc.readinessFn = func(target *app.TargetCandidate) app.ReadinessReport {
+		entered <- target
+		if target != nil && sameTarget(*target, first) {
+			<-release
+		}
+		return report
+	}
+	svc.mu.Unlock()
+
+	m.refreshReadiness()
+	select {
+	case target := <-entered:
+		if target == nil || !sameTarget(*target, first) {
+			t.Fatalf("the worker did not receive the frozen first target: %+v", target)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("the readiness pass did not start")
+	}
+
+	if err := tt.Click("更换目标"); err != nil {
+		t.Fatal(err)
+	}
+	if err := tt.Click(targetLabel(second)); err != nil {
+		t.Fatalf("choose the second window: %v", err)
+	}
+	close(release)
+	settle(t, m, q, tt)
+
+	if got := m.chosenTarget(); got == nil || !sameTarget(*got, second) {
+		t.Fatalf("the late pass replaced the new confirmation: %+v", got)
+	}
+	if m.targetChoice != 1 || m.targetNeedsChoice {
+		t.Fatalf("target choice = %d needsChoice=%v, want the second row", m.targetChoice, m.targetNeedsChoice)
+	}
+	select {
+	case target := <-entered:
+		if target == nil || !sameTarget(*target, second) {
+			t.Fatalf("the fresh pass received %+v, want the newly confirmed window", target)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("the new confirmation did not start a pass for its window")
+	}
+}
+
 // A fixed-target source (macOS, the environment override) shows no target
 // list and starts directly.
 func TestViewFixedTargetSourceSkipsSelection(t *testing.T) {

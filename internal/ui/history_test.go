@@ -589,7 +589,7 @@ func TestHistoryDeleteBlockedReasons(t *testing.T) {
 	}
 
 	m.closeHistoryMenu()
-	m.Apply(snap("live", 1, true, scan.PhaseCapturing, scan.Counts{Captured: 1}, 0, false, ""))
+	m.Apply(snap("live", 2, true, scan.PhaseCapturing, scan.Counts{Captured: 1}, 0, false, ""))
 	tt.Frame()
 	m.openHistoryMenu("r02")
 	tt.Frame()

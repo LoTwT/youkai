@@ -373,10 +373,10 @@ func TestNotificationEdgesSurviveSessionSwitches(t *testing.T) {
 		t.Fatalf("session A notifications = %d, want 2: %+v", len(*got), *got)
 	}
 
-	m.Apply(openCapturing("b", 1, 1))
+	m.Apply(openCapturing("b", 4, 1))
 	drainAll(t, m, q)
-	m.Apply(stoppingSession("b", 2, 1))
-	m.Apply(endedSession("b", 3, 1, 1))
+	m.Apply(stoppingSession("b", 5, 1))
+	m.Apply(endedSession("b", 6, 1, 1))
 	drainAll(t, m, q)
 	if len(*got) != 4 {
 		t.Fatalf("session B notifications = %d total, want 4: %+v", len(*got), *got)
@@ -384,8 +384,8 @@ func TestNotificationEdgesSurviveSessionSwitches(t *testing.T) {
 
 	// A refused start published its placeholder, then Service.abort rolled
 	// the service back to A. A's segments were already sent.
-	m.Apply(openCapturing("c", 1, 0))
-	m.Apply(endedSession("a", 4, 2, 2))
+	m.Apply(openCapturing("c", 7, 0))
+	m.Apply(endedSession("a", 8, 2, 2))
 	drainAll(t, m, q)
 	if len(*got) != 4 {
 		t.Fatalf("the rollback to A repeated its notifications: %+v", *got)

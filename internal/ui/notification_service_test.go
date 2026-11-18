@@ -23,10 +23,10 @@ import (
 type notificationServiceController struct {
 	items int
 	scope json.RawMessage
-	sink  func(json.RawMessage)
+	sink  func(json.RawMessage) error
 }
 
-func (c *notificationServiceController) SetScopeSink(sink func(json.RawMessage)) {
+func (c *notificationServiceController) SetScopeSink(sink func(json.RawMessage) error) {
 	c.sink = sink
 }
 
@@ -52,7 +52,9 @@ func (c *notificationServiceController) Collect(ctx context.Context, h *scan.Con
 		time.Sleep(10 * time.Millisecond)
 	}
 	if c.sink != nil && c.scope != nil {
-		c.sink(c.scope)
+		if err := c.sink(c.scope); err != nil {
+			return err
+		}
 	}
 	return nil
 }

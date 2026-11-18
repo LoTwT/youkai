@@ -229,12 +229,22 @@ type fakeWinFG struct {
 	// requestOK: RequestForeground actually moves the foreground.
 	requestOK bool
 	requests  []windows.HWND
+	// onForeground runs after each foreground read, outside the fake's
+	// lock. Tests use it to change an input premise at a precise point of
+	// an observation (for example, closing the kernel gate inside a drag's
+	// step precheck).
+	onForeground func()
 }
 
 func (f *fakeWinFG) ForegroundWindow() windows.HWND {
 	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.foreground
+	foreground := f.foreground
+	hook := f.onForeground
+	f.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
+	return foreground
 }
 
 func (f *fakeWinFG) RequestForeground(hwnd windows.HWND) bool {
@@ -978,6 +988,49 @@ func TestWinDispatchDelivery(t *testing.T) {
 		// The drag destination passed its own client and hit checks.
 		sess.Close()
 	})
+	t.Run("drag rechecks live premises before every move batch", func(t *testing.T) {
+		w := newWinWorld(t)
+		// The watcher would report focusLost on its own; this test drives
+		// the dispatch path, so keep the observation thread away.
+		w.adapter.WatchEvery = time.Hour
+		sess := w.openReady(t)
+		w.adapter.Sleep = func(time.Duration) {}
+		// The first interpolated move is inserted, then the game loses the
+		// foreground before the watcher could tick. Every later move must
+		// be refused and the pressed button released.
+		w.send.respond = func(call int, events []windows.InputEvent) (int, bool, error) {
+			if call == 1 {
+				w.fg.set(999)
+			}
+			return len(events), false, nil
+		}
+		res := sess.Dispatch(InputOp{Kind: InputDrag, Geometry: 1, At: image.Point{3, 5}, To: image.Point{3, 105}, Steps: 4, Duration: 40 * time.Millisecond})
+		if res.Status != InputPartial || !res.Aborted {
+			t.Fatalf("drag after focus loss: %+v, want partial aborted", res)
+		}
+		if res.Denial == nil || res.Denial.Code != CodeFocusLost {
+			t.Fatalf("denial = %+v, want focusLost", res.Denial)
+		}
+		batches := w.send.batches()
+		if len(batches) != 3 { // press + first move + release
+			t.Fatalf("batches after focus loss: %d %+v, want press, one move and the release", len(batches), batches)
+		}
+		last := batches[2]
+		if len(last) != 1 || last[0].Kind != windows.EventMouseUp {
+			t.Fatalf("the abort must insert the release: %+v", last)
+		}
+		if res.EventsPlanned != 4 || res.EventsPosted != 4 {
+			t.Fatalf("event accounting = %d/%d, want 4/4", res.EventsPosted, res.EventsPlanned)
+		}
+		winSess, ok := sess.(*winSession)
+		if !ok {
+			t.Fatalf("session type %T", sess)
+		}
+		if held := winSess.actor.Held(); len(held) != 0 {
+			t.Fatalf("the pressed button must be released: %+v", held)
+		}
+		sess.Close()
+	})
 	t.Run("drag with an occluded destination refuses", func(t *testing.T) {
 		w := newWinWorld(t)
 		sess := w.openReady(t)
@@ -1012,6 +1065,238 @@ func TestWinDispatchDelivery(t *testing.T) {
 			t.Fatalf("no second send after the block: %d", len(w.send.batches()))
 		}
 		sess.Close()
+	})
+}
+
+// Step-level drag premises are re-measured and hit-tested at the point
+// that will actually be inserted. The watcher stays out of these cases:
+// each failure must be caught by the next step, not by an observation
+// tick.
+func TestWinDragStepPremises(t *testing.T) {
+	drag := func() InputOp {
+		return InputOp{Kind: InputDrag, Geometry: 1, At: image.Point{3, 5}, To: image.Point{3, 105},
+			Steps: 4, Duration: 40 * time.Millisecond}
+	}
+
+	t.Run("client area moves one pixel between steps", func(t *testing.T) {
+		w := newWinWorld(t)
+		w.adapter.WatchEvery = time.Hour
+		sess := w.openReady(t)
+		w.adapter.Sleep = func(time.Duration) {}
+		// The first move is inserted elsewhere; then the client origin
+		// moves by one pixel while the watcher is idle. The old cached
+		// precheck kept version 1 and inserted the remaining moves.
+		w.send.respond = func(call int, events []windows.InputEvent) (int, bool, error) {
+			if call == 1 {
+				w.geo.setOrigin(11, 20)
+			}
+			return len(events), false, nil
+		}
+		res := sess.Dispatch(drag())
+		if res.Status != InputPartial || !res.Aborted {
+			t.Fatalf("drag after a one-pixel move: %+v, want partial aborted", res)
+		}
+		if res.Denial == nil || res.Denial.Code != CodeStaleGeometry {
+			t.Fatalf("denial = %+v, want staleGeometry", res.Denial)
+		}
+		if got := len(w.send.batches()); got != 3 { // press + first move + release
+			t.Fatalf("batches = %d %+v, want no moves after the geometry change", got, w.send.batches())
+		}
+		sess.Close()
+	})
+
+	t.Run("only the next move point is occluded", func(t *testing.T) {
+		w := newWinWorld(t)
+		w.adapter.WatchEvery = time.Hour
+		sess := w.openReady(t)
+		w.adapter.Sleep = func(time.Duration) {}
+		// Image (3,55) is the second interpolated move and maps to screen
+		// (13,75). The press point (13,25) and destination stay clear.
+		w.send.respond = func(call int, events []windows.InputEvent) (int, bool, error) {
+			if call == 1 {
+				w.fg.mu.Lock()
+				w.fg.hits = map[windows.PixelPoint]windows.HWND{{X: 13, Y: 75}: 55}
+				w.fg.mu.Unlock()
+			}
+			return len(events), false, nil
+		}
+		res := sess.Dispatch(drag())
+		if res.Status != InputPartial || !res.Aborted {
+			t.Fatalf("drag over the covered point: %+v, want partial aborted", res)
+		}
+		if res.Denial == nil || res.Denial.Code != CodePositionOutside {
+			t.Fatalf("denial = %+v, want positionOutside", res.Denial)
+		}
+		if got := len(w.send.batches()); got != 3 {
+			t.Fatalf("batches = %d %+v, want the first move and no more", got, w.send.batches())
+		}
+		sess.Close()
+	})
+
+	t.Run("gate closes inside the step precheck", func(t *testing.T) {
+		w := newWinWorld(t)
+		w.adapter.WatchEvery = time.Hour
+		sess := w.openReady(t)
+		w.adapter.Sleep = func(time.Duration) {}
+		armed := false
+		w.fg.mu.Lock()
+		w.fg.onForeground = func() {
+			if armed {
+				armed = false
+				w.gate.set(false)
+			}
+		}
+		w.fg.mu.Unlock()
+		w.send.respond = func(call int, events []windows.InputEvent) (int, bool, error) {
+			if call == 0 {
+				armed = true
+			}
+			return len(events), false, nil
+		}
+		res := sess.Dispatch(drag())
+		if res.Status != InputPartial || !res.Aborted {
+			t.Fatalf("drag with the gate closed by the precheck: %+v, want partial aborted", res)
+		}
+		batches := w.send.batches()
+		if len(batches) != 2 { // press + release
+			t.Fatalf("batches = %d %+v; a move slipped past the closed gate", len(batches), batches)
+		}
+		if len(batches[1]) != 1 || batches[1][0].Kind != windows.EventMouseUp {
+			t.Fatalf("the release is not the second batch: %+v", batches[1])
+		}
+		sess.Close()
+	})
+
+	t.Run("blocked abort release keeps both diagnostics and the ledger", func(t *testing.T) {
+		w := newWinWorld(t)
+		w.adapter.WatchEvery = time.Hour
+		sess := w.openReady(t)
+		w.adapter.Sleep = func(time.Duration) {}
+		w.send.respond = func(call int, events []windows.InputEvent) (int, bool, error) {
+			switch call {
+			case 1:
+				w.fg.set(999) // focus lost after the first move
+			case 2:
+				return 0, true, nil // the abort release is refused
+			}
+			return len(events), false, nil
+		}
+		res := sess.Dispatch(drag())
+		if res.Status != InputPartial || !res.Aborted {
+			t.Fatalf("aborted drag with a refused release: %+v, want partial aborted", res)
+		}
+		if res.Denial == nil || res.Denial.Code != CodeFocusLost {
+			t.Fatalf("denial = %+v, want the original focusLost", res.Denial)
+		}
+		if res.ReleaseFault == nil || res.ReleaseFault.Code != CodeInputBlocked {
+			t.Fatalf("release fault = %+v, want inputBlocked", res.ReleaseFault)
+		}
+		if res.EventsPlanned != 4 || res.EventsPosted != 3 {
+			t.Fatalf("event accounting = %d/%d, want 3 of 4", res.EventsPosted, res.EventsPlanned)
+		}
+		winSess, ok := sess.(*winSession)
+		if !ok {
+			t.Fatalf("session type %T", sess)
+		}
+		if held := winSess.actor.Held(); len(held) != 1 {
+			t.Fatalf("the refused release must stay ledgered: %+v", held)
+		}
+		// Close retries the release and reports the retry's outcome.
+		rep := sess.Close()
+		if len(rep.Releases) != 1 || !rep.Releases[0].Released || rep.Err != nil {
+			t.Fatalf("close release = %+v err=%v, want the retry to insert it", rep.Releases, rep.Err)
+		}
+		if held := winSess.actor.Held(); len(held) != 0 {
+			t.Fatalf("the retried release must clear the ledger: %+v", held)
+		}
+	})
+}
+
+// The drag's first batch shares the live-premise and permission checks of
+// the interpolated steps. A premise lost during the entry check must leave
+// the operation notDispatched with zero inserted events and nothing to
+// release; the old entry precheck trusted the cached geometry and pressed
+// first.
+func TestWinDragFirstBatchPremises(t *testing.T) {
+	drag := func() InputOp {
+		return InputOp{Kind: InputDrag, Geometry: 1, At: image.Point{3, 5}, To: image.Point{3, 105},
+			Steps: 4, Duration: 40 * time.Millisecond}
+	}
+	// setup returns a ready session whose third foreground read — the one
+	// inside the actor's start-point check — runs fn. The two earlier reads
+	// are the adapter's dispatch observation and its precheck.
+	setup := func(t *testing.T, fn func(*winWorld)) (*winWorld, Session, *bool) {
+		t.Helper()
+		w := newWinWorld(t)
+		w.adapter.WatchEvery = time.Hour
+		sess := w.openReady(t)
+		w.adapter.Sleep = func(time.Duration) {}
+		calls := 0
+		fired := false
+		w.fg.mu.Lock()
+		w.fg.onForeground = func() {
+			calls++
+			if calls == 3 {
+				fired = true
+				fn(w)
+			}
+		}
+		w.fg.mu.Unlock()
+		return w, sess, &fired
+	}
+	requireStartRefused := func(t *testing.T, w *winWorld, sess Session, res InputResult, code string) {
+		t.Helper()
+		if res.Status != InputNotDispatched || res.Aborted {
+			t.Fatalf("result = %+v, want notDispatched before the press", res)
+		}
+		if res.Denial == nil || res.Denial.Code != code {
+			t.Fatalf("denial = %+v, want %s", res.Denial, code)
+		}
+		if res.EventsPlanned != 0 || res.EventsPosted != 0 {
+			t.Fatalf("event counts = %d/%d, want none", res.EventsPosted, res.EventsPlanned)
+		}
+		if batches := w.send.batches(); len(batches) != 0 {
+			t.Fatalf("a refused first batch inserted events: %+v", batches)
+		}
+		winSess, ok := sess.(*winSession)
+		if !ok {
+			t.Fatalf("session type %T", sess)
+		}
+		if held := winSess.actor.Held(); len(held) != 0 {
+			t.Fatalf("a refused first batch ledgered a press: %+v", held)
+		}
+		sess.Close()
+	}
+
+	t.Run("client area moves one pixel during the entry check", func(t *testing.T) {
+		w, sess, fired := setup(t, func(w *winWorld) { w.geo.setOrigin(11, 20) })
+		res := sess.Dispatch(drag())
+		if !*fired {
+			t.Fatal("the fixture did not reach the actor's start-point check")
+		}
+		requireStartRefused(t, w, sess, res, CodeStaleGeometry)
+	})
+
+	t.Run("permission closes during the entry check", func(t *testing.T) {
+		w, sess, fired := setup(t, func(w *winWorld) { w.gate.set(false) })
+		res := sess.Dispatch(drag())
+		if !*fired {
+			t.Fatal("the fixture did not reach the actor's start-point check")
+		}
+		requireStartRefused(t, w, sess, res, CodePermitClosed)
+	})
+
+	t.Run("start point becomes occluded during the entry check", func(t *testing.T) {
+		w, sess, fired := setup(t, func(w *winWorld) {
+			w.fg.mu.Lock()
+			w.fg.hits = map[windows.PixelPoint]windows.HWND{{X: 13, Y: 25}: 55}
+			w.fg.mu.Unlock()
+		})
+		res := sess.Dispatch(drag())
+		if !*fired {
+			t.Fatal("the fixture did not reach the actor's start-point check")
+		}
+		requireStartRefused(t, w, sess, res, CodePositionOutside)
 	})
 }
 
