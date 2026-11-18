@@ -436,6 +436,15 @@ func (s *Session) finalize(fromProducer bool) {
 	// drain), and every worker delivers its terminal record before
 	// exiting.
 	s.workersWG.Wait()
+	// A stop can beat an admission: the entry was already marked
+	// unprocessed while OnAdmit was still running, and the producer's send
+	// then lands in the buffer after the workers left on the cancelled
+	// context. The channel is closed and no producer remains, so consuming
+	// the remainder drops those stray tasks — and the observations they
+	// still reference — before the session seals. Their terminal records
+	// were handed over by the stop path, so nothing deliverable is lost.
+	for range s.taskCh {
+	}
 	// Recognition is over; release the scan context.
 	s.cancelScan()
 	for _, rec := range s.takePendingDelivery() {
