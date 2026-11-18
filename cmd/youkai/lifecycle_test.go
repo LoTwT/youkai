@@ -1171,16 +1171,49 @@ func TestAcquireInstanceLocksReturnsDataRootFailure(t *testing.T) {
 	}
 }
 
-// The embedded tray icon is a real PNG the size the tray expects.
+// App and tray assets retain transparent corners; the menu bar template must
+// contain a silhouette rather than an opaque tile that macOS would tint solid.
 func TestTrayIconIsUsablePNG(t *testing.T) {
-	if len(trayIconPNG) == 0 {
-		t.Fatal("no embedded tray icon")
-	}
-	cfg, err := png.DecodeConfig(bytes.NewReader(trayIconPNG))
-	if err != nil {
-		t.Fatalf("decode tray icon: %v", err)
-	}
-	if cfg.Width != 32 || cfg.Height != 32 {
-		t.Fatalf("tray icon = %dx%d, want 32x32", cfg.Width, cfg.Height)
+	for _, asset := range []struct {
+		name string
+		data []byte
+		size int
+	}{
+		{"app", appIconPNG, 1024},
+		{"tray", trayIconPNG, 32},
+		{"template", trayTemplateIconPNG, 32},
+	} {
+		t.Run(asset.name, func(t *testing.T) {
+			img, err := png.Decode(bytes.NewReader(asset.data))
+			if err != nil {
+				t.Fatalf("decode icon: %v", err)
+			}
+			b := img.Bounds()
+			if b.Dx() != asset.size || b.Dy() != asset.size {
+				t.Fatalf("icon = %dx%d, want %dx%d", b.Dx(), b.Dy(), asset.size, asset.size)
+			}
+			for _, p := range [][2]int{{0, 0}, {asset.size - 1, 0}, {0, asset.size - 1}, {asset.size - 1, asset.size - 1}} {
+				if _, _, _, a := img.At(p[0], p[1]).RGBA(); a != 0 {
+					t.Fatalf("corner %v is opaque", p)
+				}
+			}
+			if asset.name == "template" {
+				visible := 0
+				for y := range asset.size {
+					for x := range asset.size {
+						r, g, bl, a := img.At(x, y).RGBA()
+						if a > 0 {
+							visible++
+						}
+						if r != 0 || g != 0 || bl != 0 {
+							t.Fatal("template must be a monochrome alpha mask")
+						}
+					}
+				}
+				if visible < 100 || visible > asset.size*asset.size/2 {
+					t.Fatalf("template has %d visible pixels; want a nonempty mark without its tile", visible)
+				}
+			}
+		})
 	}
 }

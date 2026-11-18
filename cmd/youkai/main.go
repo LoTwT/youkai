@@ -394,6 +394,12 @@ func main() {
 	mygo.App.OnNotificationClick(life.OnNotificationClick)
 
 	mygo.App.WhenReady(func() {
+		// Plain go run has no application bundle to provide a Dock icon.
+		if runtime.GOOS == "darwin" {
+			if err := mygo.App.Dock.SetIcon(appIconPNG); err != nil {
+				log.Printf("youkai: set application icon: %v", err)
+			}
+		}
 		placement := windowPlacementFor(mygo.Screen.PrimaryDisplay().WorkArea)
 		win := mygo.NewWindow(mygo.WindowOptions{
 			Title:     "Youkai",
@@ -406,6 +412,9 @@ func main() {
 			StateKey: windowStateKey,
 			Content:  mgui.View(model.View),
 		})
+		if err := win.SetIcon(appIconPNG); err != nil {
+			log.Printf("youkai: set window icon: %v", err)
+		}
 		win.OnClose(func(e *mygo.CloseEvent) {
 			life.OnWindowClose(e)
 		})

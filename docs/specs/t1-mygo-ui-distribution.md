@@ -56,6 +56,22 @@ MyGo 的 [Menus and the tray](https://mygo.egoist.dev/docs/menus#tray-icons) 提
 - MyGo 可生成 macOS `.app` 与 DMG，本地签名和 DMG 制作在 macOS 上执行。按用户选择采用 ad-hoc 签名，Developer ID 与公证不作为首版前提；macOS 制品与 DMG 已移出首版，保留为后续版本基础，路线见 [T7 第 3 节](t7-public-release-acceptance.md#3-不依赖付费证书的打包路线)。
 - 首版只交付 Windows 正式制品并在 Windows 上验收；macOS 制品随后续版本构建和验收。日常开发与 Windows 测试安排见[实施清单](scanner-implementation-plan.md#开发与-windows-测试方式)。
 
+### 应用与托盘图标
+
+2026-11-17 用户选定原始 A「涡旋独眼」，并要求应用到所有图标入口。[选定原稿](../design/icon-2026-11-17/a-vortex-eye.png)是唯一造型来源，不保留探索页面或未选方案。在仓库根运行 `go run ./tools/iconassets`，从原稿确定性导出以下资源；原稿不覆盖，也不重新生成造型。
+
+| 资源 | 用途 |
+| --- | --- |
+| `cmd/youkai/appicon.png`（1024×1024） | 清除与画布边缘连通的白色角区，保留深色底板。`mygo.json` 的 `icon` 明确引用它，MyGo 为 Windows EXE、多尺寸 ICO、安装/卸载器、快捷方式及 macOS 应用包 / DMG 生成对应图标。窗口通过 `SetIcon` 使用同一 PNG；macOS 就绪时同步设置 Dock，覆盖直接 `go run` 的开发启动。 |
+| `cmd/youkai/trayicon.png`（32×32） | Windows 彩色托盘图标，保留深色底板、奶白主体和紫红下弧。Windows 通知的 `Image` 同样使用应用 PNG，确保托盘不可用时的临时通知图标仍有品牌图形。 |
+| `cmd/youkai/trayicon-template.png`（32×32） | 仅含独眼与下弧的单色 alpha 模板，去掉底板并调整菜单栏留白。仅 macOS 的 `IconIsTemplate` 使用，由系统按菜单栏外观着色。 |
+
+`cmd/youkai/trayicon.go` 嵌入运行时资源，应用启动不依赖工作目录或临时文件。MyGo 的 Package / Release 与本地构建共用上述配置；无需分别维护 ICO / ICNS 源文件。资源解码、透明通道及本地生成制品检查不代表 Windows 系统任务栏、托盘或安装器视觉实机验收。
+
+Windows 安装器的完整模板校验同步接纳 MyGo 配置图标时生成的 `MUI_ICON` / `MUI_UNICON` 槽：仅在 `BrandingText` 后、同一个 `installer.ico` 的相邻声明才可归一化；缺失、异径、重复、移位及其他命令仍拒绝。原模板摘要、固定上游源码绑定与安装/卸载进程保护不变；回归测试同时覆盖有 / 无图标及两种主机路径。
+
+2026-11-17 本地验证：入口包与安装器适配器测试、相关包 `go vet` 通过；macOS 应用包与 Windows 安装包生成成功。macOS 包含可解码的多尺寸 ICNS，Windows EXE 含七个 ICON 资源和对应 GROUP_ICON，安装/卸载器保留成对图标声明及两段安全进程检查。图标声明的回归测试在修正前失败、修正后通过；尚未进行系统任务栏、Dock、托盘和通知的实机显示验收。
+
 ### 浏览器唤起的新增需求与构建依据
 
 用户于 2026-10-16 确认“唤起桌面 app”：网页链接唤起已安装的原生应用，链接为 `youkai://open`，已在项目清单注册。启动、恢复和扫描中收到链接的行为由[架构第 2 节](scanner-architecture.md#浏览器唤起桌面应用)维护。

@@ -2,6 +2,7 @@
   "name": "Youkai",
   "identifier": "com.lotwt.youkai",
   "version": "0.0.1",
+  "icon": "cmd/youkai/appicon.png",
   "main": "./cmd/youkai",
   "urlSchemes": ["youkai"],
   "out": "build",
