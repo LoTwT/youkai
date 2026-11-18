@@ -323,6 +323,8 @@ func (m *Model) startExport(format app.ExportFormat) {
 	m.exportDialog.openDirErr = ""
 	m.exporting = true
 	m.exportOutcome = nil
+	settled := make(chan struct{})
+	m.exportSettled = settled
 
 	m.goAsync(func() {
 		var data []byte
@@ -348,14 +350,28 @@ func (m *Model) startExport(format app.ExportFormat) {
 					// The cancel stopped the write, but a file it made is
 					// still there: do not claim nothing was written.
 					m.finishExport(format, count, pending, recordID, "", err)
+					m.settleExport(settled)
 					return
 				}
 				m.exportDialog.canceled = true
+				m.settleExport(settled)
 				return
 			}
 			m.finishExport(format, count, pending, recordID, path, err)
+			m.settleExport(settled)
 		})
 	})
+}
+
+// settleExport publishes that the export worker finished and wakes an exit
+// waiting for the write's outcome. The worker calls it from its final UI
+// update, after the dialog state changed; waking the exit earlier could let
+// the process quit between the file write and that state.
+func (m *Model) settleExport(settled chan struct{}) {
+	close(settled)
+	if m.exportSettled == settled {
+		m.exportSettled = nil
+	}
 }
 
 // saveDirectExport uses the saver's cancelable form when it has one. A

@@ -664,7 +664,7 @@ func failedConfirmPrompt(t *testing.T, items ...record.ItemRecord) (*Model, *que
 // later navigation is silently refused.
 func TestShowRecordCancelsExitIntent(t *testing.T) {
 	m, q, tt, _ := failedConfirmPrompt(t, reviewRowItem(t, 1, 12), reviewRowItem(t, 2, 12))
-	m.Apply(app.Snapshot{SessionID: "new-session"})
+	m.Apply(app.Snapshot{SessionID: "new-session", Revision: 100})
 	drainAll(t, m, q)
 	tt.Frame()
 	if m.exitIntent != exitIntentNone || m.navPrompt != nil {
