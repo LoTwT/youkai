@@ -34,8 +34,10 @@ func newTestModel(t *testing.T, cfg Config) (*Model, *queueUpdater) {
 }
 
 // TestApplyDiscardsStaleRevisions checks the subscription pump's discard
-// rule: an update of the shown session applies only at a higher revision;
-// one of another session always applies.
+// rule: a snapshot applies only above the newest applied revision, and the
+// service's revision is global across sessions. A lower-revision delivery
+// of another session is therefore stale; a refused start's rollback still
+// applies because the service publishes it at a higher revision.
 func TestApplyDiscardsStaleRevisions(t *testing.T) {
 	m, q := newTestModel(t, Config{Service: &fakeService{}})
 	busy := snap("s1", 5, true, scan.PhaseCapturing,
@@ -62,12 +64,30 @@ func TestApplyDiscardsStaleRevisions(t *testing.T) {
 		t.Fatalf("a newer revision was discarded: %+v", m.snap)
 	}
 
-	// A refused start rolls the service back to the previous session: the
-	// snapshot names another session and applies even at a lower revision.
-	other := snap("s0", 2, false, scan.PhaseEnded, scan.Counts{Captured: 1}, 1, false, "")
+	// A queued idle snapshot from before the newest revision stays stale
+	// even though it names no session; applying it would undo the state
+	// the service's newest snapshot established.
+	queuedIdle := app.Snapshot{Revision: 3}
+	m.Apply(queuedIdle)
+	if m.snap.Revision != 6 || m.appliedSession != scan.ID("s1") {
+		t.Fatalf("a stale idle snapshot was applied: %+v", m.snap)
+	}
+
+	// The same ordering holds for a named session: its age decides, not
+	// whether its identity differs from the applied one.
+	staleOther := snap("s9", 4, true, scan.PhaseCapturing, scan.Counts{Captured: 1}, 0, true, "")
+	m.Apply(staleOther)
+	if m.snap.Revision != 6 || m.appliedSession != scan.ID("s1") {
+		t.Fatalf("a stale snapshot of another session was applied: %+v", m.snap)
+	}
+
+	// A refused start rolls the service back to the previous session at a
+	// newer global revision; that rollback must apply even though it names
+	// another session.
+	other := snap("s0", 7, false, scan.PhaseEnded, scan.Counts{Captured: 1}, 1, false, "")
 	m.Apply(other)
-	if m.appliedSession != scan.ID("s0") {
-		t.Fatalf("a snapshot of another session was discarded: %+v", m.snap)
+	if m.appliedSession != scan.ID("s0") || m.snap.Revision != 7 {
+		t.Fatalf("a rollback at a newer revision was discarded: %+v", m.snap)
 	}
 	drainAll(t, m, q) // the wrap history reload settles
 }
@@ -449,7 +469,7 @@ func TestOpenHistoryAndReturnToLive(t *testing.T) {
 	// A new session takes the results area back from a history record.
 	m.OpenHistory()
 	drainAll(t, m, q)
-	m.Apply(snap("s2", 1, true, scan.PhasePreparing, scan.Counts{}, 0, true, ""))
+	m.Apply(snap("s2", 3, true, scan.PhasePreparing, scan.Counts{}, 0, true, ""))
 	drainAll(t, m, q)
 	if !m.rec.Live || m.rec.ID != "s2" {
 		t.Fatalf("a new session did not replace the history record: %+v", m.rec)

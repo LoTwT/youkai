@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LoTwT/youkai/internal/app"
 	"github.com/LoTwT/youkai/internal/scan"
 	"github.com/egoist/mygo/ui"
 )
@@ -584,5 +585,120 @@ func TestUpdateInstallCancellationClearsTheServiceFlag(t *testing.T) {
 	}
 	if err := tt.Click("重试安装"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestInstallRefusalKeepsBusySnapshotAgainstQueuedIdle covers the queued
+// delivery race: the install refusal reads the authoritative busy snapshot,
+// and a snapshot the pump read earlier at a lower revision must not restore
+// the install button even though it names no session. A real rollback at
+// the next global revision still applies across sessions.
+func TestInstallRefusalKeepsBusySnapshotAgainstQueuedIdle(t *testing.T) {
+	found := &fakeUpdateHandle{version: "0.0.2"}
+	src := &fakeUpdates{
+		enabled: true,
+		check: func(context.Context) (UpdateHandle, error) {
+			return found, nil
+		},
+	}
+	svc := &fakeService{
+		beginUpdateErr: errors.New("app: update install: the active scan session has not finished saving"),
+		snapshot: app.Snapshot{
+			SessionID: "s1",
+			Revision:  4,
+			Busy:      true,
+			Scan:      scan.Snapshot{SessionID: "s1", Revision: 4, Phase: scan.PhaseCapturing},
+		},
+	}
+	m, q := newTestModel(t, Config{Service: svc, Updates: src})
+	tt := openUpdateSettings(t, m, q)
+	m.CheckUpdates()
+	settle(t, m, q, tt)
+
+	m.InstallUpdate()
+	settle(t, m, q, tt)
+	if found.installs != 0 {
+		t.Fatalf("the refused install ran %d times", found.installs)
+	}
+	if !m.snap.Busy || m.snap.Revision != 4 {
+		t.Fatalf("the refusal did not apply the busy snapshot: %+v", m.snap)
+	}
+
+	// A delivery the pump read before the refusal: revision 3, idle.
+	m.Apply(app.Snapshot{Revision: 3})
+	if !m.snap.Busy || m.snap.Revision != 4 {
+		t.Fatalf("a queued older idle snapshot replaced the busy state: %+v", m.snap)
+	}
+	tt.Frame()
+	if !tt.HasText("扫描会话进行中，等其结束并保存完成后再安装更新。") {
+		t.Fatalf("the busy reason disappeared: %q", tt.Texts())
+	}
+	clickRevealedSettingsControl(t, tt, 1200, "安装并重启")
+	settle(t, m, q, tt)
+	if found.installs != 0 {
+		t.Fatalf("the stale idle snapshot restored the install button: %d installs", found.installs)
+	}
+
+	// A refused start rolls back to another session at a newer global
+	// revision; that delivery must still apply.
+	m.Apply(snap("s0", 5, false, scan.PhaseEnded, scan.Counts{Captured: 1}, 1, false, ""))
+	if m.appliedSession != scan.ID("s0") || m.snap.Revision != 5 {
+		t.Fatalf("a newer cross-session rollback was discarded: %+v", m.snap)
+	}
+}
+
+// TestUpdateInstallUnavailableAfterFailedExit covers the settled exit
+// failure: the service keeps admission closed for the rest of the process,
+// so the update area must disable the install and explain the exit state
+// instead of offering a retry that cannot succeed. A genuine install
+// failure still offers its retry while nothing else blocks it.
+func TestUpdateInstallUnavailableAfterFailedExit(t *testing.T) {
+	found := &fakeUpdateHandle{version: "0.0.2"}
+	src := &fakeUpdates{
+		enabled: true,
+		check: func(context.Context) (UpdateHandle, error) {
+			return found, nil
+		},
+	}
+	svc := &fakeService{}
+	m, q := newTestModel(t, Config{Service: svc, Updates: src})
+	tt := openUpdateSettings(t, m, q)
+	m.CheckUpdates()
+	settle(t, m, q, tt)
+
+	// A failed teardown keeps the service quitting; the model is in the
+	// settled failure state with no actionable save retry.
+	m.exitState = exitFailed
+	m.snap.StartBlocked = app.StartBlockedQuitting
+	tt.Frame()
+	const reason = "退出清理没有完成，不能再安装更新；请退出 youkai 后重新打开。"
+	if !tt.HasText(reason) {
+		t.Fatalf("the failed exit does not explain the blocked install: %q", tt.Texts())
+	}
+	if tt.HasText("重试安装") {
+		t.Fatalf("the failed exit offered a retry: %q", tt.Texts())
+	}
+	clickRevealedSettingsControl(t, tt, 1200, "安装并重启")
+	settle(t, m, q, tt)
+	if found.installs != 0 {
+		t.Fatalf("the disabled install ran after the failed exit: %d", found.installs)
+	}
+	m.InstallUpdate()
+	if found.installs != 0 {
+		t.Fatalf("the direct install entry ran after the failed exit: %d", found.installs)
+	}
+	if m.updatesInstallErr != "" {
+		t.Fatalf("the admission refusal was reported as an install failure: %q", m.updatesInstallErr)
+	}
+
+	// An earlier install failure stays visible, but no longer promises a
+	// retry that the closed admission cannot provide.
+	m.updatesInstallErr = "signature mismatch"
+	tt.Frame()
+	if tt.HasText("可重试安装") {
+		t.Fatalf("the failure banner still promises a retry: %q", tt.Texts())
+	}
+	if !tt.HasText("安装更新失败：signature mismatch。应用继续运行当前版本。") {
+		t.Fatalf("the failure banner lost its text: %q", tt.Texts())
 	}
 }

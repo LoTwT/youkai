@@ -2,6 +2,7 @@ package app
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -107,8 +108,9 @@ type Config struct {
 // occupancy, the record store, the process-lifetime recognizer and the
 // single active scan session. Its lifecycle belongs to the process, not
 // to a window or a button callback: the UI only calls Start, Stop,
-// Snapshot, Subscribe, RetrySave, the record listing, SaveItemRevision
-// and Quit. A window hiding or rebuilding never starts or ends a session.
+// Snapshot, Subscribe, RetrySave, the record listing, SaveItemRevision,
+// BeginUpdateInstall/EndUpdateInstall, PrepareExplicitExit and Quit. A
+// window hiding or rebuilding never starts or ends a session.
 //
 // One start request occupies the single active slot. The slot frees when
 // the session ended and its final save succeeded; a failed save keeps it
@@ -135,8 +137,10 @@ type Service struct {
 	acceptedWrites    sync.WaitGroup
 	drainErr          error
 	// updateInstalling reports an update install in progress. The update
-	// flow owns the fact and publishes it through SetUpdateInstalling;
-	// the service only reflects it in snapshots.
+	// flow takes it through BeginUpdateInstall at the same lock boundary
+	// as Start, so a scan and an install can never both be admitted, and
+	// releases it through EndUpdateInstall when the install fails or is
+	// cancelled.
 	updateInstalling bool
 
 	// readinessLog keeps the last readiness fault state across the page's
@@ -270,6 +274,48 @@ func (s *Service) DiscoverTargets() (TargetDiscoveryResult, error) {
 		return TargetDiscoveryResult{}, err
 	}
 	return result, nil
+}
+
+// admissionGatedController holds the controller's Prepare until the
+// service has run its final admission check and attached the kernel to the
+// active slot. scan.Start launches the producer before that check; without
+// the gate a quit accepted in that window could cancel a kernel the service
+// could not yet stop, while the producer had already opened input on a
+// session about to be refused.
+type admissionGatedController struct {
+	scan.Controller
+	ready <-chan struct{}
+}
+
+func (g *admissionGatedController) Prepare(ctx context.Context, h *scan.ControllerHandle) error {
+	select {
+	case <-ctx.Done():
+		// A refusal or stop cancels the kernel while this gate is still
+		// shut; the controller never starts.
+		return ctx.Err()
+	case <-g.ready:
+	}
+	return g.Controller.Prepare(ctx, h)
+}
+
+// releasableAdmissionGate preserves a controller's Releaser implementation
+// through the gate. The kernel calls Release after Prepare returned or was
+// cancelled, exactly as it does without the gate.
+type releasableAdmissionGate struct {
+	*admissionGatedController
+	releaser scan.Releaser
+}
+
+func (g *releasableAdmissionGate) Release() error { return g.releaser.Release() }
+
+// gateController wraps c so its Prepare waits for ready. The wrapper keeps
+// the kernel's only optional controller interface, Releaser, intact.
+func gateController(c scan.Controller, ready <-chan struct{}) scan.Controller {
+	gate := &admissionGatedController{Controller: c, ready: ready}
+	if rel, ok := c.(scan.Releaser); ok {
+		return &releasableAdmissionGate{admissionGatedController: gate, releaser: rel}
+	}
+	return gate
 }
 
 // Start accepts a start request into the single active slot: it takes
@@ -446,11 +492,15 @@ func (s *Service) Start(req StartRequest) (StartOutcome, error) {
 	if relay, ok := spec.Controller.(positionRelay); ok {
 		relay.SetPositionSink(func(position int) { s.observeDisplayPosition(a, position) })
 	}
+	ready := make(chan struct{})
 	kernel, err := scan.Start(scan.Config{
-		ID:         scan.ID(recordID),
-		Capacity:   scanPipelineCapacity,
-		Workers:    1, // the first version runs one recognition worker
-		Controller: spec.Controller,
+		ID:       scan.ID(recordID),
+		Capacity: scanPipelineCapacity,
+		Workers:  1, // the first version runs one recognition worker
+		// The gate keeps the producer from preparing, and therefore from
+		// opening input, until the commit below admits the session and
+		// attaches the kernel the service can cancel.
+		Controller: gateController(spec.Controller, ready),
 		Recognizer: recognizer,
 		Deliverer:  deliverer,
 		// The admission hook persists every admitted observation —
@@ -462,9 +512,12 @@ func (s *Service) Start(req StartRequest) (StartOutcome, error) {
 		return discardRecord(err)
 	}
 
-	// Commit under the lock: a quit or an update install that began during
-	// the preparation refuses the session instead of racing it, so the
-	// refusal and the snapshot's start-blocked reason stay in agreement.
+	// Commit under the lock: a quit that began during the preparation
+	// refuses the session instead of racing it, so the refusal and the
+	// snapshot's start-blocked reason stay in agreement. An install cannot
+	// begin beside this placeholder (BeginUpdateInstall refuses an
+	// unwrapped active session); the check below keeps the commit safe if
+	// that admission rule ever changes.
 	s.mu.Lock()
 	var refused error
 	switch {
@@ -477,6 +530,8 @@ func (s *Service) Start(req StartRequest) (StartOutcome, error) {
 	}
 	if refused != nil {
 		s.mu.Unlock()
+		// The producer is still at the gate; cancelling the kernel unblocks
+		// it through the context, so no controller operation starts.
 		kernel.Cancel()
 		<-kernel.Done()
 		return discardRecord(refused)
@@ -489,9 +544,14 @@ func (s *Service) Start(req StartRequest) (StartOutcome, error) {
 	}
 	a.kernelSub = kernel.Subscribe()
 	if a.stopRequested {
-		// A stop arrived while the session was still preparing; it
-		// applies to this session, whose input never opened.
+		// A stop or exit arrived while the session was still preparing; it
+		// applies to this session, whose input never opened. Cancel before
+		// opening the gate so the controller cannot enter Prepare.
 		kernel.Cancel()
+	} else {
+		// The kernel is attached and stopRequested is clear: the producer
+		// may now leave the gate and prepare.
+		close(ready)
 	}
 	go s.forwardKernel(a)
 	go s.wrapUp(a)
@@ -826,20 +886,43 @@ func (s *Service) RetrySave() error {
 	return nil
 }
 
-// SetUpdateInstalling reports that an update install is in progress (or
-// ended). The update flow owns the fact — the service cannot observe a
-// download — and publishes it so the service refuses new scans (the
-// install ends in a restart) and snapshot readers can explain why.
-// The caller must report false when the install fails or is cancelled:
-// leaving the flag set keeps Start refused for the rest of the process.
-// Only a change bumps the revision.
-func (s *Service) SetUpdateInstalling(installing bool) {
+// BeginUpdateInstall admits an update install at the service's single
+// admission boundary. The update flow owns the install and calls this
+// before any download work; the service cannot observe it otherwise.
+//
+// The check runs under the same lock as Start: a session that already
+// occupies the active slot — still preparing, capturing, wrapping up its
+// final save, or waiting for a save retry — refuses the install, and an
+// admitted install makes Start refuse until EndUpdateInstall. The UI's
+// snapshot can lag this boundary, so its disabled button alone cannot
+// keep an install from starting beside an accepted scan.
+func (s *Service) BeginUpdateInstall() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.updateInstalling == installing {
+	switch {
+	case s.quitting:
+		return errors.New("app: update install: the service is quitting")
+	case s.updateInstalling:
+		// The caller already owns the admission; no second notification.
+		return nil
+	case s.active != nil && !s.active.wrapped:
+		return errors.New("app: update install: the active scan session has not finished saving")
+	}
+	s.updateInstalling = true
+	s.notifyLocked()
+	return nil
+}
+
+// EndUpdateInstall releases the install admission after a failed or
+// cancelled install, so scans can start again. A successful install keeps
+// it: the process restarts into the installed version instead.
+func (s *Service) EndUpdateInstall() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.updateInstalling {
 		return
 	}
-	s.updateInstalling = installing
+	s.updateInstalling = false
 	s.notifyLocked()
 }
 
@@ -880,6 +963,14 @@ func (s *Service) stopForQuit(systemTerminating bool) *activeSession {
 	return a
 }
 
+// PrepareExplicitExit closes scan admission and stops the active
+// session's input before an explicit exit waits for in-flight update or
+// export work. The scan must not keep operating the game while that wait
+// runs. Quit later joins the accepted writes and the final save; calling
+// it again after this preparation is harmless, and a failed exit keeps
+// admission closed exactly as Quit does.
+func (s *Service) PrepareExplicitExit() { s.stopForQuit(false) }
+
 // PrepareSystemTermination stops input and admission before the native
 // preparation on the UI thread. It never waits for finalization; Quit
 // joins the accepted work after native main-queue dependencies are safe.
@@ -888,7 +979,9 @@ func (s *Service) PrepareSystemTermination() { s.stopForQuit(true) }
 // Quit stops new writes and input, joins accepted writes and scan saving,
 // then closes OCR and releases the data root. Run it off the UI thread,
 // except after PrepareSystemTermination and native preparation in the
-// irrevocable OS callback. Concurrent calls join the same attempt.
+// irrevocable OS callback. An explicit exit may call PrepareExplicitExit
+// first so the session stops before the UI waits for other pending work;
+// this call repeats that step. Concurrent calls join the same attempt.
 // A failed save retains the root and permits repair/retry. A failed OCR
 // teardown stays cached and retains the root for viewing and saving.
 func (s *Service) Quit() error {

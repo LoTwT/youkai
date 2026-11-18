@@ -81,9 +81,19 @@ type Service interface {
 	ClearOldLogs() (app.StorageClearPreview, error)
 	// Quit runs the explicit-exit wrap-up; it blocks until it is done.
 	Quit() error
-	// SetUpdateInstalling publishes that an update install is in progress
-	// (or ended), so the service refuses new scans until the restart.
-	SetUpdateInstalling(installing bool)
+	// PrepareExplicitExit closes scan admission and stops the active
+	// session's input before the explicit exit waits for in-flight update
+	// or export work. Quit joins the final save later; a failed exit keeps
+	// admission closed.
+	PrepareExplicitExit()
+	// BeginUpdateInstall admits an update install at the service's single
+	// admission boundary: an active scan session (including its wrap-up
+	// and a pending save retry) or a quitting service refuses it, and an
+	// admitted install makes Start refuse until EndUpdateInstall.
+	BeginUpdateInstall() error
+	// EndUpdateInstall releases the install admission after a failed or
+	// cancelled install. A successful install keeps it until the restart.
+	EndUpdateInstall()
 }
 
 // Updater runs fn on the UI thread and redraws the window. *mygo.Window
@@ -477,6 +487,11 @@ type Model struct {
 	exportOutcome *exportOutcome
 	exportDialog  exportDialogState
 	exportCancel  func()
+	// exportSettled closes when the running export's worker published its
+	// outcome. An explicit exit waits on it before the quit, so the write
+	// (and a cancelled write's cleanup) cannot be truncated by process
+	// exit; nil while no export runs.
+	exportSettled chan struct{}
 	// pendingNotificationRecordID is a notification click that arrived while
 	// the export dialog was writing. Only the last click is kept; closing
 	// the dialog replays it through OpenNotification (PR-19b, item 14).
@@ -639,8 +654,14 @@ type Model struct {
 	updatesCheckErr   string
 	updatesInstallErr string
 	updatesProgress   float64
-	appVersion        string
-	devAutoInstall    bool
+	// updatesInstallSettled closes after a running install published its
+	// outcome, so an explicit exit can wait for MyGo's in-process
+	// replacement to finish before quitting. A successful install also
+	// raises OnUpdateInstalled before the close, so the restart request
+	// precedes the exit's own quit. Nil while no install runs.
+	updatesInstallSettled chan struct{}
+	appVersion            string
+	devAutoInstall        bool
 
 	cache *evidenceCache
 }
@@ -749,13 +770,20 @@ func (m *Model) goAsync(fn func()) {
 // before draining the queued updater.
 func (m *Model) Idle() { m.wg.Wait() }
 
-// Apply renders one service snapshot, discarding stale updates: a
-// snapshot of the session already shown applies only at a higher
-// revision; one of another session (including the empty idle identity)
-// always applies. The entry point's subscription pump calls it through
-// the window's Update.
+// Apply renders one service snapshot, discarding stale updates: every
+// snapshot applies only above the newest applied revision, which the
+// service keeps global across sessions. The later delivery of the same
+// revision is discarded. A service double that reports no session must not
+// erase the session the model already shows. The entry point's
+// subscription pump calls it through the window's Update.
 func (m *Model) Apply(snap app.Snapshot) {
-	if snap.SessionID == m.appliedSession && snap.Revision <= m.appliedRevision {
+	// The service's Revision is global across sessions, not per session:
+	// a queued delivery older than the newest applied snapshot is stale
+	// even when it names another session. Without this comparison a late
+	// idle snapshot can undo a busy snapshot the model just read from the
+	// service (the install admission reads the authoritative state) and
+	// restore a button the service would refuse.
+	if snap.Revision <= m.appliedRevision {
 		return
 	}
 	previous, hadPrevious := m.notifyPrev, m.notifyPrevKnown
@@ -1631,7 +1659,27 @@ func (m *Model) beginExit() {
 	m.exitState = exitRunning
 	m.exitErr = ""
 	m.exitFailureDialogOpen = false
+	// The session must stop operating the game as soon as the exit is
+	// accepted, but this callback must not wait for the service's lock: a
+	// cleanup or save retry can hold it through disk work. The background
+	// exit closes admission and input first, then waits for a started
+	// update install or export — MyGo's Windows install replaces the
+	// executable in process and the export writes a file from its worker,
+	// so quitting during either can truncate it. Quit joins the final
+	// save only after those waits. All of it runs on this goroutine,
+	// never on the UI thread: the completion closures — the install's
+	// OnUpdateInstalled among them — are delivered through the UI thread,
+	// and waiting there would deadlock the exit against the very work it
+	// is waiting for.
+	installSettled, exportSettled := m.updatesInstallSettled, m.exportSettled
 	m.goAsync(func() {
+		m.cfg.Service.PrepareExplicitExit()
+		if installSettled != nil {
+			<-installSettled
+		}
+		if exportSettled != nil {
+			<-exportSettled
+		}
 		err := m.cfg.Service.Quit()
 		m.update(func() {
 			// Quit's own update can be posted before the subscription pump's
