@@ -1790,10 +1790,14 @@ func (run *inventoryRun) confirmBottomStep(ctx context.Context) error {
 // confirmBottom pairs the scrollbar's bottom evidence with one more drag
 // in the advance direction that must leave the list stationary: at the
 // list's end the content cannot move further (T5 §5's "再拖一次，前后帧
-// 列表区误差 < 4"). The complete walk needs both kinds of evidence. A
-// terminal Undecided means the drag's effect is unknown, so it ends the
-// position instead of stacking another drag on an unproven result (T5 §4);
-// the position keeps its admitted items and is marked incomplete.
+// 列表区误差 < 4"). The complete walk needs both kinds of evidence, and the
+// confirming pair must prove zero displacement under the same stillness
+// semantics as the retry and settle gates: a bare MAD-level Stationary can
+// hide a final-row advance whose anchors are lost, and accepting it would
+// mark an unverified end as complete. A terminal Undecided, an unproven
+// Stationary, or a displacement means the drag's effect is unknown, so it
+// ends the position instead of stacking another drag on an unproven result
+// (T5 §4); the position keeps its admitted items and is marked incomplete.
 func (run *inventoryRun) confirmBottom(ctx context.Context) (*failureFrames, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -1833,6 +1837,21 @@ func (run *inventoryRun) confirmBottom(ctx context.Context) (*failureFrames, err
 	}
 	switch {
 	case out.stationary:
+		// A Stationary verdict alone is a weak initial judgement, not end
+		// evidence: when the confirming drag advances the last row while the
+		// anchors are lost, the zero-shift MAD can still read as stillness.
+		// The pair must prove zero displacement before the position may count
+		// as complete; otherwise the end is unverified and the position is
+		// incomplete.
+		if proven, why := run.stillnessProven(before, out.after, out.match); !proven {
+			fault := positionProofFailure("bottom", CodeNavigationMismatch, out,
+				"collect: the bottom confirmation did not prove the list stayed at the end (frame %d → %d): %s",
+				before.ID, out.after.ID, why)
+			if out.after.ID != 0 && out.after.Image != nil {
+				return waitFailure("bottom-undecided", before, out), fault
+			}
+			return nil, fault
+		}
 		run.listMatch = out.afterMatch
 		run.lastFrame = out.after
 		return nil, nil
@@ -2990,6 +3009,16 @@ func (run *inventoryRun) scroll(ctx context.Context) (err error) {
 					}
 					return err
 				}
+				// The retry may only rebase on a frame proven to be at the
+				// same position: the old visit bookkeeping is carried over
+				// unchanged, so a baseline that could already have moved
+				// would silently skip a row of items on the next accepted
+				// displacement.
+				if proven, why := run.retryBaseProven(before, next); !proven {
+					return positionProofFailure("scroll", CodeNavigationMismatch, out,
+						"collect: the drag was judged unmoved, but the retry baseline (frame %d → %d) is not proven to be the same position, so a second drag would carry the visit bookkeeping over an unaccounted move: %s",
+						before.ID, next.ID, why)
+				}
 				before = next
 				continue
 			}
@@ -3046,6 +3075,55 @@ func sameFrameContent(a, b platform.Frame) bool {
 	return a.Image != nil && a.Image == b.Image
 }
 
+// zeroDisplacementProver is the optional matcher capability that reports a
+// stillness proof strong enough to rebase a scroll retry or to accept a
+// settling confirmation. The stage 2 evidence matcher implements it; the
+// legacy pixel matcher falls back to its bare Stationary verdict below,
+// keeping the ablation semantics.
+type zeroDisplacementProver interface {
+	zeroDisplacementProven(before, after platform.Frame) (bool, string)
+}
+
+// scrollMovementProver is the optional matcher capability that reports
+// observable movement counter-evidence even when the latest verdict is a
+// MAD-level Stationary. The wait uses it to keep its "unmoved" fact false;
+// a later frame returning to the baseline does not erase the observation.
+type scrollMovementProver interface {
+	zeroShiftMovement(before, after platform.Frame) (bool, string)
+}
+
+// stillnessProven reports whether before → after is strong enough proof the
+// list stayed at the same position. The stage 2 evidence matcher owns the
+// shared stillness semantics; the legacy pixel matcher keeps its Stationary
+// verdict (the ablation profile's semantics). sm is the comparison the caller
+// already made and is used only by that legacy fallback.
+func (run *inventoryRun) stillnessProven(before, after platform.Frame, sm ScrollMatch) (bool, string) {
+	if sameFrameContent(before, after) {
+		return true, "the same immutable frame content"
+	}
+	if prover, ok := run.inv.matcher().(zeroDisplacementProver); ok {
+		return prover.zeroDisplacementProven(before, after)
+	}
+	return sm.Stationary, sm.Evidence
+}
+
+// retryBaseProven reports whether the candidate retry baseline next is
+// proven to sit at the same list position as before. The retry keeps the
+// visited bookkeeping unchanged, so rebasing on a frame that may already
+// have moved would account for that move nowhere and silently skip its
+// row; a failed proof stops the position instead.
+func (run *inventoryRun) retryBaseProven(before, next platform.Frame) (bool, string) {
+	if sameFrameContent(before, next) {
+		return true, "the same immutable frame content"
+	}
+	matcher := run.inv.matcher()
+	if prover, ok := matcher.(zeroDisplacementProver); ok {
+		return prover.zeroDisplacementProven(before, next)
+	}
+	sm := matcher.MatchScroll(before, next)
+	return sm.Stationary, sm.Evidence
+}
+
 // scrollOutcome is one awaitScroll's terminal result.
 type scrollOutcome struct {
 	stationary bool
@@ -3053,10 +3131,13 @@ type scrollOutcome struct {
 	lost       bool
 	// unmoved reports that every observation in the wait was proof the
 	// list had not moved: the same content as the pre-drag frame or a
-	// Stationary comparison, with no displacement, Lost, Undecided or
-	// unreadable page at any point. Only then may a caller treat the
-	// Stationary deadline as "the drag did nothing" and send one more
-	// drag (T5 §5).
+	// Stationary comparison uncontradicted by observable movement, with no
+	// displacement, Lost, Undecided or unreadable page at any point.
+	// Information-rich sub-row movement counter-evidence and undecided
+	// comparisons veto it permanently: a later frame returning to the
+	// baseline does not turn a wait that observed movement into proof the
+	// drag did nothing. Only then may a caller treat the Stationary deadline
+	// as "the drag did nothing" and send one more drag (T5 §5).
 	unmoved bool
 	// sawFrame reports that the wait received at least one observation.
 	// lastFrameIsList reports that the most recently received observation
@@ -3137,9 +3218,13 @@ const (
 // judges the settle. A displacement is only a candidate: the matcher may
 // still be watching an inertial or snapping animation, so the candidate must
 // stay stable relative to itself for ScrollTiming.SettleObservations
-// consecutive independent observations — each one a fresh frame whose
-// comparison against the candidate is Stationary (or whose content is the
-// candidate's) — before the traversal commits anything. Platform idle
+// consecutive independent observations — each one a fresh frame that either
+// carries the candidate's content or proves zero displacement under the shared
+// stillness semantics (a same-slot selection box with no measurable thumb
+// travel, or a unique zero-shift normalized candidate passing the calibrated
+// floors) — before the traversal commits anything. A bare MAD-level Stationary
+// is not enough: repeated rows can hide an ongoing whole-row move behind a
+// near-zero mean error. Platform idle
 // confirmations (Reused frames) are neutral: they repeat the newest fresh
 // frame's already-judged content, so the same idle state re-served every
 // recheck interval is one observation, not many, and must not complete the
@@ -3201,13 +3286,17 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 		}
 		return deadline
 	}
-	// observeMotion records the first movement evidence on a fresh frame:
-	// a verified displacement, a lost overlap, or a zero-shift normalized
-	// correlation clearly below the stationary threshold on a support rich
-	// enough for that correlation to mean anything. The MAD error alone
-	// never counts (see the motionStarted comment), and neither does a low
-	// ncc0 over a low-information support: codec noise on near-uniform
-	// content decorrelates to an ncc0 near zero without any list movement.
+	// observeMotion records the first movement evidence on a fresh or reused
+	// frame: a verified displacement, a lost overlap, or a zero-shift
+	// normalized correlation clearly below the stationary threshold on a
+	// support rich enough for that correlation to mean anything. The MAD
+	// error alone never counts (see the motionStarted comment), and neither
+	// does a low ncc0 over a low-information support: codec noise on
+	// near-uniform content decorrelates to an ncc0 near zero without any list
+	// movement. When the MAD shortcut returned Stationary before measuring
+	// the normalized features, the evidence matcher's zeroShiftMovement
+	// supplies the same check, so a sub-row creep hidden under the MAD
+	// threshold still starts the clock.
 	observeMotion := func(f platform.Frame, sm ScrollMatch) {
 		if motionStarted {
 			return
@@ -3218,6 +3307,18 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 			if ncc0, ok := sm.Metrics.RowNCC[0]; ok && ncc0 < threshold &&
 				sm.Metrics.InfoStd >= infoMin {
 				moved = true
+			}
+		}
+		if !moved && sm.Stationary && (sm.Metrics == nil || !sm.Metrics.NCCMeasured) {
+			// The MAD shortcut returns Stationary before measuring the
+			// normalized features. Ask the evidence matcher whether the same
+			// pair carries information-rich sub-row movement; once seen, the
+			// wait must keep that fact even if a later frame returns to the
+			// baseline.
+			if prover, ok := run.inv.matcher().(scrollMovementProver); ok {
+				if counter, _ := prover.zeroShiftMovement(before, f); counter {
+					moved = true
+				}
 			}
 		}
 		if moved {
@@ -3321,10 +3422,14 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 					} else {
 						sm := run.inv.matcher().MatchScroll(before, f)
 						trace.noteBefore(f, sm)
+						observeMotion(f, sm)
 						out.match = sm
 						switch {
 						case sm.Stationary:
 							verdict = waitVerdictStationary
+							if motionStarted {
+								stillOnly = false
+							}
 						case sm.Lost:
 							verdict, stillOnly = waitVerdictLost, false
 						default:
@@ -3365,7 +3470,11 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 			rel := run.inv.matcher().MatchScroll(candidate, f)
 			trace.noteCandidate(candidate, f, rel)
 			out.match = rel
-			if rel.Stationary {
+			// A settling confirmation must be proof the list stayed at the
+			// candidate, not merely a Stationary verdict: on repeated rows a
+			// still-moving list can keep the zero-shift MAD low, and accepting
+			// that would commit a stale offset while the scene has moved on.
+			if proven, _ := run.stillnessProven(candidate, f, rel); proven {
 				out.settleMatch = rel
 				settleStreak++
 				if settleStreak >= timing.SettleObservations {
@@ -3391,10 +3500,18 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 				verdict = waitVerdictLost
 				out.match = total
 			case total.Stationary:
-				// The list returned to the pre-drag position: there is no
-				// displacement to commit.
-				haveCandidate = false
-				verdict = waitVerdictStationary
+				// Only a proven return to the pre-drag position clears the
+				// candidate. An unproven stillness may still be a further
+				// move hidden by repeated rows; keeping the candidate pending
+				// makes the deadline end as an unsettled Lost instead of
+				// committing it.
+				if proven, _ := run.stillnessProven(before, f, total); proven {
+					haveCandidate = false
+					verdict = waitVerdictStationary
+				} else {
+					verdict = waitVerdictUndecided
+					out.match = total
+				}
 			case total.Displaced:
 				// Moved, but without a unique correspondence: cannot keep
 				// updating the candidate; a later verified total may still
@@ -3435,6 +3552,13 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 			verdict, stillOnly = waitVerdictLost, false
 		case sm.Stationary:
 			verdict = waitVerdictStationary
+			if motionStarted {
+				// A low-MAD Stationary contradicted by observable sub-row
+				// movement is not proof the drag did nothing; the retry must
+				// stay disabled even if a later frame returns to the
+				// baseline.
+				stillOnly = false
+			}
 		case sm.Displaced:
 			verdict, stillOnly = waitVerdictAmbiguous, false
 		default:
@@ -3693,10 +3817,10 @@ func (run *inventoryRun) observeReady(ctx context.Context) error {
 // contract: posted and unaborted partial proceed to effect verification
 // — only the page evidence confirms an effect, never the dispatch
 // result; notDispatched and failed carry the platform's refusal and
-// stop the session; an aborted drag means the input gate closed
-// mid-operation — the stop path is already running, so the machine
-// unwinds without dispatching anything further (T5: the platform never
-// replays).
+// stop the session; an aborted drag means the input gate closed or a
+// live premise failed mid-operation — the stop path is already running,
+// so the machine unwinds without dispatching anything further (T5: the
+// platform never replays).
 func (run *inventoryRun) dispatchOutcome(ctx context.Context, res platform.InputResult) error {
 	switch res.Status {
 	case platform.InputPosted:
@@ -3706,6 +3830,12 @@ func (run *inventoryRun) dispatchOutcome(ctx context.Context, res platform.Input
 		if res.Aborted {
 			if err := ctx.Err(); err != nil {
 				return err
+			}
+			if res.Denial != nil {
+				// The live premise that failed mid-drag owns the
+				// diagnostic; falling back to permitClosed would hide
+				// focusLost, targetLost or staleGeometry.
+				return scan.NewFault(res.Denial.Code, faultCause(res.Denial))
 			}
 			return scan.NewFault(platform.CodePermitClosed, errors.New(
 				"collect: the drag aborted because the input gate closed"))

@@ -8,7 +8,10 @@ import (
 )
 
 // entry is the pending or terminal record of one admitted sequence
-// number, guarded by Session.mu.
+// number, guarded by Session.mu. The payload fields are populated only
+// until the entry's terminal record moves them to the deliverer; after
+// that the entry keeps just the small terminal metadata that duplicate
+// and late-outcome rejection needs.
 type entry struct {
 	state  State
 	obs    any
@@ -247,9 +250,14 @@ func (s *Session) releaseSlotLocked() {
 	}
 }
 
-// recordLocked builds the deliverable record of entry e.
+// recordLocked builds the deliverable record of entry e and moves the
+// entry's payloads into it. e must be terminal, and this is its single
+// terminal record. Clearing the payload references here keeps the
+// session's entry table from retaining one processed observation — for
+// example a full set of image crops — for the rest of the session; the
+// record owns the payloads from now on, through delivery.
 func (s *Session) recordLocked(seq Seq, e *entry) Record {
-	return Record{
+	rec := Record{
 		SessionID:   s.id,
 		Seq:         seq,
 		State:       e.state,
@@ -258,6 +266,9 @@ func (s *Session) recordLocked(seq Seq, e *entry) Record {
 		Cause:       e.cause,
 		Observation: e.obs,
 	}
+	e.obs = nil
+	e.result = nil
+	return rec
 }
 
 // takePendingDelivery hands the stop path's unprocessed marks to the

@@ -380,8 +380,10 @@ func TestRefusedStartKeepsTheDraftOnTheReturningRecord(t *testing.T) {
 		t.Fatalf("the background scan disturbed the draft: record %+v edit %+v", m.rec, m.edit)
 	}
 
-	// The service refuses s2 and rolls back to s1's ended snapshot.
-	m.Apply(snap("s1", 3, false, scan.PhaseEnded,
+	// The service refuses s2 and rolls back to s1's ended snapshot. The
+	// rollback carries the service's newer global revision, so it replaces
+	// the refused placeholder's snapshot.
+	m.Apply(snap("s1", 4, false, scan.PhaseEnded,
 		scan.Counts{Captured: 1, Produced: 1}, 1, false, ""))
 	drainAll(t, m, q)
 	if m.rec == nil || m.rec.ID != "s1" || !m.rec.Live {
@@ -445,8 +447,9 @@ func TestRefusedStartClearsTheNoticeOverAHistoryDraft(t *testing.T) {
 			m.rec, m.edit)
 	}
 
-	// The service refuses s2 and returns to s1's ended snapshot.
-	m.Apply(snap("s1", 3, false, scan.PhaseEnded,
+	// The service refuses s2 and returns to s1's ended snapshot at the
+	// newer global revision.
+	m.Apply(snap("s1", 4, false, scan.PhaseEnded,
 		scan.Counts{Captured: 1, Produced: 1}, 1, false, ""))
 	drainAll(t, m, q)
 	if m.reviewNotice != "" {

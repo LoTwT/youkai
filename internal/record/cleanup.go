@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"strings"
 )
@@ -41,9 +42,8 @@ func (f RecordFailure) Error() string {
 func (f RecordFailure) Unwrap() error { return f.Err }
 
 // EvidenceRemoval is the outcome of deleting one record's screenshots.
-// Generation is the new checkpoint generation that no longer references
-// them, or 0 when the record already held no references and only
-// leftover files were removed.
+// Generation is the newest checkpoint generation the removal wrote, or 0
+// when no write was needed.
 type EvidenceRemoval struct {
 	RecordID      string
 	Generation    int64
@@ -185,11 +185,12 @@ func (s *Store) dirFootprint(dir string) (bytes int64, files int, err error) {
 // DeleteEvidence removes one record's screenshots while keeping its
 // results, revisions and review state. It first loads the newest
 // verifiable checkpoint, strips every evidence reference — item
-// evidence, coverage evidence and the index — and writes that document as
-// a new generation. Only after that save succeeds does it delete the
-// files, so a failed checkpoint write loses nothing. A failed file
-// removal leaves an unreferenced leftover: the record still loads and a
-// retry removes the remaining files. Callers must not delete the
+// evidence, coverage evidence and the index — and makes sure the pair
+// retention keeps is reference-free and durable. Only after that does it
+// delete the files, so a failed write or sync loses nothing and the
+// screenshots stay until both recoverable states are confirmed. A failed
+// file removal leaves an unreferenced leftover: the record still loads
+// and a retry removes the remaining files. Callers must not delete the
 // screenshots of an active session; the application service enforces
 // that.
 func (s *Store) DeleteEvidence(recordID string) (EvidenceRemoval, error) {
@@ -236,54 +237,54 @@ func (s *Store) deleteEvidenceLocked(recordID string) (EvidenceRemoval, error) {
 		return removal, err
 	}
 	state := s.state(recordID)
-	cp, err := s.loadCheckpointLocked(recordID, state)
+	cp, err := s.loadCheckpointForCleanupLocked(recordID, state)
 	if err != nil {
 		return removal, fmt.Errorf("record: delete screenshots of %q: %w", recordID, err)
 	}
-	usage, err := s.usageLocked(recordID)
+	plan, err := s.planEvidenceRemovalLocked(recordID)
 	if err != nil {
-		return removal, fmt.Errorf("record: delete screenshots of %q: measure evidence: %w", recordID, err)
+		return removal, fmt.Errorf("record: delete screenshots of %q: %w", recordID, err)
 	}
-	removal.EvidenceFiles = usage.EvidenceFiles
-	removal.EvidenceBytes = usage.EvidenceBytes
-
-	if len(cp.Evidence) > 0 {
-		doc := cloneCheckpoint(cp)
-		doc.Session.CoverageEvidenceIDs = nil
-		for i := range doc.Items {
-			doc.Items[i].EvidenceIDs = nil
-		}
-		// The index must describe exactly the referenced set; with every
-		// reference gone it is empty. Filtering (instead of assigning
-		// nil) keeps the invariant explicit and would preserve any
-		// future reference source.
-		referenced := doc.referencedEvidence()
-		index := make([]EvidenceFile, 0, len(referenced))
-		for _, ev := range doc.Evidence {
-			if _, ok := referenced[ev.ID]; ok {
-				index = append(index, ev)
-			}
-		}
-		doc.Evidence = index
-		gen, err := s.writeGeneration(recordID, state, doc)
-		if err != nil {
-			return removal, fmt.Errorf("record: delete screenshots of %q: save checkpoint: %w", recordID, err)
-		}
-		state.checkpoint = doc
-		state.valid[gen] = true
-		removal.Generation = gen
-		s.prune(recordID, state, gen)
+	removal.EvidenceFiles = len(plan.files)
+	for _, f := range plan.files {
+		removal.EvidenceBytes += f.size
 	}
 
-	removed, removedBytes, leftovers, err := s.removeEvidenceFilesLocked(recordID)
+	doc := cloneCheckpoint(cp)
+	doc.Session.CoverageEvidenceIDs = nil
+	for i := range doc.Items {
+		doc.Items[i].EvidenceIDs = nil
+	}
+	// The index must describe exactly the referenced set; with every
+	// reference gone it is empty. Filtering (instead of assigning
+	// nil) keeps the invariant explicit and would preserve any
+	// future reference source.
+	referenced := doc.referencedEvidence()
+	index := make([]EvidenceFile, 0, len(referenced))
+	for _, ev := range doc.Evidence {
+		if _, ok := referenced[ev.ID]; ok {
+			index = append(index, ev)
+		}
+	}
+	doc.Evidence = index
+
+	gen, err := s.persistEvidenceRemovalLocked(recordID, state, cp, doc, plan)
+	// Report the newest generation that did land, even when the pair could
+	// not be completed: the partial state is what a retry starts from.
+	removal.Generation = gen
+	if err != nil {
+		return removal, fmt.Errorf("record: delete screenshots of %q: %w", recordID, err)
+	}
+
+	removed, removedBytes, leftovers, err := s.removePlannedEvidenceLocked(recordID, plan)
 	removal.RemovedFiles = removed
 	removal.RemovedBytes = removedBytes
 	removal.Leftovers = leftovers
 	if err != nil {
 		return removal, fmt.Errorf("record: delete screenshots of %q: %w", recordID, err)
 	}
-	// Every file the pending set could describe is gone, and the checkpoint
-	// just written references none of them. Keeping the ids would make a
+	// Every file the pending set could describe is gone, and the newest
+	// checkpoint references none of them. Keeping the ids would make a
 	// later save try to sync files that no longer exist.
 	clear(state.pendingEvidence)
 	// The measured total is the bytes actually reclaimed; when files
@@ -292,63 +293,265 @@ func (s *Store) deleteEvidenceLocked(recordID string) (EvidenceRemoval, error) {
 	return removal, nil
 }
 
-// removeEvidenceFilesLocked deletes every regular file below the
-// record's evidence directory without following symbolic links, then
-// removes the empty directory. It reports the surviving file ids for a
-// retry. Callers hold mu.
-func (s *Store) removeEvidenceFilesLocked(recordID string) (removed int, removedBytes int64, leftovers []string, err error) {
+// persistEvidenceRemovalLocked persists the states that must survive the
+// evidence files before the caller may delete them, and returns the newest
+// generation it wrote (0 when no write was needed).
+//
+// The trigger is what the plan would actually destroy: a currently
+// verifiable checkpoint that cites at least one file in the removal plan.
+// Only then does retention need two reference-free generations, and both
+// must carry the current result, so the stripped document is written
+// twice. Writing both copies first — each with a complete write, sync and
+// close — and pruning only afterwards means a failure at any step leaves
+// the evidence-citing generation and its files in place for the next
+// retry. Records with no removable files, and backups citing only
+// protected entries such as symbolic links, keep the established no-op
+// behavior. Callers hold mu.
+func (s *Store) persistEvidenceRemovalLocked(recordID string, state *recordState, current, stripped *Checkpoint, plan evidenceRemovalPlan) (int64, error) {
+	if len(plan.files) == 0 {
+		return 0, nil
+	}
+	invalidates, err := s.evidenceRemovalInvalidatesBackupLocked(recordID, current)
+	if err != nil {
+		return 0, err
+	}
+	if !invalidates {
+		return 0, nil
+	}
+
+	// Both retained generations must contain the current result. Writing
+	// two identical reference-free copies avoids inferring equivalence
+	// from generation numbers, adjacency or the absence of references.
+	first, err := s.writeStrippedGenerationLocked(recordID, state, stripped)
+	if err != nil {
+		return 0, err
+	}
+	newest, err := s.writeStrippedGenerationLocked(recordID, state, stripped)
+	if err != nil {
+		return first, err
+	}
+	// Pruning and the caller's file removal happen only after both
+	// generations completed their write, sync and close.
+	s.prune(recordID, state, newest)
+	return newest, nil
+}
+
+// evidenceRemovalInvalidatesBackupLocked reports whether removing the
+// plan's regular evidence entries would make a currently verifiable
+// checkpoint unreadable. The current checkpoint was already fully
+// verified by loadCheckpointForCleanupLocked and is reused here, so a
+// second open cannot turn a verified backup into a false no-op. Other
+// generations are read from disk; only a definite defect lets the scan
+// skip one. An undecided I/O failure is returned and blocks the cleanup.
+// Callers hold mu.
+func (s *Store) evidenceRemovalInvalidatesBackupLocked(recordID string, current *Checkpoint) (bool, error) {
+	breaks, err := s.checkpointEvidenceBreaksLocked(recordID, current)
+	if err != nil {
+		return false, err
+	}
+	if breaks {
+		return true, nil
+	}
+	gens, err := s.generations(recordID)
+	if err != nil {
+		return false, err
+	}
+	for _, g := range gens {
+		if g.revision == current.SavedRevision {
+			// Already verified; do not read the same generation again.
+			continue
+		}
+		backup, err := s.readGeneration(recordID, g)
+		if err != nil {
+			if errors.Is(err, errGenerationUnusable) || errors.Is(err, fs.ErrNotExist) {
+				// Definitively not a recoverable backup.
+				continue
+			}
+			return false, fmt.Errorf("verify checkpoint generation %d: %w", g.revision, err)
+		}
+		breaks, err := s.checkpointEvidenceBreaksLocked(recordID, backup)
+		if err != nil {
+			return false, fmt.Errorf("checkpoint generation %d: %w", g.revision, err)
+		}
+		if breaks {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// checkpointEvidenceBreaksLocked reports whether the removal plan would
+// make any evidence path cited by cp unreadable. Callers hold mu.
+func (s *Store) checkpointEvidenceBreaksLocked(recordID string, cp *Checkpoint) (bool, error) {
+	for _, ev := range cp.Evidence {
+		breaks, err := s.evidenceRemovalBreaksPathLocked(recordID, ev.ID)
+		if err != nil {
+			return false, fmt.Errorf("evidence %q: %w", ev.ID, err)
+		}
+		if breaks {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// evidenceRemovalBreaksPathLocked asks the filesystem whether the removal
+// plan makes one cited evidence path unreadable. It is only called for
+// evidence of a checkpoint that was just verified as a readable regular
+// file, so a missing entry, an unresolvable link, a different file type or
+// any other failure to confirm that identity is undecided: the caller must
+// stop before writing, pruning or deleting. A regular entry is itself in
+// the plan. A symbolic link stays in place, so only a target that is a
+// regular entry of the same evidence directory is removed; a link to a
+// path outside the directory — including another name for the same file,
+// such as a hard link — survives. Identity comes from resolving the path,
+// never from trimming or case-folding its name. Callers hold mu.
+func (s *Store) evidenceRemovalBreaksPathLocked(recordID, evidenceID string) (bool, error) {
+	path := s.evidencePath(recordID, evidenceID)
+	info, err := s.fs.Lstat(path)
+	if err != nil {
+		// The checkpoint was verified moments ago; a missing or unreadable
+		// path now cannot prove that the removal is safe.
+		return false, fmt.Errorf("stat evidence path: %w", err)
+	}
+	if info.Mode().IsRegular() {
+		// Every regular entry in the evidence directory is removed, so
+		// the cited path itself disappears.
+		return true, nil
+	}
+	if info.Mode()&fs.ModeSymlink == 0 {
+		return false, fmt.Errorf("evidence path changed to a %s, not the verified regular file", info.Mode().Type())
+	}
+	resolved, err := s.fs.EvalSymlinks(path)
+	if err != nil {
+		return false, fmt.Errorf("resolve evidence path: %w", err)
+	}
+	target, err := s.fs.Stat(resolved)
+	if err != nil {
+		return false, fmt.Errorf("stat resolved evidence: %w", err)
+	}
+	if !target.Mode().IsRegular() {
+		return false, fmt.Errorf("resolved evidence changed to a %s, not a regular file", target.Mode().Type())
+	}
+	parent, err := s.fs.Stat(filepath.Dir(resolved))
+	if err != nil {
+		return false, fmt.Errorf("stat evidence parent directory: %w", err)
+	}
+	dir, err := s.fs.Stat(s.evidenceDir(recordID))
+	if err != nil {
+		return false, fmt.Errorf("stat evidence directory: %w", err)
+	}
+	return os.SameFile(parent, dir), nil
+}
+
+// writeStrippedGenerationLocked persists one copy of the reference-free
+// document and records it as the current valid state. Callers hold mu.
+func (s *Store) writeStrippedGenerationLocked(recordID string, state *recordState, stripped *Checkpoint) (int64, error) {
+	// Each attempt gets its own copy: writeGeneration stamps the revision,
+	// and a failed write must not leave the memo claiming a revision that
+	// never landed.
+	doc := cloneCheckpoint(stripped)
+	gen, err := s.writeGeneration(recordID, state, doc)
+	if err != nil {
+		return 0, err
+	}
+	state.checkpoint = doc
+	state.valid[gen] = true
+	return gen, nil
+}
+
+// evidenceRemovalFile is one regular evidence file a cleanup will delete.
+type evidenceRemovalFile struct {
+	name string
+	size int64
+}
+
+// evidenceRemovalPlan is the snapshot of what one cleanup will actually
+// delete. Symbolic links, directories and other entries are left in place
+// and keep the evidence directory.
+type evidenceRemovalPlan struct {
+	files   []evidenceRemovalFile
+	unknown bool
+}
+
+// planEvidenceRemovalLocked lists the regular files a cleanup will delete
+// and applies the same directory, path and symbolic-link protections as
+// removal. The trigger and the deletion consume this one list, so a
+// protected entry a backup cites is never counted as removed. A missing
+// directory is an empty plan; an undecided listing or status failure is
+// returned so nothing is deleted on incomplete information. Callers hold
+// mu.
+func (s *Store) planEvidenceRemovalLocked(recordID string) (evidenceRemovalPlan, error) {
 	dir := s.evidenceDir(recordID)
 	info, err := s.fs.Lstat(dir)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			return 0, 0, nil, nil
+			return evidenceRemovalPlan{}, nil
 		}
-		return 0, 0, nil, fmt.Errorf("stat evidence directory: %w", err)
+		return evidenceRemovalPlan{}, fmt.Errorf("stat evidence directory: %w", err)
 	}
 	if info.Mode()&fs.ModeSymlink != 0 {
-		return 0, 0, nil, errors.New("the evidence directory is a symbolic link; refusing to follow it")
+		return evidenceRemovalPlan{}, errors.New("the evidence directory is a symbolic link; refusing to follow it")
 	}
 	if !info.IsDir() {
-		return 0, 0, nil, errors.New("the evidence path is not a directory")
+		return evidenceRemovalPlan{}, errors.New("the evidence path is not a directory")
 	}
 	entries, err := s.fs.ReadDir(dir)
 	if err != nil {
-		// Without the listing nothing was deleted, so the directory must
-		// stay; report the real cause instead of a later "not empty".
-		return 0, 0, nil, fmt.Errorf("read evidence directory: %w", err)
+		// Without the listing nothing can be deleted, so report the real
+		// cause instead of a later "not empty".
+		return evidenceRemovalPlan{}, fmt.Errorf("read evidence directory: %w", err)
 	}
-	var errs []error
-	unknown := false
+	var plan evidenceRemovalPlan
 	for _, e := range entries {
-		if e.Type()&fs.ModeSymlink != 0 || e.IsDir() {
+		if e.Type()&fs.ModeSymlink != 0 || e.IsDir() || !e.Type().IsRegular() {
 			// Not a file the store wrote (or one that would need
 			// following to inspect): leave it and keep the directory.
-			unknown = true
+			plan.unknown = true
 			continue
 		}
-		if !e.Type().IsRegular() {
-			unknown = true
-			continue
+		info, err := e.Info()
+		if err != nil {
+			// Without a reliable status nothing is deleted: the file may
+			// belong to a backup that must stay recoverable.
+			return evidenceRemovalPlan{}, fmt.Errorf("stat evidence %q: %w", e.Name(), err)
 		}
-		info, infoErr := e.Info()
-		if infoErr != nil {
-			errs = append(errs, fmt.Errorf("stat evidence %q: %w", e.Name(), infoErr))
-			leftovers = append(leftovers, strings.TrimSuffix(e.Name(), ".png"))
-			continue
-		}
-		path := filepath.Join(dir, e.Name())
+		plan.files = append(plan.files, evidenceRemovalFile{name: e.Name(), size: info.Size()})
+	}
+	return plan, nil
+}
+
+// removeEvidenceFilesLocked plans and removes one record's removable
+// evidence files. Cleanup itself plans once and consumes that same list;
+// this entry keeps the retry helper the tests use. Callers hold mu.
+func (s *Store) removeEvidenceFilesLocked(recordID string) (removed int, removedBytes int64, leftovers []string, err error) {
+	plan, err := s.planEvidenceRemovalLocked(recordID)
+	if err != nil {
+		return 0, 0, nil, err
+	}
+	return s.removePlannedEvidenceLocked(recordID, plan)
+}
+
+// removePlannedEvidenceLocked deletes the regular files of one plan and
+// removes the directory when no protected entry remains. It reports the
+// surviving file ids for a retry. Callers hold mu.
+func (s *Store) removePlannedEvidenceLocked(recordID string, plan evidenceRemovalPlan) (removed int, removedBytes int64, leftovers []string, err error) {
+	dir := s.evidenceDir(recordID)
+	var errs []error
+	for _, f := range plan.files {
+		path := filepath.Join(dir, f.name)
 		if rmErr := s.fs.Remove(path); rmErr != nil {
 			if errors.Is(rmErr, fs.ErrNotExist) {
 				continue
 			}
-			errs = append(errs, fmt.Errorf("remove evidence %q: %w", e.Name(), rmErr))
-			leftovers = append(leftovers, strings.TrimSuffix(e.Name(), ".png"))
+			errs = append(errs, fmt.Errorf("remove evidence %q: %w", f.name, rmErr))
+			leftovers = append(leftovers, strings.TrimSuffix(f.name, ".png"))
 			continue
 		}
 		removed++
-		removedBytes += info.Size()
+		removedBytes += f.size
 	}
-	if len(errs) == 0 && !unknown {
+	if len(errs) == 0 && !plan.unknown {
 		if rmErr := s.fs.Remove(dir); rmErr != nil && !errors.Is(rmErr, fs.ErrNotExist) {
 			errs = append(errs, fmt.Errorf("remove evidence directory: %w", rmErr))
 		}
