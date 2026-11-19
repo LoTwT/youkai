@@ -53,12 +53,70 @@ func normalizeNSIS(s string) string {
 	return s
 }
 
-func normalizePS1(s string) string {
-	for _, name := range []string{"releases", "api", "tagPrefix", "assetsApi"} {
-		re := regexp.MustCompile(`(?m)^\$` + name + ` = '[^'\r\n]*'$`)
-		s = re.ReplaceAllString(s, "$"+"$"+name+" = '@SOURCE@'")
+var ps1VersionRE = regexp.MustCompile("^[0-9]+\\.[0-9]+\\.[0-9]+$")
+
+// ps1Channel is the complete set of update values the pinned MyGo generator
+// emits for one release channel. The stable v channel is the untagged
+// GitHub feed, as MyGo's Updates.tagged treats the prefix "v" as default.
+type ps1Channel struct {
+	scriptPrefix string // $tagPrefix in the generated script
+	releases     string
+	api          string
+	assets       string
+	irm          string // the header's install.ps1 URL
+}
+
+func ps1ChannelFor(version, configPrefix string) (ps1Channel, error) {
+	if !ps1VersionRE.MatchString(version) {
+		return ps1Channel{}, fmt.Errorf("project version %q is not major.minor.patch", version)
 	}
-	return s
+	switch configPrefix {
+	case "", "v":
+		return ps1Channel{
+			releases: "https://github.com/LoTwT/youkai/releases/latest/download/",
+			assets:   "https://api.github.com/repos/LoTwT/youkai/releases/latest",
+			irm:      "https://github.com/LoTwT/youkai/releases/latest/download/install.ps1",
+		}, nil
+	case "test-v":
+		return ps1Channel{
+			scriptPrefix: "test-v",
+			releases:     "https://github.com/LoTwT/youkai/releases/download/",
+			api:          "https://api.github.com/repos/LoTwT/youkai/releases?per_page=100",
+			assets:       "https://api.github.com/repos/LoTwT/youkai/releases/tags/",
+			irm:          "https://github.com/LoTwT/youkai/releases/download/test-v" + version + "/install.ps1",
+		}, nil
+	default:
+		return ps1Channel{}, fmt.Errorf("unsupported updates.tagPrefix %q", configPrefix)
+	}
+}
+
+// normalizePS1 binds the complete script except the update values of the
+// channel that the pinned generator derives from the configuration. The
+// four assignments and the usage comment must be exactly the proven forms
+// for that channel; a legal test channel comment is normalized onto the
+// already-bound stable form, so every other byte stays in the digest.
+func normalizePS1(s, version, configPrefix string) (string, error) {
+	channel, err := ps1ChannelFor(version, configPrefix)
+	if err != nil {
+		return "", err
+	}
+	header := "# silently. Made by mygo build.\n#\n#   irm " + channel.irm + " | iex\n\n& {\n"
+	stable := "# silently. Made by mygo build.\n#\n#   irm https://github.com/LoTwT/youkai/releases/latest/download/install.ps1 | iex\n\n& {\n"
+	if s, err = once(s, header, stable); err != nil {
+		return "", fmt.Errorf("PS1 usage comment: %w", err)
+	}
+	updateHeader := "$releases = '" + channel.releases + "'\n$api = '" + channel.api + "'\n$tagPrefix = '" + channel.scriptPrefix + "'\n"
+	stableUpdateHeader := "$releases = '@SOURCE@'\n$api = '@SOURCE@'\n$tagPrefix = '@SOURCE@'\n"
+	if s, err = once(s, updateHeader, stableUpdateHeader); err != nil {
+		return "", fmt.Errorf("PS1 update header: %w", err)
+	}
+	if s, err = once(s, "$assetsApi = '"+channel.assets+"'", "$assetsApi = '@SOURCE@'"); err != nil {
+		return "", fmt.Errorf("PS1 assets API: %w", err)
+	}
+	if len(regexp.MustCompile("(?m)^\\$github = \\$true$").FindAllStringIndex(s, -1)) != 1 {
+		return "", errors.New("PS1 GitHub update source drift")
+	}
+	return s, nil
 }
 
 func closeFunction(prefix string) string {
@@ -118,7 +176,7 @@ func convertNSIS(s string) (string, error) {
 		return "", errors.New("uninstaller signing command drift")
 	}
 	if digest([]byte(normalizeNSIS(s))) != nsisTemplateSHA {
-		return "", errors.New("MyGo 0.9 complete NSIS template drift; refusing unsafe compiler input")
+		return "", errors.New("MyGo 0.10 complete NSIS template drift; refusing unsafe compiler input")
 	}
 	s = strings.TrimPrefix(s, "\ufeff")
 	for _, prefix := range []string{"", "un."} {
@@ -142,9 +200,13 @@ func nsisQuote(s string) string {
 	return `"` + s + `"`
 }
 
-func convertPS1(s string) (string, error) {
-	if digest([]byte(normalizePS1(s))) != ps1TemplateSHA {
-		return "", errors.New("MyGo 0.9 complete install.ps1 template drift")
+func convertPS1(s, version, configPrefix string) (string, error) {
+	normalized, err := normalizePS1(s, version, configPrefix)
+	if err != nil {
+		return "", err
+	}
+	if digest([]byte(normalized)) != ps1TemplateSHA {
+		return "", errors.New("MyGo 0.10 complete install.ps1 template drift")
 	}
 	start := strings.Index(s, "# Get-AppProcess returns")
 	end := strings.Index(s, "function Install-App {")
@@ -166,7 +228,6 @@ func convertPS1(s string) (string, error) {
                 $folder = $location.TrimEnd('\')
             }
         }`
-	var err error
 	s, err = once(s, old, new)
 	if err != nil {
 		return "", err
@@ -175,12 +236,12 @@ func convertPS1(s string) (string, error) {
 	return s, err
 }
 
-func rewritePS1(path string) error {
+func rewritePS1(path, version, configPrefix string) error {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return err
 	}
-	s, err := convertPS1(string(b))
+	s, err := convertPS1(string(b), version, configPrefix)
 	if err != nil {
 		return err
 	}
