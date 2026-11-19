@@ -12,14 +12,22 @@ import (
 //
 // The wrap-up's teardown releases the occupancy when its cleanup
 // succeeded; a failed teardown keeps it held for the writes the failed
-// exit still allows, and the restart would then start the new process
-// against a held root — it would quit with the misleading second-instance
-// notice. MyGo's quit sequence orders the steps: saveWindowStates, then
-// the OnQuit listeners, then relaunchNow, which starts the new process
-// without waiting; the entry point's deferred release runs only after Run
+// exit still allows. A restart then starts the new process against a held
+// root; only without an effective single-instance wait guarantee — the
+// first v0.9→v0.10 restart, whose old process never held the v0.10 file
+// lock — and while this process still holds the Youkai data root would
+// that new process quit with the misleading second-instance notice.
+// MyGo's quit sequence orders the steps: saveWindowStates, then the
+// OnQuit listeners, then relaunchNow, which starts the new process. Since
+// MyGo v0.10.0 a launch waits when the old process holds the same-identity
+// exclusive file lock: it first waits for the release, then takes the
+// lock and continues. An old v0.9 process closes its socket in OnQuit
+// without holding that file lock, so the new process may acquire the lock
+// and run before this one exits; the handoff below must stay independent
+// of the lock. The entry point's deferred release runs only after Run
 // returned. OnQuit therefore runs after the framework's last write and
-// before the new process exists: it detaches the diagnostic log and
-// releases whatever the teardown left held (DataRootLock.Close is
+// before the new process exists: it detaches the diagnostic log first and
+// then releases whatever the teardown left held (DataRootLock.Close is
 // idempotent, so the release is a no-op after a successful teardown).
 //
 // Only the installed update's restart hands over here: a cancelled

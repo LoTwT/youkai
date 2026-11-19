@@ -1,6 +1,6 @@
 # 开发指南
 
-更新日期：2026-11-14。本文维护环境要求与本仓库当前实际可用的开发命令；范围与里程碑安排见[实施清单](specs/scanner-implementation-plan.md)，构建与分发决策见 [T7](specs/t7-public-release-acceptance.md)。
+更新日期：2026-11-19。本文维护环境要求与本仓库当前实际可用的开发命令；范围与里程碑安排见[实施清单](specs/scanner-implementation-plan.md)，构建与分发决策见 [T7](specs/t7-public-release-acceptance.md)。
 
 ## 第五版原生界面
 
@@ -12,19 +12,19 @@ UXM-01 的主题、组件选择与布局由 [第五版视觉规则](design/uiux-
 
 | 工具 | 要求与用途 |
 | --- | --- |
-| Go | 1.27.4（`go.mod` 固定 `go 1.27.4`；本机工具链较低时由 `GOTOOLCHAIN` 自动获取；MyGo v0.9.0 要求 1.27.3+）。 |
-| MyGo | v0.9.0，作为 Go tool 依赖固定在 `go.mod`（`tool github.com/egoist/mygo/cmd/mygo`），经 `go tool mygo` 使用，不依赖全局安装的 `mygo` 命令。 |
+| Go | 1.27.4（`go.mod` 固定 `go 1.27.4`；本机工具链较低时由 `GOTOOLCHAIN` 自动获取；MyGo v0.10.0 要求 1.27.3+）。 |
+| MyGo | v0.10.0，作为 Go tool 依赖固定在 `go.mod`（`tool github.com/egoist/mygo/cmd/mygo`），经 `go tool mygo` 使用，不依赖全局安装的 `mygo` 命令。 |
 | Xcode 命令行工具 | macOS 打包所需（`codesign`、`hdiutil`、SDK）；开发机 `xcode-select` 指向 `/Applications/Xcode.app`。 |
 | mingw-w64 | 本机已安装（Homebrew mingw-w64 14.0.0_3）。Mac 上交叉编译应用 cgo 使用 `x86_64-w64-mingw32-gcc`。当前安装适配只生成 PowerShell 检查，不再需要额外原生 guard 或32位插件编译器。 |
 | makensis | 本机 v3.13。Windows 安全适配入口先解析绝对编译器；Windows 缺失时按 MyGo 相同版本、镜像和摘要下载到本次构建 TEMP，Mac 缺失则失败。可用 `YOUKAI_MAKENSIS` 指定真实编译器绝对路径。 |
 
 不使用 Web 前端：`mygo.json` 为纯原生 UI 配置，无需 Bun、Node.js 或 WebView2。
 
-cgo 说明：`internal/recognition` 依赖 cgo 编译 onnxruntime_go 的 C 桥接。直接调用的 `go build`/`go vet`/`go test` 与 `go tool mygo vet .` 在原生构建下默认 `CGO_ENABLED=1`，无需处理。`go tool mygo dev` 与 `go tool mygo build` 则遵循 MyGo v0.9.0 的行为：环境未显式设置 `CGO_ENABLED` 时，MyGo 给子进程设置 `CGO_ENABLED=0`（[T1](specs/t1-mygo-ui-distribution.md) 已记录，显式设置时尊重用户值）。`cmd/youkai` 经应用服务引用识别包，因此必须以 `CGO_ENABLED=1 go tool mygo dev`、`CGO_ENABLED=1 go tool mygo build` 的方式调用，否则 cgo 包编译失败。识别器由应用服务在第一次接受的开始请求时才创建（`internal/app` 的懒加载），包初始化与就绪回调不加载任何原生库与模型（见[架构第 4 节](specs/scanner-architecture.md#4-ocr原生资源与构建)）。
+cgo 说明：`internal/recognition` 依赖 cgo 编译 onnxruntime_go 的 C 桥接。直接调用的 `go build`/`go vet`/`go test` 与 `go tool mygo vet .` 在原生构建下默认 `CGO_ENABLED=1`，无需处理。`go tool mygo dev` 与 `go tool mygo build` 则遵循 MyGo v0.10.0 的行为：环境未显式设置 `CGO_ENABLED` 时，MyGo 给子进程设置 `CGO_ENABLED=0`（[T1](specs/t1-mygo-ui-distribution.md) 已记录，显式设置时尊重用户值）。`cmd/youkai` 经应用服务引用识别包，因此必须以 `CGO_ENABLED=1 go tool mygo dev`、`CGO_ENABLED=1 go tool mygo build` 的方式调用，否则 cgo 包编译失败。识别器由应用服务在第一次接受的开始请求时才创建（`internal/app` 的懒加载），包初始化与就绪回调不加载任何原生库与模型（见[架构第 4 节](specs/scanner-architecture.md#4-ocr原生资源与构建)）。
 
-2026-11-14 依赖升级的版本依据、兼容处理与验证边界见[升级记录](reports/2026-11-14-dependency-upgrade.md)。本轮包名使用 MyGo 的 slug 命名；Windows 运行、IME、托盘、通知和自动更新仍需另行验收。
+2026-11-19 将 MyGo 从 v0.9.0 升级至 v0.10.0，版本依据、模板差异与本机验证边界见[升级记录](reports/2026-11-19-mygo-v0.10.0-upgrade.md)；2026-11-14 的 v0.9.0 版本依据与兼容处理保留在[旧记录](reports/2026-11-14-dependency-upgrade.md)。包名使用 MyGo 的 slug 命名；Windows 运行、IME、托盘、通知和自动更新仍需另行验收。
 
-DEP-01 第3轮按用户“后续测试不用做得特别细，有一些边界情况可以等真的遇到了再处理”收敛到核心安全流程。当前适配完整替换两个 NSIS CloseApp 与 PS1 独立强杀/吞错：在实际最终目录仍有应用进程，或检测/工具失败时停止后续文件变更，提示通过应用菜单退出并处理未保存内容后重试。新 Windows TEMP 最小回归 **27/27 PASS**，PS1 外层拒绝 exit1、成功 exit0；待主控新独立复审。重启竞争、完整 OS 排斥、特殊别名/reparse、罕见权限及大 UI/W3 矩阵按本轮用户决定延期，不宣称已验证。普通 NSIS 卸载 bootstrap 的 direct exit0 不代表 worker 成功，仍为已知限制；见[当前记录](reports/2026-11-14-dependency-upgrade.md#r3-核心范围收敛与最小验证)。
+DEP-01 第3轮按用户“后续测试不用做得特别细，有一些边界情况可以等真的遇到了再处理”收敛到核心安全流程。当前适配完整替换两个 NSIS CloseApp 与 PS1 独立强杀/吞错：在实际最终目录仍有应用进程，或检测/工具失败时停止后续文件变更，提示通过应用菜单退出并处理未保存内容后重试。新 Windows TEMP 最小回归 **27/27 PASS**（v0.9.0 模板基线；v0.10.0 模板规范化后相同，本轮未在 Windows 重跑），PS1 外层拒绝 exit1、成功 exit0；待主控新独立复审。重启竞争、完整 OS 排斥、特殊别名/reparse、罕见权限及大 UI/W3 矩阵按本轮用户决定延期，不宣称已验证。普通 NSIS 卸载 bootstrap 的 direct exit0 不代表 worker 成功，仍为已知限制；见[当前记录](reports/2026-11-14-dependency-upgrade.md#r3-核心范围收敛与最小验证)。
 
 ## 用开发数据源跑一次完整扫描
 
@@ -304,7 +304,7 @@ Get-Content err.txt
 
 2026-10-17 修复“装后不自动重启”后补充的整链路演练：不再用驱动程序，而是跑**完整应用**，覆盖检查、下载、安装替换、明确退出收尾与自动重启的真实接线（含关窗拦截与数据根占用锁）。材料仍在 `/tmp`、密钥对一次性（`go tool mygo keygen` 生成，用后即弃）：
 
-1. **构建两个版本**：`mygo.json` 的 `updates.url` 强制 HTTPS，本地回环源经 ldflags 注入等价变量（当时的 `mygo build` 不支持自定义 ldflags；当前 v0.9.0 支持 `MYGO_LDFLAGS`，故用 `go build` 手工构建并手工组装 `.app`）：
+1. **构建两个版本**：`mygo.json` 的 `updates.url` 强制 HTTPS，本地回环源经 ldflags 注入等价变量（当时的 `mygo build` 不支持自定义 ldflags；当前 v0.10.0 支持 `MYGO_LDFLAGS`，故用 `go build` 手工构建并手工组装 `.app`）：
 
    ```sh
    CGO_ENABLED=1 go build -ldflags "-X github.com/egoist/mygo.packageUpdateFeed=http://127.0.0.1:8765/update-darwin-arm64.json -X github.com/egoist/mygo.packageUpdateKey=<测试公钥> -X 'github.com/egoist/mygo.packageName=Youkai Upd Test' -X github.com/egoist/mygo.packageVersion=<版本> -X github.com/egoist/mygo.packageIdentifier=com.lotwt.youkai.updtest -X github.com/egoist/mygo.production=1" -o <bundle>/Contents/MacOS/YoukaiUpdTest ./cmd/youkai

@@ -27,7 +27,7 @@ type member struct {
 
 // dependency is one pinned download. platform is the "goos/goarch" of the
 // apps that need it, or "" when every platform does. Destinations follow
-// MyGo's resources layout (cmd/mygo/resources.go of MyGo v0.9.0): the
+// MyGo's resources layout (cmd/mygo/resources.go of MyGo v0.10.0): the
 // contents of platform directories such as resources/windows-amd64/ ship
 // only with that platform's app, merged into the resource root, and
 // everything else ships with every app.

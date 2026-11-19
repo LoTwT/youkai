@@ -12,7 +12,7 @@ import (
 )
 
 // Keep native Table's shared header/cell padding aligned with the v5 grid.
-// MyGo 0.9.0 supplies 10 horizontal / 6 vertical DIP per cell; the body
+// MyGo 0.10.0 supplies 10 horizontal / 6 vertical DIP per cell; the body
 // adds 2 and the header sets its horizontal padding to 12.
 const (
 	historyPanelInset = 24
