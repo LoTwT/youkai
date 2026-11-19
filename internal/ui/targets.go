@@ -77,6 +77,14 @@ func startErrorText(err error) string {
 		return targetGoneText
 	case errors.Is(err, app.ErrTargetDiscoveryFailed):
 		return targetDiscoveryFailedText
+	case errors.Is(err, app.ErrRescanUnsupported):
+		return "当前扫描来源不支持补扫号位。"
+	case errors.Is(err, app.ErrRescanRequest):
+		return "补扫范围无效，请返回记录重新选择。"
+	case errors.Is(err, app.ErrRescanSource):
+		return "补扫来源记录已不可用或已改变，请返回记录重新选择。"
+	case errors.Is(err, app.ErrRescanScope):
+		return "补扫号位已不可用（已经完成或不在原记录范围内），请返回记录重新选择。"
 	default:
 		return targetStartFailedText
 	}

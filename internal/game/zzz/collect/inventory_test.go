@@ -2352,6 +2352,75 @@ func TestTraverseWalksSixPositions(t *testing.T) {
 	}
 }
 
+// T29c: a scoped traversal visits only its selected wheel position. The
+// scope records that one position as complete but stays partial, because a
+// subset is never the warehouse-wide conclusion.
+func TestTraverseScopedPositionsOnlyWalkTheSelection(t *testing.T) {
+	game := newScriptedGame()
+	game.setList(1, nil)
+	game.setList(4, listOf(2))
+	h := newTraversalHarness(t, game)
+	if err := h.inv.SetScanPositions([]int{4}); err != nil {
+		t.Fatalf("SetScanPositions: %v", err)
+	}
+	h.start()
+	h.endCompleted()
+
+	obs := h.observations()
+	if len(obs) != 2 {
+		t.Fatalf("admitted %d observations, want position 4's two", len(obs))
+	}
+	for _, o := range obs {
+		if o.Position != 4 {
+			t.Fatalf("observation at position %d, want only 4", o.Position)
+		}
+	}
+	ops := game.opsSnapshot()
+	if clicks := countWheelClicks(ops, game.layout); clicks != 1 {
+		t.Fatalf("%d wheel clicks, want one switch to position 4", clicks)
+	}
+	if clicks := countFilterClicks(ops, game.layout); clicks != 4 {
+		t.Fatalf("%d filter-control clicks, want one position's reset and S flow", clicks)
+	}
+	if drags := countOps(ops, platform.InputDrag, game.layout.TopFrom, game.layout.TopTo); drags != 1 {
+		t.Fatalf("%d top drags, want one for position 4", drags)
+	}
+	if drags := countOps(ops, platform.InputDrag, game.layout.ScrollFrom, game.layout.ScrollTo); drags != 1 {
+		t.Fatalf("%d advance drags, want one for position 4", drags)
+	}
+	scope := h.scope()
+	if scope.Coverage != "partial" || len(scope.Positions) != 1 {
+		t.Fatalf("scope = coverage %q positions %+v, want partial with only position 4", scope.Coverage, scope.Positions)
+	}
+	entry := scope.Positions[0]
+	if entry.Position != 4 || !entry.Complete || !entry.Top || !entry.Bottom {
+		t.Fatalf("position 4 ledger = %+v, want complete", entry)
+	}
+}
+
+// T29d: an explicitly selected full range is still a scoped rescan and
+// cannot claim complete warehouse coverage.
+func TestTraverseExplicitFullSelectionStaysPartial(t *testing.T) {
+	game := newScriptedGame(make([]bool, 20)...)
+	h := newTraversalHarness(t, game)
+	h.inv.Matcher = sortVerifiedMatcher{Matcher: h.inv.Matcher}
+	if err := h.inv.SetScanPositions([]int{1, 2, 3, 4, 5, 6}); err != nil {
+		t.Fatalf("SetScanPositions: %v", err)
+	}
+	h.start()
+	h.endCompleted()
+	scope := h.scope()
+	if scope.Sort != "verified" || scope.Coverage != "partial" || len(scope.Positions) != 6 {
+		t.Fatalf("scope = sort %q coverage %q positions %d, want verified/partial over six",
+			scope.Sort, scope.Coverage, len(scope.Positions))
+	}
+	for i, entry := range scope.Positions {
+		if entry.Position != i+1 || !entry.Complete {
+			t.Fatalf("position %d ledger = %+v, want complete", i+1, entry)
+		}
+	}
+}
+
 // T29b: a verified scroll at the end of position 1 whose new viewport holds
 // no admitted disc must not leak its scrollEvidence into position 2's first
 // capture.

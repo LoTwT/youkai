@@ -2,6 +2,7 @@ package record
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -12,7 +13,9 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync"
 	"syscall"
+	"time"
 )
 
 // ErrNoValidCheckpoint is reported when a record holds no generation that
@@ -179,17 +182,110 @@ func (s *Store) Peek(recordID string) (*Checkpoint, error) {
 		recordID, ErrNoValidCheckpoint, len(gens))
 }
 
+// LoadLatest returns only the newest generation after full verification:
+// structure, revision, the session identity matching the record directory,
+// and every evidence file's existence, size and digest. Unlike Load it
+// never falls back to an older generation, so a caller that must prove the
+// latest saved facts (the partial-rescan source check) cannot silently act
+// on stale data. Load and Peek keep their historical fallback for the
+// history list and recovery. The context is checked between file reads and
+// between evidence entries; a single native filesystem read that has
+// already entered the OS cannot be interrupted.
+func (s *Store) LoadLatest(ctx context.Context, recordID string) (*Recovery, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if err := checkID("record", recordID); err != nil {
+		return nil, err
+	}
+	if err := lockLoadLatest(ctx, &s.mu); err != nil {
+		return nil, err
+	}
+	defer s.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if err := s.ensureRecord(recordID); err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
+		return nil, err
+	}
+	// The directory Stat above can be the last filesystem operation before
+	// ReadDir. A cancellation that arrived while it was blocked must win
+	// before the next call.
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	gens, err := s.generations(recordID)
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if len(gens) == 0 {
+		return nil, fmt.Errorf("record: load latest %q: %w", recordID, ErrNoValidCheckpoint)
+	}
+	cp, err := s.readGenerationContext(ctx, recordID, gens[0])
+	if err != nil {
+		return nil, fmt.Errorf("record: load latest %q generation %d: %w", recordID, gens[0].revision, err)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if cp.Session.SessionID != recordID {
+		return nil, fmt.Errorf("record: load latest %q: checkpoint session %q does not match the record directory",
+			recordID, cp.Session.SessionID)
+	}
+	return applyInterruptionMarks(cp), nil
+}
+
+// lockLoadLatest waits for the store's ordinary mutex with a cancellation
+// path. The read still happens under that same lock; only its wait is
+// cancellable. TryLock avoids a detached goroutine, and the post-acquire
+// check rejects a lock/cancel race. No global timeout or lock rewrite is
+// involved, and Load/Peek keep their blocking lock semantics.
+func lockLoadLatest(ctx context.Context, mu *sync.Mutex) error {
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if mu.TryLock() {
+			if err := ctx.Err(); err != nil {
+				mu.Unlock()
+				return err
+			}
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
 // readGeneration reads and fully verifies one generation file. Any
 // failure — unreadable file, trailing bytes, unknown fields, failed
 // validation, a revision that does not match its file name, missing or
 // mismatched evidence — makes the generation unusable and the caller
 // falls back to an older one.
 func (s *Store) readGeneration(recordID string, g generation) (*Checkpoint, error) {
-	cp, err := s.readGenerationDocument(recordID, g)
+	return s.readGenerationContext(context.Background(), recordID, g)
+}
+
+func (s *Store) readGenerationContext(ctx context.Context, recordID string, g generation) (*Checkpoint, error) {
+	cp, err := s.readGenerationDocumentContext(ctx, recordID, g)
 	if err != nil {
 		return nil, err
 	}
-	if err := s.verifyEvidence(recordID, cp.Evidence); err != nil {
+	if err := s.verifyEvidenceContext(ctx, recordID, cp.Evidence); err != nil {
 		return nil, err
 	}
 	return cp, nil
@@ -198,6 +294,13 @@ func (s *Store) readGeneration(recordID string, g generation) (*Checkpoint, erro
 // readGenerationDocument decodes, validates and revision-checks one
 // generation without touching its evidence files.
 func (s *Store) readGenerationDocument(recordID string, g generation) (*Checkpoint, error) {
+	return s.readGenerationDocumentContext(context.Background(), recordID, g)
+}
+
+func (s *Store) readGenerationDocumentContext(ctx context.Context, recordID string, g generation) (*Checkpoint, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	path := filepath.Join(s.checkpointsDir(recordID), g.name)
 	file, err := s.fs.OpenFile(path, os.O_RDONLY, 0)
 	if err != nil {
@@ -208,13 +311,16 @@ func (s *Store) readGenerationDocument(recordID string, g generation) (*Checkpoi
 		// be a recoverable backup once the I/O fault clears.
 		return nil, err
 	}
-	data, err := io.ReadAll(file)
+	data, err := readAllContext(ctx, file)
 	if err != nil {
 		_ = file.Close()
-		// A read failure is undecided for the same reason.
+		// A read failure or cancellation is undecided for the same reason.
 		return nil, err
 	}
 	if err := file.Close(); err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	// Strict decode: unknown fields and a second value after the
@@ -293,12 +399,24 @@ func isUnresolvableLinkError(err error) bool {
 // The cost is one pass over the evidence per load; measured sessions of
 // M3 scale will tell whether digest caching is warranted.
 func (s *Store) verifyEvidence(recordID string, index []EvidenceFile) error {
+	return s.verifyEvidenceContext(context.Background(), recordID, index)
+}
+
+func (s *Store) verifyEvidenceContext(ctx context.Context, recordID string, index []EvidenceFile) error {
 	for _, ev := range index {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		path := s.evidencePath(recordID, ev.ID)
-		unreadable, err := s.evidencePathUnreadableLocked(path)
-		if err != nil {
+		unreadable, statErr := s.evidencePathUnreadableLocked(path)
+		if err := ctx.Err(); err != nil {
+			// The Stat above can be the last call before OpenFile; a
+			// cancellation that arrived while it was blocked must win.
+			return err
+		}
+		if statErr != nil {
 			// Undecided: the file may become readable again.
-			return fmt.Errorf("evidence %q: %w", ev.ID, err)
+			return fmt.Errorf("evidence %q: %w", ev.ID, statErr)
 		}
 		if unreadable {
 			return unusableGeneration(fmt.Errorf("evidence %q is not a readable regular file", ev.ID))
@@ -312,14 +430,17 @@ func (s *Store) verifyEvidence(recordID string, index []EvidenceFile) error {
 			return fmt.Errorf("evidence %q: %w", ev.ID, err)
 		}
 		hasher := sha256.New()
-		size, err := io.Copy(hasher, file)
+		size, err := copyContext(ctx, hasher, file)
 		closeErr := file.Close()
 		if err != nil {
-			// Undecided read failures must not be taken for corruption.
+			// A read failure or cancellation is undecided, not corruption.
 			return fmt.Errorf("evidence %q: read: %w", ev.ID, err)
 		}
 		if closeErr != nil {
 			return fmt.Errorf("evidence %q: close: %w", ev.ID, closeErr)
+		}
+		if err := ctx.Err(); err != nil {
+			return err
 		}
 		if size != ev.ByteLength {
 			return unusableGeneration(fmt.Errorf("evidence %q: %d bytes on disk, want %d", ev.ID, size, ev.ByteLength))
@@ -329,6 +450,47 @@ func (s *Store) verifyEvidence(recordID string, index []EvidenceFile) error {
 		}
 	}
 	return nil
+}
+
+// copyContext hashes in chunks and observes cancellation between reads.
+// A single Read already inside the OS may not be interruptible; callers
+// still reject the result at the next boundary.
+func copyContext(ctx context.Context, dst io.Writer, src io.Reader) (int64, error) {
+	buf := make([]byte, 64*1024)
+	var total int64
+	for {
+		if err := ctx.Err(); err != nil {
+			return total, err
+		}
+		n, readErr := src.Read(buf)
+		if n > 0 {
+			written, writeErr := dst.Write(buf[:n])
+			total += int64(written)
+			if writeErr != nil {
+				return total, writeErr
+			}
+			if written != n {
+				return total, io.ErrShortWrite
+			}
+		}
+		if readErr == io.EOF {
+			if err := ctx.Err(); err != nil {
+				return total, err
+			}
+			return total, nil
+		}
+		if readErr != nil {
+			return total, readErr
+		}
+	}
+}
+
+func readAllContext(ctx context.Context, src io.Reader) ([]byte, error) {
+	var buf bytes.Buffer
+	if _, err := copyContext(ctx, &buf, src); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }
 
 // applyInterruptionMarks turns the crash's unfinished bookkeeping into

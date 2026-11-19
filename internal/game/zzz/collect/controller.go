@@ -65,6 +65,12 @@ type Controller struct {
 	// setup fault rather than falling back to a layout for another
 	// display configuration.
 	TraversalForClient func(image.Point) (Traversal, error)
+	// ScanPositions limits the session to selected wheel positions (the
+	// partial-rescan range). Empty keeps the historical full range. The
+	// built traversal must implement PositionScoped; a traversal without
+	// the capability fails as a setup fault before its Precheck — the
+	// session never widens the range.
+	ScanPositions []int
 	// Stop is the application's idempotent stop entry (the service's
 	// Stop). The registered hotkey triggers it; a late trigger after
 	// Release is ignored so it cannot cut the next session.
@@ -310,6 +316,16 @@ func (c *Controller) SetScopeSink(sink func(json.RawMessage) error) { c.OnScopeO
 // client-area factory without a session that reports one is a wiring
 // error, not a reason to fall back to another layout.
 func (c *Controller) newTraversal(sess platform.Session) (Traversal, error) {
+	trav, err := c.buildTraversal(sess)
+	if err != nil {
+		return nil, err
+	}
+	return c.applyScanPositions(trav)
+}
+
+// buildTraversal chooses the configured factory without applying the
+// position scope, so a scoped session's error paths stay explicit.
+func (c *Controller) buildTraversal(sess platform.Session) (Traversal, error) {
 	if c.TraversalForClient != nil {
 		reporter, ok := sess.(platform.ClientAreaReporter)
 		if !ok {
@@ -330,6 +346,25 @@ func (c *Controller) newTraversal(sess platform.Session) (Traversal, error) {
 		return c.Traversal(), nil
 	}
 	return ObserveOnly{}, nil
+}
+
+// applyScanPositions limits a scoped session's traversal before its
+// precheck. A traversal without the capability, or one that refuses the
+// positions, is a setup fault: the session must never widen a requested
+// partial rescan into the whole warehouse.
+func (c *Controller) applyScanPositions(trav Traversal) (Traversal, error) {
+	if len(c.ScanPositions) == 0 {
+		return trav, nil
+	}
+	scoped, ok := trav.(PositionScoped)
+	if !ok {
+		return nil, scan.NewFault(platform.CodeInvalidOperation,
+			errors.New("collect: the traversal cannot limit the session to selected wheel positions"))
+	}
+	if err := scoped.SetScanPositions(c.ScanPositions); err != nil {
+		return nil, scan.NewFault(platform.CodeInvalidOperation, err)
+	}
+	return trav, nil
 }
 
 // relayScope hands the traversal's observed-scope report (T5 §3) to the

@@ -176,6 +176,11 @@ type activeSession struct {
 	// stopRequested: a stop arrived before the kernel existed; it is
 	// applied at commit, so no stop is lost to the preparation window.
 	stopRequested bool
+	// rescanCancel aborts the partial-rescan source validation and stops
+	// the start before the adapter, record or kernel is entered. It is
+	// nil for an ordinary start, whose historical stopRequested lifecycle
+	// must not change.
+	rescanCancel context.CancelFunc
 	// wrapped: the final checkpoint is on disk and the slot is free.
 	wrapped bool
 	// saveErr: the wrap-up's save failure, kept while a retry is due.
@@ -201,6 +206,12 @@ type StartRequest struct {
 	// ignores it and starts its configured target. The source re-checks
 	// that the window instance still exists before accepting.
 	Target *TargetCandidate
+	// Rescan selects an independent partial rescan of a saved record's
+	// incomplete wheel positions (P-12's first slice). The service proves
+	// the source record and the selected positions before the source sees
+	// the request, and refuses the start instead of falling back to a full
+	// scan. Nil keeps the ordinary whole-warehouse start unchanged.
+	Rescan *RescanRequest
 }
 
 // StartOutcome is what Start returns: the session the request produced
@@ -338,6 +349,17 @@ func (s *Service) Start(req StartRequest) (StartOutcome, error) {
 		log.Printf("youkai: start refused: %v", cause)
 		return StartOutcome{}, cause
 	}
+	if req.Rescan != nil {
+		if err := req.Rescan.Validate(); err != nil {
+			log.Printf("youkai: start refused: %v", err)
+			return StartOutcome{}, fmt.Errorf("app: start: %w", err)
+		}
+		if _, ok := s.cfg.Source.(ScopedScanSource); !ok {
+			cause := fmt.Errorf("%w", ErrRescanUnsupported)
+			log.Printf("youkai: start refused: %v", cause)
+			return StartOutcome{}, fmt.Errorf("app: start: %w", cause)
+		}
+	}
 	recordID, err := record.NewRecordID()
 	if err != nil {
 		log.Printf("youkai: start refused: %v", err)
@@ -374,11 +396,17 @@ func (s *Service) Start(req StartRequest) (StartOutcome, error) {
 		// The previous session wrapped cleanly; this request replaces it.
 		prev = a
 	}
+	var rescanCtx context.Context
+	var rescanCancel context.CancelFunc
+	if req.Rescan != nil {
+		rescanCtx, rescanCancel = context.WithCancel(context.Background())
+	}
 	a := &activeSession{
-		id:        scan.ID(recordID),
-		requestID: req.ID,
-		startedAt: nowUTC(),
-		wrapDone:  make(chan struct{}),
+		id:           scan.ID(recordID),
+		requestID:    req.ID,
+		startedAt:    nowUTC(),
+		wrapDone:     make(chan struct{}),
+		rescanCancel: rescanCancel,
 	}
 	s.active = a
 	s.notifyLocked()
@@ -387,6 +415,9 @@ func (s *Service) Start(req StartRequest) (StartOutcome, error) {
 	// abort rolls the placeholder back and restores prev. Only the
 	// goroutine that placed the placeholder calls it, exactly once.
 	abort := func(cause error) (StartOutcome, error) {
+		if rescanCancel != nil {
+			rescanCancel()
+		}
 		s.mu.Lock()
 		if s.active == a {
 			s.active = prev
@@ -402,7 +433,32 @@ func (s *Service) Start(req StartRequest) (StartOutcome, error) {
 		return abort(errors.New("no scan source is wired"))
 	}
 	var spec ScanSpec
-	if req.Target != nil {
+	if req.Rescan != nil {
+		if err := rescanCtx.Err(); err != nil {
+			return abort(err)
+		}
+		sourceShell, err := s.validateRescanSource(rescanCtx, *req.Rescan)
+		if err != nil {
+			return abort(err)
+		}
+		if err := rescanCtx.Err(); err != nil {
+			return abort(err)
+		}
+		scoped, ok := s.cfg.Source.(ScopedScanSource)
+		if !ok {
+			return abort(fmt.Errorf("%w", ErrRescanUnsupported))
+		}
+		spec, err = scoped.NewScanForRescan(req.Target, *req.Rescan)
+		if err != nil {
+			return abort(err)
+		}
+		if err := rescanCtx.Err(); err != nil {
+			return abort(err)
+		}
+		if err := validateRescanSpec(spec, *req.Rescan, sourceShell); err != nil {
+			return abort(err)
+		}
+	} else if req.Target != nil {
 		targeted, ok := s.cfg.Source.(TargetScanSource)
 		if !ok {
 			return abort(errors.New("the wired scan source does not accept a confirmed target"))
@@ -417,6 +473,27 @@ func (s *Service) Start(req StartRequest) (StartOutcome, error) {
 	if err := spec.validate(); err != nil {
 		return abort(err)
 	}
+	// The declared range decides the starting coverage conclusion before any
+	// traversal runs. A partial rescan is partial even when its precheck
+	// never starts; a full scan keeps the historical "unknown" until the
+	// adapter reports evidence. Damaged partial-rescan data is refused here
+	// rather than treated as a full range.
+	if ScanScopeDamaged(spec.Scope) {
+		return abort(errors.New("declared scan scope has invalid partial-rescan data"))
+	}
+	plan, err := ParseScanPlan(spec.Scope)
+	if err != nil {
+		return abort(fmt.Errorf("declared scan scope: %w", err))
+	}
+	initialCoverage := record.Coverage{Status: record.CoverageUnknown}
+	if !plan.Full() {
+		initialCoverage.Status = record.CoveragePartial
+	}
+	if req.Rescan != nil {
+		if err := rescanCtx.Err(); err != nil {
+			return abort(err)
+		}
+	}
 	// The scan occupancy comes first: another youkai process of this OS
 	// user must refuse here, before any work begins. The placeholder
 	// already owns the in-process slot, so no other start can race for
@@ -430,6 +507,11 @@ func (s *Service) Start(req StartRequest) (StartOutcome, error) {
 			log.Printf("youkai: release scan occupancy after a refused start: %v", err)
 		}
 		return abort(cause)
+	}
+	if req.Rescan != nil {
+		if err := rescanCtx.Err(); err != nil {
+			return rollback(err)
+		}
 	}
 	// The recognizer is created on the first start and reused for the
 	// process lifetime; a failed creation leaves it unset so the next
@@ -452,6 +534,11 @@ func (s *Service) Start(req StartRequest) (StartOutcome, error) {
 		}
 		s.mu.Unlock()
 	}
+	if req.Rescan != nil {
+		if err := rescanCtx.Err(); err != nil {
+			return rollback(err)
+		}
+	}
 	if err := s.store.CreateRecord(recordID); err != nil {
 		return rollback(err)
 	}
@@ -465,6 +552,11 @@ func (s *Service) Start(req StartRequest) (StartOutcome, error) {
 		}
 		return rollback(cause)
 	}
+	if req.Rescan != nil {
+		if err := rescanCtx.Err(); err != nil {
+			return discardRecord(err)
+		}
+	}
 	shell := record.SessionShell{
 		SessionID: recordID,
 		Game:      spec.Game,
@@ -475,8 +567,10 @@ func (s *Service) Start(req StartRequest) (StartOutcome, error) {
 		StartedAt: a.startedAt,
 		// The development source verifies no traversal, so no coverage
 		// conclusion is claimed; the game adapter of M2 owns coverage
-		// evidence, and recovery never upgrades a conclusion.
-		Coverage: record.Coverage{Status: record.CoverageUnknown},
+		// evidence, and recovery never upgrades a conclusion. A scoped
+		// session starts partial because it never covers the whole
+		// warehouse, even if preparation stops before its first position.
+		Coverage: initialCoverage,
 	}
 	deliverer := newRecordDeliverer(s.store, shell, func() {
 		s.mu.Lock()
@@ -511,6 +605,13 @@ func (s *Service) Start(req StartRequest) (StartOutcome, error) {
 	if err != nil {
 		return discardRecord(err)
 	}
+	if req.Rescan != nil {
+		if err := rescanCtx.Err(); err != nil {
+			kernel.Cancel()
+			<-kernel.Done()
+			return discardRecord(err)
+		}
+	}
 
 	// Commit under the lock: a quit that began during the preparation
 	// refuses the session instead of racing it, so the refusal and the
@@ -527,6 +628,8 @@ func (s *Service) Start(req StartRequest) (StartOutcome, error) {
 		refused = errors.New("an update install began while preparing")
 	case s.active != a:
 		refused = errors.New("the active slot was taken while preparing")
+	case req.Rescan != nil && rescanCtx.Err() != nil:
+		refused = rescanCtx.Err()
 	}
 	if refused != nil {
 		s.mu.Unlock()
@@ -578,6 +681,12 @@ func (s *Service) Stop() {
 	a := s.active
 	if a == nil {
 		return
+	}
+	if a.rescanCancel != nil {
+		// A partial-rescan proof reads the source record before the
+		// adapter or a record exists; a stop must cancel that read
+		// instead of letting the start continue behind the UI.
+		a.rescanCancel()
 	}
 	if a.kernel != nil {
 		a.kernel.Cancel()
@@ -953,6 +1062,9 @@ func (s *Service) stopForQuit(systemTerminating bool) *activeSession {
 	var kernel *scan.Session
 	if a != nil {
 		a.stopRequested = true
+		if a.rescanCancel != nil {
+			a.rescanCancel()
+		}
 		kernel = a.kernel
 	}
 	s.notifyLocked()

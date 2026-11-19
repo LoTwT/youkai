@@ -119,3 +119,13 @@ const (
 // switching or not yet verified; 1–6 is emitted after wheel verification.
 // It never participates in traversal decisions or record persistence.
 type PositionReporter interface{ SetPositionSink(func(int)) }
+
+// PositionScoped is the optional Traversal capability that limits one
+// session to selected wheel positions (the partial-rescan range). The
+// app's game source calls it before the session starts. Positions are
+// strictly ascending, unique and within 1..6; an implementation refuses
+// anything else rather than widening the range. A traversal without this
+// capability cannot serve a partial rescan.
+type PositionScoped interface {
+	SetScanPositions(positions []int) error
+}

@@ -125,6 +125,10 @@ func (m *Model) requestScanStart() {
 // menu normally closes in its PopoverBase before this runs; the explicit
 // check keeps the state honest if its overlay was already gone.
 func (m *Model) handleEscapeShortcut(c *ui.Context) {
+	if m.rescanDialog.open {
+		m.rescanDialog.open = false
+		return
+	}
 	if m.historyOpen != nil {
 		m.cancelHistoryOpen()
 		return

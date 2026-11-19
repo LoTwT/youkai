@@ -48,6 +48,97 @@ func exportTestRecovery(items ...record.ItemRecord) *record.Recovery {
 	}}
 }
 
+// Damaged partial-rescan data is not a full range. The export refuses it
+// instead of writing six slots the session never declared; the historical
+// full scope still exports all six.
+func TestExportRefusesDamagedPartialScope(t *testing.T) {
+	broken := []string{
+		`{"positions":[4],"rescanOf":""}`,
+		`{"positions":[4]}`,
+		`{"rescanOf":"src"}`,
+		`{"positions":"four","rescanOf":"src"}`,
+		`{"positions":[4],"rescanOf":7}`,
+		`{"positions":null,"rescanOf":"src"}`,
+		`{"positions":[4],"rescanOf":null}`,
+		`{"positions":[7],"rescanOf":"src"}`,
+		`{"positions":[4],"positions":[1,2,3,4,5,6],"rescanOf":"src"}`,
+		`{"positions":[4],"rescanOf":"first","rescanOf":"second"}`,
+		`{"Positions":[4],"RescanOf":"src"}`,
+	}
+	for _, scope := range broken {
+		rec := exportTestRecovery()
+		rec.Checkpoint.Session.Scope = []byte(scope)
+		if _, err := BuildUsableExport(rec); err == nil {
+			t.Fatalf("BuildUsableExport accepted damaged scope %s", scope)
+		}
+	}
+	full := exportTestRecovery()
+	export, err := BuildUsableExport(full)
+	if err != nil {
+		t.Fatalf("full export: %v", err)
+	}
+	if !reflect.DeepEqual(export.session.Scope.Slots, []int{1, 2, 3, 4, 5, 6}) {
+		t.Fatalf("full export slots = %v", export.session.Scope.Slots)
+	}
+}
+
+// A partial rescan exports through the unchanged v2 shape: the declared
+// slots name only the selected positions, coverage stays partial, and the
+// count equation is the session's own. CSV keeps its fixed header.
+func TestExportScopedRescanKeepsTheV2Shape(t *testing.T) {
+	rec := exportTestRecovery()
+	rec.Checkpoint.Session.Client = record.ClientWindowsLocal
+	rec.Checkpoint.Session.Scope = []byte(`{"kind":"zzzInventory","mode":"traverse","positions":[4],"rescanOf":"src"}`)
+	rec.Checkpoint.Session.Coverage = record.Coverage{Status: record.CoverageComplete}
+	export, err := BuildUsableExport(rec)
+	if err != nil {
+		t.Fatalf("BuildUsableExport: %v", err)
+	}
+	if !reflect.DeepEqual(export.session.Scope.Slots, []int{4}) {
+		t.Fatalf("export slots = %v, want [4]", export.session.Scope.Slots)
+	}
+	if export.session.Coverage.Status != record.CoveragePartial {
+		t.Fatalf("export coverage = %q, want partial", export.session.Coverage.Status)
+	}
+	data, err := export.JSON(exportTestTime(), "test")
+	if err != nil {
+		t.Fatalf("JSON: %v", err)
+	}
+	var doc struct {
+		FormatVersion int `json:"formatVersion"`
+		Session       struct {
+			Scope struct {
+				Slots []int `json:"slots"`
+			} `json:"scope"`
+		} `json:"session"`
+		ExcludedCount int               `json:"excludedCount"`
+		Items         []json.RawMessage `json:"items"`
+	}
+	if err := json.Unmarshal(data, &doc); err != nil {
+		t.Fatalf("decode export: %v", err)
+	}
+	if doc.FormatVersion != 2 || !reflect.DeepEqual(doc.Session.Scope.Slots, []int{4}) {
+		t.Fatalf("JSON = version %d slots %v", doc.FormatVersion, doc.Session.Scope.Slots)
+	}
+	if doc.ExcludedCount != 0 || len(doc.Items) != 0 {
+		t.Fatalf("count equation = excluded %d items %d", doc.ExcludedCount, len(doc.Items))
+	}
+	csvData, err := export.CSV()
+	if err != nil {
+		t.Fatalf("CSV: %v", err)
+	}
+	if !bytes.HasPrefix(csvData, []byte{0xEF, 0xBB, 0xBF}) {
+		t.Fatal("CSV lost its BOM")
+	}
+	rows, err := csv.NewReader(bytes.NewReader(csvData[3:])).ReadAll()
+	if err != nil {
+		t.Fatalf("read CSV: %v", err)
+	}
+	if len(rows) != 1 || len(rows[0]) != len(csvHeader()) {
+		t.Fatalf("CSV rows = %d columns %d, want the header only", len(rows), len(rows[0]))
+	}
+}
+
 func testDisc(setID, slot int, mainAttribute, mainValue string, mainUnit zzz.Unit) zzz.DiscRecord {
 	level := 15
 	return zzz.DiscRecord{

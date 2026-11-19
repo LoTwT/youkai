@@ -297,14 +297,23 @@ func (m *Model) historyTimeCell(c *ui.Context, t *ui.Theme, tok *Tokens, entry H
 // wrap-up save.
 func (m *Model) historyConclusionInput(entry HistoryEntry) recordConclusionInput {
 	active := entry.ID != "" && entry.ID == string(m.appliedSession)
+	coverage := entry.Coverage
+	if entry.RescanOf != "" || entry.RangeInvalid {
+		coverage = record.CoveragePartial
+	}
 	return recordConclusionInput{
 		CapturedCount:            entry.CapturedCount,
-		Coverage:                 entry.Coverage,
+		Coverage:                 coverage,
 		Termination:              entry.Termination,
 		Counts:                   entry.Counts,
 		Interrupted:              recordConclusionInterrupted(entry.Termination, entry.Interrupted, active),
 		IncompletePositions:      entry.IncompletePositions,
 		IncompletePositionsKnown: entry.IncompletePositionsKnown,
+		PositionOutcomes:         entry.PositionOutcomes,
+		PositionOutcomesKnown:    entry.IncompletePositionsKnown,
+		PlannedPositions:         entry.ScanPositions,
+		Rescan:                   entry.RescanOf != "",
+		RangeInvalid:             entry.RangeInvalid,
 		Unreadable:               entry.Unreadable,
 		ScanNotWrapped:           active && m.snap.Busy,
 		SaveFailed:               active && m.snap.SaveError != "",

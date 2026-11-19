@@ -103,6 +103,10 @@ const (
 	navPage
 	navExit
 	navStartScan
+	// navPrepareRescan arms P-12's selected position range and shows the
+	// normal preparation page. It runs only after the editor guard settled,
+	// so a cancelled prompt cannot leave a range armed.
+	navPrepareRescan
 	navResultFilter
 	navSummaryClass
 	navRecordTab
@@ -132,6 +136,9 @@ type navigationRequest struct {
 	// has loaded its record: the records list's 导出… means "open this
 	// record, then export it", not "export whatever is on screen".
 	exportAfterLoad bool
+	// rescan and its display-only source tag belong to navPrepareRescan (P-12).
+	rescan          *app.RescanRequest
+	rescanSourceTag string
 }
 
 // cloneDraft copies a draft including its substat slice.
@@ -728,6 +735,7 @@ func (m *Model) runNavigation(req navigationRequest) {
 	case navRecordTab:
 		m.showRecordTab(req.recordTab)
 	case navOpenRecord:
+		m.dropRescanContext()
 		m.performOpenRecord(req.recordID, req.exportAfterLoad)
 	case navPage:
 		if m.displayPage() == pageResults {
@@ -742,11 +750,28 @@ func (m *Model) runNavigation(req navigationRequest) {
 				m.clearReviewNotice()
 			}
 		}
+		if req.page != pageScan {
+			// The preparation page is the only context an armed partial
+			// range belongs to; any other destination drops it.
+			m.dropRescanContext()
+		} else {
+			m.rescanDialog.open = false
+		}
 		m.page = req.page
 	case navExit:
+		m.dropRescanContext()
 		m.continueExit()
 	case navStartScan:
 		m.Start()
+	case navPrepareRescan:
+		if req.rescan == nil {
+			return
+		}
+		if m.displayPage() == pageResults {
+			m.captureResultPlace()
+		}
+		m.armRescan(*req.rescan, req.rescanSourceTag)
+		m.page = pageScan
 	case navExport:
 		m.openExportDialog()
 	}

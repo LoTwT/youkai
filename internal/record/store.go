@@ -49,10 +49,10 @@ import (
 //
 // mu is the serial writer: every file write, generation change and
 // per-record state update happens while it is held, so callers may push
-// saves from any goroutine without locking of their own. Operations are
-// synchronous and take no context: saving has its own finalizing
-// lifecycle and must not inherit a cancelled scan context (architecture
-// section 5).
+// saves from any goroutine without locking of their own. LoadLatest takes a
+// cancellation context for the read-only source-admission path. Saving is
+// synchronous and takes no context: it has its own finalizing lifecycle and
+// must not inherit a cancelled scan context (architecture section 5).
 type Store struct {
 	fs   FS
 	root string

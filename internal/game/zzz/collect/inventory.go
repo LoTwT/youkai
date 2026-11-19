@@ -28,6 +28,10 @@ import (
 // producer goroutine in that order.
 type Inventory struct {
 	positionSink func(int)
+	// positions limits the walk to selected wheel positions (a partial
+	// rescan). Empty is the historical full range. SetScanPositions is the
+	// only writer, so an empty selection cannot be mistaken for "all".
+	positions []int
 	// Layout is the calibrated anchor set; see Layout. Empty or
 	// inconsistent anchors make Precheck fail with anchorsMissing.
 	Layout Layout
@@ -382,6 +386,9 @@ type positionScope struct {
 // Failures carry anchorsMissing or pageUnverified; the matcher's evidence
 // rides along.
 func (inv *Inventory) Precheck(ctx context.Context, sess platform.Session) error {
+	if _, err := inv.positionOrder(); err != nil {
+		return scan.NewFault(platform.CodeInvalidOperation, fmt.Errorf("collect: precheck: %w", err))
+	}
 	if err := inv.Layout.Validate(); err != nil {
 		return scan.NewFault(CodeAnchorsMissing, err)
 	}
@@ -522,11 +529,13 @@ func (inv *Inventory) recordPosition(p positionScope) {
 }
 
 // updateCoverage derives the conclusion from the ledger and the sort
-// evidence. Complete needs all six positions complete and every panel's
-// sort verified; anything shorter but non-empty is partial; no completed
+// evidence. Complete needs a full-range session, all six positions
+// complete and every panel's sort verified; a partial rescan can never
+// claim the warehouse-wide conclusion, even when its selected positions
+// all complete. Anything shorter but non-empty is partial; no completed
 // evidence at all stays unknown. Expected count is not inferred here.
 func (inv *Inventory) updateCoverage() {
-	complete := len(inv.scope.Positions) == scopePositionCount && inv.scope.Sort == scopeSortVerified
+	complete := inv.fullScope() && len(inv.scope.Positions) == scopePositionCount && inv.scope.Sort == scopeSortVerified
 	if complete {
 		for i, p := range inv.scope.Positions {
 			if p.Position != i+1 || !p.Complete || !p.Top || !p.Bottom {
@@ -713,7 +722,11 @@ const maxTopFlings = 16
 // already admitted, and too many incomplete positions stop it as well so a
 // systemic failure cannot hide behind a partial result.
 func (run *inventoryRun) run(ctx context.Context) error {
-	for pos := 1; pos <= scopePositionCount; pos++ {
+	order, err := run.inv.positionOrder()
+	if err != nil {
+		return scan.NewFault(platform.CodeInvalidOperation, fmt.Errorf("collect: collect: %w", err))
+	}
+	for _, pos := range order {
 		positionStart := time.Now()
 		var timing positionTiming
 		if err := run.preparePosition(ctx, pos, &timing); err != nil {
@@ -3892,4 +3905,52 @@ func (inv *Inventory) reportPosition(position int) {
 	if inv.positionSink != nil {
 		inv.positionSink(position)
 	}
+}
+
+// SetScanPositions implements PositionScoped: it limits the walk to the
+// selected wheel positions. The list must be non-empty, strictly ascending,
+// unique and within 1..6; the traversal refuses anything else instead of
+// widening a partial rescan into a full warehouse scan. It is called before
+// the session's Precheck, on the producer goroutine.
+func (inv *Inventory) SetScanPositions(positions []int) error {
+	if len(positions) == 0 {
+		return errors.New("collect: no wheel positions selected")
+	}
+	if _, err := inventoryPositionOrder(positions); err != nil {
+		return fmt.Errorf("collect: scan positions: %w", err)
+	}
+	inv.positions = append([]int(nil), positions...)
+	return nil
+}
+
+// positionOrder returns the wheel positions this session walks, in the one
+// canonical ascending order.
+func (inv *Inventory) positionOrder() ([]int, error) {
+	if len(inv.positions) == 0 {
+		all := make([]int, 0, scopePositionCount)
+		for position := 1; position <= scopePositionCount; position++ {
+			all = append(all, position)
+		}
+		return all, nil
+	}
+	return inventoryPositionOrder(inv.positions)
+}
+
+// fullScope reports whether the session set out to scan the whole
+// warehouse. A scoped session never supports the complete conclusion.
+func (inv *Inventory) fullScope() bool { return len(inv.positions) == 0 }
+
+// inventoryPositionOrder validates one canonical position list.
+func inventoryPositionOrder(positions []int) ([]int, error) {
+	previous := 0
+	for _, position := range positions {
+		if position < 1 || position > scopePositionCount {
+			return nil, fmt.Errorf("position %d is outside 1..%d", position, scopePositionCount)
+		}
+		if position <= previous {
+			return nil, fmt.Errorf("position %d is not after position %d", position, previous)
+		}
+		previous = position
+	}
+	return append([]int(nil), positions...), nil
 }

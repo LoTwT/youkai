@@ -2,10 +2,13 @@ package record
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 )
@@ -284,6 +287,89 @@ func TestLoadWithoutAnyValidGeneration(t *testing.T) {
 	}
 }
 
+func TestLoadLatestNeverFallsBackToAnOlderGeneration(t *testing.T) {
+	st, root := newTestStore(t)
+	id := newRecord(t, st)
+	shell := testShell()
+	shell.SessionID = id
+	saveCheckpoint(t, st, id, Checkpoint{Session: shell})
+	saveCheckpoint(t, st, id, Checkpoint{Session: shell})
+	if err := os.WriteFile(filepath.Join(root, "sessions", id, "checkpoints", "2.json"), []byte("{"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Load keeps recovery working by falling back; LoadLatest must not let
+	// a caller prove the source record from the older generation.
+	if cp, err := st.Peek(id); err != nil || cp.SavedRevision != 1 {
+		t.Fatalf("Peek = revision %d, %v; want the older generation", cp.SavedRevision, err)
+	}
+	if rec, err := st.Load(id); err != nil || rec.Checkpoint.SavedRevision != 1 {
+		t.Fatalf("Load = %v, %v; want the older generation", rec, err)
+	}
+	if _, err := st.LoadLatest(context.Background(), id); err == nil {
+		t.Fatal("LoadLatest accepted a broken newest generation")
+	}
+}
+
+func TestLoadLatestVerifiesNewestEvidenceWithoutFallback(t *testing.T) {
+	cases := []struct {
+		name   string
+		damage func(t *testing.T, path string)
+	}{
+		{name: "missing", damage: func(t *testing.T, path string) {
+			if err := os.Remove(path); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "bad digest", damage: func(t *testing.T, path string) {
+			if err := os.WriteFile(path, bytes.Repeat([]byte("x"), 32), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			st, root := newTestStore(t)
+			id := newRecord(t, st)
+			shell := testShell()
+			shell.SessionID = id
+			saveCheckpoint(t, st, id, Checkpoint{Session: shell})
+			ev := writeEvidence(t, st, id, "coverage-end", bytes.Repeat([]byte("c"), 32))
+			shell.CoverageEvidenceIDs = []string{ev.ID}
+			saveCheckpoint(t, st, id, Checkpoint{Session: shell, Evidence: []EvidenceFile{ev}})
+			tc.damage(t, filepath.Join(root, "sessions", id, "evidence", ev.ID+".png"))
+
+			if rec, err := st.Load(id); err != nil || rec.Checkpoint.SavedRevision != 1 {
+				t.Fatalf("Load = %v, %v; want the older evidence-free generation", rec, err)
+			}
+			if _, err := st.LoadLatest(context.Background(), id); err == nil {
+				t.Fatal("LoadLatest accepted the newest generation with damaged evidence")
+			}
+		})
+	}
+}
+
+func TestLoadLatestRejectsACrossDirectoryIdentity(t *testing.T) {
+	st, _ := newTestStore(t)
+	id := newRecord(t, st)
+	shell := testShell()
+	shell.SessionID = "a93e8b22-5c0d-4a7e-8f1b-52a2c11d7f10"
+	saveCheckpoint(t, st, id, Checkpoint{Session: shell})
+	if _, err := st.Load(id); err != nil {
+		t.Fatalf("Load should keep its historical behavior: %v", err)
+	}
+	if _, err := st.LoadLatest(context.Background(), id); err == nil {
+		t.Fatal("LoadLatest accepted a checkpoint whose session identity names another record")
+	}
+}
+
+func TestLoadLatestReportsNoGeneration(t *testing.T) {
+	st, _ := newTestStore(t)
+	id := newRecord(t, st)
+	if _, err := st.LoadLatest(context.Background(), id); !errors.Is(err, ErrNoValidCheckpoint) {
+		t.Fatalf("LoadLatest without a generation = %v, want ErrNoValidCheckpoint", err)
+	}
+}
+
 func TestLoadMarksInterruptions(t *testing.T) {
 	st, _ := newTestStore(t)
 	id := newRecord(t, st)
@@ -476,5 +562,341 @@ func TestLoadV2CheckpointWithoutFailureParams(t *testing.T) {
 	rec := mustLoad(t, st, id)
 	if rec.Checkpoint.Session.FailureParams != nil {
 		t.Fatalf("failureParams = %v, want nil for an old v2 record", rec.Checkpoint.Session.FailureParams)
+	}
+}
+
+type blockingReadFile struct {
+	File
+	started   chan struct{}
+	release   chan struct{}
+	closed    chan struct{}
+	once      sync.Once
+	closeOnce sync.Once
+}
+
+func (f *blockingReadFile) Read(p []byte) (int, error) {
+	if f.started != nil {
+		f.once.Do(func() { close(f.started) })
+	}
+	<-f.release
+	return f.File.Read(p)
+}
+
+// blockingCheckpointFS blocks the first checkpoint read, so Load holds the
+// store mutex until released.
+type blockingCheckpointFS struct {
+	FS
+	path    string
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (f *blockingCheckpointFS) OpenFile(path string, flag int, perm fs.FileMode) (File, error) {
+	file, err := f.FS.OpenFile(path, flag, perm)
+	if err != nil || path != f.path {
+		return file, err
+	}
+	f.once.Do(func() { close(f.started) })
+	return &blockingReadFile{File: file, release: f.release}, nil
+}
+
+// blockingStatFS blocks one Stat call and records whether the adjacent
+// ReadDir/OpenFile calls happened before cancellation was observed.
+type blockingStatFS struct {
+	FS
+	path     string
+	started  chan struct{}
+	release  chan struct{}
+	once     sync.Once
+	readDirs int
+	opens    int
+}
+
+func (f *blockingStatFS) Stat(path string) (fs.FileInfo, error) {
+	info, err := f.FS.Stat(path)
+	if path == f.path && err == nil {
+		f.once.Do(func() { close(f.started) })
+		<-f.release
+	}
+	return info, err
+}
+
+func (f *blockingStatFS) ReadDir(dir string) ([]fs.DirEntry, error) {
+	f.readDirs++
+	return f.FS.ReadDir(dir)
+}
+
+func (f *blockingStatFS) OpenFile(path string, flag int, perm fs.FileMode) (File, error) {
+	if path == f.path {
+		f.opens++
+	}
+	return f.FS.OpenFile(path, flag, perm)
+}
+
+func (f *blockingReadFile) Close() error {
+	if f.closed != nil {
+		f.closeOnce.Do(func() { close(f.closed) })
+	}
+	return f.File.Close()
+}
+
+type blockingEvidenceFS struct {
+	FS
+	path    string
+	started chan struct{}
+	release chan struct{}
+	closed  chan struct{}
+}
+
+func (f *blockingEvidenceFS) OpenFile(path string, flag int, perm fs.FileMode) (File, error) {
+	file, err := f.FS.OpenFile(path, flag, perm)
+	if err != nil || path != f.path {
+		return file, err
+	}
+	return &blockingReadFile{File: file, started: f.started, release: f.release, closed: f.closed}, nil
+}
+
+// A native read already inside the OS cannot be interrupted, but LoadLatest
+// must reject it at the next boundary and never return a partially verified
+// newest generation.
+func TestLoadLatestCancelsWhileEvidenceReadBlocks(t *testing.T) {
+	st, root := newTestStore(t)
+	id := newRecord(t, st)
+	shell := testShell()
+	shell.SessionID = id
+	saveCheckpoint(t, st, id, Checkpoint{Session: shell})
+	ev := writeEvidence(t, st, id, "coverage-end", bytes.Repeat([]byte("c"), 32))
+	shell.CoverageEvidenceIDs = []string{ev.ID}
+	saveCheckpoint(t, st, id, Checkpoint{Session: shell, Evidence: []EvidenceFile{ev}})
+
+	path := filepath.Join(root, "sessions", id, "evidence", ev.ID+".png")
+	fsys := &blockingEvidenceFS{
+		FS:      osFS{},
+		path:    path,
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+		closed:  make(chan struct{}),
+	}
+	blocked, err := newStore(root, fsys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := blocked.LoadLatest(ctx, id)
+		done <- err
+	}()
+	select {
+	case <-fsys.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("evidence read did not start")
+	}
+	cancel()
+	close(fsys.release)
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("LoadLatest after cancellation = %v, want context.Canceled", err)
+		}
+		select {
+		case <-fsys.closed:
+		default:
+			t.Fatal("the blocked evidence handle was not closed")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("LoadLatest did not return after the blocked read was released")
+	}
+}
+
+func TestLoadLatestCancelsWhileLoadHoldsStoreLock(t *testing.T) {
+	st, root := newTestStore(t)
+	id := newRecord(t, st)
+	shell := testShell()
+	shell.SessionID = id
+	saveCheckpoint(t, st, id, Checkpoint{Session: shell})
+	fsys := &blockingCheckpointFS{
+		FS:      osFS{},
+		path:    filepath.Join(root, "sessions", id, "checkpoints", "1.json"),
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	blocked, err := newStore(root, fsys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loadDone := make(chan error, 1)
+	go func() {
+		_, err := blocked.Load(id)
+		loadDone <- err
+	}()
+	select {
+	case <-fsys.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the ordinary load did not hold the store lock")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	latestDone := make(chan error, 1)
+	go func() {
+		_, err := blocked.LoadLatest(ctx, id)
+		latestDone <- err
+	}()
+	cancel()
+	select {
+	case err := <-latestDone:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("LoadLatest while the lock is held = %v, want context.Canceled", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("LoadLatest waited for the ordinary load's store lock")
+	}
+	close(fsys.release)
+	select {
+	case err := <-loadDone:
+		if err != nil {
+			t.Fatalf("ordinary Load after release: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("ordinary Load did not finish after release")
+	}
+}
+
+func TestLoadLatestWaitsForStoreLockAndContinues(t *testing.T) {
+	st, root := newTestStore(t)
+	id := newRecord(t, st)
+	shell := testShell()
+	shell.SessionID = id
+	saveCheckpoint(t, st, id, Checkpoint{Session: shell})
+	fsys := &blockingCheckpointFS{
+		FS:      osFS{},
+		path:    filepath.Join(root, "sessions", id, "checkpoints", "1.json"),
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	blocked, err := newStore(root, fsys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loadDone := make(chan error, 1)
+	go func() {
+		_, err := blocked.Load(id)
+		loadDone <- err
+	}()
+	select {
+	case <-fsys.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the ordinary load did not start")
+	}
+	latestDone := make(chan error, 1)
+	go func() {
+		_, err := blocked.LoadLatest(context.Background(), id)
+		latestDone <- err
+	}()
+	time.Sleep(5 * time.Millisecond) // let LoadLatest wait on the held lock
+	close(fsys.release)
+	select {
+	case err := <-loadDone:
+		if err != nil {
+			t.Fatalf("ordinary Load: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("ordinary Load did not finish")
+	}
+	select {
+	case err := <-latestDone:
+		if err != nil {
+			t.Fatalf("LoadLatest after a healthy lock wait: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("LoadLatest did not continue after the lock was released")
+	}
+}
+
+func TestLoadLatestCancelsBeforeReadDirAfterDirectoryStat(t *testing.T) {
+	st, root := newTestStore(t)
+	id := newRecord(t, st)
+	saveCheckpoint(t, st, id, Checkpoint{Session: testShell()})
+	fsys := &blockingStatFS{
+		FS:      osFS{},
+		path:    filepath.Join(root, "sessions", id),
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	blocked, err := newStore(root, fsys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := blocked.LoadLatest(ctx, id)
+		done <- err
+	}()
+	select {
+	case <-fsys.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("directory Stat did not block")
+	}
+	cancel()
+	close(fsys.release)
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("LoadLatest after directory Stat cancellation = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("LoadLatest did not return after directory Stat cancellation")
+	}
+	if fsys.readDirs != 0 || fsys.opens != 0 {
+		t.Fatalf("cancelled directory read still called ReadDir/OpenFile: %d/%d", fsys.readDirs, fsys.opens)
+	}
+}
+
+func TestLoadLatestCancelsBeforeOpenAfterEvidenceStat(t *testing.T) {
+	st, root := newTestStore(t)
+	id := newRecord(t, st)
+	shell := testShell()
+	shell.SessionID = id
+	saveCheckpoint(t, st, id, Checkpoint{Session: shell})
+	ev := writeEvidence(t, st, id, "coverage-end", bytes.Repeat([]byte("c"), 32))
+	shell.CoverageEvidenceIDs = []string{ev.ID}
+	saveCheckpoint(t, st, id, Checkpoint{Session: shell, Evidence: []EvidenceFile{ev}})
+
+	path := filepath.Join(root, "sessions", id, "evidence", ev.ID+".png")
+	fsys := &blockingStatFS{
+		FS:      osFS{},
+		path:    path,
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	blocked, err := newStore(root, fsys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := blocked.LoadLatest(ctx, id)
+		done <- err
+	}()
+	select {
+	case <-fsys.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("evidence Stat did not block")
+	}
+	cancel()
+	close(fsys.release)
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("LoadLatest after evidence Stat cancellation = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("LoadLatest did not return after evidence Stat cancellation")
+	}
+	if fsys.opens != 0 {
+		t.Fatalf("cancelled evidence Stat still called OpenFile %d time(s)", fsys.opens)
 	}
 }

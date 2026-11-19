@@ -77,7 +77,7 @@ type HistoryRecord struct {
 	IncompletePositionsKnown bool
 	// PositionOutcomes lists positions 1..record.PositionCount whenever
 	// IncompletePositionsKnown is true. It names each position's state —
-	// complete, degraded, truncated or not reached — so the summary and
+	// complete, degraded, truncated or not reached — so the list, summary and
 	// notification can say which positions are missing and how many the
 	// scan actually completed without re-reading the checkpoint's scope.
 	PositionOutcomes []PositionOutcome
@@ -91,6 +91,17 @@ type HistoryRecord struct {
 	// never "sort inconsistent".
 	SortVerified      bool
 	SortVerifiedKnown bool
+	// ScanPositions is the declared position range of a partial rescan
+	// (nil for the historical full range); ScanPositionsKnown separates
+	// "full range" from "the scope cannot be read". RescanOf names the
+	// saved record the range came from and is empty for a full scan.
+	ScanPositions      []int
+	ScanPositionsKnown bool
+	RescanOf           string
+	// RangeInvalid marks valid JSON that declares a partial-rescan member
+	// but cannot form a valid range. Its coverage is not a full-scan
+	// conclusion and the list must not present it as one.
+	RangeInvalid bool
 	// Interrupted reports that the newest checkpoint never recorded a
 	// termination (or recorded the interrupted kind) and this is not a
 	// still-running scan: the session ended by a crash or a lost process
@@ -184,6 +195,12 @@ func historySessionSummary(info record.RecordInfo, cp *record.Checkpoint, active
 		entry.SortVerified = sort == record.SortVerificationVerified
 		entry.SortVerifiedKnown = true
 	}
+	if plan, known := DeclaredScanPlan(cp.Session.Scope); known {
+		entry.ScanPositionsKnown = true
+		entry.ScanPositions = append([]int(nil), plan.Positions...)
+		entry.RescanOf = plan.RescanOf
+	}
+	entry.RangeInvalid = ScanScopeDamaged(cp.Session.Scope)
 	if ledger, known := cp.Session.PositionConclusions(); known {
 		entry.IncompletePositionsKnown = true
 		entry.PositionOutcomes = PositionOutcomes(ledger.Positions)

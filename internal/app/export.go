@@ -172,6 +172,18 @@ func allSScope() exportScope {
 	}
 }
 
+// exportScopeOf states what this session set out to scan. The historical
+// full scan keeps all six slots. A partial rescan declares only its
+// selected positions, so a consumer cannot read the file as a
+// whole-warehouse result; the format shape and version stay v2.
+func exportScopeOf(plan ScanPlan) exportScope {
+	scope := allSScope()
+	if !plan.Full() {
+		scope.Slots = append([]int(nil), plan.Positions...)
+	}
+	return scope
+}
+
 // BuildUsableExport analyses one saved record and freezes the data the
 // two formats share. Only records the contract calls usable enter Items:
 // produced structured data, a settled quality, a passed current
@@ -205,6 +217,15 @@ func BuildUsableExport(rec *record.Recovery) (*UsableExport, error) {
 		return nil, fmt.Errorf("app: export: captured count %d does not match %d item records",
 			shell.CapturedCount, len(cp.Items))
 	}
+	// A damaged partial-rescan range is not a full range. Refuse the export
+	// instead of writing six slots that the session never declared.
+	if ScanScopeDamaged(shell.Scope) {
+		return nil, errors.New("app: export: scan scope declares invalid partial-rescan data")
+	}
+	plan, err := ParseScanPlan(shell.Scope)
+	if err != nil {
+		return nil, fmt.Errorf("app: export: scan scope: %w", err)
+	}
 
 	export := &UsableExport{
 		session: exportSession{
@@ -216,8 +237,8 @@ func BuildUsableExport(rec *record.Recovery) (*UsableExport, error) {
 			Locale:        shell.Locale,
 			StartedAt:     formatExportTime(shell.StartedAt),
 			Termination:   exportTermination(rec),
-			Scope:         allSScope(),
-			Coverage:      exportCoverageOf(shell),
+			Scope:         exportScopeOf(plan),
+			Coverage:      exportCoverageOf(shell, plan),
 			CapturedCount: shell.CapturedCount,
 		},
 		catalog: exportCatalog{
@@ -380,10 +401,13 @@ func exportTermination(rec *record.Recovery) record.Termination {
 // exportCoverageOf copies the saved conclusion but refuses complete when
 // the observed scope never verified the sort order. Complete also needs a
 // full traversal ledger, which the current record does not carry; with
-// an unverified or absent sort the honest conclusion is partial.
-func exportCoverageOf(shell *record.SessionShell) exportCoverage {
+// an unverified or absent sort the honest conclusion is partial. A scoped
+// partial rescan never exports a warehouse-complete claim.
+func exportCoverageOf(shell *record.SessionShell, plan ScanPlan) exportCoverage {
 	status := shell.Coverage.Status
-	if status == record.CoverageComplete && !sortVerified(shell.ObservedScope) {
+	if !plan.Full() {
+		status = record.CoveragePartial
+	} else if status == record.CoverageComplete && !sortVerified(shell.ObservedScope) {
 		status = record.CoveragePartial
 	}
 	return exportCoverage{Status: status, ExpectedCount: shell.Coverage.ExpectedCount}

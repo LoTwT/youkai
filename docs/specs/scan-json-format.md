@@ -1,6 +1,6 @@
 # Youkai 扫描结果 JSON 与 CSV v2
 
-更新日期：2026-11-16。本文只维护当前公共导出契约：JSON 使用 `formatVersion: 2`，CSV 使用第 5 节的固定列序。两种格式均由 [`internal/app/export.go`](../../internal/app/export.go) 生成，管理状态为必需字段，装备状态与装备者为可选字段；装备信息未解析时保留空值和 warning，不阻止可用导出。会话、保存与物品身份以[公共架构第 5 节](scanner-architecture.md#5-扫描会话与结果语义)为准；操作流程见 [T6](t6-review-export-workflow.md)。
+更新日期：2026-11-19。本文只维护当前公共导出契约：JSON 使用 `formatVersion: 2`，CSV 使用第 5 节的固定列序。两种格式均由 [`internal/app/export.go`](../../internal/app/export.go) 生成，管理状态为必需字段，装备状态与装备者为可选字段；装备信息未解析时保留空值和 warning，不阻止可用导出。P-12 第一步的独立补扫记录仍使用 v2：`scope.slots` 只列本次会话选中的号位，覆盖为 `partial`，计数等式与 CSV 列序不变。会话、保存与物品身份以[公共架构第 5 节](scanner-architecture.md#5-扫描会话与结果语义)为准；操作流程见 [T6](t6-review-export-workflow.md)。
 
 ## 1. 两种导出格式，同一数据源
 
@@ -48,13 +48,13 @@
 | `locale` | v2 固定 `zh-CN`，对应用户已确认的首版游戏识别语言；不表示已经通过识别验收，也不规定应用界面语言。 |
 | `startedAt` / `endedAt` | 开始和实际收尾时间；中断恢复且结束时刻不可知时，`endedAt` 为 `null`，不拿恢复时间冒充结束。 |
 | `termination` | `{ "kind": "completed" 或 "cancelled" 或 "failed" 或 "interrupted", "code": string, "phase": "preparing" 或 "capturing" 或 "finalizing" }`。保留首个结束触发。 |
-| `scope` | `{ "rarity": "S", "slots": [1,2,3,4,5,6], "minLevel": 0, "maxLevel": 15, "sets": "all", "locked": "all", "discarded": "all", "equipped": "all" }`。这些是游戏筛选条件与声明范围，不是 `data` 字段。首版范围为全部套装，且不按锁定、弃置或装备状态排除盘；缩小范围须明确更新契约，不能把 UI 临时筛选偷换为来源范围。 |
+| `scope` | `{ "rarity": "S", "slots": [1,2,3,4,5,6], "minLevel": 0, "maxLevel": 15, "sets": "all", "locked": "all", "discarded": "all", "equipped": "all" }`。这些是游戏筛选条件与声明范围，不是 `data` 字段。首版全量扫描为全部套装、六个号位，且不按锁定、弃置或装备状态排除盘；缩小范围须明确更新契约，不能把 UI 临时筛选偷换为来源范围。**P-12 第一步的独立补扫记录**（2026-11-19）是明确的会话范围收窄：`slots` 只列该会话选中的号位，`coverage.status` 固定为 `partial`；它不合并原记录，计数只属于本次补扫会话，CSV 列序不变。补扫范围数据损坏（`positions`/`rescanOf` 缺失、空值、类型错误或非法范围）时拒绝导出，不能按六号位生成误导文件；旧整仓记录仍为六号位。 |
 | `coverage` | `{ "status": "complete" 或 "partial" 或 "unknown", "expectedCount": integer 或 null }`。总数只有同范围可信证据时才填；它不是 `complete` 的必要条件。 |
 | `capturedCount` | 已接纳的 S 级物品观测数，包括后来失败或未处理项。导航尝试、参照物截图、重访前被截住的失败和明确非 S 项不计入。 |
 
 **重访口径：** 只有尚未确认采集的失败（如详情归属未确认）才稍后重访；重访在接纳前截住，不分配 `sequence`，不产生第二条观测。已采集但 OCR/字段有问题的件交给现有逐件校对流程，不重访。旧尝试只留内部诊断，不计入任何件数、不进 `excludedCount`。因此 `capturedCount` 只计已接纳观测，`capturedCount = items.length + excludedCount`；`expectedCount` 只在有可信同范围证据时填写，且不是完整覆盖的必要条件（[决策 §4.5](../decisions/2026-10-28-scanner-rearchitecture.md#45-k4完整性)、[§9.4(a)](../decisions/2026-10-28-scanner-rearchitecture.md#94-scan-json-formatmd已同步选定-a)）。
 
-**位置范围未证明（[决策 §4.6](../decisions/2026-10-28-scanner-rearchitecture.md#46-k5故障分级)）：** 该位置此前已接纳物品仍在 `items` 中、不计入 `excludedCount`，`coverage.status` 只报 `partial`；完整可用性与标注口径见 [T5 §3](t5-zzz-inventory-traversal.md#3-开始前必须核对的页面条件)。v2 不新增位置级范围标注字段。位置准备失败或位置证明失败（T5 §5 的位置级降级，2026-10-31 已实现）同样只令 `coverage.status=partial`；位置级原因留在会话内部 `observedScope`、诊断与结果界面，不进入 v2。
+**位置范围未证明（[决策 §4.6](../decisions/2026-10-28-scanner-rearchitecture.md#46-k5故障分级)）：** 该位置此前已接纳物品仍在 `items` 中、不计入 `excludedCount`，`coverage.status` 只报 `partial`；完整可用性与标注口径见 [T5 §3](t5-zzz-inventory-traversal.md#3-开始前必须核对的页面条件)。v2 不新增位置级范围标注字段。位置准备失败或位置证明失败（T5 §5 的位置级降级，2026-10-31 已实现）同样只令 `coverage.status=partial`；位置级原因留在会话内部 `observedScope`、诊断与结果界面，不进入 v2。P-12 第一步的独立补扫记录同样只报 `partial`，其 `scope.slots` 收窄到本次选中号位；它不是全仓结果，也不与原记录合并。补扫预检失败、未打开输入且没有号位账目时仍报 `partial`，终止阶段表达“没有开始”，不伪造位置结论。
 
 `termination.code` 为非空诊断代码，建议使用 `verifiedEnd`、`userCancelled`、`focusLost`、`geometryChanged`、`permissionRevoked`、`navigationMismatch`、`positionFailureLimit`、`evidenceFailed`、`runtimeFailure`、`storageFailure` 或 `interrupted`。`evidenceFailed` 表示已接纳截图的投影或入队失败，保留原始错误；`positionFailureLimit` 表示不完整位置累计达到 3 个而主动停止整次扫描（T5 §5）；它们只用于解释，不授权额外动作；读取端可展示不认识的代码，不能因此把 `kind` 改为正常完成。后续故障不会覆盖首个触发。
 

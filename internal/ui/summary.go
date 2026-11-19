@@ -31,6 +31,7 @@ const (
 	summaryActionRetrySave
 	summaryActionPrepare
 	summaryActionRescan
+	summaryActionRescanIncomplete
 	summaryActionReview
 	summaryActionBackfill
 	summaryActionViewItems
@@ -117,6 +118,9 @@ func (m *Model) summaryNotices(c *ui.Context, t *ui.Theme) {
 	if m.exportBuildErr != "" {
 		ui.Text(c, "导出尚未就绪："+m.exportBuildErr).TextColor(t.Danger)
 	}
+	if m.rescanNotice != "" {
+		ui.Text(c, m.rescanNotice).TextColor(t.Warning)
+	}
 }
 
 // summaryConclusionArea renders the conclusion title, its optional
@@ -178,7 +182,10 @@ func (m *Model) performSummaryAction(c *ui.Context, kind summaryActionKind) {
 	case summaryActionRetrySave:
 		m.RetrySave()
 	case summaryActionPrepare, summaryActionRescan:
+		m.dropRescanContext()
 		m.navigatePage(pageScan)
+	case summaryActionRescanIncomplete:
+		m.openRescanDialog()
 	case summaryActionReview:
 		m.openSummaryClass(app.ItemClassPendingReview)
 	case summaryActionBackfill:
@@ -414,6 +421,14 @@ func (m *Model) summaryDetailsArea(c *ui.Context, t *ui.Theme) {
 // "全部" is a traversal conclusion, not a total reconciliation, so the line
 // says so (architecture §5 完整性与身份).
 func (m *Model) summaryCoverageLine() string {
+	plan, planKnown := app.DeclaredScanPlan(m.rec.Shell.Scope)
+	if app.ScanScopeDamaged(m.rec.Shell.Scope) {
+		return "覆盖范围：范围记录无效，无法确认是否只补扫了部分号位"
+	}
+	if planKnown && plan.RescanOf != "" {
+		return fmt.Sprintf("覆盖：部分 · 补扫 %s 号位 · 独立记录，未合并原记录",
+			summaryPositionRanges(plan.Positions))
+	}
 	switch m.recordCoverage() {
 	case record.CoverageComplete:
 		return "覆盖：全部 · 未做总数对账"
@@ -424,13 +439,32 @@ func (m *Model) summaryCoverageLine() string {
 	}
 }
 
-// summaryPositions lists all six slots whenever the record can report them:
-// each state, a degraded slot's stage and cause, and the sort verdict. A
-// record without the typed ledger or the legacy observed scope says it
-// cannot list the slots instead of inventing six complete ones.
+// summaryPositions lists the session's declared positions whenever the
+// record can report them: each state, a degraded slot's stage and cause, and
+// the sort verdict. A full scan's declared range is all six. A partial
+// rescan lists only its selected positions, so a deliberately unselected
+// position is never shown as failed or unreached. A record without the typed
+// ledger or the legacy observed scope says it cannot list the slots instead
+// of inventing six complete ones.
 func (m *Model) summaryPositions(c *ui.Context, t *ui.Theme) {
 	tok := m.effectiveTokens()
 	outcomes, known := app.PositionOutcomesOf(m.rec.Shell)
+	plan, planKnown := app.DeclaredScanPlan(m.rec.Shell.Scope)
+	if app.ScanScopeDamaged(m.rec.Shell.Scope) {
+		ui.Text(c, "号位：范围记录无效，无法列出").TextColor(tok.WarningFG)
+		return
+	}
+	if planKnown && plan.RescanOf != "" {
+		filtered := make([]app.PositionOutcome, 0, len(plan.Positions))
+		for _, outcome := range outcomes {
+			if plan.Includes(outcome.Position) {
+				filtered = append(filtered, outcome)
+			}
+		}
+		outcomes = filtered
+		ui.Text(c, "范围：补扫 "+summaryPositionRanges(plan.Positions)+" 号位 · 来源 "+plan.RescanOf).
+			TextColor(tok.TextSecondary).FontSize(t.FontSize * 0.92)
+	}
 	if !known {
 		ui.Text(c, "号位：记录没有保存号位结论，无法列出").TextColor(tok.TextMuted)
 		return
@@ -764,6 +798,16 @@ type summaryWording struct {
 	Notes      []string
 }
 
+// invalidRangeWording is the honest summary for damaged partial-rescan
+// data: the record stays readable, but neither a full nor a partial range
+// can be claimed and export is blocked.
+func invalidRangeWording() summaryWording {
+	return summaryWording{
+		Title:      "范围记录无效，无法确认覆盖范围",
+		Supplement: "补扫范围数据不完整；不能导出，也不能继续按该范围补扫。",
+	}
+}
+
 // summaryConclusionInput adapts the open record to the shared conclusion
 // input. CapturedCount falls back to the rows so an older record without the
 // four-class counts still classifies as empty or non-empty correctly.
@@ -783,9 +827,21 @@ func (m *Model) summaryConclusionInput() recordConclusionInput {
 		}
 	}
 	sort, sortKnown := m.rec.Shell.SortVerification()
+	plan := app.ScanPlan{}
+	if declared, ok := app.DeclaredScanPlan(m.rec.Shell.Scope); ok {
+		plan = declared
+	}
+	damaged := app.ScanScopeDamaged(m.rec.Shell.Scope)
+	coverage := m.recordCoverage()
+	if plan.RescanOf != "" || damaged {
+		// A scoped or damaged session never covers the whole warehouse.
+		// Even an old or foreign checkpoint that says complete/unknown is
+		// capped here so the summary and export agree on partial.
+		coverage = record.CoveragePartial
+	}
 	return recordConclusionInput{
 		CapturedCount:            captured,
-		Coverage:                 m.recordCoverage(),
+		Coverage:                 coverage,
 		Termination:              m.rec.Shell.Termination,
 		FailureParams:            m.rec.Shell.FailureParams,
 		Counts:                   counts,
@@ -794,6 +850,9 @@ func (m *Model) summaryConclusionInput() recordConclusionInput {
 		IncompletePositionsKnown: outcomesKnown,
 		PositionOutcomes:         outcomes,
 		PositionOutcomesKnown:    outcomesKnown,
+		PlannedPositions:         plan.Positions,
+		Rescan:                   plan.RescanOf != "",
+		RangeInvalid:             damaged,
 		Sort:                     sort,
 		SortKnown:                sortKnown,
 		ScanNotWrapped:           m.rec.Live && m.snap.Busy,
@@ -846,18 +905,33 @@ func recordSummaryWording(out recordOutcome) summaryWording {
 			Supplement: "结束后这里会给出覆盖结论和可导出数量。",
 		}
 	case recordOutcomeEmpty:
+		if in.RangeInvalid {
+			return invalidRangeWording()
+		}
 		return emptyRecordWording(in)
 	case recordOutcomeInterrupted:
+		if in.Rescan {
+			return summaryWording{Title: "补扫中断，只保存了部分结果", Supplement: rescanWordingSupplement}
+		}
 		return summaryWording{Title: "扫描中断，只保存了部分结果"}
 	case recordOutcomeFault:
 		return faultWording(in)
 	case recordOutcomeCancelled:
 		return manualStopWording(in)
 	case recordOutcomeCompleted:
+		if in.RangeInvalid {
+			wording := invalidRangeWording()
+			wording.Eyebrow = "正常结束"
+			return wording
+		}
 		switch in.Coverage {
 		case record.CoveragePartial:
 			wording := partialCoverageWording(in)
-			wording.Eyebrow = "正常结束"
+			if in.Rescan {
+				wording.Eyebrow = "补扫结束"
+			} else {
+				wording.Eyebrow = "正常结束"
+			}
 			return wording
 		case record.CoverageComplete:
 			wording := completeCoverageWording(in)
@@ -865,10 +939,19 @@ func recordSummaryWording(out recordOutcome) summaryWording {
 			return wording
 		default:
 			wording := summaryWording{Title: "扫描结束，无法确认是否扫全"}
-			wording.Eyebrow = "正常结束"
+			if in.Rescan {
+				wording.Title = "补扫结束，无法确认补扫范围是否完整"
+				wording.Supplement = rescanWordingSupplement
+				wording.Eyebrow = "补扫结束"
+			} else {
+				wording.Eyebrow = "正常结束"
+			}
 			return wording
 		}
 	case recordOutcomeUnknown:
+		if in.RangeInvalid {
+			return invalidRangeWording()
+		}
 		switch in.Coverage {
 		case record.CoveragePartial:
 			return partialCoverageWording(in)
@@ -918,7 +1001,11 @@ func summaryCompletePendingTitle(counts app.ItemClassCounts) string {
 // under the title (08 §2.1, wireframe 06).
 func partialCoverageWording(in recordConclusionInput) summaryWording {
 	title, notes := partialCoverageTitleAndNotes(in)
-	return summaryWording{Title: title, Notes: notes}
+	wording := summaryWording{Title: title, Notes: notes}
+	if in.Rescan {
+		wording.Supplement = rescanWordingSupplement
+	}
+	return wording
 }
 
 // partialCoverageTitleAndNotes builds "没有扫全：3 号位、5 号位不完整" plus
@@ -926,11 +1013,12 @@ func partialCoverageWording(in recordConclusionInput) summaryWording {
 // slots cannot be listed says "覆盖不完整" instead of inventing names. It
 // never says "排序不一致".
 func partialCoverageTitleAndNotes(in recordConclusionInput) (string, []string) {
+	outcomes := plannedPositionOutcomes(in)
 	var incomplete []int
 	var notes []string
 	complete := 0
 	if in.PositionOutcomesKnown {
-		for _, outcome := range in.PositionOutcomes {
+		for _, outcome := range outcomes {
 			if outcome.State == app.PositionOutcomeComplete {
 				complete++
 				continue
@@ -943,7 +1031,22 @@ func partialCoverageTitleAndNotes(in recordConclusionInput) (string, []string) {
 		}
 	}
 	title := "没有扫全：覆盖不完整"
-	if len(incomplete) > 0 {
+	if in.Rescan {
+		switch {
+		case !in.PositionOutcomesKnown:
+			title = "补扫完成，覆盖：部分"
+		case len(incomplete) > 0:
+			names := make([]string, len(incomplete))
+			for i, position := range incomplete {
+				names[i] = fmt.Sprintf("%d 号位", position)
+			}
+			title = "补扫完成：" + strings.Join(names, "、") + "不完整"
+		case rescanRangeText(in) != "":
+			title = "补扫完成：" + rescanRangeText(in) + "完整"
+		default:
+			title = "补扫完成，覆盖：部分"
+		}
+	} else if len(incomplete) > 0 {
 		names := make([]string, len(incomplete))
 		for i, position := range incomplete {
 			names[i] = fmt.Sprintf("%d 号位", position)
@@ -951,9 +1054,10 @@ func partialCoverageTitleAndNotes(in recordConclusionInput) (string, []string) {
 		title = "没有扫全：" + strings.Join(names, "、") + "不完整"
 	}
 	if in.SortKnown && in.Sort != record.SortVerificationVerified {
-		if len(incomplete) > 0 {
+		switch {
+		case len(incomplete) > 0 || in.Rescan:
 			title += "；排序未验证"
-		} else {
+		default:
 			title = "没有扫全：排序未验证"
 		}
 	}
@@ -965,16 +1069,27 @@ func partialCoverageTitleAndNotes(in recordConclusionInput) (string, []string) {
 // position ledger omits the number rather than claiming zero.
 func manualStopWording(in recordConclusionInput) summaryWording {
 	title := "已手动停止"
+	if in.Rescan {
+		title = "补扫已停止"
+	}
 	if in.PositionOutcomesKnown {
 		complete := 0
-		for _, outcome := range in.PositionOutcomes {
+		for _, outcome := range plannedPositionOutcomes(in) {
 			if outcome.State == app.PositionOutcomeComplete {
 				complete++
 			}
 		}
-		title = fmt.Sprintf("已手动停止，扫描了 %d 个号位", complete)
+		if in.Rescan {
+			title = fmt.Sprintf("补扫已停止，扫描了 %d 个号位", complete)
+		} else {
+			title = fmt.Sprintf("已手动停止，扫描了 %d 个号位", complete)
+		}
 	}
-	return summaryWording{Title: title}
+	wording := summaryWording{Title: title}
+	if in.Rescan {
+		wording.Supplement = rescanWordingSupplement
+	}
+	return wording
 }
 
 // faultWording names the fault's Chinese cause and its recovery action.
@@ -982,11 +1097,15 @@ func manualStopWording(in recordConclusionInput) summaryWording {
 // coverage sit under the title (08 §2.1, wireframe 06 B).
 func faultWording(in recordConclusionInput) summaryWording {
 	term := in.Termination
-	title := "扫描中途停止：原因未知"
+	prefix := "扫描"
+	if in.Rescan {
+		prefix = "补扫"
+	}
+	title := prefix + "中途停止：原因未知"
 	supplement := ""
 	if term != nil {
 		if cause := faultCauseText(term.Code, in.FailureParams); cause != "" {
-			title = "扫描中途停止：" + cause
+			title = prefix + "中途停止：" + cause
 		}
 		if guidance, ok := faultGuidanceFor(term.Code, in.FailureParams); ok && guidance.action != "" {
 			supplement = "怎么做：" + guidance.action
@@ -995,6 +1114,9 @@ func faultWording(in recordConclusionInput) summaryWording {
 	var notes []string
 	if saved := summarySavedLine(in); saved != "" {
 		notes = append(notes, saved)
+	}
+	if in.Rescan {
+		notes = append(notes, rescanWordingSupplement)
 	}
 	return summaryWording{Title: title, Supplement: supplement, Notes: notes}
 }
@@ -1010,7 +1132,7 @@ func summarySavedLine(in recordConclusionInput) string {
 		return saved
 	}
 	var complete, partial []int
-	for _, outcome := range in.PositionOutcomes {
+	for _, outcome := range plannedPositionOutcomes(in) {
 		switch outcome.State {
 		case app.PositionOutcomeComplete:
 			complete = append(complete, outcome.Position)
@@ -1065,11 +1187,33 @@ func emptyRecordWording(in recordConclusionInput) summaryWording {
 			action = guidance.action
 		}
 	}
+	prefix := ""
+	if in.Rescan {
+		prefix = "补扫"
+	}
+	if in.Rescan && term != nil && term.Kind == record.TerminationCompleted {
+		if rangeText := rescanRangeText(in); rangeText != "" && in.PositionOutcomesKnown {
+			var incomplete []int
+			var notes []string
+			for _, outcome := range plannedPositionOutcomes(in) {
+				if outcome.State == app.PositionOutcomeComplete {
+					continue
+				}
+				incomplete = append(incomplete, outcome.Position)
+				notes = append(notes, summaryPositionText(outcome))
+			}
+			title := "补扫完成：" + rangeText + "完整"
+			if len(incomplete) > 0 {
+				title = "补扫完成：" + plannedPositionNumbers(incomplete) + " 号位不完整"
+			}
+			return summaryWording{Title: title, Supplement: "没有采集到驱动盘。" + rescanWordingSupplement, Notes: notes}
+		}
+	}
 	// A preparation-stage refusal never scanned anything. Its record says
 	// "没有开始", the same wording the history row uses, so an integrity
 	// refusal cannot read as a completed zero-item scan.
 	if terminationNotStarted(term) {
-		title := "没有开始"
+		title := prefix + "没有开始"
 		switch term.Kind {
 		case record.TerminationFailed:
 			if cause != "" {
@@ -1081,9 +1225,16 @@ func emptyRecordWording(in recordConclusionInput) summaryWording {
 		case record.TerminationCancelled:
 			title += "：已手动停止"
 		}
-		return summaryWording{Title: title, Supplement: "回到准备检查后重新开始。"}
+		supplement := "回到准备检查后重新开始。"
+		if in.Rescan {
+			supplement = rescanWordingSupplement + " " + supplement
+		}
+		return summaryWording{Title: title, Supplement: supplement}
 	}
 	title := "没有采集到任何驱动盘"
+	if in.Rescan {
+		title = "补扫没有采集到任何驱动盘"
+	}
 	supplement := ""
 	switch {
 	case term != nil && term.Kind == record.TerminationFailed && cause != "":
@@ -1092,13 +1243,24 @@ func emptyRecordWording(in recordConclusionInput) summaryWording {
 			supplement = "怎么做：" + action
 		}
 	case recordConclusionInterrupted(term, in.Interrupted, false):
-		title = "扫描中断，没有采集到任何驱动盘"
+		if in.Rescan {
+			title = "补扫中断，没有采集到任何驱动盘"
+		} else {
+			title = "扫描中断，没有采集到任何驱动盘"
+		}
 		supplement = "请重新开始扫描。"
 	case term != nil && term.Kind == record.TerminationCancelled:
-		title = "已手动停止，没有采集到任何驱动盘"
+		if in.Rescan {
+			title = "补扫已手动停止，没有采集到任何驱动盘"
+		} else {
+			title = "已手动停止，没有采集到任何驱动盘"
+		}
 		supplement = "回到准备检查后重新开始。"
 	default:
 		supplement = "回到准备检查后重新开始。"
+	}
+	if in.Rescan {
+		supplement = rescanWordingSupplement + " " + supplement
 	}
 	return summaryWording{Title: title, Supplement: supplement}
 }
@@ -1126,6 +1288,7 @@ func (m *Model) summaryConclusionActions(out recordOutcome) (summaryAction, []su
 		if in.Termination != nil && in.Termination.Kind == record.TerminationFailed && in.Termination.Code != "" {
 			secondary = append(secondary, summaryAction{Kind: summaryActionCopyDiagnostics, Label: "复制诊断信息"})
 		}
+		secondary = append(secondary, m.rescanActions(false)...)
 		return summaryAction{Kind: summaryActionPrepare, Label: "回到准备检查"}, secondary
 	case recordOutcomeFault:
 		secondary := []summaryAction{}
@@ -1138,20 +1301,21 @@ func (m *Model) summaryConclusionActions(out recordOutcome) (summaryAction, []su
 		if in.Termination != nil && in.Termination.Code != "" {
 			secondary = append(secondary, summaryAction{Kind: summaryActionCopyDiagnostics, Label: "复制诊断信息"})
 		}
+		secondary = append(secondary, m.rescanActions(false)...)
 		return summaryAction{Kind: summaryActionRescan, Label: "修正后重新扫描"}, secondary
 	case recordOutcomeInterrupted:
 		secondary := m.pendingSecondary(counts, false)
 		if in.CapturedCount > 0 {
 			secondary = append(secondary, m.viewItemsAction())
 		}
-		secondary = append(secondary, m.rescanAction())
+		secondary = append(secondary, m.rescanActions(true)...)
 		return m.pendingPrimary(counts), secondary
 	case recordOutcomeCancelled:
-		return m.pendingPrimary(counts), append(m.pendingSecondary(counts, false), m.rescanAction())
+		return m.pendingPrimary(counts), append(m.pendingSecondary(counts, false), m.rescanActions(true)...)
 	case recordOutcomeCompleted, recordOutcomeUnknown:
 		switch in.Coverage {
 		case record.CoveragePartial:
-			return m.pendingPrimary(counts), append(m.pendingSecondary(counts, false), m.rescanAction())
+			return m.pendingPrimary(counts), append(m.pendingSecondary(counts, false), m.rescanActions(true)...)
 		case record.CoverageComplete:
 			if counts.Pending() == 0 {
 				secondary := []summaryAction{}
@@ -1227,11 +1391,64 @@ func (m *Model) exportAction() summaryAction {
 
 // rescanAction returns to the scan page's preparation checklist. The design's
 // duration estimate (P-14) is not wired yet; the label names only what it
-// does. The P-12 "rescan incomplete positions" entry will sit beside this
-// action once that contract exists; the first release reserves its place and
-// does not show it.
+// does.
 func (m *Model) rescanAction() summaryAction {
 	return summaryAction{Kind: summaryActionRescan, Label: "重新扫描"}
+}
+
+// rescanActions is the conclusion's rescan pair: P-12's partial rescan for
+// the saved record's still-incomplete positions, then the ordinary
+// full-warehouse restart when the design places it here.
+func (m *Model) rescanActions(includeNormal bool) []summaryAction {
+	actions := []summaryAction{}
+	if action, ok := m.rescanIncompleteAction(); ok {
+		actions = append(actions, action)
+	}
+	if includeNormal {
+		actions = append(actions, m.rescanAction())
+	}
+	return actions
+}
+
+// rescanIncompleteAction offers P-12's first step only when the open record
+// can prove a partial range: it is saved (not still running or awaiting a
+// save retry), readable, a Windows local scan, has a readable position
+// ledger and declared range, and at least one planned position did not
+// complete. The label names every offered position so the range is visible
+// before the dialog opens.
+func (m *Model) rescanIncompleteAction() (summaryAction, bool) {
+	candidates, ok := m.rescanCandidates()
+	if !ok || len(candidates) == 0 {
+		return summaryAction{}, false
+	}
+	positions := make([]int, len(candidates))
+	for i, outcome := range candidates {
+		positions[i] = outcome.Position
+	}
+	return summaryAction{
+		Kind:  summaryActionRescanIncomplete,
+		Label: fmt.Sprintf("补扫不完整号位（%s）", summaryPositionRanges(positions)),
+	}, true
+}
+
+// rescanCandidates is the UI's eligibility gate for P-12. The service
+// repeats every check that affects data; the UI gate only decides whether
+// to offer the entry.
+func (m *Model) rescanCandidates() ([]app.PositionOutcome, bool) {
+	if m.rec == nil || m.recErr != "" {
+		return nil, false
+	}
+	if m.rec.Shell.Client != record.ClientWindowsLocal {
+		return nil, false
+	}
+	if m.rec.Shell.Game != "zzz" || m.rec.Shell.Entity != "driveDisc" {
+		return nil, false
+	}
+	if m.rec.Live && (m.snap.Busy || m.snap.SaveError != "") {
+		// Still running, still wrapping up, or its final save is unresolved.
+		return nil, false
+	}
+	return app.RescanCandidatesOf(m.rec.Shell)
 }
 
 // viewItemsAction opens the item browser on every captured item.

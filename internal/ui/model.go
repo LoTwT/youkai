@@ -369,6 +369,20 @@ type Model struct {
 	// service answered, so a double click cannot start two sessions.
 	startSerial int
 	startReqID  string
+	// pendingRescan arms the preparation page with P-12's selected range.
+	// It survives a Busy/refusal or a pre-input preparation failure so the
+	// same range can be retried; only an actual scan start, an explicit
+	// cancel/switch, or an explicit context change clears it.
+	pendingRescan *pendingRescan
+	// rescanAttempt ties the accepted start to the session that will prove
+	// whether it actually began. Until input opens, a pre-input failure
+	// keeps pendingRescan retryable.
+	rescanAttempt *rescanAttempt
+	// rescanDialog is the summary's position picker. It only prepares the
+	// pending range; the start still uses the normal readiness and precheck.
+	rescanDialog rescanDialog
+	// rescanNotice explains a stale picker or an unusable source record.
+	rescanNotice string
 	// startErr is the last refused start as a past event, not part of the
 	// current reason. It survives automatic re-checks and may sit beside a
 	// usable start; only 重新检查, a new window confirmation or 更换目标, or
@@ -793,6 +807,7 @@ func (m *Model) Apply(snap app.Snapshot) {
 	m.appliedSession, m.appliedRevision = snap.SessionID, snap.Revision
 	m.snap = snap
 	m.prevBusy = snap.Busy
+	m.observeRescanSnapshot(snap)
 	// A service-owned block is the current reason, and a refusal it
 	// superseded must not come back once the block clears. Occupied is the
 	// placeholder the refused attempt itself published while preparing, not
@@ -952,6 +967,7 @@ func (m *Model) ShowLive() {
 	}
 	m.cancelHistoryOpen()
 	if m.liveRecordOpen() && m.recErr == "" {
+		m.dropRescanContext()
 		m.catchUpLive()
 		m.page = pageResults
 		// Returning from settings or the records list still starts a new
@@ -994,7 +1010,17 @@ type HistoryEntry struct {
 	// alone does not mean every position completed.
 	IncompletePositions      int
 	IncompletePositionsKnown bool
-	TotalBytes               int64
+	// PositionOutcomes is the expanded ledger; the partial-rescan wording
+	// needs the individual states, not only the degraded count.
+	PositionOutcomes []app.PositionOutcome
+	// ScanPositions is the declared partial-rescan range (nil for the
+	// historical full range); ScanPositionsKnown separates "full" from
+	// "the scope cannot be read". RescanOf names the source record.
+	ScanPositions      []int
+	ScanPositionsKnown bool
+	RescanOf           string
+	RangeInvalid       bool
+	TotalBytes         int64
 	// EvidenceFiles and EvidenceBytes are the record's screenshot footprint,
 	// shown in the summary's detail area; zero means unknown or no evidence.
 	EvidenceFiles int
@@ -1041,6 +1067,11 @@ func (m *Model) loadHistory() {
 					Interrupted:              info.Interrupted,
 					IncompletePositions:      info.IncompletePositions,
 					IncompletePositionsKnown: info.IncompletePositionsKnown,
+					PositionOutcomes:         info.PositionOutcomes,
+					ScanPositions:            info.ScanPositions,
+					ScanPositionsKnown:       info.ScanPositionsKnown,
+					RescanOf:                 info.RescanOf,
+					RangeInvalid:             info.RangeInvalid,
 					TotalBytes:               info.TotalBytes,
 					EvidenceFiles:            info.EvidenceFiles,
 					EvidenceBytes:            info.EvidenceBytes,
@@ -1201,6 +1232,7 @@ func (m *Model) openRecord(id string) {
 		return
 	}
 	if m.recordIsReady(id) {
+		m.dropRescanContext()
 		m.page = pageResults
 		// Entering from the list is a new visit: the previous visit's
 		// confirmed-and-stayed rows leave the pending segment, so the
@@ -1222,6 +1254,7 @@ func (m *Model) performOpenRecord(id string, exportAfterLoad bool) {
 	if id == "" {
 		return
 	}
+	m.dropRescanContext()
 	if m.displayPage() == pageHistory {
 		m.beginHistoryOpen(id, m.recordIsLive(id), exportAfterLoad)
 		return
@@ -1277,11 +1310,28 @@ func (m *Model) Start() {
 	}
 	m.startErr = ""
 	reqID := m.startReqID
-	req := app.StartRequest{ID: reqID, Target: m.chosenTarget()}
+	rescanIntent := m.pendingRescan
+	var rescan *app.RescanRequest
+	if m.pendingRescan != nil && !m.pendingRescan.blocked {
+		m.pendingRescan.retryNotice = ""
+		request := m.pendingRescan.request()
+		rescan = &request
+	}
+	req := app.StartRequest{ID: reqID, Target: m.chosenTarget(), Rescan: rescan}
 	m.goAsync(func() {
-		_, err := m.cfg.Service.Start(req)
+		outcome, err := m.cfg.Service.Start(req)
 		m.update(func() {
+			if m.startReqID != reqID {
+				// A newer request owns the state; a late answer must not
+				// clear its identity, error or rescan intent.
+				return
+			}
 			m.startReqID = ""
+			staleRescan := req.Rescan != nil && m.pendingRescan != rescanIntent
+			m.observeRescanStartResult(rescanIntent, req, outcome, err)
+			if staleRescan {
+				return
+			}
 			if err != nil {
 				// A service block that outlives this attempt is newer than the
 				// refusal and replaces it. Occupied is this attempt's own
@@ -1319,7 +1369,8 @@ func (m *Model) Start() {
 func (m *Model) canStart() bool {
 	return m.source.Available && m.readinessLoaded && !m.readinessBlocked() &&
 		m.targetReady() && m.startReqID == "" && !m.snap.Busy && m.snap.SaveError == "" &&
-		m.snap.StartBlocked == app.StartBlockedNone &&
+		m.snap.StartBlocked == app.StartBlockedNone && !m.rescanStartBlocked() &&
+		!m.rescanAwaitingSnapshot() &&
 		m.exitState == exitIdle && !m.updateRestartImminent()
 }
 
