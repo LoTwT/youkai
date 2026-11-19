@@ -609,9 +609,12 @@ func (m *Model) exportDialogPreExport(c *ui.Context, t *ui.Theme) {
 			m.exportDialogCSV()
 		}
 	})
-	ui.Text(c, "JSON：带来源扫描、覆盖结论、筛选方式、排除数量和目录。"+
-		"CSV：一行一件的表格，不含这些信息。两者来自同一已保存修订。").
-		TextColor(t.TextMuted).FontSize(t.FontSize * 0.9)
+	ui.Column(c).Gap(t.Space(0.5)).Children(func() {
+		ui.Text(c, "JSON 包含扫描来源、覆盖结论、筛选、排除数和目录。").
+			TextColor(t.TextMuted).FontSize(t.FontSize * 0.9)
+		ui.Text(c, "CSV 每行一件，适合用表格查看。").
+			TextColor(t.TextMuted).FontSize(t.FontSize * 0.9)
+	})
 
 	if reviewShown {
 		c.Key("export-dialog-review")
@@ -765,15 +768,14 @@ func (m *Model) exportDialogSuccessContent(c *ui.Context, t *ui.Theme) {
 	})
 	ui.Column(c).Gap(t.Space(0.5)).Children(func() {
 		ui.Text(c, filepath.Base(o.path)).FontWeight(600)
-		ui.Text(c, "已写入："+filepath.Dir(o.path)).TextColor(t.TextMuted).
-			FontSize(t.FontSize * 0.9)
+		ui.Text(c, "已写入："+filepath.Dir(o.path)).FontSize(t.FontSize * 1.1)
 	})
 	if m.exportDialog.openDirErr != "" {
 		ui.Text(c, m.exportDialog.openDirErr).TextColor(t.Danger)
 	}
 	actionRow(c).Wrap().Children(func() {
 		if m.cfg.OpenDownloadsDirectory != nil {
-			open := primaryButton(c, "打开下载目录").Grow(1)
+			open := primaryButton(c, "打开下载目录")
 			open.AutoFocus()
 			if open.Clicked() {
 				m.openExportDirectory()
@@ -792,11 +794,14 @@ func (m *Model) exportDialogSuccessContent(c *ui.Context, t *ui.Theme) {
 	// revision, including the backfill items the review-count helper
 	// deliberately leaves out.
 	if o.pending == 0 {
-		link := button(c, "删除这条记录的截图").TextColor(t.Accent).
-			Background(ui.Color{}).Border(0, ui.Color{}).Padding(0, 0)
-		if link.Clicked() {
-			m.exportDialogDeleteScreenshots(o.recordID)
-		}
+		ui.Divider(c)
+		ui.Row(c).AlignItems(ui.Center).Children(func() {
+			link := button(c, "删除这条记录的截图").TextColor(t.Danger).
+				Background(ui.Color{}).Border(0, ui.Color{}).Padding(0, 0)
+			if link.Clicked() {
+				m.exportDialogDeleteScreenshots(o.recordID)
+			}
+		})
 	}
 }
 

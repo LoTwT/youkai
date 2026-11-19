@@ -23,6 +23,9 @@ func (m *Model) trayHintDialogView(c *ui.Context, t *ui.Theme) {
 				ui.Text(c, "任务栏示意").TextColor(t.TextMuted).FontSize(t.FontSize * 0.9)
 				ui.Box(c).Grow(1)
 				ui.Text(c, "^").FontWeight(600)
+				if m.cfg.AppIcon != nil {
+					ui.Image(c, m.cfg.AppIcon).Size(16, 16).Fit(ui.Contain)
+				}
 				ui.Text(c, "youkai").FontWeight(600)
 			})
 			if m.trayHintErr != "" {

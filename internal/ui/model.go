@@ -124,6 +124,9 @@ type ScanSourceInfo struct {
 type Config struct {
 	// Service is the application service the window drives. Required.
 	Service Service
+	// AppIcon is the embedded brand icon used in the navigation rail and
+	// the Windows tray hint. A nil bitmap leaves the icon hidden.
+	AppIcon *ui.Bitmap
 	// ScanSource describes the start availability shown in the prepare
 	// area.
 	ScanSource ScanSourceInfo

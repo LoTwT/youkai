@@ -122,7 +122,9 @@ func (m *Model) navRail(c *ui.Context, t *ui.Theme, tok *Tokens) {
 	page := m.displayPage()
 	ui.Column(c).Width(m.railWidth()).Shrink(0).FillHeight().Background(tok.SurfaceContent).
 		Padding(16, 12).Gap(8).Children(func() {
-		ui.Text(c, "妖").FontSize(t.FontSize * 20 / 14).FontWeight(700).AlignSelf(ui.Center)
+		if m.cfg.AppIcon != nil {
+			ui.Image(c, m.cfg.AppIcon).Size(32, 32).Fit(ui.Contain).AlignSelf(ui.Center)
+		}
 		ui.Box(c).Height(16)
 		ui.Column(c).Grow(1).FillWidth().Gap(8).FocusGroup(ui.Vertical).Children(func() {
 			m.navRailItem(c, t, tok, "扫描", scanIcon, page == pageScan, false, m.showScanDestination)
