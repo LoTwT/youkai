@@ -43,7 +43,7 @@
 - **构建与发布：** 正式发布由 GitHub Actions 构建两个平台的制品，随版本发布在 GitHub Releases（`LoTwT/youkai`）上；Windows 上的测试同样使用 GitHub Actions 产出的安装包（用户不在 Windows 上安装开发工具），快速排查非 VC++ 问题时可由 Mac 交叉编译免安装包补充，见[开发与 Windows 测试方式](#开发与-windows-测试方式)。
 - **自动更新：** 首版包含，使用 MyGo v0.9.0 内置更新，从 GitHub Releases（`LoTwT/youkai`）获取经 MyGo 更新密钥签名的版本；范围与规则见[架构第 6 节](scanner-architecture.md#6-首版功能范围)，交付证据见 [T7](t7-public-release-acceptance.md#2-首版交付门槛)。发布时以标签版本为准（`test-v*` 测试渠道、`v*` 正式渠道，靠 `updates.tagPrefix` 隔离），仓库内 `mygo.json` 不随发布改版本号；发布 workflow、密钥管理与升级实测清单见[发布与自动更新](../release.md)。
 - **第三方大文件：** ORT 运行库和 OCR 模型不进 Git，由仓库内脚本按固定 URL 与 SHA-256 下载到被忽略的目录；VC++ 运行库文件取自 GitHub Actions 的 Windows runner（见 VC++ 条目），同样不进 Git。本地构建、测试和 CI 都调用同一脚本，摘要不符即失败。
-- **PR 检查：** Mac 本地测试与 Windows 交叉编译通过即可合并；只能在 Windows 实机验证的内容记入待测清单，在用户的 Windows 上集中测试后再修。GitHub Actions 在 PR 上运行轻量检查：格式、`go vet`、`go test`，覆盖 macOS 与 Windows 两个 runner；不在 PR 上打安装包、跑长时间测试或游戏相关检查。供 Windows 测试的安装包由 GitHub Actions 按需构建（见[开发与 Windows 测试方式](#开发与-windows-测试方式)），正式发布制品构建放在发布流程中。
+- **PR 检查：** Mac 本地测试与 Windows 交叉编译通过即可合并；只能在 Windows 实机验证的内容记入待测清单，在用户的 Windows 上集中测试后再修。GitHub Actions 在 ready PR 上运行轻量检查：格式、`go vet`、`go test`，代码或不确定改动覆盖 macOS 与 Windows 两个 runner；纯 Markdown 文档改动经 PR 测试合并提交的 Git 差异确认后走 Ubuntu 快速路径（多个最佳 merge base 时回退双平台），草稿 PR 转为 ready 时触发（见[开发指南](../development.md#github-actions-检查)）。不在 PR 上打安装包、跑长时间测试或游戏相关检查。供 Windows 测试的安装包由 GitHub Actions 按需构建（见[开发与 Windows 测试方式](#开发与-windows-测试方式)），正式发布制品构建放在发布流程中。
 - **本机工具：** 需要新增 mingw-w64 等工具时，先告知用户，由用户优先手动安装。
 - **PR 流程：** 本机 git skills 支持栈式 PR，但没有规定拆分或合并方式；仓库允许 merge、squash、rebase 三种合并。具体方式在实施拆分 PR 时按当时要求决定。
 - **提交溯源：** 安排任务的会话和实施会话可能不同；Agent-Models 所需的模型与 effort 由用户在实施前告知。

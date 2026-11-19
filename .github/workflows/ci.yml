@@ -1,6 +1,23 @@
-# Lightweight checks for every pull request and push to main: gofmt, go vet,
-# and go test on both target platforms, plus the MyGo UI vet on macOS. No
-# installers, no long-running tests, no OCR resource downloads.
+# Lightweight checks for ready pull requests and pushes to main: gofmt, go vet,
+# and go test on both target platforms, plus the MyGo UI vet on macOS. Draft
+# pull requests skip every job. Converting a ready PR back to draft, when that
+# event starts a run in the same concurrency group, cancels checks that are
+# still in progress. No installers, no long-running tests, no OCR downloads.
+#
+# A ready PR first runs a small Ubuntu selector. It checks out GitHub's test
+# merge commit for the event (GITHUB_SHA), verifies the exact commit and that
+# its two parents are the event base and head, then requires exactly one best
+# merge base before comparing two NUL-delimited, rename-detection-free diffs:
+# the checked-out merge tree against the base, and the PR head against the
+# merge base. A criss-cross history can have more than one best merge base; a
+# single value can hide code visible only from another best base, so zero or
+# multiple results fall back to the full checks. Only a successful, non-empty,
+# whitelist-only Markdown result (docs/**.md or root README.md) skips macOS and
+# Windows. Any checkout, verification, history, diff, or output problem keeps
+# both platform checks; a selector failure is left visible in the workflow.
+# Pushes to main do not run the selector and use the fixed platform matrix
+# directly. Platform jobs use !cancelled(), so a cancelled run does not start
+# or continue them. No REST API or extra GITHUB_TOKEN permissions are used.
 #
 # cgo is used by the OCR bindings (internal/recognition). macOS jobs use the
 # runner's Xcode toolchain (clang); Windows jobs use the MinGW gcc bundled
@@ -17,6 +34,7 @@ on:
   push:
     branches: [main]
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
 
 permissions:
   contents: read
@@ -26,8 +44,190 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  select:
+    name: Select checks
+    # Only ready PRs need routing. Drafts and main pushes do not start this job.
+    if: github.event_name == 'pull_request' && github.event.pull_request.draft != true
+    runs-on: ubuntu-latest
+    outputs:
+      docs_only: ${{ steps.route.outputs.docs_only }}
+    steps:
+      - name: Check out the PR test merge commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - name: Classify the tested tree
+        id: route
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          MERGE_SHA: ${{ github.sha }}
+          EVENT_ACTION: ${{ github.event.action }}
+        run: |
+          set -euo pipefail
+
+          fail() {
+            echo "::error::$1"
+            exit 1
+          }
+
+          # GITHUB_SHA is GitHub's test merge commit for this pull_request
+          # event. Verify that the checkout is exactly that commit and that
+          # its parents are the event base and head, in that order.
+          actual=$(git rev-parse HEAD)
+          [ "$actual" = "$MERGE_SHA" ] || fail "checked-out HEAD $actual is not github.sha $MERGE_SHA"
+
+          parents=$(git rev-list --parents -n 1 HEAD)
+          set -- $parents
+          [ "$#" -eq 3 ] || fail "expected a two-parent test merge commit, got $# parent(s)"
+          [ "$1" = "$MERGE_SHA" ] || fail "revision $1 is not github.sha $MERGE_SHA"
+          [ "$2" = "$BASE_SHA" ] || fail "first parent $2 is not event base $BASE_SHA"
+          [ "$3" = "$HEAD_SHA" ] || fail "second parent $3 is not event head $HEAD_SHA"
+
+          # A criss-cross history can have more than one best merge base. A
+          # single value can hide code that is visible only from another best
+          # base, so continue only when exactly one result is available.
+          if ! merge_bases=$(git merge-base --all "$BASE_SHA" "$HEAD_SHA"); then
+            fail "cannot determine the merge bases of event base and head"
+          fi
+          merge_base_count=0
+          merge_base=
+          while IFS= read -r candidate; do
+            [ -n "$candidate" ] || continue
+            merge_base_count=$((merge_base_count + 1))
+            merge_base=$candidate
+          done <<< "$merge_bases"
+
+          docs_only=false
+          counts_computed=false
+          tree_count=0
+          pr_count=0
+          rejected=0
+          empty_diffs=0
+          reason=ambiguous-merge-base
+
+          # The path counts are meaningful only after both diffs run. When
+          # there is no single best merge base, report them as not-computed
+          # instead of presenting the initialized zeros as measured results.
+          write_result() {
+            local tree_value pr_value rejected_value empty_value
+            local tree_log pr_log rejected_log empty_log
+            if [ "$counts_computed" = true ]; then
+              tree_value="$tree_count path(s)"
+              pr_value="$pr_count path(s)"
+              rejected_value="$rejected"
+              empty_value="$empty_diffs"
+              tree_log=$tree_count
+              pr_log=$pr_count
+              rejected_log=$rejected
+              empty_log=$empty_diffs
+            else
+              tree_value=not-computed
+              pr_value=not-computed
+              rejected_value=not-computed
+              empty_value=not-computed
+              tree_log=not-computed
+              pr_log=not-computed
+              rejected_log=not-computed
+              empty_log=not-computed
+            fi
+            if [ "$docs_only" = true ]; then
+              decision=docs-only
+            else
+              decision=full-checks
+            fi
+            printf 'decision=%s reason=%s merge_bases=%s tree_paths=%s pr_paths=%s non_whitelisted=%s empty_diffs=%s\n' \
+              "$decision" "$reason" "$merge_base_count" "$tree_log" "$pr_log" "$rejected_log" "$empty_log"
+            echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
+            {
+              echo "### CI routing"
+              echo ""
+              echo "- Event: \`$EVENT_ACTION\`"
+              echo "- Test merge commit: \`$MERGE_SHA\`"
+              echo "- Event base: \`$BASE_SHA\`"
+              echo "- Event head: \`$HEAD_SHA\`"
+              echo "- Best merge bases: $merge_base_count"
+              echo "- Checked-out tree vs base: $tree_value"
+              echo "- PR head vs merge base: $pr_value"
+              echo "- Non-whitelisted paths: $rejected_value"
+              echo "- Empty diffs: $empty_value"
+              echo "- Reason: $reason"
+              echo "- Decision: **$decision**"
+            } >> "$GITHUB_STEP_SUMMARY"
+          }
+
+          if [ "$merge_base_count" -ne 1 ]; then
+            echo "expected exactly one best merge base, found $merge_base_count; using full checks"
+            write_result
+            exit 0
+          fi
+
+          tree_diff=$(mktemp)
+          pr_diff=$(mktemp)
+          trap 'rm -f "$tree_diff" "$pr_diff"' EXIT
+
+          if ! git diff --name-only -z --no-renames --no-ext-diff "$BASE_SHA" "$MERGE_SHA" > "$tree_diff"; then
+            fail "cannot diff the checked-out merge tree against the event base"
+          fi
+          if ! git diff --name-only -z --no-renames --no-ext-diff "$merge_base" "$HEAD_SHA" > "$pr_diff"; then
+            fail "cannot diff the PR head against the merge base"
+          fi
+
+          docs_only=true
+
+          classify() {
+            local file=$1 label=$2 count=0 path
+            while IFS= read -r -d '' path; do
+              count=$((count + 1))
+              case "$path" in
+                docs/*.md|README.md) ;;
+                *)
+                  docs_only=false
+                  rejected=$((rejected + 1))
+                  printf 'non-whitelisted path in %s diff: %q\n' "$label" "$path"
+                  ;;
+              esac
+            done < "$file"
+            if [ "$count" -eq 0 ]; then
+              docs_only=false
+              empty_diffs=$((empty_diffs + 1))
+              echo "empty $label diff"
+            fi
+            if [ "$label" = tree ]; then
+              tree_count=$count
+            else
+              pr_count=$count
+            fi
+          }
+          classify "$tree_diff" tree
+          classify "$pr_diff" pr
+          counts_computed=true
+
+          if [ "$docs_only" = true ]; then
+            reason=docs-only
+          elif [ "$rejected" -gt 0 ]; then
+            reason=non-whitelisted-path
+          elif [ "$empty_diffs" -gt 0 ]; then
+            reason=empty-diff
+          else
+            reason=full-checks
+          fi
+          write_result
+
   check:
     name: Check (${{ matrix.os }})
+    needs: select
+    # A cancelled run must not start or continue platform jobs (for example,
+    # when a converted_to_draft run or a newer commit cancelled this run).
+    # !cancelled() is the official alternative to always(): it continues after
+    # failures/skips but not after cancellation. Selector failures/skips are
+    # handled separately by needs.select.result and still run both platforms.
+    # Only a ready PR whose selector succeeded with docs_only=true skips them.
+    if: |
+      !cancelled() &&
+      (github.event_name != 'pull_request' || github.event.pull_request.draft != true) &&
+      (needs.select.result != 'success' || needs.select.outputs.docs_only != 'true')
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -38,6 +238,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:

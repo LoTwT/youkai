@@ -206,7 +206,31 @@ Windows 打包统一使用 `go run ./tools/mygobuild -platform windows/amd64`，
 
 ## GitHub Actions 检查
 
-`.github/workflows/ci.yml` 在每个 pull request 与推送到 `main` 时，于 `macos-latest`（Apple Silicon）与 `windows-latest` 两个 runner 上运行轻量检查：`gofmt -l .`（要求无输出）、`go vet ./...`、`go test ./...`，macOS 上额外运行 `go tool mygo vet .`。检查不打安装包、不跑长时间测试、不下载 OCR 资源；供 Windows 测试的安装包由手动触发的 Package workflow 按需构建（见[打包 workflow](#打包-workflow)）。仓库根 `.gitattributes` 将文本文件统一为 LF 换行，Windows 检出不会因此产生 `gofmt` 误报。
+`.github/workflows/ci.yml` 在 ready pull request 与推送到 `main` 时，于 `macos-latest`（Apple Silicon）与 `windows-latest` 两个 runner 上运行轻量检查：`gofmt -l .`（要求无输出）、`go vet ./...`、`go test ./...`，macOS 上额外运行 `go tool mygo vet .`。检查不打安装包、不跑长时间测试、不下载 OCR 资源；供 Windows 测试的安装包由手动触发的 Package workflow 按需构建（见[打包 workflow](#打包-workflow)）。仓库根 `.gitattributes` 将文本文件统一为 LF 换行，Windows 检出不会因此产生 `gofmt` 误报。
+
+检查按改动范围路由；PR 路由只在 ready PR 上运行一个 Ubuntu 选择器，push `main` 与草稿 PR 不启动它：
+
+| 触发或改动 | 运行内容 |
+| --- | --- |
+| 草稿 PR 的 opened/synchronize/reopened/converted_to_draft | 不占用 runner；`converted_to_draft` 成功触发同组运行时才取消仍在运行的检查 |
+| ready PR，恰好一个最佳 merge base，且两个固定 Git 对象差异均为非空、只含白名单 Markdown | `Select checks`（Ubuntu）记录证据并跳过双平台 |
+| ready PR，其他改动、选择器失败/跳过/输出无效或无法证明 | `Select checks`（如运行）+ `Check (macos-latest)` + `Check (windows-latest)` 的全部检查 |
+| push `main` | 直接运行 `Check (macos-latest)` 与 `Check (windows-latest)`，不启动选择器 |
+
+`converted_to_draft` 的取消仅在该事件成功触发同一 concurrency group 的 workflow 运行时成立；若 GitHub 没有为该事件创建运行，不承诺取消。
+
+选择器（`Select checks`）的证据与回退：
+
+- checkout `${{ github.sha }}`（PR 的测试合并提交），`fetch-depth: 0`；验证 `HEAD` 等于 `github.sha`，且该提交恰有两个父提交，依次等于事件的 base 与 head。任一不符即选择器失败。
+- 取 `git merge-base --all BASE HEAD`；只有恰好一个最佳 merge base 才继续分类。单值 `git merge-base` 可能选到其中一个最佳结果，使两份差异看起来都是文档，而另一最佳 base 到 head 含代码（交叉合并）；因此零个、多个最佳 merge base 或 Git 失败都回退双平台。多个最佳 merge base 表现为选择器成功但 `docs_only=false`；零个（`--all` 无结果，通常非零退出）或 Git 失败表现为选择器失败；若 `--all` 成功但无结果，则与多个一样写 `docs_only=false`。平台检查在以上情况都会运行。多个/零个时不计算两份 diff，路径计数与衍生计数标为 `not-computed`，不会用初始化的 0 冒充结果；唯一祖先时真实计算到的 0 如实报告。
+- 两个差异都用 `git diff --name-only -z --no-renames --no-ext-diff`：实际检出树相对事件 base（`BASE..MERGE`）与 PR 自身差异（`merge_base..HEAD`）。NUL 分隔和关闭 rename detection 覆盖特殊文件名与重命名两端；删除、添加和重命名涉及的每个路径都必须命中白名单。
+- 只有两个差异都非空、且所有路径都是 `docs/` 下 `.md` 或根 `README.md`，才写 `docs_only=true`；否则写 `false`。空差异、非白名单路径、输出为空或不是 `true`、任何 Git/验证失败都按全量处理；选择器失败会保留在 job 状态中，平台检查仍由 `!cancelled()` 与 `needs.select.result` 兜底运行；若平台 job 自身的 checkout 也失败，则按失败报告，不视为已检查。
+- 平台 job 的顶层条件是 `!cancelled()`：官方将其作为 `always()` 的替代，在失败/跳过时继续，但在取消后不启动或继续。被取消的运行（转草稿成功触发同组运行、同 PR 新提交、main push 取代旧运行）不会占用 runner；选择器失败/跳过/输出无效仍会跑双平台，二者不要混同。
+- 白名单只覆盖不参与构建的 Markdown：当前构建不读取 `docs/` 下的 Markdown；`tools/iconassets` 读取的 `docs/design/icon-2026-11-17/a-vortex-eye.png` 不在白名单，改动它仍走全量。
+- 唯一最佳 merge base 时，选择器把 merge/base/head、最佳 merge base 数、真实路径数（真实 0 也如实报告）、非白名单数、空差异数、reason 与最终 decision 写入 step summary；多个/无可信唯一结果时跳过两份 diff，路径数与衍生计数写 `not-computed`，仍写最佳 merge base 数、reason 与 decision。不再有只 echo 的第二个 docs job。
+- 不使用 REST API、`gh` 或 `pull-requests` 权限；权限保持 `contents: read`。选择器只在 ready PR 上做一次完整历史 checkout；当前仓库约 357 个提交、约 76 MiB pack（2026-11-18 实测），成本可控。若以后历史显著增长，可改为显式 fetch base/head 并保留 merge-base 可证明性；无法证明时仍回退全量。
+
+检查名称与命令保持不变：`Check (macos-latest)`、`Check (windows-latest)`，`gofmt -l .`、`go vet ./...`、`go test ./...`、macOS 的 `go tool mygo vet .`；平台 job 也以 `ref: ${{ github.sha }}` checkout，保证与选择器评估的是同一个测试合并提交。docs-only 时双平台 job 被跳过；跳过状态不构成平台检查通过的证据。若以后把这两个检查设为必需，需要另行决定 docs-only 的必需检查策略（例如增加 summary/required check）。
 
 OCR cgo 绑定接入后，两个 runner 都要编译 `internal/recognition` 的 C 桥接：macOS runner 自带 Xcode 的 `clang`，`windows-latest` 镜像自带 MinGW gcc（写入镜像工具清单，Windows Server 2025 为 gcc 15.2.0），且原生构建 `CGO_ENABLED` 默认为 1，CI 无需额外装工具链；资源缺失时识别集成测试用 `t.Skip` 跳过，因此 PR 检查仍不下载 OCR 资源。以上 runner 镜像结论来自 runner-images 的镜像清单，首次在本仓库 PR 上实际运行 CI 时确认；若镜像变动导致 gcc 缺失，在 CI 中补装 MinGW。CI 编译通过不代表 cgo 绑定能在 Windows 实机加载运行库，该验证归 Windows 测试（见[实施清单的开发与 Windows 测试方式](specs/scanner-implementation-plan.md#开发与-windows-测试方式)）。
 
