@@ -195,6 +195,80 @@ func TestEnsureDownloadStatusError(t *testing.T) {
 	assertNoLeftovers(t, tt.root)
 }
 
+func TestEnsureDownloadFallback(t *testing.T) {
+	content := []byte("pinned-bytes")
+	for _, tc := range []struct {
+		name           string
+		primaryStatus  int
+		mirrorStatus   int
+		mirrorContent  []byte
+		mirrorRequests int64
+		wantErrors     []string
+	}{
+		{name: "missing primary", primaryStatus: http.StatusNotFound, mirrorStatus: http.StatusOK, mirrorContent: content, mirrorRequests: 1},
+		{name: "gone primary", primaryStatus: http.StatusGone, mirrorStatus: http.StatusOK, mirrorContent: content, mirrorRequests: 1},
+		{name: "both unavailable", primaryStatus: http.StatusNotFound, mirrorStatus: http.StatusGone, mirrorRequests: 1, wantErrors: []string{"/primary: unexpected status 404", "/mirror: unexpected status 410"}},
+		{name: "wrong mirror bytes", primaryStatus: http.StatusNotFound, mirrorStatus: http.StatusOK, mirrorContent: []byte("wrong"), mirrorRequests: 1, wantErrors: []string{"digest", "/mirror"}},
+		{name: "wrong primary bytes", primaryStatus: http.StatusOK, mirrorStatus: http.StatusOK, mirrorContent: content, wantErrors: []string{"digest", "/primary"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var mirrorHits atomic.Int64
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/primary":
+					w.WriteHeader(tc.primaryStatus)
+				case "/mirror":
+					mirrorHits.Add(1)
+					w.WriteHeader(tc.mirrorStatus)
+					if _, err := w.Write(tc.mirrorContent); err != nil {
+						t.Errorf("write mirror response: %v", err)
+					}
+				default:
+					t.Errorf("unexpected path: %s", r.URL.Path)
+					http.NotFound(w, r)
+				}
+			}))
+			defer srv.Close()
+			tt := newTestTool(t, srv)
+			dep := dependency{
+				name:      "model.onnx",
+				url:       srv.URL + "/primary",
+				mirrorURL: srv.URL + "/mirror",
+				sha256:    digestOf(content),
+				kind:      kindFile,
+				dest:      "models/model.onnx",
+			}
+			err := tt.ensure(context.Background(), dep)
+			if got := mirrorHits.Load(); got != tc.mirrorRequests {
+				t.Errorf("mirror requests = %d, want %d", got, tc.mirrorRequests)
+			}
+			cache := filepath.Join(tt.root, cacheDir, dep.name)
+			if len(tc.wantErrors) == 0 {
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, path := range []string{cache, tt.destPath(dep.dest)} {
+					if got, err := os.ReadFile(path); err != nil || !bytes.Equal(got, content) {
+						t.Errorf("%s content = %q, %v", path, got, err)
+					}
+				}
+			} else {
+				for _, want := range tc.wantErrors {
+					if err == nil || !strings.Contains(err.Error(), want) {
+						t.Errorf("want error containing %q, got %v", want, err)
+					}
+				}
+				for _, path := range []string{cache, tt.destPath(dep.dest)} {
+					if _, err := os.Stat(path); !errors.Is(err, fs.ErrNotExist) {
+						t.Errorf("%s exists after failure: %v", path, err)
+					}
+				}
+			}
+			assertNoLeftovers(t, tt.root)
+		})
+	}
+}
+
 func TestEnsureRejectsModifiedDestination(t *testing.T) {
 	var hits atomic.Int64
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

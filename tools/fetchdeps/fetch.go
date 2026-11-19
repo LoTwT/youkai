@@ -163,12 +163,25 @@ func (t *tool) source(ctx context.Context, dep dependency) (string, error) {
 		return "", err
 	}
 	name := tmp.Name()
-	digest, size, err := t.download(ctx, dep.url, tmp)
+	sourceURL := dep.url
+	digest, size, err := t.download(ctx, sourceURL, tmp)
+	var statusErr *downloadStatusError
+	if dep.mirrorURL != "" && errors.As(err, &statusErr) &&
+		(statusErr.code == http.StatusNotFound || statusErr.code == http.StatusGone) {
+		// A status error occurs before download writes to tmp.
+		primaryErr := err
+		sourceURL = dep.mirrorURL
+		log.Printf("%v; trying mirror %s", primaryErr, sourceURL)
+		digest, size, err = t.download(ctx, sourceURL, tmp)
+		if err != nil {
+			err = errors.Join(primaryErr, err)
+		}
+	}
 	if closeErr := tmp.Close(); err == nil {
 		err = closeErr
 	}
 	if err == nil && digest != dep.sha256 {
-		err = fmt.Errorf("downloaded bytes have digest %s, want %s pinned for this file (from %s)", digest, dep.sha256, dep.url)
+		err = fmt.Errorf("downloaded bytes have digest %s, want %s pinned for this file (from %s)", digest, dep.sha256, sourceURL)
 	}
 	if err != nil {
 		os.Remove(name)
@@ -180,6 +193,16 @@ func (t *tool) source(ctx context.Context, dep dependency) (string, error) {
 	}
 	log.Printf("downloaded %s (%d bytes)", dep.name, size)
 	return cache, nil
+}
+
+type downloadStatusError struct {
+	url    string
+	status string
+	code   int
+}
+
+func (e *downloadStatusError) Error() string {
+	return fmt.Sprintf("GET %s: unexpected status %s", e.url, e.status)
 }
 
 // download streams url to w, following redirects, and returns the SHA-256
@@ -196,7 +219,7 @@ func (t *tool) download(ctx context.Context, url string, w io.Writer) (digest st
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", 0, fmt.Errorf("GET %s: unexpected status %s", url, resp.Status)
+		return "", 0, &downloadStatusError{url: url, status: resp.Status, code: resp.StatusCode}
 	}
 	h := sha256.New()
 	size, err = io.Copy(io.MultiWriter(w, h), resp.Body)
