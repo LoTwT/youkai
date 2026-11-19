@@ -106,7 +106,7 @@ func TestPS1FullControlAndFailure(t *testing.T) {
 	if !unsafeControl(up) {
 		t.Fatal("red oracle missed original PS1")
 	}
-	got, err := convertPS1(up)
+	got, err := convertPS1(up, "0.0.1", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,16 +119,67 @@ func TestPS1FullControlAndFailure(t *testing.T) {
 	if !strings.Contains(got, `Start-Process -FilePath $setup -ArgumentList "/S /D=$folder" -Wait -PassThru`) || !strings.Contains(got, "$process.ExitCode -ne 0") {
 		t.Fatal("handoff must wait and propagate NSIS refusal")
 	}
-	if _, err := convertPS1(strings.Replace(up, "$process.ExitCode -ne 0", "$process.ExitCode -eq 0", 1)); err == nil {
+	if _, err := convertPS1(strings.Replace(up, "$process.ExitCode -ne 0", "$process.ExitCode -eq 0", 1), "0.0.1", ""); err == nil {
 		t.Fatal("exit propagation drift accepted")
 	}
-	if _, err := convertPS1(up + "\n# drift\n"); err == nil {
+	if _, err := convertPS1(up+"\n# drift\n", "0.0.1", ""); err == nil {
 		t.Fatal("PS1 full-template drift accepted")
 	}
-	channel := strings.Replace(up, "$tagPrefix = ''", "$tagPrefix = 'test-v'", 1)
-	if _, err := convertPS1(channel); err != nil {
-		t.Fatal("supported channel slot:", err)
+	for _, prefix := range []string{"", "v", "test-v"} {
+		name := prefix
+		if name == "" {
+			name = "stable"
+		}
+		t.Run("channel/"+name, func(t *testing.T) {
+			script := ps1ForChannel(up, prefix)
+			converted, err := convertPS1(script, "0.0.1", prefix)
+			if err != nil {
+				t.Fatal("supported channel:", err)
+			}
+			if unsafeControl(converted) {
+				t.Fatal("converted channel left process control")
+			}
+		})
 	}
+	testChannel := ps1ForChannel(up, "test-v")
+	comment := "#   irm https://github.com/LoTwT/youkai/releases/download/test-v0.0.1/install.ps1 | iex\n"
+	relocated := strings.Replace(testChannel, comment, "", 1)
+	relocated = strings.Replace(relocated, "& {\n", "& {\n"+comment, 1)
+	for name, tc := range map[string]struct {
+		script, version, prefix string
+	}{
+		"tag prefix without linked comment": {strings.Replace(up, "$tagPrefix = ''", "$tagPrefix = 'test-v'", 1), "0.0.1", "test-v"},
+		"comment of the wrong channel":      {strings.Replace(testChannel, "test-v0.0.1", "v0.0.1", 1), "0.0.1", "test-v"},
+		"version mismatch":                  {testChannel, "0.0.2", "test-v"},
+		"stable script for test channel":    {up, "0.0.1", "test-v"},
+		"test script for stable channel":    {testChannel, "0.0.1", ""},
+		"unsupported tag prefix":            {up, "0.0.1", "nightly"},
+		"changed releases URL":              {strings.Replace(testChannel, "$releases = 'https://github.com/LoTwT/youkai/releases/download/'", "$releases = 'https://github.com/LoTwT/youkai/releases/download/x'", 1), "0.0.1", "test-v"},
+		"duplicate usage comment":           {strings.Replace(testChannel, comment, comment+comment, 1), "0.0.1", "test-v"},
+		"relocated usage comment":           {relocated, "0.0.1", "test-v"},
+		"GitHub source disabled":            {strings.Replace(testChannel, "$github = $true", "$github = $false", 1), "0.0.1", "test-v"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := convertPS1(tc.script, tc.version, tc.prefix); err == nil {
+				t.Fatal("unsupported channel form accepted")
+			}
+		})
+	}
+}
+
+// ps1ForChannel applies the exact linked changes of the pinned generator:
+// the usage comment, releases, api, tagPrefix and assetsApi. MyGo treats
+// the stable prefix "v" as the untagged feed.
+func ps1ForChannel(up, prefix string) string {
+	if prefix == "" || prefix == "v" {
+		return up
+	}
+	s := strings.Replace(up, "#   irm https://github.com/LoTwT/youkai/releases/latest/download/install.ps1 | iex", "#   irm https://github.com/LoTwT/youkai/releases/download/"+prefix+"0.0.1/install.ps1 | iex", 1)
+	s = strings.Replace(s, "$releases = 'https://github.com/LoTwT/youkai/releases/latest/download/'", "$releases = 'https://github.com/LoTwT/youkai/releases/download/'", 1)
+	s = strings.Replace(s, "$api = ''", "$api = 'https://api.github.com/repos/LoTwT/youkai/releases?per_page=100'", 1)
+	s = strings.Replace(s, "$tagPrefix = ''", "$tagPrefix = '"+prefix+"'", 1)
+	s = strings.Replace(s, "$assetsApi = 'https://api.github.com/repos/LoTwT/youkai/releases/latest'", "$assetsApi = 'https://api.github.com/repos/LoTwT/youkai/releases/tags/'", 1)
+	return s
 }
 
 func TestFinalChecksumBoundary(t *testing.T) {

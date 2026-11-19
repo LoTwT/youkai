@@ -41,7 +41,7 @@
 | Windows x64 | 生成应用 EXE 与 NSIS 安装包，不配置 youkai 的 Authenticode 发布者证书或签名服务；已有第三方文件签名不主动删除。 | 安装、卸载、资源加载、协议注册和首次启动；记录 SmartScreen、Smart App Control 或设备策略的实际表现。 |
 | macOS arm64（后续版本） | 生成 `.app` 与 DMG，采用无需开发者会员的 ad-hoc 本地签名，不配置 Developer ID 或公证凭据。 | 应用及内置原生代码的签名完整性、资源加载、首次打开、录屏/输入授权，以及重装或换版本后的权限体验。 |
 
-MyGo 当前分发文档说明 macOS 默认使用 ad-hoc 签名，Windows 的证书签名属于可配置步骤；NSIS 安装器与 DMG 制作仍需要对应打包工具。含 OCR 的 cgo 依赖还需要目标平台编译器。缺少打包工具而跳过安装包不能算完成，构建端下载工具与用户首次启动下载识别资源是两回事。依据 v0.9.0 的[固定分发文档](https://github.com/egoist/mygo/blob/4811a2869b5a66d2b7e21a9eb5993fcff544460b/docs/distribution.md)。历史双平台构建及实机安装仅覆盖当时的 M1 组合（mac 部分保留为后续版本基础；Release workflow 自 [#118](https://github.com/LoTwT/youkai/pull/118) 起只构建 Windows，见[实施清单 M1](scanner-implementation-plan.md#m1正式工程资源与会话底座)）。原版 MyGo v0.9.0 不满足 [T1 安装契约](t1-mygo-ui-distribution.md#资源和安装)，本项目当前适配已通过用户收窄后的核心 TEMP 回归，仍需独立复审；首轮 Windows headless OCR 自检只支持依赖加载，不验证真实安装器或 GUI。
+MyGo 当前分发文档说明 macOS 默认使用 ad-hoc 签名，Windows 的证书签名属于可配置步骤；NSIS 安装器与 DMG 制作仍需要对应打包工具。含 OCR 的 cgo 依赖还需要目标平台编译器。缺少打包工具而跳过安装包不能算完成，构建端下载工具与用户首次启动下载识别资源是两回事。依据 v0.10.0 的[固定分发文档](https://github.com/egoist/mygo/blob/ebde9399baf2734b3361856a53f4036859973d1d/docs/distribution.md)。历史双平台构建及实机安装仅覆盖当时的 M1 组合（mac 部分保留为后续版本基础；Release workflow 自 [#118](https://github.com/LoTwT/youkai/pull/118) 起只构建 Windows，见[实施清单 M1](scanner-implementation-plan.md#m1正式工程资源与会话底座)）。原版 MyGo v0.9.0 不满足 [T1 安装契约](t1-mygo-ui-distribution.md#资源和安装)；v0.10.0 的完整模板与 v0.9.0 相同，项目适配现绑定 v0.10.0，但 2026-11-14 的核心 TEMP 回归 27/27 仍属于 v0.9.0，本轮未在 Windows 重跑。该适配仍需独立复审；首轮 Windows headless OCR 自检只支持依赖加载，不验证真实安装器或 GUI。
 
 商店外分发仍受操作系统检查。Mac 的 ad-hoc 签名不提供 Developer ID 身份或 Apple 公证，下载后的首次打开可能被 Gatekeeper 阻止（该平台随后续版本交付）；Apple 提供的单应用确认路径取决于系统和管理策略。Windows 未签名的新制品可能出现 SmartScreen 提示，强制策略或 Smart App Control 也可能直接阻止执行。首版说明需准确记录这些限制，不能承诺无提示启动或所有拦截都有继续按钮，也不把关闭整机保护作为安装步骤。[Apple 打开应用说明](https://support.apple.com/en-us/102445) · [Microsoft SmartScreen 说明](https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/smartscreen-reputation) · [Smart App Control FAQ](https://support.microsoft.com/en-us/windows/security/threat-malware-protection/smart-app-control-frequently-asked-questions)
 
@@ -58,7 +58,7 @@ MyGo 当前分发文档说明 macOS 默认使用 ad-hoc 签名，Windows 的证�
 
 2026-11-14 新依赖组合的本地构建与识别检查见[升级记录](../reports/2026-11-14-dependency-upgrade.md)。旧安装、升级链及 `ef04560` 的 W3 结果只对原组合成立；本轮未重做 Windows 安装或真机 UI 验收。
 
-DEP-01 第3轮当前按用户“部分边界等实际遇到再处理”的取舍，仅以核心不强杀、普通最终目录仍运行则拒绝文件变更、基本检测失败不放行、PS1外层失败传播及必要构建正确性验收。完整模板绑定/统一入口保留，原生writer与额外插件编译依赖撤下。新的完整转换 TEMP 最小回归27/27通过：install/uninstall/PS1运行拒绝、退出后真实File/RMDir继续，PS1外层1/0；18个精确记录PID均已退出。主控须新开独立复审，本记录不作merge或正式交付许可。启动竞争、OS排斥、别名/reparse/罕见权限、大UI/W3矩阵已获延期；真实目录页/HKCU发现、协议/快捷方式、签名安装与真实应用数据未测试。原NSIS卸载bootstrap直接0的已知限制保留，不能当worker成功；历史原语/前段失败不冒充当前实现保证。见[当前核心记录](../reports/2026-11-14-dependency-upgrade.md#r3-核心范围收敛与最小验证)。
+DEP-01 第3轮当前按用户“部分边界等实际遇到再处理”的取舍，仅以核心不强杀、普通最终目录仍运行则拒绝文件变更、基本检测失败不放行、PS1外层失败传播及必要构建正确性验收。完整模板绑定/统一入口保留，原生writer与额外插件编译依赖撤下。新的完整转换 TEMP 最小回归27/27通过（v0.9.0 模板基线；v0.10.0 模板规范化后相同，本轮未在 Windows 重跑）：install/uninstall/PS1运行拒绝、退出后真实File/RMDir继续，PS1外层1/0；18个精确记录PID均已退出。主控须新开独立复审，本记录不作merge或正式交付许可。启动竞争、OS排斥、别名/reparse/罕见权限、大UI/W3矩阵已获延期；真实目录页/HKCU发现、协议/快捷方式、签名安装与真实应用数据未测试。原NSIS卸载bootstrap直接0的已知限制保留，不能当worker成功；历史原语/前段失败不冒充当前实现保证。见[当前核心记录](../reports/2026-11-14-dependency-upgrade.md#r3-核心范围收敛与最小验证)。
 
 ### 最低系统候选与证据
 
@@ -75,7 +75,7 @@ Windows 依据：[Go 最低要求](https://go.dev/wiki/MinimumRequirements)、[M
 
 最低候选必须贯穿应用元数据、Go/C/Objective-C 的部署目标及全部随包原生文件。Windows 要核对最终 EXE/DLL 的导入、架构和运行库；Mac 的系统标记、加载路径及签名随后续版本核对。静态文件检查能排除明显不配套，但不能证明系统 API 行为、游戏输入或云画面兼容。
 
-MyGo v0.9.0 的 [config.go](https://github.com/egoist/mygo/blob/4811a2869b5a66d2b7e21a9eb5993fcff544460b/cmd/mygo/config.go)仍将 `macos.minimumSystemVersion` 默认为 `12.0`，[bundle.go](https://github.com/egoist/mygo/blob/4811a2869b5a66d2b7e21a9eb5993fcff544460b/cmd/mygo/bundle.go)据此生成 `LSMinimumSystemVersion`。本轮候选构建已显式设为 `14.0`（`mygo.json` 与本地打包命令、Package workflow 一致；Release workflow 自 [#118](https://github.com/LoTwT/youkai/pull/118) 起不构建 macOS）；该 macOS 构建保留供后续版本使用。Go 和原生桥接的实际部署目标随最低系统实机验收核对，修改应用声明本身不会改变已经编译好的 OCR 库下限。
+MyGo v0.10.0 的 [config.go](https://github.com/egoist/mygo/blob/ebde9399baf2734b3361856a53f4036859973d1d/cmd/mygo/config.go)仍将 `macos.minimumSystemVersion` 默认为 `12.0`，[bundle.go](https://github.com/egoist/mygo/blob/ebde9399baf2734b3361856a53f4036859973d1d/cmd/mygo/bundle.go)据此生成 `LSMinimumSystemVersion`。本轮候选构建已显式设为 `14.0`（`mygo.json` 与本地打包命令、Package workflow 一致；Release workflow 自 [#118](https://github.com/LoTwT/youkai/pull/118) 起不构建 macOS）；该 macOS 构建保留供后续版本使用。Go 和原生桥接的实际部署目标随最低系统实机验收核对，修改应用声明本身不会改变已经编译好的 OCR 库下限。
 
 ### 尚需完成的工程证据
 

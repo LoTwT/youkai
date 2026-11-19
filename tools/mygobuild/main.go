@@ -27,10 +27,10 @@ type compileRecord struct{ OriginalSHA256, ConvertedSHA256, Compiler, Input stri
 
 var sourcePins = map[string]string{
 	"nsis.go":       "1a666c780024f42d80b5659e251e519aa21a7727bfdff809c019add37b4b1adb",
-	"build.go":      "eeae6bf873395f5de91872fde6eddf5a3792fef8754f4b13ac6a80a30235ceb2",
+	"build.go":      "e0e5731875caf499f87bcbf54c3d611918d27c8a1fa49815959535aee751f9e4",
 	"installps1.go": "bdc05e3ea90cf3b5e666b84cacf47292f726530803a7d886a39f705648746c23",
 	"checksums.go":  "9e1f2f39db8205af498e4f2236ee90ebc6bee1b4dcadef6436378c5ad39001f0",
-	"updates.go":    "06e9113735002fbac0e5d208b3ea531230fe5ceb24257d66ecec9601c48cc44a",
+	"updates.go":    "3d4c29c6a9aa02ce73a55e02023ff57a99640e5a2f51370c1632e150fb823934",
 	"publish.go":    "87ca12217e125f4ccd6fc3b34a596f323b6460cfb1c722c9af1ea7628ed07caa",
 }
 
@@ -72,8 +72,8 @@ func bindMyGo() error {
 	if err = json.Unmarshal(data, &m); err != nil {
 		return err
 	}
-	if m.Version != "v0.9.0" || m.Replace != nil {
-		return errors.New("requires the original MyGo v0.9.0, without replace")
+	if m.Version != "v0.10.0" || m.Replace != nil {
+		return errors.New("requires the original MyGo v0.10.0, without replace")
 	}
 	for name, want := range sourcePins {
 		b, err := os.ReadFile(filepath.Join(m.Dir, "cmd", "mygo", name))
@@ -101,9 +101,9 @@ func build(args []string) error {
 	}
 	// There is deliberately no upload or skip-installer switch.
 	var config struct {
-		Name, Identifier, Out string
-		Windows               struct{ InstallerInclude string }
-		Updates               *json.RawMessage
+		Name, Identifier, Version, Out string
+		Windows                        struct{ InstallerInclude string }
+		Updates                        *struct{ TagPrefix string }
 	}
 	b, err := os.ReadFile("mygo.json")
 	if err != nil {
@@ -112,8 +112,8 @@ func build(args []string) error {
 	if err = json.Unmarshal(b, &config); err != nil {
 		return err
 	}
-	if config.Name != "Youkai" || config.Identifier != "com.lotwt.youkai" || config.Windows.InstallerInclude != "packaging/require-safe-installer.nsh" {
-		return errors.New("project identity or safety sentinel drift")
+	if config.Name != "Youkai" || config.Identifier != "com.lotwt.youkai" || config.Version == "" || config.Windows.InstallerInclude != "packaging/require-safe-installer.nsh" {
+		return errors.New("project identity, version or safety sentinel drift")
 	}
 	if err = bindMyGo(); err != nil {
 		return err
@@ -176,7 +176,7 @@ func build(args []string) error {
 		return errors.New("expected exactly one compiled installer")
 	}
 	if config.Updates != nil {
-		if err = rewritePS1(filepath.Join(dir, "install.ps1")); err != nil {
+		if err = rewritePS1(filepath.Join(dir, "install.ps1"), config.Version, config.Updates.TagPrefix); err != nil {
 			return err
 		}
 	}
@@ -282,7 +282,7 @@ func resolveNSIS(work string) (string, error) {
 			return filepath.Abs(p)
 		}
 	}
-	// Same NSIS release, mirrors and SHA as MyGo 0.9. Download into private
+	// Same NSIS release, mirrors and SHA as MyGo 0.10. Download into private
 	// build TEMP, never the shared Go module cache or an existing install.
 	const want = "ba63dffc4410ee89193e1cb5a41989991bd77c61068da17e3156d136b7b0b3d8"
 	client := http.Client{Timeout: 10 * time.Minute}
