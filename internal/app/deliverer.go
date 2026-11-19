@@ -2,6 +2,7 @@ package app
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -52,6 +53,10 @@ type recordStore interface {
 	ListRecords() ([]record.RecordInfo, error)
 	Load(recordID string) (*record.Recovery, error)
 	Peek(recordID string) (*record.Checkpoint, error)
+	// LoadLatest verifies and returns only the newest generation, with its
+	// evidence and record identity, for callers that must not accept an
+	// older fallback.
+	LoadLatest(ctx context.Context, recordID string) (*record.Recovery, error)
 	// Evidence and record cleanup: screenshots are removed by rewriting
 	// the checkpoint first, records by removing their directory. The
 	// service exposes both with its own activity guards.
@@ -113,6 +118,10 @@ type recordDeliverer struct {
 	// notification code uses "the first failure is 1" to notify once per
 	// wrap-up.
 	finalSaveFailures int
+	// completeCoverageAllowed is false for a scoped partial rescan. The
+	// deliverer then keeps any adapter-reported complete conclusion at
+	// partial, so one session's subset cannot claim the whole warehouse.
+	completeCoverageAllowed bool
 	// finished reports that finish ran (the kernel sealed).
 	finished bool
 	// finalRefused reports that finish refused the final generation
@@ -126,11 +135,21 @@ type recordDeliverer struct {
 // acceptance; the volatile parts (captured count, termination, end time)
 // are maintained here.
 func newRecordDeliverer(store recordStore, shell record.SessionShell, onChange func()) *recordDeliverer {
+	// A scoped rescan can never support the warehouse-wide complete
+	// conclusion, even if its adapter reports one: the session deliberately
+	// covered only part of the warehouse. Unknown or historical scopes keep
+	// the old behavior; the traversal itself already refuses complete for
+	// anything but all six positions.
+	completeAllowed := true
+	if plan, ok := DeclaredScanPlan(shell.Scope); ok && !plan.Full() {
+		completeAllowed = false
+	}
 	return &recordDeliverer{
-		store:    store,
-		recordID: shell.SessionID,
-		shell:    shell,
-		onChange: onChange,
+		store:                   store,
+		recordID:                shell.SessionID,
+		shell:                   shell,
+		onChange:                onChange,
+		completeCoverageAllowed: completeAllowed,
 	}
 }
 
@@ -370,6 +389,13 @@ func (d *recordDeliverer) observeScope(raw json.RawMessage) error {
 	}
 	d.shell.ObservedScope = append(json.RawMessage(nil), raw...)
 	if status, ok := observedCoverage(raw); ok {
+		if !d.completeCoverageAllowed {
+			// A scoped session is partial from acceptance through every
+			// report. The traversal's precheck report legitimately says
+			// "unknown" before it has a position; that must not erase the
+			// fixed partial conclusion of a rescan that never starts.
+			status = record.CoveragePartial
+		}
 		d.shell.Coverage.Status = status
 	}
 	if ledger, ok := record.DecodePositionLedger(raw); ok {

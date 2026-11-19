@@ -107,6 +107,7 @@ func (m *Model) viewPages(c *ui.Context) {
 	// The export modal and the unsaved-changes dialog both cover the
 	// whole window; only one of them is open at a time.
 	m.exportDialogView(c, t)
+	m.rescanDialogView(c, t)
 	m.navigationPrompt(c, t)
 	m.trayHintDialogView(c, t)
 	m.exitDialogView(c, t)
@@ -384,6 +385,10 @@ func (m *Model) scanStartBlockedReason() string {
 		return "正在检查……"
 	case m.startReqID != "":
 		return "正在开始扫描……"
+	case m.rescanAwaitingSnapshot():
+		return "正在等待扫描会话……"
+	case m.rescanStartBlocked():
+		return m.pendingRescan.blockedReason
 	default:
 		if reason := m.readinessStartReason(); reason != "" {
 			return reason

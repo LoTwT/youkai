@@ -119,6 +119,7 @@ func (m *Model) OpenNotification(recordID string) {
 		return
 	}
 	if m.recordIsOpen(recordID) && m.recErr == "" {
+		m.dropRescanContext()
 		m.catchUpLive()
 		// A notification click is a navigation even when the record is
 		// already open: requestNavigation owns the dirty/save prompt and the
@@ -143,6 +144,10 @@ type notificationFacts struct {
 	coverage      record.CoverageStatus
 	outcomes      []app.PositionOutcome
 	outcomesKnown bool
+	// scanPlan is the declared range; a partial rescan names only the
+	// positions this session set out to cover.
+	scanPlan      app.ScanPlan
+	rangeInvalid  bool
 	inputOpened   bool
 	end           scan.EndKind
 	trigger       *scan.Trigger
@@ -415,7 +420,13 @@ func notificationFactsFor(snap app.Snapshot, rec *record.Recovery) notificationF
 		facts.counts = view.Classes
 		facts.countsKnown = true
 		facts.coverage = view.Shell.Coverage.Status
+		facts.rangeInvalid = app.ScanScopeDamaged(view.Shell.Scope)
+		if facts.rangeInvalid {
+			// Damaged partial-rescan data is not a full-range conclusion.
+			facts.coverage = record.CoveragePartial
+		}
 		facts.outcomes, facts.outcomesKnown = app.PositionOutcomesOf(view.Shell)
+		facts.scanPlan, _ = app.DeclaredScanPlan(view.Shell.Scope)
 		facts.failureParams = view.Shell.FailureParams
 		if len(view.Rows) > facts.captured {
 			facts.captured = len(view.Rows)
@@ -488,6 +499,12 @@ func notificationParams(facts notificationFacts) map[string]string {
 }
 
 func completedNotificationWording(facts notificationFacts) (string, string) {
+	if facts.rangeInvalid {
+		return "范围记录无效，无法确认覆盖", "点击查看。"
+	}
+	if facts.scanPlan.RescanOf != "" {
+		return rescanNotificationWording(facts)
+	}
 	if facts.countsKnown && facts.counts.Total() == 0 {
 		return "扫描完成：没有采集到驱动盘", "点击查看。"
 	}
@@ -512,6 +529,32 @@ func completedNotificationWording(facts notificationFacts) (string, string) {
 	}
 }
 
+// rescanNotificationWording names the independent range instead of
+// claiming the warehouse was not scanned. Only planned positions count as
+// incomplete.
+func rescanNotificationWording(facts notificationFacts) (string, string) {
+	rangeText := summaryPositionRanges(facts.scanPlan.Positions) + " 号位"
+	title := "补扫完成：" + rangeText + "完整"
+	if !facts.outcomesKnown {
+		title = "补扫完成，覆盖：部分"
+	} else {
+		var incomplete []int
+		for _, outcome := range facts.outcomes {
+			if !facts.scanPlan.Includes(outcome.Position) || outcome.State == app.PositionOutcomeComplete {
+				continue
+			}
+			incomplete = append(incomplete, outcome.Position)
+		}
+		if len(incomplete) > 0 {
+			title = "补扫完成：" + summaryPositionRanges(incomplete) + " 号位仍不完整"
+		}
+	}
+	if facts.saved > 0 {
+		return title, fmt.Sprintf("已保存 %s 件。点击查看。", formatCount(int64(facts.saved)))
+	}
+	return title, "点击查看。"
+}
+
 // incompletePositions names the degraded positions for a partial scan. A
 // record without a usable ledger says only that coverage is partial rather
 // than inventing position numbers.
@@ -521,6 +564,9 @@ func incompletePositions(facts notificationFacts) string {
 	}
 	var positions []string
 	for _, outcome := range facts.outcomes {
+		if facts.scanPlan.RescanOf != "" && !facts.scanPlan.Includes(outcome.Position) {
+			continue
+		}
 		if outcome.State == app.PositionOutcomeDegraded {
 			positions = append(positions, fmt.Sprintf("%d 号位", outcome.Position))
 		}

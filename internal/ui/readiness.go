@@ -943,6 +943,7 @@ func readinessItemForFault(code string) app.ReadinessItem {
 // the live stage while a session runs, and the save failure while a result
 // waits for its retry (08 §1.2).
 func (m *Model) scanArea(c *ui.Context, t *ui.Theme, tok *Tokens) {
+	m.rescanBanner(c, t, tok)
 	switch {
 	case !m.source.Available:
 		m.noScanSourceArea(c, t)

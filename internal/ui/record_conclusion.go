@@ -61,10 +61,19 @@ type recordConclusionInput struct {
 	// IncompletePositions is meaningful only when Known is true.
 	IncompletePositions      int
 	IncompletePositionsKnown bool
-	// PositionOutcomes and PositionOutcomesKnown are the summary's expanded
-	// ledger facts. The list only needs the degraded count above.
+	// PositionOutcomes and PositionOutcomesKnown are the expanded ledger
+	// facts: the list uses them for the partial-rescan wording and the
+	// summary for per-position text.
 	PositionOutcomes      []app.PositionOutcome
 	PositionOutcomesKnown bool
+	// PlannedPositions is the declared partial-rescan range; nil means the
+	// historical full scan. Rescan marks a record that deliberately covers
+	// only that range, so wording never calls unplanned positions missing.
+	// RangeInvalid marks damaged partial-rescan data that cannot be treated
+	// as either a full or a partial range.
+	PlannedPositions []int
+	Rescan           bool
+	RangeInvalid     bool
 	// Sort and SortKnown are the summary's sort verdict; the list does not
 	// need them for its shorter wording.
 	Sort       record.SortVerification
@@ -117,6 +126,31 @@ func recordOutcomeFor(in recordConclusionInput) recordOutcome {
 	return recordOutcome{Kind: kind, Input: in}
 }
 
+// plannedPositionOutcomes narrows the expanded ledger to the session's
+// declared range. A full scan keeps all six; a partial rescan never shows
+// a position it did not plan as failed or unreached.
+func plannedPositionOutcomes(in recordConclusionInput) []app.PositionOutcome {
+	if len(in.PlannedPositions) == 0 {
+		return in.PositionOutcomes
+	}
+	planned := make(map[int]bool, len(in.PlannedPositions))
+	for _, position := range in.PlannedPositions {
+		planned[position] = true
+	}
+	out := make([]app.PositionOutcome, 0, len(in.PlannedPositions))
+	for _, outcome := range in.PositionOutcomes {
+		if planned[outcome.Position] {
+			out = append(out, outcome)
+		}
+	}
+	return out
+}
+
+// plannedPositionNumbers formats the declared range as "1–3、5".
+func plannedPositionNumbers(positions []int) string {
+	return summaryPositionRanges(positions)
+}
+
 // recordConclusionInterrupted applies one definition to both surfaces: a
 // non-live session with no clean termination counts as interrupted even when
 // recovery did not mark any individual item. An explicit failed, cancelled or
@@ -141,10 +175,39 @@ func recordConclusionFor(in recordConclusionInput) recordConclusion {
 	return recordListConclusion(recordOutcomeFor(in))
 }
 
+// rescanRangeText names the declared partial-rescan positions.
+func rescanRangeText(in recordConclusionInput) string {
+	if len(in.PlannedPositions) == 0 {
+		return ""
+	}
+	return plannedPositionNumbers(in.PlannedPositions) + " 号位"
+}
+
+// rescanIncompletePositions lists only the planned positions that did not
+// complete, so a complete position in the selected range is not named in
+// an "incomplete" conclusion.
+func rescanIncompletePositions(in recordConclusionInput) []int {
+	var incomplete []int
+	for _, outcome := range plannedPositionOutcomes(in) {
+		if outcome.State != app.PositionOutcomeComplete {
+			incomplete = append(incomplete, outcome.Position)
+		}
+	}
+	return incomplete
+}
+
+// rescanWordingSupplement states that the record is independent from the
+// source it was requested from.
+const rescanWordingSupplement = "独立补扫记录，原记录没有改变。"
+
 // recordListConclusion is the records list's wording. It never shows a raw
 // fault code: an unknown code degrades to the ending alone (09 §4.3).
 func recordListConclusion(out recordOutcome) recordConclusion {
 	in := out.Input
+	if in.RangeInvalid && (out.Kind == recordOutcomeEmpty ||
+		out.Kind == recordOutcomeCompleted || out.Kind == recordOutcomeUnknown) {
+		return recordConclusion{text: "范围记录无效，无法确认覆盖", tone: recordToneWarning}
+	}
 	switch out.Kind {
 	case recordOutcomeUnreadable:
 		return recordConclusion{tag: "!", text: "无法打开：记录不可读", tone: recordToneDanger}
@@ -155,12 +218,21 @@ func recordListConclusion(out recordOutcome) recordConclusion {
 	case recordOutcomeEmpty:
 		return emptyListConclusion(in)
 	case recordOutcomeInterrupted:
+		if in.Rescan {
+			return recordConclusion{tag: "中断", text: "补扫中断 · 已恢复已保存部分", tone: recordToneWarning}
+		}
 		return recordConclusion{tag: "中断", text: "已恢复已保存部分", tone: recordToneWarning}
 	case recordOutcomeFault:
 		return listFaultConclusion(in)
 	case recordOutcomeCancelled:
+		if in.Rescan {
+			return recordConclusion{text: "补扫停止 · " + rescanRangeText(in), tone: recordToneWarning}
+		}
 		return recordConclusion{text: "手动停止 · 覆盖：" + coverageText(in.Coverage)}
 	case recordOutcomeCompleted:
+		if in.Rescan {
+			return rescanCompletedConclusion(in)
+		}
 		return completedRecordConclusion(in)
 	default:
 		return recordConclusion{text: "结束状态未知", tone: recordToneMuted}
@@ -172,6 +244,9 @@ func recordListConclusion(out recordOutcome) recordConclusion {
 // keeps its cause, and only a normal end says "没有采集到驱动盘".
 func emptyListConclusion(in recordConclusionInput) recordConclusion {
 	if in.Interrupted || (in.Termination != nil && in.Termination.Kind == record.TerminationInterrupted) {
+		if in.Rescan {
+			return recordConclusion{tag: "中断", text: "补扫中断 · 已恢复已保存部分", tone: recordToneWarning}
+		}
 		return recordConclusion{tag: "中断", text: "已恢复已保存部分", tone: recordToneWarning}
 	}
 	term := in.Termination
@@ -180,10 +255,23 @@ func emptyListConclusion(in recordConclusionInput) recordConclusion {
 	}
 	switch term.Kind {
 	case record.TerminationCancelled:
+		if in.Rescan {
+			return recordConclusion{text: "补扫停止 · 覆盖：部分", tone: recordToneWarning}
+		}
 		return recordConclusion{text: "手动停止 · 覆盖：" + coverageText(in.Coverage)}
 	case record.TerminationFailed:
 		return listFaultConclusion(in)
 	case record.TerminationCompleted:
+		if in.Rescan {
+			if rangeText := rescanRangeText(in); rangeText != "" && in.PositionOutcomesKnown {
+				text := "补扫完成 · " + rangeText + "完整"
+				if incomplete := rescanIncompletePositions(in); len(incomplete) > 0 {
+					text = "补扫完成 · " + plannedPositionNumbers(incomplete) + " 号位不完整"
+				}
+				return recordConclusion{text: text}
+			}
+			return recordConclusion{text: "补扫完成 · 没有采集到驱动盘", tone: recordToneWarning}
+		}
 		return recordConclusion{text: "正常结束 · 没有采集到驱动盘", tone: recordToneWarning}
 	default:
 		return recordConclusion{text: "结束状态未知", tone: recordToneMuted}
@@ -209,20 +297,39 @@ func terminationNotStarted(term *record.Termination) bool {
 // phase's "没有开始" variant.
 func listFaultConclusion(in recordConclusionInput) recordConclusion {
 	term := in.Termination
+	prefix := ""
+	if in.Rescan {
+		prefix = "补扫"
+	}
 	if term == nil {
 		return recordConclusion{text: "中途停止", tone: recordToneDanger}
 	}
 	cause := faultCauseText(term.Code, nil)
 	if term.Phase == record.PhasePreparing && in.CapturedCount == 0 {
 		if cause == "" {
-			return recordConclusion{text: "没有开始", tone: recordToneWarning}
+			return recordConclusion{text: prefix + "没有开始", tone: recordToneWarning}
 		}
-		return recordConclusion{tag: "失败", text: "没有开始：" + cause, tone: recordToneDanger}
+		return recordConclusion{tag: "失败", text: prefix + "没有开始：" + cause, tone: recordToneDanger}
 	}
 	if cause == "" {
 		return recordConclusion{text: "中途停止", tone: recordToneDanger}
 	}
-	return recordConclusion{tag: "失败", text: "中途停止：" + cause, tone: recordToneDanger}
+	return recordConclusion{tag: "失败", text: prefix + "中途停止：" + cause, tone: recordToneDanger}
+}
+
+// rescanCompletedConclusion is a partial rescan's own ending. Its coverage
+// stays partial by contract, but unselected positions are not failures:
+// only the declared range is described.
+func rescanCompletedConclusion(in recordConclusionInput) recordConclusion {
+	rangeText := rescanRangeText(in)
+	if rangeText == "" || !in.PositionOutcomesKnown {
+		return recordConclusion{text: "补扫完成 · 覆盖：部分", tone: recordToneMuted}
+	}
+	if incomplete := rescanIncompletePositions(in); len(incomplete) > 0 {
+		return recordConclusion{text: "补扫完成 · " + plannedPositionNumbers(incomplete) + " 号位不完整",
+			tone: recordToneWarning}
+	}
+	return recordConclusion{text: "补扫完成 · " + rangeText + "完整"}
 }
 
 // completedRecordConclusion is the conclusion of a normally ended scan: the

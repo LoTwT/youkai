@@ -51,6 +51,15 @@ type TargetScanSource interface {
 	NewScanForTarget(TargetCandidate) (ScanSpec, error)
 }
 
+// ScopedScanSource is the optional capability of a ScanSource that starts
+// a partial rescan of selected wheel positions. The service proves the
+// request against the source record first; the source must either apply the
+// exact range to its spec or refuse. It must never fall back to a full
+// warehouse scan.
+type ScopedScanSource interface {
+	NewScanForRescan(confirmed *TargetCandidate, scope RescanRequest) (ScanSpec, error)
+}
+
 // positionRelay only supplies ephemeral UI progress, never scan control.
 type positionRelay interface{ SetPositionSink(func(int)) }
 
@@ -71,7 +80,8 @@ type scopeRelay interface {
 // carries collect.Inventory). The source itself changes nothing between
 // modes except the scope label and the traversal factory. A source wired
 // without a fixed target discovers the running game windows and starts
-// only the candidate the user confirmed (P-01).
+// only the candidate the user confirmed (P-01). A partial rescan uses the
+// same target path and only narrows the declared and traversed positions.
 type GameScanSource struct {
 	// Port is the platform the sessions run on (platform.Host()).
 	Port platform.Port
@@ -101,6 +111,8 @@ type GameScanSource struct {
 	stop func()
 }
 
+var _ ScopedScanSource = (*GameScanSource)(nil)
+
 // NewScan implements ScanSource: a fresh collect.Controller per start,
 // described by the source's mode (observe-only or traverse). A source
 // without a fixed target refuses here: the user must confirm one of the
@@ -109,7 +121,7 @@ func (g *GameScanSource) NewScan() (ScanSpec, error) {
 	if g.RequiresTargetConfirmation() {
 		return ScanSpec{}, fmt.Errorf("app: game scan source: %w", ErrTargetNotConfirmed)
 	}
-	return g.newScan(g.Target)
+	return g.newScan(g.Target, nil)
 }
 
 // RequiresTargetConfirmation reports whether a start must carry a
@@ -142,27 +154,57 @@ func (g *GameScanSource) DiscoverTargets() (TargetDiscoveryResult, error) {
 // with a fixed target ignores the confirmed candidate and keeps its
 // configured target.
 func (g *GameScanSource) NewScanForTarget(confirmed TargetCandidate) (ScanSpec, error) {
-	if !g.RequiresTargetConfirmation() {
-		return g.newScan(g.Target)
-	}
-	if confirmed.Handle == 0 {
-		return ScanSpec{}, errors.New("app: game scan source: the confirmed target has no window handle")
-	}
-	found, err := g.DiscoverTargets()
+	target, err := g.resolveTarget(&confirmed)
 	if err != nil {
 		return ScanSpec{}, err
 	}
+	return g.newScan(target, nil)
+}
+
+// NewScanForRescan implements ScopedScanSource: it resolves the same
+// user-confirmed window as an ordinary start and declares the requested
+// position subset in the session's scope. The traversal receives the same
+// subset before its precheck; unsupported traversals fail instead of
+// scanning the whole warehouse.
+func (g *GameScanSource) NewScanForRescan(confirmed *TargetCandidate, scope RescanRequest) (ScanSpec, error) {
+	if err := scope.Validate(); err != nil {
+		return ScanSpec{}, fmt.Errorf("app: game scan source: %w", err)
+	}
+	if g.RequiresTargetConfirmation() && (confirmed == nil || confirmed.Handle == 0) {
+		return ScanSpec{}, fmt.Errorf("app: game scan source: %w: the confirmed target has no window handle", ErrTargetNotConfirmed)
+	}
+	target, err := g.resolveTarget(confirmed)
+	if err != nil {
+		return ScanSpec{}, err
+	}
+	return g.newScan(target, &scope)
+}
+
+// resolveTarget applies the source's target policy: a configured target
+// ignores the confirmed candidate, while a discovery source requires the
+// confirmed window to still be the same process instance.
+func (g *GameScanSource) resolveTarget(confirmed *TargetCandidate) (platform.TargetSpec, error) {
+	if !g.RequiresTargetConfirmation() {
+		return g.Target, nil
+	}
+	if confirmed == nil || confirmed.Handle == 0 {
+		return platform.TargetSpec{}, errors.New("app: game scan source: the confirmed target has no window handle")
+	}
+	found, err := g.DiscoverTargets()
+	if err != nil {
+		return platform.TargetSpec{}, err
+	}
 	for _, c := range found.Candidates {
-		if sameTargetInstance(c, confirmed) {
-			return g.newScan(platform.TargetSpec{
+		if sameTargetInstance(c, *confirmed) {
+			return platform.TargetSpec{
 				ExecutablePath:       c.ExecutablePath,
 				HandleHint:           c.Handle,
 				PIDHint:              c.PID,
 				ProcessStartedAtHint: c.ProcessStartedAt,
-			})
+			}, nil
 		}
 	}
-	return ScanSpec{}, fmt.Errorf("app: game scan source: %w", ErrTargetGone)
+	return platform.TargetSpec{}, fmt.Errorf("app: game scan source: %w", ErrTargetGone)
 }
 
 // sameTargetInstance reports whether two candidates describe the same
@@ -174,15 +216,30 @@ func sameTargetInstance(a, b TargetCandidate) bool {
 		strings.EqualFold(a.ExecutablePath, b.ExecutablePath)
 }
 
-// newScan builds the accepted spec for one target.
-func (g *GameScanSource) newScan(target platform.TargetSpec) (ScanSpec, error) {
+// newScan builds the accepted spec for one target. A partial rescan
+// declares its position subset and source record in the scope and passes
+// the subset to the traversal; a full scan keeps the historical scope
+// shape unchanged.
+func (g *GameScanSource) newScan(target platform.TargetSpec, rescan *RescanRequest) (ScanSpec, error) {
 	if g.Port == nil {
 		return ScanSpec{}, fmt.Errorf("app: game scan source: no port")
 	}
-	scope, err := json.Marshal(struct {
-		Kind string `json:"kind"`
-		Mode string `json:"mode"`
-	}{Kind: "zzzInventory", Mode: g.scopeMode()})
+	scopeDoc := struct {
+		Kind      string `json:"kind"`
+		Mode      string `json:"mode"`
+		Positions []int  `json:"positions,omitempty"`
+		RescanOf  string `json:"rescanOf,omitempty"`
+	}{Kind: "zzzInventory", Mode: g.scopeMode()}
+	var positions []int
+	if rescan != nil {
+		scopeDoc.Positions = append([]int(nil), rescan.Positions...)
+		scopeDoc.RescanOf = rescan.SourceRecordID
+		positions = append([]int(nil), rescan.Positions...)
+		if g.TraversalForClient == nil && g.Traversal == nil {
+			return ScanSpec{}, fmt.Errorf("app: game scan source: %w: no inventory traversal is wired", ErrRescanUnsupported)
+		}
+	}
+	scope, err := json.Marshal(scopeDoc)
 	if err != nil {
 		return ScanSpec{}, fmt.Errorf("app: game scan source: marshal scope: %w", err)
 	}
@@ -198,6 +255,7 @@ func (g *GameScanSource) newScan(target platform.TargetSpec) (ScanSpec, error) {
 			Hotkey:             g.Hotkey,
 			Traversal:          g.Traversal,
 			TraversalForClient: g.TraversalForClient,
+			ScanPositions:      positions,
 			Stop:               g.stop,
 		},
 	}, nil
