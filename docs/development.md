@@ -236,7 +236,7 @@ OCR cgo 绑定接入后，两个 runner 都要编译 `internal/recognition` 的 
 
 ## 第三方资源下载
 
-OCR 运行库与模型不进 Git，由 `tools/fetchdeps` 按固定 URL 与 SHA-256 下载（固定组合与摘要在 [T3](specs/t3-ocr-runtime-model-samples.md#固定组合与制品静态核查)，VC++ 运行库不在此工具范围，见[实施清单的工程约定](specs/scanner-implementation-plan.md#已定的工程约定)）。在仓库根目录运行，不需要 API key：
+OCR 运行库与模型不进 Git，由 `tools/fetchdeps` 按固定下载源与 SHA-256 获取。ONNX Runtime 的镜像回退条件、固定版本和摘要见 [T3](specs/t3-ocr-runtime-model-samples.md#固定组合与制品静态核查)。VC++ 运行库单独处理，见[实施清单的工程约定](specs/scanner-implementation-plan.md#已定的工程约定)。在仓库根目录运行，不需要 API key：
 
 | 命令 | 用途 |
 | --- | --- |

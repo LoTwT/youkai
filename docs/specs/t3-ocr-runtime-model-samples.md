@@ -1,6 +1,6 @@
 # T3：OCR 运行库、模型与样本评估
 
-更新日期：2026-11-14。状态：当前组合已升级至 yalue v1.38.0 / ORT 1.32.0，模型保持原字节；本轮只完成本地检查，详见[升级记录](../reports/2026-11-14-dependency-upgrade.md)。旧组合的双平台安装、自检及升级链实机证据仍见[实施清单 M1](scanner-implementation-plan.md#m1正式工程资源与会话底座)，不覆盖新组合。2026-11-03 起首版只交付 Windows 本地客户端（范围见[架构 §6](scanner-architecture.md#6-首版功能范围)），本文的两平台制品、加载与验收要求保留为后续版本基础；macOS 云客户端首轮调参样本已建立；首版识别门槛只以 Windows 本地客户端一组样本判定，Windows 本地客户端样本与识别质量门槛仍待补齐，Windows 云与 macOS 云两组随后续版本。用户已认可模型评估方向与准确性边界：v6 small 优先验证，保留未知与人工校对，不承诺自动识别 100% 正确。字段范围由[架构第 6 节](scanner-architecture.md#首版字段清单提案)维护，管理状态与装备字段按 2026-10-20 冻结的数据模型执行；模块边界、取消与分发要求以[架构第 4 节](scanner-architecture.md#4-ocr原生资源与构建)为准。
+更新日期：2026-11-19。状态：当前组合已升级至 yalue v1.38.0 / ORT 1.32.0，模型保持原字节。2026-11-14 的本地检查见[升级记录](../reports/2026-11-14-dependency-upgrade.md)。旧组合的双平台安装、自检及升级链实机证据仍见[实施清单 M1](scanner-implementation-plan.md#m1正式工程资源与会话底座)，不覆盖新组合。2026-11-03 起首版只交付 Windows 本地客户端（范围见[架构 §6](scanner-architecture.md#6-首版功能范围)），本文的两平台制品、加载与验收要求保留为后续版本基础；macOS 云客户端首轮调参样本已建立；首版识别门槛只以 Windows 本地客户端一组样本判定，Windows 本地客户端样本与识别质量门槛仍待补齐，Windows 云与 macOS 云两组随后续版本。用户已认可模型评估方向与准确性边界：v6 small 优先验证，保留未知与人工校对，不承诺自动识别 100% 正确。字段范围由[架构第 6 节](scanner-architecture.md#首版字段清单提案)维护，管理状态与装备字段按 2026-10-20 冻结的数据模型执行；模块边界、取消与分发要求以[架构第 4 节](scanner-architecture.md#4-ocr原生资源与构建)为准。
 
 ## 1. 当前建议
 
@@ -67,6 +67,8 @@ T2 提供截图
 | 原生引擎 | ORT 1.32.0 官方 Windows x64 / macOS arm64 包，提交 `fab30a46491a40f5e4c968b80e8a59acbbb91b53`。 | 压缩包摘要与[官方发布资产](https://github.com/microsoft/onnxruntime/releases/tag/v1.32.0)一致；使用 CPU 提供器，原生包仍有其他系统依赖。 |
 | 文字模型 | `PP-OCRv6_rec_small.onnx`，RapidOCR ModelScope `v3.10.0`。 | 2026-11-14 最新稳定 RapidOCR 仍为 v3.10.0；[固定清单](https://github.com/RapidAI/RapidOCR/blob/7cfd3d9ef786a2e538ca30df700325e72e85b5f5/python/rapidocr/default_models.yaml)仍指向同一 URL 和摘要，模型字节未变。 |
 | 字符表 | 同一 ONNX 的 `character` 元数据。 | 18,708 个条目，加 CTC blank 与末尾空格对应 18,710 类；不另换字典。 |
+
+ORT 的 GitHub 下载地址返回 HTTP 404 或 410 时，`fetchdeps` 改从 [SourceForge 镜像](https://sourceforge.net/projects/onnx-runtime.mirror/files/v1.32.0/)获取同名归档。2026-11-19 完整下载两个平台的镜像归档，复算结果均与下表的固定 SHA-256 一致。归档和解出的随包成员仍须各自通过固定摘要校验。
 
 以下 SHA-256 对实际下载字节复算。压缩包摘要不等于内部 DLL/dylib 摘要；后续本地签名或其他修改还会改变最终制品摘要。
 

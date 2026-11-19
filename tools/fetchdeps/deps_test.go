@@ -21,9 +21,15 @@ func TestPinnedDeps(t *testing.T) {
 		if path.Base(d.name) != d.name {
 			t.Errorf("%s: name must be a plain file name", d.name)
 		}
-		u, err := url.Parse(d.url)
-		if err != nil || u.Scheme != "https" || u.Host == "" {
-			t.Errorf("%s: url %q is not a valid https URL", d.name, d.url)
+		urls := []string{d.url}
+		if d.mirrorURL != "" {
+			urls = append(urls, d.mirrorURL)
+		}
+		for _, sourceURL := range urls {
+			u, err := url.Parse(sourceURL)
+			if err != nil || u.Scheme != "https" || u.Host == "" {
+				t.Errorf("%s: url %q is not a valid https URL", d.name, sourceURL)
+			}
 		}
 		if err := checkDigest(d.sha256); err != nil {
 			t.Errorf("%s: %v", d.name, err)

@@ -32,13 +32,14 @@ type member struct {
 // only with that platform's app, merged into the resource root, and
 // everything else ships with every app.
 type dependency struct {
-	name     string // file name; also the cache file name and log label
-	url      string // fixed source of the bytes
-	sha256   string // digest of the downloaded bytes
-	platform string
-	kind     kind
-	dest     string   // kindFile: path under resources/
-	members  []member // archives: files to unpack
+	name      string // file name; also the cache file name and log label
+	url       string // primary source of the bytes
+	mirrorURL string // optional fallback serving the same pinned bytes
+	sha256    string // digest of the downloaded bytes
+	platform  string
+	kind      kind
+	dest      string   // kindFile: path under resources/
+	members   []member // archives: files to unpack
 }
 
 // target is one file a dependency must produce under resources/.
@@ -68,11 +69,12 @@ func (d dependency) targets() []target {
 // whatever its source serves today.
 var deps = []dependency{
 	{
-		name:     "onnxruntime-win-x64-1.32.0.zip",
-		url:      "https://github.com/microsoft/onnxruntime/releases/download/v1.32.0/onnxruntime-win-x64-1.32.0.zip",
-		sha256:   "aaa1d04fcf86bd31e84b90bc0cbde80e632bd0720dcc5d8ba05c4fe45c09d127",
-		platform: "windows/amd64",
-		kind:     kindZip,
+		name:      "onnxruntime-win-x64-1.32.0.zip",
+		url:       "https://github.com/microsoft/onnxruntime/releases/download/v1.32.0/onnxruntime-win-x64-1.32.0.zip",
+		mirrorURL: "https://downloads.sourceforge.net/project/onnx-runtime.mirror/v1.32.0/onnxruntime-win-x64-1.32.0.zip",
+		sha256:    "aaa1d04fcf86bd31e84b90bc0cbde80e632bd0720dcc5d8ba05c4fe45c09d127",
+		platform:  "windows/amd64",
+		kind:      kindZip,
 		members: []member{
 			{
 				name:   "onnxruntime-win-x64-1.32.0/lib/onnxruntime.dll",
@@ -97,11 +99,12 @@ var deps = []dependency{
 		},
 	},
 	{
-		name:     "onnxruntime-osx-arm64-1.32.0.tgz",
-		url:      "https://github.com/microsoft/onnxruntime/releases/download/v1.32.0/onnxruntime-osx-arm64-1.32.0.tgz",
-		sha256:   "8ddca23f532b9d4fbb279ba9b08dab6c0ac94fdc9aec2eb44a1db7049216c043",
-		platform: "darwin/arm64",
-		kind:     kindTgz,
+		name:      "onnxruntime-osx-arm64-1.32.0.tgz",
+		url:       "https://github.com/microsoft/onnxruntime/releases/download/v1.32.0/onnxruntime-osx-arm64-1.32.0.tgz",
+		mirrorURL: "https://downloads.sourceforge.net/project/onnx-runtime.mirror/v1.32.0/onnxruntime-osx-arm64-1.32.0.tgz",
+		sha256:    "8ddca23f532b9d4fbb279ba9b08dab6c0ac94fdc9aec2eb44a1db7049216c043",
+		platform:  "darwin/arm64",
+		kind:      kindTgz,
 		members: []member{
 			{
 				// The versioned dylib is the real file; lib/libonnxruntime.dylib
