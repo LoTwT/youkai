@@ -1,6 +1,7 @@
 package collect
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"image"
@@ -23,6 +24,7 @@ type topRebuildEvidence struct {
 type rebuildFrameGuard struct {
 	panelAllowed         bool
 	panelRequired        bool
+	closingPanel         bool
 	otherFilters         FilterState
 	selected             int
 	before               platform.Frame
@@ -52,6 +54,11 @@ func (run *inventoryRun) checkRebuildFrame(f platform.Frame, m PageMatch) error 
 		g.otherFilters = g.prover.CurrentNonSFilters(f)
 		if (p != nil && (p.ResetVerified || p.RarityS == FilterClear)) || g.otherFilters == FilterActive {
 			return scan.NewFault(CodeNavigationMismatch, fmt.Errorf("collect: frame %d shows a changed filter during top rebuild", f.ID))
+		}
+		if g.closingPanel && (!p.raritySSelected() || observedSortLabel(m) == "" || g.otherFilters != FilterClear) {
+			run.rebuildEvidence.Panel = panelRangeObservation(f, m)
+			run.rebuildEvidence.OtherFilters = g.otherFilters
+			return run.rangeFailure(fmt.Sprintf("frame %d no longer proves the range while closing the rebuild panel", f.ID))
 		}
 		return nil
 	}
@@ -159,6 +166,7 @@ func (run *inventoryRun) rebuildFirstViewport(ctx context.Context, cause error) 
 		return run.rangeFailure("the reopened panel could not prove the original S-only range and sort label")
 	}
 	g.panelRequired = false
+	g.closingPanel = true
 	if err := run.closeFilterPanel(ctx); err != nil {
 		return err
 	}
@@ -181,8 +189,33 @@ func (run *inventoryRun) rebuildFirstViewport(ctx context.Context, cause error) 
 	if !same {
 		return positionFault("rebuild", CodePositionLost, "collect: original and rebuilt top frames %d and %d could not be aligned: %s", before.ID, run.lastFrame.ID, why)
 	}
+	for i, cell := range run.ledger.visible() {
+		if cell.State != slotAdmitted && cell.State != slotNotS {
+			continue
+		}
+		if !sameRebuiltCell(before.Image, run.lastFrame.Image, run.inv.Layout.Slots[i]) {
+			return positionFault("rebuild", CodePositionLost, "collect: rebuilt top cell %d cannot be matched between frames %d and %d", i, before.ID, run.lastFrame.ID)
+		}
+	}
 	evidence.Confirmed = run.lastFrame.ID
 	// The existing ledger still describes exactly this top. nextSlot skips
 	// resolved entries; only applyTransition may add subsequent rows.
 	return nil
+}
+
+// Compare the calibrated cell in place after proving range and alignment.
+// Until animation tolerance is calibrated per profile, even a flashing badge
+// can make this recovery inconclusive. Motion outside the cells is irrelevant here.
+func sameRebuiltCell(before, after *image.RGBA, cell image.Rectangle) bool {
+	if cell.Empty() || !cell.In(before.Bounds()) || !cell.In(after.Bounds()) {
+		return false
+	}
+	width := cell.Dx() * 4
+	for y := cell.Min.Y; y < cell.Max.Y; y++ {
+		i, j := before.PixOffset(cell.Min.X, y), after.PixOffset(cell.Min.X, y)
+		if !bytes.Equal(before.Pix[i:i+width], after.Pix[j:j+width]) {
+			return false
+		}
+	}
+	return true
 }

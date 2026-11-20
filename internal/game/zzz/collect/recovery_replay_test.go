@@ -3,6 +3,9 @@ package collect_test
 import (
 	"context"
 	"errors"
+	"image"
+	"image/color"
+	"image/draw"
 	"slices"
 	"testing"
 
@@ -162,7 +165,7 @@ func (m replayCurrentRange) CurrentNonSFilters(platform.Frame) collect.FilterSta
 }
 
 func TestRecoveryReplayRebuildAtVerifiedTop(t *testing.T) {
-	for _, mode := range []string{"resume", "changed upper filter", "truncated top", "repeated loss", "later viewport", "reset and S probes only", "unreadable current range", "no current panel frame"} {
+	for _, mode := range []string{"resume", "changed upper filter", "truncated top", "replaced cell", "range lost after close", "repeated loss", "later viewport", "reset and S probes only", "unreadable current range", "no current panel frame"} {
 		t.Run(mode, func(t *testing.T) {
 			game := newScriptedGame(listOf(36)...)
 			if mode == "later viewport" {
@@ -193,17 +196,30 @@ func TestRecoveryReplayRebuildAtVerifiedTop(t *testing.T) {
 					return next(ctx, req)
 				}
 			}
-			current := replayCurrentRange{m, collect.FilterClear}
-			h.inv.Matcher = current
+			current := replayCurrentRange{lostFirstAdvance: m, otherFilters: collect.FilterClear}
+			h.inv.Matcher = &current
+			closeAttempts, topDrags, replacedFrames := 0, 0, 0
+			if mode == "replaced cell" {
+				next := h.session.FrameFn
+				h.session.FrameFn = func(ctx context.Context, req platform.FrameRequest) (platform.Frame, error) {
+					f, err := next(ctx, req)
+					if err == nil && topDrags > 0 && game.viewport == 0 {
+						img := image.NewRGBA(f.Image.Bounds())
+						draw.Draw(img, img.Bounds(), f.Image, f.Image.Bounds().Min, draw.Src)
+						draw.Draw(img, game.layout.Slots[0].Inset(20), image.NewUniform(color.White), image.Point{}, draw.Src)
+						f.Image = img
+						replacedFrames++
+					}
+					return f, err
+				}
+			}
 			switch mode {
 			case "reset and S probes only":
 				h.inv.Matcher = m
 			case "changed upper filter":
 				current.otherFilters = collect.FilterActive
-				h.inv.Matcher = current
 			case "unreadable current range":
 				current.otherFilters = collect.FilterUnknown
-				h.inv.Matcher = current
 			}
 			h.session.DispatchFn = func(op platform.InputOp) platform.InputResult {
 				switch op.At {
@@ -219,10 +235,21 @@ func TestRecoveryReplayRebuildAtVerifiedTop(t *testing.T) {
 					opens++
 					m.lost = false
 				case game.layout.TopFrom:
+					if opens == 2 {
+						topDrags++
+					}
 					if opens == 2 && mode == "truncated top" {
 						game.mu.Lock()
 						game.lists[0][0] = false
 						game.mu.Unlock()
+					}
+				case game.layout.PanelClose:
+					if opens == 2 && mode == "range lost after close" {
+						closeAttempts++
+						if closeAttempts == 1 {
+							game.failCloseLeft = 1
+							current.otherFilters = collect.FilterUnknown
+						}
 					}
 				}
 				return game.dispatch(op)
@@ -244,14 +271,23 @@ func TestRecoveryReplayRebuildAtVerifiedTop(t *testing.T) {
 						t.Fatalf("slot %d: %+v", i, cell)
 					}
 				}
-			case "reset and S probes only", "unreadable current range":
+			case "reset and S probes only", "unreadable current range", "range lost after close", "replaced cell":
 				snap := h.endCompleted()
 				stage, code, wantOpens := "scroll", collect.CodePositionLost, 1
-				if mode == "unreadable current range" {
+				if mode == "unreadable current range" || mode == "range lost after close" {
 					stage, code, wantOpens = "filter", collect.CodeNavigationMismatch, 2
 				}
+				if mode == "range lost after close" && (closeAttempts != 1 || topDrags != 0) {
+					t.Fatalf("unverified panel caused %d closes and %d return drags", closeAttempts, topDrags)
+				}
+				if mode == "replaced cell" {
+					stage, wantOpens = "rebuild", 2
+					if replacedFrames == 0 {
+						t.Fatal("the rebuilt top was never shown")
+					}
+				}
 				entry := h.requireIncompletePosition(1, stage, code)
-				if snap.Counts.Captured != 20 || advances != 1 || opens != wantOpens || entry.Rebuild.Confirmed != 0 {
+				if snap.Counts.Captured != 20 || len(entry.Ledger.Slots) != 20 || advances != 1 || opens != wantOpens || entry.Rebuild.Confirmed != 0 {
 					t.Fatalf("counts=%+v advances=%d opens=%d rebuild=%+v", snap.Counts, advances, opens, entry.Rebuild)
 				}
 				for i, cell := range entry.Ledger.Slots {
