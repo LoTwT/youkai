@@ -663,7 +663,7 @@ func TestDefaultExportName(t *testing.T) {
 	shell := exportTestShell(0)
 	shell.SessionID = "0816be6a-3d25-4389-bf84-05ac9f0a0693"
 	date := shell.StartedAt.Local().Format("2006-01-02")
-	if got, want := DefaultExportName(shell, ExportJSON), "youkai-"+date+"-0816be6a.youkai.json"; got != want {
+	if got, want := DefaultExportName(shell, ExportJSON), "youkai-"+date+"-0816be6a.json"; got != want {
 		t.Fatalf("json name = %q, want %q", got, want)
 	}
 	if got, want := DefaultExportName(shell, ExportCSV), "youkai-"+date+"-0816be6a.youkai.csv"; got != want {

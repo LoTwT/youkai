@@ -610,6 +610,7 @@ func TestWriteExportFileCancelBeforeRenameLeavesNoTarget(t *testing.T) {
 
 func TestNumberedExportNameKeepsTheExtension(t *testing.T) {
 	cases := map[string]string{
+		"out.json":          "out-1.json",
 		"out.youkai.json":   "out.youkai-1.json",
 		"out.csv":           "out-1.csv",
 		"noextension":       "noextension-1",

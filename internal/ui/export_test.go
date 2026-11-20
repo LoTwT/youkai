@@ -565,7 +565,8 @@ func TestExportDialogShowsCountsFormatDifferenceAndSuccess(t *testing.T) {
 		"纳入", "2 件", "排除", "1 件", "待处理 1",
 		"覆盖", "无法确认", "不含截图",
 		"写入位置", "系统下载目录",
-		"JSON：带来源扫描、覆盖结论、筛选方式、排除数量和目录。CSV：一行一件的表格，不含这些信息。两者来自同一已保存修订。",
+		"JSON 包含扫描来源、覆盖结论、筛选、排除数和目录。",
+		"CSV 每行一件，适合用表格查看。",
 		"导出 JSON", "导出 CSV", "去校对",
 	} {
 		if !f.tt.HasText(want) {
@@ -588,7 +589,7 @@ func TestExportDialogShowsCountsFormatDifferenceAndSuccess(t *testing.T) {
 		t.Fatalf("JSON export calls = %+v", calls)
 	}
 	date := f.m.recData.Checkpoint.Session.StartedAt.Local().Format("2006-01-02")
-	if want := "youkai-" + date + "-rec.youkai.json"; calls[0].name != want {
+	if want := "youkai-" + date + "-rec.json"; calls[0].name != want {
 		t.Fatalf("default JSON name = %q, want %q", calls[0].name, want)
 	}
 	var doc struct {
@@ -605,7 +606,7 @@ func TestExportDialogShowsCountsFormatDifferenceAndSuccess(t *testing.T) {
 		t.Fatalf("exported JSON = format %q revision %d items %d", doc.Format, doc.Session.SavedRevision, len(doc.Items))
 	}
 	if !f.tt.HasText("已导出 2 件") || !f.tt.HasText("打开下载目录") ||
-		!f.tt.HasText("完成") || !f.tt.HasText("rec.youkai.json") {
+		!f.tt.HasText("完成") || !f.tt.HasText("rec.json") {
 		t.Fatalf("the success state is incomplete: %q", f.tt.Texts())
 	}
 	if f.tt.HasText("删除这条记录的截图") {
@@ -696,12 +697,13 @@ func TestExportDialogFitsTheNarrowWindow(t *testing.T) {
 	f.m.SetContentSize(960, 640)
 	f.tt.Frame()
 	f.open(t)
+	const jsonDescription = "JSON 包含扫描来源、覆盖结论、筛选、排除数和目录。"
+	const csvDescription = "CSV 每行一件，适合用表格查看。"
 	for _, label := range []string{
 		"导出这条记录", "纳入", "排除", "覆盖", "不含截图",
 		"写入位置", "去校对", "排除原因明细", "导出 JSON", "导出 CSV",
 		"关闭导出对话框",
-		"JSON：带来源扫描、覆盖结论、筛选方式、排除数量和目录。" +
-			"CSV：一行一件的表格，不含这些信息。两者来自同一已保存修订。",
+		jsonDescription, csvDescription,
 	} {
 		rect, ok := f.tt.Find(label)
 		if !ok {
@@ -710,6 +712,11 @@ func TestExportDialogFitsTheNarrowWindow(t *testing.T) {
 		if rect.X < 0 || rect.Y < 0 || rect.X+rect.W > 960 || rect.Y+rect.H > 640 {
 			t.Fatalf("%q lies outside 960×640: %+v", label, rect)
 		}
+	}
+	jsonRow, _ := f.tt.Find(jsonDescription)
+	csvRow, _ := f.tt.Find(csvDescription)
+	if csvRow.Y < jsonRow.Y+jsonRow.H {
+		t.Fatalf("format descriptions should occupy separate rows: JSON %+v, CSV %+v", jsonRow, csvRow)
 	}
 }
 
@@ -1414,6 +1421,7 @@ func TestExportDialogFailureRetriesWithoutChangingTheRecord(t *testing.T) {
 func TestExportDialogOffersScreenshotDeletionWhenNothingIsPending(t *testing.T) {
 	rec := recovery(uiStructuredItem(t, 1, record.QualityAutoAccepted))
 	f := newExportDialogFixture(t, rec, false)
+	f.m.cfg.OpenDownloadsDirectory = func() error { return nil }
 	f.svc.previewFn = func(kind, recordID string) (app.CleanupPreview, error) {
 		return app.CleanupPreview{Records: 1, EvidenceFiles: 3, EvidenceBytes: 1024, PendingReview: 0}, nil
 	}
@@ -1422,8 +1430,14 @@ func TestExportDialogOffersScreenshotDeletionWhenNothingIsPending(t *testing.T) 
 		t.Fatalf("click 导出 JSON: %v", err)
 	}
 	settle(t, f.m, f.q, f.tt)
-	if !f.tt.HasText("删除这条记录的截图") {
-		t.Fatalf("the screenshot-deletion link is missing: %q", f.tt.Texts())
+	open, hasOpen := f.tt.Find("打开下载目录")
+	done, hasDone := f.tt.Find("完成")
+	remove, hasRemove := f.tt.Find("删除这条记录的截图")
+	if !hasOpen || !hasDone || !hasRemove {
+		t.Fatalf("the export completion actions are incomplete: %q", f.tt.Texts())
+	}
+	if open.X+open.W > done.X || remove.Y < done.Y+done.H || remove.X >= open.X {
+		t.Fatalf("expected directory and done together on the right and screenshot cleanup separately on the left: open %+v, done %+v, remove %+v", open, done, remove)
 	}
 	if err := f.tt.Click("删除这条记录的截图"); err != nil {
 		t.Fatalf("click 删除这条记录的截图: %v", err)

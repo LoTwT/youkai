@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	"image/draw"
 	"testing"
 	"time"
 
@@ -11,6 +12,33 @@ import (
 	"github.com/LoTwT/youkai/internal/scan"
 	"github.com/egoist/mygo/ui"
 )
+
+func TestAppIconAppearsInRailAndTrayHint(t *testing.T) {
+	ink := color.RGBA{R: 241, G: 3, B: 199, A: 255}
+	icon := image.NewRGBA(image.Rect(0, 0, 32, 32))
+	draw.Draw(icon, icon.Bounds(), image.NewUniform(ink), image.Point{}, draw.Src)
+	m, q := newTestModel(t, Config{Service: &fakeService{}, AppIcon: ui.NewBitmap(icon)})
+	tt := ui.NewTester(m.View, 1180, 760)
+	settle(t, m, q, tt)
+
+	if countColorInRect(tt.Image(), ink, image.Rect(0, 0, navRailWidth, 60)) < 512 {
+		t.Error("the navigation rail does not display the configured app icon")
+	}
+	if _, ok := tt.Find("妖"); ok {
+		t.Error("the navigation rail still displays the old text mark")
+	}
+
+	m.trayHintOpen = true
+	tt.Frame()
+	label, ok := tt.Find("任务栏示意")
+	if !ok {
+		t.Fatal("the tray hint illustration is missing")
+	}
+	row := image.Rect(int(label.X+label.W), int(label.Y)-4, 1180, int(label.Y+label.H)+4)
+	if countColorInRect(tt.Image(), ink, row) < 128 {
+		t.Error("the tray hint illustration does not display the configured app icon")
+	}
+}
 
 // TestNavRailIsFixedWidth checks the 64-DIP rail with its 52-DIP items at
 // the default and minimum window sizes: the three destinations exist, no

@@ -160,7 +160,7 @@ func reserveDirectExportPath(dir, defaultName string) (string, error) {
 }
 
 // numberedExportName inserts the conflict counter before the extension:
-// name.youkai.json, name.youkai-1.json, name.youkai-2.json.
+// name.json, name-1.json, name-2.json.
 func numberedExportName(name string, attempt int) string {
 	if attempt == 0 {
 		return name

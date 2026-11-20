@@ -238,8 +238,13 @@ func main() {
 	// The no-argument form preserves the original process arguments.
 	relaunch := func() { mygo.App.Relaunch() }
 
+	appIcon, err := mgui.DecodeBitmapScaled(appIconPNG, 96)
+	if err != nil {
+		log.Printf("youkai: decode app icon: %v", err)
+	}
 	model := ui.New(ui.Config{
 		Service: svc,
+		AppIcon: appIcon,
 		// The scan page's countdown and ten-second readiness re-check.
 		After: time.After,
 		ScanSource: ui.ScanSourceInfo{

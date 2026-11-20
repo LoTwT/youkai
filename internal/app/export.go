@@ -19,7 +19,7 @@ import (
 type ExportFormat string
 
 const (
-	// ExportJSON is the *.youkai.json usable-data document.
+	// ExportJSON is the Youkai usable-data JSON document.
 	ExportJSON ExportFormat = "json"
 	// ExportCSV is the *.youkai.csv wide table derived from the same data.
 	ExportCSV ExportFormat = "csv"
@@ -561,7 +561,11 @@ func DefaultExportName(shell record.SessionShell, format ExportFormat) string {
 	if short == "" {
 		short = "session"
 	}
-	return fmt.Sprintf("youkai-%s-%s.youkai.%s", date, short, format.Extension())
+	stem := fmt.Sprintf("youkai-%s-%s", date, short)
+	if format != ExportJSON {
+		stem += ".youkai"
+	}
+	return stem + "." + format.Extension()
 }
 
 // formatExportTime renders the contract's UTC millisecond timestamp.
