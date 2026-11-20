@@ -32,6 +32,7 @@ const (
 	summaryActionPrepare
 	summaryActionRescan
 	summaryActionRescanIncomplete
+	summaryActionMergeSlots
 	summaryActionReview
 	summaryActionBackfill
 	summaryActionViewItems
@@ -186,6 +187,8 @@ func (m *Model) performSummaryAction(c *ui.Context, kind summaryActionKind) {
 		m.navigatePage(pageScan)
 	case summaryActionRescanIncomplete:
 		m.openRescanDialog()
+	case summaryActionMergeSlots:
+		m.openSlotMerge()
 	case summaryActionReview:
 		m.openSummaryClass(app.ItemClassPendingReview)
 	case summaryActionBackfill:
@@ -421,12 +424,15 @@ func (m *Model) summaryDetailsArea(c *ui.Context, t *ui.Theme) {
 // "全部" is a traversal conclusion, not a total reconciliation, so the line
 // says so (architecture §5 完整性与身份).
 func (m *Model) summaryCoverageLine() string {
+	if m.hasMergedSlots() {
+		return "覆盖：部分 · 各号位分批采集"
+	}
 	plan, planKnown := app.DeclaredScanPlan(m.rec.Shell.Scope)
 	if app.ScanScopeDamaged(m.rec.Shell.Scope) {
 		return "覆盖范围：范围记录无效，无法确认是否只补扫了部分号位"
 	}
 	if planKnown && plan.RescanOf != "" {
-		return fmt.Sprintf("覆盖：部分 · 补扫 %s 号位 · 独立记录，未合并原记录",
+		return fmt.Sprintf("覆盖：部分 · 补扫 %s 号位 · 独立补扫记录",
 			summaryPositionRanges(plan.Positions))
 	}
 	switch m.recordCoverage() {
@@ -475,6 +481,10 @@ func (m *Model) summaryPositions(c *ui.Context, t *ui.Theme) {
 			color = tok.WarningFG
 		}
 		ui.Text(c, text).TextColor(color).FontSize(t.FontSize * 0.92)
+	}
+	if m.hasMergedSlots() {
+		m.summarySlotSources(c, t)
+		return
 	}
 	sort, known := m.rec.Shell.SortVerification()
 	switch {
@@ -869,6 +879,20 @@ func (m *Model) recordSummaryConclusion() summaryConclusion {
 	out := recordOutcomeFor(m.summaryConclusionInput())
 	wording := recordSummaryWording(out)
 	primary, secondary := m.summaryConclusionActions(out)
+	if m.hasMergedSlots() {
+		wording = summaryWording{
+			Title:      "已合并补扫号位",
+			Supplement: "各号位在不同时间采集，来源与时间见下方详情。",
+		}
+		counts := out.Input.Counts
+		primary = m.pendingPrimary(counts)
+		secondary = append(m.pendingSecondary(counts, true), m.rescanActions(true)...)
+	}
+	if m.slotMergeCandidate() {
+		secondary = append(secondary, summaryAction{
+			Kind: summaryActionMergeSlots, Label: "合并回原记录", DisabledReason: m.slotMergeBlockedReason(),
+		})
+	}
 	if primary.Kind == summaryActionExport && primary.disabled() {
 		// A disabled export action may be transient (loading, writing,
 		// saving, finishing) or caused by a failed snapshot. The title must

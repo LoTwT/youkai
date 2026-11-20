@@ -175,6 +175,8 @@ func (m *Model) exportBlockedReasonWithDraft(blockDirty bool) string {
 		return "正在保存修改，完成前不能导出。"
 	case m.cleanupRunning():
 		return "正在清理，完成前不能导出。"
+	case m.slotMerge != nil:
+		return "请先结束号位合并。"
 	case blockDirty && m.editingDirty():
 		return "有未保存的修改，保存或放弃后可导出。"
 	case m.loading:

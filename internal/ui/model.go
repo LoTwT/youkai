@@ -51,6 +51,8 @@ type Service interface {
 	// SaveItemRevision appends one manual revision to a produced item and
 	// returns the updated item.
 	SaveItemRevision(recordID string, sequence, expectedRevision int64, edit app.ItemRevisionEdit) (app.ItemRevisionResult, error)
+	PreviewSlotMerge(supplementID string) (app.SlotMergePreview, error)
+	MergeSlots(request app.SlotMergeRequest) (int64, error)
 	// DeleteRecordScreenshots deletes one record's screenshots while
 	// keeping its data, revisions and review state.
 	DeleteRecordScreenshots(recordID string) (record.EvidenceRemoval, error)
@@ -384,6 +386,7 @@ type Model struct {
 	// rescanDialog is the summary's position picker. It only prepares the
 	// pending range; the start still uses the normal readiness and precheck.
 	rescanDialog rescanDialog
+	slotMerge    *slotMergeDialog
 	// rescanNotice explains a stale picker or an unusable source record.
 	rescanNotice string
 	// startErr is the last refused start as a past event, not part of the

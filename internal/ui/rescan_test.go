@@ -682,7 +682,7 @@ func TestRescanSummaryNamesOnlyThePlannedRange(t *testing.T) {
 	if strings.Contains(strings.Join(got.Notes, "\n"), "1 号位") {
 		t.Fatalf("unplanned position leaked into the notes: %q", got.Notes)
 	}
-	if m.summaryCoverageLine() != "覆盖：部分 · 补扫 4 号位 · 独立记录，未合并原记录" {
+	if m.summaryCoverageLine() != "覆盖：部分 · 补扫 4 号位 · 独立补扫记录" {
 		t.Fatalf("coverage line = %q", m.summaryCoverageLine())
 	}
 
@@ -723,7 +723,7 @@ func TestViewRescanSummaryAndPreparedRange(t *testing.T) {
 		Positions: []record.PositionConclusion{{Position: 4, Complete: true}},
 	}
 	m, q, tt, _ := openSummaryRecord(t, rec, Config{DirectExportSaver: &fakeDirectExportSaver{}}, 1180, 900)
-	if !tt.HasText("补扫完成：4 号位完整") || !tt.HasText("覆盖：部分 · 补扫 4 号位 · 独立记录，未合并原记录") {
+	if !tt.HasText("补扫完成：4 号位完整") || !tt.HasText("覆盖：部分 · 补扫 4 号位 · 独立补扫记录") {
 		t.Fatalf("the summary does not name the independent range: %q", tt.Texts())
 	}
 	if tt.HasText("1 号位：未扫描") || tt.HasText("2 号位：未扫描") {

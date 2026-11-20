@@ -198,7 +198,7 @@ func rescanIncompletePositions(in recordConclusionInput) []int {
 
 // rescanWordingSupplement states that the record is independent from the
 // source it was requested from.
-const rescanWordingSupplement = "独立补扫记录，原记录没有改变。"
+const rescanWordingSupplement = "结果保存为独立补扫记录。"
 
 // recordListConclusion is the records list's wording. It never shows a raw
 // fault code: an unknown code degrades to the ending alone (09 §4.3).

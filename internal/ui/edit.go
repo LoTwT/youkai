@@ -678,6 +678,9 @@ func (m *Model) requestNavigation(req navigationRequest) {
 		m.reviewErr = "正在保存，完成前不能切换。"
 		return
 	}
+	if m.slotMerge != nil && m.slotMerge.running {
+		return
+	}
 	if m.editingDirty() {
 		m.navPrompt = &req
 		m.compactListOpen = false
