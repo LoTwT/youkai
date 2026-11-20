@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"image"
 	"log"
+	"slices"
 	"strings"
 	"time"
 
@@ -1288,10 +1289,19 @@ func (run *inventoryRun) clickUntilPage(ctx context.Context, at image.Point, wan
 			}
 			return !requireSort || observedSortLabel(m) != ""
 		}
-		if run.inv.RequirePanelRangeProof && want == PageWarehouse {
-			match = run.afterInput(match)
+		var out awaitOutcome
+		switch {
+		case run.inv.RequirePanelRangeProof && want == PageWarehouse:
+			if selected := run.rangeProof.SelectedS; selected != nil && selected.EffectVerified {
+				out = run.awaitRangeStep(ctx, match, true)
+			} else {
+				// This close is cleanup after a degraded position, not
+				// the closing step of a proven S selection.
+				out = run.awaitSettledFrame(ctx, run.afterInput(match), nil)
+			}
+		default:
+			out = run.awaitSettledFrame(ctx, match, nil)
 		}
-		out := run.awaitSettledFrame(ctx, match, nil)
 		switch out.class {
 		case awaitStable:
 			run.listMatch = out.match
@@ -1595,6 +1605,9 @@ func (run *inventoryRun) awaitTopBase(ctx context.Context) error {
 			return err
 		}
 		if !run.positionListVerdict(m) {
+			if m.Page == PageWarehouse {
+				return run.advanceStateFault("the wait for a top confirmation base", m)
+			}
 			if f.Reused {
 				if err := sleepCtx(ctx, run.inv.recheckEvery()); err != nil {
 					return err
@@ -1867,7 +1880,12 @@ func (run *inventoryRun) confirmBottom(ctx context.Context) (*failureFrames, err
 			return nil, fault
 		}
 		if err := run.checkLedgerViewport(out.afterMatch); err != nil {
-			return waitFailure("bottom-grid-changed", before, out), err
+			return waitFailure("bottom-grid-changed", before, out), positionIncomplete("bottom", err)
+		}
+		if !out.afterMatch.List.Bottom {
+			fault := run.positionProofFailure("bottom", CodeNavigationMismatch, out,
+				"collect: the stationary frame %d did not confirm the bottom indicator", out.after.ID)
+			return waitFailure("bottom-indicator-missing", before, out), fault
 		}
 		run.listMatch = out.afterMatch
 		run.lastFrame = out.after
@@ -3535,22 +3553,30 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 			continue
 		}
 		if haveCandidate {
-			if sameFrameContent(candidate, f) {
-				settleStreak++
-				if settleStreak >= timing.SettleObservations {
-					return settle(f)
+			stationary := sameFrameContent(candidate, f)
+			if !stationary {
+				rel := run.inv.matcher().MatchScroll(candidate, f)
+				trace.noteCandidate(candidate, f, rel)
+				out.match = rel
+				stationary, _ = run.stillnessProven(candidate, f, rel)
+				if stationary {
+					out.settleMatch = rel
 				}
-				continue
 			}
-			rel := run.inv.matcher().MatchScroll(candidate, f)
-			trace.noteCandidate(candidate, f, rel)
-			out.match = rel
 			// A settling confirmation must be proof the list stayed at the
 			// candidate, not merely a Stationary verdict: on repeated rows a
 			// still-moving list can keep the zero-shift MAD low, and accepting
 			// that would commit a stale offset while the scene has moved on.
-			if proven, _ := run.stillnessProven(candidate, f, rel); proven {
-				out.settleMatch = rel
+			if stationary {
+				// Pixel stillness does not prove that every occupied slot
+				// or the bottom indicator agrees with the older candidate.
+				// Without that agreement the transition cannot carry the ledger.
+				if !slices.Equal(candidateMatch.List.Occupied, m.List.Occupied) ||
+					candidateMatch.List.Bottom != m.List.Bottom {
+					candidateScroll.Evidence += fmt.Sprintf(
+						"; candidate frame %d and stationary frame %d disagree on occupancy or bottom evidence", candidate.ID, f.ID)
+					return finish()
+				}
 				settleStreak++
 				if settleStreak >= timing.SettleObservations {
 					return settle(f)
@@ -3800,12 +3826,26 @@ func (run *inventoryRun) awaitSettledSeeded(ctx context.Context, expect func(Pag
 }
 
 func (run *inventoryRun) awaitSettledFrame(ctx context.Context, expect func(platform.Frame, PageMatch) bool, seed *awaitOutcome) awaitOutcome {
+	return run.awaitCheckedFrame(ctx, func(f platform.Frame, m PageMatch) (bool, error) {
+		return expect(f, m), nil
+	}, seed)
+}
+
+// awaitCheckedFrame also lets a step reject a verified contradiction before
+// additional observations can be counted toward the expected state.
+func (run *inventoryRun) awaitCheckedFrame(ctx context.Context, check func(platform.Frame, PageMatch) (bool, error), seed *awaitOutcome) awaitOutcome {
 	deadline := time.Now().Add(run.inv.actionBudget())
 	samples := 0
 	out := awaitOutcome{}
-	if seed != nil && seed.frame.ID != 0 && seed.frame.Geometry == run.geo && expect(seed.frame, seed.match) {
-		out.frame, out.match, out.expected = seed.frame, seed.match, true
-		samples = 1
+	if seed != nil && seed.frame.ID != 0 && seed.frame.Geometry == run.geo {
+		ok, err := check(seed.frame, seed.match)
+		if err != nil {
+			return awaitOutcome{class: awaitFrameErr, frame: seed.frame, match: seed.match, err: err}
+		}
+		if ok {
+			out.frame, out.match, out.expected = seed.frame, seed.match, true
+			samples = 1
+		}
 	}
 	after := run.lastArrived
 	for {
@@ -3846,7 +3886,12 @@ func (run *inventoryRun) awaitSettledFrame(ctx context.Context, expect func(plat
 			run.lastArrived = f.ArrivedAt
 			after = f.ArrivedAt
 		}
-		if expect(f, m) {
+		ok, err := check(f, m)
+		if err != nil {
+			out.class, out.err = awaitFrameErr, err
+			return out
+		}
+		if ok {
 			out.expected = true
 			samples++
 			if samples >= run.inv.stableFrames() {

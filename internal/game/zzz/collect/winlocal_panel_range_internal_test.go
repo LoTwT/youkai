@@ -130,11 +130,8 @@ func TestWindowsLocalPanelRangeStaticCrops(t *testing.T) {
 	}
 }
 
-func TestWindowsLocalPanelRangeSingleVisitReplay(t *testing.T) {
-	profile := windowsNativeRangeProfile(t)
-	frames := loadWindowsPanelFrames(t, profile.Layout)
-	// The existing native warehouse fixture supplies complete page pixels
-	// for the close. The recorded panel crops provide the three open states.
+func loadWindowsWarehouseFrame(t *testing.T, layout Layout) platform.Frame {
+	t.Helper()
 	data, err := os.ReadFile("testdata/winlocal/win-1920x1080.png")
 	if err != nil {
 		t.Fatal(err)
@@ -145,7 +142,13 @@ func TestWindowsLocalPanelRangeSingleVisitReplay(t *testing.T) {
 	}
 	warehouse := image.NewRGBA(img.Bounds())
 	draw.Draw(warehouse, warehouse.Bounds(), img, img.Bounds().Min, draw.Src)
-	closed := platform.Frame{ID: 1, Geometry: 1, Image: warehouse, Content: profile.Layout.Content}
+	return platform.Frame{ID: 1, Geometry: 1, Image: warehouse, Content: layout.Content}
+}
+
+func TestWindowsLocalPanelRangeSingleVisitReplay(t *testing.T) {
+	profile := windowsNativeRangeProfile(t)
+	frames := loadWindowsPanelFrames(t, profile.Layout)
+	closed := loadWindowsWarehouseFrame(t, profile.Layout)
 	for _, tc := range []struct {
 		name, afterReset, afterS string
 		staleS                   bool

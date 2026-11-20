@@ -34,14 +34,15 @@ type repeatedRowsMatcher struct {
 	rows, columns int
 }
 
-func (m *repeatedRowsMatcher) Match(platform.Frame) PageMatch {
+func (m *repeatedRowsMatcher) Match(f platform.Frame) PageMatch {
 	occupied := make([]bool, m.rows*m.columns)
 	for i := range occupied {
 		occupied[i] = true
 	}
+	top, bottom := m.scrollEnds(f.Image)
 	return PageMatch{
 		Page:   PageWarehouse,
-		List:   &ListEvidence{Occupied: occupied, Selected: 0},
+		List:   &ListEvidence{Occupied: occupied, Selected: 0, Top: top, Bottom: bottom},
 		Wheel:  &WheelEvidence{Position: 1},
 		Filter: &FilterEvidence{State: FilterActive},
 	}
@@ -456,38 +457,56 @@ func TestScrollEvidenceBottomCropLeadingEdgeIsNotMovement(t *testing.T) {
 	}
 }
 
-// TestConfirmBottomAcceptsLeadingEdgeCropJitter drives the real bottom
-// confirmation over the same Windows crop frames: both are Bottom, the list
-// pixels are unchanged, and the thumb's leading edge differs by two pixels.
-// The confirmation must accept the stationary result instead of degrading the
-// position on the single-edge artifact.
-func TestConfirmBottomAcceptsLeadingEdgeCropJitter(t *testing.T) {
-	view := &repeatedRowsSequenceView{idBase: 100}
-	run := newRepeatedRowsRun(t, view, 0, 200*time.Millisecond)
-	l := run.inv.Layout
-	view.layout = l
-	view.specs = []repeatedRowsFrameSpec{
-		{selection: 16, thumbStart: 370, thumbEnd: 931},
-		{selection: 16, thumbStart: 370, thumbEnd: 931},
-	}
-	before := paintRepeatedRowsFrame(l, 50, 3, 16, 368, 931)
-	if top, bottom := run.inv.matcher().(*repeatedRowsMatcher).scrollEnds(before.Image); top || !bottom {
-		t.Fatalf("pre-drag frame top=%t bottom=%t, want Bottom", top, bottom)
-	}
-
-	err := runScriptedSession(t, run, func(ctx context.Context, run *inventoryRun) error {
-		run.lastFrame = before
-		_, err := run.confirmBottom(ctx)
-		return err
-	})
-	if err != nil {
-		t.Fatalf("the bottom confirmation must accept the edge-jitter frames: %v", err)
-	}
-	if view.dispatches != 1 {
-		t.Fatalf("bottom confirmation dispatched %d drags, want 1", view.dispatches)
-	}
-	if run.lastFrame.ID != view.idBase+2 {
-		t.Fatalf("bottom confirmation kept frame %d, want the newest fresh frame %d", run.lastFrame.ID, view.idBase+2)
+// The bottom confirmation still accepts two pixels of leading-edge crop
+// jitter. A stationary view without a current bottom indicator is incomplete.
+func TestConfirmBottomRequiresStillnessAndBottomIndicator(t *testing.T) {
+	for _, tc := range []struct {
+		name                 string
+		thumbStart, thumbEnd int
+		bottom               bool
+	}{
+		{"leading edge crop jitter", 370, 931, true},
+		{"stationary with no bottom indicator", 368, 928, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			view := &repeatedRowsSequenceView{idBase: 100}
+			run := newRepeatedRowsRun(t, view, 0, 200*time.Millisecond)
+			l := run.inv.Layout
+			view.layout = l
+			spec := repeatedRowsFrameSpec{selection: 16, thumbStart: tc.thumbStart, thumbEnd: tc.thumbEnd}
+			view.specs = []repeatedRowsFrameSpec{spec, spec}
+			before := paintRepeatedRowsFrame(l, 50, 3, 16, 368, 931)
+			matcher := run.inv.matcher().(*repeatedRowsMatcher)
+			if top, bottom := matcher.scrollEnds(before.Image); top || !bottom {
+				t.Fatalf("pre-drag frame top=%t bottom=%t, want Bottom", top, bottom)
+			}
+			after := paintRepeatedRowsFrame(l, 51, 3, 16, tc.thumbStart, tc.thumbEnd)
+			if m := matcher.Match(after); m.List.Bottom != tc.bottom {
+				t.Fatalf("terminal bottom indicator = %t, want %t", m.List.Bottom, tc.bottom)
+			}
+			sm := matcher.MatchScroll(before, after)
+			if proven, why := run.stillnessProven(before, after, sm); !proven {
+				t.Fatalf("the terminal frame must prove stillness: %s", why)
+			}
+			err := runScriptedSession(t, run, func(ctx context.Context, run *inventoryRun) error {
+				run.lastFrame = before
+				_, err := run.confirmBottom(ctx)
+				return err
+			})
+			if view.dispatches != 1 {
+				t.Fatalf("bottom confirmation dispatched %d drags, want 1", view.dispatches)
+			}
+			if !tc.bottom {
+				incomplete, ok := asPositionIncomplete(err)
+				if !ok || incomplete.stage != "bottom" || run.lastFrame.ID != before.ID {
+					t.Fatalf("bottom without an indicator: frame %d, error %v", run.lastFrame.ID, err)
+				}
+				return
+			}
+			if err != nil || run.lastFrame.ID != view.idBase+2 {
+				t.Fatalf("bottom confirmation: frame %d, want %d, error %v", run.lastFrame.ID, view.idBase+2, err)
+			}
+		})
 	}
 }
 

@@ -104,9 +104,41 @@ func (run *inventoryRun) awaitPanelEffect(ctx context.Context, controlsMatch fun
 	if !run.inv.RequirePanelRangeProof {
 		return run.awaitSettled(ctx, run.panelVerdict)
 	}
-	return run.awaitSettledFrame(ctx, run.afterInput(func(_ platform.Frame, m PageMatch) bool {
+	return run.awaitRangeStep(ctx, func(_ platform.Frame, m PageMatch) bool {
 		return run.panelVerdict(m) && controlsMatch(m.Panel.Range)
-	}), nil)
+	}, false)
+}
+
+// awaitRangeStep requires the requested effect and rejects a stable
+// contradiction within the same panel visit. An unreadable frame or an
+// isolated animation verdict does not confirm either result.
+func (run *inventoryRun) awaitRangeStep(ctx context.Context, expect func(platform.Frame, PageMatch) bool, closing bool) awaitOutcome {
+	current := run.afterInput(func(platform.Frame, PageMatch) bool { return true })
+	contradictions := 0
+	return run.awaitCheckedFrame(ctx, func(f platform.Frame, m PageMatch) (bool, error) {
+		if !current(f, m) {
+			contradictions = 0
+			return false, nil
+		}
+		if m.Page == PageWarehouse && !run.positionListVerdict(m) {
+			return false, run.advanceStateFault("filter preparation", m)
+		}
+		earlyClose := !closing && run.listVerdict(m)
+		clearedS := closing && run.panelVerdict(m) && m.Panel.Range != nil && m.Panel.Range.RarityS == FilterClear
+		if !earlyClose && !clearedS {
+			contradictions = 0
+			return expect(f, m), nil
+		}
+		contradictions++
+		if contradictions < run.inv.stableFrames() {
+			return false, nil
+		}
+		if earlyClose {
+			return false, positionFault("filter", CodeNavigationMismatch,
+				"collect: wheel position %d: the filter panel closed before its effect was verified (frame %d)", run.position, f.ID)
+		}
+		return false, run.rangeFailure(fmt.Sprintf("S was cleared before the filter panel closed (frame %d)", f.ID))
+	}, nil)
 }
 
 // afterInput requires a fresh post-action frame before an idle confirmation
