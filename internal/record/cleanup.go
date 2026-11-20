@@ -255,6 +255,11 @@ func (s *Store) deleteEvidenceLocked(recordID string) (EvidenceRemoval, error) {
 	for i := range doc.Items {
 		doc.Items[i].EvidenceIDs = nil
 	}
+	for i := range doc.SlotMerges {
+		for j := range doc.SlotMerges[i].Replaced {
+			doc.SlotMerges[i].Replaced[j].EvidenceIDs = nil
+		}
+	}
 	// The index must describe exactly the referenced set; with every
 	// reference gone it is empty. Filtering (instead of assigning
 	// nil) keeps the invariant explicit and would preserve any

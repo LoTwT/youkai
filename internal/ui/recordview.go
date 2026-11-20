@@ -380,6 +380,7 @@ func pairEvidence(ids []string, seq int64, obs observedDoc) []Evidence {
 // for any other shape or for a sequence that names another item: the image is
 // still shown, but the view does not guess where it belongs.
 func parseEvidenceID(id string, seq int64) (kind EvidenceKind, index int, ok bool) {
+	id = app.MergeEvidenceCropName(id)
 	dash := strings.LastIndexByte(id, '-')
 	if dash <= 0 || dash == len(id)-1 {
 		return "", 0, false

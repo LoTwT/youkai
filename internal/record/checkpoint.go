@@ -612,9 +612,11 @@ func (rev *ItemRevision) validate() error {
 // accepted; manual edits only append revisions and move the current
 // payload forward.
 type ItemRecord struct {
-	// Sequence is the session's capture sequence, 1..n in order.
-	Sequence int64  `json:"sequence"`
-	Status   Status `json:"status"`
+	// Sequence identifies an item in this record. A slot merge retires
+	// replaced numbers and allocates new ones above the previous maximum.
+	Sequence int64       `json:"sequence"`
+	Origin   *ItemOrigin `json:"origin,omitempty"`
+	Status   Status      `json:"status"`
 	// Reason is required exactly when Status is unprocessed: cancelled
 	// by the user or interrupted by a crash.
 	Reason UnprocessedReason `json:"unprocessedReason,omitempty"`
@@ -736,6 +738,7 @@ type Checkpoint struct {
 	Session       SessionShell   `json:"session"`
 	Items         []ItemRecord   `json:"items"`
 	Evidence      []EvidenceFile `json:"evidence"`
+	SlotMerges    []SlotMerge    `json:"slotMerges,omitempty"`
 }
 
 // validate checks the document's structural consistency: format identity,
@@ -760,8 +763,16 @@ func (cp *Checkpoint) validate() error {
 		if err := cp.Items[i].validate(); err != nil {
 			return fmt.Errorf("item %d: %w", i+1, err)
 		}
-		if cp.Items[i].Sequence != int64(i+1) {
+		if len(cp.SlotMerges) == 0 && cp.Items[i].Sequence != int64(i+1) {
 			return fmt.Errorf("item %d has sequence %d; sequences are 1..n in order", i+1, cp.Items[i].Sequence)
+		}
+		if len(cp.SlotMerges) == 0 && cp.Items[i].Origin != nil {
+			return fmt.Errorf("item %d has an origin without a slot merge", i+1)
+		}
+	}
+	if len(cp.SlotMerges) != 0 {
+		if err := cp.validateSlotMerges(); err != nil {
+			return err
 		}
 	}
 	return cp.validateEvidenceIndex()
@@ -808,6 +819,13 @@ func (cp *Checkpoint) referencedEvidence() map[string]struct{} {
 	for _, it := range cp.Items {
 		for _, id := range it.EvidenceIDs {
 			ids[id] = struct{}{}
+		}
+	}
+	for _, merge := range cp.SlotMerges {
+		for _, it := range merge.Replaced {
+			for _, id := range it.EvidenceIDs {
+				ids[id] = struct{}{}
+			}
 		}
 	}
 	for _, id := range cp.Session.CoverageEvidenceIDs {

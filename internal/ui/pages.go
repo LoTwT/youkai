@@ -108,6 +108,7 @@ func (m *Model) viewPages(c *ui.Context) {
 	// whole window; only one of them is open at a time.
 	m.exportDialogView(c, t)
 	m.rescanDialogView(c, t)
+	m.slotMergeDialogView(c, t)
 	m.navigationPrompt(c, t)
 	m.trayHintDialogView(c, t)
 	m.exitDialogView(c, t)

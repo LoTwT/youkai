@@ -132,8 +132,10 @@ type fakeService struct {
 	// it to hold responses and settle them out of order.
 	loadFn func(recordID string) (*record.Recovery, error)
 
-	saves  []saveCall
-	saveFn func(recordID string, sequence, expectedRevision int64, edit app.ItemRevisionEdit) (app.ItemRevisionResult, error)
+	saves          []saveCall
+	saveFn         func(recordID string, sequence, expectedRevision int64, edit app.ItemRevisionEdit) (app.ItemRevisionResult, error)
+	mergePreviewFn func(string) (app.SlotMergePreview, error)
+	mergeFn        func(app.SlotMergeRequest) (int64, error)
 
 	previewFn      func(kind, recordID string) (app.CleanupPreview, error)
 	storage        app.StorageUsage
@@ -152,6 +154,20 @@ type fakeService struct {
 	logErr        error
 	logClearErr   error
 	logClears     int
+}
+
+func (f *fakeService) PreviewSlotMerge(id string) (app.SlotMergePreview, error) {
+	if f.mergePreviewFn != nil {
+		return f.mergePreviewFn(id)
+	}
+	return app.SlotMergePreview{}, app.ErrSlotMergeUnavailable
+}
+
+func (f *fakeService) MergeSlots(req app.SlotMergeRequest) (int64, error) {
+	if f.mergeFn != nil {
+		return f.mergeFn(req)
+	}
+	return 0, app.ErrSlotMergeUnavailable
 }
 
 // saveCall is one recorded SaveItemRevision request.

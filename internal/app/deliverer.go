@@ -57,6 +57,7 @@ type recordStore interface {
 	// evidence and record identity, for callers that must not accept an
 	// older fallback.
 	LoadLatest(ctx context.Context, recordID string) (*record.Recovery, error)
+	CommitSlotMerge(merge record.SlotMergeCommit) (int64, error)
 	// Evidence and record cleanup: screenshots are removed by rewriting
 	// the checkpoint first, records by removing their directory. The
 	// service exposes both with its own activity guards.

@@ -66,12 +66,13 @@ type ExportSummary struct {
 // persisted recognition/manual issues of this revision; Validation is the
 // current revalidation bound to the same data and the shipped catalog.
 type ExportItem struct {
-	Sequence   int64          `json:"sequence"`
-	Revision   int64          `json:"revision"`
-	Quality    record.Quality `json:"quality"`
-	Issues     []zzz.Issue    `json:"issues"`
-	Validation zzz.Validation `json:"validation"`
-	Data       zzz.DiscData   `json:"data"`
+	Sequence   int64              `json:"sequence"`
+	Origin     *record.ItemOrigin `json:"origin,omitempty"`
+	Revision   int64              `json:"revision"`
+	Quality    record.Quality     `json:"quality"`
+	Issues     []zzz.Issue        `json:"issues"`
+	Validation zzz.Validation     `json:"validation"`
+	Data       zzz.DiscData       `json:"data"`
 }
 
 // UsableExport is one immutable, analysed snapshot of a saved record: the
@@ -118,6 +119,15 @@ type exportSession struct {
 	Scope         exportScope        `json:"scope"`
 	Coverage      exportCoverage     `json:"coverage"`
 	CapturedCount int64              `json:"capturedCount"`
+	SlotSources   []exportSlotSource `json:"slotSources,omitempty"`
+}
+
+type exportSlotSource struct {
+	Slot          int     `json:"slot"`
+	SessionID     string  `json:"sessionId"`
+	SavedRevision int64   `json:"savedRevision"`
+	StartedAt     string  `json:"startedAt"`
+	EndedAt       *string `json:"endedAt"`
 }
 
 type exportScope struct {
@@ -254,6 +264,19 @@ func BuildUsableExport(rec *record.Recovery) (*UsableExport, error) {
 		ended := formatExportTime(*shell.EndedAt)
 		export.session.EndedAt = &ended
 	}
+	if len(cp.SlotMerges) != 0 {
+		for _, src := range cp.SlotSources() {
+			line := exportSlotSource{
+				Slot: src.Slot, SessionID: src.SessionID, SavedRevision: src.SavedRevision,
+				StartedAt: formatExportTime(src.StartedAt),
+			}
+			if src.EndedAt != nil {
+				ended := formatExportTime(*src.EndedAt)
+				line.EndedAt = &ended
+			}
+			export.session.SlotSources = append(export.session.SlotSources, line)
+		}
+	}
 
 	counts := ItemClassCounts{}
 	for i := range cp.Items {
@@ -262,6 +285,10 @@ func BuildUsableExport(rec *record.Recovery) (*UsableExport, error) {
 		counts.add(classifyWithExport(item, exported, ok))
 		if !ok {
 			continue
+		}
+		if item.Origin != nil {
+			origin := *item.Origin
+			exported.Origin = &origin
 		}
 		export.items = append(export.items, exported)
 		set, _ := zzz.LookupSetByID(*exported.Data.SetID)

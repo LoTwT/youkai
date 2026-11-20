@@ -534,6 +534,8 @@ func (m *Model) cleanupBlockedReason() string {
 		return "当前构建未启用导出，历史清理不可用。"
 	case m.cleanup != nil && m.cleanup.running:
 		return "正在执行清理，完成前不能开始另一项。"
+	case m.slotMerge != nil:
+		return "请先结束号位合并。"
 	case m.exitState == exitRunning || m.exitState == exitDone:
 		return "正在退出应用，不能清理。"
 	case m.snap.SaveError != "":
