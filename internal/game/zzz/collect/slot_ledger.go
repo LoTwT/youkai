@@ -20,10 +20,12 @@ type slotIdentity struct {
 
 type slotEntry struct {
 	slotIdentity
-	State            slotState `json:"state"`
-	FirstSeenFrameID uint64    `json:"firstSeenFrameId"`
-	ResolvedFrameID  uint64    `json:"resolvedFrameId,omitempty"`
-	Sequence         scan.Seq  `json:"sequence,omitempty"`
+	State              slotState `json:"state"`
+	FirstSeenFrameID   uint64    `json:"firstSeenFrameId"`
+	ResolvedFrameID    uint64    `json:"resolvedFrameId,omitempty"`
+	Sequence           scan.Seq  `json:"sequence,omitempty"`
+	RevisitFromFrameID uint64    `json:"revisitFromFrameId,omitempty"`
+	RevisitReason      string    `json:"revisitReason,omitempty"`
 }
 
 // The current viewport is the suffix of cells starting at rowBase. Empty
