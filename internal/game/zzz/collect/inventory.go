@@ -43,6 +43,10 @@ type Inventory struct {
 	// profile with calibrated PanelEvidence.Range. The legacy path can
 	// collect observations with unproven range and partial coverage.
 	RequirePanelRangeProof bool
+	// EnableBoundedRecovery opts a validated profile into the stage 5 paths.
+	// Range proof is also required. Shipping profiles keep this off until
+	// their own recovery sequences and timing have been verified.
+	EnableBoundedRecovery bool
 	// Project converts an admitted capture before it reaches the kernel.
 	// The traversal cannot import the application's projection (that
 	// would cycle collect → app), so the caller injects it. Nil admits
@@ -367,17 +371,18 @@ type scopePayload struct {
 // (whose cause is the session termination), so the result UI can name
 // exactly the degraded positions.
 type positionScope struct {
-	Position   int               `json:"position"`
-	Viewports  int               `json:"viewports"`
-	Visits     int               `json:"visits"`
-	Top        bool              `json:"topVerified"`
-	Bottom     bool              `json:"bottomVerified"`
-	Complete   bool              `json:"complete"`
-	Range      positionRange     `json:"range"`
-	SlotLedger *slotLedgerReport `json:"slotLedger,omitempty"`
-	Stage      string            `json:"stage,omitempty"`
-	ReasonCode string            `json:"reasonCode,omitempty"`
-	Reason     string            `json:"reason,omitempty"`
+	Position   int                 `json:"position"`
+	Viewports  int                 `json:"viewports"`
+	Visits     int                 `json:"visits"`
+	Top        bool                `json:"topVerified"`
+	Bottom     bool                `json:"bottomVerified"`
+	Complete   bool                `json:"complete"`
+	Range      positionRange       `json:"range"`
+	SlotLedger *slotLedgerReport   `json:"slotLedger,omitempty"`
+	Rebuild    *topRebuildEvidence `json:"rebuild,omitempty"`
+	Stage      string              `json:"stage,omitempty"`
+	ReasonCode string              `json:"reasonCode,omitempty"`
+	Reason     string              `json:"reason,omitempty"`
 }
 
 // Precheck implements Traversal: verify, without dispatching any input,
@@ -586,11 +591,16 @@ type inventoryRun struct {
 	// viewport is the current position's viewport index: 0 after the top
 	// confirmation, +1 per verified scroll. It restarts for every wheel
 	// position (the scan JSON contract's per-position viewportIndex).
-	viewport     int
-	ledger       *slotLedger
-	rangeProof   positionRange
-	sortLabel    string // positively identified baseline for the whole scan
-	filterActive bool   // monitor the funnel after this position's panel closes
+	viewport          int
+	ledger            *slotLedger
+	detailRevisitUsed bool // one additional observation window for the entire scan
+	topRebuildUsed    bool
+	rebuildEvidence   *topRebuildEvidence
+	rebuildGuard      *rebuildFrameGuard
+	newestFrameID     uint64
+	rangeProof        positionRange
+	sortLabel         string // positively identified baseline for the whole scan
+	filterActive      bool   // monitor the funnel after this position's panel closes
 	// selectionTracked reports that this position has resolved at least
 	// one target, so the next pre-click frame can be checked for an
 	// unexpected list shift through the selected cell. A click can make
@@ -782,6 +792,7 @@ func (run *inventoryRun) positionScope(complete bool) positionScope {
 		Complete:   complete,
 		Range:      run.rangeProof,
 		SlotLedger: ledger,
+		Rebuild:    run.rebuildEvidence,
 	}
 }
 
@@ -841,6 +852,7 @@ func (run *inventoryRun) preparePosition(ctx context.Context, pos int, timing *p
 	run.viewport = 0
 	run.ledger = nil
 	run.rangeProof = positionRange{}
+	run.rebuildEvidence = nil
 	run.filterActive = false
 	run.selectionTracked = false
 	run.allowInitial = true
@@ -916,7 +928,9 @@ func (run *inventoryRun) collectPosition(ctx context.Context) error {
 				return run.confirmBottomStep(ctx)
 			}
 			if err := run.scroll(ctx); err != nil {
-				return err
+				if err := run.rebuildFirstViewport(ctx, err); err != nil {
+					return err
+				}
 			}
 			continue
 		}
@@ -1587,12 +1601,12 @@ func (run *inventoryRun) awaitTopBase(ctx context.Context) error {
 		if f.Geometry != run.geo {
 			return run.geometryChanged(f)
 		}
-		if !f.Reused {
-			run.lastArrived = f.ArrivedAt
-		}
 		latest, err = run.matchFrame(f)
 		if err != nil {
 			return err
+		}
+		if !f.Reused {
+			run.lastArrived = f.ArrivedAt
 		}
 		if run.positionListVerdict(latest) {
 			run.listMatch, run.lastFrame = latest, f
@@ -2077,7 +2091,7 @@ func (run *inventoryRun) visitSlot(ctx context.Context, i int) (err error) {
 					target))
 			}
 			detailStart := time.Now()
-			out, err := run.awaitDetail(ctx, platform.Frame{}, i, true)
+			out, err := run.awaitTargetDetail(ctx, platform.Frame{}, i, true)
 			timing.detail += time.Since(detailStart)
 			if err != nil {
 				slot.Discard()
@@ -2115,7 +2129,7 @@ func (run *inventoryRun) visitSlot(ctx context.Context, i int) (err error) {
 
 		baseline := run.detailBaseline(pre.frame)
 		detailStart := time.Now()
-		out, err := run.awaitDetail(ctx, baseline, i, false)
+		out, err := run.awaitTargetDetail(ctx, baseline, i, false)
 		timing.detail += time.Since(detailStart)
 		if err != nil {
 			slot.Discard()
@@ -2767,6 +2781,10 @@ func (run *inventoryRun) admissionEvidence(target string, pre platform.Frame, ou
 // Initial: no pre-click frame exists; consecutive observations must stay
 // the same over the same window, starting from the first decidable frame.
 func (run *inventoryRun) awaitDetail(ctx context.Context, baseline platform.Frame, target int, initial bool) (detailOutcome, error) {
+	return run.awaitDetailFrames(ctx, baseline, target, initial, nil)
+}
+
+func (run *inventoryRun) awaitDetailFrames(ctx context.Context, baseline platform.Frame, target int, initial bool, revisitCheck func(platform.Frame, PageMatch) error) (detailOutcome, error) {
 	deadline := time.Now().Add(run.inv.actionBudget())
 	span := run.inv.detailStableSpan()
 	out := detailOutcome{lastSelected: -2}
@@ -2807,6 +2825,22 @@ func (run *inventoryRun) awaitDetail(ctx context.Context, baseline platform.Fram
 		if err != nil {
 			return out, err
 		}
+		if run.inv.EnableBoundedRecovery && run.ledger != nil && !run.positionListVerdict(m) && (m.Page != PageUnknown || revisitCheck != nil) {
+			return out, run.advanceStateFault("waiting for detail", m)
+		}
+		if run.inv.EnableBoundedRecovery && run.rangeProof.Verified && run.ledger != nil {
+			if err := run.checkLedgerViewport(m); err != nil {
+				return out, err
+			}
+			if out.sawTarget && m.List.Selected != target {
+				return out, scan.NewFault(CodePositionLost, fmt.Errorf("collect: frame %d lost the selected detail target %d", f.ID, target))
+			}
+		}
+		if revisitCheck != nil {
+			if err := revisitCheck(f, m); err != nil {
+				return out, err
+			}
+		}
 		out.frame, out.match = f, m
 		if !f.Reused {
 			run.lastArrived = f.ArrivedAt
@@ -2819,7 +2853,7 @@ func (run *inventoryRun) awaitDetail(ctx context.Context, baseline platform.Fram
 				out.sawTarget = true
 				if m.Detail != nil {
 					out.sawPopulated = true
-					usable = true
+					usable = revisitCheck == nil || decidableDisc(m.Detail)
 				}
 			}
 		}
@@ -3108,12 +3142,12 @@ func (run *inventoryRun) currentList(ctx context.Context) (platform.Frame, error
 	if f.Geometry != run.geo {
 		return platform.Frame{}, run.geometryChanged(f)
 	}
-	if !f.Reused {
-		run.lastArrived = f.ArrivedAt
-	}
 	m, err := run.matchFrame(f)
 	if err != nil {
 		return platform.Frame{}, err
+	}
+	if !f.Reused {
+		run.lastArrived = f.ArrivedAt
 	}
 	if !run.positionListVerdict(m) {
 		return platform.Frame{}, scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
@@ -3476,6 +3510,9 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 		out.lastFrameIsList = run.listVerdict(m)
 		out.lastEvidence = m.Evidence
 		out.lastMatch = m
+		if run.inv.EnableBoundedRecovery && run.rangeProof.Verified && run.ledger != nil && !run.positionListVerdict(m) {
+			return scrollOutcome{}, run.advanceStateFault("waiting for a scroll in the verified range", m)
+		}
 		if run.position != 0 && m.Page != PageUnknown && !run.positionListVerdict(m) {
 			// An identified non-list page or a warehouse at another
 			// position cannot create or settle a candidate.

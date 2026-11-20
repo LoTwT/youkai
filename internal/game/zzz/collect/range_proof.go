@@ -76,6 +76,19 @@ func observedSortLabel(m PageMatch) string {
 // absence of proof. Only a directly identified different label is a change.
 func (run *inventoryRun) matchFrame(frame platform.Frame) (PageMatch, error) {
 	m := run.inv.matcher().Match(frame)
+	if run.inv.EnableBoundedRecovery && run.rangeProof.Verified {
+		fresh := !frame.Reused && frame.ID > run.newestFrameID && frame.ArrivedAt.After(run.lastArrived)
+		idle := frame.Reused && frame.ID == run.newestFrameID && frame.ArrivedAt.Equal(run.lastArrived)
+		if !fresh && !idle {
+			return m, scan.NewFault(CodePositionLost, fmt.Errorf("collect: stale frame %d at the recovery-enabled position", frame.ID))
+		}
+	}
+	if run.rebuildGuard != nil {
+		if err := run.checkRebuildFrame(frame, m); err != nil {
+			return m, err
+		}
+	}
+	run.newestFrameID = max(run.newestFrameID, frame.ID)
 	label := observedSortLabel(m)
 	if run.sortLabel == "" {
 		run.sortLabel = label

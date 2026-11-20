@@ -1041,7 +1041,11 @@ type observedPosition struct {
 	Stage      string `json:"stage"`
 	ReasonCode string `json:"reasonCode"`
 	Reason     string `json:"reason"`
-	Range      struct {
+	Rebuild    struct {
+		Before    uint64 `json:"beforeFrameId"`
+		Confirmed uint64 `json:"confirmedFrameId"`
+	} `json:"rebuild"`
+	Range struct {
 		Verified                 bool `json:"verified"`
 		Opened, Reset, SelectedS struct {
 			FrameID        uint64                      `json:"frameId"`
@@ -1054,10 +1058,11 @@ type observedPosition struct {
 	Ledger *struct {
 		RowBase int `json:"rowBase"`
 		Slots   []struct {
-			AbsoluteRow int      `json:"absoluteRow"`
-			Column      int      `json:"column"`
-			State       string   `json:"state"`
-			Sequence    scan.Seq `json:"sequence"`
+			AbsoluteRow        int      `json:"absoluteRow"`
+			Column             int      `json:"column"`
+			State              string   `json:"state"`
+			Sequence           scan.Seq `json:"sequence"`
+			RevisitFromFrameID uint64   `json:"revisitFromFrameId"`
 		} `json:"slots"`
 	} `json:"slotLedger"`
 }
@@ -1944,9 +1949,17 @@ func TestSinglePageQualityUnknownStopsUnresolved(t *testing.T) {
 func TestSinglePageSubstatsUnknownStopsUnresolved(t *testing.T) {
 	game := newScriptedGame(true, true)
 	game.substatsUnknown = true
+	game.setList(2, listOf(1))
 	h := newTraversalHarness(t, game)
+	h.inv.RequirePanelRangeProof = true
+	h.inv.Matcher = rangeMatcher{Matcher: h.inv.Matcher, game: game}
 	h.start()
 	snap := h.endFailed(collect.CodeDetailUnresolved)
+	h.requireFatallyStoppedPosition(1)
+	ops := game.opsSnapshot()
+	if len(ops) == 0 || ops[len(ops)-1].At != slotCenter(game.layout, 0) {
+		t.Fatalf("expected input to stop at the unresolved cell, got %v", ops)
+	}
 	if snap.Counts.Captured != 0 {
 		t.Fatalf("an unknown substat count admits nothing: %+v", snap.Counts)
 	}
