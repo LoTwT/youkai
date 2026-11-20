@@ -59,7 +59,12 @@ func TestScanSourceRejectsBothSwitches(t *testing.T) {
 // the local client is wired without a fixed target, so the window lists the
 // discovered candidates and a start must carry a confirmed one.
 func TestScanSourceWindowsDefaultDiscoversTarget(t *testing.T) {
-	host := func() (platform.Port, error) { return &platformfake.Port{}, nil }
+	target := platform.TargetCandidate{Handle: 1, PID: 42, ExecutablePath: `C:\Games\ZZZ\ZenlessZoneZero.exe`}
+	host := func() (platform.Port, error) {
+		return &platformfake.Port{DiscoverFn: func() (platform.TargetDiscoveryResult, error) {
+			return platform.TargetDiscoveryResult{Candidates: []platform.TargetCandidate{target}}, nil
+		}}, nil
+	}
 	source, label, err := scanSourceFrom(envOf(nil), "windows", host)
 	if err != nil {
 		t.Fatalf("scanSourceFrom: %v", err)
@@ -79,6 +84,39 @@ func TestScanSourceWindowsDefaultDiscoversTarget(t *testing.T) {
 	}
 	if game.TraversalForClient == nil {
 		t.Fatal("the installed source has no client-area traversal factory")
+	}
+	trav, err := game.TraversalForClient(image.Pt(1920, 1080))
+	if err != nil {
+		t.Fatal(err)
+	}
+	inv, ok := trav.(*collect.Inventory)
+	if !ok || !inv.RequirePanelRangeProof || inv.Project == nil {
+		t.Fatalf("the installed entry did not wire the native range-gated inventory: %T", trav)
+	}
+	if _, ok := inv.Matcher.(*collect.ScrollEvidenceMatcher); !ok {
+		t.Fatalf("type of installed matcher = %T", inv.Matcher)
+	}
+	if got := [4]image.Point{inv.Layout.FilterButton, inv.Layout.PanelReset, inv.Layout.PanelS, inv.Layout.PanelClose}; got != [4]image.Point{{X: 304, Y: 52}, {X: 1430, Y: 1030}, {X: 1426, Y: 604}, {X: 1805, Y: 49}} {
+		t.Fatalf("installed panel clicks differ from the replayed Windows inputs: %v", got)
+	}
+	if _, err := game.TraversalForClient(image.Pt(1280, 720)); err == nil {
+		t.Fatal("an unopened display tier obtained an installed traversal")
+	}
+	scoped, err := game.NewScanForRescan(&target, app.RescanRequest{SourceRecordID: "source", Positions: []int{3}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctrl, ok := scoped.Controller.(*collect.Controller)
+	if !ok || ctrl.TraversalForClient == nil || !reflect.DeepEqual(ctrl.ScanPositions, []int{3}) {
+		t.Fatalf("the installed rescan must use measured geometry and position 3: %+v", scoped.Controller)
+	}
+	rescanTraversal, err := ctrl.TraversalForClient(image.Pt(1920, 1080))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rescan, ok := rescanTraversal.(*collect.Inventory)
+	if !ok || !rescan.RequirePanelRangeProof {
+		t.Fatalf("the installed rescan did not wire the native range-gated inventory: %T", rescanTraversal)
 	}
 	if !strings.Contains(label, "自动遍历") {
 		t.Fatalf("label = %q", label)
@@ -125,6 +163,9 @@ func TestScanSourceTraverseWiresOnDarwin(t *testing.T) {
 	}
 	if inv.Project == nil {
 		t.Fatal("the inventory has no projection")
+	}
+	if inv.RequirePanelRangeProof {
+		t.Fatal("the macOS cloud profile has no Windows panel-range calibration")
 	}
 	if inv.Matcher == nil {
 		t.Fatal("the inventory has no matcher")
@@ -245,6 +286,9 @@ func TestScanSourceTraverseWiresWindowsLocal(t *testing.T) {
 	}
 	if inv.ScrollTiming == nil {
 		t.Fatal("the Windows inventory has no scroll timing profile")
+	}
+	if !inv.RequirePanelRangeProof {
+		t.Fatal("the explicit Windows local traversal must require the same native range proof")
 	}
 
 	// NewScan must carry the factory into the controller; dropping it

@@ -23,10 +23,7 @@ import (
 // under which the correspondence is validated, the per-slot visited ledger
 // and the viewport index. No view, matcher or frame pipeline is involved.
 func newTransitionRun(l Layout) *inventoryRun {
-	return &inventoryRun{
-		inv:     &Inventory{Layout: l},
-		visited: make([]bool, len(l.Slots)),
-	}
+	return &inventoryRun{inv: &Inventory{Layout: l}}
 }
 
 // gridOccupancy fills every slot of the layout's grid with the same
@@ -48,17 +45,12 @@ func transitionListVerdict(l Layout, occupied []bool) PageMatch {
 
 // rejectTransition applies a transition that must be refused and asserts
 // both halves of the fail-closed contract: the fault code is positionLost,
-// and the rejected scroll left the ledger exactly as it was. The ledger is
-// seeded with asymmetric state first: an all-false visited slice cannot
-// tell a guard that carries the mapping before validating from one that
-// returns before it.
+// and the rejected scroll left the ledger exactly as it was.
 func rejectTransition(t *testing.T, run *inventoryRun, before, after PageMatch, sm ScrollMatch, context string) {
 	t.Helper()
 	run.viewport = 3
-	run.visited = make([]bool, len(run.inv.Layout.Slots))
-	run.visited[0] = true
-	run.visited[run.inv.Layout.positionSlot(4, 3)] = true
-	wantVisited := slices.Clone(run.visited)
+	run.ledger = newSlotLedger(run.inv.Layout.Columns, before.List.Occupied, 1)
+	wantCells := slices.Clone(run.ledger.cells)
 	wantViewport := run.viewport
 	err := run.applyTransition(platform.Frame{ID: 1}, platform.Frame{ID: 2}, before, after, sm)
 	if err == nil {
@@ -71,8 +63,8 @@ func rejectTransition(t *testing.T, run *inventoryRun, before, after PageMatch, 
 	if run.viewport != wantViewport {
 		t.Fatalf("%s: the rejected transition advanced the viewport from %d to %d", context, wantViewport, run.viewport)
 	}
-	if !slices.Equal(run.visited, wantVisited) {
-		t.Fatalf("%s: the rejected transition changed the visited ledger: %v, want %v", context, run.visited, wantVisited)
+	if run.ledger.rowBase != 0 || !slices.Equal(run.ledger.cells, wantCells) {
+		t.Fatalf("%s: the rejected transition changed the ledger: %+v", context, run.ledger)
 	}
 }
 
@@ -92,6 +84,7 @@ func TestApplyTransitionAcceptsCompleteCorrespondence(t *testing.T) {
 				Evidence:  "complete correspondence",
 			}
 			before := transitionListVerdict(l, gridOccupancy(l, true))
+			run.ledger = newSlotLedger(l.Columns, before.List.Occupied, 1)
 			if err := run.applyTransition(platform.Frame{ID: 1}, platform.Frame{ID: 2}, before, before, sm); err != nil {
 				t.Fatalf("the complete %d-row correspondence was rejected: %v", rows, err)
 			}
@@ -100,6 +93,13 @@ func TestApplyTransitionAcceptsCompleteCorrespondence(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestApplyTransitionRequiresVerifiedDisplacement(t *testing.T) {
+	l := MacCloudLayout()
+	before := transitionListVerdict(l, gridOccupancy(l, true))
+	rejectTransition(t, newTransitionRun(l), before, before,
+		ScrollMatch{Undecided: true, Rows: 1, Matches: scriptedDisplacement(l, 1)}, "unverified displacement")
 }
 
 // TestApplyTransitionAcceptsConsistentOccupancy pins the positive side of
@@ -114,6 +114,7 @@ func TestApplyTransitionAcceptsConsistentOccupancy(t *testing.T) {
 	after[l.positionSlot(1, 1)] = false
 	run := newTransitionRun(l)
 	sm := ScrollMatch{Displaced: true, Rows: 1, Matches: scriptedDisplacement(l, 1), Evidence: "consistent occupancy"}
+	run.ledger = newSlotLedger(l.Columns, before, 1)
 	if err := run.applyTransition(platform.Frame{ID: 1}, platform.Frame{ID: 2},
 		transitionListVerdict(l, before), transitionListVerdict(l, after), sm); err != nil {
 		t.Fatalf("a correspondence whose corresponding slots are both empty was rejected: %v", err)
@@ -127,19 +128,24 @@ func TestApplyTransitionCarriesVisitedState(t *testing.T) {
 	l := MacCloudLayout()
 	run := newTransitionRun(l)
 	run.viewport = 3
-	run.visited[l.positionSlot(2, 0)] = true
-	run.visited[l.positionSlot(4, 3)] = true
 	before := transitionListVerdict(l, gridOccupancy(l, true))
+	run.ledger = newSlotLedger(l.Columns, before.List.Occupied, 1)
+	admitted := &run.ledger.visible()[l.positionSlot(2, 0)]
+	admitted.State, admitted.Sequence = slotAdmitted, 1
+	notS := &run.ledger.visible()[l.positionSlot(4, 3)]
+	notS.State = slotNotS
+	wantAdmitted, wantNotS := *admitted, *notS
 	sm := ScrollMatch{Displaced: true, Rows: 2, Matches: scriptedDisplacement(l, 2), Evidence: "visited carry"}
 
 	if err := run.applyTransition(platform.Frame{ID: 1}, platform.Frame{ID: 2}, before, before, sm); err != nil {
 		t.Fatalf("the complete two-row correspondence was rejected: %v", err)
 	}
-	want := make([]bool, len(l.Slots))
-	want[l.positionSlot(0, 0)] = true // (2,0) moved to (0,0)
-	want[l.positionSlot(2, 3)] = true // (4,3) moved to (2,3)
-	if !slices.Equal(run.visited, want) {
-		t.Fatalf("visited after the scroll %v, want %v", run.visited, want)
+	cells := run.ledger.visible()
+	if run.ledger.rowBase != 2 || cells[0] != wantAdmitted || cells[l.positionSlot(2, 3)] != wantNotS {
+		t.Fatalf("scroll changed the preserved ledger entries: rowBase=%d admitted=%+v notS=%+v", run.ledger.rowBase, cells[0], cells[l.positionSlot(2, 3)])
+	}
+	if newCell := cells[l.positionSlot(3, 0)]; newCell.State != slotUnresolved || newCell.AbsoluteRow != 5 || newCell.FirstSeenFrameID != 2 {
+		t.Fatalf("newly exposed slot = %+v, want unresolved absolute row 5 from frame 2", newCell)
 	}
 	if run.viewport != 4 {
 		t.Fatalf("viewport %d after one committed scroll, want 4", run.viewport)
@@ -504,6 +510,7 @@ func TestApplyTransitionCorrespondenceProperty(t *testing.T) {
 		}
 		sm := ScrollMatch{Displaced: true, Rows: rows, Matches: pairs, Evidence: "property base"}
 		run := newTransitionRun(l)
+		run.ledger = newSlotLedger(l.Columns, before, 1)
 		if err := run.applyTransition(platform.Frame{ID: 1}, platform.Frame{ID: 2},
 			transitionListVerdict(l, before), transitionListVerdict(l, after), sm); err != nil {
 			t.Fatalf("iteration %d: the legal %d-row correspondence was rejected: %v", i, rows, err)

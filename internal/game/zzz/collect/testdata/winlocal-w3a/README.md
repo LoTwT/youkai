@@ -50,7 +50,7 @@
   当前唯一反例是关闭面板，打开面板上的其他排序标签尚无样本。
 - `TestWindowsLocalW3APanelProbes`：两个面板探针在 S2 为 open、S3 为 closed。
 - `TestWindowsLocalW3AScrollbarEnds`：顶部/底部/拖动中帧的滑块起止与两端判定。
-- `TestWindowsLocalW3ASortVerifiesCoverage`：有模板时 `sort=verified`，六个完整
-  位置后 `coverage=complete`。
+- `TestWindowsLocalW3ASortVerifiesLabel`：模板匹配时 `sort=verified`；完整覆盖
+  所需的筛选范围证据见 [T5 §3](../../../../../../docs/specs/t5-zzz-inventory-traversal.md#3-开始前必须核对的页面条件)。
 - `TestWindowsLocalW3AScaledTierDropsSortTemplate`：缩放档继续丢弃排序声明。
 - `TestWindowsLocalW3AManifestProvenance`：来源、SHA-256 与裁剪范围。

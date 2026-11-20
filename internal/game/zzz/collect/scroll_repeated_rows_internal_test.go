@@ -7,6 +7,7 @@ import (
 	"image"
 	"image/color"
 	"math"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -169,9 +170,8 @@ func newRepeatedRowsRun(t *testing.T, view SessionView, retries int, budget time
 		columns:               profile.Layout.Columns,
 	}
 	run := newScriptedScrollRun(profile.Layout, view, matcher, "", retries, budget)
-	run.visited = make([]bool, len(profile.Layout.Slots))
-	for i := range run.visited {
-		run.visited[i] = true
+	for i := range run.ledger.cells {
+		run.ledger.cells[i].State = slotAdmitted
 	}
 	return run
 }
@@ -209,9 +209,8 @@ func TestScrollRepeatedRowsOneRowAdvanceCommitsOnce(t *testing.T) {
 	if next := run.nextSlot(); next != 16 {
 		t.Fatalf("nextSlot = %d after one committed row, want the newly exposed row 16", next)
 	}
-	if !run.visited[12] || run.visited[16] {
-		t.Fatalf("visited row 3=%v row 4=%v, want the inherited row visited and the new row unvisited",
-			run.visited[12], run.visited[16])
+	if cells := run.ledger.visible(); cells[12].State != slotAdmitted || cells[16].State != slotUnresolved {
+		t.Fatalf("row 3=%+v row 4=%+v, want the inherited row admitted and the new row unresolved", cells[12], cells[16])
 	}
 }
 
@@ -231,7 +230,7 @@ func TestScrollRepeatedRowsUnexplainedMoveFailsClosed(t *testing.T) {
 	}
 	run := newRepeatedRowsRun(t, view, 1, 80*time.Millisecond)
 	view.layout = run.inv.Layout
-	visitedBefore := append([]bool(nil), run.visited...)
+	ledgerBefore := slices.Clone(run.ledger.cells)
 
 	err := runScriptedScroll(t, run)
 	var incomplete *positionIncompleteError
@@ -249,10 +248,8 @@ func TestScrollRepeatedRowsUnexplainedMoveFailsClosed(t *testing.T) {
 		t.Fatalf("viewport %d rows %d after an unverifiable move, want the bookkeeping unchanged (3/0)",
 			run.viewport, run.lastScrollRows)
 	}
-	for i := range visitedBefore {
-		if run.visited[i] != visitedBefore[i] {
-			t.Fatalf("slot %d visited=%v after an unverifiable move, want %v", i, run.visited[i], visitedBefore[i])
-		}
+	if run.ledger.rowBase != 0 || !slices.Equal(run.ledger.cells, ledgerBefore) {
+		t.Fatalf("ledger changed after an unverifiable move: %+v", run.ledger)
 	}
 }
 
@@ -284,7 +281,6 @@ func TestScrollRetryRefusesUnprovenRebase(t *testing.T) {
 	}}
 	m := &unprovenRebaseMatcher{scrollScriptMatcher: scripted}
 	run := newScriptedScrollRun(l, view, m, "", 1, 40*time.Millisecond)
-	run.visited = make([]bool, len(l.Slots))
 
 	err := runScriptedScroll(t, run)
 	var incomplete *positionIncompleteError
@@ -728,10 +724,10 @@ func TestAwaitScrollRecoversAnchorsAndCommitsTheTrueTotal(t *testing.T) {
 		t.Fatalf("committed rows %d, viewport %d; want the true three-row total in one scroll step (3/4)",
 			run.lastScrollRows, run.viewport)
 	}
-	if run.visited[l.positionSlot(l.Rows-3, 0)] {
+	if run.ledger.visible()[l.positionSlot(l.Rows-3, 0)].State != slotUnresolved {
 		t.Fatal("the first newly exposed row must stay unvisited after the three-row commit")
 	}
-	if !run.visited[l.positionSlot(l.Rows-4, 0)] {
+	if run.ledger.visible()[l.positionSlot(l.Rows-4, 0)].State != slotAdmitted {
 		t.Fatal("the last overlap row must inherit its visited state")
 	}
 }
@@ -916,7 +912,7 @@ func TestScrollRetryRejectsMotionObservedBeforeCandidate(t *testing.T) {
 				t.Fatalf("the rebound baseline should be a provable retry base: %s", why)
 			}
 
-			visitedBefore := append([]bool(nil), run.visited...)
+			ledgerBefore := slices.Clone(run.ledger.cells)
 			err := runScriptedScroll(t, run)
 			var incomplete *positionIncompleteError
 			if !errors.As(err, &incomplete) || incomplete.stage != "scroll" {
@@ -936,10 +932,8 @@ func TestScrollRetryRejectsMotionObservedBeforeCandidate(t *testing.T) {
 				t.Fatalf("viewport %d rows %d after the refused retry, want the bookkeeping unchanged (3/0)",
 					run.viewport, run.lastScrollRows)
 			}
-			for i := range visitedBefore {
-				if run.visited[i] != visitedBefore[i] {
-					t.Fatalf("slot %d visited=%v after the refused retry, want %v", i, run.visited[i], visitedBefore[i])
-				}
+			if run.ledger.rowBase != 0 || !slices.Equal(run.ledger.cells, ledgerBefore) {
+				t.Fatalf("ledger changed after the refused retry: %+v", run.ledger)
 			}
 		})
 	}

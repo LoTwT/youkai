@@ -164,11 +164,10 @@ type Layout struct {
 	// "closed" before the warehouse checks run.
 	PanelOpen []ColorProbe
 	// PanelReset, PanelClose and PanelS are the panel's click points. The
-	// pixel matcher never reads them. PanelS selects the S rarity filter;
-	// the recorded frames contain no selected-S sample, so no selected-state
-	// probe is calibrated. The effect is verified through the active funnel
-	// after the single panel visit closes (T5 §3).
+	// pixel matcher never reads them. PanelS targets the post-reset position
+	// of the S rarity filter (T5 §3).
 	PanelReset, PanelClose, PanelS image.Point
+	panelRange                     *panelRangeProbes // native Windows calibration, when available
 	// SortLabel is the filter panel's sort dropdown region and the
 	// reference image it must match. The label names the active order
 	// ("稀有度" in every recorded sample); a mismatch means the matcher
@@ -282,6 +281,16 @@ func (l Layout) Validate() error {
 		return fmt.Errorf("collect: layout: the S rarity control point %v is empty or outside the content region %v",
 			l.PanelS, l.Content)
 	}
+	if p := l.panelRange; p != nil {
+		if p.sLabel.Size() != image.Pt(len(windowsPanelSStencil[0]), len(windowsPanelSStencil)) || !l.PanelS.In(p.sLabel) {
+			return fmt.Errorf("collect: layout: the native S label and click point do not share the calibrated anchor")
+		}
+		for _, probe := range []ColorProbe{p.funnel, p.sFill, p.otherFills[0], p.otherFills[1]} {
+			if err := probe.validate("panel range probe"); err != nil {
+				return err
+			}
+		}
+	}
 	switch {
 	case l.SortLabel.Empty() && l.SortTemplate == nil:
 		// The layout does not claim a sort read; panel verdicts simply
@@ -378,6 +387,13 @@ func (l Layout) FitsContent(content image.Rectangle) bool {
 			return false
 		}
 	}
+	if l.panelRange != nil {
+		for _, region := range l.panelRange.regions() {
+			if !inside(region) {
+				return false
+			}
+		}
+	}
 	for _, line := range l.DetailLines {
 		if !inside(line.Rect) {
 			return false
@@ -417,6 +433,9 @@ func (l Layout) ReadRegions() []image.Rectangle {
 	}
 	if !l.SortLabel.Empty() {
 		regions = append(regions, l.SortLabel)
+	}
+	if l.panelRange != nil {
+		regions = append(regions, l.panelRange.regions()...)
 	}
 	for _, c := range l.Wheel {
 		for _, rel := range l.WheelArcs {

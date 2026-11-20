@@ -730,17 +730,39 @@ func TestViewRescanSummaryAndPreparedRange(t *testing.T) {
 		t.Fatalf("a deliberate omission reads as a missing position: %q", tt.Texts())
 	}
 
-	m.armRescan(app.RescanRequest{SourceRecordID: "rec", Positions: []int{4}}, "rec")
 	m.navigatePage(pageScan)
 	settle(t, m, q, tt)
-	if !tt.HasText("补扫准备：只扫描 4 号位") || !tt.HasText("开始后会新建一条独立记录；原记录、图片、修订和导出的文件都不会改变。") {
-		t.Fatalf("the preparation page does not state the armed range: %q", tt.Texts())
+	const fullRange = "S 级 · 1–6 号位"
+	if !tt.HasText(fullRange) {
+		t.Fatalf("the ordinary preparation page does not state the full range: %q", tt.Texts())
 	}
-	if err := tt.Click("取消补扫"); err != nil {
-		t.Fatal(err)
-	}
-	if m.pendingRescan != nil {
-		t.Fatal("取消补扫 did not clear the range")
+	for _, tc := range []struct {
+		text      string
+		positions []int
+	}{
+		{text: "5 号位", positions: []int{5}},
+		{text: "2–3、5 号位", positions: []int{2, 3, 5}},
+	} {
+		t.Run(tc.text, func(t *testing.T) {
+			req := app.RescanRequest{SourceRecordID: "rec", Positions: tc.positions}
+			m.armRescan(req, "rec")
+			settle(t, m, q, tt)
+			if !tt.HasText("补扫准备：只扫描 "+tc.text) || !tt.HasText("S 级 · "+tc.text) || tt.HasText(fullRange) ||
+				!tt.HasText("开始后会新建一条独立记录；原记录、图片、修订和导出的文件都不会改变。") {
+				t.Fatalf("the preparation banner and checklist do not agree on %s: %q", tc.text, tt.Texts())
+			}
+			if got := m.pendingRescan.request(); !reflect.DeepEqual(got, req) {
+				t.Fatalf("rendering changed the prepared request from %+v to %+v", req, got)
+			}
+			if err := tt.Click("取消补扫"); err != nil {
+				t.Fatal(err)
+			}
+			settle(t, m, q, tt)
+			if m.pendingRescan != nil || !tt.HasText(fullRange) || tt.HasText("S 级 · "+tc.text) ||
+				tt.HasText("补扫准备：只扫描 "+tc.text) {
+				t.Fatalf("cancelling the rescan did not restore the full range: %q", tt.Texts())
+			}
+		})
 	}
 }
 

@@ -89,6 +89,9 @@ type PageMatch struct {
 	// Panel carries the panel evidence when Page is PageFilterPanel; nil
 	// otherwise.
 	Panel *PanelEvidence
+	// SortLabel is a positively identified label on a verified list or
+	// panel. Empty means unreadable or uncalibrated; it is not a change.
+	SortLabel string
 	// Evidence describes what the verdict rests on — the anchors
 	// consulted and what they showed — for logs, diagnostics and the
 	// admission record. Empty is allowed but unhelpful.
@@ -205,9 +208,6 @@ const (
 // FilterEvidence is the funnel's state on the warehouse page.
 type FilterEvidence struct{ State FilterState }
 
-// PanelEvidence marks the filter panel as open. The first version only
-// recognizes that the panel is open; its controls are the preparation
-// step's business (4b-2).
 // PanelEvidence is what a filter-panel match reports about the panel.
 // The sort fields are empty/false when the layout has no calibrated
 // reference or the region does not match it; the page verdict stays
@@ -219,6 +219,8 @@ type PanelEvidence struct {
 	// calibrated reference. It proves the recorded order, not a guess
 	// about an unrecognized label.
 	SortVerified bool `json:"sortVerified,omitempty"`
+	// Range contains the calibrated reset and S-chip verdicts, if available.
+	Range *PanelRangeEvidence
 }
 
 // DetailComparison is the verdict over the detail-pane line regions of

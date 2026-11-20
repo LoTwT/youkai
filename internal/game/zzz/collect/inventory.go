@@ -38,6 +38,10 @@ type Inventory struct {
 	// Matcher is the page evidence engine; nil takes Uncalibrated,
 	// whose every verdict is “cannot determine”.
 	Matcher Matcher
+	// RequirePanelRangeProof enables the reset and S effect gates for a
+	// profile with calibrated PanelEvidence.Range. The legacy path can
+	// collect observations with unproven range and partial coverage.
+	RequirePanelRangeProof bool
 	// Project converts an admitted capture before it reaches the kernel.
 	// The traversal cannot import the application's projection (that
 	// would cycle collect → app), so the caller injects it. Nil admits
@@ -125,11 +129,8 @@ const (
 	DefaultRecheckEvery     = 20 * time.Millisecond
 )
 
-// Observed-scope vocabulary. Sort stays unverified until every opened
-// panel matched the calibrated reference; coverage stays unknown until a
-// position completes, becomes partial on a stopped or unverified-sort
-// traversal, and becomes complete only for all six verified positions
-// with the sort verified.
+// Observed-scope vocabulary. Complete coverage needs a full, continuous
+// traversal with range and sort evidence at all six positions.
 const (
 	scopeSortUnverified   = "unverified"
 	scopeSortVerified     = "verified"
@@ -256,10 +257,9 @@ type Observation struct {
 	Position int `json:"position"`
 	// Quality is the calibrated rarity evidence the admission rested on.
 	Quality Quality `json:"quality"`
-	// RarityFilter is the rarity filter the position's preparation verified
-	// before this capture: "S" when the S-only filter was active on the
-	// funnel. It records the observed preparation state, not the declared
-	// range (that stays in the session scope's filterAtStart).
+	// RarityFilter names the proved rarity filter. "S" requires a verified
+	// reset and S selection in this position's preparation and an active
+	// funnel on the captured frame.
 	RarityFilter string `json:"rarityFilter,omitempty"`
 	// ManagementState is the confirmed management state: "locked",
 	// "discarded" or "none". Empty means the list badge and the top
@@ -340,23 +340,24 @@ type ReferenceEvidence struct {
 // the initial facts and writes sort/coverage as unverified/unknown; the
 // traversal updates them as panel and position evidence arrives.
 type scopePayload struct {
-	Kind          string          `json:"kind"`
-	Page          string          `json:"page"`
-	Layout        string          `json:"layout,omitempty"`
-	Geometry      uint64          `json:"geometry"`
-	Slots         int             `json:"slots"`
-	StartPosition int             `json:"startPosition"`
-	FilterAtStart string          `json:"filterAtStart"`
-	Sort          string          `json:"sort"`
-	SortLabel     string          `json:"sortLabel,omitempty"`
-	Coverage      string          `json:"coverage,omitempty"`
-	Positions     []positionScope `json:"positions,omitempty"`
+	Kind            string          `json:"kind"`
+	Page            string          `json:"page"`
+	Layout          string          `json:"layout,omitempty"`
+	Geometry        uint64          `json:"geometry"`
+	Slots           int             `json:"slots"`
+	StartPosition   int             `json:"startPosition"`
+	FilterAtStart   string          `json:"filterAtStart"`
+	Sort            string          `json:"sort"`
+	SortLabel       string          `json:"sortLabel,omitempty"`
+	Coverage        string          `json:"coverage,omitempty"`
+	CountReconciled bool            `json:"countReconciled"`
+	Positions       []positionScope `json:"positions,omitempty"`
 }
 
 // positionScope is one wheel position's ledger entry: how many viewports
 // it traversed, how many occupied slots were visited, and whether the top
-// and bottom evidence completed. Complete is true only when both ends
-// verified; a stopped position keeps its partial counts. Stage, ReasonCode
+// and bottom evidence completed. Complete records traversal completion;
+// Range records whether the filter scope was proven. Stage, ReasonCode
 // and Reason are set only for a position the walk marked incomplete
 // because its preparation or position proof failed (decision §4.6 K5;
 // T5 §1): the failed step ("wheel", "filter", "top", "scroll", "bottom"),
@@ -365,15 +366,17 @@ type scopePayload struct {
 // (whose cause is the session termination), so the result UI can name
 // exactly the degraded positions.
 type positionScope struct {
-	Position   int    `json:"position"`
-	Viewports  int    `json:"viewports"`
-	Visits     int    `json:"visits"`
-	Top        bool   `json:"topVerified"`
-	Bottom     bool   `json:"bottomVerified"`
-	Complete   bool   `json:"complete"`
-	Stage      string `json:"stage,omitempty"`
-	ReasonCode string `json:"reasonCode,omitempty"`
-	Reason     string `json:"reason,omitempty"`
+	Position   int               `json:"position"`
+	Viewports  int               `json:"viewports"`
+	Visits     int               `json:"visits"`
+	Top        bool              `json:"topVerified"`
+	Bottom     bool              `json:"bottomVerified"`
+	Complete   bool              `json:"complete"`
+	Range      positionRange     `json:"range"`
+	SlotLedger *slotLedgerReport `json:"slotLedger,omitempty"`
+	Stage      string            `json:"stage,omitempty"`
+	ReasonCode string            `json:"reasonCode,omitempty"`
+	Reason     string            `json:"reason,omitempty"`
 }
 
 // Precheck implements Traversal: verify, without dispatching any input,
@@ -496,23 +499,18 @@ func (inv *Inventory) writeScope() error {
 	return nil
 }
 
-// observeSort records one opened panel's sort evidence. The session's
-// sort is verified only when every checked panel matched the reference;
-// the first mismatch sticks, because a changed order mid-scan cannot be
-// represented by the calibrated label.
-func (inv *Inventory) observeSort(panel *PanelEvidence) {
-	if panel == nil {
-		return
-	}
+// observeSort records the label check for one opened panel. An unreadable
+// label leaves the session's sort unverified even if later panels are read.
+func (inv *Inventory) observeSort(label string) {
 	inv.sortChecks++
-	if panel.SortVerified && panel.SortLabel == sortLabelRarity {
+	if label != "" {
 		inv.sortVerifiedChecks++
 	}
 	inv.scope.Sort = scopeSortUnverified
 	inv.scope.SortLabel = ""
 	if inv.sortChecks > 0 && inv.sortVerifiedChecks == inv.sortChecks {
 		inv.scope.Sort = scopeSortVerified
-		inv.scope.SortLabel = sortLabelRarity
+		inv.scope.SortLabel = label
 	}
 	inv.updateCoverage()
 	_ = inv.writeScope()
@@ -529,16 +527,15 @@ func (inv *Inventory) recordPosition(p positionScope) {
 }
 
 // updateCoverage derives the conclusion from the ledger and the sort
-// evidence. Complete needs a full-range session, all six positions
-// complete and every panel's sort verified; a partial rescan can never
-// claim the warehouse-wide conclusion, even when its selected positions
-// all complete. Anything shorter but non-empty is partial; no completed
-// evidence at all stays unknown. Expected count is not inferred here.
+// evidence. Complete requires a full-range session, all six positions
+// complete with verified ranges, and every panel's sort verified. A walk
+// with any recorded position that falls short is partial. A walk with no
+// position entry is unknown.
 func (inv *Inventory) updateCoverage() {
 	complete := inv.fullScope() && len(inv.scope.Positions) == scopePositionCount && inv.scope.Sort == scopeSortVerified
 	if complete {
 		for i, p := range inv.scope.Positions {
-			if p.Position != i+1 || !p.Complete || !p.Top || !p.Bottom {
+			if p.Position != i+1 || !p.Complete || !p.Top || !p.Bottom || !p.Range.Verified {
 				complete = false
 				break
 			}
@@ -588,12 +585,11 @@ type inventoryRun struct {
 	// viewport is the current position's viewport index: 0 after the top
 	// confirmation, +1 per verified scroll. It restarts for every wheel
 	// position (the scan JSON contract's per-position viewportIndex).
-	viewport int
-	// visited tracks, per slot of the current viewport in reading order,
-	// whether the position was already visited. Overlap positions a
-	// verified scroll maps keep their state; genuinely new positions
-	// start unvisited. It is cleared for every wheel position.
-	visited []bool
+	viewport     int
+	ledger       *slotLedger
+	rangeProof   positionRange
+	sortLabel    string // positively identified baseline for the whole scan
+	filterActive bool   // monitor the funnel after this position's panel closes
 	// selectionTracked reports that this position has resolved at least
 	// one target, so the next pre-click frame can be checked for an
 	// unexpected list shift through the selected cell. A click can make
@@ -604,15 +600,6 @@ type inventoryRun struct {
 	// visitIndex counts admitted visits; the next admission takes
 	// visitIndex+1.
 	visitIndex int
-	// positionVisits counts the current wheel position's resolved targets
-	// (admitted S discs and calibrated NotS discs), the ledger's per-
-	// position visit count.
-	positionVisits int
-	// listEstablished and topVerified record how far preparation got; a
-	// stopped position's ledger entry must not claim a viewport or a top
-	// it never verified.
-	listEstablished bool
-	topVerified     bool
 	// allowInitial is true until the first click of the current wheel
 	// position. The initial-read path is only available then: a target
 	// that already carries the selection border after a click can only be
@@ -755,17 +742,17 @@ func (run *inventoryRun) run(ctx context.Context) error {
 // as before. A nil error records a complete position.
 func (run *inventoryRun) finishPosition(err error, timing positionTiming, collect, total time.Duration) error {
 	incomplete, degraded := asPositionIncomplete(err)
+	entry := run.positionScope(err == nil)
+	if degraded {
+		entry.Stage = incomplete.stage
+		entry.ReasonCode = faultDiagnosticCode(incomplete.err)
+		entry.Reason = incomplete.err.Error()
+	}
+	run.inv.recordPosition(entry)
+	run.logPositionSummary(timing, collect, total, entry)
 	if !degraded {
-		run.inv.recordPosition(run.positionScope(err == nil))
-		run.logPositionSummary(timing, collect, total, err == nil)
 		return err
 	}
-	entry := run.positionScope(false)
-	entry.Stage = incomplete.stage
-	entry.ReasonCode = faultDiagnosticCode(incomplete.err)
-	entry.Reason = incomplete.err.Error()
-	run.inv.recordPosition(entry)
-	run.logPositionSummary(timing, collect, total, false)
 	run.incompletePositions++
 	run.incompleteReasons = append(run.incompleteReasons,
 		fmt.Sprintf("position %d %s: %s", entry.Position, entry.Stage, entry.Reason))
@@ -777,21 +764,23 @@ func (run *inventoryRun) finishPosition(err error, timing positionTiming, collec
 	return nil
 }
 
-// positionScope snapshots the current position's ledger entry. Viewports
-// stays zero when the list was never established; Top and Bottom are only
-// true after the corresponding evidence completed.
+// positionScope snapshots the current position at its last verified viewport.
+// A position that never proved the top has no viewport ledger.
 func (run *inventoryRun) positionScope(complete bool) positionScope {
+	ledger, visits := run.ledger.report()
 	viewports := 0
-	if run.listEstablished {
+	if ledger != nil {
 		viewports = run.viewport + 1
 	}
 	return positionScope{
-		Position:  run.position,
-		Viewports: viewports,
-		Visits:    run.positionVisits,
-		Top:       run.topVerified,
-		Bottom:    complete,
-		Complete:  complete,
+		Position:   run.position,
+		Viewports:  viewports,
+		Visits:     visits,
+		Top:        ledger != nil,
+		Bottom:     complete,
+		Complete:   complete,
+		Range:      run.rangeProof,
+		SlotLedger: ledger,
 	}
 }
 
@@ -822,13 +811,13 @@ func (run *inventoryRun) logVisit(i int, timing *visitTiming, total time.Duratio
 // logPositionSummary writes one wheel position's fixed-field stage totals
 // when its preparation and walk ended, successfully or not. visits counts
 // every resolved visit, admitted S discs and skipped non-S discs alike.
-func (run *inventoryRun) logPositionSummary(timing positionTiming, collect, total time.Duration, complete bool) {
+func (run *inventoryRun) logPositionSummary(timing positionTiming, collect, total time.Duration, entry positionScope) {
 	log.Printf("youkai: collect: position=%d summary complete=%t establish_ms=%d wheel_ms=%d filter_ms=%d top_ms=%d visit_ms=%d scroll_ms=%d bottom_ms=%d collect_ms=%d total_ms=%d visits=%d scrolls=%d",
-		run.position, complete, timing.establish.Milliseconds(), timing.wheel.Milliseconds(),
+		run.position, entry.Complete, timing.establish.Milliseconds(), timing.wheel.Milliseconds(),
 		timing.filter.Milliseconds(), timing.top.Milliseconds(), run.positionVisitMs.Milliseconds(),
 		run.positionScrollMs.Milliseconds(), run.positionBottomMs.Milliseconds(),
 		collect.Milliseconds(), total.Milliseconds(),
-		run.positionVisits, run.positionScrolls)
+		entry.Visits, run.positionScrolls)
 }
 
 // topStep runs scrollToTop, records the phase's decision span, and only
@@ -849,12 +838,11 @@ func (run *inventoryRun) preparePosition(ctx context.Context, pos int, timing *p
 	run.inv.reportPosition(0)
 	run.position = pos
 	run.viewport = 0
-	run.visited = make([]bool, len(run.inv.Layout.Slots))
+	run.ledger = nil
+	run.rangeProof = positionRange{}
+	run.filterActive = false
 	run.selectionTracked = false
 	run.allowInitial = true
-	run.positionVisits = 0
-	run.listEstablished = false
-	run.topVerified = false
 	run.lastScrollRows = 0
 	run.lastScrollEvidence = ""
 	run.lastDetailFrame = platform.Frame{}
@@ -869,7 +857,6 @@ func (run *inventoryRun) preparePosition(ctx context.Context, pos int, timing *p
 	if err != nil {
 		return err
 	}
-	run.listEstablished = true
 	started = time.Now()
 	err = run.switchWheel(ctx, pos)
 	timing.wheel = time.Since(started)
@@ -884,13 +871,13 @@ func (run *inventoryRun) preparePosition(ctx context.Context, pos int, timing *p
 	if err != nil {
 		return err
 	}
-	log.Printf("youkai: collect: position %d: filter reset and S selected", pos)
+	log.Printf("youkai: collect: position %d: filter preparation finished, range_verified=%t", pos, run.rangeProof.Verified)
 	err = run.topStep(ctx, timing)
 	if err != nil {
 		return err
 	}
-	run.topVerified = true
-	log.Printf("youkai: collect: position %d prepared: S filter active, top confirmed", pos)
+	run.ledger = newSlotLedger(run.inv.Layout.Columns, run.listMatch.List.Occupied, run.lastFrame.ID)
+	log.Printf("youkai: collect: position %d prepared: funnel active, top confirmed", pos)
 	return nil
 }
 
@@ -1004,15 +991,11 @@ func (run *inventoryRun) switchWheel(ctx context.Context, pos int) error {
 	}
 }
 
-// resetFilters applies the S rarity filter in one panel visit: open, reset,
-// select S, close and require the funnel to be active. Reset and S cannot be
-// observed separately without closing the panel between them; the user
-// decided on 2026-10-25 to keep one visit in every mode. The Active reading
-// after closing proves the S filter is in effect, while a reset that failed
-// to remove an older filter remains a documented residual risk (T5 §3).
-// A preparation failure inside a verifiable warehouse or panel page ends
-// this position as incomplete instead of guessing; a page that is no longer
-// decidable still stops the session.
+// resetFilters uses one panel visit. A calibrated profile verifies reset
+// and S in the panel, then checks the warehouse position and Active funnel
+// after closing. An uncalibrated profile can prepare the position for
+// collection without proving range. Missing preparation evidence can make
+// the position incomplete. Losing the warehouse or panel stops the session.
 func (run *inventoryRun) resetFilters(ctx context.Context) error {
 	if err := run.openFilterPanel(ctx); err != nil {
 		return err
@@ -1026,12 +1009,18 @@ func (run *inventoryRun) resetFilters(ctx context.Context) error {
 	if err := run.closeFilterPanel(ctx); err != nil {
 		return err
 	}
+	run.rangeProof.ClosedFrameID = run.lastFrame.ID
+	if run.listMatch.Filter != nil {
+		run.rangeProof.ClosedFunnel = run.listMatch.Filter.State
+	}
 	if err := run.requireWheelPosition("S filter selection"); err != nil {
 		return err
 	}
-	if err := run.requireFilterState(FilterActive, "the S rarity filter selection was not confirmed"); err != nil {
+	if err := run.requireFilterState(FilterActive, "the funnel did not confirm an active filter after closing the panel"); err != nil {
 		return err
 	}
+	run.rangeProof.Verified = run.inv.RequirePanelRangeProof
+	run.filterActive = true
 	return nil
 }
 
@@ -1051,12 +1040,8 @@ func (run *inventoryRun) requireFilterState(want FilterState, what string) error
 		run.position, what, state, want)
 }
 
-// observedRarityFilter names the rarity filter the current warehouse frame
-// proves. Only an active funnel after the S selection can claim "S";
-// anything else stays empty, so the observation never repeats the declared
-// range as if it had been observed.
-func (run *inventoryRun) observedRarityFilter() string {
-	if run.listMatch.Filter != nil && run.listMatch.Filter.State == FilterActive {
+func (run *inventoryRun) observedRarityFilter(match PageMatch) string {
+	if run.rangeProof.Verified && match.Filter != nil && match.Filter.State == FilterActive {
 		return "S"
 	}
 	return ""
@@ -1082,7 +1067,8 @@ func (run *inventoryRun) openFilterPanel(ctx context.Context) error {
 	if err := run.clickUntilPage(ctx, run.inv.Layout.FilterButton, PageFilterPanel, "the filter panel never opened"); err != nil {
 		return err
 	}
-	run.inv.observeSort(run.listMatch.Panel)
+	run.rangeProof.Opened = panelRangeObservation(run.lastFrame, run.listMatch)
+	run.inv.observeSort(observedSortLabel(run.listMatch))
 	return nil
 }
 
@@ -1108,7 +1094,8 @@ func (run *inventoryRun) resetFilterPanel(ctx context.Context) error {
 		if err := run.dispatchOutcome(ctx, res); err != nil {
 			return err
 		}
-		out := run.awaitSettled(ctx, run.panelVerdict)
+		out := run.awaitPanelEffect(ctx, (*PanelRangeEvidence).resetConfirmed)
+		run.rangeProof.Reset = run.panelEffectObservation(out)
 		switch out.class {
 		case awaitStable:
 			run.listMatch = out.match
@@ -1123,9 +1110,7 @@ func (run *inventoryRun) resetFilterPanel(ctx context.Context) error {
 				if attempt < run.inv.maxRetries() {
 					continue
 				}
-				run.pendingPanelClose = true
-				return positionFault("filter", CodeNavigationMismatch,
-					"collect: wheel position %d: the filter panel never settled after the reset (attempt %d)", run.position, attempt+1)
+				return run.rangeFailure(fmt.Sprintf("the filter reset could not be verified (attempt %d)", attempt+1))
 			}
 			fault := scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
 				"collect: wheel position %d: the filter panel did not stay open while resetting (last verdict %s): %s",
@@ -1142,57 +1127,46 @@ func (run *inventoryRun) resetFilterPanel(ctx context.Context) error {
 }
 
 // selectRarityS clicks the panel's S rarity control and waits for the
-// still-open panel to settle. The selected state itself has no calibrated
-// pixel probe yet; the effect is verified after closing through the funnel
-// (active) and the first admitted disc's S badge. A panel that unexpectedly
-// closes is a failure, not something to click around.
+// still-open panel to settle. A calibrated profile requires direct evidence
+// of S. The same toggle is sent once per panel visit.
 func (run *inventoryRun) selectRarityS(ctx context.Context) error {
-	for attempt := 0; ; attempt++ {
-		if err := ctx.Err(); err != nil {
-			return err
+	if err := run.observeReady(ctx); err != nil {
+		return err
+	}
+	if !run.h.InputPermitted() {
+		return ctx.Err()
+	}
+	res := run.view.Dispatch(platform.InputOp{
+		Kind:     platform.InputClick,
+		Geometry: run.geo,
+		FrameID:  run.lastFrame.ID,
+		At:       run.inv.Layout.PanelS,
+	})
+	if err := run.dispatchOutcome(ctx, res); err != nil {
+		return err
+	}
+	out := run.awaitPanelEffect(ctx, (*PanelRangeEvidence).raritySSelected)
+	run.rangeProof.SelectedS = run.panelEffectObservation(out)
+	switch out.class {
+	case awaitStable:
+		run.listMatch = out.match
+		run.lastFrame = out.frame
+		return nil
+	case awaitCanceled, awaitFrameErr:
+		return out.err
+	case awaitGeometry:
+		return run.geometryChanged(out.frame)
+	default:
+		if run.panelVerdict(out.match) {
+			return run.rangeFailure("S selection could not be verified")
 		}
-		if !run.h.InputPermitted() {
-			return ctx.Err()
+		fault := scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
+			"collect: wheel position %d: the filter panel did not stay open while selecting S (last verdict %s): %s",
+			run.position, out.match.Page, out.match.Evidence))
+		if run.listVerdict(out.match) {
+			return positionIncomplete("filter", fault)
 		}
-		if err := run.observeReady(ctx); err != nil {
-			return err
-		}
-		res := run.view.Dispatch(platform.InputOp{
-			Kind:     platform.InputClick,
-			Geometry: run.geo,
-			FrameID:  run.lastFrame.ID,
-			At:       run.inv.Layout.PanelS,
-		})
-		if err := run.dispatchOutcome(ctx, res); err != nil {
-			return err
-		}
-		out := run.awaitSettled(ctx, run.panelVerdict)
-		switch out.class {
-		case awaitStable:
-			run.listMatch = out.match
-			run.lastFrame = out.frame
-			return nil
-		case awaitCanceled, awaitFrameErr:
-			return out.err
-		case awaitGeometry:
-			return run.geometryChanged(out.frame)
-		default:
-			if run.panelVerdict(out.match) {
-				if attempt < run.inv.maxRetries() {
-					continue
-				}
-				run.pendingPanelClose = true
-				return positionFault("filter", CodeNavigationMismatch,
-					"collect: wheel position %d: the filter panel never settled after selecting S (attempt %d)", run.position, attempt+1)
-			}
-			fault := scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
-				"collect: wheel position %d: the filter panel did not stay open while selecting S (last verdict %s): %s",
-				run.position, out.match.Page, out.match.Evidence))
-			if run.listVerdict(out.match) {
-				return positionIncomplete("filter", fault)
-			}
-			return fault
-		}
+		return fault
 	}
 }
 
@@ -1206,8 +1180,8 @@ func (run *inventoryRun) closeFilterPanel(ctx context.Context) error {
 // that holds an item and is not yet visited, or -1 when the viewport is
 // exhausted.
 func (run *inventoryRun) nextSlot() int {
-	for i := range run.visited {
-		if !run.visited[i] && run.listMatch.List.Occupied[i] {
+	for i, cell := range run.ledger.visible() {
+		if cell.State == slotUnresolved {
 			return i
 		}
 	}
@@ -1282,6 +1256,8 @@ func frameDiagnostic(f platform.Frame) string {
 // holds at the deadline) is retried within the bound; an undecidable page
 // stops the walk.
 func (run *inventoryRun) clickUntilPage(ctx context.Context, at image.Point, want PageKind, what string) error {
+	expect := run.pageVerdict(want)
+	requireSort := want == PageFilterPanel && (run.inv.RequirePanelRangeProof || run.inv.Layout.SortTemplate != nil)
 	for attempt := 0; ; attempt++ {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -1301,7 +1277,21 @@ func (run *inventoryRun) clickUntilPage(ctx context.Context, at image.Point, wan
 		if err := run.dispatchOutcome(ctx, res); err != nil {
 			return err
 		}
-		out := run.awaitSettled(ctx, run.pageVerdict(want))
+		var openedFrame platform.Frame
+		var openedMatch PageMatch
+		match := func(f platform.Frame, m PageMatch) bool {
+			if !expect(m) {
+				return false
+			}
+			if want == PageFilterPanel {
+				openedFrame, openedMatch = f, m
+			}
+			return !requireSort || observedSortLabel(m) != ""
+		}
+		if run.inv.RequirePanelRangeProof && want == PageWarehouse {
+			match = run.afterInput(match)
+		}
+		out := run.awaitSettledFrame(ctx, match, nil)
 		switch out.class {
 		case awaitStable:
 			run.listMatch = out.match
@@ -1312,6 +1302,17 @@ func (run *inventoryRun) clickUntilPage(ctx context.Context, at image.Point, wan
 		case awaitGeometry:
 			return run.geometryChanged(out.frame)
 		default:
+			if openedMatch.Panel != nil {
+				run.rangeProof.Opened = panelRangeObservation(openedFrame, openedMatch)
+				run.inv.observeSort("")
+				if run.panelVerdict(out.match) {
+					return run.rangeFailure("the filter panel or its sort label could not be verified during preparation")
+				}
+				if run.listVerdict(out.match) {
+					return positionFault("filter", CodeNavigationMismatch,
+						"collect: wheel position %d: the filter panel closed before preparation could verify it", run.position)
+				}
+			}
 			if run.sourcePageVerdict(out.match, want) {
 				if attempt < run.inv.maxRetries() {
 					continue
@@ -1435,16 +1436,26 @@ func (run *inventoryRun) scrollToTop(ctx context.Context) (*failureFrames, error
 			run.position, flings+1, beforeStart, beforeOK, afterStart, afterOK,
 			out.stationary, out.displaced, out.lost, out.match.Rows,
 			scrollMarginFields(run.inv.matcher(), out.match, out.settleMatch))
+		if out.lastMatch.Page == PageWarehouse && !run.positionListVerdict(out.lastMatch) {
+			return waitFailure(waitKind("top", out), before, out), run.advanceStateFault("the return to top", out.lastMatch)
+		}
+		if !out.sawFrame || !out.lastFrameIsList {
+			evidence := "no frame received"
+			if out.sawFrame {
+				evidence = out.lastEvidence
+				if evidence == "" {
+					evidence = "the last frame had no page evidence"
+				}
+			}
+			return waitFailure(waitKind("top", out), before, out), scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
+				"collect: wheel position %d: the top fling ended without a verifiable warehouse list: %s",
+				run.position, evidence))
+		}
 		flings++
 		progressed := false
 		topProven = false
 		switch {
 		case out.lost:
-			if !run.listVerdict(out.afterMatch) {
-				return waitFailure(waitKind("top", out), before, out), scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
-					"collect: wheel position %d: the top fling lost the list and left no warehouse verdict: %s",
-					run.position, out.match.Evidence))
-			}
 			run.listMatch = out.afterMatch
 			run.lastFrame = out.after
 			// A fling that overshot the overlap certainly moved; the
@@ -1475,22 +1486,7 @@ func (run *inventoryRun) scrollToTop(ctx context.Context) (*failureFrames, error
 			// boundary, so like Lost it keeps moving toward the top
 			// instead of stacking a verification action. It still counts
 			// as no progress and stays inside the fling and no-progress
-			// bounds. Continuing requires the latest observation to be
-			// the verifiable warehouse list; a page that left the
-			// warehouse or a wait with no frame at all is a page-level
-			// failure, as in the Lost branch above.
-			if !out.sawFrame || !out.lastFrameIsList {
-				evidence := "no frame received"
-				if out.sawFrame {
-					evidence = out.lastEvidence
-					if evidence == "" {
-						evidence = "the last frame had no page evidence"
-					}
-				}
-				return waitFailure(waitKind("top", out), before, out), scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
-					"collect: wheel position %d: the top fling ended without a verifiable warehouse list: %s",
-					run.position, evidence))
-			}
+			// bounds.
 			run.listMatch = out.afterMatch
 			run.lastFrame = out.after
 		}
@@ -1594,7 +1590,10 @@ func (run *inventoryRun) awaitTopBase(ctx context.Context) error {
 		if !f.Reused {
 			run.lastArrived = f.ArrivedAt
 		}
-		m := run.inv.matcher().Match(f)
+		m, err := run.matchFrame(f)
+		if err != nil {
+			return err
+		}
 		if !run.positionListVerdict(m) {
 			if f.Reused {
 				if err := sleepCtx(ctx, run.inv.recheckEvery()); err != nil {
@@ -1680,6 +1679,9 @@ func (run *inventoryRun) confirmTop(ctx context.Context) (*failureFrames, error)
 			beforeStart, beforeOK, afterStart, afterOK,
 			out.stationary, out.displaced, out.lost, out.match.Evidence,
 			scrollMarginFields(run.inv.matcher(), out.match, out.settleMatch))
+		if out.sawFrame && !run.positionListVerdict(out.lastMatch) {
+			return waitFailure(waitKind("top", out), before, out), run.advanceStateFault("the top confirmation", out.lastMatch)
+		}
 		if !listOK && (out.lost || out.displaced) {
 			return waitFailure(waitKind("top", out), before, out), scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
 				"collect: wheel position %d: the top confirmation moved the list without a warehouse verdict: %s",
@@ -1841,8 +1843,7 @@ func (run *inventoryRun) confirmBottom(ctx context.Context) (*failureFrames, err
 	log.Printf("youkai: collect: position %d: bottom confirmation attempt 1: stationary=%t displaced=%t lost=%t rows=%d %s",
 		run.position, out.stationary, out.displaced, out.lost, out.match.Rows,
 		scrollMarginFields(run.inv.matcher(), out.match, out.settleMatch))
-	if out.afterMatch.Page == PageWarehouse && !run.positionListVerdict(out.afterMatch) {
-		fault := run.advanceStateFault("the bottom confirmation", out.afterMatch)
+	if fault := run.latestAdvanceFault("the bottom confirmation", out); fault != nil {
 		if out.after.ID != 0 && out.after.Image != nil {
 			return waitFailure("bottom-wrong-position", before, out), fault
 		}
@@ -1857,7 +1858,7 @@ func (run *inventoryRun) confirmBottom(ctx context.Context) (*failureFrames, err
 		// as complete; otherwise the end is unverified and the position is
 		// incomplete.
 		if proven, why := run.stillnessProven(before, out.after, out.match); !proven {
-			fault := positionProofFailure("bottom", CodeNavigationMismatch, out,
+			fault := run.positionProofFailure("bottom", CodeNavigationMismatch, out,
 				"collect: the bottom confirmation did not prove the list stayed at the end (frame %d → %d): %s",
 				before.ID, out.after.ID, why)
 			if out.after.ID != 0 && out.after.Image != nil {
@@ -1865,19 +1866,22 @@ func (run *inventoryRun) confirmBottom(ctx context.Context) (*failureFrames, err
 			}
 			return nil, fault
 		}
+		if err := run.checkLedgerViewport(out.afterMatch); err != nil {
+			return waitFailure("bottom-grid-changed", before, out), err
+		}
 		run.listMatch = out.afterMatch
 		run.lastFrame = out.after
 		return nil, nil
 	case out.lost:
-		fault := positionProofFailure("bottom", CodeNavigationMismatch, out,
+		fault := run.positionProofFailure("bottom", CodeNavigationMismatch, out,
 			"collect: the bottom confirmation could not verify that the list stayed at the end: %s", out.match.Evidence)
 		return waitFailure("bottom-lost", before, out), fault
 	case out.displaced:
-		fault := positionProofFailure("bottom", CodeNavigationMismatch, out,
+		fault := run.positionProofFailure("bottom", CodeNavigationMismatch, out,
 			"collect: the bottom confirmation moved the list, contradicting the scrollbar's bottom evidence: %s", out.match.Evidence)
 		return waitFailure("bottom-displaced", before, out), fault
 	default:
-		fault := positionProofFailure("bottom", CodeNavigationMismatch, out,
+		fault := run.positionProofFailure("bottom", CodeNavigationMismatch, out,
 			"collect: the bottom confirmation produced no verifiable verdict within the budget; no further drag is sent")
 		if out.after.ID != 0 && out.after.Image != nil {
 			return waitFailure("bottom-undecided", before, out), fault
@@ -1900,6 +1904,16 @@ func (run *inventoryRun) listVerdict(m PageMatch) bool {
 // would otherwise keep the old position's visited map and range.
 func (run *inventoryRun) positionListVerdict(m PageMatch) bool {
 	return run.listVerdict(m) && m.Wheel != nil && m.Wheel.Position == run.position
+}
+
+// checkLedgerViewport rejects detectable list changes between verified
+// transitions. The ledger describes the last proven viewport only.
+func (run *inventoryRun) checkLedgerViewport(m PageMatch) error {
+	if run.ledger != nil && (!run.positionListVerdict(m) || !run.ledger.agreesWith(m.List.Occupied)) {
+		return scan.NewFault(CodePositionLost, fmt.Errorf("collect: wheel position %d viewport %d: the observed grid no longer agrees with the slot ledger: %s",
+			run.position, run.viewport, m.Evidence))
+	}
+	return nil
 }
 
 // selectionMoved reports an unexpected grid shift between the last
@@ -2035,6 +2049,10 @@ func (run *inventoryRun) visitSlot(ctx context.Context, i int) (err error) {
 					"collect: the list selection did not return to slot %d (last seen %d) while preparing %s; the grid no longer maps to the visited positions (%s)",
 					expected, lastSeen, target, restored.match.Evidence))
 			}
+		}
+		if err := run.checkLedgerViewport(pre.match); err != nil {
+			slot.Discard()
+			return err
 		}
 		run.listMatch = pre.match
 		run.lastFrame = pre.frame
@@ -2234,6 +2252,10 @@ func (run *inventoryRun) referenceRoundTrip(ctx context.Context, slot *scan.Slot
 	if timing == nil {
 		timing = &visitTiming{}
 	}
+	if err := run.checkLedgerViewport(targetOut.match); err != nil {
+		slot.Discard()
+		return err
+	}
 	ref, ok := run.referenceSlot(targetOut.match, target, previous)
 	if !ok {
 		slot.Discard()
@@ -2263,6 +2285,10 @@ func (run *inventoryRun) referenceRoundTrip(ctx context.Context, slot *scan.Slot
 		return scan.NewFault(CodeDetailUnattributed, fmt.Errorf(
 			"collect: the same-detail reference round trip for %s could not establish a stable pre-reference frame with the target selected and reference slot %d occupied: %s",
 			targetName, ref, preRef.match.Evidence))
+	}
+	if err := run.checkLedgerViewport(preRef.match); err != nil {
+		slot.Discard()
+		return err
 	}
 	run.listMatch = preRef.match
 	run.lastFrame = preRef.frame
@@ -2303,6 +2329,10 @@ func (run *inventoryRun) referenceRoundTrip(ctx context.Context, slot *scan.Slot
 	default:
 		slot.Discard()
 		return run.referenceFault("the reference click", refOut, targetName, ref)
+	}
+	if err := run.checkLedgerViewport(refOut.match); err != nil {
+		slot.Discard()
+		return err
 	}
 	run.listMatch = refOut.match
 	run.lastFrame = refOut.frame
@@ -2575,6 +2605,15 @@ func avatarName(state AvatarState) string {
 // or line count stops the walk with detailUnresolved. ref is non-nil only
 // for a referenceVerified admission.
 func (run *inventoryRun) admit(slot *scan.Slot, out detailOutcome, pre platform.Frame, preMatch PageMatch, i, row, col int, assoc Association, preID uint64, ref *referenceCapture, attempt int, target string, timing *visitTiming) error {
+	if err := run.checkLedgerViewport(out.match); err != nil {
+		slot.Discard()
+		return err
+	}
+	cell := &run.ledger.visible()[i]
+	if cell.State != slotUnresolved {
+		slot.Discard()
+		return scan.NewFault(CodePositionLost, fmt.Errorf("collect: %s cannot be admitted from ledger state %q", target, cell.State))
+	}
 	if out.match.Detail == nil {
 		slot.Discard()
 		return scan.NewFault(CodeDetailUnresolved, fmt.Errorf(
@@ -2587,8 +2626,8 @@ func (run *inventoryRun) admit(slot *scan.Slot, out detailOutcome, pre platform.
 	timing.association = assoc
 	switch out.match.Detail.Quality {
 	case QualityNotS:
-		run.positionVisits++
-		run.visited[i] = true
+		cell.State = slotNotS
+		cell.ResolvedFrameID = out.frame.ID
 		run.selectionTracked = true
 		run.listMatch = out.match
 		run.lastFrame = out.frame
@@ -2607,9 +2646,6 @@ func (run *inventoryRun) admit(slot *scan.Slot, out detailOutcome, pre platform.
 		return scan.NewFault(CodeDetailUnresolved, fmt.Errorf(
 			"collect: %s settled with an undecidable substat row count: %s", target, out.match.Evidence))
 	}
-	run.visitIndex++
-	run.positionVisits++
-	run.visited[i] = true
 	managementState, managementEvidence := managementVerdict(preMatch, out.match, i)
 	equippedState, equippedEvidence := equippedVerdict(preMatch, out.match, i)
 	obs := Observation{
@@ -2623,7 +2659,7 @@ func (run *inventoryRun) admit(slot *scan.Slot, out detailOutcome, pre platform.
 		Column:             col,
 		Position:           run.position,
 		Quality:            out.match.Detail.Quality,
-		RarityFilter:       run.observedRarityFilter(),
+		RarityFilter:       run.observedRarityFilter(out.match),
 		ScrollEvidence:     run.lastScrollEvidence,
 		ManagementState:    managementState,
 		ManagementEvidence: managementEvidence,
@@ -2631,7 +2667,7 @@ func (run *inventoryRun) admit(slot *scan.Slot, out detailOutcome, pre platform.
 		EquippedEvidence:   equippedEvidence,
 		Lines:              run.inv.Layout.detailLines(out.match.Detail.Substats),
 		Context:            run.inv.Layout.contextLines(i),
-		VisitIndex:         run.visitIndex,
+		VisitIndex:         run.visitIndex + 1,
 		Association:        assoc,
 		PreClickFrameID:    preID,
 		Evidence:           run.admissionEvidence(target, pre, out, attempt, assoc, ref),
@@ -2664,6 +2700,10 @@ func (run *inventoryRun) admit(slot *scan.Slot, out detailOutcome, pre platform.
 		return scan.NewFault(CodeEvidenceFailed, fmt.Errorf(
 			"collect: admit %s: %w", target, admitErr))
 	}
+	cell.State = slotAdmitted
+	cell.ResolvedFrameID = out.frame.ID
+	cell.Sequence = seq
+	run.visitIndex++
 	timing.admitted = true
 	timing.visitIndex = run.visitIndex
 	timing.seq = int(seq)
@@ -2757,7 +2797,10 @@ func (run *inventoryRun) awaitDetail(ctx context.Context, baseline platform.Fram
 			out.class, out.frame = awaitGeometry, f
 			return out, nil
 		}
-		m := run.inv.matcher().Match(f)
+		m, err := run.matchFrame(f)
+		if err != nil {
+			return out, err
+		}
 		out.frame, out.match = f, m
 		if !f.Reused {
 			run.lastArrived = f.ArrivedAt
@@ -2948,15 +2991,16 @@ func (run *inventoryRun) scroll(ctx context.Context) (err error) {
 		waitOut = out
 		afterID = out.after.ID
 		outcome = scrollOutcomeName(out)
-		if out.afterMatch.Page == PageWarehouse && !run.positionListVerdict(out.afterMatch) {
+		stateFault := run.latestAdvanceFault("the scroll", out)
+		if stateFault != nil {
 			outcome = "wrong-position"
 		}
 		attemptLog = append(attemptLog, scrollAttempt{number: attempts, before: before, outcome: outcome, out: out})
 		log.Printf("youkai: collect: scroll position=%d viewport_from=%d attempt=%d before_frame=%d after_frame=%d outcome=%s unmoved=%t rows=%d %s",
 			run.position, fromViewport, attempts, before.ID, out.after.ID, outcome, out.unmoved, out.match.Rows,
 			scrollMarginFields(run.inv.matcher(), out.match, out.settleMatch))
-		if outcome == "wrong-position" {
-			return run.advanceStateFault("the scroll", out.afterMatch)
+		if stateFault != nil {
+			return stateFault
 		}
 		switch {
 		case out.lost:
@@ -2964,18 +3008,18 @@ func (run *inventoryRun) scroll(ctx context.Context) (err error) {
 				run.position, before.ID, out.after.ID, out.unsettled, out.after.ID,
 				out.match.Rows, len(out.match.Matches), out.match.Evidence)
 			if out.unsettled {
-				return positionProofFailure("scroll", CodePositionLost, out,
+				return run.positionProofFailure("scroll", CodePositionLost, out,
 					"collect: the list displaced but did not settle within the scroll budget, so its final position is unverified (last candidate frame %d): %s",
 					out.after.ID, out.match.Evidence)
 			}
-			return positionProofFailure("scroll", CodePositionLost, out,
+			return run.positionProofFailure("scroll", CodePositionLost, out,
 				"collect: the list displaced but no unique correspondence verified where it went (frame %d): %s",
 				out.after.ID, out.match.Evidence)
 		case out.displaced:
 			if len(out.match.Matches) == 0 {
 				log.Printf("youkai: collect: position %d scroll %d -> %d displaced without correspondences: rows=%d evidence=%s",
 					run.position, before.ID, out.after.ID, out.match.Rows, out.match.Evidence)
-				return positionProofFailure("scroll", CodePositionLost, out,
+				return run.positionProofFailure("scroll", CodePositionLost, out,
 					"collect: the list displaced but the matcher reported no correspondences")
 			}
 			if err := run.applyTransition(before, out.after, run.listMatch, out.afterMatch, out.match); err != nil {
@@ -3000,7 +3044,7 @@ func (run *inventoryRun) scroll(ctx context.Context) (err error) {
 				// The last comparison was Stationary, but the wait also
 				// saw movement or an undecided comparison: the drag's
 				// effect is not proven, so no second drag is sent.
-				return positionProofFailure("scroll", CodeNavigationMismatch, out,
+				return run.positionProofFailure("scroll", CodeNavigationMismatch, out,
 					"collect: the drag ended stationary but the wait also observed movement or an undecided comparison, so its effect is unverified (attempt %d)", attempt+1)
 			}
 			if attempt < run.inv.maxRetries() {
@@ -3028,21 +3072,21 @@ func (run *inventoryRun) scroll(ctx context.Context) (err error) {
 				// would silently skip a row of items on the next accepted
 				// displacement.
 				if proven, why := run.retryBaseProven(before, next); !proven {
-					return positionProofFailure("scroll", CodeNavigationMismatch, out,
+					return run.positionProofFailure("scroll", CodeNavigationMismatch, out,
 						"collect: the drag was judged unmoved, but the retry baseline (frame %d → %d) is not proven to be the same position, so a second drag would carry the visit bookkeeping over an unaccounted move: %s",
 						before.ID, next.ID, why)
 				}
 				before = next
 				continue
 			}
-			return positionProofFailure("scroll", CodeNavigationMismatch, out,
+			return run.positionProofFailure("scroll", CodeNavigationMismatch, out,
 				"collect: the drag never displaced the list within the budget (attempt %d) and no end evidence held", attempt+1)
 		default:
 			// No verifiable verdict: the drag's effect is unknown, so a
 			// second drag would stack an action on an unproven result. The
 			// helper keeps a still-verifiable list position-scoped but lets
 			// a page that left the warehouse stop the session.
-			return positionProofFailure("scroll", CodeNavigationMismatch, out,
+			return run.positionProofFailure("scroll", CodeNavigationMismatch, out,
 				"collect: the scroll drag produced no verifiable verdict within the budget (attempt %d); no further drag is sent", attempt+1)
 		}
 	}
@@ -3061,11 +3105,20 @@ func (run *inventoryRun) currentList(ctx context.Context) (platform.Frame, error
 	if !f.Reused {
 		run.lastArrived = f.ArrivedAt
 	}
-	m := run.inv.matcher().Match(f)
+	m, err := run.matchFrame(f)
+	if err != nil {
+		return platform.Frame{}, err
+	}
 	if !run.positionListVerdict(m) {
 		return platform.Frame{}, scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
 			"collect: the current list frame (id %d) is not a verifiable warehouse list at wheel position %d: %s",
 			f.ID, run.position, m.Evidence))
+	}
+	if err := run.checkLedgerViewport(m); err != nil {
+		return platform.Frame{}, err
+	}
+	if run.selectionMoved(m) {
+		return platform.Frame{}, scan.NewFault(CodePositionLost, fmt.Errorf("collect: wheel position %d viewport %d: selection moved before the scroll", run.position, run.viewport))
 	}
 	run.listMatch = m
 	run.lastFrame = f
@@ -3166,9 +3219,9 @@ type scrollOutcome struct {
 	lastEvidence string
 	// lastMatch is the page verdict of the most recently received
 	// observation. Unlike afterMatch (which an unsettled Lost may reset to
-	// an older candidate), it always describes the newest frame, so a top
-	// failure can tell an unresolved position from a wheel change or page
-	// departure that happened after the candidate.
+	// an older candidate), it always describes the newest frame. All drag
+	// callers use it to distinguish position proof loss from a warehouse or
+	// wheel change before continuing.
 	lastMatch PageMatch
 	// unsettled reports a displacement that never settled relative to its
 	// candidate within the budget. It is a Lost outcome, but the position
@@ -3404,11 +3457,20 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 		if f.Geometry != run.geo {
 			return scrollOutcome{}, run.geometryChanged(f)
 		}
-		m := run.inv.matcher().Match(f)
+		m, err := run.matchFrame(f)
+		if err != nil {
+			return scrollOutcome{}, err
+		}
 		out.sawFrame = true
 		out.lastFrameIsList = run.listVerdict(m)
 		out.lastEvidence = m.Evidence
 		out.lastMatch = m
+		if run.position != 0 && m.Page == PageWarehouse && !run.positionListVerdict(m) {
+			// A frame from another position cannot create or settle a
+			// candidate. Preserve the previous candidate for diagnostics.
+			out.after, out.afterMatch = f, m
+			return finish()
+		}
 		if f.Reused {
 			// Unchanged content can prove the candidate stayed still; it
 			// cannot prove a displacement not yet seen fresh. It also never
@@ -3614,6 +3676,12 @@ func (run *inventoryRun) applyTransition(before, after platform.Frame, beforeMat
 			"collect: the scroll transition %d → %d was rejected: %s (correspondence evidence: %s)",
 			before.ID, after.ID, reason, sm.Evidence))
 	}
+	if !sm.Displaced || sm.Stationary || sm.Lost || sm.Undecided {
+		return fail("the matcher did not prove displacement")
+	}
+	if !run.listVerdict(beforeMatch) || !run.listVerdict(afterMatch) || run.ledger == nil || !run.ledger.agreesWith(beforeMatch.List.Occupied) {
+		return fail("the before-viewport does not agree with the ledger, or the after-viewport is unreadable")
+	}
 	if sm.Rows < 1 || sm.Rows > l.Rows-1 {
 		return fail(fmt.Sprintf("the verified row count %d is outside 1..%d", sm.Rows, l.Rows-1))
 	}
@@ -3658,14 +3726,7 @@ func (run *inventoryRun) applyTransition(before, after platform.Frame, beforeMat
 			}
 		}
 	}
-	// Carry the bookkeeping: matched positions inherit their visit
-	// state; the remaining after-positions are genuinely new.
-	newVisited := make([]bool, len(run.visited))
-	for _, p := range sm.Matches {
-		newVisited[l.positionSlot(p.ToRow, p.ToColumn)] =
-			run.visited[l.positionSlot(p.FromRow, p.FromColumn)]
-	}
-	run.visited = newVisited
+	run.ledger.advance(sm.Rows, afterMatch.List.Occupied, after.ID)
 	run.viewport++
 	return nil
 }
@@ -3735,10 +3796,14 @@ func (run *inventoryRun) awaitSettled(ctx context.Context, expect func(PageMatch
 // the "current content" proof while avoiding a duplicate settle after an
 // action whose resulting frame is already known and unchanged.
 func (run *inventoryRun) awaitSettledSeeded(ctx context.Context, expect func(PageMatch) bool, seed *awaitOutcome) awaitOutcome {
+	return run.awaitSettledFrame(ctx, func(_ platform.Frame, m PageMatch) bool { return expect(m) }, seed)
+}
+
+func (run *inventoryRun) awaitSettledFrame(ctx context.Context, expect func(platform.Frame, PageMatch) bool, seed *awaitOutcome) awaitOutcome {
 	deadline := time.Now().Add(run.inv.actionBudget())
 	samples := 0
 	out := awaitOutcome{}
-	if seed != nil && seed.frame.ID != 0 && seed.frame.Geometry == run.geo && expect(seed.match) {
+	if seed != nil && seed.frame.ID != 0 && seed.frame.Geometry == run.geo && expect(seed.frame, seed.match) {
 		out.frame, out.match, out.expected = seed.frame, seed.match, true
 		samples = 1
 	}
@@ -3771,13 +3836,17 @@ func (run *inventoryRun) awaitSettledSeeded(ctx context.Context, expect func(Pag
 			out.class, out.frame = awaitGeometry, f
 			return out
 		}
-		m := run.inv.matcher().Match(f)
+		m, err := run.matchFrame(f)
+		if err != nil {
+			out.class, out.frame, out.match, out.err = awaitFrameErr, f, m, err
+			return out
+		}
 		out.frame, out.match = f, m
 		if !f.Reused {
 			run.lastArrived = f.ArrivedAt
 			after = f.ArrivedAt
 		}
-		if expect(m) {
+		if expect(f, m) {
 			out.expected = true
 			samples++
 			if samples >= run.inv.stableFrames() {

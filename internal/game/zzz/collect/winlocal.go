@@ -21,12 +21,10 @@ const WindowsLocalTimingProvenance = "macOS cloud profile (uncalibrated; W3 fina
 // macOS cloud profile.
 //
 // Calibration state: W2c wires the profile, it does not calibrate it.
-// Timing, drag durations and the scaled pixel-count thresholds are
-// unverified on Windows; W3's sample collection, parameter finalization
-// and full 1920×1080 field acceptance replace them. The 2026-11-02 W3a
-// offline sample added the native sort-label template to the 1920×1080
-// reference layout, so this tier can verify the filter panel's sort order;
-// a scaled tier still drops the template and can be at most partial.
+// Scroll timing, drag durations and scaled pixel-count thresholds are
+// unverified on Windows. The native 1920×1080 reference carries the W3a
+// sort-label template and the T5 range probes exercised by the six-position
+// panel replay. Non-identity transforms drop both native panel probes.
 type WindowsLocalProfile struct {
 	// Name identifies the profile in diagnostics.
 	Name string
@@ -125,12 +123,11 @@ func openClientTier(client image.Point) (DisplayTier, error) {
 }
 
 // Diagnostic renders the profile's identity and calibration state for the
-// session log. Tier, scale, profile name, sort-template presence and the
-// uncalibrated timing provenance are the facts a later field report needs to
-// attribute its results to this wiring.
+// session log, including native sort and range probe availability and the
+// provenance of the scroll timing.
 func (p WindowsLocalProfile) Diagnostic() string {
-	return fmt.Sprintf("profile=%s tier=%s client=%dx%d scale=%.4f layout=%s sort=%s timing=%s",
-		p.Name, p.Tier.Name, p.Tier.Client.X, p.Tier.Client.Y, p.Transform.Scale, p.Layout.Name, p.sortState(), WindowsLocalTimingProvenance)
+	return fmt.Sprintf("profile=%s tier=%s client=%dx%d scale=%.4f layout=%s sort=%s panel_range_required=%t timing=%s",
+		p.Name, p.Tier.Name, p.Tier.Client.X, p.Tier.Client.Y, p.Transform.Scale, p.Layout.Name, p.sortState(), p.Layout.panelRange != nil, WindowsLocalTimingProvenance)
 }
 
 // sortState names whether this profile can read the panel's sort order. The
@@ -149,11 +146,8 @@ func (p WindowsLocalProfile) sortState() string {
 // drag durations. legacy selects the pre-stage-2 grayscale-MAD scroll
 // judgment, the same field fallback the macOS wiring keeps.
 //
-// The 1920×1080 layout carries the W3a Windows native sort template, so a
-// matching panel verdict sets SortVerified and the session's observedScope
-// can reach sort=verified; coverage then becomes complete when all six
-// positions are complete. A scaled tier drops the template (fail-closed) and
-// remains at most partial.
+// The native layout requires calibrated reset and S evidence. The scroll
+// matcher fallback uses the same panel probes and preparation gate.
 func (p WindowsLocalProfile) Inventory(legacy bool) *Inventory {
 	pixel := NewPixelMatcher(p.Layout, p.Calibration)
 	var matcher Matcher = pixel
@@ -162,8 +156,9 @@ func (p WindowsLocalProfile) Inventory(legacy bool) *Inventory {
 	}
 	timing := p.ScrollTiming
 	return &Inventory{
-		Layout:       p.Layout,
-		Matcher:      matcher,
-		ScrollTiming: &timing,
+		Layout:                 p.Layout,
+		Matcher:                matcher,
+		RequirePanelRangeProof: p.Layout.panelRange != nil,
+		ScrollTiming:           &timing,
 	}
 }

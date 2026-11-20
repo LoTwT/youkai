@@ -21,7 +21,7 @@ func scopeOf(t *testing.T, inv *Inventory) scopePayload {
 func completePositions(inv *Inventory) {
 	for i := 1; i <= scopePositionCount; i++ {
 		inv.recordPosition(positionScope{
-			Position: i, Viewports: 2, Visits: 4, Top: true, Bottom: true, Complete: true,
+			Position: i, Viewports: 2, Visits: 4, Top: true, Bottom: true, Complete: true, Range: positionRange{Verified: true},
 		})
 	}
 }
@@ -29,7 +29,7 @@ func completePositions(inv *Inventory) {
 func TestObservedScopeCompletesOnlyWithSortAndLedger(t *testing.T) {
 	inv := &Inventory{}
 	inv.scope = scopePayload{Sort: scopeSortUnverified, Coverage: scopeCoverageUnknown}
-	inv.observeSort(&PanelEvidence{SortVerified: true, SortLabel: sortLabelRarity})
+	inv.observeSort(sortLabelRarity)
 	if got := scopeOf(t, inv); got.Sort != scopeSortVerified || got.Coverage != scopeCoverageUnknown {
 		t.Fatalf("after sort check = %+v, want verified/unknown", got)
 	}
@@ -57,8 +57,8 @@ func TestObservedScopeStaysPartialWithoutVerifiedSort(t *testing.T) {
 func TestObservedScopeSortMismatchSticks(t *testing.T) {
 	inv := &Inventory{}
 	inv.scope = scopePayload{Sort: scopeSortUnverified, Coverage: scopeCoverageUnknown}
-	inv.observeSort(&PanelEvidence{SortVerified: true, SortLabel: sortLabelRarity})
-	inv.observeSort(&PanelEvidence{}) // a later panel did not match
+	inv.observeSort(sortLabelRarity)
+	inv.observeSort("") // a later panel did not match
 	if got := scopeOf(t, inv); got.Sort != scopeSortUnverified || got.SortLabel != "" {
 		t.Fatalf("scope = %+v, want the mismatch to leave the sort unverified", got)
 	}
@@ -67,7 +67,7 @@ func TestObservedScopeSortMismatchSticks(t *testing.T) {
 func TestObservedScopePartialLedger(t *testing.T) {
 	inv := &Inventory{}
 	inv.scope = scopePayload{Sort: scopeSortVerified, Coverage: scopeCoverageUnknown}
-	inv.observeSort(&PanelEvidence{SortVerified: true, SortLabel: sortLabelRarity})
+	inv.observeSort(sortLabelRarity)
 	inv.recordPosition(positionScope{Position: 1, Viewports: 1, Visits: 2, Top: true, Bottom: false})
 	got := scopeOf(t, inv)
 	if got.Coverage != scopeCoveragePartial || len(got.Positions) != 1 || got.Positions[0].Complete {

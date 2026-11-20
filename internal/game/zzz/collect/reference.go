@@ -259,10 +259,9 @@ func ReferenceLayout() Layout {
 		TopTo:          image.Pt(333, 892),
 		TopDuration:    150 * time.Millisecond,
 
-		// The funnel button occupies the toolbar's text control around
-		// x 292–340; the click point is its center. The icon itself spans
-		// x 175–220 and the probe reads the solid blue fill at (189,55).
-		FilterButton: image.Pt(314, 55),
+		// The funnel button uses the 2026-11-20 Windows field click point.
+		// Its icon spans x 175–220 and the probe reads the blue fill at (189,55).
+		FilterButton: image.Pt(304, 52),
 		Funnel: ColorProbe{
 			At: image.Rect(189, 55, 190, 56),
 			// Active: the measured Windows fill (53,140,252). Clear: carried
@@ -304,15 +303,13 @@ func ReferenceLayout() Layout {
 				Tol: 25,
 			},
 		},
-		// W3a checked the reset and close click points against the S2 panel
-		// frame; both agree with these positions. PanelS is not calibrated:
-		// with two set filters selected, the S control was observed near
-		// y≈704 rather than y=604, because the set-filter rows push the
-		// controls down. Re-measure it after a reset; until then the value
-		// stays the cloud-derived placeholder.
-		PanelReset: image.Pt(1432, 1035),
-		PanelClose: image.Pt(1804, 55),
+		// These are the recorded click points from the six 2026-11-20
+		// Windows filter replays. Retained sets can move the S control,
+		// so PanelS is usable only after the reset state is confirmed.
+		PanelReset: image.Pt(1430, 1030),
+		PanelClose: image.Pt(1805, 49),
 		PanelS:     image.Pt(1426, 604),
+		panelRange: windowsPanelRangeCalibration(),
 		// The Windows local client renders "稀有度" at native pixels. The
 		// W3a template is the crop (1285,124)-(1467,201) of S2/frame-0000.png
 		// (182×77); see sortlabel.go for its provenance. The template is
@@ -456,6 +453,7 @@ func ScaledLayout(ref Layout, t CanvasTransform) (Layout, error) {
 		// silently change the calibrated MAD.
 		out.SortLabel = image.Rectangle{}
 		out.SortTemplate = nil
+		out.panelRange = nil
 	}
 
 	for i, center := range ref.Wheel {
