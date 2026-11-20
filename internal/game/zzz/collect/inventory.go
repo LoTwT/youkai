@@ -1446,7 +1446,7 @@ func (run *inventoryRun) scrollToTop(ctx context.Context) (*failureFrames, error
 			run.position, flings+1, beforeStart, beforeOK, afterStart, afterOK,
 			out.stationary, out.displaced, out.lost, out.match.Rows,
 			scrollMarginFields(run.inv.matcher(), out.match, out.settleMatch))
-		if out.lastMatch.Page == PageWarehouse && !run.positionListVerdict(out.lastMatch) {
+		if out.lastMatch.Page != PageUnknown && !run.positionListVerdict(out.lastMatch) {
 			return waitFailure(waitKind("top", out), before, out), run.advanceStateFault("the return to top", out.lastMatch)
 		}
 		if !out.sawFrame || !out.lastFrameIsList {
@@ -1558,41 +1558,31 @@ type thumbReporter interface {
 	ThumbStart(frame platform.Frame) (int, bool)
 }
 
-// awaitTopBase waits until two consecutive fresh observations are
-// pixel-stationary before the first top-confirmation drag. The top claim
-// itself is already proven by scrollToTop; this wait only keeps a
-// still-settling list from wasting a confirmation attempt. A timeout is
-// not a failure: confirmTop still validates its own drag, so the walk
-// proceeds with the latest verified frame.
+// awaitTopBase verifies the current page and wheel before a confirmation
+// drag. The stillness wait only paces the drag: at the deadline a readable
+// same-position frame can be used even without a stationary pair.
 func (run *inventoryRun) awaitTopBase(ctx context.Context) error {
-	if run.lastFrame.ID == 0 {
-		return nil
-	}
 	deadline := time.Now().Add(run.inv.actionBudget())
 	prev := run.lastFrame
+	latest := PageMatch{Evidence: "no frame received"}
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		if !time.Now().Before(deadline) {
-			log.Printf("youkai: collect: position %d: top base did not prove stillness within %s; confirming from frame %d",
-				run.position, run.inv.actionBudget(), run.lastFrame.ID)
-			return nil
+			break
 		}
 		fctx, cancel := context.WithDeadline(ctx, deadline)
 		f, err := run.view.Frame(fctx, platform.FrameRequest{After: run.lastArrived})
 		cancel()
 		if err != nil {
-			switch {
-			case ctx.Err() != nil:
+			if ctx.Err() != nil {
 				return ctx.Err()
-			case errors.Is(err, context.DeadlineExceeded):
-				log.Printf("youkai: collect: position %d: no frame for the top base before the budget; confirming from frame %d",
-					run.position, run.lastFrame.ID)
-				return nil
-			default:
-				return wrapObservationErr(err)
 			}
+			if errors.Is(err, context.DeadlineExceeded) {
+				break
+			}
+			return wrapObservationErr(err)
 		}
 		if f.Geometry != run.geo {
 			return run.geometryChanged(f)
@@ -1600,33 +1590,36 @@ func (run *inventoryRun) awaitTopBase(ctx context.Context) error {
 		if !f.Reused {
 			run.lastArrived = f.ArrivedAt
 		}
-		m, err := run.matchFrame(f)
+		latest, err = run.matchFrame(f)
 		if err != nil {
 			return err
 		}
-		if !run.positionListVerdict(m) {
-			if m.Page == PageWarehouse {
-				return run.advanceStateFault("the wait for a top confirmation base", m)
+		if run.positionListVerdict(latest) {
+			run.listMatch, run.lastFrame = latest, f
+			if prev.ID != 0 && (sameFrameContent(prev, f) || run.inv.matcher().MatchScroll(prev, f).Stationary) {
+				return nil
 			}
-			if f.Reused {
-				if err := sleepCtx(ctx, run.inv.recheckEvery()); err != nil {
-					return err
-				}
+			prev = f
+		} else {
+			if latest.Page != PageUnknown {
+				return run.advanceStateFault("the wait for a top confirmation base", latest)
 			}
-			continue
+			prev = platform.Frame{}
 		}
-		run.listMatch = m
-		run.lastFrame = f
-		if sameFrameContent(prev, f) || run.inv.matcher().MatchScroll(prev, f).Stationary {
-			return nil
-		}
-		prev = f
 		if f.Reused {
 			if err := sleepCtx(ctx, run.inv.recheckEvery()); err != nil {
 				return err
 			}
 		}
 	}
+	if !run.positionListVerdict(latest) {
+		return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
+			"collect: wheel position %d: no current verifiable warehouse list for the top confirmation: %s",
+			run.position, latest.Evidence))
+	}
+	log.Printf("youkai: collect: position %d: top base did not prove stillness within %s; confirming from frame %d",
+		run.position, run.inv.actionBudget(), run.lastFrame.ID)
+	return nil
 }
 
 // confirmTop performs the "drag again and nothing changes" top evidence:
@@ -1639,16 +1632,6 @@ func (run *inventoryRun) awaitTopBase(ctx context.Context) error {
 // marks the position incomplete rather than admitting items from an
 // unverified position.
 func (run *inventoryRun) confirmTop(ctx context.Context) (*failureFrames, error) {
-	// The return-to-top fling can still be settling when the top claim
-	// first holds. Confirming immediately then compares the first drag
-	// against a moving base frame; every observed miss costs a full
-	// ScrollBudget before the next attempt. Wait for two frame
-	// observations to be pixel-stationary first. This is only a pacing
-	// optimization: if stillness cannot be proven within the action
-	// budget, the confirmation below still verifies the drag itself.
-	if err := run.awaitTopBase(ctx); err != nil {
-		return nil, err
-	}
 	before := run.lastFrame
 	var lastOut scrollOutcome
 	haveWait := false
@@ -1658,6 +1641,11 @@ func (run *inventoryRun) confirmTop(ctx context.Context) (*failureFrames, error)
 		}
 		if !run.h.InputPermitted() {
 			return nil, ctx.Err()
+		}
+		// An earlier wait may still hold a displacement candidate. Each
+		// input needs a current warehouse observation from this wheel.
+		if err := run.awaitTopBase(ctx); err != nil {
+			return topWaitFailure("top", before, lastOut, haveWait), err
 		}
 		if err := run.observeReady(ctx); err != nil {
 			return nil, err
@@ -3418,6 +3406,7 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 		candidateMatch  PageMatch
 		candidateScroll ScrollMatch
 		haveCandidate   bool
+		bottomMissFrame uint64
 		verdict         = waitVerdictNone
 		stillOnly       = true
 	)
@@ -3441,6 +3430,10 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 			// nothing and stop at the unverified position (T5 §5).
 			out.lost, out.unsettled = true, true
 			out.after, out.afterMatch, out.match = candidate, candidateMatch, candidateScroll
+			if bottomMissFrame != 0 {
+				out.match.Evidence += fmt.Sprintf(
+					". Candidate frame %d and stationary frame %d disagree on the bottom indicator", candidate.ID, bottomMissFrame)
+			}
 			out.candidate, out.hasCandidate = candidate, true
 		case verdict == waitVerdictLost || verdict == waitVerdictAmbiguous || verdict == waitVerdictDisplaced:
 			out.lost = true
@@ -3483,9 +3476,9 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 		out.lastFrameIsList = run.listVerdict(m)
 		out.lastEvidence = m.Evidence
 		out.lastMatch = m
-		if run.position != 0 && m.Page == PageWarehouse && !run.positionListVerdict(m) {
-			// A frame from another position cannot create or settle a
-			// candidate. Preserve the previous candidate for diagnostics.
+		if run.position != 0 && m.Page != PageUnknown && !run.positionListVerdict(m) {
+			// An identified non-list page or a warehouse at another
+			// position cannot create or settle a candidate.
 			out.after, out.afterMatch = f, m
 			return finish()
 		}
@@ -3554,29 +3547,33 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 		}
 		if haveCandidate {
 			stationary := sameFrameContent(candidate, f)
+			var rel ScrollMatch
 			if !stationary {
-				rel := run.inv.matcher().MatchScroll(candidate, f)
+				rel = run.inv.matcher().MatchScroll(candidate, f)
 				trace.noteCandidate(candidate, f, rel)
 				out.match = rel
 				stationary, _ = run.stillnessProven(candidate, f, rel)
-				if stationary {
-					out.settleMatch = rel
-				}
 			}
 			// A settling confirmation must be proof the list stayed at the
 			// candidate, not merely a Stationary verdict: on repeated rows a
 			// still-moving list can keep the zero-shift MAD low, and accepting
 			// that would commit a stale offset while the scene has moved on.
 			if stationary {
-				// Pixel stillness does not prove that every occupied slot
-				// or the bottom indicator agrees with the older candidate.
-				// Without that agreement the transition cannot carry the ledger.
-				if !slices.Equal(candidateMatch.List.Occupied, m.List.Occupied) ||
-					candidateMatch.List.Bottom != m.List.Bottom {
+				// Even a stationary grid cannot inherit a candidate's
+				// correspondence if the occupied slots disagree.
+				if !slices.Equal(candidateMatch.List.Occupied, m.List.Occupied) {
 					candidateScroll.Evidence += fmt.Sprintf(
-						"; candidate frame %d and stationary frame %d disagree on occupancy or bottom evidence", candidate.ID, f.ID)
+						". Candidate frame %d and stationary frame %d disagree on occupied slots", candidate.ID, f.ID)
 					return finish()
 				}
+				if candidateMatch.List.Bottom != m.List.Bottom {
+					// The thumb edge can briefly fall outside its threshold
+					// while the list is still. Require a new full streak.
+					bottomMissFrame = f.ID
+					settleStreak = 0
+					continue
+				}
+				out.settleMatch = rel
 				settleStreak++
 				if settleStreak >= timing.SettleObservations {
 					return settle(f)
@@ -3592,6 +3589,7 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 				// The list moved further: the latest total displacement is
 				// the candidate, still uncommitted until it settles.
 				candidate, candidateMatch, candidateScroll = f, m, total
+				bottomMissFrame = 0
 				trace.pinCandidate(f)
 				out.match = total
 				verdict = waitVerdictDisplaced
@@ -3645,6 +3643,7 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 		case sm.Displaced && len(sm.Matches) > 0:
 			haveCandidate = true
 			candidate, candidateMatch, candidateScroll = f, m, sm
+			bottomMissFrame = 0
 			trace.pinCandidate(f)
 			verdict = waitVerdictDisplaced
 			stillOnly = false

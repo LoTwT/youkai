@@ -97,7 +97,7 @@ func (run *inventoryRun) positionProofFailure(stage, code string, out scrollOutc
 // may commit a displacement, retry, or verify the bottom. An unsettled
 // candidate can still describe the old position even after the wheel moved.
 func (run *inventoryRun) latestAdvanceFault(action string, out scrollOutcome) error {
-	if (out.lastMatch.Page == PageWarehouse || out.displaced || out.stationary) && !run.positionListVerdict(out.lastMatch) {
+	if (out.lastMatch.Page != PageUnknown || out.displaced || out.stationary) && !run.positionListVerdict(out.lastMatch) {
 		return run.advanceStateFault(action, out.lastMatch)
 	}
 	return nil

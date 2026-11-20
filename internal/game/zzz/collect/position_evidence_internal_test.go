@@ -190,3 +190,79 @@ func TestShortBottomStepRejectsChangedOccupancyAtSettle(t *testing.T) {
 			run.inv.scope.Coverage, run.lastFrame.ID, view.dispatches, run.ledger.rowBase, err)
 	}
 }
+
+func TestShortBottomStepRestartsConfirmationAfterBottomJitter(t *testing.T) {
+	p := windowsNativeRangeProfile(t)
+	m := bottomStepMatcher{p.Inventory(false).Matcher.(*ScrollEvidenceMatcher)}
+	l := p.Layout
+	candidate := loadWindowsWarehouseFrame(t, l)
+	candidate.ID = 2
+	thumb := image.Rect(l.ScrollTrack.Min.X, 368, l.ScrollTrack.Max.X, 932)
+	draw.Draw(candidate.Image, l.ScrollTrack, image.Black, image.Point{}, draw.Src)
+	draw.Draw(candidate.Image, thumb, image.NewUniform(color.Gray{Y: 220}), image.Point{}, draw.Src)
+	miss := candidate
+	miss.Image = image.NewRGBA(candidate.Image.Bounds())
+	draw.Draw(miss.Image, miss.Image.Bounds(), candidate.Image, image.Point{}, draw.Src)
+	trailing := image.Rect(thumb.Min.X, thumb.Max.Y-3, thumb.Max.X, thumb.Max.Y)
+	draw.Draw(miss.Image, trailing, image.Black, image.Point{}, draw.Src)
+	if on, off := m.Match(candidate).List, m.Match(miss).List; !on.Bottom || off.Bottom ||
+		!reflect.DeepEqual(on.Occupied, off.Occupied) {
+		t.Fatal("the tail-edge crop must change only the bottom indicator")
+	}
+	if ok, why := m.zeroDisplacementProven(candidate, miss); !ok {
+		t.Fatalf("tail-edge crop must still prove stationary content: %s", why)
+	}
+	before := candidate
+	before.ID = 1
+	before.Image = image.NewRGBA(candidate.Image.Bounds())
+	draw.Draw(before.Image, before.Image.Bounds(), candidate.Image, image.Point{}, draw.Src)
+
+	for _, tc := range []struct {
+		name     string
+		bottom   []bool
+		complete bool
+	}{
+		{"recovered with a full new streak", []bool{true, false, true, true}, true},
+		{"one recovery frame cannot finish", []bool{true, false, true}, false},
+		{"persistent indicator loss", []bool{false, false, false}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			frames := []platform.Frame{before, candidate}
+			for _, bottom := range tc.bottom {
+				f := miss
+				if bottom {
+					f = candidate
+				}
+				f.ID = uint64(len(frames) + 1)
+				frames = append(frames, f)
+			}
+			view := &scrollScriptView{frames: frames, blockAfter: true}
+			run := newScriptedScrollRun(l, view, m, "", 0, 60*time.Millisecond)
+			run.position = 3
+			run.lastFrame, run.listMatch = before, m.Match(before)
+			run.ledger = newSlotLedger(l.Columns, run.listMatch.List.Occupied, before.ID)
+			for i, slot := range run.ledger.visible() {
+				if slot.State == slotUnresolved {
+					run.ledger.visible()[i].State = slotAdmitted
+				}
+			}
+			err := runScriptedSession(t, run, func(ctx context.Context, run *inventoryRun) error {
+				return run.collectPosition(ctx)
+			})
+			if view.calls != len(frames) || view.dispatches != 1 {
+				t.Fatalf("ended after %d/%d reads and %d drags: %v", view.calls, len(frames), view.dispatches, err)
+			}
+			if tc.complete {
+				if err != nil || run.ledger.rowBase != 1 {
+					t.Fatalf("bottom proof was restored: row=%d err=%v", run.ledger.rowBase, err)
+				}
+				return
+			}
+			incomplete, scoped := asPositionIncomplete(err)
+			if !scoped || incomplete.stage != "scroll" || faultDiagnosticCode(err) != CodePositionLost ||
+				run.ledger.rowBase != 0 || run.lastFrame.ID != before.ID {
+				t.Fatalf("bottom disagreement must keep the previous ledger: row=%d frame=%d err=%v", run.ledger.rowBase, run.lastFrame.ID, err)
+			}
+		})
+	}
+}
