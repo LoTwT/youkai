@@ -412,13 +412,13 @@ func TestReferenceLayoutMatchesScaledMacDerivation(t *testing.T) {
 		t.Fatalf("durations are client-profile timing and must not scale: %s/%s vs %s/%s",
 			got.ScrollDuration, got.TopDuration, mac.ScrollDuration, mac.TopDuration)
 	}
-	checkPoint("filter button", got.FilterButton, mac.FilterButton, tolerance, "toolbar control center")
+	// Windows filter, reset and close clicks use the native points from
+	// the T5 replay. The Windows entry test checks them explicitly. The
+	// pixel anchors below still share comparable geometry.
 	checkRect("funnel probe", got.Funnel.At, mac.Funnel.At, tolerance, "1x1 icon fill pixel")
 	for i := range mac.PanelOpen {
 		checkRect(fmt.Sprintf("panel probe %d", i), got.PanelOpen[i].At, mac.PanelOpen[i].At, tolerance, "filter-panel probe")
 	}
-	checkPoint("panel reset", got.PanelReset, mac.PanelReset, tolerance, "filter-panel control")
-	checkPoint("panel close", got.PanelClose, mac.PanelClose, tolerance, "filter-panel control")
 	checkPoint("panel S", got.PanelS, mac.PanelS, tolerance, "filter-panel control")
 	for i := range mac.Wheel {
 		checkPoint(fmt.Sprintf("wheel %d", i+1), got.Wheel[i], mac.Wheel[i], tolerance, "wheel center")

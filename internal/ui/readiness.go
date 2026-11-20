@@ -971,6 +971,10 @@ func (m *Model) noScanSourceArea(c *ui.Context, t *ui.Theme) {
 func (m *Model) readinessChecklist(c *ui.Context, t *ui.Theme, tok *Tokens) {
 	rows := m.readinessRows()
 	attention := m.readinessCount()
+	positions := "1–6"
+	if p := m.pendingRescan; p != nil {
+		positions = summaryPositionRanges(p.positions)
+	}
 	unknown := 0
 	for _, row := range rows {
 		if row.status == readinessUnknown {
@@ -988,7 +992,7 @@ func (m *Model) readinessChecklist(c *ui.Context, t *ui.Theme, tok *Tokens) {
 				ui.Text(c, "全部满足 · 可以开始").TextColor(t.Success)
 			}
 			ui.Box(c).Grow(1)
-			ui.Text(c, "S 级 · 1–6 号位").TextColor(tok.TextSecondary).Background(tok.AccentSoft).Padding(4, 12).Radius(4)
+			ui.Text(c, "S 级 · "+positions+" 号位").TextColor(tok.TextSecondary).Background(tok.AccentSoft).Padding(4, 12).Radius(4)
 		})
 		if m.startFailureMessage != "" {
 			ui.Text(c, m.startFailureMessage).TextColor(t.Danger).FontWeight(600)

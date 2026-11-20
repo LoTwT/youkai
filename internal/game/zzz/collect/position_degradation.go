@@ -83,19 +83,24 @@ func positionLimitError(reasons []string) error {
 }
 
 // positionProofFailure builds a scroll or bottom confirmation fault. It
-// marks the position incomplete only while the last observed frame is still
-// a verifiable warehouse list. A page that left the warehouse (popup,
-// loading page, lost stream) is session-fatal: continuing would hide the
-// real page fault and keep dispatching input into an unknown page. A
-// candidate retained from before the departure does not change that — the
-// last frame, not the candidate, decides whether the position is the
-// unresolved phenomenon or the page itself went away.
-func positionProofFailure(stage, code string, out scrollOutcome, format string, args ...any) error {
+// marks the position incomplete only when the latest observation proves
+// the warehouse list and the prepared wheel position.
+func (run *inventoryRun) positionProofFailure(stage, code string, out scrollOutcome, format string, args ...any) error {
 	fault := scan.NewFault(code, fmt.Errorf(format, args...))
-	if out.sawFrame && out.lastFrameIsList {
+	if out.sawFrame && run.positionListVerdict(out.lastMatch) {
 		return positionIncomplete(stage, fault)
 	}
 	return fault
+}
+
+// latestAdvanceFault checks the frame that ended the wait before a scroll
+// may commit a displacement, retry, or verify the bottom. An unsettled
+// candidate can still describe the old position even after the wheel moved.
+func (run *inventoryRun) latestAdvanceFault(action string, out scrollOutcome) error {
+	if (out.lastMatch.Page != PageUnknown || out.displaced || out.stationary) && !run.positionListVerdict(out.lastMatch) {
+		return run.advanceStateFault(action, out.lastMatch)
+	}
+	return nil
 }
 
 // advanceStateFault describes a wheel or grid change observed after an

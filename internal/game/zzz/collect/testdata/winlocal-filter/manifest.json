@@ -1,0 +1,138 @@
+{
+  "purpose": "Windows matcher calibration and local replay",
+  "originalClientSize": {
+    "height": 1080,
+    "width": 1920
+  },
+  "zoomPercent": 125,
+  "position": 3,
+  "coordinates": "Zero-based original client pixels. Right and bottom bounds are exclusive.",
+  "verification": "All cropped pixels compared with the original PNG after saving. No resampling.",
+  "limitations": [
+    "Only open-panel static states. No confirmed closed-panel S-only frame.",
+    "No continuous frame sequence between user actions.",
+    "Collapsed or off-screen filters are not asserted by these crops."
+  ],
+  "samples": [
+    {
+      "sample": "residual",
+      "observation": "同一 3 号位，面板开启，两条套装蓝，S 灰，漏斗蓝，排序稀有度。",
+      "original": "filter-residual-115535/frame-0000.png",
+      "originalPngSha256": "bbd67c7be1a55e33629dd5805bbe6c4a62ed4cdf22a2e59b049d4a62d165b574",
+      "frameIndex": 0,
+      "frameTimeUtc": "2026-11-20T03:55:57.0208449Z",
+      "originalFramePixelSha256": "7f2a68f2714b5660e24f343b0259b819e2c22797bf21b5db90fbd2ce2024008b",
+      "geometryVersion": 1,
+      "files": [
+        {
+          "file": "residual-panel.png",
+          "role": "panel",
+          "sourceRect": {
+            "height": 920,
+            "rightExclusive": 1920,
+            "x": 1230,
+            "y": 0,
+            "bottomExclusive": 920,
+            "width": 690
+          },
+          "bytes": 132809,
+          "sha256": "8c5447f3a6f527aa5d3fad0664d9a4acc2243b511f22e8cf303552464b8b0754"
+        },
+        {
+          "file": "residual-funnel.png",
+          "role": "funnel",
+          "sourceRect": {
+            "height": 73,
+            "rightExclusive": 417,
+            "x": 174,
+            "y": 17,
+            "bottomExclusive": 90,
+            "width": 243
+          },
+          "bytes": 5098,
+          "sha256": "34a4e6311663059fb3377d34cdb081da1c7e261eedf5da23ad73398fedae6f59"
+        }
+      ]
+    },
+    {
+      "sample": "reset",
+      "observation": "同一面板访问，套装空，S/A/B 无蓝色填充，漏斗灰，排序稀有度。",
+      "original": "filter-reset-121152/frame-0000.png",
+      "originalPngSha256": "ab0499690094c7dd724d412b6852f118c6b37e2251253361e458d54cc63e4e51",
+      "frameIndex": 0,
+      "frameTimeUtc": "2026-11-20T04:11:53.5983542Z",
+      "originalFramePixelSha256": "a6ee9fc55a11cadcd6e44ee2c7750ab45833df70d327455e099cc6c716803064",
+      "geometryVersion": 1,
+      "files": [
+        {
+          "file": "reset-panel.png",
+          "role": "panel",
+          "sourceRect": {
+            "height": 920,
+            "rightExclusive": 1920,
+            "x": 1230,
+            "y": 0,
+            "bottomExclusive": 920,
+            "width": 690
+          },
+          "bytes": 128776,
+          "sha256": "2c44538b691b059a7f7fa78a9d7cd60cc36d193cb32bf397e43b1d77a358dc3a"
+        },
+        {
+          "file": "reset-funnel.png",
+          "role": "funnel",
+          "sourceRect": {
+            "height": 73,
+            "rightExclusive": 417,
+            "x": 174,
+            "y": 17,
+            "bottomExclusive": 90,
+            "width": 243
+          },
+          "bytes": 4568,
+          "sha256": "078f9833fab0ff081f829f2cd8407107807af29a98856c05603ac9c80f157a25"
+        }
+      ]
+    },
+    {
+      "sample": "s-only",
+      "observation": "同一面板访问，套装空，S 蓝，A/B 和可见状态无蓝色填充，漏斗蓝，排序稀有度。",
+      "original": "filter-s-121854/frame-0000.png",
+      "originalPngSha256": "798e5af5122774ef914d48f7a90502690406b697371ec5cdfc66794dcb7b8f8d",
+      "frameIndex": 0,
+      "frameTimeUtc": "2026-11-20T04:18:54.9867483Z",
+      "originalFramePixelSha256": "caecb2dcebb8407da14e7a624e4a1b9e15c985adec405863eef05d608d1bf58b",
+      "geometryVersion": 1,
+      "files": [
+        {
+          "file": "s-only-panel.png",
+          "role": "panel",
+          "sourceRect": {
+            "height": 920,
+            "rightExclusive": 1920,
+            "x": 1230,
+            "y": 0,
+            "bottomExclusive": 920,
+            "width": 690
+          },
+          "bytes": 128835,
+          "sha256": "ad813714a4c0bf9c45eb305852c323e212572a4f60a92779861c5858f4a8ebea"
+        },
+        {
+          "file": "s-only-funnel.png",
+          "role": "funnel",
+          "sourceRect": {
+            "height": 73,
+            "rightExclusive": 417,
+            "x": 174,
+            "y": 17,
+            "bottomExclusive": 90,
+            "width": 243
+          },
+          "bytes": 5103,
+          "sha256": "6deacdd08b557b79b71de390ea3c7ca038dd862824673d768674db0a0db41e24"
+        }
+      ]
+    }
+  ]
+}

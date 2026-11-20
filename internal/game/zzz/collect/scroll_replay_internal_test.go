@@ -198,7 +198,7 @@ func newReplayScrollRun(t *testing.T, seq *replayedWaitSequence, m Matcher, dir 
 		geo:      1,
 		position: seq.manifest.Position,
 		viewport: seq.manifest.Viewport,
-		visited:  make([]bool, len(layout.Slots)),
+		ledger:   newSlotLedger(layout.Columns, m.Match(seq.frames[0]).List.Occupied, seq.frames[0].ID),
 	}
 	return run, session
 }

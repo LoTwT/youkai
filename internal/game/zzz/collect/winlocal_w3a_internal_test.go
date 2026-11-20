@@ -246,11 +246,8 @@ func parseW3AThumb(text string) (start, end int, ok bool) {
 	return start, end, true
 }
 
-// TestWindowsLocalW3ASortVerifiesCoverage exercises the coverage conclusion
-// with the Windows template present: one matching panel makes the observed
-// sort verified, and six complete positions then make coverage complete. This
-// is the logic change W3a enables; it is still not field acceptance.
-func TestWindowsLocalW3ASortVerifiesCoverage(t *testing.T) {
+// The Windows template verifies the label without proving the filter range.
+func TestWindowsLocalW3ASortVerifiesLabel(t *testing.T) {
 	m, layout := w3aWindowsMatcher(t)
 	match := m.Match(panelFrame(t, layout, layout.SortTemplate))
 	if match.Page != PageFilterPanel || match.Panel == nil || !match.Panel.SortVerified {
@@ -258,13 +255,9 @@ func TestWindowsLocalW3ASortVerifiesCoverage(t *testing.T) {
 	}
 	inv := &Inventory{}
 	inv.scope = scopePayload{Sort: scopeSortUnverified, Coverage: scopeCoverageUnknown}
-	inv.observeSort(match.Panel)
+	inv.observeSort(observedSortLabel(match))
 	if got := scopeOf(t, inv); got.Sort != scopeSortVerified || got.SortLabel != sortLabelRarity {
 		t.Fatalf("after the Windows panel match scope = %+v, want verified %q", got, sortLabelRarity)
-	}
-	completePositions(inv)
-	if got := scopeOf(t, inv); got.Coverage != scopeCoverageComplete {
-		t.Fatalf("after six complete positions and a verified Windows sort, coverage = %q", got.Coverage)
 	}
 }
 
@@ -276,6 +269,9 @@ func TestWindowsLocalW3AScaledTierDropsSortTemplate(t *testing.T) {
 	if ref.SortLabel.Empty() || ref.SortTemplate == nil {
 		t.Fatal("ReferenceLayout does not declare the W3a Windows sort template")
 	}
+	if ref.panelRange == nil {
+		t.Fatal("ReferenceLayout does not declare native Windows panel range probes")
+	}
 	tr, err := ClientRectTransform(image.Pt(2560, 1440))
 	if err != nil {
 		t.Fatal(err)
@@ -286,6 +282,9 @@ func TestWindowsLocalW3AScaledTierDropsSortTemplate(t *testing.T) {
 	}
 	if !got.SortLabel.Empty() || got.SortTemplate != nil {
 		t.Fatalf("scaled tier kept sort fields: label=%v template=%v", got.SortLabel, got.SortTemplate)
+	}
+	if got.panelRange != nil {
+		t.Fatal("scaled tier kept native Windows panel range probes")
 	}
 }
 

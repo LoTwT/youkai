@@ -101,6 +101,7 @@ type scriptedGame struct {
 	// resetClosesPanelAt closes the panel when reset is clicked at that
 	// wheel position, modelling a panel that unexpectedly disappears.
 	resetClosesPanelAt int
+	resetDoesNothingAt int
 	// sClosesPanelAt closes the panel when S is clicked at that wheel
 	// position.
 	sClosesPanelAt int
@@ -546,6 +547,9 @@ func (g *scriptedGame) dispatch(op platform.InputOp) platform.InputResult {
 		if g.page == pagePanel {
 			switch {
 			case op.At.Eq(g.layout.PanelReset):
+				if g.wheel == g.resetDoesNothingAt {
+					return posted(now)
+				}
 				if g.wheel == g.resetClosesPanelAt {
 					g.pending = append(g.pending, pendingEffect{dueAt: lag, apply: func(g *scriptedGame) {
 						g.page = pageWarehouse
@@ -890,6 +894,9 @@ func (c *frameClock) Advance(step time.Duration) { c.now = c.now.Add(step) }
 func newTraversalHarness(t *testing.T, game *scriptedGame) *traversalHarness {
 	t.Helper()
 	l := collect.MacCloudLayout()
+	// Scripted pixels carry no sort label. Focused sort tests inject a
+	// positive verdict or opt into the calibrated-label requirement.
+	l.SortLabel, l.SortTemplate = image.Rectangle{}, nil
 	calibration := collect.MacCloudCalibration()
 	if testRace {
 		// The race detector instruments the matcher's per-pixel loops; a
@@ -1034,12 +1041,32 @@ type observedPosition struct {
 	Stage      string `json:"stage"`
 	ReasonCode string `json:"reasonCode"`
 	Reason     string `json:"reason"`
+	Range      struct {
+		Verified                 bool `json:"verified"`
+		Opened, Reset, SelectedS struct {
+			FrameID        uint64                      `json:"frameId"`
+			Controls       *collect.PanelRangeEvidence `json:"controls"`
+			EffectVerified bool                        `json:"effectVerified"`
+		}
+		ClosedFrameID uint64              `json:"closedFrameId"`
+		ClosedFunnel  collect.FilterState `json:"closedFunnel"`
+	} `json:"range"`
+	Ledger *struct {
+		RowBase int `json:"rowBase"`
+		Slots   []struct {
+			AbsoluteRow int      `json:"absoluteRow"`
+			Column      int      `json:"column"`
+			State       string   `json:"state"`
+			Sequence    scan.Seq `json:"sequence"`
+		} `json:"slots"`
+	} `json:"slotLedger"`
 }
 
 type observedScopeDoc struct {
-	Sort      string             `json:"sort"`
-	Coverage  string             `json:"coverage"`
-	Positions []observedPosition `json:"positions"`
+	Sort            string             `json:"sort"`
+	Coverage        string             `json:"coverage"`
+	Positions       []observedPosition `json:"positions"`
+	CountReconciled *bool              `json:"countReconciled"`
 }
 
 func (h *traversalHarness) scope() observedScopeDoc {
@@ -1101,11 +1128,8 @@ func (h *traversalHarness) requireFatallyStoppedPosition(pos int) observedPositi
 	return entry
 }
 
-// sortVerifiedMatcher marks every filter-panel verdict's sort label
-// verified. The scripted fake does not render the calibrated label, so the
-// real matcher leaves the session's sort unverified; this wrapper lets the
-// all-positions-complete case reach coverage=complete end to end without
-// weakening any navigation evidence.
+// sortVerifiedMatcher marks the sort label verified in the scripted
+// panel without adding a range proof.
 type sortVerifiedMatcher struct {
 	collect.Matcher
 }
@@ -1257,8 +1281,8 @@ func TestSinglePageCompletesOneViewport(t *testing.T) {
 		if o.Context[2].Role != collect.LineDetailAvatar || o.Context[3].Role != collect.LineListAvatar {
 			t.Fatalf("observation %d context lacks the avatar crops: %+v", i+1, o.Context)
 		}
-		if o.RarityFilter != "S" {
-			t.Fatalf("observation %d rarityFilter %q, want S", i+1, o.RarityFilter)
+		if o.RarityFilter != "" {
+			t.Fatalf("observation %d claims rarityFilter %q without a proved panel range", i+1, o.RarityFilter)
 		}
 		if o.Association != collect.AssociationTransition {
 			t.Fatalf("observation %d association %s, want transition", i+1, o.Association)
@@ -1957,6 +1981,15 @@ func TestSinglePageNotSSkipsWithoutAdmission(t *testing.T) {
 	if clicks := countSlotClicks(game.opsSnapshot(), game.layout); clicks != 3 {
 		t.Fatalf("%d slot clicks, want 3", clicks)
 	}
+	entry := h.scope().Positions[0]
+	if entry.Visits != 3 || entry.Ledger == nil || len(entry.Ledger.Slots) != 3 {
+		t.Fatalf("non-S ledger = %+v", entry)
+	}
+	for _, cell := range entry.Ledger.Slots {
+		if cell.State != "notS" || cell.Sequence != 0 {
+			t.Fatalf("non-S ledger slot = %+v", cell)
+		}
+	}
 }
 
 // T19: precheck refusals start with the right code and dispatch nothing.
@@ -2329,7 +2362,7 @@ func TestTraverseWalksSixPositions(t *testing.T) {
 		t.Fatalf("an empty position admitted observations: %v", viewports[3])
 	}
 	for _, o := range obs {
-		if o.Position == 2 && o.Viewport == 1 && o.Row < 1 {
+		if o.Position == 2 && o.Viewport == 1 && o.Row < 4 {
 			t.Fatalf("position 2 viewport 1 admitted an overlap row: %+v", o)
 		}
 	}
@@ -2349,6 +2382,15 @@ func TestTraverseWalksSixPositions(t *testing.T) {
 	}
 	for pos := 1; pos <= 6; pos++ {
 		h.requireCompletePosition(pos)
+	}
+	ledger := h.scope().Positions[1].Ledger
+	if ledger == nil || ledger.RowBase != 1 || len(ledger.Slots) != 24 {
+		t.Fatalf("position 2 ledger = %+v, want one proven row of movement and 24 identities", ledger)
+	}
+	for i, cell := range ledger.Slots {
+		if cell.AbsoluteRow != i/4 || cell.Column != i%4 || cell.State != "admitted" || cell.Sequence != scan.Seq(4+i) {
+			t.Fatalf("position 2 ledger slot %d = %+v", i, cell)
+		}
 	}
 }
 
@@ -2403,7 +2445,8 @@ func TestTraverseScopedPositionsOnlyWalkTheSelection(t *testing.T) {
 func TestTraverseExplicitFullSelectionStaysPartial(t *testing.T) {
 	game := newScriptedGame(make([]bool, 20)...)
 	h := newTraversalHarness(t, game)
-	h.inv.Matcher = sortVerifiedMatcher{Matcher: h.inv.Matcher}
+	h.inv.RequirePanelRangeProof = true
+	h.inv.Matcher = rangeMatcher{Matcher: h.inv.Matcher, game: game}
 	if err := h.inv.SetScanPositions([]int{1, 2, 3, 4, 5, 6}); err != nil {
 		t.Fatalf("SetScanPositions: %v", err)
 	}
@@ -2415,7 +2458,7 @@ func TestTraverseExplicitFullSelectionStaysPartial(t *testing.T) {
 			scope.Sort, scope.Coverage, len(scope.Positions))
 	}
 	for i, entry := range scope.Positions {
-		if entry.Position != i+1 || !entry.Complete {
+		if entry.Position != i+1 || !entry.Complete || !entry.Range.Verified {
 			t.Fatalf("position %d ledger = %+v, want complete", i+1, entry)
 		}
 	}
@@ -3053,17 +3096,16 @@ func TestTraverseSessionFatalDuringPreparationStops(t *testing.T) {
 	}
 }
 
-// T37d: six complete positions with a verified sort still conclude
-// coverage=complete end to end.
-func TestTraverseAllPositionsCompleteCoverage(t *testing.T) {
+// T37d: an identified sort alone leaves the range of a legacy walk unproven.
+func TestTraverseLegacySortAloneLeavesCoveragePartial(t *testing.T) {
 	game := newScriptedGame(make([]bool, 20)...)
 	h := newTraversalHarness(t, game)
 	h.inv.Matcher = sortVerifiedMatcher{Matcher: h.inv.Matcher}
 	h.start()
 	h.endCompleted()
 	scope := h.scope()
-	if scope.Sort != "verified" || scope.Coverage != "complete" {
-		t.Fatalf("scope = sort %q coverage %q, want verified/complete", scope.Sort, scope.Coverage)
+	if scope.Sort != "verified" || scope.Coverage != "partial" {
+		t.Fatalf("scope = sort %q coverage %q, want verified/partial", scope.Sort, scope.Coverage)
 	}
 	for pos := 1; pos <= 6; pos++ {
 		h.requireCompletePosition(pos)
@@ -3139,5 +3181,10 @@ func TestTraverseProjectErrorStops(t *testing.T) {
 	}
 	if clicks := countSlotClicks(game.opsSnapshot(), game.layout); clicks != 1 {
 		t.Fatalf("%d slot clicks, want the one refused admission", clicks)
+	}
+	entry := h.scope().Positions[0]
+	if entry.Visits != 0 || entry.Ledger == nil || len(entry.Ledger.Slots) != 1 ||
+		entry.Ledger.Slots[0].State != "unresolved" || entry.Ledger.Slots[0].Sequence != 0 {
+		t.Fatalf("failed projection ledger = %+v", entry)
 	}
 }

@@ -64,7 +64,7 @@ func (m *PixelMatcher) Match(f platform.Frame) PageMatch {
 		}
 	}
 	if open == len(m.L.PanelOpen) {
-		panel := &PanelEvidence{}
+		panel := &PanelEvidence{Range: m.panelRangeEvidence(f.Image)}
 		if m.sortLabelMatches(f.Image) {
 			panel.SortLabel = sortLabelRarity
 			panel.SortVerified = true

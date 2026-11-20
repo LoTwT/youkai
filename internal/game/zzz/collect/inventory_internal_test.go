@@ -494,8 +494,8 @@ func TestAwaitScrollCommitsLatestSettledCandidate(t *testing.T) {
 		t.Fatalf("committed frame %d rows %d matches %d, want frame 3 with the five-row total",
 			out.after.ID, out.match.Rows, len(out.match.Matches))
 	}
-	run.visited = make([]bool, len(l.Slots))
 	run.listMatch = m.Match(before)
+	run.ledger = newSlotLedger(l.Columns, run.listMatch.List.Occupied, before.ID)
 	if err := run.applyTransition(before, out.after, m.Match(before), out.afterMatch, out.match); err != nil {
 		t.Fatalf("the settled five-row candidate must commit in the six-row grid: %v", err)
 	}
@@ -869,7 +869,6 @@ func TestAwaitScrollWithoutSettlingIsLost(t *testing.T) {
 		{4, 4}: {Stationary: true},
 	}}
 	run := newScrollRun(l, view, m, 40*time.Millisecond)
-	run.visited = make([]bool, len(l.Slots))
 	out, err := run.awaitScroll(context.Background(), before)
 	if err != nil {
 		t.Fatalf("awaitScroll: %v", err)
@@ -1042,6 +1041,7 @@ func newScriptedScrollRun(l Layout, view SessionView, m Matcher, dir string, ret
 		geo:      1,
 		position: 1,
 		viewport: 3,
+		ledger:   newSlotLedger(l.Columns, gridOccupancy(l, true), 1),
 	}
 }
 
@@ -1197,7 +1197,6 @@ func TestScrollSuccessWritesTimingDiagnostics(t *testing.T) {
 	}}
 	dir := t.TempDir()
 	run := newScriptedScrollRun(l, view, m, dir, 0, time.Second)
-	run.visited = make([]bool, len(l.Slots))
 
 	if err := runScriptedScroll(t, run); err != nil {
 		t.Fatalf("the settled scroll must succeed: %v", err)
@@ -1448,7 +1447,6 @@ func TestScrollStationaryAfterUndecidedDoesNotDragAgain(t *testing.T) {
 		{1, 3}: {Stationary: true, Evidence: "scripted stationary"},
 	}}
 	run := newScriptedScrollRun(l, view, m, "", 2, 40*time.Millisecond)
-	run.visited = make([]bool, len(l.Slots))
 
 	err := runScriptedScroll(t, run)
 	var fault *scan.FaultError
@@ -1499,7 +1497,6 @@ func TestScrollUnknownOutcomeDoesNotDragAgain(t *testing.T) {
 		{1, 3}: {Undecided: true, Evidence: "scripted undecided"},
 	}}
 	run := newScriptedScrollRun(l, view, m, "", 2, 40*time.Millisecond)
-	run.visited = make([]bool, len(l.Slots))
 
 	err := runScriptedScroll(t, run)
 	var fault *scan.FaultError
@@ -1526,7 +1523,6 @@ func TestScrollUnknownOutcomeNonListStopsSession(t *testing.T) {
 		{1, 3}: {Undecided: true, Evidence: "scripted undecided"},
 	}, nonListFrames: map[uint64]bool{2: true, 3: true}}
 	run := newScriptedScrollRun(l, view, m, "", 2, 40*time.Millisecond)
-	run.visited = make([]bool, len(l.Slots))
 
 	err := runScriptedScroll(t, run)
 	var fault *scan.FaultError
@@ -1561,7 +1557,6 @@ func TestScrollRetryUnmovedUsesFreshBase(t *testing.T) {
 		{4, 6}: {Stationary: true, Evidence: "scripted settled"},
 	}}
 	run := newScriptedScrollRun(l, view, m, "", 1, 40*time.Millisecond)
-	run.visited = make([]bool, len(l.Slots))
 
 	if err := runScriptedScroll(t, run); err != nil {
 		t.Fatalf("the unmoved retry must commit the fresh-base scroll: %v", err)
@@ -1591,7 +1586,6 @@ func TestScrollFailureKeepsEveryAttemptDiagnostics(t *testing.T) {
 	}}
 	dir := t.TempDir()
 	run := newScriptedScrollRun(l, view, m, dir, 1, 40*time.Millisecond)
-	run.visited = make([]bool, len(l.Slots))
 
 	logs := &bytes.Buffer{}
 	previous := log.Writer()
@@ -1778,7 +1772,6 @@ func TestScrollRetryBaseNavigationMismatchKeepsAttemptDiagnostics(t *testing.T) 
 	}
 	dir := t.TempDir()
 	run := newScriptedScrollRun(l, view, m, dir, 1, 40*time.Millisecond)
-	run.visited = make([]bool, len(l.Slots))
 
 	err := runScriptedScroll(t, run)
 	var fault *scan.FaultError
@@ -1874,7 +1867,6 @@ func TestScrollRetryBaseOperationalErrorWritesNoDiagnostics(t *testing.T) {
 	}}
 	dir := t.TempDir()
 	run := newScriptedScrollRun(l, view, m, dir, 1, 40*time.Millisecond)
-	run.visited = make([]bool, len(l.Slots))
 
 	err := runScriptedScroll(t, run)
 	var fault *scan.FaultError
@@ -2061,16 +2053,19 @@ func (c *admitFailureController) Collect(ctx context.Context, h *scan.Controller
 	// controller error.
 	h.Fail(scan.NewFault("scriptedStop", errors.New("scripted stop")))
 	inv := &Inventory{Layout: MacCloudLayout(), Matcher: Uncalibrated{}}
-	run := &inventoryRun{inv: inv, h: h, geo: 1, visited: make([]bool, len(inv.Layout.Slots))}
+	run := &inventoryRun{inv: inv, h: h, geo: 1, position: 1}
 	out := detailOutcome{
 		class: awaitStable,
 		frame: platform.Frame{ID: 1, Geometry: 1},
 		match: PageMatch{
 			Page:   PageWarehouse,
 			List:   &ListEvidence{Occupied: make([]bool, len(inv.Layout.Slots)), Selected: 0},
+			Wheel:  &WheelEvidence{Position: 1},
 			Detail: &DetailEvidence{Quality: QualityS, Substats: 3},
 		},
 	}
+	out.match.List.Occupied[0] = true
+	run.ledger = newSlotLedger(inv.Layout.Columns, out.match.List.Occupied, out.frame.ID)
 	err := run.admit(slot, out, platform.Frame{}, PageMatch{}, 0, 0, 0, AssociationTransition, 0, nil, 1, "scripted slot", nil)
 	c.errCh <- err
 	return err
