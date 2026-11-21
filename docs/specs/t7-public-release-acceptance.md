@@ -1,29 +1,27 @@
 # T7：构建打包与交付验收
 
-更新日期：2026-11-14。状态：交付规划；打包与发布路线已实施：双平台 Package/Release workflow、测试渠道发布与两平台升级链实机验证（mac 部分保留为后续版本基础，见[实施清单 M1](scanner-implementation-plan.md#m1正式工程资源与会话底座)；Release workflow 自 [#118](https://github.com/LoTwT/youkai/pull/118) 起只构建 Windows），第 2 节的首版交付门槛尚未验收（M4）。2026-10-20 同步 JSON/CSV 导出、截图与记录清理、默认关窗决策。2026-11-03 用户决定首版只支持 Windows 本地客户端、只交付 Windows 安装包，macOS 与 Windows 云客户端及 Mac DMG 移入后续版本；范围以[架构第 6 节](scanner-architecture.md#6-首版功能范围)为准。本文维护首版交付门槛、无付费证书的打包路线和最低系统候选。
+更新日期：2026-11-21。本文维护首版交付门槛、打包路线和最低系统候选。Release 当前只构建 Windows。Package 保留两平台构建。首版已取得的实扫、安装和签名测试渠道升级证据见 [M4](scanner-implementation-plan.md#m4双平台交付验收)。
 
 ## 1. 已确认目标与现有条件
 
 - 首版只支持 Windows 本地客户端，范围见[架构第 6 节](scanner-architecture.md#6-首版功能范围)（2026-11-03 用户决定）。
 - 首版采用 MyGo 原生 UI，网页链接唤起桌面应用；浏览器内界面只答复了可行性，不在首版范围，见 [T1](t1-mygo-ui-distribution.md#浏览器唤起的新增需求与构建依据)。
 - 用户明确首版只要求正常构建、打包，不走官方渠道。功能、数据正确性、停止保存和实机测试仍按已有设计验收；商店上架、代码签名证书和 Apple 公证不作为首版前提。
-- 发布方式（2026-10-16 确认）：正式制品由 GitHub Actions 构建，随版本发布在 GitHub Releases（`LoTwT/youkai`）上，首个发布版为 `0.0.1`；首版包含 MyGo 内置自动更新，更新档案经 MyGo 更新密钥签名后随同一 Releases 发布，更新私钥由用户保管在密码管理器与 GitHub Actions secrets、不进仓库，范围与规则见[架构第 6 节](scanner-architecture.md#6-首版功能范围)，版本规则、发布 workflow（`test-v*` 测试渠道与 `v*` 正式渠道）与发布后验证见[发布与自动更新](../release.md)。Windows 上的测试使用 GitHub Actions 产出的安装包，用户不在 Windows 上安装开发工具；需要快速排查非 VC++ 问题时可由 Mac 交叉编译免安装包补充，见[实施清单](scanner-implementation-plan.md#开发与-windows-测试方式)。
+- 正式制品由 GitHub Actions 构建，安装包与签名更新档案通过 GitHub Releases 分发。渠道、密钥及发布后验证见[发布指南](../release.md)，本机候选与交付制品的验证分工见[实施清单](scanner-implementation-plan.md#开发与-windows-测试方式)。
 - 用户拥有 Windows 与 Mac，会在测试前准备设备和客户端；系统、硬件、显示配置及客户端版本在测试准备时记录到 [T2 第 3.2 节](t2-platform-capture-input.md#32-可验收的窄显示配置候选)。开发在 Mac 上进行，Windows 测试安排见[实施清单](scanner-implementation-plan.md#开发与-windows-测试方式)。
 - 2026-10-16 用户确认不指定必须兼容的旧系统版本，最低版本依据框架、OCR 运行库、平台 API 和实测结果确定；具体顺序见第 4 节。应用自身界面与使用说明仅提供简体中文，产品选择由 [T1](t1-mygo-ui-distribution.md#已确认的产品选择)维护。
 - 开发过程中可形成供用户测试的构建，正式首版仍需通过对应交付门槛；不另增加独立 UI 验证版。没有付费发布者签名不等于跳过平台必要的本地代码签名，具体路线见第 3 节。
 
 ## 2. 首版交付门槛
 
-本表提出可检验的交付条件，具体功能规则引用已有权威文档，避免另建一套判定标准。所有项目均未通过完整工程验收；M1 已为安装、打包与自动更新相关项取得部分实测证据（见[实施清单 M1 结论](scanner-implementation-plan.md#m1正式工程资源与会话底座)）。
-
-实施顺序与内部里程碑见[首版实施清单](scanner-implementation-plan.md)。早期构建已完成资源加载和打包检查（安装布局识别自检与产物强制校验，见实施清单 M1），完整安装及 Windows 本地客户端验收仍按本节判断，不能用阶段产物替代首版交付；其余客户端的验收随后续版本执行。
+下表维护交付条件。首版实测、免验决定及最终制品待验项集中记录在 [M4](scanner-implementation-plan.md#m4双平台交付验收)。早期打包和升级证据见 [M1](scanner-implementation-plan.md#m1正式工程资源与会话底座)。
 
 | 交付项 | 必须取得的证据 |
 | --- | --- |
-| 支持范围 | 实体与简体中文语言按[已确认范围](scanner-architecture.md#6-首版功能范围)验收，首版显示策略按 [T2](t2-platform-capture-input.md#32-可验收的窄显示配置候选)选定 Windows 本地客户端首组配置。列出精确的系统、架构、客户端及显示参数；最低系统从选定依赖与目标机测试共同确定。Windows 两种尺寸候选不能都默认标成支持；后续新增内置尺寸逐组补验收。macOS 与云客户端的支持范围随后续版本验收。 |
-| 安装与运行资源 | 首版在无开发工具的环境安装运行 Windows 安装包；模型、字典及原生库完整，首次启动不下载识别资源，中文/空格路径及任意工作目录可用。Mac DMG 的安装与运行资源验收随后续版本执行。按[公共安装验收](scanner-architecture.md#游戏与安装验收首版-windows-本地其余客户端为后续版本)区分断网识别与云游戏联网。 |
+| 支持范围 | 实体与简体中文语言按[已确认范围](scanner-architecture.md#6-首版功能范围)验收，首版显示策略按 [T2](t2-platform-capture-input.md#32-可验收的窄显示配置候选)选定 Windows 本地客户端首组配置。列出精确的系统、架构、客户端及显示参数；最低系统从选定依赖与目标机测试共同确定。首版开放的 1920×1080 实际客户区见架构，后续尺寸逐组验收。macOS 与云客户端的支持范围随后续版本验收。 |
+| 安装与运行资源 | 首版在无开发工具的环境安装运行 Windows 安装包；模型、字典及原生库完整，首次启动不下载识别资源，中文/空格路径及任意工作目录可用。首版安装版断网 OCR 按 [M4 决定](scanner-implementation-plan.md#windows-安装验收记录)免验。Mac DMG 的安装与运行资源验收随后续版本执行。 |
 | Windows 本地客户端实扫（首版） | 完成准备、范围检查、采集、OCR、停止/正常结束、校对及导出。按 [T5](t5-zzz-inventory-traversal.md)检查详情归属、相同物品、滚动衔接和末尾。macOS 云与 Windows 云客户端随后续版本分别实扫，任一种客户端的成功不能代替其他客户端。 |
-| 识别质量 | 按 [T3 的独立样本与分组指标](t3-ocr-runtime-model-samples.md#4-三组样本与验收)报告整件字段准确率、自动接受错误、拒识与人工校对量；管理字段遵守已确认范围。有限样本通过不意味着未来自动识别必然全对。 |
+| 识别质量 | 首版独立 OCR 样本及已扫描记录的其余人工字段复核按 [M4 决定](scanner-implementation-plan.md#首版字段验收决定)免验放行。样本评估方法见 [T3](t3-ocr-runtime-model-samples.md#4-三组样本与验收)，管理字段遵守已确认范围。 |
 | 停止与保存 | 失焦、几何变化、权限撤回、取消和保存失败有明确结果；关闭输入许可、原生任务结束和保存完成分别核对。重开保留有效结果，不自动续扫；规则见[公共会话契约](scanner-architecture.md#5-扫描会话与结果语义)。 |
 | 校对与文件 | [T6](t6-review-export-workflow.md)的截图对应、问题盘校对确认及保存失败通过；自动接受记录通过当前校验后可直接导出，人工修改后须确认当前修订。核对 [JSON/CSV v2](scan-json-format.md)的单位、`managementState`、`equipped`、重复物品、修订、纳入/排除数和覆盖结论；排序标签未验证时不得显示完整覆盖。JSON 与 CSV 来自同一修订和同一批记录，均不含截图；不提供 ZIP、archive 视图或档案导入导出。 |
 | 存储与清理 | 按[公共目录与清理契约](scanner-architecture.md#本地目录保留与清理)及 [T6 存储管理](t6-review-export-workflow.md#历史记录与存储管理)验收首版 Windows 实际路径（macOS 路径随后续版本）、开发/正式数据隔离、进程全程的数据根独占、清缓存、删除截图、删除记录、忙碌保护和失败恢复；两个真实进程验证编辑与删除竞争及崩溃释放。升级或卸载保留历史，外部 JSON/CSV 不受清理影响。 |
@@ -54,11 +52,9 @@ MyGo 当前分发文档说明 macOS 默认使用 ad-hoc 签名，Windows 的证�
 1. 固定 MyGo、Go、OCR 绑定、原生运行库、模型与字典的候选组合，记录版本、架构、摘要、加载路径及再分发声明。现有固定源码和滚动官网分开，官网更新不自动升级选型。
 2. 从组合要求和 T2 的采集/输入 API 得出最低系统候选，结合现有设备确定能验证哪些版本、还缺哪些环境。不为没有具体需求的旧版本额外维护兼容路径；首版候选通过 Windows 上的安装、原生库加载和 Windows 本地客户端扫描验收后，才写成支持范围；其余客户端随后续版本按同一标准补充。游戏官方系统下限、开发主机版本和 SDK 版本均不能单独作为产品下限。
 3. 按第 3 节固定无需付费发布者证书的构建与打包配置，将安装注册、原生资源、本地签名和权限纳入正式功能验收；设备信息在测试开始前补录。
-4. 正式功能实现获授权后，先贯通单件采集、OCR、取消、校对与保存，再完成整仓遍历；首版以 Windows 本地客户端全部达标为准，macOS 与两种云客户端随后续版本交付。
+4. 在目标系统核对最终制品和对应游戏客户端。首版及后续平台的证据要求见第 2 节。
 
-2026-11-14 新依赖组合的本地构建与识别检查见[升级记录](../reports/2026-11-14-dependency-upgrade.md)。旧安装、升级链及 `ef04560` 的 W3 结果只对原组合成立；本轮未重做 Windows 安装或真机 UI 验收。
-
-DEP-01 第3轮当前按用户“部分边界等实际遇到再处理”的取舍，仅以核心不强杀、普通最终目录仍运行则拒绝文件变更、基本检测失败不放行、PS1外层失败传播及必要构建正确性验收。完整模板绑定/统一入口保留，原生writer与额外插件编译依赖撤下。新的完整转换 TEMP 最小回归27/27通过（v0.9.0 模板基线；v0.10.0 模板规范化后相同，本轮未在 Windows 重跑）：install/uninstall/PS1运行拒绝、退出后真实File/RMDir继续，PS1外层1/0；18个精确记录PID均已退出。主控须新开独立复审，本记录不作merge或正式交付许可。启动竞争、OS排斥、别名/reparse/罕见权限、大UI/W3矩阵已获延期；真实目录页/HKCU发现、协议/快捷方式、签名安装与真实应用数据未测试。原NSIS卸载bootstrap直接0的已知限制保留，不能当worker成功；历史原语/前段失败不冒充当前实现保证。见[当前核心记录](../reports/2026-11-14-dependency-upgrade.md#r3-核心范围收敛与最小验证)。
+依赖升级的构建和模板回归分别见 [v0.9.0 记录](../reports/2026-11-14-dependency-upgrade.md#r3-核心范围收敛与最小验证)与 [v0.10.0 记录](../reports/2026-11-19-mygo-v0.10.0-upgrade.md)。后续实际安装与签名升级以 [M4](scanner-implementation-plan.md#m4双平台交付验收)为准。
 
 ### 最低系统候选与证据
 
@@ -67,11 +63,11 @@ DEP-01 第3轮当前按用户“部分边界等实际遇到再处理”的取舍
 | 平台 | 已取得的约束证据 | 建议 |
 | --- | --- | --- |
 | macOS arm64（后续版本） | Go 1.27 要求 macOS 13+；实际 ORT 1.32.0 dylib 的 `LC_BUILD_VERSION` 为 14.0，固定发布流水线也设置 14.0；T2 选用的 filter 几何属性自 14.0 提供。 | 以 **macOS 14.0** 为最低候选，不为 macOS 交付额外构建低版本 ORT 或采集兼容路径。必须在拟声明的最低系统上验证加载、权限和 Mac 云客户端扫描；较新系统上的成功不能替代此项。 |
-| Windows x64 | Go 与 MyGo 的文档覆盖 Windows 10/11，PMv2 需 Windows 10 1703+；实读 ORT DLL 还依赖 VC++ v14/UCRT。没有证据表明这些依赖强制要求 Windows 11。 | 基于用户没有旧系统兼容目标，建议首轮以 **Windows 11 25H2 x64** 为最低测试候选，26H2 为现行版本回归候选，缩小初始系统矩阵。Windows 10 暂不列入首发承诺，这属于维护范围建议，不是假称技术上无法运行。测试准备时结合实际可用系统确定最终声明。 |
+| Windows x64 | Go 与 MyGo 的文档覆盖 Windows 10/11，PMv2 需 Windows 10 1703+。实际 ORT DLL 依赖 VC++ v14/UCRT。 | 首轮最低测试候选为 Windows 11 25H2 x64。当前 LO-WINDOWS 实测为 Windows 11 Pro x64 23H2（22631.6199），带开发工具。能声明的最低版本和支持配置需由目标环境与最终制品的证据确定。 |
 
 Mac 依据：[Go 1.27](https://go.dev/doc/go1.27#ports)、[ORT 1.32.0 发布流水线](https://github.com/microsoft/onnxruntime/blob/fab30a46491a40f5e4c968b80e8a59acbbb91b53/tools/ci_build/github/azure-pipelines/templates/mac-cpu-packing-jobs.yml)、[T3 实际制品检查](t3-ocr-runtime-model-samples.md#固定组合与制品静态核查)、[T2 API 版本](t2-platform-capture-input.md#23-api-可用版本不等于产品下限)。ORT 的通用构建页面写有 macOS 13.3，但它不能覆盖这个具体发布文件的 14.0 标记；SDK 版本也不等于运行系统下限。
 
-Windows 依据：[Go 最低要求](https://go.dev/wiki/MinimumRequirements)、[MyGo 要求](https://mygo.egoist.dev/docs)、[VC++ 支持范围](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist?view=msvc-170)。截至核对日，[Microsoft 发布信息](https://learn.microsoft.com/en-us/windows/release-health/windows11-release-information)列出 25H2 和 26H2 均在维护中；本建议不以发布时间推断哪个版本更稳定。缺少相应目标环境时调整候选或补齐验证，不仅凭构建成功宣布整个 Windows 11 系列均受支持。
+Windows 依据：[Go 最低要求](https://go.dev/wiki/MinimumRequirements)、[MyGo 要求](https://mygo.egoist.dev/docs)、[VC++ 支持范围](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist?view=msvc-170)与 [Microsoft Windows 发行信息](https://learn.microsoft.com/en-us/windows/release-health/windows11-release-information)。
 
 最低候选必须贯穿应用元数据、Go/C/Objective-C 的部署目标及全部随包原生文件。Windows 要核对最终 EXE/DLL 的导入、架构和运行库；Mac 的系统标记、加载路径及签名随后续版本核对。静态文件检查能排除明显不配套，但不能证明系统 API 行为、游戏输入或云画面兼容。
 
@@ -79,9 +75,6 @@ MyGo v0.10.0 的 [config.go](https://github.com/egoist/mygo/blob/ebde9399baf2734
 
 ### 尚需完成的工程证据
 
-资料阶段已复算两个 ORT 压缩包和模型的 SHA-256，并静态核对库依赖与模型元数据。以下随正式功能完成：
+安装与识别依赖的核对方式见 [T3](t3-ocr-runtime-model-samples.md#绑定与运行库的实际交接)。最终制品、目标环境与支持范围按第 2 节及 [M4](scanner-implementation-plan.md#m4双平台交付验收)核对。
 
-1. 首版构建并打包 Windows 原生 UI、cgo 和随包资源；显式路径加载，检查中文/空格路径、任意工作目录、缺库、错架构、损坏模型及重复运行。macOS 的对应构建与验收随后续版本执行。
-2. Windows 按 [T3 的应用本地部署](t3-ocr-runtime-model-samples.md#绑定与运行库的实际交接)随包提供 VC++ v14 x64 运行库文件；版本不能仅因名称带“2019”就视为足够，须不早于构建 ORT 所用的工具版本。随包布局与摘要已随 M1 打包与实机测试核对（见[实施清单 M1](scanner-implementation-plan.md#m1正式工程资源与会话底座)）；未装 VC++ 的干净系统上实际加载随包副本的验证经用户决定不补测（2026-10-18，M1 收尾，口径见 [T3](t3-ocr-runtime-model-samples.md#绑定与运行库的实际交接)），再分发条件的最终核对随正式发布完成。[版本要求](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist?view=msvc-170)
-3. 在无开发工具的干净环境断网安装 Windows 制品，用固定图片完成识别、校对、保存与导出；首版不包含云游戏。Mac 的无付费签名路线、首次打开与授权随后续版本验收，最终资源与签名后制品摘要另记。
-4. 首版由 Windows 本地客户端通过整仓及取消闭环，按 T3/T5/T6 统计字段、导航、遗漏、重复物品、校对量和负载；macOS 云与 Windows 云客户端随后续版本分别完成同一验收。Windows 11 25H2 等拟声明下限需相应证据；Mac 14 随后续版本核对。无法验证的范围保留未验证标签。
+随包 VC++ 使用 [T3 的应用本地部署](t3-ocr-runtime-model-samples.md#绑定与运行库的实际交接)。随包布局与摘要已随 M1 核对。未装系统 VC++ 的专门实机加载检查已按 2026-10-18 用户决定免验。再分发条件随正式制品核对。

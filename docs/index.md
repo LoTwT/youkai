@@ -2,46 +2,57 @@
 
 ## 文档导航
 
-- [项目图标原稿](design/icon-2026-11-17/a-vortex-eye.png)：选定的原始 A「涡旋独眼」；应用、窗口、安装器和托盘的资源入口与再生成方式见 [T1 图标约定](specs/t1-mygo-ui-distribution.md#应用与托盘图标)。
+按任务选择入口。新增、移动或移除文档时，同步更新相对链接。
 
-- [MyGo + Go 扫描器架构](specs/scanner-architecture.md)：公共架构与首版范围的权威来源，包括模块边界、应用与会话契约、隐藏恢复退出、结果与存储、字段校验范围、验收与成本。2026-10-29 按[重新架构决策](decisions/2026-10-28-scanner-rearchitecture.md)同步：完整覆盖不再要求同范围总数、覆盖完整与结果完整分开、故障分级与会话内恢复边界、三客户端 profile；2026-10-31 同步位置准备/证明失败的位置级降级（已实现最小切片，会话致命故障仍整次停止）。2026-11-01 增加 W2a 参考画布模型（1920×1080 参考、16:9 客户区变换、阈值分类，见 §6）；2026-11-02 W2c 把 Windows 本地客户端接入 `traverse`（布局按预检实测档位生成、仅开放 1920×1080、时序暂用 mac 未标定值，见 §6 的 Windows 本地客户端遍历状态）；同日 W3b 落入 W3a 离线样本（长列表滑块两端、Windows 原生排序模板、面板探针与悬停）；同日晚间完成 1920×1080 首次全量真机扫描（时序未标定，见[报告](reports/2026-11-02-windows-local-field-acceptance.md)），但 T5 §6 的三次人工基准验收仍待完成。2026-11-03 在 §5 记录 Windows 托盘可用性：确认 MyGo v0.6.2 的异步注册会丢失失败结果，已补日志与空托盘防御；[真机只读诊断](reports/2026-11-03-windows-tray-diagnosis.md)确认图标实际已注册，此前的“找不到”实为左键无响应（#115），修复后左键/双击均可恢复主窗口。同日按用户决定把首版范围收窄为 Windows 本地客户端，Windows 云与 macOS 云客户端及 Mac DMG 移入后续版本（见 §6）。
-- [扫描器首版实施清单](specs/scanner-implementation-plan.md)：四个内部里程碑、代码落点、Mac 开发与 Windows 测试方式、需尽早取得的证据和验证命令；M1 已完成收尾（结论见清单第 3 节），M2 的 macOS 侧已完成——两平台底座、平台会话集成（4a）、遍历骨架（4c）、macOS 云客户端像素匹配器/单页遍历（4b-1）与准备循环/真实遍历接入（4b-2）已实现，macOS 云客户端实测轮 ① 与样本采集轮已完成（坐标标定修正、9 个主属性名核实、27 件调参样本入库、筛选/滚动/时延标定写回 T5）；Windows 本地客户端已完成 1920×1080 首次全量真机扫描（2026-11-02，时序未标定，见[报告](reports/2026-11-02-windows-local-field-acceptance.md)）；Windows 实测轮 ②（云客户端等）推迟，完成前不宣称 Windows M3 通过；M3 代码实施已合并到 `main`（`b4fa6b2`），Windows 实测轮 ② 仍待执行；macOS 正式六位置与 macOS 原生体验随后续版本执行。2026-11-03 用户决定首版只支持 Windows 本地客户端、只交付 Windows 安装包，范围见架构 §6。
-- [T1：MyGo 界面与构建分发](specs/t1-mygo-ui-distribution.md)：已确认的产品选择、MyGo v0.10.0 当前选型与历史升级记录、资源与安装、浏览器唤起依据和界面验收。
-- [T2：平台采集与输入](specs/t2-platform-capture-input.md)：首版只支持 Windows 本地客户端（2026-11-03）；原三种客户端范围与 Windows GDI/SendInput、macOS ScreenCaptureKit/Quartz 方案保留为后续版本基础，另含坐标单位、显示配置候选、帧时序与平台故障；2026-11-02 Windows 本地客户端完成 1920×1080 首次全量真机扫描（时序未标定，见[报告](reports/2026-11-02-windows-local-field-acceptance.md)）。
-- [T3：OCR 运行库、模型与样本](specs/t3-ocr-runtime-model-samples.md)：固定的绑定、运行库与模型组合及制品核查、预处理与解码基准；首版以 Windows 本地客户端一组样本与识别质量门槛判定，另两组随后续版本。
-- T4：扫描会话与结果契约：直接在[架构第 5 节](specs/scanner-architecture.md#5-扫描会话与结果语义)维护。
-- [T5：绝区零仓库遍历与详情归属](specs/t5-zzz-inventory-traversal.md)：页面预检、选中与详情归属、滚动衔接、末尾判断和完整性验收；macOS 云客户端的布局、阈值、单页流程（4b-1）与位置×列表两层遍历（4b-2）已标定并实现，面板排序标签模板验证与六位置覆盖账目已接入 observedScope；2026-10-20 现场干净运行完成 1,005 件、六位置 `complete` 且排序验证为“稀有度”。2026-10-29 按决策同步 F1–F7/F4b 证据、筛选范围证明、选中框为主的滚动证据与停稳模型、位置准备/位置证明失败的位置级降级、单件未采集重访；正文区分“目标设计（待阶段 N 实现）”与“当前实现”。阶段 1（滚动动作状态机）与阶段 2（选中框位移为主的新滚动判定、多帧停稳与时序 profile、成功滚动帧时间诊断）已实现，旧判定保留为 `legacy` 回退；2026-10-31 阶段 2 验收修补（滑块佐证、显式并列容差 ε=0.005、滑块行程可区分性）与每次成功滚动写 manifest 已同步；阶段 2 已通过 2026-11-01 独立完整扫描验收（见[报告](reports/2026-11-01-macos-stage2-field-acceptance.md)）。2026-10-31 提前实现阶段 5 的最小切片：位置准备/证明失败标为不完整、记录原因并继续后续位置（每个位置重新准备，只有降级位置遗留的面板才先关闭），累计 3 个不完整位置停止整次扫描；降级边界与会话致命项见 T5 §5 分类表；已接纳物品保留并只令 `coverage=partial`，JSON v2 不变；位置重建与物品重访仍归阶段 5。2026-11-02 Windows 本地客户端完成一次 1920×1080 全量真机扫描（见[报告](reports/2026-11-02-windows-local-field-acceptance.md)）；T5 §6 的三次人工基准验收仍未完成。阶段 3 的连续格位账目、严格范围路径及排序停止门禁已接入，Windows 控件校准与真机范围验证待补，见 T5 §3/§5。
-- [按位置重试与续扫（历史草案，部分被取代）](specs/position-retry-design.md)：位置级故障的一次自动重试与会话内续走草案；A2 的逐行继承方案已被决策 K1 改写，Q1–Q13 的逐条处置见[决策 §9.3](decisions/2026-10-28-scanner-rearchitecture.md#93-position-retry-designmd92-历史草案已逐条处置)，当前恢复边界以架构与 T5 为准。
-- [扫描器重新架构决策（已定稿）](decisions/2026-10-28-scanner-rearchitecture.md)：2026-10-28 真机失败后的重新架构方向，2026-10-29 定稿——保留技术栈与串行控制骨架，按阶段替换遍历证据模型；记录 K1–K5、F1–F7/F4b 真机核实、位置准备失败的位置级降级、范围未证明位置的已接纳物品保留、三客户端 profile、阶段路线与规格同步结果，F8 Windows 云客户端另行安排；2026-10-31 记录阶段 2 验收修补与并列容差/滑块可区分性（细则引用 T5 §5），并标注阶段 5 位置级降级的提前实现状态；2026-11-01 阶段 2 独立完整扫描验收通过（见[报告](reports/2026-11-01-macos-stage2-field-acceptance.md)）；2026-11-02 记录 Windows 本地客户端决定——16:9 前提、窗口超出屏幕拒绝、程序清单不提权而按完整性级别拒绝并提示（D-1）、首批开放范围只到 1920×1080（D-2），F8 本地客户端第 1–3 段探针完成（见[报告](reports/2026-11-01-windows-local-probe.md)），同日晚间完成 1920×1080 首次全量真机扫描（时序未标定，见[报告](reports/2026-11-02-windows-local-field-acceptance.md)）；2026-11-03 记录首版范围决定——只支持 Windows 本地客户端，其余客户端与 Mac DMG 移入后续版本（见决策末节）。
-- [T6：用户操作、结果校对与导出](specs/t6-review-export-workflow.md)：准备到导出的操作流程、逐件校对、JSON/CSV 两种导出、历史与截图/记录清理。
-- [扫描结果 JSON/CSV v2](specs/scan-json-format.md)：当前公共导出契约、CSV 完整列序与来源/空值语义，附同源 [JSON](examples/scan-usable-v2.json) / [CSV](examples/scan-usable-v2.csv) 合成示例；重访不产生新序号，位置范围未证明位置的已接纳物品仍可用且不计入 `excludedCount`，计数保持 `capturedCount = items.length + excludedCount`。
-- [T7：构建打包与交付验收](specs/t7-public-release-acceptance.md)：首版 Windows 本地客户端交付门槛、无付费证书的打包路线、最低系统候选；macOS 与 Mac DMG 为后续版本。
-- [UI/UX 重设计 2026-11（第一阶段草案）](design/uiux-2026-11/README.md)：从头重设计的第一阶段——按规格整理的功能清单、关键约束、Windows 本地用户的旅程（mac 云客户端旅程保留为后续版本参考）、状态矩阵，以及待用户决定的功能提案和给第二阶段（布局与导航）的输入；不含布局与线框图，功能以现有规格为准。
-- [UI/UX 重设计 2026-11（第二阶段）](design/uiux-2026-11/07-information-architecture.md)：信息架构与低保真布局——对象模型与导航、每屏规格、窗口边界与交互规则、对服务层的需求、待用户决定的问题和灰阶线框图（07–11、`wireframes/`）；首版只做 Windows 本地客户端；检查点 2 的问题已全部决定（2026-11-03/04），T6、T1 的展示条款已于 2026-11-05 同步；第三阶段实施计划见[12](design/uiux-2026-11/12-implementation-plan.md)。
-- [UI/UX 重设计 2026-11（第三阶段实施计划）](design/uiux-2026-11/12-implementation-plan.md)：2026-11-05 用户批准的实施拆分——21 个 PR 的批次、依赖与关键路径，每个 PR 必须同步的规格，Windows 真机验证安排与主要风险；本阶段先由 PR-01 同步第一阶段原文与 T6 / T1 / 架构的展示条款。
-- [历史 UI 设计基线（已过时）](design/uiux-2026-10-21/README.md)：2026-10-21 的设计稿与评审记录，仅作历史参考；当前界面、token 与布局以 `internal/ui` 和测试为准。
-- [扫描器背景与参考实现](scanner-handoff.md)：项目起因、参考扫描器研究结论和与 fairy 的边界。
-- [开发指南](development.md)：环境要求与当前实际可用的构建、测试、MyGo 开发命令。
-- [发布与自动更新](release.md)：版本号规则、测试与正式两条发布渠道、发布 workflow 步骤、更新密钥管理与发布后验证（含升级实测清单）。
-- [M1 Windows 实机测试报告](reports/2026-10-17-m1-windows-test.md)：首份实测报告——Package workflow 安装包在 Windows 11 实机的下载核对、安装、识别自检、启动、第二实例、数据目录与卸载结果，含未覆盖项与观察项。
-- [M1 macOS 实机测试报告](reports/2026-10-17-m1-macos-test.md)：DMG 安装版在 macOS（Apple Silicon）实机的下载核对、安装、Gatekeeper 首次打开与放行、识别自检、启动、第二实例、数据目录与移除结果，含未覆盖项与观察项。
-- [M1 自动更新升级实测报告](reports/2026-10-18-m1-auto-update-test.md)：Release 测试渠道的升级链实测——两平台 test-v0.0.1 至 test-v0.0.4 逐轮升级（检测、下载进度、自动重启、版本一致与数据保留），含 Windows 构建提交号带 `-modified` 与下载完成日志重复两项观察的根因、修复与本地演练，未覆盖项与不能推出的结论。
-- [M2 macOS 实测轮 ① 报告](reports/2026-10-18-m2-macos-field-round1.md)：macOS 平台底座在真实《云·绝区零》云客户端上的采集与输入实测——窗口身份（位置漂移、每会话重解析）、~56fps 单窗口流与完整停止释放、几何附件自洽与 macOS 26 rect 形态修复、displayTime 时钟（含分析错误更正）、绝对位移/点击/拖拽/全局热键验证；合成滚轮被客户端忽略（遍历走拖拽）；如实记录第一轮输入失败的两个驱动侧根因（CGEventPost 退出竞争、缺 LockOSThread）与修复，含结论表、未覆盖项与遗留项。
-- [M2 样本采集轮报告（macOS 云客户端）](reports/2026-10-19-m2-macos-sample-round.md)：131 件不重复驱动盘样本采集（120 件视口 + 10 件名称 + 1 件补采，五类管理状态覆盖）——坐标标定修正（屏幕点 = 原点 + 帧像素 × 0.7055；主控首采"像素/2"错误与旧证据审计 60 张实为 12 件有效，如实记录）、9 个 5/6 号位主属性名实盘核实（以太为"以太伤害加成"、无"属性"二字，资料表已修正）、等级 0 盘 3/4 条副词条两种形态、筛选行为（默认视图≠无筛选、漏斗判据、重置不恢复排序、当前装备置顶）、滚动步进与顶底判据、点击→详情时延；27 件精选样本入库识别测试数据并经真实模型全量复核。
-- [M3 规模测试与正式验收清单](reports/2026-10-20-m3-acceptance-checklist.md)：1,000/10,000 条合成数据下的结果浏览、待校对导航、连续校对、图片缓存与 JSON/CSV 导出自动化结果；明确 macOS 六位置单次筛选准备、顶部稳定确认、Lost、相邻同详情、管理/装备、覆盖，以及 Windows 实测轮 ②、托盘/深链接/输入法/文件对话框仍待用户现场执行，未执行不视为通过。该报告早于 2026-10-23 UI 外壳改版，当前界面以 T6 与 `internal/ui` 为准。
-- [macOS 真机验收（2026-10-26）](reports/2026-10-26-macos-field-acceptance.md)：`fix/collect-field-acceptance`（`6233725`）在 macOS 27.0.1 + 云·绝区零上的全量 1,007 件六位置扫描、JSON/CSV 导出、冷启动历史重开、全局热键中途停止与正常退出收尾；记录云断连 `-1022`、一次未复现的进程消失和一次重试后通过的 `navigationMismatch`。报告中的 0 件失败会话展示问题已在验收后修复并在 dev 构建验证；`establishList` 放宽为首次等待超时后重试一次，单测覆盖静默/停顿码流，dev8 三次短扫描未再出现 `navigationMismatch`，但重试分支本身尚未在真机触发。Windows 未测。
-- [macOS 阶段 2 真机验收（2026-11-01）](reports/2026-11-01-macos-stage2-field-acceptance.md)：`9a151dd` 的 dev 构建在 macOS 27.0.1 + 云·绝区零上的阶段 2 独立全量扫描——六位置完成、覆盖完整、排序验证，全部滚动由阶段 2 判定确认且无未决/丢失/重试；报告记录首次窗口几何失败、逐位置账目、滑块佐证、时序、诊断与未覆盖项。Windows 未测，导出与截图未执行。
-- [Windows 本地客户端探针（2026-11-01）](reports/2026-11-01-windows-local-probe.md)：Windows 11 + 4K/125% 缩放下本地客户端的三段探针——GDI 客户区截图（#103 修复 DPI/DC 缺陷，无黑屏且尺寸等于客户区）、六档 16:9 几何与 Lanczos 布局比对（3840×2160 超出屏幕）、UIPI/提权输入（普通权限被静默丢弃，提权后单次点击生效）；记录探针误判、证据位置和未覆盖项，Windows 云客户端、连续操作与字段验收未测。
-- [Windows 本地客户端 W3a 样本轮（2026-11-02）](reports/2026-11-02-windows-local-sample-round.md)：1920×1080 本地客户端的只读样本——约 1.4 屏长列表验证滑块两端与轨道亮度、Windows 原生“稀有度”模板（mac 模板缩放后 MAD 9.37–10.16，不可复用）、面板打开/关闭探针、悬停不渲染高亮；记录面板 S 按钮在套装筛选下的位置偏移、证据 SHA-256 与未覆盖的时序/OCR/全量扫描。
-- [Windows 本地客户端 1920×1080 全量真机扫描（2026-11-02）](reports/2026-11-02-windows-local-field-acceptance.md)：`890e573` 的 dev 构建在 Windows 本地完整客户端上的一次全量扫描报告——三次运行与 #110/#111 修复、位置账目、逐件对比、未解决问题与复算方法；结论与限制见报告正文。
-- [Windows 托盘图标缺失只读诊断（2026-11-03）](reports/2026-11-03-windows-tray-diagnosis.md)：已执行的 Windows 真机只读诊断与复验——确认图标实际已注册（`Shell_NotifyIconGetRect` hr=0、坐标为日志坐标的 1.25 倍、注册表有对应项），11-02 的“找不到”实为左键无响应（#115 修复），关闭主窗口后 `MyGoWindow` 仍是同一 HWND；进程自行消失原因未查明，正式安装版的托盘行为未测，状态以[架构第 5 节](specs/scanner-architecture.md#隐藏恢复与退出)为准。
-- [Windows UI/UX 第三阶段验收（2026-11-14）](reports/2026-11-14-windows-uiux-acceptance.md)：W-3 整链 Windows 真机验收在固定构建 `ef04560` 上的汇总——复用三次各 1003 件的正式扫描，记录手动停止与保存、热键占用、窗口越界恢复、文本 100% / 125% / 150% 准备页、空闲隐藏/恢复/退出及通知留存；用户决定结束实测并全部保留数据，通知点击与两段显示、固定托盘图标、扫描中退出、退出失败路径与 W6 清理等未覆盖，T-01 部分通过、T-04 在溢出区不通过、T-06/T-08 通过（复用 PR-17 旧证据；T-08 仅正常准备页，双行未覆盖）；明确未达成全项验收与 M4。
+### 开发、发布与验收
 
-- [2026-11-14 依赖升级](reports/2026-11-14-dependency-upgrade.md)：固定版本、兼容修正及验收缺口；第3轮按用户收窄范围完成核心安装适配，Windows 最小回归27/27通过，待主控独立复审，延期边界明确记录。
-- [2026-11-19 MyGo v0.10.0 升级](reports/2026-11-19-mygo-v0.10.0-upgrade.md)：v0.9.0→v0.10.0 的上游核对、依赖与适配器变更、生成模板与冻结 fixture 的逐段对比、本机测试/race/真实 OCR/Windows 交叉打包结果及未验证边界。
-- [2026-11-19 Windows 安装保护与单号位补扫验收](reports/2026-11-19-windows-install-and-rescan-acceptance.md)记录固定安装器、覆盖及卸载保护、5 号位实际采集和新旧记录核对结果。
+- 配置环境、运行应用、复现诊断或执行测试时，查阅[开发指南](development.md)。
+- 修改模块边界、会话、存储或支持范围时，查阅[扫描器架构](specs/scanner-architecture.md)。
+- 查阅里程碑、实施顺序和验证记录时，使用[首版实施清单](specs/scanner-implementation-plan.md)。
+- 核对 Windows 三轮实扫、安装、签名升级、免验决定或首发后检查时，查阅 [M4 验收记录](specs/scanner-implementation-plan.md#m4双平台交付验收)。
+- 准备标签、签名制品或验证更新渠道时，查阅[发布与自动更新](release.md)。
+- 确定 Windows 安装包、支持系统和交付门槛时，查阅 [T7 构建打包与交付验收](specs/t7-public-release-acceptance.md)。
+- 查阅项目起因、参考扫描器和与 fairy 的边界时，使用[项目背景](scanner-handoff.md)。
 
-- [第五版视觉与实现约束](design/uiux-2026-11/13-v5-visual-system.md)：UXM-01 的固定组件依赖、主题偏好、同底横排侧栏、完整逐件卡片、真实内存号位和验证边界。当前呈现以本节及已同步的 07/08/09、T1/T6 为准；历史 W-3 不代表第五版验收。
+### 专项规格
+
+| 文档 | 查阅场景 |
+| --- | --- |
+| [T1 MyGo 界面与构建分发](specs/t1-mygo-ui-distribution.md) | 原生界面、应用资源、安装与浏览器唤起。 |
+| [T2 平台采集与输入](specs/t2-platform-capture-input.md) | 窗口身份、客户区、DPI、支持档位、输入许可与采集时序。 |
+| [T3 OCR 运行库、模型与样本](specs/t3-ocr-runtime-model-samples.md) | 固定依赖、资源摘要、预处理和识别质量评估。 |
+| [T4 扫描会话与结果契约](specs/scanner-architecture.md#5-扫描会话与结果语义) | 接纳记账、取消、恢复、保存与资源所有权。 |
+| [T5 绝区零仓库遍历与详情归属](specs/t5-zzz-inventory-traversal.md) | 筛选范围、滚动衔接、相同盘、末尾、覆盖和 Windows 阶段 3 实测。 |
+| [T6 用户操作、结果校对与导出](specs/t6-review-export-workflow.md) | 逐件校对、按号位补扫与合并、导出预检、历史和清理。 |
+| [扫描结果 JSON/CSV v2](specs/scan-json-format.md) | 公共字段、空值、计数及列序。另见同源 [JSON](examples/scan-usable-v2.json) 与 [CSV](examples/scan-usable-v2.csv) 示例。 |
+
+### 界面设计与资产
+
+- [第五版视觉与实现约束](design/uiux-2026-11/13-v5-visual-system.md)维护当前组件、主题和布局规则。
+- [2026-11 重设计第一阶段](design/uiux-2026-11/README.md)保存功能清单、约束、用户旅程和状态矩阵。
+- [第二阶段信息架构](design/uiux-2026-11/07-information-architecture.md)通往逐屏规格、交互规则与线框；当前呈现同时查阅第五版视觉规则。
+- [第三阶段实施计划](design/uiux-2026-11/12-implementation-plan.md)记录 PR 拆分与实机验证安排。
+- [2026-10-21 UI 设计基线](design/uiux-2026-10-21/README.md)用于追溯旧版设计。
+- [项目图标原稿](design/icon-2026-11-17/a-vortex-eye.png)用于再生成应用、窗口、安装器和托盘图标，命令见 [T1 图标约定](specs/t1-mygo-ui-distribution.md#应用与托盘图标)。
+
+### 决策与历史方案
+
+- [扫描器重新架构决策](decisions/2026-10-28-scanner-rearchitecture.md)记录范围、覆盖、故障恢复和客户端 profile 的取舍。
+- [按位置重试与续扫草案](specs/position-retry-design.md)保留旧方案及其被取代的部分。当前恢复契约见 T5。
+
+### 实测与升级报告
+
+| 报告 | 查阅场景 |
+| --- | --- |
+| [M1 Windows 安装](reports/2026-10-17-m1-windows-test.md)、[M1 macOS 安装](reports/2026-10-17-m1-macos-test.md) | 早期安装、识别自检、启动和卸载基线。 |
+| [M1 自动更新](reports/2026-10-18-m1-auto-update-test.md) | 早期测试渠道升级链与重启证据。 |
+| [M2 macOS 输入](reports/2026-10-18-m2-macos-field-round1.md)、[M2 macOS 样本](reports/2026-10-19-m2-macos-sample-round.md) | 云客户端采集、输入与调参样本。 |
+| [M3 规模测试与验收清单](reports/2026-10-20-m3-acceptance-checklist.md) | 合成数据规模测试和历史 macOS 整仓轮次。 |
+| [macOS 真机验收 10-26](reports/2026-10-26-macos-field-acceptance.md)、[macOS 阶段 2 验收 11-01](reports/2026-11-01-macos-stage2-field-acceptance.md) | 全量扫描、导出、停止与滚动证据。 |
+| [Windows 本地探针](reports/2026-11-01-windows-local-probe.md)、[W3a 样本轮](reports/2026-11-02-windows-local-sample-round.md)、[早期全量扫描](reports/2026-11-02-windows-local-field-acceptance.md) | 客户区、权限、排序样本和早期全扫基线。 |
+| [Windows 托盘诊断](reports/2026-11-03-windows-tray-diagnosis.md)、[Windows 第三阶段界面验收](reports/2026-11-14-windows-uiux-acceptance.md) | 托盘恢复诊断和第五版之前的交互证据。 |
+| [11-14 依赖升级](reports/2026-11-14-dependency-upgrade.md)、[MyGo v0.10.0 升级](reports/2026-11-19-mygo-v0.10.0-upgrade.md) | 历史适配、固定依赖、测试结果及各轮未验证边界。 |
+| [Windows 安装保护与单号位补扫](reports/2026-11-19-windows-install-and-rescan-acceptance.md) | 运行中拒绝覆盖或卸载、5 号位独立补扫与导出。 |
 
 ## 目录约定
 
@@ -52,10 +63,13 @@
 | 路径 | 内容归属 |
 |---|---|
 | `index.md` | 已有文档的导航与阅读场景。 |
-| `architecture.md` | 全局架构、模块关系、依赖边界与共享约束。 |
+| `specs/scanner-architecture.md` | 全局架构、模块关系、依赖边界与共享约束。 |
 | `development.md` | 环境准备、开发方式、项目特有的编码约定、测试与验证方法。 |
 | `release.md` | 版本管理、发布流程、发布专属检查与发布后验证。 |
+| `scanner-handoff.md` | 项目背景、参考实现与功能边界。 |
 | `specs/` | 专项需求、设计、必要的调研结论与取舍依据、接口合同、验收标准。 |
+| `design/` | 界面设计、交互稿、视觉资产和相关实施计划。 |
+| `examples/` | 由规格引用的合成示例和文件格式样本。 |
 | `references/` | 供查阅的领域资料、第三方约束与资料来源，由相关规格或实现引用。 |
 | `decisions/` | 需要独立保存的重要决策历史、当时的背景与取舍。 |
 | `reports/` | 实机与制品测试的实测报告，以日期与主题命名；记录至少包含的内容见[实施清单第 5 节](specs/scanner-implementation-plan.md#5-验证命令与执行记录)。 |
@@ -66,4 +80,5 @@
 - 日常开发与验证方法归入 `development.md`，发布流程引用共用的方法或已有脚本，仅单独说明发布所需的步骤与检查。
 - 参考资料保留事实与来源；被项目采用的设计选择和约束写入相关规格，并引用支撑资料。
 - 简短的设计理由直接写在相关规格中；需要独立追溯决策时再创建 `decisions/` 中的记录，由当前规格引用。
+- 较长的文档在开头给出概要或章节结构，便于按章节查阅。
 - 草案与尚未确认的内容明确标注；被替代的决策指向后续决定，保留必要的历史背景。

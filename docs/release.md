@@ -1,17 +1,17 @@
 # 发布与自动更新
 
-更新日期：2026-11-19。本文维护 youkai 的版本规则、两条发布渠道、打标签与发布步骤、更新密钥管理与发布后验证（含升级实测清单）；日常构建命令见[开发指南](development.md)，交付门槛见 [T7](specs/t7-public-release-acceptance.md)，自动更新的范围与规则见[架构第 6 节](specs/scanner-architecture.md#6-首版功能范围)。发布由 `LoTwT/youkai` 的 GitHub Releases 承担，也是 MyGo 内置更新的下载源（MyGo v0.10.0，行为依据其 `docs/updates.md`、`docs/github-actions.md` 与 `internal/update`）。
+更新日期：2026-11-21。本文维护标签、更新渠道、密钥、发布步骤和发布后检查。日常构建见[开发指南](development.md)，交付条件见 [T7](specs/t7-public-release-acceptance.md)，实测结果见 [M4](specs/scanner-implementation-plan.md#m4双平台交付验收)。
 
-2026-11-03 用户决定首版只支持 Windows 本地客户端：发布流程只构建并发布 Windows 版，不发布 macOS DMG；macOS 仍作为开发平台使用，macOS 发布留待后续版本。T7 的交付形式与架构 §6/§7 中的双平台表述已同步（首版范围见[架构第 6 节](specs/scanner-architecture.md#6-首版功能范围)）；本文只记录发布流程的现状，交付门槛见 [T7：构建打包与交付验收](specs/t7-public-release-acceptance.md)。
+首版 Release 只发布 Windows x64。macOS 继续使用开发和 Package 构建。平台范围见[架构 §6](specs/scanner-architecture.md#6-首版功能范围)。
 
-已知影响：下一个 `test-v` 发布后，已安装的 macOS 测试版每次检查更新都会因缺少 `update-darwin-arm64.json` 而报 404（例如 `GET …/update-darwin-arm64.json: 404 Not Found`），需要 macOS 用户自行处理；在下一个 `test-v` 发布前，最新 Release（`test-v0.0.4`）仍含 darwin 清单，不受影响。这是预期行为，应用不会崩溃，也不会安装错误的包。依据是 MyGo v0.10.0 `internal/update/github.go`（固定提交 `ebde9399baf2734b3361856a53f4036859973d1d`；该文件自 v0.9.0 未变） 的 `latestTagged` 只按标签选择 Release、不按平台筛选资产；该结论来自评审阅读代码，未在实机复现。
+[test-v0.0.5](https://github.com/LoTwT/youkai/releases/tag/test-v0.0.5) 已按该范围发布，只有 Windows 更新清单。MyGo v0.10.0 的 [`latestTagged`](https://github.com/egoist/mygo/blob/ebde9399baf2734b3361856a53f4036859973d1d/internal/update/github.go) 按标签选择 Release，选择时不区分平台。此前安装的 macOS 测试版检查这一发布时可能遇到更新清单 404。该行为是从源码得出的判断，未在 Mac 实测。
 
 ## 版本号与两条渠道
 
-- **版本号**：`major.minor.patch`（语义化），首个发布版 `0.0.1`，随发布递增。发布时以**标签中的版本为准**：`mygo.json` 源文件保持开发版本（当前 `0.0.1`），发布 workflow 在构建前把标签版本与渠道前缀写入构建检出里的 `mygo.json` 副本（不提交；改写前对该文件设置 `git update-index --skip-worktree`，`git status` 因此不报修改）。Go 的 VCS 戳记按 `git status` 判定，未跟踪文件同样会标记 `-modified`，构建前因此不得有任何过程文件落进检出（test-v0.0.1 至 test-v0.0.4 的 Windows 构建曾因 VC++ 步骤把 `vc-redist-info.txt` 写进仓库根而携带 `commit=<sha>-modified`，已改为写入 runner 临时目录 `RUNNER_TEMP`，机制见[开发指南的诊断日志](development.md#诊断日志)）。构建日志与诊断日志首行因此携带干净的 `commit=`，构建产物、`mygo.App.Version()` 与标签一致，不为发布提交版本号改动。
+- **版本号**。按 `major.minor.patch` 递增。最早的测试发布是 `test-v0.0.1`。发布以标签中的版本为准，workflow 只修改运行检出中的 `mygo.json`。构建中间文件放在 `RUNNER_TEMP`，避免给 Go 的 VCS 戳记加上 `-modified`。戳记核对见[开发指南](development.md#诊断日志)。
 - **测试渠道**：标签 `test-v<版本>`（如 `test-v0.0.1`）。发布为**普通 Release**（本项目未调用 `SetPrereleases(true)`，更新器默认只接受已发布、非草稿、非预发布的版本），但**不设为 latest**，标题与说明注明“测试版，勿用”。测试渠道构建的应用只检查 `test-v` 标签的 Release。
-- **正式渠道**：标签 `v<版本>`。正式渠道构建读仓库 **latest Release** 的更新清单（MyGo 对前缀 `v` 与不设前缀等价：`tagged()` 为假，feed 为 `releases/latest/download/`）。选显式 `tagPrefix: "v"` 是为了在 workflow 里自文档；测试渠道 Release 发布时一律 `--latest=false`，但这只是不把测试版显式标记为 latest，挡不住 GitHub 的回退：仓库中没有显式 latest 时，`releases/latest` 返回最新发布的非草稿、非预发布 Release。因此在**第一个正式版（`v*`）发布前**，唯一的测试版仍会被 GitHub 当作 latest（`test-v0.0.1` 发布后实测 `GET /repos/LoTwT/youkai/releases/latest` 返回的正是它）。目前不存在正式渠道构建的安装，latest 指向测试版不影响更新隔离；第一个正式版必须以 `--latest=true` 发布（workflow 已如此），此后 latest 恒为正式版。发布正式草稿前，workflow 会比较当前 latest：若已有更新的正式版 latest，则以 `--latest=false` 发布该草稿，避免旧草稿或旧标签重跑把 latest 移回旧版本；latest 读取失败或状态畸形时不发布（fail closed）。即使走标签列表路径（`internal/update/github.go` 的 `HasPrefix(tag, prefix)`），前缀 `v` 也匹配不到 `test-v…`，两渠道不会串。
-- **渠道隔离靠 `updates.tagPrefix`**：发布 workflow 按标签写入 `test-v` 或 `v`，应用内嵌的更新源随渠道固定；同一把更新密钥签名两个渠道，公钥自 `0.0.1` 随包内置（晚加需用户手动重装一次）。
+- **正式渠道**。标签 `v<版本>`。配置 `updates.tagPrefix="v"` 的 MyGo 构建从 `releases/latest/download/` 读更新清单。首个正式版发布前，GitHub 的回退仍可能把普通测试 Release 作为 latest，`test-v0.0.5` 已观测到该情况。首个正式发布应显式设 `make_latest=true`。之后较旧的正式草稿不能覆盖较新的正式 latest。读取失败或状态不一致时 workflow 停在草稿。发布后检查见下节。
+- **渠道配置**。workflow 将 `updates.tagPrefix` 固定为标签的 `test-v` 或 `v`。两条渠道使用同一密钥，更新公钥自 `0.0.1` 随包内置。
 - **更新说明**：每个发布版本在 [CHANGELOG.md](../CHANGELOG.md) 有 `## <版本号>` 小节（两渠道共用同一版本号的小节），小节文字进入该版本的更新清单（`update-<target>.json` 的 `notes`），即应用内“发现新版本”时显示的说明；可用简短中文。**缺失对应小节时发布构建失败**，草稿 job 也会在构建前先检查。
 
 ## 更新配置与密钥
@@ -33,17 +33,17 @@
 
 ## 发布步骤
 
-1. 确认目标版本号已在 [CHANGELOG.md](../CHANGELOG.md) 有小节、相对上一发布版递增，且要发布的提交已合并 `main`。
-2. 在合并提交上打标签并推送（由主会话执行）：
-   - 正式版：`git tag v0.0.2 && git push origin v0.0.2`
-   - 测试版：`git tag test-v0.0.3 && git push origin test-v0.0.3`
+1. 确认版本相对上一发布版递增，[CHANGELOG.md](../CHANGELOG.md) 有对应小节，并核对已合并到 `main` 的目标提交。
+2. 在已核对的提交上打标签并推送。下列 `<版本>` 与 `<提交>` 需替换为本次获准发布的值。
+   - 正式版用 `git tag v<版本> <提交>`，再执行 `git push origin v<版本>`。
+   - 测试版用 `git tag test-v<版本> <提交>`，再执行 `git push origin test-v<版本>`。
 3. `Release` workflow（[release.yml](../.github/workflows/release.yml)）自动执行：
-   1. **草稿 job**：校验标签（`test-v`/`v` + `major.minor.patch`）、CHANGELOG 小节与 `updates` 配置；用分页的 release 列表（对 push 权限包含草稿）确认该标签状态：先校验每一页和每一项都有可匹配的 tag 表示（无关外部标签不要求本项目格式），只有合法空仓库响应 `[[]]` 或完整验证后无匹配才视为不存在；`[]`、`null` 项、缺 tag/字段、分页失败、同标签重复均 fail closed。没有 Release 时创建草稿，已有**草稿**时复用同一草稿继续重试，已有**已发布** Release 时在改动前停止。列表读取失败、对象畸形或无法确定状态时不创建也不复用。
-   2. **Windows job**：写入版本与渠道前缀 → fetchdeps → 取 VC++ 运行库 → `CGO_ENABLED=1 go run ./tools/mygobuild -platform windows/amd64`（私钥经 `MYGO_UPDATER_PRIVATE_KEY`，`GH_TOKEN` 供差量计算）→ 校验打包布局与更新档案（清单版本与归档 URL 必须指向本标签）→ 在打包产物上运行识别自检并断言 `updates=enabled` → 校验 `SHA256SUMS`，再通过同一列表确认该标签仍是草稿后才上传安装包、更新归档、可选差量、`install.ps1` 和摘要（`--clobber` 覆盖同名草稿资产），最后上传更新清单。
-   3. **发布 job**（Windows job 成功后）：从同一次列表查找读取该标签的草稿对象（不用只保证已公开 Release 的 `/releases/tags/{tag}`），用它的资产清单核对安装包、Windows 更新归档与清单齐全，按资产 ID 下载清单核对版本与标签一致，再由 [generate-release-downloads.mjs](../scripts/generate-release-downloads.mjs) 根据同一对象生成 Windows x64 安装包下载表格、可折叠的安装提示与 `SHA256SUMS` 链接，原有说明保留在“更新内容”下；重跑会替换带标记的下载区块，避免重复添加下载信息与测试警示。下载表格与 `SHA256SUMS` 链接由已核验的仓库、标签和存储资产名生成 `https://github.com/<owner>/<repo>/releases/download/<tag>/<asset>`，不使用草稿资产的 `untagged` 浏览器地址；清单仍按资产 ID 下载并校验。编辑前重新读取并核对仍是同一 Release ID 的草稿（已发布则拒绝继续），然后按该 ID 发布：测试渠道 `--draft=false --prerelease=false --latest=false` 并改标题为“Youkai <版本>（测试版，勿用）”、说明前加警示；正式渠道用 curl 读取 `/releases/latest`：先要求传输完成（curl 退出码 0，且有 `Content-Length` 时下载字节数一致），再解释 HTTP 状态与完整响应体；截断、超时、畸形响应或无法解析的部分 JSON 均零编辑。404 的响应体还必须是单个 GitHub REST Not Found 错误对象（`message` 为 `Not Found`，`documentation_url` 指向 docs.github.com，`status` 若存在必须为 404），且列表中没有公开非预发布对象、或这些对象全是合法 `test-v<major.minor.patch>`；预发布与草稿排除，未知公开标签、畸形 404 响应零编辑。200 的 tag 必须是合法的 `v<semver>` 或 `test-v<semver>`，且与同一份已验证列表中的同名、非草稿、非预发布对象及 ID 一致；未知 latest tag 或未知公开非预发布标签均 fail closed，不会被当作测试版；5xx、403、无法读取、列表不一致均零编辑。若列表中已有更高正式公开版本，旧草稿以 `--latest=false` 发布，不能抢占 latest；否则按合法无 latest、测试版 latest 或版本比较决定 `--latest=true`。
-4. 失败处理：只有**草稿**可以重跑。构建或发布失败时用 "Re-run failed jobs" 重跑：草稿 job 复用同标签的现有草稿，Windows job 在上传前、发布 job 在编辑前都会通过 release 列表确认它仍是草稿，并在草稿内以 `--clobber` 覆盖同名资产或按 Release ID 重写说明。已发布 Release 是终态：草稿 job、上传步和发布步都会在改动前失败，只重跑部分 job 也一样；需要修正时发布新版本，不重跑旧标签。同一标签的 workflow 运行由顶层 `concurrency` 串行排队；不同正式标签的 publish job 共用一个 job 级 `concurrency` 组（`queue: max`，排队而不是取消），使 latest 读取、比较与发布编辑处于同一互斥区间；测试标签的 publish 按标签独立，Windows 构建不进入该互斥区间。状态检查与写入之间的极短窗口仍需避免人工同时操作同一 Release。标签或 CHANGELOG 问题需在发布前改标签（删远端标签重打）或补小节后重新推送标签触发；已发布后只能发新版本。**重跑使用原始 workflow 的 SHA/ref**：只有原始运行定义已包含本修复时才有上述保护；现存旧定义的历史 run 重跑仍执行旧逻辑，不能通过重跑旧 run 获得本修复。
-   - `test-v0.0.1` 即由此走过一遭：发布 job 的资产校验按带空格的本地名比对而失败（GitHub 存储名空格转 `.`，见下文 Release 资产一览；重跑执行的是标签提交里的同一份校验，必然再败），草稿与两平台 job 均已成功。主会话核对两份更新清单（`version` 均为 0.0.1、归档 `url` 指向 `test-v0.0.1`）后，按 workflow 原有发布步参数手动完成了发布（`--draft=false --prerelease=false --latest=false`、标题“Youkai 0.0.1（测试版，勿用）”、说明前加警示）。该校验缺陷已修正为按存储名比对（自 `0.0.2` 起的标签包含修正），后续发布不再需要此类手动补救。
-5. **首次发布需重点看**：`MYGO_UPDATER_PRIVATE_KEY` 是否就位（否则产物校验步失败，报缺更新档案）；Windows 的 NSIS 是否成功下载（缺安装包会在校验步失败）；差量计算对首版只会记 "no version is published yet"（正常，不是失败）；发布 job 的资产清单是否与下表一致；发布后 latest 是否指向正式版。
+   1. **草稿**。校验标签、对应的 CHANGELOG 小节和更新配置。查询 Release 列表后创建草稿或复用同标签的唯一草稿。列表无法完整读取、格式不合规或同标签状态无法确定时停止。
+   2. **构建**。写入版本和渠道，下载固定依赖，随包放入 VC++ DLL，生成安装器、签名更新归档和差量。校验布局、摘要以及指向本标签的更新清单，并运行 OCR 自检断言 `updates=enabled`。再次确认仍是草稿后上传制品，最后上传更新清单。
+   3. **发布**。按草稿的 Release ID 校验必需资产，按资产 ID 下载并验证更新清单，生成可公开访问的下载区块，保留原更新说明。发布前重新确认同一 ID 仍为草稿。测试渠道使用 `make_latest=false`。正式渠道在完整校验当前 latest 与已发布版本后选择 `make_latest`。状态解析见 [release-state.sh](../scripts/release-state.sh)，下载区块见 [generate-release-downloads.mjs](../scripts/generate-release-downloads.mjs)。
+4. 仅对草稿使用 **Re-run failed jobs**。它沿用原运行的 SHA/ref 和 workflow 定义，允许覆盖同名草稿资产。已发布版本需要修正时发新版本。标签或变更日志有误时，先修正提交与尚未发布的标签，再触发新运行。相同标签的运行串行，正式发布的 latest 判断与写入共享一个队列。自动运行期间避免手动改同一草稿。
+   - 早期 `test-v0.0.1` 曾因安装器存储名与本地名不同需补发布。修正和当时的发布证据见 [M1](specs/scanner-implementation-plan.md#m1正式工程资源与会话底座)。
+5. 首次正式发布前确认签名密钥已配置并核对渠道和标签。构建缺安装器或更新档案时产物校验会失败。没有可用的历史归档时可以无差量。发布后按下节核对渠道指向。
 
 Release 资产一览（`<版本>` 为标签版本，表列为 GitHub 上的存储名）：
 
@@ -52,24 +52,21 @@ Release 资产一览（`<版本>` 为标签版本，表列为 GitHub 上的存�
 | `youkai-setup-<版本>-amd64.exe` | Windows NSIS 每用户安装包 |
 | `youkai-<版本>-windows-amd64.tar.gz` | 更新安装用的应用归档（签名） |
 | `update-windows-amd64.json` | 更新清单（含版本、说明、签名，缓存禁用） |
-| `install.ps1` / `SHA256SUMS` | MyGo v0.10.0 自动生成的辅助安装脚本与摘要，由 workflow 在校验后上传；本轮只本地生成，未发布。 |
-| `youkai-<旧>-to-<版本>-<target>.delta` | 差量更新（可选，首版无） |
+| `install.ps1` / `SHA256SUMS` | 辅助安装脚本和摘要。Windows workflow 校验后上传。 |
+| `youkai-<旧>-to-<版本>-<target>.delta` | 使用已发布归档生成的可选差量。 |
 
-MyGo v0.7+ 将安装包改为 slug 名：当前本地构建、检查和预期上传资产均为 `youkai-setup-<版本>-amd64.exe`，本轮尚未发布这组新资产。历史 `test-v0.0.1` 的 `Youkai.Setup.0.0.1.amd64.exe` 保留原事实。DEP-01 第3轮核心适配已完成，新 Windows TEMP 回归27/27通过（v0.9.0 模板基线；v0.10.0 模板规范化后相同，本轮未在 Windows 重跑），待主控按用户收窄后的标准独立复审；没有发布/真实安装许可。实际应用仍运行或基本检测失败就停止目标文件操作，PS1外层失败非零。标准 NSIS 卸载 bootstrap 的直接exit0仍只表示启动worker，不表示卸载成功；这一限制已保留记录，未增加新的原生卸载引导。
+`test-v0.0.5` 已发布上表的 Windows 资产，包括三个差量，验签结果见 [M4](specs/scanner-implementation-plan.md#windows-签名测试发布)。较早的 `test-v0.0.1` 使用旧安装器文件名 `Youkai.Setup.0.0.1.amd64.exe`。
 
-Windows 入口强制绑定 MyGo v0.10.0 源码及完整 NSIS/PS1 模板，模板、转换位置、签名命令数量漂移均拒绝；PS1 的用法注释与来源变量按 stable / `v` / `test-v` 渠道精确校验，未知渠道、错误注释或来源变量不符均拒绝。顺序保持“NSIS 转换 → 实际编译及卸载器签名 → MyGo 安装器签名/更新归档；真实生成 PS1 后转换；输出根目录最终 SHA256SUMS/校验/自检后显式上传，manifest 最后”。适配不改 archive/delta/manifest 字节，原摘要必须继续匹配；如将来修改则须重建相应摘要与 Ed25519 签名。用户本轮同意延期的重启竞争、特殊路径/权限、大 UI/W3 矩阵及真实签名链未覆盖，不作为当前核心修正门槛，也不宣传通过。当前实现与证据见[核心记录](reports/2026-11-14-dependency-upgrade.md#r3-核心范围收敛与最小验证)。
+Windows 安装保护与模板校验见 [T1](specs/t1-mygo-ui-distribution.md)。构建中修改 NSIS 或安装脚本时必须按适配流程重新核对最终制品摘要和签名更新资产，详见[模板适配记录](reports/2026-11-14-dependency-upgrade.md#r3-核心范围收敛与最小验证)。
 
 ## 发布后验证
 
-- **资产核对**：上表必需项齐全；`update-*.json` 的 `version` 与标签一致、`url` 指向本标签；Windows 安装包内含 VC++ DLL（发布 job 已自动核对，抽查 release 页面即可）。
-- **识别自检**：`YOUKAI_SELFTEST=1` 在安装版上通过（workflow 已在打包布局上跑过，实机再确认一次安装布局）。
-- **升级实测清单**（按 T7“自动更新”交付门槛，逐项留证）：
-  1. 旧版检测到新版：启动后台检查与“检查更新”入口都显示新版本号与说明（说明应来自 CHANGELOG 小节）。（2026-10-18 实测：两平台 0.0.1→0.0.4 每轮升级均检测到新版本——日志 `update check: found <版本> (running <旧版本>)`，升级后再次检查显示已是最新；说明文字的显示未逐字核对，见[M1 自动更新升级实测报告](reports/2026-10-18-m1-auto-update-test.md)。）
-  2. 安装更新后：版本号与标签一致（诊断日志首行 `version=`），历史记录与数据根保留、可重开。（2026-10-18 实测：两平台升级后日志首行 `version=0.0.4`，`/Applications/Youkai.app` 与 `Youkai.exe` 文件版本均为 0.0.4，历史数据保留经用户确认；“可重开”未单独验证，见[M1 自动更新升级实测报告](reports/2026-10-18-m1-auto-update-test.md)。）
-  3. 签名错误被拒：篡改清单或换密钥的档案使安装失败，界面如实显示错误（如 `mygo: installing the update: the update is not signed with the app's key`），应用继续运行原版本。可用一次性测试密钥对在本地演练（见[开发指南](development.md#自动更新的本地演练)，勿用正式密钥）。（安装版实机未测，见[M1 自动更新升级实测报告](reports/2026-10-18-m1-auto-update-test.md)的未覆盖项。）
-  4. 扫描进行中（含收尾与待重试保存）禁止安装：更新区按钮禁用并说明原因；会话保存完成后可安装。（仅单元测试覆盖——M1 安装版无扫描源，实机待 M2 后验证，见[M1 自动更新升级实测报告](reports/2026-10-18-m1-auto-update-test.md)的未覆盖项。）
-  5. macOS 升级后 Gatekeeper 与权限表现：ad-hoc 签名替换后首次打开是否再次拦截、录屏/辅助功能权限是否保留（TCC 随 bundle identifier 记录，替换重签名后的表现以实测为准），结果写回本节与 T7。（2026-10-18 实测：Gatekeeper 侧已验证——0.0.3→0.0.4 升级并自动重启进入新版本后无再次拦截；录屏/辅助功能权限待 M2 申请权限后实测，见[M1 自动更新升级实测报告](reports/2026-10-18-m1-auto-update-test.md)。）（macOS 暂不发布，本项在恢复 mac 发布前不适用）
-  6. 自动重启进入新版本：安装完成后应用自动重启，重启后诊断日志首行 `version=` 为新版本号、窗口更新区显示“当前版本 <新版本>”（2026-10-17 两平台升级实测曾“安装后应用退出但不再拉起”，根因是应用的关窗拦截取消了 MyGo 的首次 Relaunch；已修复为收尾完成后重新发起，并在 macOS 本机完整演练通过，见[开发指南](development.md#自动更新的本地演练)）。（2026-10-18 实机确认：两平台 0.0.3→0.0.4 同一秒内完成安装、退出收尾与重启，重启后首行 `version=0.0.4`，Windows 当前运行进程即重启实例，见[M1 自动更新升级实测报告](reports/2026-10-18-m1-auto-update-test.md)。）
-  7. Windows“应用和功能”中的版本：升级后列表显示新版本号（应用启动时刷新 HKCU 卸载项 `DisplayVersion`；`Uninstall.exe` 保持安装时的版本属正常，卸载行为不受影响）。（2026-10-18 实测：0.0.2→0.0.3 升级后日志 `uninstall entry version refreshed to 0.0.3`；0.0.3→0.0.4 后注册表 `DisplayVersion` 为 0.0.4，见[M1 自动更新升级实测报告](reports/2026-10-18-m1-auto-update-test.md)。）
-  8. 更新日志行：诊断日志含各阶段行，逐行核对便于定位——检查 `youkai: update check: found …` / `no version newer than …` / `update check failed: …`，安装 `update install: downloading and verifying …`、`update install: downloaded N bytes`、`update install: … installed` / `update install failed: …`，重启 `update installed, restarting the application` 与 `exit settled, relaunching into the installed update`。（2026-10-18 实测：0.0.3→0.0.4 两平台各阶段行齐全；`downloaded N bytes` 曾在完成时报两次（MyGo 进度回调在最后一块与 EOF 各报一次完成），已改为每次下载记一次、差量回退整包时两次下载各一行，见[M1 自动更新升级实测报告](reports/2026-10-18-m1-auto-update-test.md)。）
-- 测试渠道发布后，另用安装了测试版应用的设备确认它只收到 `test-v` 渠道的更新、正式版只收到正式渠道更新。（2026-10-18：测试渠道侧已在升级链全程验证——安装测试版的两台设备逐轮收到 `test-v` 更新；渠道隔离的排除侧与正式渠道因尚无 `v*` 发布未验证，见[M1 自动更新升级实测报告](reports/2026-10-18-m1-auto-update-test.md)。）
+- **资产核对**。公开页面含上表必需资产。Windows 清单的 `version` 与标签一致，归档 URL 指向本标签。确认摘要、随包 VC++ DLL 和构建自检记录。
+- **识别自检**。`YOUKAI_SELFTEST=1` 在安装布局下能读取随包固定图。首版安装版断网检查的免验决定见 [M4](specs/scanner-implementation-plan.md#windows-安装验收记录)。
+- **升级实测清单**。按 [T7](specs/t7-public-release-acceptance.md#2-首版交付门槛)留证。历史双平台结果见 [M1 报告](reports/2026-10-18-m1-auto-update-test.md)，当前 Windows 测试渠道见 [M4](specs/scanner-implementation-plan.md#windows-签名测试发布)。
+  1. 从旧版启动或手动检查，确认显示新版本及 CHANGELOG 中的更新说明。
+  2. 安装后确认自动重启到新版本，界面、诊断日志的 `version=` 与 Windows 卸载项版本一致。确认升级前可读的历史仍可重开。
+  3. 用一次性密钥[本地演练](development.md#自动更新的本地演练)验证坏签名被拒并能继续使用原版本。
+  4. 验证扫描、收尾或待重试保存期间禁止安装，保存完成后恢复可用。
+  5. 核对 `update check`、下载验签、安装和重启日志。差量回退整包时分别记录下载量。macOS 恢复发布时再核对升级后的 Gatekeeper 和录屏、辅助功能权限。
+- **渠道核对**。首个正式版发布后，确认仓库 `latest` 的标签和 Windows 更新清单都指向该正式版，并确认测试客户端仍只读 `test-v` 渠道。待有下一正式版本时，用已安装的正式版验证同渠道升级。

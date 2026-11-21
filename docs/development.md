@@ -1,12 +1,12 @@
 # 开发指南
 
-更新日期：2026-11-19。本文维护环境要求与本仓库当前实际可用的开发命令；范围与里程碑安排见[实施清单](specs/scanner-implementation-plan.md)，构建与分发决策见 [T7](specs/t7-public-release-acceptance.md)。
+更新日期：2026-11-21。本文维护环境要求与本仓库当前实际可用的开发命令；范围与里程碑安排见[实施清单](specs/scanner-implementation-plan.md)，构建与分发决策见 [T7](specs/t7-public-release-acceptance.md)。
 
 ## 第五版原生界面
 
 UXM-01 的主题、组件选择与布局由 [第五版视觉规则](design/uiux-2026-11/13-v5-visual-system.md) 维护。Lobe 固定到 `v0.0.0-20261110162706-5e5fea5ef9e2`，不升级 MyGo 或其他依赖；新增许可随 `resources/licenses/` 分发。
 
-相关本地检查沿用 `go test ./internal/ui ./internal/app ./cmd/youkai`、`go vet ./...`、`go tool mygo vet .` 和 Windows x64 交叉编译。主题指针与偏好、真实号位事件时机/迟到隔离和响应布局只补必要断言；既有保存、导出、清理、虚拟化测试继续复用。临时产品 Model 渲染入口与唯一 App.Name 预览构建不进入产品源码，不新增测试运行时或生产开关。软件渲染不是 Windows 实测，完整安装/升级验收仍另行安排。
+UI 本地验证使用 `go test ./internal/ui ./internal/app ./cmd/youkai`、`go vet ./...`、`go tool mygo vet .` 和 Windows x64 交叉编译。临时界面预览使用独立应用名，避免占用正常数据根。Windows 安装与升级实测见[实施清单 M4](specs/scanner-implementation-plan.md#m4双平台交付验收)。
 
 ## 环境要求
 
@@ -22,9 +22,9 @@ UXM-01 的主题、组件选择与布局由 [第五版视觉规则](design/uiux-
 
 cgo 说明：`internal/recognition` 依赖 cgo 编译 onnxruntime_go 的 C 桥接。直接调用的 `go build`/`go vet`/`go test` 与 `go tool mygo vet .` 在原生构建下默认 `CGO_ENABLED=1`，无需处理。`go tool mygo dev` 与 `go tool mygo build` 则遵循 MyGo v0.10.0 的行为：环境未显式设置 `CGO_ENABLED` 时，MyGo 给子进程设置 `CGO_ENABLED=0`（[T1](specs/t1-mygo-ui-distribution.md) 已记录，显式设置时尊重用户值）。`cmd/youkai` 经应用服务引用识别包，因此必须以 `CGO_ENABLED=1 go tool mygo dev`、`CGO_ENABLED=1 go tool mygo build` 的方式调用，否则 cgo 包编译失败。识别器由应用服务在第一次接受的开始请求时才创建（`internal/app` 的懒加载），包初始化与就绪回调不加载任何原生库与模型（见[架构第 4 节](specs/scanner-architecture.md#4-ocr原生资源与构建)）。
 
-2026-11-19 将 MyGo 从 v0.9.0 升级至 v0.10.0，版本依据、模板差异与本机验证边界见[升级记录](reports/2026-11-19-mygo-v0.10.0-upgrade.md)；2026-11-14 的 v0.9.0 版本依据与兼容处理保留在[旧记录](reports/2026-11-14-dependency-upgrade.md)。包名使用 MyGo 的 slug 命名；Windows 运行、IME、托盘、通知和自动更新仍需另行验收。
+MyGo v0.10.0 的升级依据和构建验证见[升级记录](reports/2026-11-19-mygo-v0.10.0-upgrade.md)。Windows 交互、安装和签名测试渠道升级的证据见 [W-3 报告](reports/2026-11-14-windows-uiux-acceptance.md)与[实施清单 M4](specs/scanner-implementation-plan.md#m4双平台交付验收)。
 
-DEP-01 第3轮按用户“后续测试不用做得特别细，有一些边界情况可以等真的遇到了再处理”收敛到核心安全流程。当前适配完整替换两个 NSIS CloseApp 与 PS1 独立强杀/吞错：在实际最终目录仍有应用进程，或检测/工具失败时停止后续文件变更，提示通过应用菜单退出并处理未保存内容后重试。新 Windows TEMP 最小回归 **27/27 PASS**（v0.9.0 模板基线；v0.10.0 模板规范化后相同，本轮未在 Windows 重跑），PS1 外层拒绝 exit1、成功 exit0；待主控新独立复审。重启竞争、完整 OS 排斥、特殊别名/reparse、罕见权限及大 UI/W3 矩阵按本轮用户决定延期，不宣称已验证。普通 NSIS 卸载 bootstrap 的 direct exit0 不代表 worker 成功，仍为已知限制；见[当前记录](reports/2026-11-14-dependency-upgrade.md#r3-核心范围收敛与最小验证)。
+运行中安装与卸载的保护规则见 [T1](specs/t1-mygo-ui-distribution.md)，模板适配和 Windows TEMP 回归见[依赖升级报告](reports/2026-11-14-dependency-upgrade.md#r3-核心范围收敛与最小验证)。
 
 ## 用开发数据源跑一次完整扫描
 
@@ -67,14 +67,13 @@ M2 平台会话集成后可用另一组开关接入真实游戏窗口做仅观�
 - **安装版默认扫描源（PR-05，P-01）：** Windows 构建在未设置任何环境变量时自动接入本地客户端遍历，不需要 `YOUKAI_GAME_EXE`；目标识别、选择与完整预检以 [T2 §3.2](specs/t2-platform-capture-input.md#windows-扫描前预检w2b权威说明) 为准，准备页见 [08 §1.1](design/uiux-2026-11/08-screens.md#11-准备检查清单)。初次唯一候选直接选中并显示实际身份，选中不会自动开始；多候选、旧实例失效或用户显式“更换目标”后，未显式选择前“开始扫描”禁用，刷新也不自动重选。点“重新检查”重新枚举；开始时仍核对完整路径、HWND、PID 与进程启动时间并执行完整预检，真正输入前仍复核许可、目标和几何条件。
 - **环境变量（开发覆盖）：** `YOUKAI_GAME_SOURCE=traverse`、`YOUKAI_GAME_CLIENT=local`、`YOUKAI_GAME_EXE=<游戏 exe 完整路径>` 仍可用于固定一个开发目标；此时跳过候选列表，直接锁定该路径。三层都必须满足；缺 `YOUKAI_GAME_EXE` 或把客户端设为 `cloud` 都会在接线时拒绝并说明原因。`observe` 仍按上一节的方式工作。`YOUKAI_SCROLL_MATCHER=legacy` 对安装版默认与固定目标覆盖都生效。
 - **权限（D-1）：** 必须以管理员身份运行 youkai，否则开始扫描时因游戏进程完整性级别更高而拒绝；程序清单不要求提权。点击在提权后有效，2026-11-02 的 1920×1080 全量扫描也在 `target=high self=high` 下完成；但仍以 T5 的动作效果证据为准。
-- **开始前激活：** 点击开始后，Windows 会话对预检锁定的 HWND 请求一次前台（`SetForegroundWindow`），随后在最多 500 ms 内每 25 ms 观察一次实际前台；日志先写 `platform windows: activate: requesting foreground...`，再写 `accepted after N ms`（目标已在前台）或 `not foreground after 500 ms` 加 `waiting for the user to focus the game`（超时后照常进入 30 秒准备等待）。成功不跳过准备核验。2026-11-02 真机首次运行发现旧实现没有 `Activator`，日志只记录 `another window is the actual foreground window`（操作者记录当时前台是 Youkai），最终以 `prepareTimeout`（`focusLost`）结束且没有激活失败日志；#110 补齐后，同日第二次和第三次运行（自动开始）都在激活后立即复查未见游戏在前台，约 0.24 s 后游戏已在前台并通过就绪检查，这正是本次有界等待要覆盖的异步切换。2026-11-03 的手动开始真机复验（dev `48dec0f`）确认了 #113 的成功路径：请求后 26 ms 记录 `accepted after 26 ms`，游戏切到前台。`YOUKAI_DEV_AUTOSTART` 自动开始路径下 #113 的激活结果尚未复验；进程可能没有前台权限，到上限仍未见前台是预期路径，但不能据此断言 `SetForegroundWindow` 被拒。最小化由预检拒绝，不做恢复窗口。状态以[架构 §6](specs/scanner-architecture.md#windows-本地客户端遍历状态1920x1080-首次全量真机扫描完成时序未标定)为准。
+- **开始前激活。** Windows 向锁定的 HWND 请求一次前台，在 500 ms 内每 25 ms 核对实际前台。日志记录 `accepted after N ms` 或 `not foreground after 500 ms`，随后执行完整准备检查。开发自动开始可能需要手动聚焦游戏。最小化窗口由预检拒绝。机制和实测见[架构 §6](specs/scanner-architecture.md#windows-本地客户端遍历状态1920x1080-首次全量真机扫描完成时序未标定)。
 - **显示档位：** 首批只开放 1920×1080（窗口/无边框模式）。其他已知 16:9 档位与任意非 16:9 尺寸都会被预检拒绝并提示切换；列出的档位不等于已开放。
 - **参数状态：** 滚动停稳与两个拖拽时长仍沿用 macOS 云客户端的值，由 `WindowsLocalProfile` 集中声明。Windows 输入层的 `MaxDragDuration` 为 1500 ms，以容纳 1200 ms 滚动拖拽。1920×1080 验收候选的遍历诊断包含 `sort=template panel_range_required=true`，一次面板访问各节点沿用 2 秒与连续三帧门槛。滚动时序仍未标定，普通范围的时序证据见 [T5 §3](specs/t5-zzz-inventory-traversal.md#3-开始前必须核对的页面条件)。
 - **覆盖结论：** 每个面板都匹配“稀有度”时 `sort=verified`。整仓覆盖 `complete` 还需要筛选范围已证明、六个位置完整及格位账目闭合。缩放档丢弃原生排序和范围探针。标签模板当前仅验证“稀有度”，排序方向超出证明范围。
-- **样本状态：** 原生 1920×1080 六个号位的普通面板流程已完成离线回放。2026-11-02 的早期全量扫描及 W3a 长列表滑块/排序样本另见[全量真机扫描报告](reports/2026-11-02-windows-local-field-acceptance.md)与[W3a 样本报告](reports/2026-11-02-windows-local-sample-round.md)。
-- **真机进展。** Windows 本地原生 1920×1080 已通过阶段 3 的全扫、独立补扫和补扫 JSON v2 导出。各档 OCR、滚动时序标定、像素计数阈值、其他 16:9 档位与三次人工基准验收仍待完成。数据和适用边界见 [T5 §3](specs/t5-zzz-inventory-traversal.md#3-开始前必须核对的页面条件)。
-- **托盘点击（2026-11-03 真机）：** 图标可见、日志有 `tray created: icon at …` 时，关闭窗口后左键单击或双击托盘图标恢复主窗口，右键弹出菜单；`da43ae3` 的 run5 复验了左键与双击两条路径。此前双击无反应是因为入口没有注册 MyGo 的 `Tray.OnClick`（Windows 的每次左键松开触发一次回调，没有双击事件；重复恢复幂等）。macOS 点击菜单栏图标仍是弹出菜单。行为与原因以[架构第 5 节](specs/scanner-architecture.md#隐藏恢复与退出)为准。
-- **托盘与窗口生命周期（2026-11-03 真机）：** 操作者 2026-11-02 报告关闭主窗口后托盘没有图标、日志没有 `tray` 行、无法从托盘退出。2026-11-03 的只读诊断确认图标实际已注册（`Shell_NotifyIconGetRect` hr=0，矩形为日志坐标的 1.25 倍，注册表有对应项），“找不到”实为左键或双击没有处理路径（#115 修复）；关闭后 `MyGoWindow` 仍是同一 HWND，`MainWindowHandle` 改指 dev 构建的控制台窗口，不是窗口重建。进程在 20–40 分钟后自行消失仍未解释，dev 构建关闭控制台可能连带结束进程只是推断；正式安装版（GUI 子系统，没有控制台窗口）的托盘行为未测。代码路径、证据与未覆盖项以[架构第 5 节](specs/scanner-architecture.md#隐藏恢复与退出)和[只读诊断](reports/2026-11-03-windows-tray-diagnosis.md)为准。dev 链接时出现 `.rsrc merge failure: multiple non-default manifests` 警告，自检与扫描正常，未进一步定位。证据与边界见[全量真机扫描报告](reports/2026-11-02-windows-local-field-acceptance.md)。
+- **真机证据：** Windows 1920×1080 的普通准备、整仓与补扫见 [T5 §3](specs/t5-zzz-inventory-traversal.md#3-开始前必须核对的页面条件)。三轮固定库存对账见[实施清单 M4](specs/scanner-implementation-plan.md#m4双平台交付验收)。早期布局和滑块样本见 [W3a 报告](reports/2026-11-02-windows-local-sample-round.md)。
+- **托盘诊断。** 先检查日志是否有 `tray created`，再验证左键恢复窗口、右键打开菜单。窗口生命周期以[架构 §5](specs/scanner-architecture.md#隐藏恢复与退出)为准，历史诊断见 [2026-11-03 报告](reports/2026-11-03-windows-tray-diagnosis.md)。
+- **Windows 构建诊断。** dev 链接曾报告 `.rsrc merge failure: multiple non-default manifests`，当次识别自检与扫描可运行。见[全量真机扫描报告](reports/2026-11-02-windows-local-field-acceptance.md)。
 
 持久化从扫描过程中开始：每次接纳观测（`internal/scan` 的接纳钩子）都会先写该件的证据图、再以 queued 状态把条目加入检查点文档，终结时只更新状态与载荷；崩溃后重开由 `internal/record` 把排队/运行条目标为中断未处理，已接纳的物品不会消失。
 
