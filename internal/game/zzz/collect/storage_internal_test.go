@@ -58,6 +58,7 @@ func TestStorageLayoutAndProfile(t *testing.T) {
 		"empty card set":      func(l *Layout) { l.CardPositions[0] = glyphSet{} },
 		"empty detail set":    func(l *Layout) { l.DetailPositions[0] = glyphSet{} },
 		"oversized mask": func(l *Layout) {
+			l.CardPositions[0].masks = append([]glyphMask(nil), l.CardPositions[0].masks...)
 			l.CardPositions[0].masks[0] = glyphMask{rows: []string{
 				"################################################################",
 			}}

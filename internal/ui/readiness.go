@@ -327,7 +327,7 @@ func (m *Model) readinessRow(check app.ReadinessCheck) readinessRow {
 	case app.ReadinessRecognitionResources:
 		row = readinessRecognitionResourcesRow(check)
 	case app.ReadinessGamePage:
-		row = readinessAfterStartRow(check, "游戏页面、遮挡、独占全屏", "请打开驱动仓库页。")
+		row = readinessAfterStartRow(check, "游戏页面、遮挡、独占全屏", "请打开驱动仓库页（旧入口为驱动盘仓库页）。")
 	default:
 		row = readinessRow{item: check.Item, title: string(check.Item), status: readinessUnknown}
 	}
@@ -431,7 +431,7 @@ func (m *Model) targetReadinessRow(check app.ReadinessCheck) readinessRow {
 		row.why, row.how = readinessParts(check)
 		if row.status == readinessUnsatisfied && row.why == "" {
 			row.why = "没有找到《绝区零》的游戏窗口"
-			row.how = "请启动游戏并打开驱动仓库页，然后点“重新检查”。"
+			row.how = "请启动游戏并打开驱动仓库页（旧入口为驱动盘仓库页），然后点“重新检查”。"
 		}
 		return row
 	}
@@ -476,7 +476,7 @@ func (m *Model) targetReadinessRow(check app.ReadinessCheck) readinessRow {
 		row.startReason = "查找游戏窗口失败。"
 	default:
 		row.status = readinessUnsatisfied
-		row.value = "未找到《绝区零》窗口 → 启动游戏并打开驱动仓库页"
+		row.value = "未找到《绝区零》窗口 → 启动游戏并打开驱动仓库页（旧入口为驱动盘仓库页）"
 		row.how = "找到后点“重新检查”。"
 	}
 	if m.targetInvalidated && row.action == readinessActionChooseTarget {

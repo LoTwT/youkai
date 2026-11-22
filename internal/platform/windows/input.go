@@ -574,11 +574,20 @@ func (a *InputActor) Dispatch(req InputRequest) InputResult {
 		}
 		return nil
 	}
-	// Other operations keep the entry precheck contract. A drag runs the
-	// live check at its actual start point inside the serial section
-	// instead, so its first batch has the same guarantees as the steps.
+	// Other operations keep the entry precheck contract. A drag and a wheel
+	// both run the live check at their actual point inside the serial
+	// section, so their first batch has the same guarantees as drag steps:
+	// a window move after the adapter's entry measurement cannot leave a
+	// wheel at a stale client coordinate. Without a step check the actor
+	// falls back to the entry precheck.
 	if req.Op.Kind != OpDrag {
-		if a.precheck != nil {
+		if req.Op.Kind == OpScroll && a.stepCheck != nil {
+			if err := dragStepCheck(req.Op.Point); err != nil {
+				res.State = StateNotDispatched
+				res.Err = err
+				return res
+			}
+		} else if a.precheck != nil {
 			if err := a.precheck(req); err != nil {
 				res.State = StateNotDispatched
 				res.Err = err

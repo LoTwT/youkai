@@ -39,7 +39,7 @@ func TestSessionTerminationNotice(t *testing.T) {
 			name:     "failed preparing",
 			term:     &record.Termination{Kind: record.TerminationFailed, Code: "pageUnverified", Phase: record.PhasePreparing},
 			rows:     0,
-			want:     "没有开始：游戏页面不是驱动仓库页。请打开驱动仓库页后重新开始扫描。",
+			want:     "没有开始：游戏页面不是已支持的仓库页。请打开驱动仓库页（旧入口为驱动盘仓库页）后重新开始扫描。",
 			wantKind: record.TerminationFailed,
 			wantOK:   true,
 		},

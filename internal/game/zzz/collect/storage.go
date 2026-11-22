@@ -505,19 +505,19 @@ func WindowsStorageProfileFor(client image.Point) (WindowsStorageProfile, error)
 	}, nil
 }
 
-// Inventory builds one drive-storage traversal. The legacy switch retains
-// the field fallback for scroll judgment; the page evidence, range proof
-// and admission rules are shared with the old traversal.
+// Inventory builds one drive-storage traversal. The old warehouse's
+// legacy pixel matcher is not a safe ablation for the 9×4 repeated-card
+// grid: its bare MAD Stationary can accept a moving scrollbar at the
+// bottom as stillness. Drive storage therefore always uses the evidence
+// matcher regardless of the legacy switch; the switch remains meaningful
+// only for the old warehouse entry.
 func (p WindowsStorageProfile) Inventory(legacy bool) *Inventory {
+	_ = legacy
 	pixel := NewPixelMatcher(p.Layout, p.Calibration)
-	var matcher Matcher = pixel
-	if !legacy {
-		matcher = NewScrollEvidenceMatcher(pixel)
-	}
 	timing := p.ScrollTiming
 	return &Inventory{
 		Layout:                 p.Layout,
-		Matcher:                matcher,
+		Matcher:                NewScrollEvidenceMatcher(pixel),
 		RequirePanelRangeProof: true,
 		ScrollTiming:           &timing,
 	}

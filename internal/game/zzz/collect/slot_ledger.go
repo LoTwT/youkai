@@ -13,6 +13,11 @@ const (
 	// the card was seen and identified, but it is never clicked, admitted
 	// or counted as a visit.
 	slotOutOfScope slotState = "outOfScope"
+	// slotEmpty is report-only: the drive-storage ledger keeps empty grid
+	// cells so a saved report can show which positions were genuinely
+	// empty. The live ledger uses the zero state for the same cells so
+	// occupancy agreement stays unchanged.
+	slotEmpty slotState = "empty"
 )
 
 // A slotIdentity is valid only within this position's continuous walk in

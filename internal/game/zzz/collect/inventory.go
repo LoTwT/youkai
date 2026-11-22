@@ -258,8 +258,14 @@ type Observation struct {
 	Viewport int `json:"viewportIndex"`
 	Row      int `json:"row"`
 	Column   int `json:"column"`
-	// Position is the wheel position (1..6) this visit belongs to.
+	// Position is the wheel position (1..6) this visit belongs to on the
+	// old warehouse page, or the card/detail-confirmed slot on the drive
+	// storage page.
 	Position int `json:"position"`
+	// Page names the calibrated page that produced this capture. The
+	// recognizer uses it to apply the drive-storage-only OCR slot
+	// cross-check, never the old warehouse wheel position.
+	Page PageKind `json:"page,omitempty"`
 	// Quality is the calibrated rarity evidence the admission rested on.
 	Quality Quality `json:"quality"`
 	// RarityFilter names the proved rarity filter. "S" requires a verified
@@ -1746,7 +1752,8 @@ func (run *inventoryRun) confirmTop(ctx context.Context) (*failureFrames, error)
 	return topWaitFailure("top", before, lastOut, haveWait), run.topProofFault(lastOut, fault)
 }
 
-// topConfirmed accepts a warehouse frame at the scrollbar's top. A settled
+// topConfirmed accepts a warehouse or drive-storage list frame at the
+// scrollbar's top. A settled
 // stationary outcome is direct evidence. An undecided pixel comparison
 // with an independent, unchanged thumb start is also safe: live UI
 // animation can raise the zero-shift error without moving the list, and a
@@ -1757,7 +1764,8 @@ func (run *inventoryRun) confirmTop(ctx context.Context) (*failureFrames, error)
 // accepted by the thumb guard below. The Lost branch keeps its match check
 // as a safety net for a lost candidate whose final comparison is undecided.
 func topConfirmed(out scrollOutcome, beforeOK, afterOK bool, beforeStart, afterStart int) bool {
-	if out.afterMatch.Page != PageWarehouse || out.afterMatch.List == nil || !out.afterMatch.List.Top {
+	if (out.afterMatch.Page != PageWarehouse && out.afterMatch.Page != PageDriveStorage) ||
+		out.afterMatch.List == nil || !out.afterMatch.List.Top {
 		return false
 	}
 	if out.displaced {
@@ -2236,10 +2244,23 @@ func (run *inventoryRun) preClickSeed(i int) *awaitOutcome {
 }
 
 // detailBaseline chooses the detail comparison frame for the next click.
-// The last admitted detail is a known item and is not subject to the
-// pre-click list frame's cloud-video lag; fall back to the fresh
-// pre-click frame only before the first admission of a wheel position.
+// On drive storage the fresh pre-click frame is the authoritative "before"
+// observation: the right pane can already show a detail that differs from
+// the last admitted item, and after the click that same pane may remain
+// unchanged. Comparing only with the last admitted frame would mislabel that
+// unchanged old pane as a transition when the old and target cards share a
+// slot. The old warehouse keeps its cloud-video lag guard (the last admitted
+// detail frame); both paths fall back to the other frame when one is missing.
 func (run *inventoryRun) detailBaseline(pre platform.Frame) platform.Frame {
+	if run.inv != nil && run.inv.storagePage() {
+		if pre.ID != 0 {
+			return pre
+		}
+		if run.lastDetailFrame.ID != 0 {
+			return run.lastDetailFrame
+		}
+		return pre
+	}
 	if run.lastDetailFrame.ID != 0 {
 		return run.lastDetailFrame
 	}
@@ -2282,8 +2303,10 @@ func (run *inventoryRun) sameDetailSelection(out detailOutcome, target int) bool
 // pre-click frame carried exactly the detail the target repeated, so
 // clicking that slot back would only repeat the same ambiguity. Among the
 // remaining occupied slots the nearest grid neighbor wins (reading order
-// breaks ties), keeping the click inside the current viewport. No scroll is
-// ever used to find a reference.
+// breaks ties), keeping the click inside the current viewport. A scoped
+// drive-storage rescan additionally excludes cards whose badge lies outside
+// the declared positions, so a reference never clicks outside the approved
+// range. No scroll is ever used to find a reference.
 func (run *inventoryRun) referenceSlot(m PageMatch, target, previous int) (int, bool) {
 	if !run.listVerdict(m) {
 		return 0, false
@@ -2294,6 +2317,12 @@ func (run *inventoryRun) referenceSlot(m PageMatch, target, previous int) (int, 
 	for i, occupied := range m.List.Occupied {
 		if !occupied || i == target || i == previous {
 			continue
+		}
+		if run.inv.storagePage() && len(run.inv.positions) > 0 {
+			pos := m.List.Positions[i]
+			if !pos.known() || !containsPosition(run.inv.positions, pos.Position) {
+				continue
+			}
 		}
 		row, column := l.slotPosition(i)
 		distance := absInt(row-targetRow) + absInt(column-targetColumn)
@@ -2729,6 +2758,7 @@ func (run *inventoryRun) admit(slot *scan.Slot, out detailOutcome, pre platform.
 		Row:                row,
 		Column:             col,
 		Position:           run.position,
+		Page:               run.inv.Layout.Page,
 		Quality:            out.match.Detail.Quality,
 		RarityFilter:       run.observedRarityFilter(out.match),
 		ScrollEvidence:     run.lastScrollEvidence,
@@ -3825,7 +3855,11 @@ func (run *inventoryRun) applyTransition(before, after platform.Frame, beforeMat
 			return fail(fmt.Sprintf("the correspondence (%d,%d)→(%d,%d) changes occupancy",
 				p.FromRow, p.FromColumn, p.ToRow, p.ToColumn))
 		}
-		if run.inv.storagePage() {
+		if run.inv.storagePage() && beforeMatch.List.Occupied[from] {
+			// Empty cells have no card badge to read. Their correspondence is
+			// already proven by equal occupancy above; requiring a badge here
+			// would reject a proven overlap as soon as it contains an empty
+			// cell.
 			beforePos := beforeMatch.List.Positions[from]
 			afterPos := afterMatch.List.Positions[to]
 			if !beforePos.known() || !afterPos.known() || beforePos.Position != afterPos.Position {

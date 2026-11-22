@@ -634,10 +634,10 @@ func (m *ScrollEvidenceMatcher) storageScrollEvidence(before, after platform.Fra
 	for _, direction := range []int{1, -1} {
 		for rows := 1; rows <= m.L.Rows-1; rows++ {
 			signed := rows * direction
-			if _, ok, _ := m.thumbTravelOf(thumbB, thumbA, signed); !ok {
+			if _, ok, _ := m.thumbTravelOfStrict(thumbB, thumbA, signed); !ok {
 				continue
 			}
-			occupied, matched := 0, 0
+			occupied, matched, changed := 0, 0, 0
 			valid := true
 			for r := 0; r < m.L.Rows-rows && valid; r++ {
 				for c := 0; c < m.L.Columns; c++ {
@@ -653,6 +653,16 @@ func (m *ScrollEvidenceMatcher) storageScrollEvidence(before, after platform.Fra
 						valid = false
 						break
 					}
+					// A repeated slot number is not an instance identity.
+					// Require the destination cell itself to show a change
+					// from the before frame; a static same-slot grid must not
+					// satisfy a displacement the list never made.
+					bd := beforePage.List.Positions[to]
+					ad := afterPage.List.Positions[to]
+					if (!bd.known() && ad.known()) ||
+						(bd.known() && ad.known() && bd.Position != ad.Position) {
+						changed++
+					}
 					if !beforeOccupied {
 						continue
 					}
@@ -667,10 +677,11 @@ func (m *ScrollEvidenceMatcher) storageScrollEvidence(before, after platform.Fra
 				}
 			}
 			// At least one occupied overlap cell must carry the same known
-			// slot badge on both sides; an all-empty overlap would leave only
-			// the scrollbar as evidence and is not enough for a card-list
-			// scroll.
-			if valid && occupied > 0 && matched == occupied {
+			// slot badge on both sides, and the destination grid must have
+			// changed somewhere. An all-empty or all-identical overlap leaves
+			// only the scrollbar as evidence and is not enough for a
+			// card-list scroll.
+			if valid && occupied > 0 && matched == occupied && changed > 0 {
 				fits = append(fits, candidate{rows: signed})
 			}
 		}
@@ -951,6 +962,17 @@ func (t thumbTravel) expected(rows int) float64 {
 // the step count at ~1.0 despite measurement jitter, and its genuine one-row
 // scroll must still corroborate.
 func (m *ScrollEvidenceMatcher) thumbTravelOf(before, after thumbReading, rows int) (thumbTravel, bool, string) {
+	return m.thumbTravelCheck(before, after, rows, false)
+}
+
+// thumbTravelOfStrict is the drive-storage variant: both thumb edges must
+// move in the claimed direction; a lone leading-edge move is not enough.
+// The old warehouse keeps thumbTravelOf's original contract.
+func (m *ScrollEvidenceMatcher) thumbTravelOfStrict(before, after thumbReading, rows int) (thumbTravel, bool, string) {
+	return m.thumbTravelCheck(before, after, rows, true)
+}
+
+func (m *ScrollEvidenceMatcher) thumbTravelCheck(before, after thumbReading, rows int, strict bool) (thumbTravel, bool, string) {
 	if !before.ok || !after.ok {
 		return thumbTravel{}, false, "thumb unreadable"
 	}
@@ -960,14 +982,48 @@ func (m *ScrollEvidenceMatcher) thumbTravelOf(before, after thumbReading, rows i
 		return thumbTravel{}, false, fmt.Sprintf("thumb %d–%d → %d–%d fills the track: no scrollable content below the viewport",
 			before.start, before.end, after.start, after.end)
 	}
-	travel := after.start - before.start
-	if rows < 0 {
+	startTravel := after.start - before.start
+	endTravel := after.end - before.end
+	travel := startTravel
+	if strict {
+		translated, both := thumbTranslation(before, after)
+		if both {
+			travel = translated
+		} else {
+			// The trailing edge may be pinned at a track end while the leading
+			// edge still moves for the final row. A synthetic one-edge move
+			// (leading edge 300→306, trailing edge 323→323) is not a track-end
+			// clamp and must not prove a row. Down: the bottom edge is pinned;
+			// up: the top edge is pinned.
+			pinnedDown := rows > 0 && endTravel == 0 && startTravel > 0 &&
+				after.end >= m.C.ScrollbarBottomEndMin
+			pinnedUp := rows < 0 && startTravel == 0 && endTravel < 0 &&
+				after.start <= m.C.ScrollbarTopStartMax
+			if !pinnedDown && !pinnedUp {
+				return thumbTravel{}, false, fmt.Sprintf(
+					"thumb %d–%d → %d–%d did not move both edges together (start %+d, end %+d)",
+					before.start, before.end, after.start, after.end, startTravel, endTravel)
+			}
+			if pinnedUp {
+				travel = endTravel
+			}
+		}
+		if rows < 0 {
+			travel = -travel
+		}
+		travel = absInt(travel)
+	}
+	if rows < 0 && !strict {
 		travel = -travel
 	}
 	totalRows := float64(m.L.Rows) * float64(trackLen) / thumbLen
 	steps := totalRows - float64(m.L.Rows)
 	t := thumbTravel{moved: travel, perRow: (float64(trackLen) - thumbLen) / steps}
 	if float64(travel) < float64(m.C.ScrollbarMoveMin) || !m.thumbTravelFits(t, rows) {
+		if strict {
+			return t, false, fmt.Sprintf("thumb %d–%d → %d–%d travelled %dpx, expected ~%.0fpx (≈%.1fpx per row × %d) within ±%.0f%%",
+				before.start, before.end, after.start, after.end, travel, t.expected(rows), t.perRow, absInt(rows), m.C.ScrollbarTravelTolerance*100)
+		}
 		return t, false, fmt.Sprintf("thumb %d → %d travelled %dpx, expected ~%.0fpx (≈%.1fpx per row × %d) within ±%.0f%%",
 			before.start, after.start, travel, t.expected(rows), t.perRow, absInt(rows), m.C.ScrollbarTravelTolerance*100)
 	}

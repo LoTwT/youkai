@@ -94,11 +94,19 @@ func (run *inventoryRun) matchFrame(frame platform.Frame) (PageMatch, error) {
 		run.inv.updateCoverage()
 		_ = run.inv.writeScope()
 		return m, scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
-			"collect: wheel position %d frame %d: the observed sort label changed from %q to %q", run.position, frame.ID, run.sortLabel, label))
+			"collect: %s frame %d: the observed sort label changed from %q to %q",
+			run.positionLabel(), frame.ID, run.sortLabel, label))
 	}
-	if run.filterActive && m.Page == PageWarehouse && m.Filter != nil && m.Filter.State == FilterClear {
+	if run.inv != nil && run.inv.storagePage() && run.sortLabel != "" && m.Page == PageFilterPanel &&
+		(m.Panel == nil || !m.Panel.SortVerified) {
 		return m, scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
-			"collect: wheel position %d frame %d: the active filter changed to clear", run.position, frame.ID))
+			"collect: %s frame %d: a later filter-panel frame no longer matches the ready-to-scan sort label",
+			run.positionLabel(), frame.ID))
+	}
+	if run.filterActive && (m.Page == PageWarehouse || m.Page == PageDriveStorage) &&
+		m.Filter != nil && m.Filter.State == FilterClear {
+		return m, scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
+			"collect: %s frame %d: the active filter changed to clear", run.positionLabel(), frame.ID))
 	}
 	if run.rebuildGuard != nil {
 		return m, run.checkRebuildFrame(frame, m)

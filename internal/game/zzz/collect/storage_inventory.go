@@ -315,7 +315,22 @@ func (run *inventoryRun) storagePositionLedger(pos int) (*slotLedgerReport, int)
 	report := &slotLedgerReport{Slots: []slotEntry{}}
 	visits := 0
 	for _, cell := range run.ledger.cells {
-		if cell.State == "" || cell.Position != pos {
+		switch {
+		case cell.State == "":
+			// Preserve empty cells in the saved storage ledger. They are
+			// part of the viewport coverage proof and of merge decisions;
+			// the report-only state keeps them distinguishable from an
+			// item slot without changing the live ledger's zero state.
+			cell.State = slotEmpty
+			report.Slots = append(report.Slots, cell)
+			continue
+		case cell.State == slotOutOfScope:
+			// A scoped rescan must retain the cards it saw but did not
+			// click. Every declared position's report carries them so the
+			// saved evidence can show the approved range was respected.
+			report.Slots = append(report.Slots, cell)
+			continue
+		case cell.Position != pos:
 			continue
 		}
 		report.Slots = append(report.Slots, cell)
