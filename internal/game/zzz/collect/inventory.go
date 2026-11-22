@@ -3661,7 +3661,14 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 						rel := run.inv.matcher().MatchScroll(candidate, f)
 						trace.noteCandidate(candidate, f, rel)
 						out.match = rel
-						if rel.Stationary {
+						if rel.SelectionConflict {
+							// A readable selection contradiction invalidates
+							// the pending candidate; an idle/reused frame must
+							// not turn it into a fresh settling sample.
+							haveCandidate = false
+							verdict, stillOnly = waitVerdictUndecided, false
+							settleStreak = 0
+						} else if rel.Stationary {
 							out.settleMatch = rel
 						}
 					}
@@ -3715,6 +3722,16 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 				rel = run.inv.matcher().MatchScroll(candidate, f)
 				trace.noteCandidate(candidate, f, rel)
 				out.match = rel
+				if rel.SelectionConflict {
+					// A readable cross-column selection is a positive
+					// contradiction: discard this candidate instead of
+					// treating the frame as "no anchor" and eventually
+					// committing the old displacement.
+					haveCandidate = false
+					verdict, stillOnly = waitVerdictUndecided, false
+					settleStreak = 0
+					continue
+				}
 				stationary, _ = run.stillnessProven(candidate, f, rel)
 			}
 			// A settling confirmation must be proof the list stayed at the

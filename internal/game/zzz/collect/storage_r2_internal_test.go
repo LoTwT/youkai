@@ -1,10 +1,12 @@
 package collect
 
 import (
+	"context"
 	"image"
 	"image/color"
 	"image/draw"
 	"testing"
+	"time"
 
 	"github.com/LoTwT/youkai/internal/platform"
 )
@@ -220,5 +222,70 @@ func TestStorageReopenedPanelWithClearRangeStops(t *testing.T) {
 	}
 	if _, err := run.matchFrame(platform.Frame{ID: 50}); err == nil {
 		t.Fatal("a panel reopened after preparation with S visibly clear did not invalidate the scan")
+	}
+}
+
+func storageSettleRun(l Layout, m *ScrollEvidenceMatcher, before platform.Frame, frames ...platform.Frame) *inventoryRun {
+	now := time.Now()
+	before.ArrivedAt = now
+	for i := range frames {
+		frames[i].ArrivedAt = now.Add(time.Duration(i+1) * time.Millisecond)
+	}
+	run := &inventoryRun{
+		geo: 1,
+		inv: &Inventory{
+			Layout: l, Matcher: m, ScrollBudget: 2 * time.Second,
+			ScrollTiming: &ScrollTiming{MotionStartBudget: time.Second, SettleBudget: time.Second, SettleObservations: 2},
+		},
+		view: &storageReviewFrames{frames: frames},
+	}
+	run.ledger = run.newStorageLedger(m.Match(before), before.ID)
+	return run
+}
+
+func TestStorageCrossColumnConfirmationCannotSettleLedger(t *testing.T) {
+	l := StorageLayout()
+	m := NewScrollEvidenceMatcher(NewPixelMatcher(l, StorageCalibration()))
+	before := storageSelectedPatternFrame(l, 1, 0, 27, 300, 323)
+	candidate := storageSelectedPatternFrame(l, 2, 1, 18, 306, 329)
+	conflict1 := storageSelectedPatternFrame(l, 3, 1, 19, 306, 329)
+	conflict2 := storageSelectedPatternFrame(l, 4, 1, 19, 306, 329)
+	run := storageSettleRun(l, m, before, candidate, conflict1, conflict2)
+	out, err := run.awaitScroll(context.Background(), before)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.settled {
+		if err := run.applyTransition(before, out.after, m.Match(before), out.afterMatch, out.match); err != nil {
+			t.Fatalf("fixture unexpectedly stopped the commit: %v", err)
+		}
+		t.Fatalf("cross-column confirmation settled ledger viewport %d from candidate %d; latest anchor %d",
+			run.viewport, out.after.ID, out.lastMatch.List.Selected)
+	}
+	if run.viewport != 0 {
+		t.Fatalf("ledger viewport advanced to %d despite a cross-column confirmation", run.viewport)
+	}
+}
+
+func TestStorageAlignedConfirmationSettlesLedger(t *testing.T) {
+	l := StorageLayout()
+	m := NewScrollEvidenceMatcher(NewPixelMatcher(l, StorageCalibration()))
+	before := storageSelectedPatternFrame(l, 1, 0, 27, 300, 323)
+	candidate := storageSelectedPatternFrame(l, 2, 1, 18, 306, 329)
+	confirm1 := storageSelectedPatternFrame(l, 3, 1, 18, 306, 329)
+	confirm2 := storageSelectedPatternFrame(l, 4, 1, 18, 306, 329)
+	run := storageSettleRun(l, m, before, candidate, confirm1, confirm2)
+	out, err := run.awaitScroll(context.Background(), before)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !out.displaced || !out.settled {
+		t.Fatalf("aligned confirmation did not settle: displaced=%t settled=%t", out.displaced, out.settled)
+	}
+	if err := run.applyTransition(before, out.after, m.Match(before), out.afterMatch, out.match); err != nil {
+		t.Fatalf("aligned confirmation did not commit: %v", err)
+	}
+	if run.viewport != 1 {
+		t.Fatalf("aligned confirmation committed viewport %d, want 1", run.viewport)
 	}
 }

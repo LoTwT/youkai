@@ -289,6 +289,11 @@ type ScrollMatch struct {
 	// did not move). It is not movement evidence; callers may combine it
 	// with an independent probe such as the scrollbar thumb.
 	Undecided bool
+	// SelectionConflict reports a readable selection pair that
+	// contradicts a vertical list scroll (for example a cross-column
+	// change). It is a positive conflict, not a missing anchor: a pending
+	// drive-storage candidate must be discarded rather than settled.
+	SelectionConflict bool
 	// Basis names which evidence accepted a Displaced verdict, for field
 	// diagnostics and the stage 5 calibration. It is empty for every other
 	// verdict. The values distinguish the normal competition-margin pass

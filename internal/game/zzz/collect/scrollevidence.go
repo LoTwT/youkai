@@ -385,7 +385,7 @@ func (m *ScrollEvidenceMatcher) MatchScroll(before, after platform.Frame) Scroll
 		// positive contradiction of a vertical list scroll. This must veto
 		// even a MAD-level Stationary/interprets-as-still path; it must not
 		// be relabelled as "no anchor".
-		return ScrollMatch{Undecided: true, Metrics: metrics, Evidence: fmt.Sprintf(
+		return ScrollMatch{Undecided: true, SelectionConflict: true, Metrics: metrics, Evidence: fmt.Sprintf(
 			"frames %d → %d: both selection anchors are readable but the selection changed from slot %d to %d without a vertical row correspondence; the observed selection contradicts a column scroll",
 			before.ID, after.ID, selB, selA)}
 	}
@@ -465,7 +465,7 @@ func (m *ScrollEvidenceMatcher) MatchScroll(before, after platform.Frame) Scroll
 			storageRows = -storageRows
 		}
 		if storageRows != selRows {
-			return ScrollMatch{Undecided: true, Metrics: metrics, Evidence: fmt.Sprintf(
+			return ScrollMatch{Undecided: true, SelectionConflict: true, Metrics: metrics, Evidence: fmt.Sprintf(
 				"frames %d → %d: the selection box names %+d row(s) but the thumb and card overlap name %+d; the witnesses contradict each other; %s",
 				before.ID, after.ID, selRows, storageRows, thumbNote)}
 		}
@@ -820,6 +820,17 @@ func (m *ScrollEvidenceMatcher) zeroDisplacementProven(before, after platform.Fr
 	if selB >= 0 && selA >= 0 {
 		if rows, ok := m.selectionRows(selB, selA); ok && rows != 0 {
 			selectionMoved = true
+		}
+	}
+	if m.L.Page == PageDriveStorage && selB >= 0 && selA >= 0 && selB != selA {
+		if _, ok := m.selectionRows(selB, selA); !ok {
+			// A readable cross-column/non-vertical selection pair is a
+			// positive conflict, not an absent anchor. It cannot prove
+			// stillness, and it must not let the caller settle a pending
+			// candidate as if the confirmation pane had stayed put.
+			return false, fmt.Sprintf(
+				"frames %d → %d: both selection anchors are readable but the selection changed from slot %d to %d without a vertical row correspondence; a cross-column confirmation cannot prove stillness",
+				before.ID, after.ID, selB, selA)
 		}
 	}
 	if selectionMoved {
