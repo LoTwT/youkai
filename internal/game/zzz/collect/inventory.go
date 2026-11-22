@@ -3612,8 +3612,40 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 		}
 		return false
 	}
+	observeFrame := func(rows int, rowsKnown bool, m PageMatch) bool {
+		if rowsKnown && recordBadges(rows, m) {
+			return true
+		}
+		if m.List == nil {
+			return false
+		}
+		selected := m.List.Selected
+		if selected < 0 || selected >= len(run.inv.Layout.Slots) {
+			return false
+		}
+		_, column := run.inv.Layout.slotPosition(selected)
+		switch {
+		case anchorColumn < 0:
+			anchorColumn, anchorSlot = column, selected
+			anchorRows, anchorRowsKnown = rows, rowsKnown
+		case column != anchorColumn:
+			return true
+		case !rowsKnown:
+			return false
+		case !anchorRowsKnown:
+			// A previous readable frame established only the column; this
+			// independently localized frame upgrades it to an absolute row.
+			anchorSlot, anchorRows, anchorRowsKnown = selected, rows, true
+		default:
+			expected := anchorSlot - (rows-anchorRows)*run.inv.Layout.Columns
+			if expected != selected {
+				return true
+			}
+		}
+		return false
+	}
 	if storageAction {
-		_ = recordBadges(0, actionBeforeMatch)
+		_ = observeFrame(0, true, actionBeforeMatch)
 	}
 	actionConflict := false
 	var (
@@ -3711,52 +3743,25 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 			}
 			if !actionConflict {
 				totalRows, totalKnown := scrollSignedRows(total)
-				if !totalKnown && !haveCandidate && !total.Lost {
+				if !totalKnown && !total.Lost {
 					if proven, _ := run.stillnessProven(before, f, total); proven {
 						totalRows, totalKnown = 0, true
 					}
 				}
-				if totalKnown && recordBadges(totalRows, m) {
+				if observeFrame(totalRows, totalKnown, m) {
 					actionConflict = true
 					haveCandidate = false
 					out.match = ScrollMatch{
 						Undecided: true, SelectionConflict: true,
-						Evidence: fmt.Sprintf("frames %d → %d: a known card badge conflicts with an already proven absolute cell after the %+d-row action displacement; the scroll action is invalidated",
-							before.ID, f.ID, totalRows),
+						Evidence: fmt.Sprintf("frames %d → %d: the independently localized frame conflicts with the action's known cells or selection; the scroll action is invalidated", before.ID, f.ID),
 					}
 					verdict, stillOnly = waitVerdictUndecided, false
 					settleStreak = 0
 				}
-				if !actionConflict {
-					if selected := m.List.Selected; selected >= 0 && selected < len(run.inv.Layout.Slots) {
-						_, column := run.inv.Layout.slotPosition(selected)
-						switch {
-						case anchorColumn < 0:
-							// The first reliable selection in an action establishes
-							// the column and, when the total is already proven, its
-							// absolute row. An unreadable pre-action or candidate
-							// frame cannot erase it later.
-							anchorColumn, anchorSlot = column, selected
-							anchorRows, anchorRowsKnown = totalRows, totalKnown
-						case column != anchorColumn:
-							actionConflict = true
-						case anchorRowsKnown && totalKnown:
-							expected := anchorSlot - (totalRows-anchorRows)*run.inv.Layout.Columns
-							if expected != selected {
-								actionConflict = true
-							}
-						}
-						if actionConflict {
-							haveCandidate = false
-							out.match = ScrollMatch{
-								Undecided: true, SelectionConflict: true,
-								Evidence: fmt.Sprintf("frames %d → %d: the action's reliable selection (slot %d at %+d rows) conflicts with the observed slot %d at %+d rows; the scroll action is invalidated",
-									before.ID, f.ID, anchorSlot, anchorRows, selected, totalRows),
-							}
-							verdict, stillOnly = waitVerdictUndecided, false
-							settleStreak = 0
-						}
-					}
+				if !actionConflict && totalKnown && totalRows == 0 && haveCandidate {
+					// A proven return to offset zero clears the old
+					// candidate; a later frame must establish a new one.
+					haveCandidate = false
 				}
 			}
 		}
@@ -3801,12 +3806,12 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 							verdict, stillOnly = waitVerdictUndecided, false
 							settleStreak = 0
 						} else if rel.Stationary {
-							if rows, ok := scrollSignedRows(candidateScroll); ok && recordBadges(rows, m) {
+							if rows, ok := scrollSignedRows(candidateScroll); ok && observeFrame(rows, true, m) {
 								actionConflict = true
 								haveCandidate = false
 								out.match = ScrollMatch{
 									Undecided: true, SelectionConflict: true,
-									Evidence: fmt.Sprintf("frames %d → %d: the reusable confirmation disagrees with a known absolute badge; the scroll action is invalidated", candidate.ID, f.ID),
+									Evidence: fmt.Sprintf("frames %d → %d: the reusable confirmation disagrees with the action's known absolute cells or selection; the scroll action is invalidated", candidate.ID, f.ID),
 								}
 								verdict, stillOnly = waitVerdictUndecided, false
 								settleStreak = 0
@@ -3903,12 +3908,12 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 					settleStreak = 0
 					continue
 				}
-				if candidateRows, ok := scrollSignedRows(candidateScroll); ok && recordBadges(candidateRows, m) {
+				if candidateRows, ok := scrollSignedRows(candidateScroll); ok && observeFrame(candidateRows, true, m) {
 					actionConflict = true
 					haveCandidate = false
 					out.match = ScrollMatch{
 						Undecided: true, SelectionConflict: true,
-						Evidence: fmt.Sprintf("frames %d → %d: the stationary confirmation disagrees with a known absolute badge; the scroll action is invalidated", candidate.ID, f.ID),
+						Evidence: fmt.Sprintf("frames %d → %d: the stationary confirmation disagrees with the action's known absolute cells or selection; the scroll action is invalidated", candidate.ID, f.ID),
 					}
 					verdict, stillOnly = waitVerdictUndecided, false
 					settleStreak = 0
