@@ -124,6 +124,75 @@ func TestRunningCleanupCannotBeReopened(t *testing.T) {
 	}
 }
 
+func TestStaleCleanupPreviewCannotReplaceRunningDeletion(t *testing.T) {
+	for _, target := range []string{"screenshots", "cache"} {
+		t.Run(target, func(t *testing.T) {
+			m, q, svc := settingsTestModel(t)
+			drainAll(t, m, q)
+			hasFiles := false
+			svc.previewFn = func(string, string) (app.CleanupPreview, error) {
+				if hasFiles {
+					return cleanupPreview(), nil
+				}
+				return app.CleanupPreview{}, nil
+			}
+			svc.cachePreview = app.StorageClearPreview{}
+			request, cancel, confirm := func() { m.RequestScreenshotCleanup("r1") }, m.CancelCleanup, m.ConfirmCleanup
+			running := m.cleanupRunning
+			if target == "cache" {
+				request, cancel, confirm = m.RequestCacheClear, m.CancelStorageClear, m.ConfirmStorageClear
+				running = func() bool { return m.storagePrompt != nil && m.storagePrompt.running }
+			}
+			request()
+			m.Idle()
+			stale := q.take()
+			if len(stale) != 1 {
+				t.Fatalf("first preview queued %d updates, want one", len(stale))
+			}
+			cancel()
+			hasFiles = true
+			svc.cachePreview = app.StorageClearPreview{Files: 1, Bytes: 1024}
+			request()
+			drainAll(t, m, q)
+			confirm()
+			if !running() {
+				t.Fatal("the second preview did not start cleanup")
+			}
+			stale[0]()
+			if !running() {
+				t.Error("the first preview cleared the running cleanup")
+			}
+			drainAll(t, m, q)
+		})
+	}
+}
+
+func TestHistoryOpenPreventsConfirmingCleanup(t *testing.T) {
+	m, q, tt, svc, gates := gatedHistoryModel(t)
+	svc.previewFn = func(string, string) (app.CleanupPreview, error) { return cleanupPreview(), nil }
+	m.RequestRecordCleanup("r01")
+	drainAll(t, m, q)
+	m.openHistoryRow(0)
+	<-gates["r01"].started
+	tt.Frame()
+	_ = tt.Click("确认删除") // May be disabled while the record is loading.
+	m.ConfirmCleanup()
+	if m.cleanup == nil || m.cleanup.running {
+		t.Error("record cleanup started while the record was being opened")
+	}
+	m.cancelHistoryOpen()
+	gates["r01"].unblock()
+	drainAll(t, m, q)
+	if _, _, records, _ := svc.cleanupCalls(); len(records) != 0 {
+		t.Fatalf("deleted records while reading: %v", records)
+	}
+	m.ConfirmCleanup()
+	drainAll(t, m, q)
+	if _, _, records, _ := svc.cleanupCalls(); len(records) != 1 {
+		t.Fatalf("cleanup after cancelling the read got deletions %v, want one", records)
+	}
+}
+
 func TestViewHistoryScreenshotCleanupPreviewsCancelAndFails(t *testing.T) {
 	svc := cleanupPreviewService(
 		[]record.RecordInfo{{ID: "r1", LatestRevision: 2, SavedAt: time.Now()}},

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"time"
 )
@@ -182,21 +183,18 @@ func (s *Store) CommitSlotMerge(merge SlotMergeCommit) (revision int64, err erro
 			return 0, fmt.Errorf("record: %q changed after slot merge preview: %w", pair.id, ErrRevisionConflict)
 		}
 	}
-	dirs := []string{s.checkpointsDir(merge.RecordID)}
-	if len(merge.EvidenceCopies) != 0 {
-		dirs = append(dirs, s.evidenceDir(merge.RecordID))
+	checkpointDir := s.checkpointsDir(merge.RecordID)
+	info, err := s.fs.Lstat(checkpointDir)
+	if err != nil {
+		return 0, err
 	}
-	for _, dir := range dirs {
-		info, err := s.fs.Lstat(dir)
-		if err != nil {
-			return 0, err
-		}
-		if !info.IsDir() {
-			return 0, fmt.Errorf("record: slot merge destination %q is not a real directory", dir)
-		}
+	if !info.IsDir() {
+		return 0, fmt.Errorf("record: slot merge destination %q is not a real directory", checkpointDir)
 	}
 
 	state := s.state(merge.RecordID)
+	evidenceDir := s.evidenceDir(merge.RecordID)
+	createdEvidenceDir := false
 	var created []string
 	defer func() {
 		if err == nil {
@@ -206,7 +204,31 @@ func (s *Store) CommitSlotMerge(merge SlotMergeCommit) (revision int64, err erro
 			err = s.removePartial(s.evidencePath(merge.RecordID, id), err)
 			delete(state.pendingEvidence, id)
 		}
+		if createdEvidenceDir {
+			err = s.removePartial(evidenceDir, err)
+		}
 	}()
+	if len(merge.EvidenceCopies) != 0 {
+		info, err := s.fs.Lstat(evidenceDir)
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+			// Screenshot cleanup removes the empty directory. Recreate just
+			// that child so this revision can cite the supplement's evidence.
+			if err := s.fs.Mkdir(evidenceDir, 0o755); err != nil {
+				return 0, fmt.Errorf("record: create slot merge evidence directory: %w", err)
+			}
+			createdEvidenceDir = true
+		case err != nil:
+			return 0, err
+		case !info.IsDir():
+			return 0, fmt.Errorf("record: slot merge destination %q is not a real directory", evidenceDir)
+		}
+		// A previous attempt may have left the directory behind before
+		// syncing its entry. Flush the parent before publishing any copies.
+		if err := s.fs.SyncDir(s.recordDir(merge.RecordID)); err != nil {
+			return 0, fmt.Errorf("record: sync slot merge evidence directory entry: %w", err)
+		}
+	}
 	doc := cloneCheckpoint(&merge.Checkpoint)
 	for _, ev := range doc.Evidence {
 		sourceID, ok := merge.EvidenceCopies[ev.ID]

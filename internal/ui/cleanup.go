@@ -68,6 +68,11 @@ func (m *Model) cleanupRunning() bool {
 	return m.cleanup != nil && m.cleanup.running
 }
 
+func (m *Model) recordDeletionRunning(id string) bool {
+	p := m.cleanup
+	return p != nil && p.running && (p.target == cleanupAllRecords || (p.target == cleanupOneRecord && p.recordID == id))
+}
+
 // RequestScreenshotCleanup opens the measured confirmation for one
 // record's screenshots.
 func (m *Model) RequestScreenshotCleanup(recordID string) {
@@ -105,12 +110,12 @@ func (m *Model) requestCleanup(target cleanupTarget, recordID string) {
 		m.cleanupNotice = reason
 		return
 	}
-	m.cleanup = &cleanupPrompt{target: target, recordID: recordID, previewing: true}
+	p := &cleanupPrompt{target: target, recordID: recordID, previewing: true}
+	m.cleanup = p
 	m.goAsync(func() {
 		preview, err := m.previewCleanup(target, recordID)
 		m.update(func() {
-			p := m.cleanup
-			if p == nil || p.target != target || p.recordID != recordID {
+			if m.cleanup != p {
 				return
 			}
 			p.previewing = false
@@ -203,7 +208,7 @@ func (m *Model) RequestCacheClear() { m.requestStorageClear(storageClearCache) }
 func (m *Model) RequestOldLogClear() { m.requestStorageClear(storageClearOldLogs) }
 
 func (m *Model) requestStorageClear(target storageClearTarget) {
-	if target == storageClearNone {
+	if target == storageClearNone || (m.storagePrompt != nil && m.storagePrompt.running) {
 		return
 	}
 	m.cleanupNotice = ""
@@ -212,12 +217,12 @@ func (m *Model) requestStorageClear(target storageClearTarget) {
 		m.cleanupNotice = reason
 		return
 	}
-	m.storagePrompt = &storagePrompt{target: target, previewing: true}
+	p := &storagePrompt{target: target, previewing: true}
+	m.storagePrompt = p
 	m.goAsync(func() {
 		preview, err := m.previewStorageClear(target)
 		m.update(func() {
-			p := m.storagePrompt
-			if p == nil || p.target != target {
+			if m.storagePrompt != p {
 				return
 			}
 			p.previewing = false
@@ -534,6 +539,8 @@ func (m *Model) cleanupBlockedReason() string {
 		return "当前构建未启用导出，历史清理不可用。"
 	case m.cleanup != nil && m.cleanup.running:
 		return "正在执行清理，完成前不能开始另一项。"
+	case m.historyOpen != nil:
+		return "正在读取记录，完成或取消打开后才能清理。"
 	case m.slotMerge != nil:
 		return "请先结束号位合并。"
 	case m.exitState == exitRunning || m.exitState == exitDone:

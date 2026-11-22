@@ -2,6 +2,7 @@ package platform
 
 import (
 	"errors"
+	"fmt"
 	"image"
 	"strings"
 	"testing"
@@ -102,6 +103,34 @@ func TestWinReadinessTargetNotFound(t *testing.T) {
 		}
 	}
 	assertReadOnly(t, w)
+}
+
+func TestWinReadinessMinimizedTarget(t *testing.T) {
+	for _, target := range []TargetSpec{{}, {ExecutablePath: gameExe}} {
+		t.Run(fmt.Sprintf("fixed=%t", target.ExecutablePath != ""), func(t *testing.T) {
+			w := newWinWorld(t)
+			w.minimize()
+			req := ReadinessRequest{Target: target, Display: testDisplayPolicy()}
+			report, err := w.adapter.CheckReadiness(req)
+			if err != nil {
+				t.Fatalf("check readiness: %v", err)
+			}
+			if target.ExecutablePath == "" && (len(report.Candidates) != 1 || report.Candidates[0].Handle != uintptr(gameHwnd)) {
+				t.Fatalf("candidates = %+v, want the minimized game window retained", report.Candidates)
+			}
+			checks := readinessChecks(t, report)
+			check := checks[ReadinessTargetClient]
+			if check.Verdict != ReadinessUnsatisfied || check.Fault == nil || check.Fault.Code != CodeTargetHidden {
+				t.Errorf("target = %+v, want unsatisfied targetHidden", check)
+			}
+			for _, item := range []ReadinessItem{ReadinessGameResolution, ReadinessWindowPosition, ReadinessDisplayScale} {
+				if check := checks[item]; check.Verdict != ReadinessUnknown || check.Fault != nil {
+					t.Errorf("%s = %+v, want unknown without a measurement fault", item, check)
+				}
+			}
+			assertReadOnly(t, w)
+		})
+	}
 }
 
 func TestWinReadinessTargetAmbiguousNeedsAChoice(t *testing.T) {

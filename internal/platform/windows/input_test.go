@@ -3,6 +3,7 @@ package windows
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -80,6 +81,32 @@ func clickRequest(version GeometryVersion, p PixelPoint) InputRequest {
 		GeometryVersion: version,
 		FrameRef:        "frame-1",
 		Op:              InputOp{Kind: OpClick, Point: p, Button: MouseButtonLeft},
+	}
+}
+
+func TestInputGateClosesDuringPrecheck(t *testing.T) {
+	ops := []InputOp{
+		{Kind: OpClick, Button: MouseButtonLeft},
+		{Kind: OpKeyPress, Key: 0x41},
+		{Kind: OpScroll, WheelSteps: 1},
+	}
+	for _, op := range ops {
+		t.Run(string(op.Kind), func(t *testing.T) {
+			permitted := true
+			sender := newFakeSender()
+			actor := NewInputActor(sender, func(InputRequest) error {
+				permitted = false
+				return nil
+			})
+			actor.SetInputGate(func() bool { return permitted })
+			actor.SetSleep(func(time.Duration) {})
+			actor.Permit()
+			res := actor.Dispatch(InputRequest{Op: op})
+			if res.State != StateNotDispatched || res.Err == nil ||
+				!strings.Contains(res.Err.Error(), "input permission closed:") || sender.callCount() != 0 {
+				t.Fatalf("dispatch after the gate closed: %+v, SendInput calls=%d", res, sender.callCount())
+			}
+		})
 	}
 }
 
@@ -593,6 +620,7 @@ func TestInputPrecheck(t *testing.T) {
 	t.Run("minimized refuses", func(t *testing.T) {
 		w := newPrecheckWorld(t)
 		w.win.byHandle[7].iconic = true
+		w.fg.foreground = 999
 		if code := precheckCode(w.precheck()(clickRequest(1, PixelPoint{10, 10}))); code != PrecheckMinimized {
 			t.Fatalf("want minimized, got %v", code)
 		}

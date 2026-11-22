@@ -249,6 +249,49 @@ func TestObserveTargetMeasurementFailsKeepsLastGeometry(t *testing.T) {
 	}
 }
 
+func TestObserveTargetMinimizedKeepsLastGeometryUntilRestored(t *testing.T) {
+	w := newObserveWorld(t)
+	before := w.observe(time.Now())
+	w.win.byHandle[7].iconic = true
+	w.fg.foreground = 555
+	sizes := 0
+	w.geo.clientSize = func() (int, int, error) {
+		sizes++
+		return 0, 0, nil
+	}
+	minimized := w.observe(time.Now())
+	if !minimized.Matched || !minimized.Minimized || minimized.Fault != nil {
+		t.Errorf("minimized observation = %+v, want matched target without a geometry fault", minimized)
+	}
+	if sizes != 0 || minimized.Geometry != before.Geometry || minimized.GeometryChanged {
+		t.Errorf("minimization read the client size %d times or changed geometry: %+v", sizes, minimized)
+	}
+
+	w.win.byHandle[7].iconic = false
+	w.fg.foreground = 7
+	w.geo.clientSize = func() (int, int, error) { return 1920, 1080, nil }
+	w.geo.toScreen = func(x, y int) (PixelPoint, error) {
+		return PixelPoint{X: 5 + x, Y: y}, nil
+	}
+	restored := w.observe(time.Now())
+	if restored.Minimized || restored.Fault != nil || !restored.GeometryChanged ||
+		restored.Geometry.Version != before.Geometry.Version+1 || restored.Geometry.Client.Min.X != 5 {
+		t.Errorf("restored observation = %+v, want fresh geometry from the restored window", restored)
+	}
+}
+
+func TestObserveTargetMinimizedDuringMeasurement(t *testing.T) {
+	w := newObserveWorld(t)
+	w.geo.clientSize = func() (int, int, error) {
+		w.win.byHandle[7].iconic = true
+		return 0, 0, nil
+	}
+	obs := w.observe(time.Now())
+	if !obs.Minimized || obs.Fault != nil || obs.Geometry.Version != 0 {
+		t.Fatalf("minimized during measurement = %+v, want no geometry or fault", obs)
+	}
+}
+
 func TestObserveTargetFocusLossIsObservationNotFault(t *testing.T) {
 	w := newObserveWorld(t)
 	w.observe(time.Now())

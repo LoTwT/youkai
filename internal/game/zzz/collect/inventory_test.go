@@ -2595,8 +2595,8 @@ func TestTraverseIncompletePositionLimitStops(t *testing.T) {
 	if snap.Counts.Captured != 0 {
 		t.Fatalf("failed preparations admit nothing: %+v", snap.Counts)
 	}
-	if snap.Trigger == nil || !strings.Contains(snap.Trigger.Message, "3 wheel positions are incomplete") {
-		t.Fatalf("the limit trigger does not name the count: %+v", snap.Trigger)
+	if snap.Trigger == nil || !strings.Contains(snap.Trigger.Message, "limit of 3") {
+		t.Fatalf("the limit trigger does not name the threshold: %+v", snap.Trigger)
 	}
 	scope := h.scope()
 	if len(scope.Positions) != 3 || scope.Coverage != "partial" {
@@ -2614,6 +2614,65 @@ func TestTraverseIncompletePositionLimitStops(t *testing.T) {
 	}
 	if drags := countOps(game.opsSnapshot(), platform.InputDrag, game.layout.TopFrom, game.layout.TopTo); drags != 0 {
 		t.Fatalf("%d top drags after three failed preparations", drags)
+	}
+}
+
+func TestTraverseScopedPositionsAllIncompleteFails(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		positions []int
+	}{
+		{"one position", []int{4}},
+		{"two positions", []int{2, 4}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			game := newScriptedGame()
+			game.sClickDoesNothing = true
+			h := newTraversalHarness(t, game)
+			if err := h.inv.SetScanPositions(tc.positions); err != nil {
+				t.Fatal(err)
+			}
+			h.start()
+			snap := h.endFailed(collect.CodePositionFailureLimit)
+			if !strings.Contains(snap.Trigger.Message, fmt.Sprintf("limit of %d", len(tc.positions))) {
+				t.Errorf("the trigger does not name the selected threshold: %+v", snap.Trigger)
+			}
+			if snap.Counts.Captured != 0 {
+				t.Fatalf("failed preparations admitted items: %+v", snap.Counts)
+			}
+			scope := h.scope()
+			if len(scope.Positions) != len(tc.positions) || scope.Coverage != "partial" {
+				t.Fatalf("scope = %+v, want partial coverage for %v", scope, tc.positions)
+			}
+			for i, entry := range scope.Positions {
+				if entry.Position != tc.positions[i] || entry.Complete || entry.Stage != "filter" ||
+					entry.ReasonCode != collect.CodeNavigationMismatch || entry.Reason == "" {
+					t.Errorf("position ledger = %+v, want incomplete position %d with the filter failure", entry, tc.positions[i])
+				}
+			}
+		})
+	}
+}
+
+func TestTraverseScopedPositionsOneCompleteFinishes(t *testing.T) {
+	game := newScriptedGame()
+	game.sClickDoesNothingAt = 2
+	h := newTraversalHarness(t, game)
+	if err := h.inv.SetScanPositions([]int{2, 4}); err != nil {
+		t.Fatal(err)
+	}
+	h.start()
+	h.endCompleted()
+
+	scope := h.scope()
+	if len(scope.Positions) != 2 || scope.Coverage != "partial" {
+		t.Fatalf("scope = %+v, want partial coverage for positions 2 and 4", scope)
+	}
+	if first := scope.Positions[0]; first.Position != 2 || first.Complete || first.Stage != "filter" {
+		t.Errorf("first position = %+v, want incomplete position 2", first)
+	}
+	if second := scope.Positions[1]; second.Position != 4 || !second.Complete || !second.Top || !second.Bottom {
+		t.Errorf("second position = %+v, want position 4 with complete coverage of its empty list", second)
 	}
 }
 

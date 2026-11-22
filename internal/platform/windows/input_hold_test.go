@@ -137,7 +137,7 @@ func TestDragAbortsWhenStepGateCloses(t *testing.T) {
 	actor, sleep := holdActor(sender)
 
 	permit := true
-	actor.SetStepGate(func() bool { return permit })
+	actor.SetInputGate(func() bool { return permit })
 	// The gate closes while the second step sleeps.
 	step := 0
 	actor.SetSleep(func(d time.Duration) {

@@ -26,9 +26,9 @@ import (
 // and run before this one exits; the handoff below must stay independent
 // of the lock. The entry point's deferred release runs only after Run
 // returned. OnQuit therefore runs after the framework's last write and
-// before the new process exists: it detaches the diagnostic log first and
-// then releases whatever the teardown left held (DataRootLock.Close is
-// idempotent, so the release is a no-op after a successful teardown).
+// before the new process exists: it seals and drains service writes, then
+// detaches the diagnostic log and releases whatever the teardown left held.
+// The release is a no-op after a successful teardown.
 //
 // Only the installed update's restart hands over here: a cancelled
 // relaunch never reaches OnQuit. A plain explicit exit whose teardown
@@ -42,6 +42,8 @@ type relaunchHandoff struct {
 	updateInstalled bool
 	// settled reports that an explicit exit reached onExitSettled.
 	settled bool
+	// sealWrites joins repair writes admitted after a failed teardown.
+	sealWrites func() error
 	// detachLog stops the standard logger from writing into the diagnostic
 	// log under the data root. On the restart path a new process may
 	// already be appending to that file while this one still logs — a
@@ -56,12 +58,13 @@ type relaunchHandoff struct {
 	release func() error
 }
 
-// newRelaunchHandoff wires the entry point's handoff: the diagnostic log
-// detaches to stderr and release frees the held data-root occupancy.
-func newRelaunchHandoff(dataLock *app.DataRootLock) *relaunchHandoff {
+// newRelaunchHandoff wires the write drain, log detachment and occupancy
+// release used at the irrevocable exit.
+func newRelaunchHandoff(dataLock *app.DataRootLock, sealWrites func() error) *relaunchHandoff {
 	return &relaunchHandoff{
-		detachLog: detachDiagnosticLog,
-		release:   dataLock.Close,
+		sealWrites: sealWrites,
+		detachLog:  detachDiagnosticLog,
+		release:    dataLock.Close,
 	}
 }
 
@@ -104,7 +107,14 @@ func (h *relaunchHandoff) onExitSettled(relaunch, quit func()) {
 
 // onQuit is the MyGo OnQuit listener.
 func (h *relaunchHandoff) onQuit() {
-	if !h.updateInstalled || !h.settled {
+	if !h.settled {
+		return
+	}
+	// The remaining accepted writes finish without waiting for the UI.
+	if err := h.sealWrites(); err != nil {
+		log.Printf("youkai: accepted write failed during final exit: %v", err)
+	}
+	if !h.updateInstalled {
 		return
 	}
 	// Detach the log before the release: from here the lines this process

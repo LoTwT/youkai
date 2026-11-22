@@ -183,7 +183,6 @@ func historySessionSummary(info record.RecordInfo, cp *record.Checkpoint, active
 	entry.Interrupted = info.ID != activeID && InterruptedSession(cp.Session.Termination)
 	entry.Client = cp.Session.Client
 	entry.CapturedCount = cp.Session.CapturedCount
-	entry.Coverage = cp.Session.Coverage.Status
 	if cp.Session.Termination != nil {
 		term := *cp.Session.Termination
 		entry.Termination = &term
@@ -195,12 +194,17 @@ func historySessionSummary(info record.RecordInfo, cp *record.Checkpoint, active
 		entry.SortVerified = sort == record.SortVerificationVerified
 		entry.SortVerifiedKnown = true
 	}
-	if plan, known := DeclaredScanPlan(cp.Session.Scope); known {
+	plan, known := DeclaredScanPlan(cp.Session.Scope)
+	if known {
 		entry.ScanPositionsKnown = true
 		entry.ScanPositions = append([]int(nil), plan.Positions...)
 		entry.RescanOf = plan.RescanOf
 	}
 	entry.RangeInvalid = ScanScopeDamaged(cp.Session.Scope)
+	entry.Coverage = coverageConclusion(&cp.Session, plan)
+	if entry.RangeInvalid {
+		entry.Coverage = record.CoveragePartial
+	}
 	if ledger, known := cp.Session.PositionConclusions(); known {
 		entry.IncompletePositionsKnown = true
 		entry.PositionOutcomes = PositionOutcomes(ledger.Positions)

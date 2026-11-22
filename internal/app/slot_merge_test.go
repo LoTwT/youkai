@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -168,6 +170,53 @@ func TestSlotMergeRefusesUnassignedItemsAndStaleRevisions(t *testing.T) {
 	}
 	if got := latestMergeFixture(t, store, base).Checkpoint; got.SavedRevision != 1 || len(got.SlotMerges) != 0 {
 		t.Fatalf("rejected merge wrote a generation: %+v", got)
+	}
+}
+
+func TestSlotMergeAfterOriginalScreenshotsAreDeleted(t *testing.T) {
+	paths := newTestPaths(t)
+	store, err := record.Open(paths.Data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := newServiceWithStore(t, paths, store, nil, nil)
+	base := saveSlotMergeFixture(t, store, "original", "", nil, []record.PositionConclusion{
+		{Position: 1, Complete: true}, {Position: 4},
+	}, []int{1, 4})
+	supplement := saveSlotMergeFixture(t, store, "supplement", base, []int{4}, []record.PositionConclusion{
+		{Position: 4, Complete: true},
+	}, []int{4})
+	if _, err := svc.DeleteRecordScreenshots(base); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Dir(record.EvidencePath(paths.Data, base, "000001-line0"))
+	if _, err := os.Lstat(dir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("cleanup left an evidence directory: %v", err)
+	}
+	if err := svc.Quit(); err != nil {
+		t.Fatal(err)
+	}
+	store, err = record.Open(paths.Data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc = newServiceWithStore(t, paths, store, nil, nil)
+	preview, err := svc.PreviewSlotMerge(supplement)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.MergeSlots(mergeFixtureRequest(preview, 4)); err != nil {
+		t.Fatal(err)
+	}
+	cp := latestMergeFixture(t, store, base).Checkpoint
+	if len(cp.Items) != 2 || len(cp.SlotMerges) != 1 || len(cp.SlotMerges[0].Replaced) != 1 ||
+		len(cp.Items[0].EvidenceIDs) != 0 || len(cp.SlotMerges[0].Replaced[0].EvidenceIDs) != 0 ||
+		len(cp.Evidence) != 1 || !slices.Equal(cp.Items[1].EvidenceIDs, []string{cp.Evidence[0].ID}) {
+		t.Fatalf("merge did not preserve screenshot cleanup or import the new screenshot: %+v", cp)
+	}
+	got, err := os.ReadFile(record.EvidencePath(paths.Data, base, cp.Evidence[0].ID))
+	if err != nil || string(got) != "supplement item 1" {
+		t.Fatalf("copied screenshot = %q, %v", got, err)
 	}
 }
 

@@ -477,7 +477,13 @@ func TestSettingsStorageFromPrepareCheck(t *testing.T) {
 	tt := ui.NewTester(m.View, 1180, 520)
 	settle(t, m, q, tt)
 
-	m.ShowStorageFromPrepareCheck()
+	applyReadinessReport(t, m, q, tt, svc, readinessWith(app.ReadinessCheck{
+		Item: app.ReadinessDiskSpace, Verdict: app.ReadinessUnsatisfied,
+		Current: "100000000", Required: "1073741824",
+	}))
+	if err := tt.Click("去清理"); err != nil {
+		t.Fatal(err)
+	}
 	settle(t, m, q, tt)
 	if m.displayPage() != pageSettings {
 		t.Fatalf("the disk-space entry opened %v, want settings", m.displayPage())
@@ -495,6 +501,9 @@ func TestSettingsStorageFromPrepareCheck(t *testing.T) {
 
 	clickRevealedSettingsControl(t, tt, 520, "清缓存")
 	settle(t, m, q, tt)
+	svc.mu.Lock()
+	svc.readiness = fakeReadyReport(nil, 0, 0)
+	svc.mu.Unlock()
 	if err := tt.Click("确认清理"); err != nil {
 		t.Fatal(err)
 	}
@@ -507,6 +516,9 @@ func TestSettingsStorageFromPrepareCheck(t *testing.T) {
 	}
 	if tt.HasText("完成后返回准备检查") {
 		t.Fatal("the return promise outlived the return")
+	}
+	if !tt.HasText("全部满足") {
+		t.Fatalf("the prepare check did not refresh after cleanup: %q", tt.Texts())
 	}
 }
 

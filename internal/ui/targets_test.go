@@ -153,6 +153,8 @@ func TestUniqueTargetSelectionKeepsReadinessGuards(t *testing.T) {
 			Current: "target=high self=medium", FaultCode: "integrityMismatch"},
 		{Item: app.ReadinessGameResolution, Verdict: app.ReadinessUnsatisfied,
 			Current: "2560x1440", Required: "1920x1080", FaultCode: "clientTierNotOpened"},
+		{Item: app.ReadinessTargetClient, Verdict: app.ReadinessUnsatisfied,
+			Current: "minimized=true", FaultCode: "targetHidden"},
 	} {
 		t.Run(string(check.Item), func(t *testing.T) {
 			svc := &fakeService{targets: []app.TargetCandidate{cand}, readiness: readinessWith(check)}
@@ -171,6 +173,17 @@ func TestUniqueTargetSelectionKeepsReadinessGuards(t *testing.T) {
 			settle(t, m, q, tt)
 			if len(svc.starts) != 0 {
 				t.Fatal("disabled start issued a request")
+			}
+			if check.FaultCode == "targetHidden" {
+				if !tt.HasText("游戏窗口被最小化或隐藏。") {
+					t.Fatal("the minimized window is not named in the start refusal")
+				}
+				applyReadinessReport(t, m, q, tt, svc, readinessWith(app.ReadinessCheck{
+					Item: app.ReadinessTargetClient, Verdict: app.ReadinessSatisfied,
+				}))
+				if !m.scanStartReady() || m.chosenTarget() == nil || m.chosenTarget().Handle != cand.Handle {
+					t.Fatal("restoring the same window should unblock start without changing selection")
+				}
 			}
 		})
 	}

@@ -571,7 +571,57 @@ func (w *winWorld) openReady(t *testing.T) Session {
 	return sess
 }
 
+func (w *winWorld) minimize() {
+	w.win.mu.Lock()
+	w.win.wnds[0].iconic = true
+	w.win.mu.Unlock()
+	w.geo.mu.Lock()
+	w.geo.clientSize = windows.PixelPoint{}
+	w.geo.mu.Unlock()
+	w.fg.set(999)
+}
+
 // ---- tests ----
+
+func TestWinMinimizedWindowRefusesOpen(t *testing.T) {
+	w := newWinWorld(t)
+	w.minimize()
+
+	_, err := w.adapter.Open(context.Background(), w.config())
+	var f *Fault
+	if !errors.As(err, &f) || f.Code != CodeTargetHidden || f.Class != ClassPremise {
+		t.Fatalf("open on a minimized window = %v, want targetHidden premise", err)
+	}
+	if w.hotkey.registered() || w.gdi.captures != 0 {
+		t.Fatal("refused open must not keep a hotkey or capture the minimized window")
+	}
+}
+
+func TestWinMinimizedWindowRefusesCaptureAndInput(t *testing.T) {
+	w := newWinWorld(t)
+	w.adapter.WatchEvery = time.Hour
+	sess := w.openReady(t)
+	defer sess.Close()
+	before := w.gdi.captures
+	w.minimize()
+
+	obs, err := sess.Observe()
+	if err != nil || obs.Ready || mostSevere(obs.Problems).Code != CodeTargetHidden {
+		t.Errorf("observe on a minimized window = %+v, %v, want targetHidden", obs, err)
+	}
+	_, err = sess.Frame(context.Background(), FrameRequest{})
+	var f *Fault
+	if !errors.As(err, &f) || f.Code != CodeTargetHidden {
+		t.Errorf("frame on a minimized window = %v, want targetHidden", err)
+	}
+	res := sess.Dispatch(InputOp{Kind: InputClick, Geometry: 1, At: image.Pt(3, 5)})
+	if res.Status != InputNotDispatched || res.Denial == nil || res.Denial.Code != CodeTargetHidden {
+		t.Errorf("dispatch on a minimized window = %+v, want targetHidden", res)
+	}
+	if w.gdi.captures != before || len(w.send.batches()) != 0 {
+		t.Fatal("a minimized window must not receive a capture or input")
+	}
+}
 
 // W1: target resolution and geometry/DPI verification at open.
 func TestWinOpenResolution(t *testing.T) {
@@ -1348,6 +1398,32 @@ func TestWinHotkeyAndClose(t *testing.T) {
 	rep2 := sess.Close()
 	if rep2.CaptureStopped != rep.CaptureStopped {
 		t.Fatalf("close must be idempotent: %+v", rep2)
+	}
+}
+
+func TestWinCloseClosesInputBeforeWaitingForWatcher(t *testing.T) {
+	w := newWinWorld(t)
+	session, err := w.adapter.Open(context.Background(), w.config())
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := session.(*winSession)
+	s.actor.Permit()
+	if s.actor.Closed() {
+		t.Fatal("the actor did not accept input before close")
+	}
+	// Represent a watcher that is still finishing its last observation.
+	s.watchStarted = true
+	closed := make(chan CloseReport, 1)
+	go func() { closed <- s.Close() }()
+	<-s.watchStop
+	wasClosed := s.actor.Closed()
+	close(s.watchDone)
+	if rep := <-closed; rep.Err != nil {
+		t.Fatal(rep.Err)
+	}
+	if !wasClosed {
+		t.Fatal("Close left the actor open while waiting for the watcher")
 	}
 }
 

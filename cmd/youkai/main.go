@@ -234,7 +234,7 @@ func main() {
 	// a failed teardown the handoff below releases it from OnQuit, after
 	// the framework's last write and before relaunchNow. Both callbacks
 	// run on the UI thread, as does everything they touch.
-	handoff := newRelaunchHandoff(dataLock)
+	handoff := newRelaunchHandoff(dataLock, svc.SealWritesForExit)
 	// The no-argument form preserves the original process arguments.
 	relaunch := func() { mygo.App.Relaunch() }
 

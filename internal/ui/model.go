@@ -459,6 +459,8 @@ type Model struct {
 	historyOpen       *historyOpen
 	historyOpenFailed *historyOpen
 	historyOpenError  string
+	// Review writes can change the list's counts while it is off screen.
+	historyNeedsRefresh bool
 	// historyLoadSeq identifies the newest load; a late result from an
 	// older load must not replace its list or clear its loading state.
 	historyLoadSeq uint64
@@ -1041,6 +1043,7 @@ type HistoryEntry struct {
 func (m *Model) loadHistory() {
 	m.historyLoadSeq++
 	seq := m.historyLoadSeq
+	m.historyNeedsRefresh = false
 	m.historyLoading = true
 	m.goAsync(func() {
 		records, err := m.cfg.Service.HistoryRecords()
@@ -1051,6 +1054,7 @@ func (m *Model) loadHistory() {
 			}
 			m.historyLoading = false
 			if err != nil {
+				m.historyNeedsRefresh = true
 				m.histErr = err.Error()
 				return
 			}
@@ -1227,7 +1231,7 @@ func (m *Model) OpenHistory() {
 // selection, scroll and unsaved edit; another record waits for the editor
 // to settle before it replaces the workspace.
 func (m *Model) openRecord(id string) {
-	if id == "" || m.exitState == exitRunning || m.exitState == exitDone {
+	if id == "" || m.Exiting() || m.recordDeletionRunning(id) {
 		return
 	}
 	if m.historyOpen != nil || m.exitIntent != exitIntentNone || m.navPrompt != nil {
@@ -1257,7 +1261,7 @@ func (m *Model) openRecord(id string) {
 // this action always replaces the workspace and loads from disk; it also
 // retries a record whose previous load failed.
 func (m *Model) performOpenRecord(id string, exportAfterLoad bool) {
-	if id == "" {
+	if id == "" || m.recordDeletionRunning(id) {
 		return
 	}
 	m.dropRescanContext()

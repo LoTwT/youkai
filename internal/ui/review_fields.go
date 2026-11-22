@@ -126,8 +126,6 @@ func (m *Model) reviewProblems(row *Row) []reviewProblem {
 	if row == nil {
 		return nil
 	}
-	editing := m.edit != nil && m.rec != nil &&
-		m.edit.recordID == m.rec.ID && m.edit.seq == row.Seq
 	var problems []reviewProblem
 	// Problems are deduplicated by (field, code), not by their prose: a
 	// persisted old message and the current validation can describe the
@@ -152,7 +150,9 @@ func (m *Model) reviewProblems(row *Row) []reviewProblem {
 			Field: field, Code: code, Message: message, Severity: severity, Kind: kind,
 		})
 	}
-	if editing {
+	if m.reviewEditing(row) {
+		// Saving a draft replaces the stored issues with its current
+		// validation. Keep issues from the old revision out of this form.
 		for _, problem := range m.edit.fieldErrors {
 			add(problem.Field, "", problem.Message, zzz.SeverityError, reviewProblemBlocking)
 		}
@@ -164,15 +164,6 @@ func (m *Model) reviewProblems(row *Row) []reviewProblem {
 		}
 		for _, warning := range m.edit.check.Warnings {
 			add(warning.Field, warning.Code, warning.Message, zzz.SeverityWarning, reviewProblemWarning)
-		}
-		if row.Structured != nil {
-			for _, issue := range row.Structured.Issues {
-				kind := reviewProblemWarning
-				if issue.Severity == zzz.SeverityError {
-					kind = reviewProblemBlocking
-				}
-				add(issue.Field, issue.Code, issue.Message, issue.Severity, kind)
-			}
 		}
 	} else if row.Structured != nil {
 		check := app.CheckDiscData(row.Structured.Data)
@@ -373,10 +364,13 @@ func (m *Model) reviewConfirmBlockedReason(row *Row) string {
 	if gaps > 0 {
 		return fmt.Sprintf("还有 %d 个必填字段没有填好，暂时不能确认。", gaps)
 	}
-	if m.edit != nil && !m.edit.check.Confirmable() {
-		return "必需字段仍未读取或校验未通过，不能确认。"
+	confirmable := false
+	if m.reviewEditing(row) {
+		confirmable = m.edit.canConfirm()
+	} else if row.Structured != nil {
+		confirmable = app.CheckDiscData(row.Structured.Data).Confirmable()
 	}
-	if row.Structured != nil && !app.CheckDiscData(row.Structured.Data).Confirmable() {
+	if !confirmable {
 		return "必需字段仍未读取或校验未通过，不能确认。"
 	}
 	return ""

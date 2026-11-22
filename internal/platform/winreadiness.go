@@ -38,7 +38,14 @@ func (a *WinAdapter) CheckReadiness(req ReadinessRequest) (ReadinessReport, erro
 		return report, nil
 	}
 
-	measurement, measureFault := windows.MeasureClient(a.natives.Geo, target.hwnd)
+	measurement, minimized, measureFault := windows.MeasureUnminimizedClient(a.natives.Win, a.natives.Geo, target.hwnd)
+	if minimized {
+		report.set(ReadinessCheck{Item: ReadinessTargetClient, Verdict: ReadinessUnsatisfied,
+			Current: "minimized=true", Required: "minimized=false", Fault: winMinimizedFault(at), At: at})
+		report.set(a.readinessResolution(windows.ClientGeometry{}, false, req.Display, nil, at))
+		report.set(a.readinessDisplayScale(nil, windows.GeometryMeasurement{}, nil, at))
+		return report, nil
+	}
 	clientKnown := measurement.ClientSize.X > 0 && measurement.ClientSize.Y > 0 &&
 		measurement.ClientFarCorner.X-measurement.ClientOrigin.X == measurement.ClientSize.X &&
 		measurement.ClientFarCorner.Y-measurement.ClientOrigin.Y == measurement.ClientSize.Y

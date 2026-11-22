@@ -317,12 +317,12 @@ func (a *WinAdapter) Open(ctx context.Context, cfg SessionConfig) (Session, erro
 	}
 	s.precheck = windows.InputPrecheck(a.natives.Win, a.natives.FG, s.tracker, locked)
 
-	// The first observation measures and verifies the client geometry
-	// (identity, DPI consistency) — its problems are Open failures here.
+	// The first observation verifies identity, window state and client
+	// geometry before Open can probe the capture path.
 	obs := s.observe()
-	if obs.fault != nil {
+	if f := obs.blockingFault(); f != nil {
 		stopHotkey()
-		return nil, mapWinFault(obs.fault)
+		return nil, f
 	}
 	if !obs.obs.Matched {
 		stopHotkey()
@@ -355,17 +355,30 @@ func (a *WinAdapter) Open(ctx context.Context, cfg SessionConfig) (Session, erro
 
 	actor := windows.NewInputActor(a.natives.Send, s.precheck)
 	actor.SetSleep(a.sleep)
-	actor.SetStepGate(func() bool { return cfg.Gate.InputPermitted() })
+	actor.SetInputGate(func() bool { return !s.isClosed() && cfg.Gate.InputPermitted() })
 	actor.SetStepPrecheck(s.checkStepPremises)
 	s.actor = actor
 	return s, nil
 }
 
-// winObservation is the adapter-internal observation: the windows base's
-// TargetObservation plus the mapped port fault when its premises broke.
+// winObservation holds the Windows observation and its native fault.
 type winObservation struct {
 	obs   windows.TargetObservation
 	fault *windows.PlatformFault
+}
+
+func (o winObservation) blockingFault() *Fault {
+	if o.fault != nil {
+		return mapWinFault(o.fault)
+	}
+	if o.obs.Minimized {
+		return winMinimizedFault(o.obs.ObservedAt)
+	}
+	return nil
+}
+
+func winMinimizedFault(at time.Time) *Fault {
+	return &Fault{Code: CodeTargetHidden, Class: ClassPremise, Message: "the target window is minimized", At: at}
 }
 
 // mapWinFault translates the windows base's fault codes into the port's
@@ -543,8 +556,8 @@ func (s *winSession) Observe() (Observation, error) {
 	now := s.adapter.now()
 	o := s.observe()
 	var problems []*Fault
-	if o.fault != nil {
-		problems = append(problems, mapWinFault(o.fault))
+	if f := o.blockingFault(); f != nil {
+		problems = append(problems, f)
 	} else {
 		if !o.obs.Matched {
 			problems = append(problems, &Fault{Code: CodeTargetLost, Class: ClassBroken,
@@ -554,10 +567,7 @@ func (s *winSession) Observe() (Observation, error) {
 			problems = append(problems, &Fault{Code: CodeFocusLost, Class: ClassPremise,
 				Message: "another window is the actual foreground window", At: now})
 		}
-		if o.obs.Minimized {
-			problems = append(problems, &Fault{Code: CodeTargetHidden, Class: ClassPremise,
-				Message: "the target window is minimized", At: now})
-		} else if !o.obs.Visible {
+		if !o.obs.Visible {
 			problems = append(problems, &Fault{Code: CodeTargetHidden, Class: ClassPremise,
 				Message: "the target window is not visible", At: now})
 		}
@@ -610,7 +620,7 @@ func (s *winSession) preBaselineProblems(obs windows.TargetObservation, now time
 		problems = append(problems, f)
 		return problems
 	}
-	if !obs.Foreground || !obs.Visible || obs.Minimized {
+	if !obs.Foreground || !obs.Visible {
 		return problems
 	}
 	probes, ok := s.cfg.Display.probesFor(image.Pt(geo.Client.Dx(), geo.Client.Dy()))
@@ -794,8 +804,8 @@ func (s *winSession) Frame(ctx context.Context, req FrameRequest) (Frame, error)
 		}
 	}
 	o := s.observe()
-	if o.fault != nil {
-		return Frame{}, mapWinFault(o.fault)
+	if f := o.blockingFault(); f != nil {
+		return Frame{}, f
 	}
 	if s.baselineLocked() && o.obs.GeometryChanged {
 		return Frame{}, &Fault{Code: CodeGeometryChanged, Class: ClassBroken,
@@ -848,8 +858,8 @@ func (s *winSession) Dispatch(op InputOp) InputResult {
 	// 1. Re-measure: the precheck alone would click stale coordinates
 	// after a window move.
 	o := s.observe()
-	if o.fault != nil {
-		return deny(mapWinFault(o.fault))
+	if f := o.blockingFault(); f != nil {
+		return deny(f)
 	}
 	if s.baselineLocked() && o.obs.GeometryChanged {
 		return deny(&Fault{Code: CodeStaleGeometry, Class: ClassPremise,
@@ -945,12 +955,12 @@ func (s *winSession) checkStepPremises(req windows.InputRequest, at windows.Pixe
 		return &windows.PrecheckError{Code: windows.PrecheckTargetGone,
 			Detail: "the locked target no longer matches its identity"}
 	}
+	if obs.obs.Minimized {
+		return &windows.PrecheckError{Code: windows.PrecheckMinimized, Detail: "target window is minimized"}
+	}
 	if !obs.obs.Foreground {
 		return &windows.PrecheckError{Code: windows.PrecheckFocusLost,
 			Detail: fmt.Sprintf("foreground window is %d, target is %d", obs.obs.ForegroundHWND, s.locked.HWND)}
-	}
-	if obs.obs.Minimized {
-		return &windows.PrecheckError{Code: windows.PrecheckMinimized, Detail: "target window is minimized"}
 	}
 	geo := obs.obs.Geometry
 	if obs.obs.GeometryChanged || req.GeometryVersion != windows.GeometryVersion(geo.Version) {
@@ -1069,8 +1079,8 @@ func faultMessage(err error) string {
 	return err.Error()
 }
 
-// Close implements Session: stop the watcher, close the actor's
-// permission and release its own presses, stop the hotkey loop (which
+// Close implements Session: close the actor's permission, stop the
+// watcher, release the actor's own presses, and stop the hotkey loop (which
 // unregisters on the thread that registered). There is no capture
 // stream and SendInput is synchronous, so there is no drain to wait for
 // and no dwell to sleep.
@@ -1088,12 +1098,12 @@ func (s *winSession) Close() CloseReport {
 	watchStarted := s.watchStarted
 	s.mu.Unlock()
 
+	s.actor.ClosePermission("session closed")
 	if watchStarted {
 		close(s.watchStop)
 		<-s.watchDone
 	}
 	releases := s.actor.ReleaseHeld()
-	s.actor.ClosePermission("session closed")
 	hotkeyErr := s.loop.Stop()
 
 	rep := CloseReport{

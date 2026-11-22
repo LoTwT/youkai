@@ -761,6 +761,9 @@ func (m *Model) runNavigation(req navigationRequest) {
 			m.rescanDialog.open = false
 		}
 		m.page = req.page
+		if req.page == pageHistory && m.historyNeedsRefresh {
+			m.loadHistory()
+		}
 	case navExit:
 		m.dropRescanContext()
 		m.continueExit()
@@ -1021,6 +1024,9 @@ func (m *Model) confirmCurrentAction(action reviewAction) {
 // submitReview schedules one save/confirmation. The captured identity and
 // serial mean a late response can only update the item it was sent for.
 func (m *Model) submitReview(recordID string, seq, expectedRevision int64, data zzz.DiscData, action reviewAction, after func()) {
+	if m.Exiting() {
+		return
+	}
 	if m.rec == nil || m.rec.ID != recordID || m.selectedSeq() != seq {
 		m.reviewErr = "编辑内容与当前查看的条目不一致，已取消写入。"
 		return
@@ -1045,6 +1051,10 @@ func (m *Model) submitReview(recordID string, seq, expectedRevision int64, data 
 			if err != nil {
 				m.handleReviewError(recordID, err)
 				return
+			}
+			m.historyNeedsRefresh = true
+			if m.displayPage() == pageHistory {
+				m.loadHistory()
 			}
 			if m.rec == nil || m.rec.ID != recordID {
 				// The record was replaced while the save ran; the saved
