@@ -288,6 +288,107 @@ func TestStorageCandidateReplacementSameColumnRecovers(t *testing.T) {
 	}
 }
 
+func storageWaitAndCommit(t *testing.T, l Layout, m *ScrollEvidenceMatcher, before platform.Frame, frames ...platform.Frame) (scrollOutcome, int) {
+	t.Helper()
+	run := storageSettleRun(l, m, before, frames...)
+	out, err := run.awaitScroll(context.Background(), before)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.displaced {
+		if err := run.latestAdvanceFault("the scroll", out); err != nil {
+			t.Fatalf("unexpected last-page fault: %v", err)
+		}
+		if err := run.applyTransition(before, out.after, m.Match(before), out.afterMatch, out.match); err != nil {
+			t.Fatalf("unexpected ledger failure: %v", err)
+		}
+	}
+	return out, run.viewport
+}
+
+func paintStorageBadge(l Layout, f platform.Frame, cell, position int) {
+	r := l.CardPositionRect(cell)
+	draw.Draw(f.Image, r, image.NewUniform(color.RGBA{R: 10, G: 10, B: 10, A: 255}), image.Point{}, draw.Src)
+	for y, row := range l.CardPositions[position-1].masks[0].rows {
+		for x := range len(row) {
+			if row[x] == '#' {
+				f.Image.SetRGBA(r.Min.X+x, r.Min.Y+y, color.RGBA{R: 255, G: 255, B: 255, A: 255})
+			}
+		}
+	}
+}
+
+func TestStorageZeroDisplacementAnchorRetainsRow(t *testing.T) {
+	l := StorageLayout()
+	m := NewScrollEvidenceMatcher(NewPixelMatcher(l, StorageCalibration()))
+	before := storageSelectedPatternFrame(l, 1, 0, -1, 300, 323)
+	anchored := storageSelectedPatternFrame(l, 2, 0, 27, 300, 323)
+	candidate := storageSelectedPatternFrame(l, 3, 1, -1, 306, 329)
+	if !m.MatchScroll(before, anchored).Stationary {
+		t.Fatal("invalid stationary anchor fixture")
+	}
+	if ok, _ := m.zeroDisplacementProven(before, anchored); !ok {
+		t.Fatal("fixture did not prove zero displacement")
+	}
+	if got := m.MatchScroll(before, candidate); !got.Displaced || got.Rows != 1 {
+		t.Fatalf("invalid one-row candidate: %s", got.Evidence)
+	}
+	t.Run("aligned", func(t *testing.T) {
+		confirm1 := storageSelectedPatternFrame(l, 4, 1, 18, 306, 329)
+		confirm2 := storageSelectedPatternFrame(l, 5, 1, 18, 306, 329)
+		out, viewport := storageWaitAndCommit(t, l, m, before, anchored, candidate, confirm1, confirm2)
+		if !out.settled || viewport != 1 {
+			t.Fatalf("aligned zero-anchor control did not commit: settled=%t viewport=%d", out.settled, viewport)
+		}
+	})
+	t.Run("row conflict", func(t *testing.T) {
+		confirm1 := storageSelectedPatternFrame(l, 4, 1, 9, 306, 329)
+		confirm2 := storageSelectedPatternFrame(l, 5, 1, 9, 306, 329)
+		out, viewport := storageWaitAndCommit(t, l, m, before, anchored, candidate, confirm1, confirm2)
+		if out.settled || viewport != 0 {
+			t.Fatalf("zero-anchor row conflict committed frame %d to viewport %d", out.after.ID, viewport)
+		}
+	})
+}
+
+func TestStorageReplacementRetainsNewRowBadge(t *testing.T) {
+	l := StorageLayout()
+	m := NewScrollEvidenceMatcher(NewPixelMatcher(l, StorageCalibration()))
+	before := storageSelectedPatternFrame(l, 1, 0, -1, 300, 323)
+	candidate := storageSelectedPatternFrame(l, 2, 1, -1, 306, 329)
+	if got := m.MatchScroll(before, candidate); !got.Displaced || got.Rows != 1 {
+		t.Fatalf("invalid one-row candidate: %s", got.Evidence)
+	}
+	original := m.Match(candidate).List.Positions[27]
+	if !original.known() || original.Position != 5 {
+		t.Fatalf("fixture did not establish absolute row 4 col 0 badge 5: %+v", original)
+	}
+	for _, badge := range []int{5, 2} {
+		name := "same badge"
+		if badge != 5 {
+			name = "known badge conflict"
+		}
+		t.Run(name, func(t *testing.T) {
+			replacement := storageSelectedPatternFrame(l, 3, 2, -1, 312, 335)
+			confirm1 := storageSelectedPatternFrame(l, 4, 2, -1, 312, 335)
+			confirm2 := storageSelectedPatternFrame(l, 5, 2, -1, 312, 335)
+			for _, f := range []platform.Frame{replacement, confirm1, confirm2} {
+				paintStorageBadge(l, f, 18, badge)
+			}
+			out, viewport := storageWaitAndCommit(t, l, m, before, candidate, replacement, confirm1, confirm2)
+			if badge == 5 {
+				if !out.settled || viewport != 1 {
+					t.Fatalf("same-badge replacement did not commit: settled=%t viewport=%d", out.settled, viewport)
+				}
+				return
+			}
+			if out.settled || viewport != 0 {
+				t.Fatalf("replacement overwrote absolute row 4 badge 5 with 2 and committed frame %d to viewport %d", out.after.ID, viewport)
+			}
+		})
+	}
+}
+
 func TestStorageReplacementRetainsAnchorRow(t *testing.T) {
 	l := StorageLayout()
 	m := NewScrollEvidenceMatcher(NewPixelMatcher(l, StorageCalibration()))
