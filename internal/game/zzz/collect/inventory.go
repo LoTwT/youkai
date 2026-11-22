@@ -3732,23 +3732,28 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 			out.after, out.afterMatch = f, m
 			return finish()
 		}
+		var (
+			direct      ScrollMatch
+			directRows  int
+			directKnown bool
+		)
 		if storageAction && !actionConflict && m.List != nil {
-			total := run.inv.matcher().MatchScroll(before, f)
-			if total.SelectionConflict {
+			direct = run.inv.matcher().MatchScroll(before, f)
+			if direct.SelectionConflict {
 				actionConflict = true
 				haveCandidate = false
-				out.match = total
+				out.match = direct
 				verdict, stillOnly = waitVerdictUndecided, false
 				settleStreak = 0
 			}
 			if !actionConflict {
-				totalRows, totalKnown := scrollSignedRows(total)
-				if !totalKnown && !total.Lost {
-					if proven, _ := run.stillnessProven(before, f, total); proven {
-						totalRows, totalKnown = 0, true
+				directRows, directKnown = scrollSignedRows(direct)
+				if !directKnown && !direct.Lost {
+					if proven, _ := run.stillnessProven(before, f, direct); proven {
+						directRows, directKnown = 0, true
 					}
 				}
-				if observeFrame(totalRows, totalKnown, m) {
+				if observeFrame(directRows, directKnown, m) {
 					actionConflict = true
 					haveCandidate = false
 					out.match = ScrollMatch{
@@ -3758,10 +3763,78 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 					verdict, stillOnly = waitVerdictUndecided, false
 					settleStreak = 0
 				}
-				if !actionConflict && totalKnown && totalRows == 0 && haveCandidate {
-					// A proven return to offset zero clears the old
-					// candidate; a later frame must establish a new one.
+			}
+		}
+		var (
+			candidateRel   ScrollMatch
+			candidateStill bool
+		)
+		if !actionConflict && out.lastFrameIsList && m.List != nil && haveCandidate {
+			// Read the candidate-relative comparison once. Its signed
+			// displacement and its independently proven stillness are both
+			// localizations; neither is allowed to reach a state branch
+			// before the action's known cells and badges were checked.
+			if sameFrameContent(candidate, f) {
+				candidateStill = true
+			} else {
+				candidateRel = run.inv.matcher().MatchScroll(candidate, f)
+				trace.noteCandidate(candidate, f, candidateRel)
+				out.match = candidateRel
+				if candidateRel.SelectionConflict {
+					actionConflict = true
 					haveCandidate = false
+					verdict, stillOnly = waitVerdictUndecided, false
+					settleStreak = 0
+				} else {
+					// A reused frame can prove the pending candidate was
+					// still there, but only through an independent zero
+					// proof; it cannot prove a new displacement.
+					candidateStill, _ = run.stillnessProven(candidate, f, candidateRel)
+				}
+			}
+			if !actionConflict && storageAction && (!f.Reused || candidateStill) {
+				if candidateStill {
+					if delta, displaced := scrollSignedRows(candidateRel); displaced && delta != 0 {
+						actionConflict = true
+						haveCandidate = false
+						out.match = ScrollMatch{
+							Undecided: true, SelectionConflict: true,
+							Evidence: fmt.Sprintf("frames %d → %d: the candidate-relative comparison proves both stillness and a %+d-row displacement; the scroll action is invalidated", candidate.ID, f.ID, delta),
+						}
+						verdict, stillOnly = waitVerdictUndecided, false
+						settleStreak = 0
+					}
+				}
+				base, baseKnown := scrollSignedRows(candidateScroll)
+				rows, rowsKnown := 0, false
+				if !actionConflict && baseKnown {
+					if candidateStill {
+						rows, rowsKnown = base, true
+					} else if delta, displaced := scrollSignedRows(candidateRel); displaced {
+						rows, rowsKnown = base+delta, true
+					}
+				}
+				if !actionConflict && rowsKnown {
+					switch {
+					case directKnown && directRows != rows:
+						actionConflict = true
+						haveCandidate = false
+						out.match = ScrollMatch{
+							Undecided: true, SelectionConflict: true,
+							Evidence: fmt.Sprintf("frames %d → %d: the action-start comparison locates the frame at %+d rows but the candidate-relative localization locates it at %+d rows; the scroll action is invalidated", before.ID, f.ID, directRows, rows),
+						}
+						verdict, stillOnly = waitVerdictUndecided, false
+						settleStreak = 0
+					case observeFrame(rows, true, m):
+						actionConflict = true
+						haveCandidate = false
+						out.match = ScrollMatch{
+							Undecided: true, SelectionConflict: true,
+							Evidence: fmt.Sprintf("frames %d → %d: the candidate-relative localization disagrees with the action's known absolute cells or selection; the scroll action is invalidated", candidate.ID, f.ID),
+						}
+						verdict, stillOnly = waitVerdictUndecided, false
+						settleStreak = 0
+					}
 				}
 			}
 		}
@@ -3780,6 +3853,12 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 			}
 			continue
 		}
+		if storageAction && directKnown && directRows == 0 && haveCandidate {
+			// A proven return to offset zero clears the old candidate only
+			// after the frame's candidate-relative localization was checked;
+			// an incompatible source invalidates the action above.
+			haveCandidate = false
+		}
 		if f.Reused {
 			// Unchanged content can prove the candidate stayed still; it
 			// cannot prove a displacement not yet seen fresh. It also never
@@ -3792,39 +3871,19 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 			if run.listVerdict(m) {
 				out.after, out.afterMatch = f, m
 				if haveCandidate {
-					if !sameFrameContent(candidate, f) {
-						rel := run.inv.matcher().MatchScroll(candidate, f)
-						trace.noteCandidate(candidate, f, rel)
-						out.match = rel
-						if rel.SelectionConflict {
-							// A readable selection contradiction invalidates
-							// the pending candidate and the whole action; an
-							// idle/reused frame must not turn it into a fresh
-							// settling sample.
-							actionConflict = true
-							haveCandidate = false
-							verdict, stillOnly = waitVerdictUndecided, false
-							settleStreak = 0
-						} else if rel.Stationary {
-							if rows, ok := scrollSignedRows(candidateScroll); ok && observeFrame(rows, true, m) {
-								actionConflict = true
-								haveCandidate = false
-								out.match = ScrollMatch{
-									Undecided: true, SelectionConflict: true,
-									Evidence: fmt.Sprintf("frames %d → %d: the reusable confirmation disagrees with the action's known absolute cells or selection; the scroll action is invalidated", candidate.ID, f.ID),
-								}
-								verdict, stillOnly = waitVerdictUndecided, false
-								settleStreak = 0
-							} else {
-								out.settleMatch = rel
-							}
-						}
+					if !sameFrameContent(candidate, f) && candidateRel.Stationary {
+						// The candidate-relative comparison and the action's
+						// known cells were checked before this branch.
+						out.settleMatch = candidateRel
 					}
 				} else {
 					if sameFrameContent(before, f) {
 						verdict = waitVerdictStationary
 					} else {
-						sm := run.inv.matcher().MatchScroll(before, f)
+						sm := direct
+						if !storageAction {
+							sm = run.inv.matcher().MatchScroll(before, f)
+						}
 						trace.noteBefore(f, sm)
 						observeMotion(f, sm)
 						out.match = sm
@@ -3870,30 +3929,11 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 			continue
 		}
 		if haveCandidate {
-			stationary := sameFrameContent(candidate, f)
-			var rel ScrollMatch
-			if !stationary {
-				rel = run.inv.matcher().MatchScroll(candidate, f)
-				trace.noteCandidate(candidate, f, rel)
-				out.match = rel
-				if rel.SelectionConflict {
-					// A readable cross-column selection is a positive
-					// contradiction: discard the candidate and invalidate the
-					// whole action instead of treating the frame as "no
-					// anchor" and eventually committing the old displacement.
-					actionConflict = true
-					haveCandidate = false
-					verdict, stillOnly = waitVerdictUndecided, false
-					settleStreak = 0
-					continue
-				}
-				stationary, _ = run.stillnessProven(candidate, f, rel)
-			}
 			// A settling confirmation must be proof the list stayed at the
 			// candidate, not merely a Stationary verdict: on repeated rows a
 			// still-moving list can keep the zero-shift MAD low, and accepting
 			// that would commit a stale offset while the scene has moved on.
-			if stationary {
+			if candidateStill {
 				// Even a stationary grid cannot inherit a candidate's
 				// correspondence if the occupied slots disagree.
 				if !slices.Equal(candidateMatch.List.Occupied, m.List.Occupied) {
@@ -3908,33 +3948,23 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 					settleStreak = 0
 					continue
 				}
-				if candidateRows, ok := scrollSignedRows(candidateScroll); ok && observeFrame(candidateRows, true, m) {
-					actionConflict = true
-					haveCandidate = false
-					out.match = ScrollMatch{
-						Undecided: true, SelectionConflict: true,
-						Evidence: fmt.Sprintf("frames %d → %d: the stationary confirmation disagrees with the action's known absolute cells or selection; the scroll action is invalidated", candidate.ID, f.ID),
+				total := direct
+				if !storageAction {
+					total = run.inv.matcher().MatchScroll(before, f)
+					trace.noteBefore(f, total)
+					if total.SelectionConflict ||
+						(candidateScroll.Displaced && total.Displaced && total.Rows != candidateScroll.Rows) {
+						actionConflict = true
+						haveCandidate = false
+						verdict, stillOnly = waitVerdictUndecided, false
+						out.match = total
+						settleStreak = 0
+						continue
 					}
-					verdict, stillOnly = waitVerdictUndecided, false
-					settleStreak = 0
-					continue
+				} else {
+					trace.noteBefore(f, total)
 				}
-				// The action-level total is checked even when the
-				// candidate-relative comparison proves stillness. A missing
-				// candidate anchor must not hide a row conflict between the
-				// action's pre-state and the confirmation.
-				total := run.inv.matcher().MatchScroll(before, f)
-				trace.noteBefore(f, total)
-				if total.SelectionConflict ||
-					(candidateScroll.Displaced && total.Displaced && total.Rows != candidateScroll.Rows) {
-					actionConflict = true
-					haveCandidate = false
-					verdict, stillOnly = waitVerdictUndecided, false
-					out.match = total
-					settleStreak = 0
-					continue
-				}
-				out.settleMatch = rel
+				out.settleMatch = candidateRel
 				settleStreak++
 				if settleStreak >= timing.SettleObservations {
 					return settle(f)
@@ -3942,7 +3972,10 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 				continue
 			}
 			settleStreak = 0
-			total := run.inv.matcher().MatchScroll(before, f)
+			total := direct
+			if !storageAction {
+				total = run.inv.matcher().MatchScroll(before, f)
+			}
 			trace.noteBefore(f, total)
 			observeMotion(f, total)
 			if total.SelectionConflict {
@@ -4007,7 +4040,10 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 			verdict = waitVerdictStationary
 			continue
 		}
-		sm := run.inv.matcher().MatchScroll(before, f)
+		sm := direct
+		if !storageAction {
+			sm = run.inv.matcher().MatchScroll(before, f)
+		}
 		trace.noteBefore(f, sm)
 		observeMotion(f, sm)
 		out.match = sm
