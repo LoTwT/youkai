@@ -51,6 +51,7 @@ type storageFlowGame struct {
 type storageFlowSnapshot struct {
 	page, viewport, selected, detail int
 	filter                           collect.FilterState
+	image                            *image.RGBA
 }
 
 func newStorageFlowGame() *storageFlowGame {
@@ -127,16 +128,15 @@ func (g *storageFlowGame) frame(context.Context, platform.FrameRequest) (platfor
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.nextID++
-	snap := storageFlowSnapshot{
-		page: g.page, viewport: g.viewport, selected: g.selected,
-		detail: g.detail, filter: g.filter,
-	}
-	g.frames[g.nextID] = snap
 	img := g.images[g.viewport]
 	if img == nil {
 		img = image.NewRGBA(image.Rect(0, 0, 1920, 1080))
 		img.SetRGBA(0, 0, color.RGBA{R: uint8(g.viewport + 1), G: uint8(g.viewport + 1), B: uint8(g.viewport + 1), A: 255})
 		g.images[g.viewport] = img
+	}
+	g.frames[g.nextID] = storageFlowSnapshot{
+		page: g.page, viewport: g.viewport, selected: g.selected,
+		detail: g.detail, filter: g.filter, image: img,
 	}
 	return platform.Frame{
 		ID: g.nextID, Geometry: 1, Image: img, Content: g.layout.Content,
@@ -330,6 +330,13 @@ func (g *storageFlowGame) clickedDetailsSnapshot() []int {
 	return append([]int(nil), g.clickedDetails...)
 }
 
+func (g *storageFlowGame) frameSnapshot(id uint64) (storageFlowSnapshot, bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	snap, ok := g.frames[id]
+	return snap, ok
+}
+
 type storageFlowScope struct {
 	Sort      string `json:"sort"`
 	Coverage  string `json:"coverage"`
@@ -458,8 +465,8 @@ func checkStorageActions(t *testing.T, game *storageFlowGame, ops []platform.Inp
 	}
 	for i := 0; i < 2; i++ {
 		op := ops[4+i]
-		if op.Kind != platform.InputScroll || op.WheelSteps <= 0 || op.At != game.layout.ScrollFrom {
-			t.Fatalf("top op %d = %+v, want a positive wheel at ScrollFrom", i+1, op)
+		if op.Kind != platform.InputScroll || op.WheelSteps != 3 || op.At != game.layout.ScrollFrom {
+			t.Fatalf("top op %d = %+v, want the three-detent wheel at ScrollFrom", i+1, op)
 		}
 	}
 	cards, down, up := 0, 0, 0
@@ -470,6 +477,9 @@ func checkStorageActions(t *testing.T, game *storageFlowGame, ops []platform.Inp
 				t.Fatalf("scroll landed at %v, want %v", op.At, game.layout.ScrollFrom)
 			}
 			if op.WheelSteps < 0 {
+				if op.WheelSteps != -1 {
+					t.Fatalf("advance/bottom wheel = %d detents, want -1", op.WheelSteps)
+				}
 				down++
 			} else if op.WheelSteps > 0 {
 				up++
@@ -477,8 +487,14 @@ func checkStorageActions(t *testing.T, game *storageFlowGame, ops []platform.Inp
 				t.Fatalf("zero-step scroll: %+v", op)
 			}
 		case platform.InputClick:
-			if game.slotAt(op.At) < 0 {
+			slot := game.slotAt(op.At)
+			if slot < 0 {
 				t.Fatalf("card click landed outside a card slot: %v", op.At)
+			}
+			r := game.layout.Slots[slot]
+			want := r.Min.Add(r.Size().Div(2))
+			if op.At != want {
+				t.Fatalf("card click landed at %v, want exact slot center %v for slot %d", op.At, want, slot)
 			}
 			cards++
 		case platform.InputDrag:
@@ -532,6 +548,21 @@ func checkStorageIdentities(t *testing.T, game *storageFlowGame, observations []
 		if obs.Position != game.cardSlot(global) {
 			t.Fatalf("observation at viewport %d row %d col %d says slot %d, want %d",
 				obs.Viewport, obs.Row, obs.Column, obs.Position, game.cardSlot(global))
+		}
+		snap, ok := game.frameSnapshot(obs.FrameID)
+		if !ok {
+			t.Fatalf("admitted frame %d is not a captured frame", obs.FrameID)
+		}
+		if snap.page != 0 || snap.viewport != obs.Viewport {
+			t.Fatalf("admitted frame %d is page %d viewport %d, observation says viewport %d",
+				obs.FrameID, snap.page, snap.viewport, obs.Viewport)
+		}
+		if snap.selected != global || snap.detail != global {
+			t.Fatalf("admitted card %d frame %d selected=%d detail=%d, want selected/detail %d",
+				global, obs.FrameID, snap.selected, snap.detail, global)
+		}
+		if obs.Image == nil || obs.Image != snap.image {
+			t.Fatalf("admitted card %d did not save the frame image for frame %d", global, obs.FrameID)
 		}
 		if !clicked[global] && !(wantCards == 53 && global == 0) {
 			t.Fatalf("admitted card %d was never clicked and is not the initial selection", global)

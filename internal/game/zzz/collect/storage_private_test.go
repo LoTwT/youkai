@@ -157,6 +157,41 @@ func TestStoragePrivateHandoff(t *testing.T) {
 	}
 }
 
+// TestStoragePrivateSelectionInsideOverlap edits only the three selection
+// probes on the private one-row pair. The selected card moves in the same
+// direction as the unchanged list and scrollbar evidence; the repeated-grid
+// zero-shift correlation must not override that checked displacement.
+func TestStoragePrivateSelectionInsideOverlap(t *testing.T) {
+	dir := os.Getenv("YOUKAI_STORAGE_SAMPLES")
+	if dir == "" {
+		t.Skip("YOUKAI_STORAGE_SAMPLES is not set; private drive-storage handoff not available")
+	}
+	layout := collect.StorageLayout()
+	m := collect.NewScrollEvidenceMatcher(collect.NewPixelMatcher(layout, collect.StorageCalibration()))
+	frame := func(name string, id uint64) platform.Frame {
+		f := mustStorageFrame(t, filepath.Join(dir, "final-state.png"), 55, 105)
+		mustDraw(t, f, filepath.Join(dir, name), image.Pt(55, 184))
+		return platform.Frame{ID: id, Geometry: 1, Image: f, Content: layout.Content}
+	}
+	before := frame("scroll-top.png", 1)
+	after := frame("scroll-one-row.png", 2)
+	if s := m.MatchScroll(before, after); !s.Displaced || s.Rows != 1 {
+		t.Fatalf("original sample control: %s", s.Evidence)
+	}
+	yellow := image.NewUniform(color.RGBA{R: 224, G: 208, B: 67, A: 255})
+	dim := image.NewUniform(color.RGBA{R: 16, G: 16, B: 16, A: 255})
+	draw.Draw(before.Image, layout.BorderRect(0), dim, image.Point{}, draw.Src)
+	draw.Draw(before.Image, layout.BorderRect(35), yellow, image.Point{}, draw.Src)
+	draw.Draw(after.Image, layout.BorderRect(26), yellow, image.Point{}, draw.Src)
+	if b, a := m.Match(before), m.Match(after); b.List == nil || a.List == nil ||
+		b.List.Selected != 35 || a.List.Selected != 26 {
+		t.Fatalf("edited selection probes did not read as 35 -> 26: %s; %s", b.Evidence, a.Evidence)
+	}
+	if s := m.MatchScroll(before, after); !s.Displaced || s.Rows != 1 {
+		t.Fatalf("in-view selection agrees with the same one-row movement but rejects it: %s", s.Evidence)
+	}
+}
+
 func mustStorageFrame(t *testing.T, path string, x, y int) *image.RGBA {
 	t.Helper()
 	frame := image.NewRGBA(image.Rect(0, 0, 1920, 1080))

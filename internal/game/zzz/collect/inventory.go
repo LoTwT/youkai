@@ -1712,6 +1712,9 @@ func (run *inventoryRun) confirmTop(ctx context.Context) (*failureFrames, error)
 				}
 			}
 		}
+		if out.afterMatch.Page == PageDriveStorage && out.stationary {
+			out.listStill, _ = run.stillnessProven(before, out.after, out.match)
+		}
 		lastOut, haveWait = out, true
 		listOK := run.listVerdict(out.afterMatch) && out.afterMatch.List != nil
 		log.Printf("youkai: collect: position %d: top confirmation attempt %d: top=%t thumb %d/%t -> %d/%t stationary=%t displaced=%t lost=%t evidence=%s %s",
@@ -1798,17 +1801,15 @@ func topConfirmed(out scrollOutcome, beforeOK, afterOK bool, beforeStart, afterS
 	thumbStable := beforeOK && afterOK && absInt(afterStart-beforeStart) <= 2
 	if storage {
 		thumbStable = out.thumbStill
+		// A stationary thumb is supporting evidence, not top evidence on
+		// its own. The list must independently prove zero displacement; an
+		// Undecided comparison therefore cannot confirm the top.
+		return out.stationary && out.listStill && thumbStable
 	}
 	if out.lost {
 		return out.match.Undecided && thumbStable
 	}
 	if out.stationary {
-		if storage {
-			// The shared Stationary verdict is MAD-level and can ignore a
-			// one-edge thumb move. At a boundary the thumb must not move at
-			// all (within the 2 px jitter floor) for the wait to confirm.
-			return thumbStable
-		}
 		return true
 	}
 	return thumbStable
@@ -3355,6 +3356,11 @@ type scrollOutcome struct {
 	// jitter floor across this wait. It is computed from both edges when
 	// the matcher exposes them, not only from the start used for progress.
 	thumbStill bool
+	// listStill reports that the complete stillness predicate accepted the
+	// before/after list content. A stationary thumb alone is not enough to
+	// establish the top: the list pixels must independently prove no
+	// displacement.
+	listStill bool
 	// unmoved reports that every observation in the wait was proof the
 	// list had not moved: the same content as the pre-drag frame or a
 	// Stationary comparison uncontradicted by observable movement, with no

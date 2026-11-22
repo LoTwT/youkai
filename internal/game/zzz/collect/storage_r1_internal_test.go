@@ -58,7 +58,7 @@ func (s *storageReviewFrames) Frame(context.Context, platform.FrameRequest) (pla
 func TestStorageTopConfirmedAtTop(t *testing.T) {
 	page := storageReviewPage()
 	page.List.Top = true
-	if !topConfirmed(scrollOutcome{afterMatch: page, stationary: true, beforeAtTop: true, thumbStill: true}, true, true, 238, 238) {
+	if !topConfirmed(scrollOutcome{afterMatch: page, stationary: true, beforeAtTop: true, thumbStill: true, listStill: true}, true, true, 238, 238) {
 		t.Fatal("a stationary drive-storage list at the proven scrollbar top was rejected")
 	}
 }

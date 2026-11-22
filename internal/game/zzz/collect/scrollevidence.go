@@ -430,6 +430,33 @@ func (m *ScrollEvidenceMatcher) MatchScroll(before, after platform.Frame) Scroll
 			before.ID, after.ID, cand.ncc, m.C.ScrollStationaryNCC, comp.gap, m.C.ScrollNCCMargin, cand.std, err0, thumbNote)}
 	}
 
+	// Drive storage with a visible selection uses the same independent
+	// witness as the no-selection path: a physical-direction thumb travel
+	// plus the card-badge overlap. The selected card is not allowed to
+	// bypass that witness, and the repeated-grid zero-shift correlation is
+	// not allowed to overrule a selection whose direction the thumb and
+	// overlap already prove.
+	if m.L.Page == PageDriveStorage && selectionMoved {
+		beforeThumb := thumbReading{start: thumbBStart, end: thumbBEnd, ok: thumbBOK}
+		afterThumb := thumbReading{start: thumbAStart, end: thumbAEnd, ok: thumbAOK}
+		match, ok := m.storageScrollEvidence(before, after, beforeThumb, afterThumb, metrics)
+		if !ok {
+			return ScrollMatch{Undecided: true, Metrics: metrics, Evidence: fmt.Sprintf(
+				"frames %d → %d: the selection box and the card overlap did not produce one consistent displacement (zero-shift error %.2f, ncc0 %.3f); %s",
+				before.ID, after.ID, err0, metrics.RowNCC[0], thumbNote)}
+		}
+		storageRows := match.Rows
+		if len(match.Matches) > 0 && match.Matches[0].FromRow < match.Matches[0].ToRow {
+			storageRows = -storageRows
+		}
+		if storageRows != selRows {
+			return ScrollMatch{Undecided: true, Metrics: metrics, Evidence: fmt.Sprintf(
+				"frames %d → %d: the selection box names %+d row(s) but the thumb and card overlap name %+d; the witnesses contradict each other; %s",
+				before.ID, after.ID, selRows, storageRows, thumbNote)}
+		}
+		return match
+	}
+
 	// 3) The selection box's displacement: the primary evidence, corroborated
 	// by the normalized feature at the named row.
 	if selectionMoved {
@@ -691,7 +718,7 @@ func (m *ScrollEvidenceMatcher) storageScrollEvidence(before, after platform.Fra
 	}
 	rows := fits[0].rows
 	return m.displaced(before.ID, after.ID, rows, ScrollBasisStoragePositions, metrics,
-		fmt.Sprintf("the selected card is no longer in the viewport and the repeated card grid's normalized feature is ambiguous; the scrollbar travel and the card slot badges' overlap both name the same %d-row displacement", rows)), true
+		fmt.Sprintf("the scrollbar travel and the card slot badges' overlap both name the same %d-row displacement", rows)), true
 }
 
 // displaced builds the Displaced verdict for a verified signed row count:
