@@ -288,6 +288,58 @@ func TestStorageCandidateReplacementSameColumnRecovers(t *testing.T) {
 	}
 }
 
+func TestStorageReplacementRetainsAnchorRow(t *testing.T) {
+	l := StorageLayout()
+	m := NewScrollEvidenceMatcher(NewPixelMatcher(l, StorageCalibration()))
+	before := storageSelectedPatternFrame(l, 1, 0, -1, 300, 323)
+	anchored := storageSelectedPatternFrame(l, 2, 1, 27, 306, 329)
+	replacement := storageSelectedPatternFrame(l, 3, 2, -1, 312, 335)
+	confirm1 := storageSelectedPatternFrame(l, 4, 2, 9, 312, 335)
+	confirm2 := storageSelectedPatternFrame(l, 5, 2, 9, 312, 335)
+	run := storageSettleRun(l, m, before, anchored, replacement, confirm1, confirm2)
+	out, err := run.awaitScroll(context.Background(), before)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.settled || run.viewport != 0 {
+		t.Fatalf("a replacement frame lost the reliable anchor row: settled=%t viewport=%d", out.settled, run.viewport)
+	}
+	if !out.match.SelectionConflict {
+		t.Fatalf("anchor-row conflict was not retained: %s", out.match.Evidence)
+	}
+}
+
+func TestStorageConfirmationRetainsKnownBadges(t *testing.T) {
+	l := StorageLayout()
+	m := NewScrollEvidenceMatcher(NewPixelMatcher(l, StorageCalibration()))
+	before := storageSelectedPatternFrame(l, 1, 0, 27, 300, 323)
+	candidate := storageSelectedPatternFrame(l, 2, 1, 18, 306, 329)
+	confirm1 := storageSelectedPatternFrame(l, 3, 1, 18, 306, 329)
+	confirm2 := storageSelectedPatternFrame(l, 4, 1, 18, 306, 329)
+	for _, f := range []*platform.Frame{&confirm1, &confirm2} {
+		r := l.CardPositionRect(0)
+		draw.Draw(f.Image, r, image.NewUniform(color.RGBA{R: 10, G: 10, B: 10, A: 255}), image.Point{}, draw.Src)
+		for y, row := range l.CardPositions[4].masks[0].rows {
+			for x := range len(row) {
+				if row[x] == '#' {
+					f.Image.SetRGBA(r.Min.X+x, r.Min.Y+y, color.RGBA{R: 255, G: 255, B: 255, A: 255})
+				}
+			}
+		}
+	}
+	run := storageSettleRun(l, m, before, candidate, confirm1, confirm2)
+	out, err := run.awaitScroll(context.Background(), before)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.settled || run.viewport != 0 {
+		t.Fatalf("a known badge change was accepted as stillness: settled=%t viewport=%d", out.settled, run.viewport)
+	}
+	if !out.match.SelectionConflict {
+		t.Fatalf("known badge conflict was not retained: %s", out.match.Evidence)
+	}
+}
+
 func TestStorageConflictBeforeCandidateInvalidatesAction(t *testing.T) {
 	l := StorageLayout()
 	m := NewScrollEvidenceMatcher(NewPixelMatcher(l, StorageCalibration()))

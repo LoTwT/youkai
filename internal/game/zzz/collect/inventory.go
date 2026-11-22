@@ -3477,6 +3477,56 @@ const (
 // gets its own SettleBudget settle window instead of being cut off
 // mid-settle. Neither widening ever shortens the plain scroll budget.
 //
+// scrollSignedRows returns the signed total row displacement. Positive
+// rows move content up and the selected card toward lower row indices.
+func scrollSignedRows(sm ScrollMatch) (int, bool) {
+	if !sm.Displaced || sm.Rows == 0 || len(sm.Matches) == 0 {
+		return 0, false
+	}
+	if sm.Matches[0].FromRow < sm.Matches[0].ToRow {
+		return -sm.Rows, true
+	}
+	return sm.Rows, true
+}
+
+// storageBadgeConflict reports a known badge contradiction between two
+// aligned storage views. An unreadable badge is not a conflict; two known
+// and different slots are.
+func storageBadgeConflict(a, b PageMatch) bool {
+	if a.List == nil || b.List == nil ||
+		len(a.List.Positions) != len(b.List.Positions) {
+		return false
+	}
+	for i := range a.List.Positions {
+		ap, bp := a.List.Positions[i], b.List.Positions[i]
+		if ap.known() && bp.known() && ap.Position != bp.Position {
+			return true
+		}
+	}
+	return false
+}
+
+// storageAlignedBadgeConflict compares a confirmation viewport with the
+// action-start viewport after applying the independently proven total row
+// displacement. Cells outside the overlap are not compared; two known
+// badges that should be the same card but differ are a conflict.
+func storageAlignedBadgeConflict(before, current PageMatch, rows, columns int) bool {
+	if before.List == nil || current.List == nil {
+		return false
+	}
+	for i := range current.List.Positions {
+		source := i + rows*columns
+		if source < 0 || source >= len(before.List.Positions) {
+			continue
+		}
+		bp, cp := before.List.Positions[source], current.List.Positions[i]
+		if bp.known() && cp.known() && bp.Position != cp.Position {
+			return true
+		}
+	}
+	return false
+}
+
 // The terminal verdict is the latest one: Undecided supersedes an earlier
 // Stationary or Lost. An existing candidate still dominates — it cannot be
 // committed without a settling confirmation — and the separate unmoved
@@ -3570,9 +3620,13 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 		}
 	}
 	anchorColumn := -1
+	anchorSlot := -1
+	anchorRows := 0
+	anchorRowsKnown := false
 	if storageAction && actionBeforeMatch.List != nil {
 		if selected := actionBeforeMatch.List.Selected; selected >= 0 && selected < len(run.inv.Layout.Slots) {
 			_, anchorColumn = run.inv.Layout.slotPosition(selected)
+			anchorSlot, anchorRows, anchorRowsKnown = selected, 0, true
 		}
 	}
 	actionConflict := false
@@ -3661,22 +3715,58 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 			return finish()
 		}
 		if storageAction && !actionConflict && m.List != nil {
-			if selected := m.List.Selected; selected >= 0 && selected < len(run.inv.Layout.Slots) {
-				_, column := run.inv.Layout.slotPosition(selected)
-				if anchorColumn < 0 {
-					// The first reliable selection in an action establishes
-					// the column; an unreadable pre-action or candidate frame
-					// cannot erase it later.
-					anchorColumn = column
-				} else if column != anchorColumn {
+			total := run.inv.matcher().MatchScroll(before, f)
+			if total.SelectionConflict {
+				actionConflict = true
+				haveCandidate = false
+				out.match = total
+				verdict, stillOnly = waitVerdictUndecided, false
+				settleStreak = 0
+			}
+			if !actionConflict {
+				totalRows, totalKnown := scrollSignedRows(total)
+				if totalKnown && storageAlignedBadgeConflict(actionBeforeMatch, m, totalRows, run.inv.Layout.Columns) {
 					actionConflict = true
 					haveCandidate = false
 					out.match = ScrollMatch{
 						Undecided: true, SelectionConflict: true,
-						Evidence: fmt.Sprintf("frames %d → %d: the action's reliable selection column conflicts with the observed selection; the scroll action is invalidated", before.ID, f.ID),
+						Evidence: fmt.Sprintf("frames %d → %d: a known card badge disagrees with the action-start view after the proven %+d-row displacement; the scroll action is invalidated",
+							before.ID, f.ID, totalRows),
 					}
 					verdict, stillOnly = waitVerdictUndecided, false
 					settleStreak = 0
+				}
+			}
+			if !actionConflict {
+				totalRows, totalKnown := scrollSignedRows(total)
+				if selected := m.List.Selected; selected >= 0 && selected < len(run.inv.Layout.Slots) {
+					_, column := run.inv.Layout.slotPosition(selected)
+					switch {
+					case anchorColumn < 0:
+						// The first reliable selection in an action establishes
+						// the column and, when the total is already proven, its
+						// absolute row. An unreadable pre-action or candidate
+						// frame cannot erase it later.
+						anchorColumn, anchorSlot = column, selected
+						anchorRows, anchorRowsKnown = totalRows, totalKnown
+					case column != anchorColumn:
+						actionConflict = true
+					case anchorRowsKnown && totalKnown:
+						expected := anchorSlot - (totalRows-anchorRows)*run.inv.Layout.Columns
+						if expected != selected {
+							actionConflict = true
+						}
+					}
+					if actionConflict {
+						haveCandidate = false
+						out.match = ScrollMatch{
+							Undecided: true, SelectionConflict: true,
+							Evidence: fmt.Sprintf("frames %d → %d: the action's reliable selection (slot %d at %+d rows) conflicts with the observed slot %d at %+d rows; the scroll action is invalidated",
+								before.ID, f.ID, anchorSlot, anchorRows, selected, totalRows),
+						}
+						verdict, stillOnly = waitVerdictUndecided, false
+						settleStreak = 0
+					}
 				}
 			}
 		}
@@ -3809,6 +3899,17 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 					// The thumb edge can briefly fall outside its threshold
 					// while the list is still. Require a new full streak.
 					bottomMissFrame = f.ID
+					settleStreak = 0
+					continue
+				}
+				if storageAction && storageBadgeConflict(candidateMatch, m) {
+					actionConflict = true
+					haveCandidate = false
+					out.match = ScrollMatch{
+						Undecided: true, SelectionConflict: true,
+						Evidence: fmt.Sprintf("frames %d → %d: the candidate and its stationary confirmation disagree on a known card badge; the scroll action is invalidated", candidate.ID, f.ID),
+					}
+					verdict, stillOnly = waitVerdictUndecided, false
 					settleStreak = 0
 					continue
 				}
