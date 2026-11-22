@@ -3477,6 +3477,24 @@ const (
 // gets its own SettleBudget settle window instead of being cut off
 // mid-settle. Neither widening ever shortens the plain scroll budget.
 //
+// selectionPairConflicts reports a readable drive-storage selection pair
+// that changes column. It is the action-level baseline check: a candidate
+// frame may lose its own anchor, but a later readable anchor compared with
+// the pre-action or candidate anchor still exposes the contradiction.
+func (run *inventoryRun) selectionPairConflicts(a, b PageMatch) bool {
+	if a.List == nil || b.List == nil {
+		return false
+	}
+	sa, sb := a.List.Selected, b.List.Selected
+	if sa < 0 || sb < 0 || sa == sb ||
+		sa >= len(run.inv.Layout.Slots) || sb >= len(run.inv.Layout.Slots) {
+		return false
+	}
+	_, ac := run.inv.Layout.slotPosition(sa)
+	_, bc := run.inv.Layout.slotPosition(sb)
+	return ac != bc
+}
+
 // The terminal verdict is the latest one: Undecided supersedes an earlier
 // Stationary or Lost. An existing candidate still dominates — it cannot be
 // committed without a settling confirmation — and the separate unmoved
@@ -3561,6 +3579,15 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 	after := run.lastArrived
 	trace := newScrollTrace(run.inv.Layout, before)
 	out := scrollOutcome{trace: trace, waitStart: waitStart}
+	storageAction := run.inv.storagePage()
+	actionBeforeMatch := PageMatch{}
+	if storageAction {
+		actionBeforeMatch = run.listMatch
+		if actionBeforeMatch.List == nil {
+			actionBeforeMatch = run.inv.matcher().Match(before)
+		}
+	}
+	actionConflict := false
 	var (
 		candidate       platform.Frame
 		candidateMatch  PageMatch
@@ -3645,6 +3672,34 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 			out.after, out.afterMatch = f, m
 			return finish()
 		}
+		if storageAction && !actionConflict {
+			if run.selectionPairConflicts(actionBeforeMatch, m) ||
+				(haveCandidate && run.selectionPairConflicts(candidateMatch, m)) {
+				actionConflict = true
+				haveCandidate = false
+				out.match = ScrollMatch{
+					Undecided: true, SelectionConflict: true,
+					Evidence: fmt.Sprintf("frames %d → %d: the action's selection baseline conflicts with the observed selection; the scroll action is invalidated", before.ID, f.ID),
+				}
+				verdict, stillOnly = waitVerdictUndecided, false
+				settleStreak = 0
+			}
+		}
+		if actionConflict {
+			if !f.Reused {
+				run.lastArrived = f.ArrivedAt
+				after = f.ArrivedAt
+			}
+			out.after, out.afterMatch = f, m
+			verdict, stillOnly = waitVerdictUndecided, false
+			settleStreak = 0
+			if f.Reused {
+				if err := sleepCtx(ctx, run.inv.recheckEvery()); err != nil {
+					return scrollOutcome{}, err
+				}
+			}
+			continue
+		}
 		if f.Reused {
 			// Unchanged content can prove the candidate stayed still; it
 			// cannot prove a displacement not yet seen fresh. It also never
@@ -3663,8 +3718,10 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 						out.match = rel
 						if rel.SelectionConflict {
 							// A readable selection contradiction invalidates
-							// the pending candidate; an idle/reused frame must
-							// not turn it into a fresh settling sample.
+							// the pending candidate and the whole action; an
+							// idle/reused frame must not turn it into a fresh
+							// settling sample.
+							actionConflict = true
 							haveCandidate = false
 							verdict, stillOnly = waitVerdictUndecided, false
 							settleStreak = 0
@@ -3724,9 +3781,10 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 				out.match = rel
 				if rel.SelectionConflict {
 					// A readable cross-column selection is a positive
-					// contradiction: discard this candidate instead of
-					// treating the frame as "no anchor" and eventually
-					// committing the old displacement.
+					// contradiction: discard the candidate and invalidate the
+					// whole action instead of treating the frame as "no
+					// anchor" and eventually committing the old displacement.
+					actionConflict = true
 					haveCandidate = false
 					verdict, stillOnly = waitVerdictUndecided, false
 					settleStreak = 0
@@ -3764,6 +3822,17 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 			total := run.inv.matcher().MatchScroll(before, f)
 			trace.noteBefore(f, total)
 			observeMotion(f, total)
+			if total.SelectionConflict {
+				// The total rejudgment is an action-level check too. Its
+				// conflict invalidates the whole action; it is not a generic
+				// Undecided that leaves the old candidate pending.
+				actionConflict = true
+				haveCandidate = false
+				verdict, stillOnly = waitVerdictUndecided, false
+				out.match = total
+				settleStreak = 0
+				continue
+			}
 			switch {
 			case total.Displaced && len(total.Matches) > 0:
 				// The list moved further: the latest total displacement is

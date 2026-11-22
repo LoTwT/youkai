@@ -267,6 +267,89 @@ func TestStorageCrossColumnConfirmationCannotSettleLedger(t *testing.T) {
 	}
 }
 
+func TestStorageMissingCandidateCrossColumnNoCommit(t *testing.T) {
+	l := StorageLayout()
+	m := NewScrollEvidenceMatcher(NewPixelMatcher(l, StorageCalibration()))
+	before := storageSelectedPatternFrame(l, 1, 0, 27, 300, 323)
+	candidate := storageSelectedPatternFrame(l, 2, 1, -1, 306, 329)
+	conflict1 := storageSelectedPatternFrame(l, 3, 1, 19, 306, 329)
+	conflict2 := storageSelectedPatternFrame(l, 4, 1, 19, 306, 329)
+	run := storageSettleRun(l, m, before, candidate, conflict1, conflict2)
+	out, err := run.awaitScroll(context.Background(), before)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.settled || run.viewport != 0 {
+		t.Fatalf("missing candidate followed by cross-column anchors committed viewport %d from candidate %d; latest %d",
+			run.viewport, out.after.ID, out.lastMatch.List.Selected)
+	}
+	if !out.match.SelectionConflict {
+		t.Fatalf("missing-anchor cross-column conflict was not retained: %s", out.match.Evidence)
+	}
+}
+
+func TestStorageTotalConflictInvalidatesCandidate(t *testing.T) {
+	l := StorageLayout()
+	m := NewScrollEvidenceMatcher(NewPixelMatcher(l, StorageCalibration()))
+	before := storageSelectedPatternFrame(l, 1, 0, 27, 300, 323)
+	candidate := storageSelectedPatternFrame(l, 2, 1, -1, 306, 329)
+	conflict := storageSelectedPatternFrame(l, 3, 2, 10, 312, 335)
+	restored1 := storageSelectedPatternFrame(l, 4, 1, -1, 306, 329)
+	restored2 := storageSelectedPatternFrame(l, 5, 1, -1, 306, 329)
+	run := storageSettleRun(l, m, before, candidate, conflict, restored1, restored2)
+	out, err := run.awaitScroll(context.Background(), before)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.settled || run.viewport != 0 {
+		t.Fatalf("a total-rejudgment conflict left the old candidate committable: settled=%t viewport=%d", out.settled, run.viewport)
+	}
+	if !out.match.SelectionConflict {
+		t.Fatalf("total-selection conflict was not retained: %s", out.match.Evidence)
+	}
+}
+
+func TestStorageReusedConflictDoesNotSurviveDeadline(t *testing.T) {
+	l := StorageLayout()
+	m := NewScrollEvidenceMatcher(NewPixelMatcher(l, StorageCalibration()))
+	before := storageSelectedPatternFrame(l, 1, 0, 27, 300, 323)
+	candidate := storageSelectedPatternFrame(l, 2, 1, 18, 306, 329)
+	conflict := storageSelectedPatternFrame(l, 3, 1, 19, 306, 329)
+	conflict.Reused = true
+	run := storageSettleRun(l, m, before, candidate, conflict)
+	out, err := run.awaitScroll(context.Background(), before)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.displaced || out.settled || out.hasCandidate || run.viewport != 0 || !out.match.SelectionConflict {
+		t.Fatalf("reused conflict survived the deadline: displaced=%t settled=%t candidate=%t viewport=%d conflict=%t",
+			out.displaced, out.settled, out.hasCandidate, run.viewport, out.match.SelectionConflict)
+	}
+}
+
+func TestStorageMissingCandidateAnchorCanRecover(t *testing.T) {
+	l := StorageLayout()
+	m := NewScrollEvidenceMatcher(NewPixelMatcher(l, StorageCalibration()))
+	before := storageSelectedPatternFrame(l, 1, 0, 27, 300, 323)
+	candidate := storageSelectedPatternFrame(l, 2, 1, -1, 306, 329)
+	confirm1 := storageSelectedPatternFrame(l, 3, 1, 18, 306, 329)
+	confirm2 := storageSelectedPatternFrame(l, 4, 1, 18, 306, 329)
+	run := storageSettleRun(l, m, before, candidate, confirm1, confirm2)
+	out, err := run.awaitScroll(context.Background(), before)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !out.displaced || !out.settled {
+		t.Fatalf("a legal same-column recovery after a missing candidate anchor did not settle: displaced=%t settled=%t", out.displaced, out.settled)
+	}
+	if err := run.applyTransition(before, out.after, m.Match(before), out.afterMatch, out.match); err != nil {
+		t.Fatalf("legal missing-anchor recovery did not commit: %v", err)
+	}
+	if run.viewport != 1 {
+		t.Fatalf("legal missing-anchor recovery committed viewport %d, want 1", run.viewport)
+	}
+}
+
 func TestStorageAlignedConfirmationSettlesLedger(t *testing.T) {
 	l := StorageLayout()
 	m := NewScrollEvidenceMatcher(NewPixelMatcher(l, StorageCalibration()))
