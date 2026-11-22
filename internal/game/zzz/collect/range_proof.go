@@ -103,6 +103,15 @@ func (run *inventoryRun) matchFrame(frame platform.Frame) (PageMatch, error) {
 			"collect: %s frame %d: a later filter-panel frame no longer matches the ready-to-scan sort label",
 			run.positionLabel(), frame.ID))
 	}
+	if run.inv != nil && run.inv.storagePage() && run.filterActive && m.Page == PageFilterPanel &&
+		(m.Panel == nil || m.Panel.Range == nil || m.Panel.Range.RarityS != FilterActive) {
+		// A panel reopened after preparation is read, not skipped. A clear
+		// or unreadable S chip means the locked range can no longer be
+		// assumed; the prior range proof is not carried across it.
+		return m, scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
+			"collect: %s frame %d: the prepared S range is no longer proven on a reopened filter panel",
+			run.positionLabel(), frame.ID))
+	}
 	if run.filterActive && (m.Page == PageWarehouse || m.Page == PageDriveStorage) &&
 		m.Filter != nil && m.Filter.State == FilterClear {
 		return m, scan.NewFault(CodeNavigationMismatch, fmt.Errorf(

@@ -58,7 +58,7 @@ func (s *storageReviewFrames) Frame(context.Context, platform.FrameRequest) (pla
 func TestStorageTopConfirmedAtTop(t *testing.T) {
 	page := storageReviewPage()
 	page.List.Top = true
-	if !topConfirmed(scrollOutcome{afterMatch: page, stationary: true}, true, true, 238, 238) {
+	if !topConfirmed(scrollOutcome{afterMatch: page, stationary: true, beforeAtTop: true, thumbStill: true}, true, true, 238, 238) {
 		t.Fatal("a stationary drive-storage list at the proven scrollbar top was rejected")
 	}
 }
@@ -202,6 +202,19 @@ func TestStorageSavedLedgerKeepsEmptyAndOutOfScope(t *testing.T) {
 	}
 	if states[slotEmpty] == 0 || states[slotOutOfScope] == 0 || states[slotUnresolved] == 0 {
 		t.Fatalf("saved ledger states = %+v, want empty, outOfScope and unresolved cells", states)
+	}
+	foundEmpty := false
+	for _, cell := range report.Slots {
+		if cell.State != slotEmpty || cell.AbsoluteRow != 0 || cell.Column != 1 {
+			continue
+		}
+		foundEmpty = true
+		if cell.FirstSeenFrameID != 1 {
+			t.Fatalf("empty cell identity = %+v, want row 0, column 1, frame 1", cell)
+		}
+	}
+	if !foundEmpty {
+		t.Fatalf("empty cell (0,1) missing from report: %+v", report.Slots)
 	}
 }
 

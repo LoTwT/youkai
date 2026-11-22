@@ -64,14 +64,17 @@ func newSlotLedgerWithPositions(columns int, occupied []bool, positions []int, f
 func (l *slotLedger) appendCells(occupied []bool, positions []int, frameID uint64) {
 	base := len(l.cells)
 	for i, present := range occupied {
-		var entry slotEntry
+		// Every observed cell needs its own identity and first-seen frame,
+		// including empty cells. Storage saves empties as real evidence;
+		// leaving them at the zero identity makes every empty look like
+		// (0,0)/frame 0 and destroys which cells were actually observed.
+		index := base + i
+		entry := slotEntry{
+			slotIdentity:     slotIdentity{AbsoluteRow: index / l.columns, Column: index % l.columns},
+			FirstSeenFrameID: frameID,
+		}
 		if present {
-			index := base + i
-			entry = slotEntry{
-				slotIdentity:     slotIdentity{AbsoluteRow: index / l.columns, Column: index % l.columns},
-				State:            slotUnresolved,
-				FirstSeenFrameID: frameID,
-			}
+			entry.State = slotUnresolved
 			if i < len(positions) {
 				entry.Position = positions[i]
 			}

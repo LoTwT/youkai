@@ -36,9 +36,16 @@ type storageFlowGame struct {
 
 	ops              []platform.InputOp
 	clickedPositions []int
+	clickedGlobals   []int
+	clickedDetails   []int
 	frames           map[uint64]storageFlowSnapshot
 	nextID           uint64
 	images           map[int]*image.RGBA
+
+	// Optional per-card overrides for the same-detail scoped-reference
+	// path. Nil uses the normal round-robin slots and unique details.
+	positionFor  []int
+	detailGroups []int
 }
 
 type storageFlowSnapshot struct {
@@ -55,6 +62,7 @@ func newStorageFlowGame() *storageFlowGame {
 		total:    totalRows,
 		maxTop:   totalRows - 4,
 		filter:   collect.FilterClear,
+		viewport: 1,
 		selected: 0,
 		detail:   0,
 		frames:   map[uint64]storageFlowSnapshot{},
@@ -63,10 +71,43 @@ func newStorageFlowGame() *storageFlowGame {
 	return g
 }
 
-func (g *storageFlowGame) cardSlot(global int) int { return global%6 + 1 }
+func (g *storageFlowGame) cardSlot(global int) int {
+	if global >= 0 && global < len(g.positionFor) && g.positionFor[global] > 0 {
+		return g.positionFor[global]
+	}
+	return global%6 + 1
+}
+
+func (g *storageFlowGame) detailGroup(global int) int {
+	if global >= 0 && global < len(g.detailGroups) && g.detailGroups[global] > 0 {
+		return g.detailGroups[global]
+	}
+	return global + 1
+}
 
 func (g *storageFlowGame) globalAt(row, col int) int {
 	return (g.viewport+row)*g.layout.Columns + col
+}
+
+// thumbStart is the scripted scrollbar position. Viewport 1 is the middle
+// start; the top fling moves it to the calibrated top start, and the top
+// confirmation then observes the same value.
+func (g *storageFlowGame) thumbEdges(f platform.Frame) (int, int, bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	snap, ok := g.frames[f.ID]
+	if !ok || snap.page != 0 {
+		return 0, 0, false
+	}
+	if snap.viewport == 0 {
+		return 238, 261, true
+	}
+	return 300, 323, true
+}
+
+func (g *storageFlowGame) thumbStart(f platform.Frame) (int, bool) {
+	start, _, ok := g.thumbEdges(f)
+	return start, ok
 }
 
 func (g *storageFlowGame) slotAt(p image.Point) int {
@@ -129,6 +170,8 @@ func (g *storageFlowGame) dispatch(op platform.InputOp) platform.InputResult {
 					g.selected = global
 					g.detail = global
 					g.clickedPositions = append(g.clickedPositions, g.cardSlot(global))
+					g.clickedGlobals = append(g.clickedGlobals, global)
+					g.clickedDetails = append(g.clickedDetails, g.detail)
 				}
 			}
 		}
@@ -241,7 +284,7 @@ func (g *storageFlowGame) compareDetail(before, after platform.Frame) collect.De
 	defer g.mu.Unlock()
 	b, bok := g.frames[before.ID]
 	a, aok := g.frames[after.ID]
-	if !bok || !aok || b.detail == a.detail {
+	if !bok || !aok || g.detailGroup(b.detail) == g.detailGroup(a.detail) {
 		return collect.DetailSame
 	}
 	return collect.DetailDifferent
@@ -256,6 +299,12 @@ func (m storageFlowMatcher) MatchScroll(b, a platform.Frame) collect.ScrollMatch
 func (m storageFlowMatcher) CompareDetail(b, a platform.Frame) collect.DetailComparison {
 	return m.game.compareDetail(b, a)
 }
+func (m storageFlowMatcher) ThumbStart(f platform.Frame) (int, bool) {
+	return m.game.thumbStart(f)
+}
+func (m storageFlowMatcher) ThumbEdges(f platform.Frame) (int, int, bool) {
+	return m.game.thumbEdges(f)
+}
 
 func (g *storageFlowGame) opsSnapshot() []platform.InputOp {
 	g.mu.Lock()
@@ -267,6 +316,18 @@ func (g *storageFlowGame) clickedSnapshot() []int {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	return append([]int(nil), g.clickedPositions...)
+}
+
+func (g *storageFlowGame) clickedGlobalsSnapshot() []int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return append([]int(nil), g.clickedGlobals...)
+}
+
+func (g *storageFlowGame) clickedDetailsSnapshot() []int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return append([]int(nil), g.clickedDetails...)
 }
 
 type storageFlowScope struct {
@@ -296,7 +357,15 @@ type storageFlowScope struct {
 
 func runStorageFlow(t *testing.T, positions []int) (*storageFlowGame, []collect.Observation, storageFlowScope) {
 	t.Helper()
-	game := newStorageFlowGame()
+	game, observations, scope, snap := runStorageFlowInternal(t, newStorageFlowGame(), positions)
+	if snap.End != scan.EndCompleted {
+		t.Fatalf("storage flow end = %s trigger=%+v", snap.End, snap.Trigger)
+	}
+	return game, observations, scope
+}
+
+func runStorageFlowInternal(t *testing.T, game *storageFlowGame, positions []int) (*storageFlowGame, []collect.Observation, storageFlowScope, scan.Snapshot) {
+	t.Helper()
 	profile, err := collect.WindowsStorageProfileFor(image.Pt(1920, 1080))
 	if err != nil {
 		t.Fatal(err)
@@ -350,9 +419,7 @@ func runStorageFlow(t *testing.T, positions []int) (*storageFlowGame, []collect.
 	case <-time.After(60 * time.Second):
 		t.Fatalf("storage flow timed out; ops=%d", len(game.opsSnapshot()))
 	}
-	if snap := kernel.Snapshot(); snap.End != scan.EndCompleted {
-		t.Fatalf("storage flow end = %s trigger=%+v", snap.End, snap.Trigger)
-	}
+	snap := kernel.Snapshot()
 	observations := make([]collect.Observation, 0, sink.len())
 	for _, rec := range sink.recordsSnapshot() {
 		obs, ok := rec.Observation.(collect.Observation)
@@ -365,7 +432,121 @@ func runStorageFlow(t *testing.T, positions []int) (*storageFlowGame, []collect.
 	if err := json.Unmarshal(inv.ObservedScope(), &scope); err != nil {
 		t.Fatalf("decode observed scope: %v", err)
 	}
-	return game, observations, scope
+	return game, observations, scope, snap
+}
+
+// checkStorageActions verifies the exact normal-entry action shape: four
+// panel clicks, a top fling and its independent confirmation, one card click
+// per non-selected card, the two advance wheels, and one extra bottom
+// recheck wheel. Every scroll lands on ScrollFrom and every card click lands
+// inside a card slot.
+func checkStorageActions(t *testing.T, game *storageFlowGame, ops []platform.InputOp, wantCards int) {
+	t.Helper()
+	if len(ops) != 4+2+wantCards+3 {
+		t.Fatalf("dispatched %d ops, want 4 prepare + 2 top wheels + %d card clicks + 3 advance/bottom wheels", len(ops), wantCards)
+	}
+	wantPrefix := []image.Point{
+		game.layout.FilterButton,
+		game.layout.PanelReset,
+		game.layout.PanelS,
+		game.layout.PanelClose,
+	}
+	for i, want := range wantPrefix {
+		if ops[i].Kind != platform.InputClick || ops[i].At != want {
+			t.Fatalf("prepare op %d = %s at %v, want click at %v", i, ops[i].Kind, ops[i].At, want)
+		}
+	}
+	for i := 0; i < 2; i++ {
+		op := ops[4+i]
+		if op.Kind != platform.InputScroll || op.WheelSteps <= 0 || op.At != game.layout.ScrollFrom {
+			t.Fatalf("top op %d = %+v, want a positive wheel at ScrollFrom", i+1, op)
+		}
+	}
+	cards, down, up := 0, 0, 0
+	for _, op := range ops[6:] {
+		switch op.Kind {
+		case platform.InputScroll:
+			if op.At != game.layout.ScrollFrom {
+				t.Fatalf("scroll landed at %v, want %v", op.At, game.layout.ScrollFrom)
+			}
+			if op.WheelSteps < 0 {
+				down++
+			} else if op.WheelSteps > 0 {
+				up++
+			} else {
+				t.Fatalf("zero-step scroll: %+v", op)
+			}
+		case platform.InputClick:
+			if game.slotAt(op.At) < 0 {
+				t.Fatalf("card click landed outside a card slot: %v", op.At)
+			}
+			cards++
+		case platform.InputDrag:
+			t.Fatalf("drive-storage flow dispatched a drag: %+v", op)
+		default:
+			t.Fatalf("unexpected drive-storage op: %+v", op)
+		}
+	}
+	if cards != wantCards {
+		t.Fatalf("card clicks = %d, want %d", cards, wantCards)
+	}
+	if up != 0 || down != 3 {
+		t.Fatalf("advance/bottom wheels = %d up/%d down, want 0/3", up, down)
+	}
+	if last := ops[len(ops)-1]; last.Kind != platform.InputScroll || last.WheelSteps >= 0 || last.At != game.layout.ScrollFrom {
+		t.Fatalf("last op = %+v, want the independent bottom recheck wheel", last)
+	}
+}
+
+// checkStorageIdentities verifies unique card identities and that each
+// recorded right-pane detail belongs to the card that was clicked. The
+// collect observation's viewport/row/column reconstructs the same global
+// card the fake selected.
+func checkStorageIdentities(t *testing.T, game *storageFlowGame, observations []collect.Observation, wantCards int) {
+	t.Helper()
+	clickedGlobals := game.clickedGlobalsSnapshot()
+	clickedDetails := game.clickedDetailsSnapshot()
+	if len(clickedGlobals) != wantCards || len(clickedDetails) != wantCards {
+		t.Fatalf("recorded %d globals/%d details, want %d", len(clickedGlobals), len(clickedDetails), wantCards)
+	}
+	clicked := make(map[int]bool, len(clickedGlobals))
+	for i, global := range clickedGlobals {
+		if clicked[global] {
+			t.Fatalf("duplicate clicked card identity %d", global)
+		}
+		clicked[global] = true
+		if clickedDetails[i] != global {
+			t.Fatalf("click %d selected card %d but right detail was %d", i, global, clickedDetails[i])
+		}
+	}
+	if len(observations) != wantCards+1 && wantCards == 53 {
+		t.Fatalf("full observations = %d, want 54", len(observations))
+	}
+	seen := make(map[int]bool, len(observations))
+	for _, obs := range observations {
+		global := obs.Viewport*game.layout.Columns + obs.Row*game.layout.Columns + obs.Column
+		if seen[global] {
+			t.Fatalf("duplicate admitted card identity %d", global)
+		}
+		seen[global] = true
+		if obs.Position != game.cardSlot(global) {
+			t.Fatalf("observation at viewport %d row %d col %d says slot %d, want %d",
+				obs.Viewport, obs.Row, obs.Column, obs.Position, game.cardSlot(global))
+		}
+		if !clicked[global] && !(wantCards == 53 && global == 0) {
+			t.Fatalf("admitted card %d was never clicked and is not the initial selection", global)
+		}
+		if obs.RarityFilter != "S" || obs.Quality != collect.QualityS {
+			t.Fatalf("observation rarity = %q/%q, want S/S", obs.RarityFilter, obs.Quality)
+		}
+	}
+	if wantCards == 53 {
+		for global := 1; global <= 53; global++ {
+			if !clicked[global] || !seen[global] {
+				t.Fatalf("card %d missing from clicked=%t observed=%t", global, clicked[global], seen[global])
+			}
+		}
+	}
 }
 
 func TestStorageNormalEntryActionSequence(t *testing.T) {
@@ -374,36 +555,8 @@ func TestStorageNormalEntryActionSequence(t *testing.T) {
 		t.Fatalf("full flow admitted %d items with %d card clicks, want 54/53",
 			len(observations), len(game.clickedSnapshot()))
 	}
-	ops := game.opsSnapshot()
-	wantPrefix := []image.Point{
-		game.layout.FilterButton,
-		game.layout.PanelReset,
-		game.layout.PanelS,
-		game.layout.PanelClose,
-	}
-	if len(ops) < 5 {
-		t.Fatalf("full flow dispatched only %d ops", len(ops))
-	}
-	for i, want := range wantPrefix {
-		if ops[i].Kind != platform.InputClick || ops[i].At != want {
-			t.Fatalf("prepare op %d = %s at %v, want click at %v", i, ops[i].Kind, ops[i].At, want)
-		}
-	}
-	if ops[4].Kind != platform.InputScroll || ops[4].WheelSteps <= 0 {
-		t.Fatalf("first post-prepare op = %+v, want a wheel toward the top", ops[4])
-	}
-	scrolls := 0
-	for _, op := range ops {
-		if op.Kind == platform.InputDrag {
-			t.Fatalf("drive-storage flow dispatched a drag: %+v", op)
-		}
-		if op.Kind == platform.InputScroll && op.WheelSteps < 0 {
-			scrolls++
-		}
-	}
-	if scrolls < 2 {
-		t.Fatalf("full flow dispatched %d downward wheels, want at least two", scrolls)
-	}
+	checkStorageActions(t, game, game.opsSnapshot(), 53)
+	checkStorageIdentities(t, game, observations, 53)
 	seenSlots := map[int]bool{}
 	for _, position := range game.clickedSnapshot() {
 		seenSlots[position] = true
@@ -414,16 +567,8 @@ func TestStorageNormalEntryActionSequence(t *testing.T) {
 		}
 	}
 	for _, obs := range observations {
-		global := obs.Viewport*game.layout.Columns + obs.Row*game.layout.Columns + obs.Column
 		if obs.Page != collect.PageDriveStorage {
 			t.Fatalf("observation page = %q, want drive storage", obs.Page)
-		}
-		if obs.Position != game.cardSlot(global) {
-			t.Fatalf("observation at viewport %d row %d col %d says slot %d, want %d",
-				obs.Viewport, obs.Row, obs.Column, obs.Position, game.cardSlot(global))
-		}
-		if obs.RarityFilter != "S" || obs.Quality != collect.QualityS {
-			t.Fatalf("observation rarity = %q/%q, want S/S", obs.RarityFilter, obs.Quality)
 		}
 	}
 	if scope.Sort != "verified" || scope.Coverage != "complete" {
@@ -442,12 +587,49 @@ func TestStorageNormalEntryActionSequence(t *testing.T) {
 	}
 }
 
+func TestStorageScopedSameDetailSkipsOutOfScopeReference(t *testing.T) {
+	game := newStorageFlowGame()
+	game.positionFor = make([]int, game.total*game.layout.Columns)
+	game.detailGroups = make([]int, game.total*game.layout.Columns)
+	for i := range game.positionFor {
+		game.positionFor[i] = 4
+		game.detailGroups[i] = i + 1
+	}
+	// The first two visible cards are the only in-scope cards and share
+	// both slot and detail. The target is card 0, the pre-click selection
+	// is card 1, so the reference choice has only out-of-scope cards left.
+	game.positionFor[0], game.positionFor[1] = 3, 3
+	game.detailGroups[0], game.detailGroups[1] = 1, 1
+	game.selected, game.detail = 1, 1
+
+	gameResult, observations, _, snap := runStorageFlowInternal(t, game, []int{3})
+	if snap.End == scan.EndCompleted {
+		t.Fatalf("same-detail scoped flow completed without a reference: %d observations", len(observations))
+	}
+	clicked := gameResult.clickedSnapshot()
+	if len(clicked) == 0 {
+		t.Fatal("the target card was never clicked")
+	}
+	for _, slot := range clicked {
+		if slot != 3 {
+			t.Fatalf("scoped same-detail flow clicked out-of-scope slot %d", slot)
+		}
+	}
+	for _, global := range gameResult.clickedGlobalsSnapshot() {
+		if global >= 2 {
+			t.Fatalf("out-of-scope card %d was clicked as a reference", global)
+		}
+	}
+}
+
 func TestStorageScopedRescanActionSequence(t *testing.T) {
 	game, observations, scope := runStorageFlow(t, []int{3})
 	if len(observations) != 9 || len(game.clickedSnapshot()) != 9 {
 		t.Fatalf("scoped flow admitted %d items with %d card clicks, want 9/9",
 			len(observations), len(game.clickedSnapshot()))
 	}
+	checkStorageActions(t, game, game.opsSnapshot(), 9)
+	checkStorageIdentities(t, game, observations, 9)
 	for _, obs := range observations {
 		if obs.Position != 3 {
 			t.Fatalf("scoped observation slot = %d, want 3", obs.Position)

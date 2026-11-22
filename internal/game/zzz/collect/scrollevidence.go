@@ -780,6 +780,11 @@ func (m *ScrollEvidenceMatcher) zeroDisplacementProven(before, after platform.Fr
 			"frames %d → %d: the selection box moved (slot %d → %d), so the list did not stay at one position (zero-shift error %.2f)",
 			before.ID, after.ID, selB, selA, err0)
 	}
+	if m.L.Page == PageDriveStorage && !m.thumbStationary(beforeThumb, afterThumb) {
+		return false, fmt.Sprintf(
+			"frames %d → %d: the scrollbar thumb moved at an edge (%d–%d → %d–%d), so boundary stillness is not proven (zero-shift error %.2f)",
+			before.ID, after.ID, thumbBStart, thumbBEnd, thumbAStart, thumbAEnd, err0)
+	}
 	if m.thumbMoved(beforeThumb, afterThumb) {
 		return false, fmt.Sprintf(
 			"frames %d → %d: the scrollbar thumb verifiably travelled (%d–%d → %d–%d), so the list may have moved (zero-shift error %.2f)",
@@ -931,6 +936,20 @@ func (m *ScrollEvidenceMatcher) thumbMoved(before, after thumbReading) bool {
 	return translated && absInt(travel) >= m.C.ScrollbarMoveMin
 }
 
+// thumbStationary reports that neither thumb edge moved by more than the
+// calibrated movement floor. It is the boundary-stillness predicate: a
+// single moving edge is a measurement artifact for proving a row, but it is
+// still a contradiction of "the thumb did not move" and must not be ignored
+// when top/bottom stillness is being confirmed. The floor absorbs the 2 px
+// jitter seen at the Windows bottom capture; a 6 px edge move is real motion.
+func (m *ScrollEvidenceMatcher) thumbStationary(before, after thumbReading) bool {
+	if !before.ok || !after.ok {
+		return false
+	}
+	return absInt(after.start-before.start) <= m.C.ScrollbarMoveMin &&
+		absInt(after.end-before.end) <= m.C.ScrollbarMoveMin
+}
+
 // thumbTravel is the scrollbar's independently measured travel for a claimed
 // row count: the signed pixels the thumb moved and the per-row travel the
 // observed thumb geometry implies.
@@ -987,9 +1006,8 @@ func (m *ScrollEvidenceMatcher) thumbTravelCheck(before, after thumbReading, row
 	travel := startTravel
 	if strict {
 		translated, both := thumbTranslation(before, after)
-		if both {
-			travel = translated
-		} else {
+		physical := translated
+		if !both {
 			// The trailing edge may be pinned at a track end while the leading
 			// edge still moves for the final row. A synthetic one-edge move
 			// (leading edge 300→306, trailing edge 323→323) is not a track-end
@@ -1005,13 +1023,20 @@ func (m *ScrollEvidenceMatcher) thumbTravelCheck(before, after thumbReading, row
 					before.start, before.end, after.start, after.end, startTravel, endTravel)
 			}
 			if pinnedUp {
-				travel = endTravel
+				physical = endTravel
+			} else {
+				physical = startTravel
 			}
 		}
-		if rows < 0 {
-			travel = -travel
+		// Positive rows mean the content moved up and the thumb moved down.
+		// Keep the physical sign through the row test; taking the magnitude
+		// first would let an upward thumb corroborate a forward row.
+		if rows == 0 || physical*rows <= 0 {
+			return thumbTravel{}, false, fmt.Sprintf(
+				"thumb %d–%d → %d–%d moved %+dpx, opposite to the claimed %+d-row direction",
+				before.start, before.end, after.start, after.end, physical, rows)
 		}
-		travel = absInt(travel)
+		travel = absInt(physical)
 	}
 	if rows < 0 && !strict {
 		travel = -travel

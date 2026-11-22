@@ -1589,6 +1589,13 @@ type thumbReporter interface {
 	ThumbStart(frame platform.Frame) (int, bool)
 }
 
+// thumbEdgesReporter is the optional matcher capability for boundary
+// stillness. The top confirmation needs both thumb edges, not only the
+// start used for progress toward the top.
+type thumbEdgesReporter interface {
+	ThumbEdges(frame platform.Frame) (start, end int, ok bool)
+}
+
 // awaitTopBase verifies the current page and wheel before a confirmation
 // drag. The stillness wait only paces the drag: at the deadline a readable
 // same-position frame can be used even without a stationary pair.
@@ -1683,6 +1690,7 @@ func (run *inventoryRun) confirmTop(ctx context.Context) (*failureFrames, error)
 		}
 		before = run.lastFrame
 		beforeStart, beforeOK := run.thumbStart(before)
+		beforeAtTop := run.listMatch.List != nil && run.listMatch.List.Top
 		res := run.view.Dispatch(run.topInputOp(before))
 		if err := run.dispatchOutcome(ctx, res); err != nil {
 			return nil, err
@@ -1694,8 +1702,17 @@ func (run *inventoryRun) confirmTop(ctx context.Context) (*failureFrames, error)
 		if err != nil {
 			return nil, err
 		}
-		lastOut, haveWait = out, true
 		afterStart, afterOK := run.thumbStart(out.after)
+		out.beforeAtTop = beforeAtTop
+		out.thumbStill = beforeOK && afterOK && absInt(afterStart-beforeStart) <= 2
+		if r, ok := run.inv.matcher().(thumbEdgesReporter); ok {
+			if bs, be, bok := r.ThumbEdges(before); bok {
+				if as, ae, aok := r.ThumbEdges(out.after); aok {
+					out.thumbStill = absInt(as-bs) <= 2 && absInt(ae-be) <= 2
+				}
+			}
+		}
+		lastOut, haveWait = out, true
 		listOK := run.listVerdict(out.afterMatch) && out.afterMatch.List != nil
 		log.Printf("youkai: collect: position %d: top confirmation attempt %d: top=%t thumb %d/%t -> %d/%t stationary=%t displaced=%t lost=%t evidence=%s %s",
 			run.position, attempt+1,
@@ -1764,18 +1781,34 @@ func (run *inventoryRun) confirmTop(ctx context.Context) (*failureFrames, error)
 // accepted by the thumb guard below. The Lost branch keeps its match check
 // as a safety net for a lost candidate whose final comparison is undecided.
 func topConfirmed(out scrollOutcome, beforeOK, afterOK bool, beforeStart, afterStart int) bool {
-	if (out.afterMatch.Page != PageWarehouse && out.afterMatch.Page != PageDriveStorage) ||
+	storage := out.afterMatch.Page == PageDriveStorage
+	if (out.afterMatch.Page != PageWarehouse && !storage) ||
 		out.afterMatch.List == nil || !out.afterMatch.List.Top {
+		return false
+	}
+	if storage && !out.beforeAtTop {
+		// A frame that moved into the top on this wait is a scroll, not a
+		// stationary boundary confirmation. Confirm only from an already
+		// proven top base.
 		return false
 	}
 	if out.displaced {
 		return false
 	}
 	thumbStable := beforeOK && afterOK && absInt(afterStart-beforeStart) <= 2
+	if storage {
+		thumbStable = out.thumbStill
+	}
 	if out.lost {
 		return out.match.Undecided && thumbStable
 	}
 	if out.stationary {
+		if storage {
+			// The shared Stationary verdict is MAD-level and can ignore a
+			// one-edge thumb move. At a boundary the thumb must not move at
+			// all (within the 2 px jitter floor) for the wait to confirm.
+			return thumbStable
+		}
 		return true
 	}
 	return thumbStable
@@ -3313,6 +3346,15 @@ type scrollOutcome struct {
 	stationary bool
 	displaced  bool
 	lost       bool
+	// beforeAtTop reports that the frame immediately before this wait's
+	// action was already at the scrollbar's top. Drive-storage top
+	// confirmation requires it: a thumb moving into the top on the same
+	// wait is a scroll, not a stationary boundary proof.
+	beforeAtTop bool
+	// thumbStill reports that both thumb edges stayed within the 2 px
+	// jitter floor across this wait. It is computed from both edges when
+	// the matcher exposes them, not only from the start used for progress.
+	thumbStill bool
 	// unmoved reports that every observation in the wait was proof the
 	// list had not moved: the same content as the pre-drag frame or a
 	// Stationary comparison uncontradicted by observable movement, with no

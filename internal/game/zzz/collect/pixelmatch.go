@@ -445,6 +445,16 @@ func (m *PixelMatcher) ThumbStart(f platform.Frame) (int, bool) {
 	return start, ok
 }
 
+// ThumbEdges reports both ends of the scrollbar thumb. Boundary stillness
+// needs both: a stable start alone does not rule out a moving trailing
+// edge, and a one-edge move must not pass the top or bottom confirmation.
+func (m *PixelMatcher) ThumbEdges(f platform.Frame) (start, end int, ok bool) {
+	if m == nil || !m.valid || !m.frameFits(f) {
+		return 0, 0, false
+	}
+	return m.thumbSegment(f.Image)
+}
+
 // thumbSegment finds the longest bright run in the scrollbar's thumb
 // column. The track rect excludes the two end caps.
 func (m *PixelMatcher) thumbSegment(img *image.RGBA) (start, end int, ok bool) {
