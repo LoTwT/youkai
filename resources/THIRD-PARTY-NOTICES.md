@@ -14,8 +14,8 @@
 ## 识别模型
 
 - 组件：`models/PP-OCRv6_rec_small.onnx`（PP-OCRv6 文字识别模型，small）。
-- 来源：RapidAI/RapidOCR 的 ModelScope `v3.10.0` 资源（<https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.10.0/onnx/PP-OCRv6/rec/PP-OCRv6_rec_small.onnx>），下载位置与摘要固定于 RapidOCR 仓库 v3.10.0 的 `default_models.yaml`。
-- 许可：RapidOCR 仓库与该模型卡均声明 Apache-2.0。**注意：模型托管根目录的独立 `LICENSE` 文件尚未取得，模型原始来源、转换说明与最终适用声明须在正式交付前核对归档（项目交付清单已记录此项）；当前构建供开发与测试使用。**
+- 来源与归属见 [RapidOCR 模型许可与归属声明](https://github.com/RapidAI/RapidOCRDocs/blob/256173e56c46ccd173ef89d1b256900f9baed80b/docs/model_licenses.md)。RapidOCR 将 PaddleOCR 的 `PP-OCRv6_small_rec` 转换为 ONNX 并通过 ModelScope `v3.10.0` 分发。上游模型权重版权归百度及／或相应 PaddleOCR 权利人所有。Youkai 随包分发 RapidOCR 提供的原文件。
+- 模型按 Apache-2.0 分发，许可证原文见随包的 [`licenses/apache-2.0.txt`](licenses/apache-2.0.txt)。[PaddlePaddle 官方 ONNX 模型卡](https://huggingface.co/PaddlePaddle/PP-OCRv6_small_rec_onnx)也标明该许可。
 
 ## 构建时链接的库
 
