@@ -389,6 +389,45 @@ func TestStorageReplacementRetainsNewRowBadge(t *testing.T) {
 	}
 }
 
+func clearStorageBadge(l Layout, f platform.Frame, cell int) {
+	r := l.CardPositionRect(cell)
+	draw.Draw(f.Image, r, image.NewUniform(color.RGBA{R: 10, G: 10, B: 10, A: 255}), image.Point{}, draw.Src)
+}
+
+func TestStorageKnownBadgeSurvivesMissingAndReread(t *testing.T) {
+	l := StorageLayout()
+	m := NewScrollEvidenceMatcher(NewPixelMatcher(l, StorageCalibration()))
+	before := storageSelectedPatternFrame(l, 1, 0, -1, 300, 323)
+	candidate := storageSelectedPatternFrame(l, 2, 1, -1, 306, 329)
+	if got := m.MatchScroll(before, candidate); !got.Displaced || got.Rows != 1 {
+		t.Fatalf("invalid one-row candidate: %s", got.Evidence)
+	}
+	for _, badge := range []int{5, 2} {
+		name := "same readable badge"
+		if badge != 5 {
+			name = "conflicting readable badge"
+		}
+		t.Run(name, func(t *testing.T) {
+			replacement := storageSelectedPatternFrame(l, 3, 2, -1, 312, 335)
+			clearStorageBadge(l, replacement, 18)
+			confirm1 := storageSelectedPatternFrame(l, 4, 2, -1, 312, 335)
+			confirm2 := storageSelectedPatternFrame(l, 5, 2, -1, 312, 335)
+			paintStorageBadge(l, confirm1, 18, badge)
+			paintStorageBadge(l, confirm2, 18, badge)
+			out, viewport := storageWaitAndCommit(t, l, m, before, candidate, replacement, confirm1, confirm2)
+			if badge == 5 {
+				if !out.settled || viewport != 1 {
+					t.Fatalf("same badge after an unreadable frame did not commit: settled=%t viewport=%d", out.settled, viewport)
+				}
+				return
+			}
+			if out.settled || viewport != 0 {
+				t.Fatalf("conflicting badge after an unreadable frame committed frame %d to viewport %d", out.after.ID, viewport)
+			}
+		})
+	}
+}
+
 func TestStorageReplacementRetainsAnchorRow(t *testing.T) {
 	l := StorageLayout()
 	m := NewScrollEvidenceMatcher(NewPixelMatcher(l, StorageCalibration()))
