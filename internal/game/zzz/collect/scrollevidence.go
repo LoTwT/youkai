@@ -363,8 +363,14 @@ func (m *ScrollEvidenceMatcher) MatchScroll(before, after platform.Frame) Scroll
 	if selB >= 0 && selA >= 0 {
 		selRows, selRowsOK = m.selectionRows(selB, selA)
 	}
-	selectionStill := selB >= 0 && selA >= 0 && selB == selA
+	selectionKnown := selB >= 0 && selA >= 0
+	selectionStill := selectionKnown && selB == selA
 	selectionMoved := selRowsOK && selRows != 0
+	// A readable pair that is neither still nor a vertical row change is a
+	// conflict, not a missing anchor. Treating it as missing would let the
+	// no-selection path accept a scroll that the observed selection
+	// contradicts.
+	selectionConflict := selectionKnown && !selectionStill && !selectionMoved
 	thumbMoved := m.thumbMoved(
 		thumbReading{start: thumbBStart, end: thumbBEnd, ok: thumbBOK},
 		thumbReading{start: thumbAStart, end: thumbAEnd, ok: thumbAOK})
@@ -373,6 +379,15 @@ func (m *ScrollEvidenceMatcher) MatchScroll(before, after platform.Frame) Scroll
 		Err0:            err0,
 		SelectionBefore: selB,
 		SelectionAfter:  selA,
+	}
+	if m.L.Page == PageDriveStorage && selectionConflict {
+		// Two readable anchors that did not move along a column are a
+		// positive contradiction of a vertical list scroll. This must veto
+		// even a MAD-level Stationary/interprets-as-still path; it must not
+		// be relabelled as "no anchor".
+		return ScrollMatch{Undecided: true, Metrics: metrics, Evidence: fmt.Sprintf(
+			"frames %d → %d: both selection anchors are readable but the selection changed from slot %d to %d without a vertical row correspondence; the observed selection contradicts a column scroll",
+			before.ID, after.ID, selB, selA)}
 	}
 
 	// 1) Pixel-identical frames prove stillness directly, uniform content
@@ -439,7 +454,7 @@ func (m *ScrollEvidenceMatcher) MatchScroll(before, after platform.Frame) Scroll
 	if m.L.Page == PageDriveStorage && selectionMoved {
 		beforeThumb := thumbReading{start: thumbBStart, end: thumbBEnd, ok: thumbBOK}
 		afterThumb := thumbReading{start: thumbAStart, end: thumbAEnd, ok: thumbAOK}
-		match, ok := m.storageScrollEvidence(before, after, beforeThumb, afterThumb, metrics)
+		match, ok := m.storageScrollEvidence(before, after, beforeThumb, afterThumb, metrics, false)
 		if !ok {
 			return ScrollMatch{Undecided: true, Metrics: metrics, Evidence: fmt.Sprintf(
 				"frames %d → %d: the selection box and the card overlap did not produce one consistent displacement (zero-shift error %.2f, ncc0 %.3f); %s",
@@ -554,7 +569,6 @@ func (m *ScrollEvidenceMatcher) MatchScroll(before, after platform.Frame) Scroll
 			"frames %d → %d: the content changed (zero-shift error %.2f) but the selection box stayed on slot %d; the changed pixels are not list movement (ncc0 %.3f); %s",
 			before.ID, after.ID, err0, selB, metrics.RowNCC[0], thumbNote)}
 	}
-
 	// The drive-storage grid repeats the same card art and level text, so
 	// the normalized feature can prefer zero shift after a real one-row
 	// move (the 2026-11-22 handoff: ncc0 0.945 vs +1 0.922). When the
@@ -565,7 +579,7 @@ func (m *ScrollEvidenceMatcher) MatchScroll(before, after platform.Frame) Scroll
 	if m.L.Page == PageDriveStorage && !selectionMoved {
 		beforeThumb := thumbReading{start: thumbBStart, end: thumbBEnd, ok: thumbBOK}
 		afterThumb := thumbReading{start: thumbAStart, end: thumbAEnd, ok: thumbAOK}
-		if match, ok := m.storageScrollEvidence(before, after, beforeThumb, afterThumb, metrics); ok {
+		if match, ok := m.storageScrollEvidence(before, after, beforeThumb, afterThumb, metrics, true); ok {
 			return match
 		}
 		// Falling through to the feature-only path would let the repeated
@@ -641,7 +655,11 @@ func (m *ScrollEvidenceMatcher) MatchScroll(before, after platform.Frame) Scroll
 // carry the same art and level text, so a real one-row move can leave the
 // zero-shift correlation higher than the shifted rows. Exactly one row
 // count must fit both witnesses; zero or multiple fits stay unverified.
-func (m *ScrollEvidenceMatcher) storageScrollEvidence(before, after platform.Frame, thumbB, thumbA thumbReading, metrics *ScrollMetrics) (ScrollMatch, bool) {
+// requireChange is true for the no-selection branch, where the destination
+// badges must prove the grid moved; a consistent selection supplies that
+// independent instance evidence and may sit on a same-column repeated
+// badge pattern.
+func (m *ScrollEvidenceMatcher) storageScrollEvidence(before, after platform.Frame, thumbB, thumbA thumbReading, metrics *ScrollMetrics, requireChange bool) (ScrollMatch, bool) {
 	beforePage := m.PixelMatcher.Match(before)
 	afterPage := m.PixelMatcher.Match(after)
 	if beforePage.Page != PageDriveStorage || afterPage.Page != PageDriveStorage ||
@@ -704,11 +722,13 @@ func (m *ScrollEvidenceMatcher) storageScrollEvidence(before, after platform.Fra
 				}
 			}
 			// At least one occupied overlap cell must carry the same known
-			// slot badge on both sides, and the destination grid must have
-			// changed somewhere. An all-empty or all-identical overlap leaves
-			// only the scrollbar as evidence and is not enough for a
-			// card-list scroll.
-			if valid && occupied > 0 && matched == occupied && changed > 0 {
+			// slot badge on both sides. Without a readable selection the
+			// destination grid must also change somewhere; with an already
+			// proven selection, a same-column repeated badge pattern is
+			// allowed because the selection, thumb and every occupied
+			// overlap cell agree on the row. An all-empty overlap still
+			// leaves only the scrollbar as evidence and is rejected.
+			if valid && occupied > 0 && matched == occupied && (!requireChange || changed > 0) {
 				fits = append(fits, candidate{rows: signed})
 			}
 		}

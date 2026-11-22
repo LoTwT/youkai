@@ -52,6 +52,64 @@ func storageSelectedPatternFrame(l Layout, id uint64, first, selected, thumbStar
 	return f
 }
 
+func storageRepeatPositionColumns(l Layout, f platform.Frame) {
+	blank := image.NewUniform(color.RGBA{R: 10, G: 10, B: 10, A: 255})
+	white := color.RGBA{R: 255, G: 255, B: 255, A: 255}
+	for i := range l.Slots {
+		r := l.CardPositionRect(i)
+		draw.Draw(f.Image, r, blank, image.Point{}, draw.Src)
+		position := i % l.Columns % len(l.CardPositions)
+		for y, row := range l.CardPositions[position].masks[0].rows {
+			for x := range len(row) {
+				if row[x] == '#' {
+					f.Image.SetRGBA(r.Min.X+x, r.Min.Y+y, white)
+				}
+			}
+		}
+	}
+}
+
+func TestStorageSelectedRepeatedColumnsStillAdvances(t *testing.T) {
+	l := StorageLayout()
+	m := NewScrollEvidenceMatcher(NewPixelMatcher(l, StorageCalibration()))
+	before := storageSelectedPatternFrame(l, 1, 0, 27, 300, 323)
+	after := storageSelectedPatternFrame(l, 2, 1, 18, 306, 329)
+	if got := m.MatchScroll(before, after); !got.Displaced || got.Rows != 1 {
+		t.Fatalf("invalid changing-badge positive control: %s", got.Evidence)
+	}
+	for i, f := range []platform.Frame{before, after} {
+		storageRepeatPositionColumns(l, f)
+		p := m.Match(f)
+		if p.Page != PageDriveStorage || p.List.Selected != []int{27, 18}[i] {
+			t.Fatalf("invalid repeated-column fixture: %s", p.Evidence)
+		}
+		for cell, position := range p.List.Positions {
+			if !position.known() || position.Position != cell%l.Columns%6+1 {
+				t.Fatalf("invalid repeated badge at %d: %+v", cell, position)
+			}
+		}
+	}
+	if got := m.MatchScroll(before, after); !got.Displaced || got.Rows != 1 {
+		t.Fatalf("selection and thumb agree, but repeated badges blocked the row: %s", got.Evidence)
+	}
+}
+
+func TestStorageSelectedCrossColumnConflictStops(t *testing.T) {
+	l := StorageLayout()
+	m := NewScrollEvidenceMatcher(NewPixelMatcher(l, StorageCalibration()))
+	before := storageSelectedPatternFrame(l, 1, 0, 27, 300, 323)
+	after := storageSelectedPatternFrame(l, 2, 1, 19, 306, 329)
+	for i, f := range []platform.Frame{before, after} {
+		p := m.Match(f)
+		if p.Page != PageDriveStorage || p.List.Selected != []int{27, 19}[i] {
+			t.Fatalf("invalid cross-column fixture: %s", p.Evidence)
+		}
+	}
+	if got := m.MatchScroll(before, after); got.Displaced {
+		t.Fatalf("accepted a column scroll while both anchors were readable and changed column: %s", got.Evidence)
+	}
+}
+
 func TestStorageSelectedScrollDirectionMustMatchThumb(t *testing.T) {
 	l := StorageLayout()
 	m := NewScrollEvidenceMatcher(NewPixelMatcher(l, StorageCalibration()))
