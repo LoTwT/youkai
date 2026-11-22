@@ -113,6 +113,15 @@ const (
 	// perception failure (decision §4.6 K5's escalation guard). The
 	// incomplete positions stay in the observed scope with their reasons.
 	CodePositionFailureLimit = "positionFailureLimit"
+	// CodePositionUnreadable: a drive-storage card or detail slot badge was
+	// present but could not be named by the calibrated templates. The
+	// traversal never guesses the slot or lets the card's detail stand in
+	// for it; the mixed-list pass stops and the already admitted items stay.
+	CodePositionUnreadable = "positionUnreadable"
+	// CodePositionConflict: the drive-storage card badge, the detail badge
+	// or two templates within one badge disagree. The slot is ambiguous,
+	// so no admission can be attributed to it.
+	CodePositionConflict = "positionConflict"
 )
 
 // PositionReporter is an optional, display-only progress relay. Zero means

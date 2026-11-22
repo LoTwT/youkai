@@ -454,26 +454,42 @@ func (inv *Inventory) Precheck(ctx context.Context, sess platform.Session) error
 			frame.Content))
 	}
 	m := inv.matcher().Match(frame)
-	if m.Page != PageWarehouse || m.List == nil || len(m.List.Occupied) != len(inv.Layout.Slots) {
-		return scan.NewFault(CodePageUnverified, fmt.Errorf(
-			"collect: precheck: the current frame is not a verifiable warehouse list (verdict %s): %s",
-			m.Page, m.Evidence))
-	}
-	if m.Wheel == nil || m.Wheel.Position < 1 || m.Wheel.Position > 6 {
-		return scan.NewFault(CodePageUnverified, fmt.Errorf(
-			"collect: precheck: no unique wheel position is selected: %s", m.Evidence))
+	if inv.storagePage() {
+		if m.Page != PageDriveStorage || m.List == nil || len(m.List.Occupied) != len(inv.Layout.Slots) ||
+			len(m.List.Positions) != len(inv.Layout.Slots) {
+			return scan.NewFault(CodePageUnverified, fmt.Errorf(
+				"collect: precheck: the current frame is not a verifiable drive-storage list (verdict %s): %s",
+				m.Page, m.Evidence))
+		}
+	} else {
+		if m.Page != PageWarehouse || m.List == nil || len(m.List.Occupied) != len(inv.Layout.Slots) {
+			return scan.NewFault(CodePageUnverified, fmt.Errorf(
+				"collect: precheck: the current frame is not a verifiable warehouse list (verdict %s): %s",
+				m.Page, m.Evidence))
+		}
+		if m.Wheel == nil || m.Wheel.Position < 1 || m.Wheel.Position > 6 {
+			return scan.NewFault(CodePageUnverified, fmt.Errorf(
+				"collect: precheck: no unique wheel position is selected: %s", m.Evidence))
+		}
 	}
 	filterAtStart := FilterUnknown
 	if m.Filter != nil {
 		filterAtStart = m.Filter.State
 	}
+	page := string(PageWarehouse)
+	startPosition := 0
+	if inv.storagePage() {
+		page = string(PageDriveStorage)
+	} else {
+		startPosition = m.Wheel.Position
+	}
 	inv.scope = scopePayload{
 		Kind:          "zzzInventory",
-		Page:          string(PageWarehouse),
+		Page:          page,
 		Layout:        inv.Layout.Name,
 		Geometry:      uint64(geo),
 		Slots:         len(inv.Layout.Slots),
-		StartPosition: m.Wheel.Position,
+		StartPosition: startPosition,
 		FilterAtStart: string(filterAtStart),
 		Sort:          scopeSortUnverified,
 		Coverage:      scopeCoverageUnknown,
@@ -566,6 +582,9 @@ func (inv *Inventory) Collect(ctx context.Context, sess platform.Session, h *sca
 		view: view,
 		h:    h,
 		geo:  inv.boundGeometry,
+	}
+	if inv.storagePage() {
+		return run.runStorage(ctx)
 	}
 	return run.run(ctx)
 }
@@ -667,6 +686,13 @@ type inventoryRun struct {
 	// without this marker remains session-fatal, because the scanner itself
 	// never opens one except during an approved preparation.
 	pendingPanelClose bool
+
+	// Drive-storage one-pass state. The mixed list has one global top,
+	// bottom and range proof; these facts are mapped to per-slot ledger
+	// entries only after the whole pass completes (T5 §3/§5).
+	storageTopVerified    bool
+	storageBottomVerified bool
+	storageComplete       bool
 }
 
 // positionTiming is one wheel position's preparation stage durations for
@@ -1019,8 +1045,10 @@ func (run *inventoryRun) resetFilters(ctx context.Context) error {
 	if run.listMatch.Filter != nil {
 		run.rangeProof.ClosedFunnel = run.listMatch.Filter.State
 	}
-	if err := run.requireWheelPosition("S filter selection"); err != nil {
-		return err
+	if !run.inv.storagePage() {
+		if err := run.requireWheelPosition("S filter selection"); err != nil {
+			return err
+		}
 	}
 	if err := run.requireFilterState(FilterActive, "the funnel did not confirm an active filter after closing the panel"); err != nil {
 		return err
@@ -1042,8 +1070,8 @@ func (run *inventoryRun) requireFilterState(want FilterState, what string) error
 		return nil
 	}
 	return positionFault("filter", CodeNavigationMismatch,
-		"collect: wheel position %d: %s; the funnel is %q, not %q — refusing to continue so filters cannot be assumed",
-		run.position, what, state, want)
+		"collect: %s: %s; the funnel is %q, not %q — refusing to continue so filters cannot be assumed",
+		run.positionLabel(), what, state, want)
 }
 
 func (run *inventoryRun) observedRarityFilter(match PageMatch) string {
@@ -1409,7 +1437,7 @@ func (run *inventoryRun) scrollToTop(ctx context.Context) (*failureFrames, error
 				run.position, run.listMatch.Evidence))
 			return topWaitFailure("top", lastBefore, lastOut, haveWait), run.topProofFault(lastOut, fault)
 		}
-		if flings >= maxTopFlings {
+		if flings >= run.topFlingBound() {
 			fault := scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
 				"collect: wheel position %d: the top was not reached after %d flings: %s",
 				run.position, flings, run.listMatch.Evidence))
@@ -1426,15 +1454,7 @@ func (run *inventoryRun) scrollToTop(ctx context.Context) (*failureFrames, error
 		}
 		before := run.lastFrame
 		beforeStart, beforeOK := run.thumbStart(before)
-		res := run.view.Dispatch(platform.InputOp{
-			Kind:     platform.InputDrag,
-			Geometry: run.geo,
-			FrameID:  before.ID,
-			At:       run.inv.Layout.TopFrom,
-			To:       run.inv.Layout.TopTo,
-			Steps:    10,
-			Duration: run.inv.Layout.TopDuration,
-		})
+		res := run.view.Dispatch(run.topInputOp(before))
 		if err := run.dispatchOutcome(ctx, res); err != nil {
 			return nil, err
 		}
@@ -1640,7 +1660,7 @@ func (run *inventoryRun) confirmTop(ctx context.Context) (*failureFrames, error)
 	before := run.lastFrame
 	var lastOut scrollOutcome
 	haveWait := false
-	for attempt := 0; attempt < maxTopFlings; attempt++ {
+	for attempt := 0; attempt < run.topFlingBound(); attempt++ {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
@@ -1657,15 +1677,7 @@ func (run *inventoryRun) confirmTop(ctx context.Context) (*failureFrames, error)
 		}
 		before = run.lastFrame
 		beforeStart, beforeOK := run.thumbStart(before)
-		res := run.view.Dispatch(platform.InputOp{
-			Kind:     platform.InputDrag,
-			Geometry: run.geo,
-			FrameID:  before.ID,
-			At:       run.inv.Layout.TopFrom,
-			To:       run.inv.Layout.TopTo,
-			Steps:    10,
-			Duration: run.inv.Layout.TopDuration,
-		})
+		res := run.view.Dispatch(run.topInputOp(before))
 		if err := run.dispatchOutcome(ctx, res); err != nil {
 			return nil, err
 		}
@@ -1730,7 +1742,7 @@ func (run *inventoryRun) confirmTop(ctx context.Context) (*failureFrames, error)
 		}
 	}
 	fault := scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
-		"collect: wheel position %d: the top confirmation did not settle after %d attempts", run.position, maxTopFlings))
+		"collect: wheel position %d: the top confirmation did not settle after %d attempts", run.position, run.topFlingBound()))
 	return topWaitFailure("top", before, lastOut, haveWait), run.topProofFault(lastOut, fault)
 }
 
@@ -1830,15 +1842,7 @@ func (run *inventoryRun) confirmBottom(ctx context.Context) (*failureFrames, err
 		return nil, err
 	}
 	before := run.lastFrame
-	res := run.view.Dispatch(platform.InputOp{
-		Kind:     platform.InputDrag,
-		Geometry: run.geo,
-		FrameID:  before.ID,
-		At:       run.inv.Layout.ScrollFrom,
-		To:       run.inv.Layout.ScrollTo,
-		Steps:    10,
-		Duration: run.inv.Layout.ScrollDuration,
-	})
+	res := run.view.Dispatch(run.scrollInputOp(before))
 	if err := run.dispatchOutcome(ctx, res); err != nil {
 		return nil, err
 	}
@@ -1906,23 +1910,46 @@ func (run *inventoryRun) confirmBottom(ctx context.Context) (*failureFrames, err
 // reporting another shape is a contract violation, surfaced as a fault
 // rather than papered over.
 func (run *inventoryRun) listVerdict(m PageMatch) bool {
+	if run.inv.storagePage() {
+		return m.Page == PageDriveStorage && m.List != nil &&
+			len(m.List.Occupied) == len(run.inv.Layout.Slots) &&
+			len(m.List.Positions) == len(run.inv.Layout.Slots)
+	}
 	return m.Page == PageWarehouse && m.List != nil && len(m.List.Occupied) == len(run.inv.Layout.Slots)
 }
 
 // positionListVerdict adds the wheel invariant to listVerdict: collection
 // is only allowed to act while the frame still shows the wheel position
 // this traversal prepared. A wheel change under the same page/geometry
-// would otherwise keep the old position's visited map and range.
+// would otherwise keep the old position's visited map and range. The
+// drive-storage page has one mixed list and no wheel, so its invariant is
+// the page and grid shape alone.
 func (run *inventoryRun) positionListVerdict(m PageMatch) bool {
+	if run.inv.storagePage() {
+		return run.listVerdict(m)
+	}
 	return run.listVerdict(m) && m.Wheel != nil && m.Wheel.Position == run.position
 }
 
 // checkLedgerViewport rejects detectable list changes between verified
 // transitions. The ledger describes the last proven viewport only.
 func (run *inventoryRun) checkLedgerViewport(m PageMatch) error {
-	if run.ledger != nil && (!run.positionListVerdict(m) || !run.ledger.agreesWith(m.List.Occupied)) {
-		return scan.NewFault(CodePositionLost, fmt.Errorf("collect: wheel position %d viewport %d: the observed grid no longer agrees with the slot ledger: %s",
-			run.position, run.viewport, m.Evidence))
+	if run.ledger == nil {
+		return nil
+	}
+	ok := run.positionListVerdict(m) && run.ledger.agreesWith(m.List.Occupied)
+	if ok && run.inv.storagePage() {
+		positions := make([]int, len(m.List.Positions))
+		for i, p := range m.List.Positions {
+			if p.known() {
+				positions[i] = p.Position
+			}
+		}
+		ok = run.ledger.positionsAgree(m.List.Occupied, positions)
+	}
+	if !ok {
+		return scan.NewFault(CodePositionLost, fmt.Errorf("collect: %s viewport %d: the observed grid or card slots no longer agree with the slot ledger: %s",
+			run.positionLabel(), run.viewport, m.Evidence))
 	}
 	return nil
 }
@@ -1959,7 +1986,7 @@ func (run *inventoryRun) awaitSelectionReturned(ctx context.Context, target, exp
 // association evidence, admit the capture and continue in the same page.
 func (run *inventoryRun) visitSlot(ctx context.Context, i int) (err error) {
 	row, col := run.inv.Layout.slotPosition(i)
-	target := fmt.Sprintf("wheel position %d viewport %d slot %d (row %d, column %d)", run.position, run.viewport, i, row, col)
+	target := fmt.Sprintf("%s viewport %d slot %d (row %d, column %d)", run.positionLabel(), run.viewport, i, row, col)
 	timing := &visitTiming{}
 	started := time.Now()
 	defer func() {
@@ -2065,6 +2092,10 @@ func (run *inventoryRun) visitSlot(ctx context.Context, i int) (err error) {
 			slot.Discard()
 			return err
 		}
+		if err := run.requireCardPosition(pre.match, i, target); err != nil {
+			slot.Discard()
+			return err
+		}
 		run.listMatch = pre.match
 		run.lastFrame = pre.frame
 		preSelected := pre.match.List.Selected
@@ -2090,6 +2121,10 @@ func (run *inventoryRun) visitSlot(ctx context.Context, i int) (err error) {
 			}
 			switch out.class {
 			case awaitStable:
+				if err := run.requireDetailPosition(out.match, i, target); err != nil {
+					slot.Discard()
+					return err
+				}
 				return run.admit(slot, out, pre.frame, pre.match, i, row, col, AssociationInitial, 0, nil, attempt+1, target, timing)
 			case awaitCanceled, awaitFrameErr:
 				slot.Discard()
@@ -2128,6 +2163,10 @@ func (run *inventoryRun) visitSlot(ctx context.Context, i int) (err error) {
 		}
 		switch out.class {
 		case awaitStable:
+			if err := run.requireDetailPosition(out.match, i, target); err != nil {
+				slot.Discard()
+				return err
+			}
 			return run.admit(slot, out, pre.frame, pre.match, i, row, col, AssociationTransition, pre.frame.ID, nil, attempt+1, target, timing)
 		case awaitCanceled, awaitFrameErr:
 			slot.Discard()
@@ -2161,6 +2200,16 @@ func (run *inventoryRun) visitSlot(ctx context.Context, i int) (err error) {
 	}
 }
 
+func (run *inventoryRun) positionLabel() string {
+	if run.inv.storagePage() {
+		if run.position >= 1 && run.position <= 6 {
+			return fmt.Sprintf("card slot %d", run.position)
+		}
+		return "drive storage"
+	}
+	return fmt.Sprintf("wheel position %d", run.position)
+}
+
 // preClickSeed returns the last admitted frame as the first stability
 // sample for the next pre-click wait when it still proves the target
 // occupied in the same wheel position. No input happened after that frame,
@@ -2172,6 +2221,13 @@ func (run *inventoryRun) preClickSeed(i int) *awaitOutcome {
 	}
 	if !run.listVerdict(run.listMatch) || !run.listMatch.List.Occupied[i] {
 		return nil
+	}
+	if run.inv.storagePage() {
+		if len(run.listMatch.List.Positions) != len(run.inv.Layout.Slots) ||
+			!run.listMatch.List.Positions[i].known() {
+			return nil
+		}
+		return &awaitOutcome{frame: run.lastFrame, match: run.listMatch, expected: true}
 	}
 	if run.listMatch.Wheel == nil || run.listMatch.Wheel.Position != run.position {
 		return nil
@@ -2373,6 +2429,10 @@ func (run *inventoryRun) referenceRoundTrip(ctx context.Context, slot *scan.Slot
 	case awaitStable:
 		log.Printf("youkai: collect: %s: return click selected the target and its detail differs from reference frame %d, stable on frame %d",
 			targetName, refOut.frame.ID, backOut.frame.ID)
+		if err := run.requireDetailPosition(backOut.match, target, targetName); err != nil {
+			slot.Discard()
+			return err
+		}
 		timing.reference += time.Since(referenceStart)
 		return run.admit(slot, backOut, pre, preMatch, target, row, column, AssociationReference, pre.ID,
 			&referenceCapture{slot: ref, row: refRow, column: refColumn, frame: refOut.frame}, attempt+1, targetName, timing)
@@ -2752,7 +2812,12 @@ func (run *inventoryRun) admissionEvidence(target string, pre platform.Frame, ou
 	if span := run.inv.detailStableSpan(); span > 0 {
 		stability = fmt.Sprintf(" for at least %s", span)
 	}
-	return fmt.Sprintf("%s%s; matcher: %s", lead, stability, out.match.Evidence)
+	slotEvidence := ""
+	if run.inv.storagePage() && out.match.Detail != nil {
+		slotEvidence = fmt.Sprintf("; drive-storage card slot %d and detail badge slot %d agree",
+			run.position, out.match.Detail.Position.Position)
+	}
+	return fmt.Sprintf("%s%s%s; matcher: %s", lead, stability, slotEvidence, out.match.Evidence)
 }
 
 // awaitDetail waits for the detail pane to become attributable to the
@@ -2999,15 +3064,7 @@ func (run *inventoryRun) scroll(ctx context.Context) (err error) {
 			return err
 		}
 		dispatchStart := time.Now()
-		res := run.view.Dispatch(platform.InputOp{
-			Kind:     platform.InputDrag,
-			Geometry: run.geo,
-			FrameID:  before.ID,
-			At:       run.inv.Layout.ScrollFrom,
-			To:       run.inv.Layout.ScrollTo,
-			Steps:    10,
-			Duration: run.inv.Layout.ScrollDuration,
-		})
+		res := run.view.Dispatch(run.scrollInputOp(before))
 		drag += time.Since(dispatchStart)
 		attempts++
 		if err := run.dispatchOutcome(ctx, res); err != nil {
@@ -3768,6 +3825,14 @@ func (run *inventoryRun) applyTransition(before, after platform.Frame, beforeMat
 			return fail(fmt.Sprintf("the correspondence (%d,%d)→(%d,%d) changes occupancy",
 				p.FromRow, p.FromColumn, p.ToRow, p.ToColumn))
 		}
+		if run.inv.storagePage() {
+			beforePos := beforeMatch.List.Positions[from]
+			afterPos := afterMatch.List.Positions[to]
+			if !beforePos.known() || !afterPos.known() || beforePos.Position != afterPos.Position {
+				return fail(fmt.Sprintf("the correspondence (%d,%d)→(%d,%d) changes or loses the card slot badge",
+					p.FromRow, p.FromColumn, p.ToRow, p.ToColumn))
+			}
+		}
 	}
 	// Full overlap coverage: the after-viewport's overlap rows must be
 	// exactly the matched to-positions.
@@ -3779,7 +3844,17 @@ func (run *inventoryRun) applyTransition(before, after platform.Frame, beforeMat
 			}
 		}
 	}
-	run.ledger.advance(sm.Rows, afterMatch.List.Occupied, after.ID)
+	if run.inv.storagePage() {
+		positions := make([]int, len(afterMatch.List.Positions))
+		for i, p := range afterMatch.List.Positions {
+			if p.known() {
+				positions[i] = p.Position
+			}
+		}
+		run.ledger.advanceWithPositions(sm.Rows, afterMatch.List.Occupied, positions, after.ID)
+	} else {
+		run.ledger.advance(sm.Rows, afterMatch.List.Occupied, after.ID)
+	}
 	run.viewport++
 	return nil
 }

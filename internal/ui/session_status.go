@@ -159,7 +159,7 @@ var faultGuidanceTable = map[string]func(faultFacts) faultGuidance{
 		faultExitHotkey, false),
 	"targetNotFound": staticGuidance(
 		"没有找到《绝区零》的游戏窗口",
-		"请启动游戏并打开驱动盘仓库页。",
+		"请启动游戏并打开驱动仓库页。",
 		faultExitTargetClient, false),
 	"screenRecordingUnavailable": staticGuidance(
 		"无法使用屏幕录制权限",
@@ -364,11 +364,11 @@ var faultGuidanceTable = map[string]func(faultFacts) faultGuidance{
 
 	"prepareTimeout": staticGuidance(
 		"30 秒内游戏没有就绪",
-		"请让游戏保持在前台并停在驱动盘仓库页，然后重新开始扫描。",
+		"请让游戏保持在前台并停在驱动仓库页，然后重新开始扫描。",
 		faultExitGamePage, false),
 	"pageUnverified": staticGuidance(
-		"游戏页面不是驱动盘仓库页",
-		"请打开驱动盘仓库页后重新开始扫描。",
+		"游戏页面不是驱动仓库页",
+		"请打开驱动仓库页后重新开始扫描。",
 		faultExitGamePage, false),
 	"anchorsMissing": staticGuidance(
 		"游戏画面与当前客户端的布局不匹配",
@@ -396,6 +396,14 @@ var faultGuidanceTable = map[string]func(faultFacts) faultGuidance{
 		faultExitRestart, true),
 	"positionFailureLimit": staticGuidance(
 		"号位未完成，已停止遍历",
+		"请重新开始扫描；反复出现时复制诊断信息。",
+		faultExitRestart, true),
+	"positionUnreadable": staticGuidance(
+		"驱动仓库里的卡片号位无法识别",
+		"请重新开始扫描；反复出现时复制诊断信息。",
+		faultExitRestart, true),
+	"positionConflict": staticGuidance(
+		"卡片和详情的号位不一致或无法唯一确定",
 		"请重新开始扫描；反复出现时复制诊断信息。",
 		faultExitRestart, true),
 

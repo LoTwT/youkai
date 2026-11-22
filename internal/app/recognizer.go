@@ -132,6 +132,20 @@ func structuredDisc(obs Observation, lines []RecognizedLine) *zzz.StructuredDisc
 		return nil
 	}
 	rec, issues := zzz.ParseDetail(detail)
+	// The traversal already compared the card badge with the selected card
+	// and the visible detail badge. The name line's [N] suffix is the OCR
+	// side of the same fact; if it disagrees, the slot is unknown rather
+	// than choosing one of the two readings.
+	if obs.Position >= 1 && obs.Position <= 6 && rec.Slot != 0 && rec.Slot != obs.Position {
+		issues = append(issues, zzz.Issue{
+			Field:    "slot",
+			Code:     zzz.CodeSlotPositionMismatch,
+			Severity: zzz.SeverityError,
+			Message: fmt.Sprintf("详情标题槽位 [%d] 与遍历确认的卡片槽位 %d 不一致；槽位记为未知",
+				rec.Slot, obs.Position),
+		})
+		rec.Slot = 0
+	}
 	structured := zzz.ToStructuredWithState(rec, obs.Rarity, zzz.CaptureState{
 		ManagementState: obs.ManagementState,
 		EquippedState:   obs.EquippedState,

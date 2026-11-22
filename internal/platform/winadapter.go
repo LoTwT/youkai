@@ -901,6 +901,8 @@ func (s *winSession) Dispatch(op InputOp) InputResult {
 		}
 		wop = windows.InputOp{Kind: windows.OpDrag, Point: at, To: to, Button: windows.MouseButtonLeft,
 			Steps: op.Steps, Duration: op.Duration}
+	case InputScroll:
+		wop = windows.InputOp{Kind: windows.OpScroll, Point: at, WheelSteps: op.WheelSteps}
 	default:
 		return deny(&Fault{Code: CodeInvalidOperation, Class: ClassPremise,
 			Message: fmt.Sprintf("unknown input kind %q", op.Kind), At: started})

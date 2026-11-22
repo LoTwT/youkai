@@ -259,16 +259,19 @@ type Frame struct {
 	Reused bool
 }
 
-// InputKind is the kind of one bounded input operation. Scroll is
-// deliberately not part of the vocabulary: the macOS cloud client
-// ignores synthesized wheel events (实测轮 ①), so traversal scrolling is
-// expressed as a drag on both platforms.
+// InputKind is the kind of one bounded input operation. Drag stays the
+// portable traversal primitive because the macOS cloud client ignores
+// synthesized wheel events (实测轮 ①). Scroll is available to a client
+// that has measured wheel behavior; the Windows drive-storage page moved
+// exactly one row per detent in the 2026-11-22 field sample, so its
+// traversal uses a wheel step instead of an uncalibrated drag.
 type InputKind string
 
 const (
 	InputClick    InputKind = "click"
 	InputKeyPress InputKind = "keyPress"
 	InputDrag     InputKind = "drag"
+	InputScroll   InputKind = "scroll"
 )
 
 // InputOp is one bounded input operation. Positions are Image pixels of
@@ -287,6 +290,11 @@ type InputOp struct {
 	At, To image.Point
 	// Key is the key of a key press.
 	Key Key
+	// WheelSteps is the scroll amount in detents for InputScroll: 1..3 by
+	// magnitude, positive toward the list's beginning (the platform's
+	// standard wheel-up direction). Zero is invalid for InputScroll and
+	// ignored by the other kinds.
+	WheelSteps int
 	// Hold is the press-to-release interval of a click; zero takes the
 	// default (60 ms), above the bound (200 ms) is refused.
 	Hold time.Duration

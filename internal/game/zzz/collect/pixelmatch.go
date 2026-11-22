@@ -51,6 +51,9 @@ func (m *PixelMatcher) Match(f platform.Frame) PageMatch {
 		return m.unknown("frame %d is not the calibrated display configuration (image %v, content %v, want %dx%d and %v)",
 			f.ID, boundsOrNil(f.Image), f.Content, m.L.Image.X, m.L.Image.Y, m.L.Content)
 	}
+	if m.L.Page == PageDriveStorage {
+		return m.storageMatch(f)
+	}
 
 	// The filter panel overlays the warehouse; its two probes must agree
 	// on the tier before either page can be judged.
@@ -179,6 +182,9 @@ func (m *PixelMatcher) detailEvidence(img *image.RGBA) *DetailEvidence {
 		ev.Quality = QualityS
 	}
 	ev.Avatar = m.avatarState(img, m.L.DetailAvatar)
+	if m.L.Page == PageDriveStorage {
+		ev.Position = m.positionVerdict(img, m.L.DetailPositionBadge, m.L.DetailPositions)
+	}
 	switch ink := m.inkCount(img, m.L.Substat4Probe, m.C.InkThreshold); {
 	case ink >= m.C.Substat4InkMin:
 		ev.Substats = 4

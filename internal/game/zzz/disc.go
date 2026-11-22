@@ -100,6 +100,10 @@ const (
 	CodeNameLineUnparsed = "nameLineUnparsed"
 	// CodeSlotOutOfRange: the slot read from the name line is not 1–6.
 	CodeSlotOutOfRange = "slotOutOfRange"
+	// CodeSlotPositionMismatch: the detail name's [N] suffix disagrees with
+	// the traversal's confirmed card-slot position. Neither value is
+	// substituted for the other; the slot is recorded as unknown.
+	CodeSlotPositionMismatch = "slotPositionMismatch"
 	// CodeUnknownSet: the set name is not in the catalog.
 	CodeUnknownSet = "unknownSet"
 	// CodeLevelLineUnparsed: the level line has no 等级N/15 shape.

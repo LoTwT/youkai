@@ -26,6 +26,11 @@ const (
 	// PageFilterPanel: the filter panel overlays the warehouse; the list is
 	// dimmed and the funnel is unreadable while it is open.
 	PageFilterPanel PageKind = "filterPanel"
+	// PageDriveStorage: the standalone drive-storage page added in game
+	// 3.3.0. It mixes all six disc slots in one 9×4 grid and has no wheel;
+	// each card badge and the detail badge name the slot. The layout's
+	// Page field selects this page kind.
+	PageDriveStorage PageKind = "driveStorage"
 	// PageUnknown is every frame the matcher cannot attribute to a known
 	// page with the evidence it has. It is the zero value on purpose: an
 	// absent verdict must never read as a page.
@@ -121,6 +126,11 @@ type ListEvidence struct {
 	// means the corner is a readable empty placeholder; unknown means the
 	// corner is obscured or falls between tiers.
 	Avatars []AvatarState
+	// Positions is the drive-storage card badge verdict per slot, in
+	// reading order. It is nil on the old warehouse page, whose wheel
+	// position applies to every item. Unoccupied slots have Position 0;
+	// an unreadable or ambiguous badge is never guessed.
+	Positions []PositionVerdict
 	// TopManagement is the detail page's lock indicator for the selected
 	// item, the confirmation evidence for the list badge's locked
 	// dimension. The indicator cannot distinguish discarded from none.
@@ -191,6 +201,10 @@ type DetailEvidence struct {
 	// Avatar is the level-right equipped-agent avatar: the primary
 	// equipment-presence evidence. Unknown is not absent.
 	Avatar AvatarState
+	// Position is the detail pane's independent slot badge verdict. It is
+	// the detail-side half of the drive-storage attribution; the old
+	// warehouse page leaves it unknown and uses the wheel position.
+	Position PositionVerdict
 }
 
 // WheelEvidence is the wheel's selected position.
@@ -309,6 +323,12 @@ const (
 	// selection pair exists: the stronger feature threshold, the
 	// competition margin and the scrollbar's travel all agree.
 	ScrollBasisFeatureThumb = "feature+scrollbar"
+	// ScrollBasisStoragePositions is the drive-storage path used when the
+	// selected card left the viewport and the repeated card grid makes the
+	// normalized feature ambiguous: the scrollbar's independently derived
+	// travel and the card slot badges' overlap both name the same unique row
+	// count.
+	ScrollBasisStoragePositions = "storage+scrollbar+positions"
 )
 
 // ScrollMetrics is the numeric evidence behind one ScrollMatch: the

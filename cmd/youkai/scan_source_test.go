@@ -96,8 +96,11 @@ func TestScanSourceWindowsDefaultDiscoversTarget(t *testing.T) {
 	if _, ok := inv.Matcher.(*collect.ScrollEvidenceMatcher); !ok {
 		t.Fatalf("type of installed matcher = %T", inv.Matcher)
 	}
-	if got := [4]image.Point{inv.Layout.FilterButton, inv.Layout.PanelReset, inv.Layout.PanelS, inv.Layout.PanelClose}; got != [4]image.Point{{X: 304, Y: 52}, {X: 1430, Y: 1030}, {X: 1426, Y: 604}, {X: 1805, Y: 49}} {
-		t.Fatalf("installed panel clicks differ from the replayed Windows inputs: %v", got)
+	if inv.Layout.Page != collect.PageDriveStorage {
+		t.Fatalf("installed entry page = %s, want the drive-storage entry", inv.Layout.Page)
+	}
+	if got := [4]image.Point{inv.Layout.FilterButton, inv.Layout.PanelReset, inv.Layout.PanelS, inv.Layout.PanelClose}; got != [4]image.Point{{X: 148, Y: 929}, {X: 1431, Y: 1028}, {X: 1425, Y: 441}, {X: 148, Y: 929}} {
+		t.Fatalf("installed panel clicks differ from the drive-storage inputs: %v", got)
 	}
 	if _, err := game.TraversalForClient(image.Pt(1280, 720)); err == nil {
 		t.Fatal("an unopened display tier obtained an installed traversal")

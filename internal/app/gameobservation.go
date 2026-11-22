@@ -49,6 +49,7 @@ func ProjectDiscObservation(obs collect.Observation) (any, error) {
 	return Observation{
 		Lines:              lines,
 		Context:            context,
+		Position:           obs.Position,
 		Rarity:             string(obs.Quality),
 		ManagementState:    obs.ManagementState,
 		ManagementEvidence: obs.ManagementEvidence,

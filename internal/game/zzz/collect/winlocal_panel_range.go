@@ -12,6 +12,14 @@ type panelRangeProbes struct {
 	sFill      ColorProbe
 	otherFills [2]ColorProbe
 	sLabel     image.Rectangle
+	// sStencil overrides the historical 26×22 S mask for a page whose S
+	// control has a different glyph geometry. Nil keeps the old mask.
+	sStencil *glyphStencil
+	// sLabelSet is the drive-storage S label's foreground-F1 set. The label
+	// is the same S in the open, reset and S-only panel states, but its
+	// antialiased edge is brighter when the S row is selected; two masks
+	// cover both renderings. When set it supersedes sStencil.
+	sLabelSet *glyphSet
 }
 
 func (p panelRangeProbes) regions() []image.Rectangle {
@@ -64,13 +72,29 @@ func windowsPanelSLabelMatches(img *image.RGBA, r image.Rectangle) bool {
 	return true
 }
 
+// panelSLabelMatches uses the page's calibrated S mask when it has one,
+// and the historical Windows mask otherwise.
+func panelSLabelMatches(img *image.RGBA, p *panelRangeProbes) bool {
+	if p == nil {
+		return false
+	}
+	if p.sLabelSet != nil {
+		score, ok := p.sLabelSet.bestScore(img, p.sLabel)
+		return ok && score >= p.sLabelSet.minScore
+	}
+	if p.sStencil != nil {
+		return p.sStencil.matchesExact(img, p.sLabel)
+	}
+	return windowsPanelSLabelMatches(img, p.sLabel)
+}
+
 func (m *PixelMatcher) panelRangeEvidence(img *image.RGBA) *PanelRangeEvidence {
 	p := m.L.panelRange
 	if p == nil {
 		return nil
 	}
 	evidence := &PanelRangeEvidence{}
-	if !windowsPanelSLabelMatches(img, p.sLabel) {
+	if !panelSLabelMatches(img, p) {
 		return evidence
 	}
 	funnel := FilterState(m.classify(img, p.funnel))

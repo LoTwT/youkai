@@ -8,6 +8,11 @@ const (
 	slotUnresolved slotState = "unresolved"
 	slotAdmitted   slotState = "admitted"
 	slotNotS       slotState = "notS"
+	// slotOutOfScope is a drive-storage card whose slot is not in a scoped
+	// rescan's declared range. It remains in the ledger as evidence that
+	// the card was seen and identified, but it is never clicked, admitted
+	// or counted as a visit.
+	slotOutOfScope slotState = "outOfScope"
 )
 
 // A slotIdentity is valid only within this position's continuous walk in
@@ -20,6 +25,10 @@ type slotIdentity struct {
 
 type slotEntry struct {
 	slotIdentity
+	// Position is the drive-storage card badge's slot (1..6). It is zero on
+	// the old warehouse page, where the wheel position applies to the
+	// whole list.
+	Position           int       `json:"position,omitempty"`
 	State              slotState `json:"state"`
 	FirstSeenFrameID   uint64    `json:"firstSeenFrameId"`
 	ResolvedFrameID    uint64    `json:"resolvedFrameId,omitempty"`
@@ -38,12 +47,16 @@ type slotLedger struct {
 }
 
 func newSlotLedger(columns int, occupied []bool, frameID uint64) *slotLedger {
+	return newSlotLedgerWithPositions(columns, occupied, nil, frameID)
+}
+
+func newSlotLedgerWithPositions(columns int, occupied []bool, positions []int, frameID uint64) *slotLedger {
 	l := &slotLedger{columns: columns}
-	l.appendCells(occupied, frameID)
+	l.appendCells(occupied, positions, frameID)
 	return l
 }
 
-func (l *slotLedger) appendCells(occupied []bool, frameID uint64) {
+func (l *slotLedger) appendCells(occupied []bool, positions []int, frameID uint64) {
 	base := len(l.cells)
 	for i, present := range occupied {
 		var entry slotEntry
@@ -53,6 +66,9 @@ func (l *slotLedger) appendCells(occupied []bool, frameID uint64) {
 				slotIdentity:     slotIdentity{AbsoluteRow: index / l.columns, Column: index % l.columns},
 				State:            slotUnresolved,
 				FirstSeenFrameID: frameID,
+			}
+			if i < len(positions) {
+				entry.Position = positions[i]
 			}
 		}
 		l.cells = append(l.cells, entry)
@@ -75,8 +91,48 @@ func (l *slotLedger) agreesWith(occupied []bool) bool {
 }
 
 func (l *slotLedger) advance(rows int, occupied []bool, frameID uint64) {
-	l.appendCells(occupied[len(occupied)-rows*l.columns:], frameID)
+	l.advanceWithPositions(rows, occupied, nil, frameID)
+}
+
+func (l *slotLedger) advanceWithPositions(rows int, occupied []bool, positions []int, frameID uint64) {
+	start := len(occupied) - rows*l.columns
+	if start < 0 {
+		start = 0
+	}
+	tail := make([]int, len(occupied)-start)
+	if len(positions) >= len(occupied) {
+		copy(tail, positions[start:])
+	}
+	l.appendCells(occupied[start:], tail, frameID)
 	l.rowBase += rows
+}
+
+// positionsAgree checks the visible viewport's card badges against the
+// ledger. The old warehouse page has no per-card positions, so it agrees
+// vacuously.
+func (l *slotLedger) positionsAgree(occupied []bool, positions []int) bool {
+	cells := l.visible()
+	if len(cells) != len(occupied) {
+		return false
+	}
+	for i, cell := range cells {
+		if !occupied[i] {
+			if cell.State != "" {
+				return false
+			}
+			continue
+		}
+		if cell.State == "" {
+			return false
+		}
+		if len(positions) == 0 {
+			continue
+		}
+		if i >= len(positions) || positions[i] == 0 || positions[i] != cell.Position {
+			return false
+		}
+	}
+	return true
 }
 
 type slotLedgerReport struct {

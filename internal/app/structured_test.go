@@ -75,6 +75,37 @@ func TestStructuredDiscFromRecognizedLines(t *testing.T) {
 	}
 }
 
+// TestStructuredDiscSlotPositionMismatch checks the OCR-side cross-check:
+// the name line's [N] suffix must agree with the traversal's confirmed card
+// slot. A disagreement records an error and leaves the slot null instead of
+// choosing either reading.
+func TestStructuredDiscSlotPositionMismatch(t *testing.T) {
+	lines := detailLines()
+	matched := structuredDisc(Observation{Rarity: zzz.RarityS, Position: 1}, lines)
+	if matched == nil || matched.Data.Slot == nil || *matched.Data.Slot != 1 {
+		t.Fatalf("matching slot = %+v, want 1", matched)
+	}
+	for _, issue := range matched.Issues {
+		if issue.Code == zzz.CodeSlotPositionMismatch {
+			t.Fatalf("matching slot reported a mismatch: %+v", issue)
+		}
+	}
+
+	mismatched := structuredDisc(Observation{Rarity: zzz.RarityS, Position: 3}, lines)
+	if mismatched == nil || mismatched.Data.Slot != nil {
+		t.Fatalf("mismatched slot = %+v, want null", mismatched)
+	}
+	found := false
+	for _, issue := range mismatched.Issues {
+		if issue.Field == "slot" && issue.Code == zzz.CodeSlotPositionMismatch && issue.Severity == zzz.SeverityError {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("mismatched issues = %+v, want the slotPositionMismatch error", mismatched.Issues)
+	}
+}
+
 // TestStructuredDiscRarityFromCapture checks that rarity is never inferred
 // from text: without a verified capture verdict it stays null with an
 // error, even when the set and level lines are perfect.

@@ -109,6 +109,16 @@ func (run *inventoryRun) latestAdvanceFault(action string, out scrollOutcome) er
 // position-level proof failure. The message distinguishes a changed wheel
 // from a warehouse page whose grid could not be read.
 func (run *inventoryRun) advanceStateFault(action string, after PageMatch) error {
+	if run.inv.storagePage() {
+		if !run.listVerdict(after) {
+			return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
+				"collect: drive storage: %s left a drive-storage page whose grid could not be verified (last verdict %s): %s",
+				action, after.Page, after.Evidence))
+		}
+		return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
+			"collect: drive storage: %s left the calibrated 9x4 grid or its card evidence: %s",
+			action, after.Evidence))
+	}
 	if !run.listVerdict(after) {
 		return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
 			"collect: wheel position %d: %s left a warehouse page whose grid could not be verified (last verdict %s): %s",

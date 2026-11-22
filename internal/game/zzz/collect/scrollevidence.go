@@ -528,6 +528,28 @@ func (m *ScrollEvidenceMatcher) MatchScroll(before, after platform.Frame) Scroll
 			before.ID, after.ID, err0, selB, metrics.RowNCC[0], thumbNote)}
 	}
 
+	// The drive-storage grid repeats the same card art and level text, so
+	// the normalized feature can prefer zero shift after a real one-row
+	// move (the 2026-11-22 handoff: ncc0 0.945 vs +1 0.922). When the
+	// selected card has scrolled out there is no selection anchor either.
+	// The scrollbar's geometry-derived travel and the card slot badges'
+	// overlap are independent evidence; use them only when both name one
+	// unique row count, and never guess when two counts fit.
+	if m.L.Page == PageDriveStorage && !selectionMoved {
+		beforeThumb := thumbReading{start: thumbBStart, end: thumbBEnd, ok: thumbBOK}
+		afterThumb := thumbReading{start: thumbAStart, end: thumbAEnd, ok: thumbAOK}
+		if match, ok := m.storageScrollEvidence(before, after, beforeThumb, afterThumb, metrics); ok {
+			return match
+		}
+		// Falling through to the feature-only path would let the repeated
+		// card grid's normalized best row choose a displacement without the
+		// independent badge witness. Stay undecided instead; the wait will
+		// stop safely rather than skip or double-count a row.
+		return ScrollMatch{Undecided: true, Metrics: metrics, Evidence: fmt.Sprintf(
+			"frames %d → %d: no unique scrollbar-travel and card-slot overlap witness for the drive-storage displacement (zero-shift error %.2f, ncc0 %.3f); refusing to fall back to the repeated-grid normalized feature; %s",
+			before.ID, after.ID, err0, metrics.RowNCC[0], thumbNote)}
+	}
+
 	// 4) A feature-only displacement: the stronger threshold, the
 	// competition margin and the scrollbar's corroboration.
 	if bestRow != 0 && absInt(bestRow) <= m.C.ScrollMaxRows {
@@ -583,6 +605,82 @@ func (m *ScrollEvidenceMatcher) MatchScroll(before, after platform.Frame) Scroll
 	return ScrollMatch{Undecided: true, Metrics: metrics, Evidence: fmt.Sprintf(
 		"frames %d → %d: undecided (zero-shift error %.2f, best shift %d at error %.2f, normalized candidates %s)",
 		before.ID, after.ID, err0, dy, bestErr, formatRowNCC(metrics.RowNCC))}
+}
+
+// storageScrollEvidence resolves a drive-storage scroll from two
+// independent facts: the thumb's geometry-derived travel and the card
+// slot badges visible on both sides of the overlap. The normalized pixel
+// feature is deliberately not used as the decider here: the 9×4 cards
+// carry the same art and level text, so a real one-row move can leave the
+// zero-shift correlation higher than the shifted rows. Exactly one row
+// count must fit both witnesses; zero or multiple fits stay unverified.
+func (m *ScrollEvidenceMatcher) storageScrollEvidence(before, after platform.Frame, thumbB, thumbA thumbReading, metrics *ScrollMetrics) (ScrollMatch, bool) {
+	beforePage := m.PixelMatcher.Match(before)
+	afterPage := m.PixelMatcher.Match(after)
+	if beforePage.Page != PageDriveStorage || afterPage.Page != PageDriveStorage ||
+		beforePage.List == nil || afterPage.List == nil ||
+		len(beforePage.List.Positions) != len(m.L.Slots) ||
+		len(afterPage.List.Positions) != len(m.L.Slots) ||
+		!thumbB.ok || !thumbA.ok {
+		return ScrollMatch{}, false
+	}
+	type candidate struct {
+		rows int
+	}
+	var fits []candidate
+	// A wheel advances the list down; returning to the top scrolls it up.
+	// Both directions use the same badge-overlap witness, with the signed
+	// row count also checked against the thumb's independent travel.
+	for _, direction := range []int{1, -1} {
+		for rows := 1; rows <= m.L.Rows-1; rows++ {
+			signed := rows * direction
+			if _, ok, _ := m.thumbTravelOf(thumbB, thumbA, signed); !ok {
+				continue
+			}
+			occupied, matched := 0, 0
+			valid := true
+			for r := 0; r < m.L.Rows-rows && valid; r++ {
+				for c := 0; c < m.L.Columns; c++ {
+					fromRow, toRow := r+rows, r
+					if direction < 0 {
+						fromRow, toRow = r, r+rows
+					}
+					from := fromRow*m.L.Columns + c
+					to := toRow*m.L.Columns + c
+					beforeOccupied := beforePage.List.Occupied[from]
+					afterOccupied := afterPage.List.Occupied[to]
+					if beforeOccupied != afterOccupied {
+						valid = false
+						break
+					}
+					if !beforeOccupied {
+						continue
+					}
+					occupied++
+					bp := beforePage.List.Positions[from]
+					ap := afterPage.List.Positions[to]
+					if !bp.known() || !ap.known() || bp.Position != ap.Position {
+						valid = false
+						break
+					}
+					matched++
+				}
+			}
+			// At least one occupied overlap cell must carry the same known
+			// slot badge on both sides; an all-empty overlap would leave only
+			// the scrollbar as evidence and is not enough for a card-list
+			// scroll.
+			if valid && occupied > 0 && matched == occupied {
+				fits = append(fits, candidate{rows: signed})
+			}
+		}
+	}
+	if len(fits) != 1 {
+		return ScrollMatch{}, false
+	}
+	rows := fits[0].rows
+	return m.displaced(before.ID, after.ID, rows, ScrollBasisStoragePositions, metrics,
+		fmt.Sprintf("the selected card is no longer in the viewport and the repeated card grid's normalized feature is ambiguous; the scrollbar travel and the card slot badges' overlap both name the same %d-row displacement", rows)), true
 }
 
 // displaced builds the Displaced verdict for a verified signed row count:
