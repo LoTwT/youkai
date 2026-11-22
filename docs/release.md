@@ -8,7 +8,7 @@
 
 ## 版本号与两条渠道
 
-- **版本号**。按 `major.minor.patch` 递增。最早的测试发布是 `test-v0.0.1`。发布以标签中的版本为准，workflow 只修改运行检出中的 `mygo.json`。构建中间文件放在 `RUNNER_TEMP`，避免给 Go 的 VCS 戳记加上 `-modified`。戳记核对见[开发指南](development.md#诊断日志)。
+- **版本号**。各渠道内按 `major.minor.patch` 递增。最早的测试发布是 `test-v0.0.1`，首个正式版是 `v0.0.1`。发布以标签中的版本为准，workflow 只修改运行检出中的 `mygo.json`。构建中间文件放在 `RUNNER_TEMP`，避免给 Go 的 VCS 戳记加上 `-modified`。戳记核对见[开发指南](development.md#诊断日志)。
 - **测试渠道**：标签 `test-v<版本>`（如 `test-v0.0.1`）。发布为**普通 Release**（本项目未调用 `SetPrereleases(true)`，更新器默认只接受已发布、非草稿、非预发布的版本），但**不设为 latest**，标题与说明注明“测试版，勿用”。测试渠道构建的应用只检查 `test-v` 标签的 Release。
 - **正式渠道**。标签 `v<版本>`。配置 `updates.tagPrefix="v"` 的 MyGo 构建从 `releases/latest/download/` 读更新清单。首个正式版发布前，GitHub 的回退仍可能把普通测试 Release 作为 latest，`test-v0.0.5` 已观测到该情况。首个正式发布应显式设 `make_latest=true`。之后较旧的正式草稿不能覆盖较新的正式 latest。读取失败或状态不一致时 workflow 停在草稿。发布后检查见下节。
 - **渠道配置**。workflow 将 `updates.tagPrefix` 固定为标签的 `test-v` 或 `v`。两条渠道使用同一密钥，更新公钥自 `0.0.1` 随包内置。
@@ -33,7 +33,7 @@
 
 ## 发布步骤
 
-1. 确认版本相对上一发布版递增，[CHANGELOG.md](../CHANGELOG.md) 有对应小节，并核对已合并到 `main` 的目标提交。
+1. 确认版本相对同一渠道的上一发布版递增，[CHANGELOG.md](../CHANGELOG.md) 有对应小节，并核对已合并到 `main` 的目标提交。
 2. 在已核对的提交上打标签并推送。下列 `<版本>` 与 `<提交>` 需替换为本次获准发布的值。
    - 正式版用 `git tag v<版本> <提交>`，再执行 `git push origin v<版本>`。
    - 测试版用 `git tag test-v<版本> <提交>`，再执行 `git push origin test-v<版本>`。
