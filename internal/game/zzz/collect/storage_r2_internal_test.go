@@ -243,6 +243,86 @@ func storageSettleRun(l Layout, m *ScrollEvidenceMatcher, before platform.Frame,
 	return run
 }
 
+func TestStorageCandidateReplacementKeepsReliableAnchor(t *testing.T) {
+	l := StorageLayout()
+	m := NewScrollEvidenceMatcher(NewPixelMatcher(l, StorageCalibration()))
+	before := storageSelectedPatternFrame(l, 1, 0, -1, 300, 323)
+	first := storageSelectedPatternFrame(l, 2, 1, 27, 306, 329)
+	replacement := storageSelectedPatternFrame(l, 3, 2, -1, 312, 335)
+	conflict1 := storageSelectedPatternFrame(l, 4, 2, 19, 312, 335)
+	conflict2 := storageSelectedPatternFrame(l, 5, 2, 19, 312, 335)
+	run := storageSettleRun(l, m, before, first, replacement, conflict1, conflict2)
+	out, err := run.awaitScroll(context.Background(), before)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.settled || run.viewport != 0 {
+		t.Fatalf("a replacement frame erased the reliable candidate anchor: settled=%t viewport=%d", out.settled, run.viewport)
+	}
+	if !out.match.SelectionConflict {
+		t.Fatalf("candidate-anchor conflict was not retained: %s", out.match.Evidence)
+	}
+}
+
+func TestStorageCandidateReplacementSameColumnRecovers(t *testing.T) {
+	l := StorageLayout()
+	m := NewScrollEvidenceMatcher(NewPixelMatcher(l, StorageCalibration()))
+	before := storageSelectedPatternFrame(l, 1, 0, -1, 300, 323)
+	first := storageSelectedPatternFrame(l, 2, 1, 27, 306, 329)
+	replacement := storageSelectedPatternFrame(l, 3, 2, -1, 312, 335)
+	confirm1 := storageSelectedPatternFrame(l, 4, 2, 18, 312, 335)
+	confirm2 := storageSelectedPatternFrame(l, 5, 2, 18, 312, 335)
+	run := storageSettleRun(l, m, before, first, replacement, confirm1, confirm2)
+	out, err := run.awaitScroll(context.Background(), before)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !out.displaced || !out.settled {
+		t.Fatalf("same-column replacement did not settle: displaced=%t settled=%t", out.displaced, out.settled)
+	}
+	if err := run.applyTransition(before, out.after, m.Match(before), out.afterMatch, out.match); err != nil {
+		t.Fatalf("same-column replacement did not commit: %v", err)
+	}
+	if run.viewport != 1 {
+		t.Fatalf("same-column replacement committed viewport %d, want 1", run.viewport)
+	}
+}
+
+func TestStorageConflictBeforeCandidateInvalidatesAction(t *testing.T) {
+	l := StorageLayout()
+	m := NewScrollEvidenceMatcher(NewPixelMatcher(l, StorageCalibration()))
+	before := storageSelectedPatternFrame(l, 1, 0, 27, 300, 323)
+	conflict := storageSelectedPatternFrame(l, 2, 1, 9, 306, 329)
+	candidate := storageSelectedPatternFrame(l, 3, 1, 18, 306, 329)
+	confirm1 := storageSelectedPatternFrame(l, 4, 1, 18, 306, 329)
+	confirm2 := storageSelectedPatternFrame(l, 5, 1, 18, 306, 329)
+	run := storageSettleRun(l, m, before, conflict, candidate, confirm1, confirm2)
+	out, err := run.awaitScroll(context.Background(), before)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.settled || run.viewport != 0 {
+		t.Fatalf("a conflict before the first candidate was forgotten: settled=%t viewport=%d", out.settled, run.viewport)
+	}
+}
+
+func TestStorageMissingCandidateSameColumnRowConflict(t *testing.T) {
+	l := StorageLayout()
+	m := NewScrollEvidenceMatcher(NewPixelMatcher(l, StorageCalibration()))
+	before := storageSelectedPatternFrame(l, 1, 0, 27, 300, 323)
+	candidate := storageSelectedPatternFrame(l, 2, 1, -1, 306, 329)
+	conflict1 := storageSelectedPatternFrame(l, 3, 1, 9, 306, 329)
+	conflict2 := storageSelectedPatternFrame(l, 4, 1, 9, 306, 329)
+	run := storageSettleRun(l, m, before, candidate, conflict1, conflict2)
+	out, err := run.awaitScroll(context.Background(), before)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.settled || run.viewport != 0 {
+		t.Fatalf("a same-column row conflict was hidden by the missing candidate anchor: settled=%t viewport=%d", out.settled, run.viewport)
+	}
+}
+
 func TestStorageCrossColumnConfirmationCannotSettleLedger(t *testing.T) {
 	l := StorageLayout()
 	m := NewScrollEvidenceMatcher(NewPixelMatcher(l, StorageCalibration()))
