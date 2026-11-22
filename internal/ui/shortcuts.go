@@ -2,6 +2,12 @@ package ui
 
 import "github.com/egoist/mygo/ui"
 
+// Full-window dialogs own their own Escape and other keyboard actions.
+func (m *Model) pageShortcutsBlocked() bool {
+	return m.Exiting() || m.exitFailureDialogOpen || m.trayHintOpen || m.navPrompt != nil ||
+		m.exportDialog.open || m.rescanDialog.open || m.slotMerge != nil
+}
+
 // registerPageShortcuts wires the keys the page shell owns across
 // destinations. Escape keeps the design's order: MyGo's overlays (menus,
 // Select popovers) take it first, then a held navigation is cancelled, then
@@ -11,12 +17,6 @@ import "github.com/egoist/mygo/ui"
 // review's item list, screenshots and form (other pages keep the rail and
 // the page's content).
 func (m *Model) registerPageShortcuts(c *ui.Context) {
-	if m.exportDialog.open {
-		// The modal owns the keyboard while it is open: Esc belongs to it
-		// (and is ignored during an export), and page keys must not move
-		// the focus behind the backdrop.
-		return
-	}
 	c.OnShortcut(0, ui.KeyEscape, func() { m.handleEscapeShortcut(c) })
 	if m.scanStartReady() {
 		c.OnShortcut(ui.Cmd, ui.KeyR, func() { m.requestScanStart() })
@@ -125,20 +125,12 @@ func (m *Model) requestScanStart() {
 // menu normally closes in its PopoverBase before this runs; the explicit
 // check keeps the state honest if its overlay was already gone.
 func (m *Model) handleEscapeShortcut(c *ui.Context) {
-	if m.rescanDialog.open {
-		m.rescanDialog.open = false
-		return
-	}
 	if m.historyOpen != nil {
 		m.cancelHistoryOpen()
 		return
 	}
 	if m.historyMenuOpen {
 		m.closeHistoryMenu()
-		return
-	}
-	if m.navPrompt != nil {
-		m.promptStay()
 		return
 	}
 	if m.textInputFocused {

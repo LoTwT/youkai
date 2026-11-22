@@ -560,6 +560,7 @@ func (m *Model) returnToPrepareCheck() {
 	m.settingsFocusStorage = false
 	m.settingsFocusPending = false
 	m.page = pageScan
+	m.refreshReadiness()
 }
 
 type storageMetric struct {

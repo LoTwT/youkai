@@ -395,7 +395,7 @@ var faultGuidanceTable = map[string]func(faultFacts) faultGuidance{
 		"请重新开始扫描；反复出现时复制诊断信息。",
 		faultExitRestart, true),
 	"positionFailureLimit": staticGuidance(
-		"多个号位没有完成",
+		"号位未完成，已停止遍历",
 		"请重新开始扫描；反复出现时复制诊断信息。",
 		faultExitRestart, true),
 

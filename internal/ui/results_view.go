@@ -1115,9 +1115,14 @@ func (m *Model) reviewFieldControl(c *ui.Context, t *ui.Theme, row *Row, field F
 			state := ui.Select(c, &draft.EquippedState,
 				equippedChoices(optionValue(draft.EquippedState))).
 				Width(150).Disabled(m.reviewActionsBlocked()).Label("装备状态")
-			disabled := optionValue(draft.EquippedState) != string(zzz.EquippedStateEquipped)
+			stateChanged := state.Changed()
+			equipped := optionValue(draft.EquippedState) == zzz.EquippedStateEquipped
+			if stateChanged && !equipped {
+				draft.AgentID = unreadOption
+				m.edit.refresh()
+			}
 			agent := ui.Select(c, &draft.AgentID, agentChoices(currentID(draft.AgentID))).
-				Width(170).Disabled(disabled || m.reviewSaving).Label("代理人")
+				Width(170).Disabled(!equipped || m.reviewActionsBlocked()).Label("代理人")
 			if m.focusReviewField == field {
 				m.selectReviewField(field)
 				state.Focus()

@@ -34,14 +34,15 @@ func BenchmarkHistoryRecordsFiftyRecordsThousandItems(b *testing.B) {
 		recordEnd := recordStart.Add(14 * time.Minute)
 		cp := record.Checkpoint{
 			Session: record.SessionShell{
-				SessionID: id,
-				Game:      "zzz",
-				Entity:    "driveDisc",
-				Client:    record.ClientWindowsLocal,
-				Locale:    "zh-CN",
-				Scope:     json.RawMessage(`{"rarity":"S"}`),
-				StartedAt: recordStart,
-				EndedAt:   &recordEnd,
+				SessionID:     id,
+				Game:          "zzz",
+				Entity:        "driveDisc",
+				Client:        record.ClientWindowsLocal,
+				Locale:        "zh-CN",
+				Scope:         json.RawMessage(`{"rarity":"S"}`),
+				StartedAt:     recordStart,
+				EndedAt:       &recordEnd,
+				ObservedScope: json.RawMessage(`{"sort":"verified"}`),
 				Termination: &record.Termination{
 					Kind: record.TerminationCompleted, Code: "verifiedEnd", Phase: record.PhaseCapturing,
 				},

@@ -395,6 +395,9 @@ func (m *Model) waitingForGame() bool {
 	if check.FaultCode == "targetNotFound" {
 		return true
 	}
+	if check.FaultCode == "targetHidden" {
+		return false
+	}
 	return check.Verdict == app.ReadinessUnsatisfied && len(m.targets) == 0 &&
 		m.targetsAccessDenied == 0 && m.targetsUnreadable == 0
 }
@@ -403,6 +406,19 @@ func (m *Model) waitingForGame() bool {
 // selected window shows its actual identity and keeps a 更换目标 action.
 func (m *Model) targetReadinessRow(check app.ReadinessCheck) readinessRow {
 	row := readinessRow{item: check.Item, title: "目标客户端", status: readinessSatisfied}
+	if check.Verdict == app.ReadinessUnsatisfied && check.FaultCode == "targetHidden" {
+		row.status = readinessUnsatisfied
+		row.why, row.how = readinessParts(check)
+		row.value = row.why
+		row.startReason = row.why + "。"
+		if target := m.chosenTarget(); m.source.TargetSelection && target != nil {
+			row.value = targetLabel(*target)
+			row.action = readinessActionChangeTarget
+		} else {
+			row.why = ""
+		}
+		return row
+	}
 	if !m.source.TargetSelection {
 		row.value = "已配置游戏窗口"
 		if check.Verdict == app.ReadinessUnsatisfied {
@@ -1080,8 +1096,7 @@ func (m *Model) runReadinessAction(c *ui.Context, action readinessActionKind) {
 	case readinessActionExit:
 		m.requestExit(false)
 	case readinessActionCleanup:
-		m.settingsFocusStorage = true
-		m.navigatePage(pageSettings)
+		m.ShowStorageFromPrepareCheck()
 	case readinessActionDiagnostics:
 		m.copyDiagnostics(c)
 	case readinessActionChangeTarget:

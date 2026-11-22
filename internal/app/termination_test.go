@@ -307,6 +307,90 @@ func (noopDeliverer) Deliver(scan.Record) error { return nil }
 // revived error would keep the slot busy and make every later Quit refuse
 // an exit whose final generation is on disk.
 func TestWrapUpDoesNotReviveAStaleSaveFailureAfterRetry(t *testing.T) {
+	svc, _, _, a := failedWrapUpFixture(t)
+	// The wrap-up already observed failure before a concurrent retry
+	// published success, so its late result must not revive the error.
+	a.wrapped = true
+	svc.wrapUp(a)
+	select {
+	case <-a.wrapDone:
+	default:
+		t.Fatal("wrapUp did not close its done channel")
+	}
+	if a.saveErr != nil || !a.wrapped {
+		t.Fatalf("wrapUp lost the retry's success: wrapped=%v, error=%v", a.wrapped, a.saveErr)
+	}
+}
+
+func TestFinalSaveRetryReleasesScanOccupancyBeforeAdvertisingFreeSlot(t *testing.T) {
+	svc, dataLock, store, a := failedWrapUpFixture(t)
+	svc.active = a
+	store.failOn = nil
+	if err := svc.RetrySave(); err != nil {
+		t.Fatalf("RetrySave: %v", err)
+	}
+	if !a.wrapped {
+		t.Fatal("the persisted retry did not free the active slot")
+	}
+	reacquired, err := dataLock.AcquireScanLock()
+	if err != nil {
+		t.Fatalf("the retry advertised a free slot while still holding scan occupancy: %v", err)
+	}
+	if err := reacquired.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSealWritesForExitDrainsAcceptedWrites(t *testing.T) {
+	svc := &Service{}
+	if err := svc.beginWrite(); err != nil {
+		t.Fatal(err)
+	}
+	finished := false
+	defer func() {
+		if !finished {
+			svc.finishWrite(nil)
+		}
+	}()
+	done := make(chan error, 1)
+	go func() { done <- svc.SealWritesForExit() }()
+	timeout := time.NewTimer(5 * time.Second)
+	defer timeout.Stop()
+	for {
+		err := svc.beginWrite()
+		if errors.Is(err, ErrServiceClosing) {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		svc.finishWrite(nil)
+		select {
+		case <-timeout.C:
+			t.Fatal("final exit did not close admission")
+		case <-time.After(time.Millisecond):
+		}
+	}
+	select {
+	case err := <-done:
+		t.Fatalf("final exit returned %v while an accepted write was still active", err)
+	default:
+	}
+	writeErr := errors.New("injected failure in accepted write")
+	svc.finishWrite(writeErr)
+	finished = true
+	select {
+	case err := <-done:
+		if !errors.Is(err, writeErr) {
+			t.Fatalf("final exit did not observe the accepted write: %v", err)
+		}
+	case <-timeout.C:
+		t.Fatal("final exit did not finish after the accepted write")
+	}
+}
+
+func failedWrapUpFixture(t *testing.T) (*Service, *DataRootLock, *flakyStore, *activeSession) {
+	t.Helper()
 	paths := newTestPaths(t)
 	svc, dataLock := newTestService(t, paths, nil, func() (Recognizer, error) {
 		return newFakeRecognizer(), nil
@@ -352,31 +436,17 @@ func TestWrapUpDoesNotReviveAStaleSaveFailureAfterRetry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AcquireScanLock: %v", err)
 	}
+	t.Cleanup(func() { _ = scanLock.Close() })
 	a := &activeSession{
 		id:        scan.ID(id),
 		kernel:    kernel,
 		deliverer: deliverer,
 		scanLock:  scanLock,
-		// wrapped simulates the retry that already persisted the final
-		// generation before this wrap-up's failed attempt recorded its
-		// outcome.
-		wrapped:   true,
 		wrapDone:  make(chan struct{}),
 		kernelSub: kernel.Subscribe(),
 	}
-	svc.wrapUp(a)
-
-	select {
-	case <-a.wrapDone:
-	default:
-		t.Fatal("wrapUp did not close its done channel")
-	}
-	if a.saveErr != nil {
-		t.Fatalf("stale save error revived after a successful retry: %v", a.saveErr)
-	}
-	if !a.wrapped {
-		t.Fatal("wrapUp unset the retry's completed wrap-up state")
-	}
+	t.Cleanup(a.kernelSub.Close)
+	return svc, dataLock, store, a
 }
 
 // TestFinishRefusesNonTerminalItemsAndRetrySettlesInterrupted pins the

@@ -18,7 +18,8 @@ import (
 // at a systemic perception failure (capture, filter handling or wheel
 // switching) rather than an unlucky frame; continuing would hide it behind
 // a plausible partial result. The count is per scan, not consecutive:
-// independent positions failing repeatedly is itself the signal.
+// independent positions failing repeatedly is itself the signal. For a
+// smaller selection, the number of requested positions caps the limit.
 const maxIncompletePositions = 3
 
 // positionIncompleteError marks a fault that invalidates only the current
@@ -73,13 +74,11 @@ func faultDiagnosticCode(err error) string {
 	return ""
 }
 
-// positionLimitError builds the session fault raised when the incomplete
-// positions reach maxIncompletePositions. It names every degraded position
-// so the stop is diagnosable from the session trigger alone.
-func positionLimitError(reasons []string) error {
+// positionLimitError names every degraded position so the stop can be
+// diagnosed from the session trigger.
+func positionLimitError(limit int, reasons []string) error {
 	return scan.NewFault(CodePositionFailureLimit, fmt.Errorf(
-		"collect: %d wheel positions are incomplete (limit %d); stopping instead of continuing so a systemic failure cannot be hidden: %s",
-		len(reasons), maxIncompletePositions, strings.Join(reasons, "; ")))
+		"collect: incomplete wheel positions reached the limit of %d: %s", limit, strings.Join(reasons, "; ")))
 }
 
 // positionProofFailure builds a scroll or bottom confirmation fault. It

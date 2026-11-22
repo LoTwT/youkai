@@ -155,6 +155,20 @@ func MeasureClient(api GeometryAPI, hwnd HWND) (GeometryMeasurement, *PlatformFa
 	return m, nil
 }
 
+// MeasureUnminimizedClient skips geometry for minimized windows, which
+// may have an empty or otherwise unusable client area. The second check
+// also catches minimization during the non-atomic measurement.
+func MeasureUnminimizedClient(win WindowAPI, api GeometryAPI, hwnd HWND) (GeometryMeasurement, bool, *PlatformFault) {
+	if win.IsIconic(hwnd) {
+		return GeometryMeasurement{}, true, nil
+	}
+	measurement, fault := MeasureClient(api, hwnd)
+	if win.IsIconic(hwnd) {
+		return GeometryMeasurement{}, true, nil
+	}
+	return measurement, false, fault
+}
+
 // VerifyDpiSetup checks the measured DPI facts for coordinate
 // virtualization and returns a fault when the physical-pixel premise of
 // the whole platform path does not hold.

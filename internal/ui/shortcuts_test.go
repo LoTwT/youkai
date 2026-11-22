@@ -356,6 +356,67 @@ func TestEditSaveShortcut(t *testing.T) {
 	})
 }
 
+func TestReviewZoomShortcutsRespectTextFocus(t *testing.T) {
+	m, _, tt, _ := openReviewRecordPage(t, reviewRowItem(t, 1, 12))
+	m.requestReviewFieldFocus(FormFieldLevel)
+	tt.Frame()
+	tt.Frame()
+	if active, _ := tt.TextInputActive(); !active {
+		t.Fatal("the level field did not take focus")
+	}
+	const zoom = 1.5
+	for _, binding := range []struct {
+		mods ui.Modifiers
+		key  ui.Key
+	}{{ui.Cmd, ui.KeyEqual}, {ui.Cmd | ui.Shift, ui.KeyEqual}, {ui.Cmd, ui.KeyMinus}, {ui.Cmd, ui.Key0}} {
+		m.cropZoom = zoom
+		tt.Key(binding.mods, binding.key)
+		if m.cropZoom != zoom {
+			t.Errorf("key %v with modifiers %v changed zoom with text focus: got %v, want %v", binding.key, binding.mods, m.cropZoom, zoom)
+		}
+	}
+}
+
+func TestReviewShortcutsLeaveUnsavedPromptInCharge(t *testing.T) {
+	m, q, tt, svc := openReviewRecordPage(t, reviewRowItem(t, 1, 12), reviewRowItem(t, 2, 10))
+	m.edit.draft.Level = "13"
+	m.requestNavigation(navigationRequest{kind: navSelect, seq: 2})
+	tt.Frame()
+	if m.navPrompt == nil {
+		t.Fatal("navigation did not open the unsaved prompt")
+	}
+	tt.Key(ui.Cmd, ui.KeyS)
+	tt.Key(ui.Cmd, ui.KeyEnter)
+	tt.Key(0, ui.KeyF6)
+	settle(t, m, q, tt)
+	if svc.saveCount() != 0 || m.navPrompt == nil || m.selectedSeq() != 1 {
+		t.Fatalf("page shortcuts changed the prompt or draft: saves=%d prompt=%+v seq=%d", svc.saveCount(), m.navPrompt, m.selectedSeq())
+	}
+	tt.Key(0, ui.KeyEscape)
+	settle(t, m, q, tt)
+	if m.navPrompt != nil {
+		t.Fatal("Escape did not close the prompt")
+	}
+	tt.Key(ui.Cmd, ui.KeyS)
+	settle(t, m, q, tt)
+	if svc.saveCount() != 1 {
+		t.Fatalf("page save shortcut after closing the prompt: got %d saves, want one", svc.saveCount())
+	}
+}
+
+func TestReviewSaveRefusedDuringExit(t *testing.T) {
+	m, q, tt, svc := openReviewRecordPage(t, reviewRowItem(t, 1, 12))
+	m.edit.draft.Level = "13"
+	m.exitState = exitRunning
+	tt.Frame()
+	tt.Key(ui.Cmd, ui.KeyS)
+	m.saveEdit(reviewSave, nil)
+	settle(t, m, q, tt)
+	if svc.saveCount() != 0 {
+		t.Fatalf("exit accepted %d review writes", svc.saveCount())
+	}
+}
+
 // TestEscapeClosesTheRowMenu checks the first Escape step: MyGo's popover
 // takes the key before the shell and closes the menu.
 func TestEscapeClosesTheRowMenu(t *testing.T) {

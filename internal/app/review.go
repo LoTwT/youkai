@@ -334,7 +334,7 @@ func CheckDiscData(data zzz.DiscData) DataCheck {
 				addWarning(newReviewWarning("equipped", zzz.CodeEquippedStateUnavailable,
 					"已装备但代理人未读取；装备字段按可选处理"))
 			} else if _, ok := zzz.LookupAgentByID(*data.Equipped.AgentID); !ok {
-				addBlocking(newReviewIssue("equipped", "unknownAgent",
+				addBlocking(newReviewIssue("equipped", zzz.CodeUnknownAgent,
 					fmt.Sprintf("代理人 ID %d 不在资料表中", *data.Equipped.AgentID)))
 			}
 		default:

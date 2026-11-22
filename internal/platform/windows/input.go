@@ -399,7 +399,7 @@ type InputActor struct {
 	precheck    PrecheckFunc
 	stepCheck   StepPrecheckFunc
 	sleep       func(time.Duration)
-	stepGate    func() bool
+	inputGate   func() bool
 	permitted   bool
 	closed      bool
 	closeReason string
@@ -429,14 +429,13 @@ func (a *InputActor) SetSleep(sleep func(time.Duration)) {
 	}
 }
 
-// SetStepGate installs the gate honored between a drag's steps: when it
-// reports false the drag aborts — the release is inserted, Aborted set —
-// so a stop waits at most one step interval. The hook must be fast and
-// must not call back into the actor.
-func (a *InputActor) SetStepGate(gate func() bool) {
+// SetInputGate installs the kernel permission check before dispatch and
+// between drag steps. A closed gate aborts a drag but still allows its
+// release. The hook must be fast and must not call back into the actor.
+func (a *InputActor) SetInputGate(gate func() bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.stepGate = gate
+	a.inputGate = gate
 }
 
 // SetStepPrecheck installs the per-move live-premise check. It receives
@@ -586,6 +585,11 @@ func (a *InputActor) Dispatch(req InputRequest) InputResult {
 				return res
 			}
 		}
+		if a.inputGate != nil && !a.inputGate() {
+			res.State = StateNotDispatched
+			res.Err = permissionClosed()
+			return res
+		}
 	}
 
 	// sendBatch inserts one batch, folding its accepted prefix into the
@@ -672,7 +676,7 @@ func (a *InputActor) Dispatch(req InputRequest) InputResult {
 		// in the adapter), then re-check permission after that possibly
 		// blocking work. Any failure before the press is notDispatched
 		// with zero events — nothing was pressed, so nothing is released.
-		if a.stepGate != nil && !a.stepGate() {
+		if a.inputGate != nil && !a.inputGate() {
 			res.State = StateNotDispatched
 			res.Err = permissionClosed()
 			return res
@@ -682,7 +686,7 @@ func (a *InputActor) Dispatch(req InputRequest) InputResult {
 			res.Err = err
 			return res
 		}
-		if a.stepGate != nil && !a.stepGate() {
+		if a.inputGate != nil && !a.inputGate() {
 			res.State = StateNotDispatched
 			res.Err = permissionClosed()
 			return res
@@ -693,7 +697,7 @@ func (a *InputActor) Dispatch(req InputRequest) InputResult {
 		interval := dur / time.Duration(steps)
 		for i := 1; i <= steps; i++ {
 			a.sleep(interval)
-			if a.stepGate != nil && !a.stepGate() {
+			if a.inputGate != nil && !a.inputGate() {
 				res.Aborted = true
 				break
 			}
@@ -716,7 +720,7 @@ func (a *InputActor) Dispatch(req InputRequest) InputResult {
 			// The step precheck can close the permission (a stop arriving
 			// during observation). Re-check the gate after the precheck so
 			// a closed permission never inserts one more move.
-			if a.stepGate != nil && !a.stepGate() {
+			if a.inputGate != nil && !a.inputGate() {
 				res.Aborted = true
 				break
 			}
@@ -924,11 +928,11 @@ func InputPrecheck(win WindowAPI, fg ForegroundAPI, tracker *GeometryTracker, lo
 		if pid != locked.PID {
 			return &PrecheckError{Code: PrecheckTargetReplaced, Detail: fmt.Sprintf("handle %d now owned by pid %d, locked pid %d", hwnd, pid, locked.PID)}
 		}
-		if fg.ForegroundWindow() != hwnd {
-			return &PrecheckError{Code: PrecheckFocusLost, Detail: fmt.Sprintf("foreground window is %d, target is %d", fg.ForegroundWindow(), hwnd)}
-		}
 		if win.IsIconic(hwnd) {
 			return &PrecheckError{Code: PrecheckMinimized, Detail: "target window is minimized"}
+		}
+		if foreground := fg.ForegroundWindow(); foreground != hwnd {
+			return &PrecheckError{Code: PrecheckFocusLost, Detail: fmt.Sprintf("foreground window is %d, target is %d", foreground, hwnd)}
 		}
 		if req.Op.HasPoint() {
 			if !geo.Client.Contains(req.Op.Point) {

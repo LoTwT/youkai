@@ -926,7 +926,7 @@ func TestSessionTerminationNoticeNamesIncompletePositions(t *testing.T) {
 	}
 	rec.Checkpoint.Session.ObservedScope = []byte(`{"positions":[{"position":1,"complete":false,"stage":"filter","reasonCode":"navigationMismatch","reason":"three preparations failed"}]}`)
 	_, _, tt := openResponsiveResults(t, rec, 1024, 700)
-	if !tt.HasText("扫描失败：多个号位没有完成") || !tt.HasText("不完整号位：1 号位 筛选准备失败：点击或拖拽后页面没有按预期变化") {
+	if !tt.HasText("扫描失败：号位未完成，已停止遍历") || !tt.HasText("不完整号位：1 号位 筛选准备失败：点击或拖拽后页面没有按预期变化") {
 		t.Fatalf("the failed-session surface omits the degraded positions: %q", tt.Texts())
 	}
 }

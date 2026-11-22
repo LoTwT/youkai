@@ -132,10 +132,10 @@ type Service struct {
 	// Admission and Add share mu with the quit boundary. Wait runs only
 	// after admission closed, outside mu, so an accepted writer can finish
 	// (including its notification) before the data root is handed over.
-	writesClosed      bool
-	systemTerminating bool
-	acceptedWrites    sync.WaitGroup
-	drainErr          error
+	writesClosed   bool
+	writesSealed   bool
+	acceptedWrites sync.WaitGroup
+	drainErr       error
 	// updateInstalling reports an update install in progress. The update
 	// flow takes it through BeginUpdateInstall at the same lock boundary
 	// as Start, so a scan and an install can never both be admitted, and
@@ -916,11 +916,7 @@ func (s *Service) wrapUp(a *activeSession) {
 	final := a.kernel.Snapshot()
 	logSessionTrigger(a.id, final)
 	err := a.deliverer.finish(final)
-	if lockErr := a.scanLock.Close(); lockErr != nil {
-		// The OS releases the occupancy at process exit anyway; the
-		// failure is diagnosable, but it must not gate the slot.
-		log.Printf("youkai: scan %s: release scan occupancy: %v", a.id, lockErr)
-	}
+	a.releaseScanLock()
 	s.mu.Lock()
 	if err != nil && a.wrapped {
 		// A retry persisted the final generation while this attempt was
@@ -948,6 +944,12 @@ func (s *Service) wrapUp(a *activeSession) {
 	a.kernelSub.Close()
 	s.notifyLocked()
 	s.mu.Unlock()
+}
+
+func (a *activeSession) releaseScanLock() {
+	if err := a.scanLock.Close(); err != nil {
+		log.Printf("youkai: scan %s: release scan occupancy: %v", a.id, err)
+	}
 }
 
 // logSessionTrigger writes the sealed session's first stop trigger and
@@ -985,7 +987,10 @@ func (s *Service) RetrySave() error {
 	}
 	if a.deliverer.settled() && !a.wrapped {
 		// The failed final save is now complete: the wrap-up's own
-		// attempt failed, this retry wrote the final generation.
+		// attempt failed, this retry wrote the final generation. It can
+		// win before wrapUp releases the lock, so release it here too
+		// before publishing an available slot.
+		a.releaseScanLock()
 		a.wrapped = true
 		a.saveErr = nil
 		log.Printf("youkai: scan %s: final checkpoint saved on retry (generation %d)",
@@ -1050,9 +1055,9 @@ func (s *Service) LoadRecord(recordID string) (*record.Recovery, error) {
 }
 
 // stopForQuit closes admission and cancels input without joining work.
-func (s *Service) stopForQuit(systemTerminating bool) *activeSession {
+func (s *Service) stopForQuit(sealWrites bool) *activeSession {
 	s.mu.Lock()
-	s.systemTerminating = s.systemTerminating || systemTerminating
+	s.writesSealed = s.writesSealed || sealWrites
 	s.quitting = true
 	if !s.writesClosed {
 		s.drainErr = nil
@@ -1122,16 +1127,13 @@ func (s *Service) quit() error {
 	defer func() {
 		if !s.quitDataReleaseAttempted {
 			s.mu.Lock()
-			if !s.systemTerminating {
+			if !s.writesSealed {
 				s.writesClosed = false
 			}
 			s.mu.Unlock()
 		}
 	}()
-	s.acceptedWrites.Wait()
-	s.mu.Lock()
-	drainErr := s.drainErr
-	s.mu.Unlock()
+	drainErr := s.waitForAcceptedWrites()
 	if a != nil {
 		<-a.wrapDone
 		s.mu.Lock()

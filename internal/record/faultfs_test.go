@@ -118,6 +118,8 @@ func (f *faultFS) rule(op faultOp, path string) *faultRule {
 	return nil
 }
 
+func (f *faultFS) Mkdir(dir string, perm fs.FileMode) error { return f.inner.Mkdir(dir, perm) }
+
 func (f *faultFS) MkdirAll(dir string, perm fs.FileMode) error { return f.inner.MkdirAll(dir, perm) }
 
 func (f *faultFS) Stat(path string) (fs.FileInfo, error) {

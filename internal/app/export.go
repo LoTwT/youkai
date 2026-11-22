@@ -425,35 +425,45 @@ func exportTermination(rec *record.Recovery) record.Termination {
 	}
 }
 
-// exportCoverageOf copies the saved conclusion but refuses complete when
-// the observed scope never verified the sort order. Complete also needs a
-// full traversal ledger, which the current record does not carry; with
-// an unverified or absent sort the honest conclusion is partial. A scoped
-// partial rescan never exports a warehouse-complete claim.
 func exportCoverageOf(shell *record.SessionShell, plan ScanPlan) exportCoverage {
-	status := shell.Coverage.Status
-	if !plan.Full() {
-		status = record.CoveragePartial
-	} else if status == record.CoverageComplete && !sortVerified(shell.ObservedScope) {
-		status = record.CoveragePartial
-	}
-	return exportCoverage{Status: status, ExpectedCount: shell.Coverage.ExpectedCount}
+	return exportCoverage{Status: coverageConclusion(shell, plan), ExpectedCount: shell.Coverage.ExpectedCount}
 }
 
-// sortVerified reports whether the observed scope explicitly records a
-// verified sort label. The calibrated traversal writes "unverified"; an
-// absent scope proves nothing.
-func sortVerified(observed json.RawMessage) bool {
-	if len(observed) == 0 {
+// coverageConclusion keeps the saved conclusion unless a complete claim
+// is unsupported. A scoped rescan always has partial coverage.
+func coverageConclusion(shell *record.SessionShell, plan ScanPlan) record.CoverageStatus {
+	status := shell.Coverage.Status
+	if !plan.Full() || (status == record.CoverageComplete && !supportsCompleteCoverage(shell)) {
+		return record.CoveragePartial
+	}
+	return status
+}
+
+// supportsCompleteCoverage uses the typed ledger when present and accepts
+// the stored complete claim from older records that verified the sort
+// before position conclusions were recorded.
+func supportsCompleteCoverage(shell *record.SessionShell) bool {
+	sort, known := shell.SortVerification()
+	if !known || sort != record.SortVerificationVerified {
 		return false
 	}
-	var scope struct {
-		Sort string `json:"sort"`
+	ledger, known := shell.PositionConclusions()
+	if !known {
+		// An absent legacy positions member differs from a malformed one.
+		var scope struct {
+			Positions json.RawMessage `json:"positions"`
+		}
+		return json.Unmarshal(shell.ObservedScope, &scope) == nil && len(scope.Positions) == 0
 	}
-	if err := json.Unmarshal(observed, &scope); err != nil {
+	if len(ledger.Positions) != record.PositionCount {
 		return false
 	}
-	return scope.Sort == "verified"
+	for i, position := range ledger.Positions {
+		if position.Position != i+1 || !position.Complete {
+			return false
+		}
+	}
+	return true
 }
 
 // JSON renders the usable-data document at one export time. Items and

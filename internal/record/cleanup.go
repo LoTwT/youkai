@@ -460,7 +460,9 @@ func (s *Store) writeStrippedGenerationLocked(recordID string, state *recordStat
 	if err != nil {
 		return 0, err
 	}
-	state.checkpoint = doc
+	// Cleanup preserves the on-disk result. Later revisions still need
+	// the same recovered base they would get by opening the record.
+	state.checkpoint = &applyInterruptionMarks(doc).Checkpoint
 	state.valid[gen] = true
 	return gen, nil
 }

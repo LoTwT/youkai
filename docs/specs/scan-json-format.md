@@ -59,11 +59,11 @@
 
 **位置范围未证明（[决策 §4.6](../decisions/2026-10-28-scanner-rearchitecture.md#46-k5故障分级)）：** 该位置此前已接纳物品仍在 `items` 中、不计入 `excludedCount`，`coverage.status` 只报 `partial`；完整可用性与标注口径见 [T5 §3](t5-zzz-inventory-traversal.md#3-开始前必须核对的页面条件)。位置准备失败或位置证明失败（T5 §5 的位置级降级，2026-10-31 已实现）同样只令 `coverage.status=partial`；位置级原因留在会话内部 `observedScope`、诊断与结果界面，不进入 v2。P-12 第一步的独立补扫记录同样只报 `partial`，其 `scope.slots` 收窄到本次选中号位；独立补扫与按号位合并分别导出。补扫预检失败、未打开输入且没有号位账目时仍报 `partial`，终止阶段表达“没有开始”，不伪造位置结论。
 
-`termination.code` 为非空诊断代码，建议使用 `verifiedEnd`、`userCancelled`、`focusLost`、`geometryChanged`、`permissionRevoked`、`navigationMismatch`、`positionFailureLimit`、`evidenceFailed`、`runtimeFailure`、`storageFailure` 或 `interrupted`。`evidenceFailed` 表示已接纳截图的投影或入队失败，保留原始错误；`positionFailureLimit` 表示不完整位置累计达到 3 个而主动停止整次扫描（T5 §5）；它们只用于解释，不授权额外动作；读取端可展示不认识的代码，不能因此把 `kind` 改为正常完成。后续故障不会覆盖首个触发。
+`termination.code` 为非空诊断代码，建议使用 `verifiedEnd`、`userCancelled`、`focusLost`、`geometryChanged`、`permissionRevoked`、`navigationMismatch`、`positionFailureLimit`、`evidenceFailed`、`runtimeFailure`、`storageFailure` 或 `interrupted`。`evidenceFailed` 表示已接纳截图的投影或入队失败，保留原始错误；`positionFailureLimit` 表示不完整号位达到 [T5 §5](t5-zzz-inventory-traversal.md#5-滚动衔接重复物品与末尾) 的升级阈值；它们只用于解释，不授权额外动作；读取端可展示不认识的代码，不能因此把 `kind` 改为正常完成。后续故障不会覆盖首个触发。
 
 `termination.phase` 是首个结束触发所在的阶段，不是文件导出时的状态。正常遍历到末尾通常为 `completed + capturing`；准备阶段已验证空库存可为 `completed + preparing`，不统一改写成 `finalizing`。
 
-范围描述预期扫描什么，`coverage` 描述实际覆盖到哪里，`excludedCount` 描述导出舍弃多少已采集记录，三者独立。即使 `coverage.status=complete`，仍可能有排除项。`complete` 不由 OCR 成功率或 `expectedCount` 单独推出；有可信总数时必须与采集数一致，否则保留冲突并降为 `partial` 或 `unknown`。按 T5 的严格排序规则，只有排序标签已读取并验证时才允许 `complete`；未验证时只能为 `partial` 或 `unknown`。
+范围描述预期扫描什么，`coverage` 描述实际覆盖到哪里，`excludedCount` 描述导出舍弃多少已采集记录，三者独立。即使 `coverage.status=complete`，仍可能有排除项。`complete` 不由 OCR 成功率或 `expectedCount` 单独推出；有可信总数时必须与采集数一致，否则保留冲突并降为 `partial` 或 `unknown`。历史列表与导出使用同一覆盖结论。只有原结论为 `complete`、排序已验证，且号位账目显示六个号位均完整时，才保留完整覆盖。优先读取会话外壳的号位账目，旧检查点回读 `observedScope`；早期整仓记录若只有已验证排序、未记录号位账目，则保留原完整结论。
 
 ## 3. 一件驱动盘
 
@@ -93,7 +93,7 @@
 
 装备状态从详情页等级右侧头像判断并匹配代理人身份，列表格右上角头像确认；冲突或不可读时整个 `equipped` 记 `null`。当前代理人装备和他人装备都属于 `equipped`，当前装备置顶只影响遍历顺序，不构成额外的数据状态。`unequipped` 时 `agentId` 必须为 `null`；`equipped` 且 `agentId` 非空时，`agentId` 必须是 fairy 代理人数值 ID（例如耀嘉音 `1311`），并能在 `catalog.agents` 中解析；`agentId=null` 只产生 warning，不阻止导出。
 
-未知、否定和空集合不能互换。`managementState=null` 不等于 `none`，`equipped=null` 不等于 `unequipped`，`substats=[]` 只陈述读到了空列表。识别不到装备者不等于未装备；管理状态与装备分别保留，不能仅凭用户回忆的图标位置合并或补默认值。
+未知、否定和空集合不能互换。`managementState=null` 不等于 `none`，`equipped=null` 不等于 `unequipped`，`substats=[]` 只陈述读到了空列表。识别不到装备者不等于未装备；捕获明确报出目录无法解析的代理人 ID 时，该条目保留为待校对。管理状态与装备分别保留，不能仅凭用户回忆的图标位置合并或补默认值。
 
 `fieldPolicy` 在 v2 固定为 `{ "management": "required", "equipped": "optional" }`：
 

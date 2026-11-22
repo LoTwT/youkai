@@ -110,7 +110,7 @@ func TestRecoveryReplayPassiveDetailRevisit(t *testing.T) {
 					t.Fatal("passive revisit sent an extra click")
 				}
 			case "unreadable", "second unresolved cell":
-				snap := h.endCompleted()
+				snap := h.endFailed(collect.CodePositionFailureLimit)
 				entry := h.requireIncompletePosition(1, "detail", collect.CodeDetailUnresolved)
 				want := 0
 				if mode == "second unresolved cell" {
@@ -272,7 +272,7 @@ func TestRecoveryReplayRebuildAtVerifiedTop(t *testing.T) {
 					}
 				}
 			case "reset and S probes only", "unreadable current range", "range lost after close", "replaced cell":
-				snap := h.endCompleted()
+				snap := h.endFailed(collect.CodePositionFailureLimit)
 				stage, code, wantOpens := "scroll", collect.CodePositionLost, 1
 				if mode == "unreadable current range" || mode == "range lost after close" {
 					stage, code, wantOpens = "filter", collect.CodeNavigationMismatch, 2
@@ -296,7 +296,7 @@ func TestRecoveryReplayRebuildAtVerifiedTop(t *testing.T) {
 					}
 				}
 			case "repeated loss", "later viewport":
-				snap := h.endCompleted()
+				snap := h.endFailed(collect.CodePositionFailureLimit)
 				h.requireIncompletePosition(1, "scroll", collect.CodePositionLost)
 				wantCaptured, wantOpens := 20, 2
 				if mode == "later viewport" {

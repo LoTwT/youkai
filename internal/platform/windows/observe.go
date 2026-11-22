@@ -152,8 +152,8 @@ type TargetObservation struct {
 	// it notChecked.
 	Occlusion OcclusionState
 	// Geometry is the current geometry; before the first valid
-	// measurement it is the zero value. On a fault it is the last
-	// geometry that was still valid.
+	// measurement it is the zero value. On a fault or while minimized,
+	// it is the last geometry that was still valid.
 	Geometry ClientGeometry
 	// GeometryChanged: this observation bumped the geometry version, so
 	// coordinates derived from older versions are invalid.
@@ -219,11 +219,14 @@ func ObserveTarget(win WindowAPI, procs ProcessAPI, geo GeometryAPI, fg Foregrou
 	}
 	obs.Matched = true
 	obs.Visible = win.IsWindowVisible(locked.HWND)
-	obs.Minimized = win.IsIconic(locked.HWND)
 	obs.ForegroundHWND = fg.ForegroundWindow()
 	obs.Foreground = obs.ForegroundHWND == locked.HWND
 
-	measurement, fault := MeasureClient(geo, locked.HWND)
+	measurement, minimized, fault := MeasureUnminimizedClient(win, geo, locked.HWND)
+	obs.Minimized = minimized
+	if minimized {
+		return obs
+	}
 	if fault == nil {
 		if self, selfErr := geo.SelfDpiAwareness(); selfErr != nil {
 			fault = NewFault(CodeDpiCheckUnavailable, "scanner DPI awareness unverifiable", selfErr, PhaseObserve, at, lastVersion)

@@ -658,12 +658,9 @@ type inventoryRun struct {
 	// positions. Neither counter feeds a navigation decision.
 	diagnosticOKManifests int
 	diagnosticOKImages    int
-	// incompletePositions counts the wheel positions this walk degraded
-	// (decision §4.6 K5). incompleteReasons names each one for the limit
-	// fault's message; both are diagnostic bookkeeping only and never feed
-	// a navigation decision beyond the limit check.
-	incompletePositions int
-	incompleteReasons   []string
+	// incompleteReasons records one reason per degraded wheel position for
+	// the failure limit and its diagnostic message (decision §4.6 K5).
+	incompleteReasons []string
 	// pendingPanelClose permits the next position's establishList to close
 	// one verified filter panel left open by a degraded previous position.
 	// Only a failure that leaves the panel open sets it; a panel observed
@@ -724,33 +721,31 @@ func (run *inventoryRun) run(ctx context.Context) error {
 	if err != nil {
 		return scan.NewFault(platform.CodeInvalidOperation, fmt.Errorf("collect: collect: %w", err))
 	}
+	failureLimit := min(maxIncompletePositions, len(order))
 	for _, pos := range order {
 		positionStart := time.Now()
 		var timing positionTiming
-		if err := run.preparePosition(ctx, pos, &timing); err != nil {
-			if err := run.finishPosition(err, timing, 0, time.Since(positionStart)); err != nil {
-				return err
-			}
-			continue
+		var collectMs time.Duration
+		err := run.preparePosition(ctx, pos, &timing)
+		if err == nil {
+			collectStart := time.Now()
+			err = run.collectPosition(ctx)
+			collectMs = time.Since(collectStart)
 		}
-		collectStart := time.Now()
-		err := run.collectPosition(ctx)
-		collectMs := time.Since(collectStart)
 		if err := run.finishPosition(err, timing, collectMs, time.Since(positionStart)); err != nil {
 			return err
+		}
+		if len(run.incompleteReasons) >= failureLimit {
+			return positionLimitError(failureLimit, run.incompleteReasons)
 		}
 	}
 	return nil
 }
 
-// finishPosition closes one wheel position: it records the ledger entry and
-// the position summary, then decides whether the walk continues. A
-// position-scoped failure (positionIncompleteError) marks this position
-// incomplete with its stage, cause code and reason, and lets the next
-// position start unless the incomplete count reached the limit. Every other
-// error — a session-fatal fault, cancellation, a storage failure — is
-// returned unchanged after the same accounting, so the walk stops exactly
-// as before. A nil error records a complete position.
+// finishPosition records the ledger entry and summary for one wheel
+// position. A position-scoped failure adds its reason to the count the
+// walk uses for escalation. A nil error records a complete position.
+// Every other error stops the walk and is returned unchanged.
 func (run *inventoryRun) finishPosition(err error, timing positionTiming, collect, total time.Duration) error {
 	incomplete, degraded := asPositionIncomplete(err)
 	entry := run.positionScope(err == nil)
@@ -764,14 +759,10 @@ func (run *inventoryRun) finishPosition(err error, timing positionTiming, collec
 	if !degraded {
 		return err
 	}
-	run.incompletePositions++
 	run.incompleteReasons = append(run.incompleteReasons,
 		fmt.Sprintf("position %d %s: %s", entry.Position, entry.Stage, entry.Reason))
 	log.Printf("youkai: collect: position=%d incomplete stage=%s code=%s reason=%q",
 		entry.Position, entry.Stage, entry.ReasonCode, entry.Reason)
-	if run.incompletePositions >= maxIncompletePositions {
-		return positionLimitError(run.incompleteReasons)
-	}
 	return nil
 }
 

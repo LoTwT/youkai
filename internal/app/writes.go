@@ -25,6 +25,25 @@ func (s *Service) finishWrite(err error) {
 	s.acceptedWrites.Done()
 }
 
+// SealWritesForExit closes admission permanently and joins writes that
+// were accepted before the final exit. Call it after Quit has settled and
+// the user has committed to exiting, including after a failed teardown
+// that temporarily reopened writes while the data root was still held.
+func (s *Service) SealWritesForExit() error {
+	s.mu.Lock()
+	s.writesClosed = true
+	s.writesSealed = true
+	s.mu.Unlock()
+	return s.waitForAcceptedWrites()
+}
+
+func (s *Service) waitForAcceptedWrites() error {
+	s.acceptedWrites.Wait()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.drainErr
+}
+
 // SaveSettings writes preferences under the same admission and occupancy
 // contract as record revisions. Startup reads still use LoadSettings.
 func (s *Service) SaveSettings(settings Settings) (err error) {

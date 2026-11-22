@@ -560,6 +560,7 @@ func TestHistoryRecordsSummaryAndInterruption(t *testing.T) {
 			Client: record.ClientWindowsLocal, Locale: "zh-CN",
 			Scope:     json.RawMessage(`{"rarity":"S"}`),
 			StartedAt: started, EndedAt: &ended,
+			ObservedScope: json.RawMessage(`{"sort":"verified"}`),
 			Termination:   &record.Termination{Kind: record.TerminationCompleted, Code: "verifiedEnd", Phase: record.PhaseCapturing},
 			Coverage:      record.Coverage{Status: record.CoverageComplete},
 			CapturedCount: 1,

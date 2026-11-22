@@ -8,8 +8,16 @@ import (
 )
 
 func TestSlotMergeFailureLeavesBothRevisionsAndCanRetry(t *testing.T) {
-	for _, boundary := range []string{"copy", "checkpoint"} {
-		t.Run(boundary, func(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		cleaned bool
+	}{
+		{name: "copy"},
+		{name: "checkpoint"},
+		{name: "directory sync after cleanup", cleaned: true},
+		{name: "checkpoint after cleanup", cleaned: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			st, fs, root := newFaultStore(t)
 			const baseID, supplementID, copyID = "original", "supplement", "merge-copy"
 			for _, id := range []string{baseID, supplementID} {
@@ -31,6 +39,15 @@ func TestSlotMergeFailureLeavesBothRevisionsAndCanRetry(t *testing.T) {
 			supplement.Session.SessionID = supplementID
 			baseRev := saveCheckpoint(t, st, baseID, base)
 			supplementRev := saveCheckpoint(t, st, supplementID, supplement)
+			if tc.cleaned {
+				removal, err := st.DeleteEvidence(baseID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				baseRev = removal.Generation
+				base.Items[0].EvidenceIDs = nil
+				base.Evidence = nil
+			}
 			merged := *cloneCheckpoint(&base)
 			merged.Session.Coverage = Coverage{Status: CoveragePartial}
 			merged.Session.PositionLedger = &PositionLedger{
@@ -52,16 +69,24 @@ func TestSlotMergeFailureLeavesBothRevisionsAndCanRetry(t *testing.T) {
 				Checkpoint: merged, EvidenceCopies: map[string]string{copyID: newEvidence.ID},
 			}
 
-			path := st.generationPath(baseID, baseRev+1)
-			if boundary == "copy" {
-				path = st.evidencePath(baseID, copyID)
+			switch tc.name {
+			case "copy":
+				fs.injectShortWrite(st.evidencePath(baseID, copyID), 3, errDiskFull)
+			case "directory sync after cleanup":
+				fs.inject(faultSyncDir, st.recordDir(baseID), errDiskFull)
+			default:
+				fs.injectShortWrite(st.generationPath(baseID, baseRev+1), 3, errDiskFull)
 			}
-			fs.injectShortWrite(path, 3, errDiskFull)
 			if _, err := st.CommitSlotMerge(commit); !errors.Is(err, errDiskFull) {
 				t.Fatalf("injected failure = %v", err)
 			}
 			if _, err := os.Stat(st.evidencePath(baseID, copyID)); !errors.Is(err, os.ErrNotExist) {
 				t.Fatalf("failed merge left copied evidence: %v", err)
+			}
+			if tc.cleaned {
+				if _, err := os.Lstat(st.evidenceDir(baseID)); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("failed merge left a new evidence directory: %v", err)
+				}
 			}
 			for id, want := range map[string]int64{baseID: baseRev, supplementID: supplementRev} {
 				rec, err := st.LoadLatest(context.Background(), id)

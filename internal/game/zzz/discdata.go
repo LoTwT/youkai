@@ -1,5 +1,7 @@
 package zzz
 
+import "fmt"
+
 // The structured drive-disc payload mirrors the scan JSON contract's
 // `data` object plus the record-level `issues` and `validation`. It is
 // the bridge between the detail-line parser and persistence: every field
@@ -10,10 +12,10 @@ package zzz
 // Management state, equipment presence and the equipper's identity come
 // from the collector's calibrated badge/avatar evidence. The identity is
 // written only when the avatar matcher reports a reliable fairy numeric
-// id; an absent, ambiguous or unreliable match keeps agentId=null and
-// validation unavailable. A record whose required fields all pass is
-// eligible for auto-accept; incomplete or conflicting records stay
-// needsReview.
+// id. An absent, ambiguous or unreliable match keeps agentId=null with a
+// warning. An explicit ID outside the catalog keeps validation unavailable.
+// A record whose required fields all pass is eligible for auto-accept;
+// incomplete or conflicting records stay needsReview.
 
 // ManagementState and equipment-presence values of an observation, as the
 // collector confirmed them. Empty means the collector could not read the
@@ -30,7 +32,7 @@ const (
 // CaptureState is the non-text evidence the collector confirmed for one
 // observation. Empty fields stay JSON null. AgentID is the fairy numeric
 // agent id the avatar matcher accepted, or 0 when the identity is absent,
-// ambiguous or unreliable; an id outside the catalog is treated as unknown.
+// ambiguous or unreliable. A nonzero id outside the catalog requires review.
 type CaptureState struct {
 	ManagementState string
 	EquippedState   string
@@ -54,7 +56,14 @@ const (
 	// equipment-presence state, or an equipped record's equipper identity
 	// is absent, ambiguous or unreliable (agentId=null).
 	CodeEquippedStateUnavailable = "equippedStateUnavailable"
+	// CodeUnknownAgent marks an explicit ID that the catalog cannot resolve.
+	CodeUnknownAgent = "unknownAgent"
 )
+
+// Old checkpoints used the missing-equipment code for unknown IDs and
+// wrote a null agentId. Their persisted message is the remaining way to
+// distinguish that case from a genuinely missing equipper.
+const legacyUnknownAgentMessage = "已识别装备者身份，但该 ID 不在 catalog 中，无法完成校验"
 
 // StatData is one affix value in the public JSON shape. Every part is a
 // pointer so an unread attribute, value or unit stays an explicit null.
@@ -96,9 +105,9 @@ type DiscData struct {
 	Equipped        *Equipped     `json:"equipped"`
 }
 
-// Validation is the record-level revalidation result. Parsing errors make
-// it failed; missing management/equipment state or the still-missing
-// equipper identity keeps it unavailable; a complete record passes.
+// Validation is the record-level revalidation result. Parsing errors fail
+// validation; missing required evidence or an unresolved catalog ID makes
+// it unavailable. Missing optional equipment evidence adds a warning.
 type Validation struct {
 	Status string  `json:"status"`
 	Issues []Issue `json:"issues"`
@@ -273,12 +282,12 @@ func validate(issues []Issue, state CaptureState) Validation {
 	switch state.EquippedState {
 	case EquippedStateEquipped:
 		switch {
-		case state.AgentID <= 0:
+		case state.AgentID == 0:
 			warnings = append(warnings, newWarning("equipped", CodeEquippedStateUnavailable,
 				"已确认装备存在性，但未能可靠识别装备者身份（agentId 为 null）；装备字段按可选处理"))
 		case !validAgentID(state.AgentID):
-			gaps = append(gaps, newIssue("equipped", CodeEquippedStateUnavailable,
-				"已识别装备者身份，但该 ID 不在 catalog 中，无法完成校验"))
+			gaps = append(gaps, newIssue("equipped", CodeUnknownAgent,
+				fmt.Sprintf("代理人 ID %d 不在资料表中", state.AgentID)))
 		}
 	case EquippedStateUnequipped:
 		// No equipper to identify; the state itself is complete.
@@ -345,7 +354,7 @@ func OnlyEquippedStateUnavailable(validation Validation, issues []Issue) bool {
 		return false
 	}
 	for _, issue := range validation.Issues {
-		if issue.Code != CodeEquippedStateUnavailable {
+		if issue.Code != CodeEquippedStateUnavailable || issue.Message == legacyUnknownAgentMessage {
 			return false
 		}
 	}

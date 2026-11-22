@@ -577,6 +577,44 @@ func TestCoverageNeverClaimsCompleteWithoutVerifiedSort(t *testing.T) {
 	}
 }
 
+func TestExportCoverageUsesCanonicalPositionConclusions(t *testing.T) {
+	positions := make([]record.PositionConclusion, record.PositionCount)
+	for i := range positions {
+		positions[i] = record.PositionConclusion{Position: i + 1, Complete: true}
+	}
+	for _, tc := range []struct {
+		name     string
+		ledger   *record.PositionLedger
+		observed string
+		want     record.CoverageStatus
+	}{
+		{"typed ledger without observed scope", &record.PositionLedger{Sort: record.SortVerificationVerified, Positions: positions}, "", record.CoverageComplete},
+		{"typed ledger takes precedence", &record.PositionLedger{Sort: record.SortVerificationVerified, Positions: positions}, `{"sort":"unverified","positions":[{"position":1,"complete":false}]}`, record.CoverageComplete},
+		{"typed short ledger", &record.PositionLedger{Sort: record.SortVerificationVerified, Positions: positions[:1]}, `{"sort":"verified"}`, record.CoveragePartial},
+		{"legacy short ledger", nil, `{"sort":"verified","positions":[{"position":1,"complete":true}]}`, record.CoveragePartial},
+		{"legacy incomplete position", nil, `{"sort":"verified","positions":[{"position":1,"complete":true},{"position":2,"complete":true},{"position":3,"complete":true},{"position":4,"complete":true},{"position":5,"complete":true},{"position":6,"complete":false}]}`, record.CoveragePartial},
+		{"legacy malformed ledger", nil, `{"sort":"verified","positions":"unreadable"}`, record.CoveragePartial},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := exportTestRecovery()
+			shell := &rec.Checkpoint.Session
+			shell.Coverage.Status = record.CoverageComplete
+			shell.PositionLedger = tc.ledger
+			shell.ObservedScope = json.RawMessage(tc.observed)
+			export, err := BuildUsableExport(rec)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if export.Summary.Coverage != tc.want || export.session.Coverage.Status != tc.want {
+				t.Fatalf("coverage = %s in summary, %s in export, want %s", export.Summary.Coverage, export.session.Coverage.Status, tc.want)
+			}
+			if got := historySessionSummary(record.RecordInfo{}, &rec.Checkpoint, "").Coverage; got != tc.want {
+				t.Fatalf("history coverage = %s, want export conclusion %s", got, tc.want)
+			}
+		})
+	}
+}
+
 // TestIncompletePositionKeepsAdmittedItemsExportable pins decision
 // §4.6/§9.4(a): a position marked incomplete by position-level degradation
 // keeps its already admitted items in the usable result. The public v2
@@ -764,5 +802,46 @@ func TestBuildUsableExportReclassifiesLegacyOptionalEquipped(t *testing.T) {
 	}
 	if export.Summary.Included != 0 || export.Summary.Excluded != 1 {
 		t.Fatalf("manual summary = %+v, want 0 included / 1 excluded", export.Summary)
+	}
+}
+
+func TestBuildUsableExportDoesNotReclassifyUnknownAgent(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		agentID int
+		legacy  bool
+	}{
+		{name: "unlisted ID", agentID: 9999},
+		{name: "negative ID", agentID: -1},
+		{name: "saved with legacy issue code", agentID: 9999, legacy: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			structured := zzz.ToStructuredWithState(testDisc(31100, 4, "critRate", "24", zzz.UnitPercent), zzz.RarityS,
+				zzz.CaptureState{ManagementState: zzz.ManagementLocked, EquippedState: zzz.EquippedStateEquipped, AgentID: tc.agentID}, nil)
+			if tc.legacy {
+				structured.Validation = zzz.Validation{Status: zzz.ValidationUnavailable, Issues: []zzz.Issue{{
+					Field: "equipped", Code: zzz.CodeEquippedStateUnavailable, Severity: zzz.SeverityError,
+					Message: "已识别装备者身份，但该 ID 不在 catalog 中，无法完成校验",
+				}}}
+			}
+			quality := record.QualityNeedsReview
+			if autoAcceptable(&structured) {
+				quality = record.QualityAutoAccepted
+			}
+			item := exportItemWithStructured(t, 1, record.StatusProduced, quality, structured)
+			export, err := BuildUsableExport(exportTestRecovery(item))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if export.Summary.Included != 0 || export.Summary.Excluded != 1 || !itemPendingReview(item) {
+				t.Fatalf("unknown agent treated as settled: summary=%+v pending review=%v", export.Summary, itemPendingReview(item))
+			}
+			if structured.Validation.Status != zzz.ValidationUnavailable {
+				t.Fatalf("unknown agent validation = %+v, want unavailable", structured.Validation)
+			}
+			if !tc.legacy && (len(structured.Validation.Issues) != 1 || structured.Validation.Issues[0].Code != zzz.CodeUnknownAgent) {
+				t.Fatalf("unknown agent issues = %+v, want unknownAgent", structured.Validation.Issues)
+			}
+		})
 	}
 }

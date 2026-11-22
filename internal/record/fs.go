@@ -14,6 +14,8 @@ import (
 // path it builds comes from a validated root plus validated identifiers,
 // so implementations need no path sandboxing of their own.
 type FS interface {
+	// Mkdir creates dir only if its parent exists and dir does not.
+	Mkdir(dir string, perm fs.FileMode) error
 	// MkdirAll creates dir and its missing parents, like os.MkdirAll.
 	MkdirAll(dir string, perm fs.FileMode) error
 	// Stat reports the file info of path, like os.Stat.
@@ -58,6 +60,8 @@ type File interface {
 
 // osFS implements FS with the os package.
 type osFS struct{}
+
+func (osFS) Mkdir(dir string, perm fs.FileMode) error { return os.Mkdir(dir, perm) }
 
 func (osFS) MkdirAll(dir string, perm fs.FileMode) error { return os.MkdirAll(dir, perm) }
 

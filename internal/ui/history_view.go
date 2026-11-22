@@ -651,7 +651,9 @@ func (m *Model) historyNotices(c *ui.Context, t *ui.Theme) {
 		ui.Text(c, m.cleanupNotice)
 	}
 	if m.cleanup != nil && !m.cleanup.target.all() {
-		m.cleanupPromptArea(c, t)
+		ui.Column(c).FillWidth().Disabled(m.historyOpen != nil).DimDisabled(false).Children(func() {
+			m.cleanupPromptArea(c, t)
+		})
 	}
 }
 

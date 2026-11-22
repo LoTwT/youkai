@@ -66,12 +66,23 @@ func TestRelaunchReleasesDataRootBeforeRestart(t *testing.T) {
 	}
 	defer held.Close()
 	logDir := routeLogToDataRoot(t)
+	ocrErr := errors.New("injected OCR shutdown failure")
+	svc, err := app.NewService(app.Config{
+		Paths: app.Paths{Data: root}, DataLock: held,
+		ShutdownOCR: func() error { return ocrErr },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	handoff := newRelaunchHandoff(held)
+	handoff := newRelaunchHandoff(held, svc.SealWritesForExit)
 	release := handoff.release
 	handoff.release = func() error {
 		if log.Writer() != os.Stderr {
 			t.Error("the data-root occupancy was released before the diagnostic log was detached")
+		}
+		if err := svc.SaveSettings(app.Settings{}); !errors.Is(err, app.ErrServiceClosing) {
+			t.Errorf("service save at the data-root release = %v, want ErrServiceClosing", err)
 		}
 		return release()
 	}
@@ -95,6 +106,12 @@ func TestRelaunchReleasesDataRootBeforeRestart(t *testing.T) {
 	log.Print("youkai: logged before the restart handoff")
 	if got := readDiagnosticLog(t, logDir); !strings.Contains(got, "logged before the restart handoff") {
 		t.Fatalf("a line logged before the restart handoff did not reach the data root: %q", got)
+	}
+	if err := svc.Quit(); !errors.Is(err, ocrErr) {
+		t.Fatalf("Quit = %v, want the teardown failure", err)
+	}
+	if err := svc.SaveSettings(app.Settings{}); err != nil {
+		t.Fatalf("save after the failed exit = %v, want repair writes still open", err)
 	}
 
 	// The settled exit re-issues the restart; the quit is still on its
@@ -133,7 +150,7 @@ func TestPlainExitKeepsDataRootUntilProcessExit(t *testing.T) {
 		t.Fatalf("acquire the data-root occupancy: %v", err)
 	}
 	logDir := routeLogToDataRoot(t)
-	handoff := newRelaunchHandoff(held)
+	handoff := newRelaunchHandoff(held, func() error { return nil })
 	var relaunches, quits int
 	handoff.onExitSettled(func() { relaunches++ }, func() { quits++ })
 	if quits != 1 || relaunches != 0 {

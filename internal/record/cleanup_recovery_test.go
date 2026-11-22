@@ -140,6 +140,70 @@ func TestDeleteEvidenceKeepsTwoRecoverableGenerations(t *testing.T) {
 	}
 }
 
+func TestDeleteEvidenceKeepsRecoveredRevisionBase(t *testing.T) {
+	for _, scenario := range []string{"opened record", "cold store", "second write failed"} {
+		t.Run(scenario, func(t *testing.T) {
+			st, ffs, root := newFaultStore(t)
+			id := newRecord(t, st)
+			detail := writeEvidence(t, st, id, "detail-1", []byte("screenshot"))
+			cp := checkpointWithEvidence(detail)
+			cp.Items = append(cp.Items, ItemRecord{Sequence: 2, Status: StatusQueued, Quality: QualityNotEvaluated})
+			cp.Session.CapturedCount = 2
+			cp.Session.Coverage.Status = CoverageComplete
+			saveCheckpoint(t, st, id, cp)
+
+			if scenario == "cold store" {
+				var err error
+				st, err = Open(root)
+				if err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				// Review loads the recovery before attempting to save its edit.
+				rec := mustLoad(t, st, id)
+				if !slices.Equal(rec.Interrupted, []int64{2}) || !rec.CoverageDowngraded {
+					t.Fatalf("initial interruption marks missing: %+v", rec)
+				}
+			}
+			wantGeneration := int64(3)
+			var wantErr error
+			if scenario == "second write failed" {
+				ffs.inject(faultCreate, "3.json", errFaultCreate)
+				wantGeneration, wantErr = 2, errFaultCreate
+			}
+			removal, err := st.DeleteEvidence(id)
+			if !errors.Is(err, wantErr) || removal.Generation != wantGeneration {
+				t.Fatalf("DeleteEvidence = generation %d, %v, want %d, %v", removal.Generation, err, wantGeneration, wantErr)
+			}
+			ffs.clear()
+			raw, err := st.Peek(id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if raw.Items[1].Status != StatusQueued || raw.Session.Coverage.Status != CoverageComplete {
+				t.Fatalf("cleanup altered the stored result: status=%s, coverage=%s", raw.Items[1].Status, raw.Session.Coverage.Status)
+			}
+
+			// Do not call Load between deletion and the edit: it would
+			// repair the memo and mask loss of the recovery marks.
+			item, _, err := st.SaveRevision(id, 2, 0, ItemEdit{Data: json.RawMessage(`{"slot":5}`), Confirmed: true})
+			if err != nil {
+				t.Fatalf("backfill after DeleteEvidence: %v", err)
+			}
+			if item.Status != StatusUnprocessed || item.Reason != ReasonInterrupted || item.Revision != 1 || item.Quality != QualityHumanConfirmed {
+				t.Errorf("backfill lost the recovered item or edit: %+v", item)
+			}
+			raw, err = st.Peek(id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if raw.Session.Coverage.Status != CoveragePartial {
+				t.Errorf("saved coverage = %s, want partial", raw.Session.Coverage.Status)
+			}
+		})
+	}
+}
+
 // A retry in the same store must not let a stale validity verdict keep a
 // generation that no longer verifies: the damaged newest generation is
 // dropped from retention instead of replacing the only usable state.

@@ -167,7 +167,7 @@ func TestTraverseConfirmedSRequiresActiveFunnelAfterClose(t *testing.T) {
 		change:  func(m *collect.PageMatch) { m.Filter.State = collect.FilterClear },
 	}
 	h.start()
-	snap := h.endCompleted()
+	snap := h.endFailed(collect.CodePositionFailureLimit)
 	entry := h.requireIncompletePosition(1, "filter", collect.CodeNavigationMismatch)
 	if !entry.Range.SelectedS.EffectVerified || entry.Range.ClosedFunnel != collect.FilterClear ||
 		entry.Range.Verified || entry.Top || snap.Counts.Captured != 0 {

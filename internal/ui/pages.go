@@ -69,15 +69,12 @@ func (m *Model) viewPages(c *ui.Context) {
 		}
 		m.lastPage = page
 	}
-	m.registerPageShortcuts(c)
 	if page == pageScan {
 		// Entering the scan page applies the ten-second freshness rule; a
 		// focus or timer event also triggers it while the page stays open.
 		m.refreshReadinessIfStale()
 	}
-	if page == pageResults && m.recordTab == recordTabItems {
-		m.registerResultsShortcuts(c)
-	} else {
+	if page != pageResults || m.recordTab != recordTabItems {
 		// The pending segment's just-confirmed markers belong to the item
 		// browser's current visit; the summary and other destinations
 		// refresh it. The browse guard protects only that bar's reused
@@ -104,14 +101,20 @@ func (m *Model) viewPages(c *ui.Context) {
 			m.reviewNoticePage(c, t)
 		})
 	})
-	// The export modal and the unsaved-changes dialog both cover the
-	// whole window; only one of them is open at a time.
 	m.exportDialogView(c, t)
 	m.rescanDialogView(c, t)
 	m.slotMergeDialogView(c, t)
 	m.navigationPrompt(c, t)
 	m.trayHintDialogView(c, t)
 	m.exitDialogView(c, t)
+	// The page records text focus as it builds, and a click in the same
+	// frame can hand keyboard ownership over to a dialog.
+	if !m.pageShortcutsBlocked() {
+		m.registerPageShortcuts(c)
+		if m.displayPage() == pageResults && m.recordTab == recordTabItems {
+			m.registerResultsShortcuts(c)
+		}
+	}
 }
 
 // navRail is the three-destination rail: icon to the left of its label, the active
