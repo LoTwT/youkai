@@ -139,6 +139,27 @@ var storageCardPosition3B = glyphMask{rows: []string{
 	"..........................",
 }}
 
+var storageCardPosition3C = glyphMask{rows: []string{
+	"..........................",
+	".......##############.....",
+	".......###############....",
+	"......################....",
+	"..................#####...",
+	"..................#####...",
+	"..................#####...",
+	".........##############...",
+	".........##############...",
+	".........##############...",
+	".........###########.#....",
+	"..........................",
+	"..........................",
+	"..........................",
+	"..........................",
+	"..........................",
+	"..........................",
+	"..........................",
+}}
+
 var storageCardPosition4A = glyphMask{rows: []string{
 	"..........................",
 	"..........########........",
@@ -427,6 +448,53 @@ var storageCardPosition2D = glyphMask{rows: []string{
 	"..........................",
 }}
 
+// The R14 candidate frame 347 shifted the whole list by one pixel after
+// selecting R4C2. The row-2 slot-2 glyphs still visibly read 2, but their F1
+// gap to the slot-3 templates fell below the unchanged 0.04 margin. These
+// two slot-2 shapes and one slot-3 shape are the y=3 variants from that real
+// frame; only shape masks are retained, not the source crops or images.
+var storageCardPosition2E = glyphMask{rows: []string{
+	"..........................",
+	".......###########........",
+	"....###############.......",
+	"....################......",
+	"...............#####......",
+	"................####......",
+	"...............#####......",
+	"......##############......",
+	".....##############.......",
+	"....##############........",
+	".......##.#####...........",
+	"..........................",
+	"..........................",
+	"..........................",
+	"..........................",
+	"..........................",
+	"..........................",
+	"..........................",
+}}
+
+var storageCardPosition2F = glyphMask{rows: []string{
+	"..........................",
+	".......##########.........",
+	"...################.......",
+	"...################.......",
+	"...............#####......",
+	"...............#####......",
+	"...............#####......",
+	".....##############.......",
+	"....###############.......",
+	"...#.#############........",
+	"......##..#####...........",
+	"..........................",
+	"..........................",
+	"..........................",
+	"..........................",
+	"..........................",
+	"..........................",
+	"..........................",
+}}
+
 var storageCardPosition6C = glyphMask{rows: []string{
 	"..........................",
 	"....##############........",
@@ -483,6 +551,7 @@ var storageCardPosition2 = glyphSet{
 	masks: []glyphMask{
 		storageCardPosition2A, storageCardPosition2B,
 		storageCardPosition2C, storageCardPosition2D,
+		storageCardPosition2E, storageCardPosition2F,
 	},
 }
 
@@ -490,7 +559,7 @@ var storageCardPosition3 = glyphSet{
 	minBrightness: 180,
 	minScore:      0.88,
 	minMargin:     0.04,
-	masks:         []glyphMask{storageCardPosition3A, storageCardPosition3B},
+	masks:         []glyphMask{storageCardPosition3A, storageCardPosition3B, storageCardPosition3C},
 }
 
 var storageCardPosition4 = glyphSet{

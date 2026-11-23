@@ -130,6 +130,7 @@ go build -o winprobe.exe ./tools/winprobe
 | `go test -race -timeout 30m ./internal/game/zzz/collect` | 遍历与像素匹配的竞态检查；实测超过 Go 默认 10 分钟超时，必须显式放宽。 |
 | `YOUKAI_M2_SAMPLES=/tmp/m2-samples go test ./internal/game/zzz/collect` | 像素匹配器与单页遍历在完整未掩码源帧上的回放；样本目录不入库，未设置时自动跳过。 |
 | `YOUKAI_STORAGE_SAMPLES=<样本目录> go test ./internal/game/zzz/collect -run TestStoragePrivate -count=1 -v` | 驱动仓库 1080p 私有样本回放：页面/面板、36 个混排号位、单行滚轮、底部 1+8、六份详情号位，以及只改选中探针的同号位视口内对照。样本目录、整帧与附件包不入库；未设置时自动跳过。公开单测：`go test ./internal/game/zzz/collect -run 'TestStorage|TestPositionVerdict'`。 |
+| `YOUKAI_FRAME347_EVIDENCE=<解包目录> go test ./internal/game/zzz/collect -run 'TestStorageFrame347' -count=1 -v` | R15 的 338/340/347 私有候选帧回放：帧 347 必须 36/36 且 R2C8 为 known 3，2/3 半混合仍为 unknown/conflict。只读取外部 ROI 与 manifest，不把裁剪入库；未设置时自动跳过。 |
 | `YOUKAI_SCROLL_REPLAY="$HOME/Library/Logs/Youkai Dev" go test ./internal/game/zzz/collect -run TestScrollReplay` | 滚动判定的现场证据回放：把 2026-10-30 阶段 1 复测的两组失败序列（各 25 帧逐帧诊断）经真实 `scroll()` 走阶段 2 判定（应验证 4 行位移并停稳、写出 `scroll-ok` 帧时间诊断），并用旧判定复现现场失败（消融）；回放 2026-10-31 阶段 2 验收的两组新位置首滚 undecided 序列（选中框 4 行与 NCC 最佳行一致但差距不足，应由滑块行程佐证接受并在两次确认后停稳；撤掉滑块证据后仍判 undecided），并验证其中一组经完整 `scroll()` 提交、`scroll-ok` 清单记录 `selection+feature+scrollbar` 依据；另回放 2026-10-28 两组 before/after 锚点对。并列容差 ε=0.005、滑块行程与其他竞争行数可区分性由合成序列覆盖（不经本回放）。证据目录在仓库外，未设置时自动跳过。 |
 | `go tool mygo vet .` | 先运行 `go vet ./...`，再检查原生 UI 生命周期问题；参数是应用目录（项目根），不能写成 `./...`。 |
 | `go tool mygo dev` | 开发运行，编辑 Go 代码、配置或资源后自动重建重启；开发应用名为 `Youkai Dev`（标识 `com.lotwt.youkai.dev`，位于 `.mygo/dev`），与正式安装的数据和权限隔离。退出应用或 Ctrl+C 结束。 |

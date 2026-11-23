@@ -113,6 +113,18 @@ func TestPositionVerdictUnknownAndConflict(t *testing.T) {
 	}
 }
 
+// TestStorageCardPositionBlankStaysUnknown keeps the lower-bound gate on
+// the storage calibration: a blank badge window must not become a known
+// position just because the slot-2/slot-3 mask families grew.
+func TestStorageCardPositionBlankStaysUnknown(t *testing.T) {
+	layout := StorageLayout()
+	img := image.NewRGBA(image.Rect(0, 0, layout.CardPositionBadge.Dx(), layout.CardPositionBadge.Dy()))
+	got := (&PixelMatcher{}).positionVerdict(img, img.Bounds(), layout.CardPositions)
+	if got.known() {
+		t.Fatalf("blank storage badge = %+v, want unknown", got)
+	}
+}
+
 func TestStorageSlotLedgerMixedPositions(t *testing.T) {
 	const cells = storageRows * storageColumns
 	occupied := make([]bool, cells)
