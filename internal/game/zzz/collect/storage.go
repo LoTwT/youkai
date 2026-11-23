@@ -369,7 +369,9 @@ func StorageLayout() Layout {
 		// lock button are measured from the handoff.
 		DetailLines: []LineRegion{
 			{Role: LineName, Rect: image.Rect(1405, 272, 1835, 305)},
-			{Role: LineLevel, Rect: image.Rect(1448, 405, 1835, 435)},
+			// Stop at x=1645: x=1700 is the measured start of the
+			// equipped-slot "EMPTY" label, which must not enter level OCR.
+			{Role: LineLevel, Rect: image.Rect(1448, 405, 1645, 435)},
 			{Role: LineMain, Rect: image.Rect(1405, 495, 1835, 525)},
 			{Role: LineSub1, Rect: image.Rect(1405, 578, 1835, 600)},
 			{Role: LineSub2, Rect: image.Rect(1405, 628, 1835, 650)},
