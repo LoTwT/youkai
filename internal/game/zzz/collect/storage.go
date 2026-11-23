@@ -425,9 +425,12 @@ func storagePanelRangeCalibration() *panelRangeProbes {
 // StorageCalibration returns the drive-storage page's measured threshold
 // set. It reuses the normalized scroll/detail thresholds and replaces the
 // probe-count and scrollbar-end values that depend on this page's regions.
-// Unmarked/discarded cards, 3-substat discs, pink equipped avatars and
-// long-list scrollbar margins are not covered by the handoff; those
-// thresholds remain conservative or unverified and are called out in T5.
+// The 3-row and 4-row substat tiers include the 2026-11-23 field control: a
+// short fourth value ("9") measured 174 ink pixels in the value column, a
+// three-row set-effect row measured 0, and a normal four-row row measured
+// 572. Unmarked/discarded cards, pink equipped avatars and long-list
+// scrollbar margins are not covered by the handoff; those thresholds remain
+// conservative or unverified and are called out in T5.
 func StorageCalibration() Calibration {
 	c := ReferenceCalibration()
 	c.BarEmptyMax = 40
@@ -437,7 +440,9 @@ func StorageCalibration() Calibration {
 	c.DetailSameMax = 2.0
 	c.DetailDifferentMin = 4.0
 	c.InkThreshold = 60
-	c.Substat4InkMin = 200
+	// Keep the 3/4 boundary below the 174-pixel short fourth value while
+	// leaving 61–99 as unknown so a partial/animation frame still stops.
+	c.Substat4InkMin = 100
 	c.Substat3InkMax = 60
 	c.DetailPopulatedInk = 2000
 	c.QualityGoldMin = 250
