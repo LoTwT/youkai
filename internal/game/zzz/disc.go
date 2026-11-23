@@ -350,7 +350,10 @@ func splitNameLine(text string) (name string, slot int, ok bool) {
 }
 
 // splitLevelLine splits the level line ("等级15/15") into the level and
-// the denominator, both non-negative decimals without leading zeros.
+// the denominator. The Windows independent warehouse renders level zero as
+// "等级00/15"; that exact two-zero numerator is the only accepted
+// leading-zero form. Other 01-09 forms, extra zero padding and a padded
+// denominator remain unparsed until a real sample supports them.
 func splitLevelLine(text string) (level, denominator int, ok bool) {
 	line := strings.TrimSpace(text)
 	rest, found := strings.CutPrefix(line, "等级")
@@ -359,7 +362,8 @@ func splitLevelLine(text string) (level, denominator int, ok bool) {
 	}
 	num, denom, found := strings.Cut(rest, "/")
 	if !found || !isDigits(num) || !isDigits(denom) ||
-		(len(num) > 1 && num[0] == '0') || (len(denom) > 1 && denom[0] == '0') {
+		(len(num) > 1 && num[0] == '0' && num != "00") ||
+		(len(denom) > 1 && denom[0] == '0') {
 		return 0, 0, false
 	}
 	level, err1 := strconv.Atoi(num)
