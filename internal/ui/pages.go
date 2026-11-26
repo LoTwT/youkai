@@ -124,12 +124,22 @@ func (m *Model) viewPages(c *ui.Context) {
 // and Enter visits them (design 09 §4.4).
 func (m *Model) navRail(c *ui.Context, t *ui.Theme, tok *Tokens) {
 	page := m.displayPage()
-	ui.Column(c).Width(m.railWidth()).Shrink(0).FillHeight().Background(tok.SurfaceContent).
-		Padding(16, 12).Gap(8).Children(func() {
-		if m.cfg.AppIcon != nil {
-			ui.Image(c, m.cfg.AppIcon).Size(32, 32).Fit(ui.Contain).AlignSelf(ui.Center)
-		}
-		ui.Box(c).Height(16)
+	railWidth := m.railWidth()
+	const railInset, brandIconSize, brandGap = 12, 32, 8
+	ui.Column(c).Width(railWidth).Shrink(0).FillHeight().Background(tok.SurfaceContent).
+		Padding(m.pagePadding(), railInset, 16).Gap(pageHeaderGap).Children(func() {
+		ui.Row(c).Height(pageHeaderMinHeight(t)).Shrink(0).Gap(brandGap).AlignItems(ui.Center).Children(func() {
+			wordmarkWidth := railWidth - 2*railInset
+			if m.cfg.AppIcon != nil {
+				ui.Image(c, m.cfg.AppIcon).Size(brandIconSize, brandIconSize).Fit(ui.Contain).Shrink(0)
+				wordmarkWidth -= brandIconSize + brandGap
+			}
+			wordmark := ui.Span{Text: "Youkai", Size: t.FontSize * 20 / 14, Weight: 600}
+			if width, _ := c.MeasureText(0, wordmark); width > wordmarkWidth {
+				wordmark.Size *= wordmarkWidth / width
+			}
+			ui.Text(c, wordmark.Text).FontSize(wordmark.Size).FontWeight(wordmark.Weight).SingleLine()
+		})
 		ui.Column(c).Grow(1).FillWidth().Gap(8).FocusGroup(ui.Vertical).Children(func() {
 			m.navRailItem(c, t, tok, "扫描", scanIcon, page == pageScan, false, m.showScanDestination)
 			m.navRailItem(c, t, tok, "记录", recordsIcon, page == pageResults || page == pageHistory, false, m.showRecordsDestination)
@@ -228,18 +238,20 @@ func (m *Model) pageBody(c *ui.Context, t *ui.Theme, tok *Tokens) {
 	case pageResults:
 		m.recordWorkspace(c, t)
 	case pageHistory:
-		ui.Column(c).Grow(1).FillHeight().MinHeight(0).Padding(m.pagePadding(), m.pagePadding(), m.pagePadding(), m.pageLeftPadding()).Gap(16).Children(func() { m.historyPage(c, t) })
+		ui.Column(c).Grow(1).FillHeight().MinHeight(0).Padding(m.pagePadding(), m.pagePadding(), m.pagePadding(), m.pageLeftPadding()).Gap(pageHeaderGap).Children(func() { m.historyPage(c, t) })
 	case pageSettings:
-		ui.Column(c).Grow(1).FillHeight().MinHeight(0).Padding(m.pagePadding(), m.pagePadding(), m.pagePadding(), m.pageLeftPadding()).Gap(16).Children(func() {
+		ui.Column(c).Grow(1).FillHeight().MinHeight(0).Padding(m.pagePadding(), m.pagePadding(), m.pagePadding(), m.pageLeftPadding()).Gap(pageHeaderGap).Children(func() {
 			pageHeader(c).Children(func() { pageTitle(c, "设置") })
 			m.settingsPage(c, t)
 		})
 	default:
-		ui.Column(c).Grow(1).FillHeight().MinHeight(0).Padding(m.pagePadding(), m.pagePadding(), m.pagePadding(), m.pageLeftPadding()).Gap(16).Children(func() {
+		ui.Column(c).Grow(1).FillHeight().MinHeight(0).Padding(m.pagePadding(), m.pagePadding(), m.pagePadding(), m.pageLeftPadding()).Gap(pageHeaderGap).Children(func() {
 			m.scanHeader(c, t)
 			contentPanel(c, tok).Children(func() {
-				ui.Scroll(c).Grow(1).MinHeight(0).Children(func() {
-					ui.Column(c).Padding(panelInset).Gap(16).Children(func() {
+				// Auto margins center short content. The scroll view shrinks when
+				// the checklist needs more space than the panel can provide.
+				ui.Scroll(c).Shrink(1).MinHeight(0).FillWidth().Margin(ui.Auto, 0).Children(func() {
+					ui.Column(c).FillWidth().Padding(panelInset).Gap(16).Children(func() {
 						m.scanArea(c, t, tok)
 						if m.exitState != exitIdle {
 							m.exitArea(c, t)
@@ -258,11 +270,11 @@ func (m *Model) pageBody(c *ui.Context, t *ui.Theme, tok *Tokens) {
 // instead of a fixed one so the minimum window keeps every line and the
 // button visible (08 §1.3; v5 removes the estimate).
 func (m *Model) pageActions(c *ui.Context, t *ui.Theme, tok *Tokens) {
-	if m.displayPage() != pageScan {
+	if m.displayPage() != pageScan || (m.snap.Busy && m.snap.Scan.Phase == scan.PhaseFinalizing) {
 		return
 	}
 	ui.Divider(c)
-	ui.Row(c).Background(tok.SurfaceHeader).Padding(24).
+	ui.Row(c).Background(tok.SurfaceHeader).Padding(panelInset).
 		AlignItems(ui.Center).Gap(t.Space(3)).Children(func() {
 		ui.Column(c).Grow(1).Basis(0).MinWidth(0).Gap(t.Space(0.5)).Children(func() {
 			if !m.snap.Busy || m.snap.Scan.Phase == scan.PhasePreparing {
@@ -274,7 +286,7 @@ func (m *Model) pageActions(c *ui.Context, t *ui.Theme, tok *Tokens) {
 			}
 		})
 		if m.snap.Busy || m.startReqID != "" {
-			button := button(c, "停止扫描").TextColor(t.Danger).Bind(&m.scanActionRef)
+			button := primaryButton(c, "停止扫描").Bind(&m.scanActionRef)
 			if button.Clicked() {
 				m.Stop()
 			}

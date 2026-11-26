@@ -654,8 +654,8 @@ func TestRescanSummaryRefusesToShowADamagedRangeAsFull(t *testing.T) {
 	m, q, tt, _ := openSummaryRecord(t, rec, Config{DirectExportSaver: &fakeDirectExportSaver{}}, 1180, 900)
 	settle(t, m, q, tt)
 	if !tt.HasText("范围记录无效，无法确认覆盖范围") ||
-		!tt.HasText("覆盖范围：范围记录无效，无法确认是否只补扫了部分号位") ||
-		!tt.HasText("号位：范围记录无效，无法列出") {
+		!tt.HasText("补扫范围数据不完整；不能导出，也不能继续按该范围补扫。") ||
+		tt.HasText("覆盖：全部") {
 		t.Fatalf("summary treated a damaged range as a full scan: %q", tt.Texts())
 	}
 	if m.exportBuildErr == "" || !strings.Contains(strings.Join(tt.Texts(), "\n"), "导出尚未就绪") {
@@ -732,7 +732,7 @@ func TestViewRescanSummaryAndPreparedRange(t *testing.T) {
 
 	m.navigatePage(pageScan)
 	settle(t, m, q, tt)
-	const fullRange = "S 级 · 1–6 号位"
+	const fullRange = "计划范围 · S 级 · 1–6 号位"
 	if !tt.HasText(fullRange) {
 		t.Fatalf("the ordinary preparation page does not state the full range: %q", tt.Texts())
 	}
@@ -747,7 +747,7 @@ func TestViewRescanSummaryAndPreparedRange(t *testing.T) {
 			req := app.RescanRequest{SourceRecordID: "rec", Positions: tc.positions}
 			m.armRescan(req, "rec")
 			settle(t, m, q, tt)
-			if !tt.HasText("补扫准备：只扫描 "+tc.text) || !tt.HasText("S 级 · "+tc.text) || tt.HasText(fullRange) ||
+			if !tt.HasText("补扫准备 · S 级 · "+tc.text) || tt.HasText(fullRange) ||
 				!tt.HasText("开始后会新建一条独立记录；原记录、图片、修订和导出的文件都不会改变。") {
 				t.Fatalf("the preparation banner and checklist do not agree on %s: %q", tc.text, tt.Texts())
 			}
@@ -758,8 +758,7 @@ func TestViewRescanSummaryAndPreparedRange(t *testing.T) {
 				t.Fatal(err)
 			}
 			settle(t, m, q, tt)
-			if m.pendingRescan != nil || !tt.HasText(fullRange) || tt.HasText("S 级 · "+tc.text) ||
-				tt.HasText("补扫准备：只扫描 "+tc.text) {
+			if m.pendingRescan != nil || !tt.HasText(fullRange) || tt.HasText("补扫准备 · S 级 · "+tc.text) {
 				t.Fatalf("cancelling the rescan did not restore the full range: %q", tt.Texts())
 			}
 		})

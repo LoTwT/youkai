@@ -20,13 +20,18 @@ const (
 	controlGap        = 12
 	panelHeaderHeight = 40
 	pageHeaderHeight  = 48
+	pageHeaderGap     = 16
 )
 
 // pageHeader reserves the same title baseline and body start even when
 // trailing controls disappear. Its minimum grows with desktop text size.
 func pageHeader(c *ui.Context) ui.Element {
-	return ui.Row(c).MinHeight(max(pageHeaderHeight, c.Theme().FontSize*1.5+24)).
+	return ui.Row(c).MinHeight(pageHeaderMinHeight(c.Theme())).
 		Shrink(0).Gap(12).AlignItems(ui.Center)
+}
+
+func pageHeaderMinHeight(t *ui.Theme) float32 {
+	return max(pageHeaderHeight, t.FontSize*1.5+24)
 }
 
 func pageTitle(c *ui.Context, title string) ui.Element {

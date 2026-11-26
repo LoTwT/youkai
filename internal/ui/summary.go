@@ -83,6 +83,8 @@ func (m *Model) recordSummary(c *ui.Context, t *ui.Theme) {
 		return
 	}
 	conclusion := m.recordSummaryConclusion()
+	plan, _ := app.DeclaredScanPlan(m.rec.Shell.Scope)
+	showScope := m.hasMergedSlots() || plan.RescanOf != ""
 	ui.Column(c).Grow(1).MinHeight(0).Gap(24).Children(func() {
 		ui.Scroll(c).Grow(1).MinHeight(0).Children(func() {
 			ui.Column(c).Gap(24).Children(func() {
@@ -94,12 +96,11 @@ func (m *Model) recordSummary(c *ui.Context, t *ui.Theme) {
 					})
 					ui.Divider(c)
 					m.summaryCountsGrid(c, t)
-					if m.recordCoverage() == record.CoveragePartial {
-						ui.Text(c, m.summaryCoverageLine()).TextColor(t.Warning)
-						m.summaryPositions(c, t)
+					if showScope {
+						ui.Text(c, m.summaryCoverageLine()).TextColor(m.effectiveTokens().TextSecondary)
 					}
 				})
-				m.summaryDetailsArea(c, t)
+				m.summaryDetailsArea(c, t, !showScope)
 			})
 		})
 		m.summaryActions(c, t, conclusion)
@@ -337,8 +338,8 @@ func (m *Model) summaryCountsGrid(c *ui.Context, t *ui.Theme) {
 }
 
 // summaryCountCellWidth gives every cell the same share of the summary's
-// inner width, so the four cells read as one row of equal cards (or two by
-// two in the compact layout). The inner width is the window minus the rail,
+// inner width, so the four cells align on one row (or two by two in the
+// compact layout). The inner width is the window minus the rail,
 // its divider and the summary padding.
 func (m *Model) summaryCountCellWidth(t *ui.Theme, columns int) float32 {
 	inner := float32(m.contentWidth) - m.railWidth() - m.pageLeftPadding() - m.pagePadding() - 64
@@ -360,23 +361,22 @@ func (m *Model) summaryCountCell(c *ui.Context, t *ui.Theme, width float32, labe
 	if count > 0 {
 		display += " ›"
 	}
-	border, borderWidth := tok.BorderDefault, float32(1)
-	if attention {
-		border, borderWidth = tok.BorderStrong, 2
-	}
-	background := tok.SurfaceCard
-	if class == app.ItemClassWarning {
-		background = tok.WarningSoft
-	} else if class == app.ItemClassPassed {
-		background = tok.SuccessSoft
-	}
 	cell := ui.ButtonBase(c).Label(fmt.Sprintf("%s，%s 件", label, formatCount(count))).
-		Width(width).MinHeight(max(100, t.FontSize*4+32)).Padding(16).
-		Background(background).Border(borderWidth, border).Radius(controlRadius)
+		Width(width).MinHeight(max(72, t.FontSize*3+24)).Padding(8, 16).
+		Background(ui.Transparent).Radius(controlRadius)
+	switch {
+	case cell.Pressed():
+		cell.Background(tok.SurfacePressed)
+	case cell.Hovered():
+		cell.Background(tok.SurfaceHover)
+	}
 	cell.Children(func() {
-		ui.Column(c).FillWidth().AlignItems(ui.Start).Gap(t.Space(0.5)).Children(func() {
+		ui.Column(c).FillWidth().AlignItems(ui.Start).Gap(4).Children(func() {
 			ui.Text(c, formatCount(count)).FontSize(t.FontSize * 2).FontWeight(700).TextColor(summaryClassColor(tok, class))
-			ui.Text(c, display).TextColor(tok.TextMuted).FontSize(t.FontSize * 0.9)
+			text := ui.Text(c, display).TextColor(tok.TextSecondary)
+			if attention {
+				text.FontWeight(600).TextColor(tok.TextPrimary)
+			}
 		})
 	})
 	if cell.Clicked() {
@@ -384,9 +384,7 @@ func (m *Model) summaryCountCell(c *ui.Context, t *ui.Theme, width float32, labe
 	}
 }
 
-// summaryCellAttention marks the classes that still need a person (待校对
-// and 待补录) with the stronger border from wireframe 05, so the distinction
-// does not rely on color alone.
+// summaryCellAttention emphasizes nonempty classes that need user action.
 func (m *Model) summaryCellAttention(class app.ItemClass, counts app.ItemClassCounts) bool {
 	switch class {
 	case app.ItemClassPendingReview:
@@ -401,12 +399,14 @@ func (m *Model) summaryCellAttention(class app.ItemClass, counts app.ItemClassCo
 // summaryDetailsArea is the collapsed "详情" disclosure: coverage and
 // position conclusions, count breakdown, session ending, duration,
 // screenshot footprint and management entry, and the fault diagnostics.
-func (m *Model) summaryDetailsArea(c *ui.Context, t *ui.Theme) {
+func (m *Model) summaryDetailsArea(c *ui.Context, t *ui.Theme, showCoverage bool) {
 	tok := m.effectiveTokens()
 	panel(c, tok).Padding(24).Children(func() {
 		ui.Collapsible(c, "详情", &m.summaryDetailsOpen, func() {
 			ui.Column(c).Gap(t.Space(1)).Padding(t.Space(1), t.Space(0.5)).Children(func() {
-				ui.Text(c, m.summaryCoverageLine()).TextColor(tok.TextSecondary)
+				if showCoverage {
+					ui.Text(c, m.summaryCoverageLine()).TextColor(tok.TextSecondary)
+				}
 				m.summaryPositions(c, t)
 				ui.Text(c, m.summaryCountLine()).TextColor(tok.TextSecondary)
 				ui.Text(c, m.summaryTerminationLine()).TextColor(tok.TextSecondary)
@@ -468,7 +468,7 @@ func (m *Model) summaryPositions(c *ui.Context, t *ui.Theme) {
 			}
 		}
 		outcomes = filtered
-		ui.Text(c, "范围：补扫 "+summaryPositionRanges(plan.Positions)+" 号位 · 来源 "+plan.RescanOf).
+		ui.Text(c, "来源记录："+plan.RescanOf).
 			TextColor(tok.TextSecondary).FontSize(t.FontSize * 0.92)
 	}
 	if !known {
@@ -1020,38 +1020,23 @@ func summaryCompletePendingTitle(counts app.ItemClassCounts) string {
 	}
 }
 
-// partialCoverageWording names the slots that did not complete and, when
-// known, the unverified sort. The incomplete slots and their reasons stay
-// under the title (08 §2.1, wireframe 06).
+// partialCoverageWording summarizes the ending; the details list the slot
+// outcomes and causes.
 func partialCoverageWording(in recordConclusionInput) summaryWording {
-	title, notes := partialCoverageTitleAndNotes(in)
-	wording := summaryWording{Title: title, Notes: notes}
+	wording := summaryWording{Title: partialCoverageTitle(in)}
 	if in.Rescan {
 		wording.Supplement = rescanWordingSupplement
 	}
 	return wording
 }
 
-// partialCoverageTitleAndNotes builds "没有扫全：3 号位、5 号位不完整" plus
-// "；排序未验证" when the sort was known and not verified. A record whose
-// slots cannot be listed says "覆盖不完整" instead of inventing names. It
-// never says "排序不一致".
-func partialCoverageTitleAndNotes(in recordConclusionInput) (string, []string) {
-	outcomes := plannedPositionOutcomes(in)
+func partialCoverageTitle(in recordConclusionInput) string {
 	var incomplete []int
-	var notes []string
-	complete := 0
 	if in.PositionOutcomesKnown {
-		for _, outcome := range outcomes {
-			if outcome.State == app.PositionOutcomeComplete {
-				complete++
-				continue
+		for _, outcome := range plannedPositionOutcomes(in) {
+			if outcome.State != app.PositionOutcomeComplete {
+				incomplete = append(incomplete, outcome.Position)
 			}
-			incomplete = append(incomplete, outcome.Position)
-			notes = append(notes, summaryPositionText(outcome))
-		}
-		if len(incomplete) > 0 && complete > 0 {
-			notes = append(notes, fmt.Sprintf("其余 %d 个号位完整", complete))
 		}
 	}
 	title := "没有扫全：覆盖不完整"
@@ -1070,7 +1055,7 @@ func partialCoverageTitleAndNotes(in recordConclusionInput) (string, []string) {
 		default:
 			title = "补扫完成，覆盖：部分"
 		}
-	} else if len(incomplete) > 0 {
+	} else if len(incomplete) > 0 && len(incomplete) < record.PositionCount {
 		names := make([]string, len(incomplete))
 		for i, position := range incomplete {
 			names[i] = fmt.Sprintf("%d 号位", position)
@@ -1079,35 +1064,22 @@ func partialCoverageTitleAndNotes(in recordConclusionInput) (string, []string) {
 	}
 	if in.SortKnown && in.Sort != record.SortVerificationVerified {
 		switch {
-		case len(incomplete) > 0 || in.Rescan:
+		case (len(incomplete) > 0 && len(incomplete) < record.PositionCount) || in.Rescan:
 			title += "；排序未验证"
 		default:
 			title = "没有扫全：排序未验证"
 		}
 	}
-	return title, notes
+	return title
 }
 
-// manualStopWording is the user-stopped ending. The count is the number of
-// slots the traversal completed, not the slots it tried; a record without a
-// position ledger omits the number rather than claiming zero.
 func manualStopWording(in recordConclusionInput) summaryWording {
 	title := "已手动停止"
 	if in.Rescan {
 		title = "补扫已停止"
 	}
-	if in.PositionOutcomesKnown {
-		complete := 0
-		for _, outcome := range plannedPositionOutcomes(in) {
-			if outcome.State == app.PositionOutcomeComplete {
-				complete++
-			}
-		}
-		if in.Rescan {
-			title = fmt.Sprintf("补扫已停止，扫描了 %d 个号位", complete)
-		} else {
-			title = fmt.Sprintf("已手动停止，扫描了 %d 个号位", complete)
-		}
+	if in.CapturedCount > 0 {
+		title += " · 已保存 " + formatCount(in.CapturedCount) + " 件"
 	}
 	wording := summaryWording{Title: title}
 	if in.Rescan {
@@ -1145,40 +1117,11 @@ func faultWording(in recordConclusionInput) summaryWording {
 	return summaryWording{Title: title, Supplement: supplement, Notes: notes}
 }
 
-// summarySavedLine states how much a faulted record saved and which slots
-// the saved result covers, using the same position expansion as the details.
 func summarySavedLine(in recordConclusionInput) string {
 	if in.CapturedCount == 0 {
 		return ""
 	}
-	saved := "已保存：" + formatCount(in.CapturedCount) + " 件"
-	if !in.PositionOutcomesKnown {
-		return saved
-	}
-	var complete, partial []int
-	for _, outcome := range plannedPositionOutcomes(in) {
-		switch outcome.State {
-		case app.PositionOutcomeComplete:
-			complete = append(complete, outcome.Position)
-		case app.PositionOutcomeDegraded, app.PositionOutcomeTruncated:
-			partial = append(partial, outcome.Position)
-		}
-	}
-	var parts []string
-	if len(complete) > 0 {
-		parts = append(parts, summaryPositionRanges(complete)+" 号位完整")
-	}
-	if len(partial) > 0 {
-		names := make([]string, len(partial))
-		for i, position := range partial {
-			names[i] = fmt.Sprintf("%d", position)
-		}
-		parts = append(parts, strings.Join(names, "、")+" 号位部分")
-	}
-	if len(parts) > 0 {
-		saved += "（" + strings.Join(parts, "，") + "）"
-	}
-	return saved
+	return "已保存：" + formatCount(in.CapturedCount) + " 件"
 }
 
 // summaryPositionRanges compresses sorted positions into "1–3、5" form.
