@@ -18,10 +18,16 @@ func TestAppIconAppearsInRailAndTrayHint(t *testing.T) {
 	icon := image.NewRGBA(image.Rect(0, 0, 32, 32))
 	draw.Draw(icon, icon.Bounds(), image.NewUniform(ink), image.Point{}, draw.Src)
 	m, q := newTestModel(t, Config{Service: &fakeService{}, AppIcon: ui.NewBitmap(icon)})
-	tt := ui.NewTester(m.View, 1180, 760)
+	m.SetContentSize(960, 640)
+	tt := ui.NewTesterWith(m.View, 960, 640, ui.TesterOptions{Preferences: ui.Preferences{TextScale: 1.5, ReduceMotion: true}})
 	settle(t, m, q, tt)
 
-	if countColorInRect(tt.Image(), ink, image.Rect(0, 0, navRailWidth, 60)) < 512 {
+	brand, ok := tt.Find("Youkai")
+	if !ok || brand.X+brand.W > m.railWidth()-11 {
+		t.Fatalf("the Youkai wordmark does not fit in the navigation rail: %+v", brand)
+	}
+	logoArea := image.Rect(0, int(brand.Y)-12, int(brand.X), int(brand.Y+brand.H)+12)
+	if countColorInRect(tt.Image(), ink, logoArea) < 960 {
 		t.Error("the navigation rail does not display the configured app icon")
 	}
 	if _, ok := tt.Find("妖"); ok {
@@ -34,15 +40,14 @@ func TestAppIconAppearsInRailAndTrayHint(t *testing.T) {
 	if !ok {
 		t.Fatal("the tray hint illustration is missing")
 	}
-	row := image.Rect(int(label.X+label.W), int(label.Y)-4, 1180, int(label.Y+label.H)+4)
+	row := image.Rect(int(label.X+label.W), int(label.Y)-4, 960, int(label.Y+label.H)+4)
 	if countColorInRect(tt.Image(), ink, row) < 128 {
 		t.Error("the tray hint illustration does not display the configured app icon")
 	}
 }
 
-// TestNavRailIsFixedWidth checks the 64-DIP rail with its 52-DIP items at
-// the default and minimum window sizes: the three destinations exist, no
-// wide sidebar remains, and settings stays pinned to the bottom.
+// TestNavRailIsFixedWidth checks that the destinations fit the rail at
+// standard and compact widths and settings stays pinned to the bottom.
 func TestNavRailIsFixedWidth(t *testing.T) {
 	for _, tc := range []struct {
 		width, height int

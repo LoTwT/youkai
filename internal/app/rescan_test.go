@@ -423,8 +423,19 @@ func TestStoppedPartialRescanStaysPartialAndLeavesTheSource(t *testing.T) {
 		t.Fatalf("start rescan: %v", err)
 	}
 	waitSnapshot(t, svc, scan.PhaseCapturing, "rescan collecting")
+	progress := svc.Snapshot()
+	if !reflect.DeepEqual(progress.RescanPositions, []int{4}) {
+		t.Fatalf("active rescan range = %v, want [4]", progress.RescanPositions)
+	}
+	progress.RescanPositions[0] = 1
+	if got := svc.Snapshot().RescanPositions; !reflect.DeepEqual(got, []int{4}) {
+		t.Fatalf("mutating a snapshot changed the active range: %v", got)
+	}
 	svc.Stop()
 	waitWrapped(t, svc)
+	if got := svc.Snapshot().RescanPositions; len(got) != 0 {
+		t.Fatalf("the wrapped scan still reports an active range: %v", got)
+	}
 
 	rec, err := svc.LoadRecord(string(outcome.SessionID))
 	if err != nil {

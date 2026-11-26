@@ -517,7 +517,7 @@ func TestSettingsStorageFromPrepareCheck(t *testing.T) {
 	if tt.HasText("完成后返回准备检查") {
 		t.Fatal("the return promise outlived the return")
 	}
-	if !tt.HasText("全部满足") {
+	if !tt.HasText("可以开始 · 部分项目将在启动后检查") {
 		t.Fatalf("the prepare check did not refresh after cleanup: %q", tt.Texts())
 	}
 }

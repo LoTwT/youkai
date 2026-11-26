@@ -167,6 +167,7 @@ type quitAttempt struct {
 // kernel: its slow preparation runs without the service lock.
 type activeSession struct {
 	displayPosition int
+	rescanPositions []int
 	id              scan.ID
 	requestID       string
 	startedAt       time.Time
@@ -642,6 +643,9 @@ func (s *Service) Start(req StartRequest) (StartOutcome, error) {
 	a.kernel = kernel
 	a.deliverer = deliverer
 	a.scanLock = scanLock
+	if plan.RescanOf != "" {
+		a.rescanPositions = plan.Positions
+	}
 	if prev != nil {
 		prev.kernelSub.Close()
 	}
@@ -712,12 +716,8 @@ func (s *Service) snapshotLocked() Snapshot {
 	if a := s.active; a != nil {
 		snap.SessionID = a.id
 		snap.Busy = !a.wrapped
-		if a.kernel != nil {
-			snap.Scan = a.kernel.Snapshot()
-		} else {
-			// Accepted but not yet started: the prechecks (scan
-			// occupancy, recognizer resources, the record) run here.
-			snap.Scan = scan.Snapshot{SessionID: a.id, Revision: 1, Phase: scan.PhasePreparing}
+		if snap.Busy {
+			snap.RescanPositions = append([]int(nil), a.rescanPositions...)
 		}
 		if a.deliverer != nil {
 			st := a.deliverer.status()
@@ -727,6 +727,15 @@ func (s *Service) snapshotLocked() Snapshot {
 			if st.err != nil {
 				snap.SaveError = st.err.Error()
 			}
+		}
+		// Read the kernel after the deliverer so the captured count includes
+		// any admissions already present in the saved generation above.
+		if a.kernel != nil {
+			snap.Scan = a.kernel.Snapshot()
+		} else {
+			// Accepted but not yet started: the prechecks (scan
+			// occupancy, recognizer resources, the record) run here.
+			snap.Scan = scan.Snapshot{SessionID: a.id, Revision: 1, Phase: scan.PhasePreparing}
 		}
 	}
 	if a := s.active; a != nil && !a.wrapped && snap.Scan.Phase == scan.PhaseCapturing {
@@ -789,6 +798,8 @@ type Snapshot struct {
 	// DisplayPosition is ephemeral UI progress: 0 unknown, otherwise 1–6.
 	// It is deliberately absent from scan, records and export entities.
 	DisplayPosition int
+	// RescanPositions holds the accepted plan for an active rescan.
+	RescanPositions []int
 	// SessionID identifies the session this snapshot describes; empty
 	// when the service has never started one.
 	SessionID scan.ID
@@ -799,8 +810,8 @@ type Snapshot struct {
 	// Busy: the active slot is occupied; a start would not begin a new
 	// session now.
 	Busy bool
-	// SavedCount is the number of terminal records the newest saved
-	// checkpoint generation contains.
+	// SavedCount is the number of item records in the newest saved
+	// checkpoint generation, including any still being recognized.
 	SavedCount int
 	// SavePending: terminal content exists that no saved generation
 	// covers — a batch in flight, or a failed save awaiting retry.

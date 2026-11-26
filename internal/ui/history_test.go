@@ -793,7 +793,6 @@ func TestRecordConclusion(t *testing.T) {
 			summaryEyebrow: "正常结束",
 			text:           "没有扫全 · 2 个号位不完整",
 			summaryTitle:   "没有扫全：1 号位、2 号位不完整",
-			summaryNotes:   "其余 4 个号位完整",
 		},
 		{
 			name: "manual stop",
@@ -806,7 +805,7 @@ func TestRecordConclusion(t *testing.T) {
 			},
 			wantOutcome:  recordOutcomeCancelled,
 			text:         "手动停止 · 覆盖：部分",
-			summaryTitle: "已手动停止",
+			summaryTitle: "已手动停止 · 已保存 2 件",
 		},
 		{
 			name: "manual stop with complete coverage",
@@ -819,7 +818,7 @@ func TestRecordConclusion(t *testing.T) {
 			},
 			wantOutcome:  recordOutcomeCancelled,
 			text:         "手动停止 · 覆盖：全部",
-			summaryTitle: "已手动停止",
+			summaryTitle: "已手动停止 · 已保存 2 件",
 		},
 		{
 			name: "completed record without four-class counts",

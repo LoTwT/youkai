@@ -115,7 +115,6 @@ func TestRecordSummaryConclusionTable(t *testing.T) {
 			wantPrimary:    summaryActionExport,
 			wantPrimaryLbl: "导出",
 			wantSecondary:  []summaryActionKind{summaryActionRescan},
-			wantNotes:      "其余 4 个号位完整",
 		},
 		{
 			name: "partial coverage with unverified sort only",
@@ -127,10 +126,10 @@ func TestRecordSummaryConclusionTable(t *testing.T) {
 			wantSecondary:  []summaryActionKind{summaryActionRescan},
 		},
 		{
-			name: "manual stop counts completed positions",
+			name: "manual stop counts saved items",
 			view: summaryView(1, app.ItemClassCounts{Passed: 1},
 				shell(cancelled, record.CoveragePartial, record.SortVerificationUnverified, truncatedAt3)),
-			wantTitle:      "已手动停止，扫描了 2 个号位",
+			wantTitle:      "已手动停止 · 已保存 1 件",
 			wantPrimary:    summaryActionExport,
 			wantPrimaryLbl: "导出",
 			wantSecondary:  []summaryActionKind{summaryActionRescan},
@@ -144,7 +143,7 @@ func TestRecordSummaryConclusionTable(t *testing.T) {
 			wantPrimaryLbl: "修正后重新扫描",
 			wantSupplement: "怎么做：扫描时请不要切换应用。",
 			wantSecondary:  []summaryActionKind{summaryActionViewItems, summaryActionCopyDiagnostics},
-			wantNotes:      "已保存：1 件（1–2 号位完整，3 号位部分）",
+			wantNotes:      "已保存：1 件",
 		},
 		{
 			name: "fault with pending review offers review as secondary",
@@ -701,8 +700,8 @@ func TestViewSummaryCountClearsItemBrowserFilters(t *testing.T) {
 	}
 }
 
-// TestSummaryAttentionCell pins the wireframe 05 text-plus-border rule: only
-// the pending classes with a non-zero count get the strong border.
+// TestSummaryAttentionCell checks that only nonempty pending classes get
+// attention styling.
 func TestSummaryAttentionCell(t *testing.T) {
 	m := &Model{}
 	if !m.summaryCellAttention(app.ItemClassPendingReview, app.ItemClassCounts{PendingReview: 1}) {
@@ -872,6 +871,9 @@ func TestViewSummaryDetailsShowPositionConclusion(t *testing.T) {
 	)
 	m, q, tt, _ := openSummaryRecord(t, rec,
 		Config{DirectExportSaver: &fakeDirectExportSaver{}}, 1180, 900)
+	if tt.HasText("1 号位：完整") || tt.HasText("排序：未验证") {
+		t.Fatalf("slot outcomes were shown outside the details: %q", tt.Texts())
+	}
 
 	tt.Scroll(700, 400, 0, 500)
 	tt.Frame()
@@ -942,7 +944,7 @@ func TestViewSummaryEndings(t *testing.T) {
 			{Position: 4, Complete: true}, {Position: 5, Stage: "bottom"}, {Position: 6, Complete: true},
 		}, 1), "没有扫全：3 号位、5 号位不完整；排序未验证", "导出"},
 		{"manual stop", recordWith(cancelled, record.CoveragePartial, record.SortVerificationUnverified, truncatedAt3, 1),
-			"已手动停止，扫描了 2 个号位", "导出"},
+			"已手动停止 · 已保存 1 件", "导出"},
 		{"fault", recordWith(failed, record.CoveragePartial, record.SortVerificationUnverified, truncatedAt3, 1),
 			"扫描中途停止：游戏失去了焦点", "修正后重新扫描"},
 		{"zero items", recordWith(pageFault, record.CoverageUnknown, record.SortVerificationUnverified, nil, 0),
@@ -956,13 +958,20 @@ func TestViewSummaryEndings(t *testing.T) {
 				rec := tc.rec
 				rec.Checkpoint.Items[0].Quality = record.QualityNeedsReview
 			}
-			_, _, tt, _ := openSummaryRecord(t, tc.rec,
+			m, q, tt, _ := openSummaryRecord(t, tc.rec,
 				Config{DirectExportSaver: &fakeDirectExportSaver{}}, 1180, 900)
 			if !tt.HasText(tc.title) {
 				t.Fatalf("the summary title %q is missing: %q", tc.title, tt.Texts())
 			}
 			if !tt.HasText(tc.primary) {
 				t.Fatalf("the main action %q is missing: %q", tc.primary, tt.Texts())
+			}
+			if tc.name == "manual stop" || tc.name == "fault" {
+				m.summaryDetailsOpen = true
+				settle(t, m, q, tt)
+				if !tt.HasText("覆盖：部分") {
+					t.Fatalf("the record details do not state the partial coverage: %q", tt.Texts())
+				}
 			}
 		})
 	}

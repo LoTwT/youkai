@@ -194,7 +194,7 @@ func TestViewStartAndStopByPhase(t *testing.T) {
 	// Finalizing: the stop is over, recognition and saving remain.
 	applyAndSettle(t, m, q, tt, snap("s1", 3, true, scan.PhaseFinalizing,
 		scan.Counts{Captured: 5, Produced: 3, Queued: 2}, 3, true, ""))
-	if !tt.HasText("已停止操作游戏，正在识别剩余 2 件并保存") {
+	if !tt.HasText("正在识别剩余 2 件") || tt.HasText("停止扫描") {
 		t.Errorf("the finalizing stage does not show: %q", tt.Texts())
 	}
 

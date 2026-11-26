@@ -21,9 +21,10 @@ import (
 // pending-backfill class, and the final scope report supplies coverage and
 // the position ledger.
 type notificationServiceController struct {
-	items int
-	scope json.RawMessage
-	sink  func(json.RawMessage) error
+	items       int
+	scope       json.RawMessage
+	sink        func(json.RawMessage) error
+	collectGate <-chan struct{}
 }
 
 func (c *notificationServiceController) SetScopeSink(sink func(json.RawMessage) error) {
@@ -35,6 +36,13 @@ func (c *notificationServiceController) Prepare(context.Context, *scan.Controlle
 }
 
 func (c *notificationServiceController) Collect(ctx context.Context, h *scan.ControllerHandle) error {
+	if c.collectGate != nil {
+		select {
+		case <-c.collectGate:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 	for i := 0; i < c.items; i++ {
 		slot := h.Acquire(ctx)
 		if slot == nil {
@@ -232,15 +240,21 @@ func TestResultNotificationMatchesTheFinalRecord(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			collect := make(chan struct{})
 			source := &notificationServiceSource{controller: &notificationServiceController{
-				items: tc.items,
-				scope: tc.scope,
+				items:       tc.items,
+				scope:       tc.scope,
+				collectGate: collect,
 			}}
 			r := newNotificationServiceRig(t, source)
 			out, err := r.svc.Start(app.StartRequest{ID: "final-record"})
 			if err != nil {
 				t.Fatal(err)
 			}
+			// The input-stop notification requires an observed open-to-closed
+			// edge. An instant scan can otherwise coalesce both snapshots.
+			r.until("input permission", func() bool { return r.m.snap.Scan.InputPermitted })
+			close(collect)
 			got := r.waitNotifications(2)
 			if got[0].Segment != NotificationInputStopped || got[1].Segment != NotificationResult {
 				t.Fatalf("segments = %v / %v, want input stop then result", got[0].Segment, got[1].Segment)

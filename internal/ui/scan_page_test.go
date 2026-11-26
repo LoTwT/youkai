@@ -866,6 +866,36 @@ func TestScanStageActivationAndCountdown(t *testing.T) {
 	}
 }
 
+func TestScanReadinessUsesPanelWidth(t *testing.T) {
+	for _, width := range []int{960, 1440} {
+		t.Run(fmt.Sprint(width), func(t *testing.T) {
+			m, q := newTestModel(t, Config{Service: &fakeService{}, ScanSource: availableSource()})
+			m.SetContentSize(width, 900)
+			tt := ui.NewTester(m.View, width, 900)
+			settle(t, m, q, tt)
+			bounds := func(label string) ui.Rect {
+				t.Helper()
+				bounds, ok := tt.Find(label)
+				if !ok {
+					t.Fatalf("could not find %q", label)
+				}
+				return bounds
+			}
+			footerLeft := bounds("中途停止 " + shortcutStopScan).X
+			panelRight := float32(width) - m.pagePadding() - 1 - panelInset
+			if left := bounds("准备检查").X; left != footerLeft {
+				t.Errorf("checklist starts at %g, want panel inset at %g", left, footerLeft)
+			}
+			for _, label := range []string{"计划范围 · S 级 · 1–6 号位", "开始后检查"} {
+				b := bounds(label)
+				if right := b.X + b.W; right < panelRight-1 || right > panelRight+1 {
+					t.Errorf("%q ends at %g, want panel inset at %g", label, right, panelRight)
+				}
+			}
+		})
+	}
+}
+
 // TestScanPageActionBarFitsMinimumWindow measures the 960×640 contract:
 // with both the current reason and the last start failure on screen, both
 // texts and the start button are fully inside the window at 100%, 125% and
@@ -1392,12 +1422,37 @@ func TestScanStageCopy(t *testing.T) {
 		tt := ui.NewTester(m.View, 1020, 700)
 		settle(t, m, q, tt)
 		applyAndSettle(t, m, q, tt, snap("s1", 1, true, scan.PhaseCapturing,
-			scan.Counts{Captured: 12}, 0, true, ""))
-		if !(tt.HasText("正在扫描") && tt.HasText("12") && tt.HasText("件") && tt.HasText("当前号位")) {
+			scan.Counts{Captured: 12, Produced: 8, Queued: 3, Running: 1}, 7, true, ""))
+		if !(tt.HasText("正在扫描") && tt.HasText("12") && tt.HasText("件")) || tt.HasText("当前号位") || tt.HasText("补扫范围") {
 			t.Fatalf("the capturing stage does not show its count: %q", tt.Texts())
+		}
+		if !tt.HasText("已保存 7 件") || !tt.HasText("剩余识别 4 件") {
+			t.Fatalf("the capturing stage does not show persisted and pending counts: %q", tt.Texts())
 		}
 		if !tt.HasText("点击窗口本身也会让游戏失焦而停止") {
 			t.Fatalf("the capturing stage lost the safety note: %q", tt.Texts())
+		}
+		for _, tc := range []struct {
+			position int
+			rangeIDs []int
+			want     string
+		}{
+			{position: 4, want: "当前号位：4 号位"},
+			{rangeIDs: []int{1}, want: "补扫范围：1 号位"},
+			{rangeIDs: []int{2, 6}, want: "补扫范围：2、6 号位"},
+		} {
+			progress := snap("s1", m.snap.Revision+1, true, scan.PhaseCapturing, scan.Counts{Captured: 12}, 0, true, "")
+			progress.DisplayPosition = tc.position
+			progress.RescanPositions = tc.rangeIDs
+			if len(tc.rangeIDs) > 0 {
+				// The capturing snapshot can arrive before the Start reply
+				// that consumes the preparation banner.
+				m.armRescan(app.RescanRequest{SourceRecordID: "source", Positions: tc.rangeIDs}, "source")
+			}
+			applyAndSettle(t, m, q, tt, progress)
+			if !tt.HasText(tc.want) || (tc.position == 0 && tt.HasText("当前号位")) || tt.HasText("补扫准备") {
+				t.Fatalf("the capturing stage should show %q: %q", tc.want, tt.Texts())
+			}
 		}
 	})
 
@@ -1406,9 +1461,12 @@ func TestScanStageCopy(t *testing.T) {
 		m, q := newTestModel(t, Config{Service: svc})
 		tt := ui.NewTester(m.View, 1020, 700)
 		settle(t, m, q, tt)
-		applyAndSettle(t, m, q, tt, snap("s1", 1, true, scan.PhaseFinalizing,
-			scan.Counts{Queued: 3, Running: 1}, 0, true, ""))
-		if !tt.HasText("已停止操作游戏，正在识别剩余 4 件并保存") {
+		progress := snap("s1", 1, true, scan.PhaseFinalizing,
+			scan.Counts{Captured: 12, Produced: 8, Queued: 3, Running: 1}, 7, true, "")
+		progress.RescanPositions = []int{2, 6}
+		applyAndSettle(t, m, q, tt, progress)
+		if !tt.HasText("正在识别剩余 4 件") || !tt.HasText("已保存 7 件") ||
+			!tt.HasText("补扫范围：2、6 号位") || tt.HasText("停止扫描") {
 			t.Fatalf("the finalizing stage does not show the remaining count: %q", tt.Texts())
 		}
 	})
@@ -1420,7 +1478,7 @@ func TestScanStageCopy(t *testing.T) {
 		settle(t, m, q, tt)
 		applyAndSettle(t, m, q, tt, snap("s1", 1, true, scan.PhaseFinalizing,
 			scan.Counts{}, 0, true, ""))
-		if !tt.HasText("已停止操作游戏，正在保存结果") {
+		if !tt.HasText("正在保存结果") || tt.HasText("停止扫描") {
 			t.Fatalf("the saving stage does not show its copy: %q", tt.Texts())
 		}
 	})

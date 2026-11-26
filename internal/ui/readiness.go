@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/LoTwT/youkai/internal/app"
+	"github.com/LoTwT/youkai/internal/record"
 	"github.com/LoTwT/youkai/internal/scan"
 	"github.com/egoist/mygo/ui"
 )
@@ -632,7 +633,7 @@ func readinessRecognitionResourcesRow(check app.ReadinessCheck) readinessRow {
 	row := readinessRow{item: check.Item, title: "识别资源", status: readinessSatisfied}
 	switch check.Verdict {
 	case app.ReadinessSatisfied:
-		row.value = "安装完整"
+		row.value = "已找到识别资源"
 	case app.ReadinessUnsatisfied:
 		row.status = readinessUnsatisfied
 		row.value = "安装不完整 → 需要完整的识别资源"
@@ -959,7 +960,9 @@ func readinessItemForFault(code string) app.ReadinessItem {
 // the live stage while a session runs, and the save failure while a result
 // waits for its retry (08 §1.2).
 func (m *Model) scanArea(c *ui.Context, t *ui.Theme, tok *Tokens) {
-	m.rescanBanner(c, t, tok)
+	if !m.snap.Busy || !m.snap.Scan.InputOpened {
+		m.rescanBanner(c, t, tok)
+	}
 	switch {
 	case !m.source.Available:
 		m.noScanSourceArea(c, t)
@@ -973,10 +976,10 @@ func (m *Model) scanArea(c *ui.Context, t *ui.Theme, tok *Tokens) {
 }
 
 func (m *Model) noScanSourceArea(c *ui.Context, t *ui.Theme) {
-	ui.Column(c).Gap(t.Space(2)).Children(func() {
+	ui.Column(c).AlignItems(ui.Center).Gap(t.Space(2)).Children(func() {
 		ui.Text(c, "这个版本还不能扫描").FontSize(t.FontSize * 1.25).FontWeight(600)
 		if m.source.Reason != "" {
-			ui.Text(c, m.source.Reason).TextColor(t.TextMuted)
+			ui.Text(c, m.source.Reason).TextColor(t.TextMuted).TextAlign(ui.Center)
 		}
 		ui.Text(c, "记录和设置照常可用。").TextColor(t.TextMuted)
 	})
@@ -987,28 +990,32 @@ func (m *Model) noScanSourceArea(c *ui.Context, t *ui.Theme) {
 func (m *Model) readinessChecklist(c *ui.Context, t *ui.Theme, tok *Tokens) {
 	rows := m.readinessRows()
 	attention := m.readinessCount()
-	positions := "1–6"
-	if p := m.pendingRescan; p != nil {
-		positions = summaryPositionRanges(p.positions)
-	}
 	unknown := 0
+	afterStart := false
 	for _, row := range rows {
-		if row.status == readinessUnknown {
+		switch row.status {
+		case readinessUnknown:
 			unknown++
+		case readinessAfterStart:
+			afterStart = true
 		}
 	}
 	ui.Column(c).Gap(t.Space(2)).Children(func() {
-		ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
+		ui.Row(c).Gap(12).AlignItems(ui.Center).Wrap().Children(func() {
 			ui.Text(c, "准备检查").FontSize(t.FontSize * 16 / 14).FontWeight(600)
 			if attention > 0 {
 				ui.Textf(c, "! %d 项需要处理", attention).TextColor(t.Warning)
 			} else if m.readinessLoaded && unknown > 0 {
 				ui.Textf(c, "%d 项无法判断", unknown).TextColor(t.TextMuted)
+			} else if m.readinessLoaded && afterStart {
+				ui.Text(c, "可以开始 · 部分项目将在启动后检查").TextColor(tok.TextSecondary)
 			} else if m.readinessLoaded {
 				ui.Text(c, "全部满足 · 可以开始").TextColor(t.Success)
 			}
-			ui.Box(c).Grow(1)
-			ui.Text(c, "S 级 · "+positions+" 号位").TextColor(tok.TextSecondary).Background(tok.AccentSoft).Padding(4, 12).Radius(4)
+			if m.pendingRescan == nil {
+				ui.Box(c).Grow(1)
+				ui.Text(c, "计划范围 · S 级 · 1–6 号位").TextColor(tok.TextSecondary)
+			}
 		})
 		if m.startFailureMessage != "" {
 			ui.Text(c, m.startFailureMessage).TextColor(t.Danger).FontWeight(600)
@@ -1139,22 +1146,15 @@ func (m *Model) readinessTargetChoices(c *ui.Context, primary bool) {
 	}
 }
 
-// scanStageArea is 08 §1.2's stage block. The countdown is the page's own
-// calculation from the reported deadline; no per-tick revision is spent on
-// it. Counts are limited to captured items (R-11's first version).
+// scanStageArea displays the active phase and counts from its snapshot.
 func (m *Model) scanStageArea(c *ui.Context, t *ui.Theme) {
 	snap := m.snap.Scan
 	tok := m.effectiveTokens()
-	stage := ui.Column(c).Gap(24)
-	if snap.Phase == scan.PhaseCapturing || snap.Phase == scan.PhaseFinalizing {
-		width := min(float32(800), float32(m.contentWidth)-m.railWidth()-m.pageLeftPadding()-m.pagePadding()-48)
-		stage = stage.Width(width).AlignSelf(ui.Center).MinHeight(max(280, float32(m.contentHeight)-300)).Justify(ui.Center)
-	}
-	stage.Children(func() {
+	ui.Column(c).Gap(16).AlignItems(ui.Center).Children(func() {
 		switch snap.Phase {
 		case scan.PhasePreparing:
 			ui.Text(c, m.prepareCountdownText()).FontSize(t.FontSize * 2.6).FontWeight(600)
-			ui.Text(c, "请在倒计时结束前让游戏保持在前台")
+			ui.Text(c, "请在倒计时结束前让游戏保持在前台").TextAlign(ui.Center)
 			ui.Text(c, "正在等待游戏就绪").TextColor(t.TextMuted)
 			switch snap.Activation {
 			case scan.ActivationActivated:
@@ -1164,28 +1164,31 @@ func (m *Model) scanStageArea(c *ui.Context, t *ui.Theme) {
 			}
 			ui.Text(c, "请确保 youkai 没有盖住游戏窗口").TextColor(t.TextMuted)
 			m.schedulePrepareTick()
-		case scan.PhaseCapturing:
-			scanStageHeading(c, t, tok, "正在扫描")
-			ui.Row(c).Gap(24).Children(func() {
-				scanMetric(c, t, tok, "已采集", formatCount(int64(snap.Counts.Captured))+" 件")
-				position := "—"
-				if m.snap.DisplayPosition >= 1 && m.snap.DisplayPosition <= 6 {
-					position = fmt.Sprintf("%d 号位", m.snap.DisplayPosition)
-				}
-				scanMetric(c, t, tok, "当前号位", position)
-			})
-
-		case scan.PhaseFinalizing:
-			scanStageHeading(c, t, tok, "识别和保存")
+		case scan.PhaseCapturing, scan.PhaseFinalizing:
+			capturing := snap.Phase == scan.PhaseCapturing
 			remaining := snap.Counts.Queued + snap.Counts.Running
-			ui.Row(c).Gap(24).Children(func() {
-				scanMetric(c, t, tok, "已采集", formatCount(int64(snap.Counts.Captured))+" 件")
-				scanMetric(c, t, tok, "剩余识别", formatCount(int64(remaining))+" 件")
+			status := "正在扫描"
+			if !capturing {
+				status = "正在保存结果"
+				if remaining > 0 {
+					status = "正在识别剩余 " + formatCount(int64(remaining)) + " 件"
+				}
+			}
+			ui.Text(c, status).FontSize(t.FontSize * 24 / 14).FontWeight(700).TextAlign(ui.Center)
+			scanCapturedCount(c, t, tok, int64(snap.Counts.Captured))
+			ui.Row(c).Gap(24).Wrap().Justify(ui.Center).Children(func() {
+				ui.Textf(c, "已保存 %s 件", formatCount(int64(m.snap.SavedCount))).TextColor(tok.TextSecondary)
+				if capturing {
+					ui.Textf(c, "剩余识别 %s 件", formatCount(int64(remaining))).TextColor(tok.TextSecondary)
+				}
 			})
-			if remaining > 0 {
-				ui.Textf(c, "已停止操作游戏，正在识别剩余 %d 件并保存", remaining)
-			} else {
-				ui.Text(c, "已停止操作游戏，正在保存结果")
+			rangePositions := m.snap.RescanPositions
+			position := m.snap.DisplayPosition
+			if len(rangePositions) > 0 {
+				ui.Textf(c, "补扫范围：%s 号位", summaryPositionRanges(rangePositions)).TextColor(tok.TextSecondary).TextAlign(ui.Center)
+			}
+			if capturing && position >= 1 && position <= record.PositionCount {
+				ui.Textf(c, "当前号位：%d 号位", position).TextColor(tok.TextSecondary)
 			}
 		default:
 			ui.Text(c, "正在保存结果").FontSize(t.FontSize * 24 / 14).FontWeight(700)
@@ -1230,17 +1233,17 @@ func (m *Model) schedulePrepareTick() {
 // problem (08 §1.2): there is no new scan, update or exit until the retry
 // succeeds.
 func (m *Model) scanSaveFailureArea(c *ui.Context, t *ui.Theme) {
-	ui.Column(c).Gap(t.Space(2)).Children(func() {
+	ui.Column(c).AlignItems(ui.Center).Gap(t.Space(2)).Children(func() {
 		ui.Text(c, "扫描结果还没有保存").FontSize(t.FontSize * 1.35).FontWeight(600).TextColor(t.Danger)
-		ui.Text(c, m.snap.SaveError).TextColor(t.Danger)
+		ui.Text(c, m.snap.SaveError).TextColor(t.Danger).TextAlign(ui.Center)
 		if m.snap.SavedCount > 0 {
-			ui.Textf(c, "已保存 %d 条；其余已采集结果尚未保存。", m.snap.SavedCount).TextColor(t.TextMuted)
+			ui.Textf(c, "已保存 %d 条；其余已采集结果尚未保存。", m.snap.SavedCount).TextColor(t.TextMuted).TextAlign(ui.Center)
 		} else {
 			ui.Textf(c, "本次扫描已采集的 %d 件结果还没有写入本机。", m.snap.Scan.Counts.Captured).
-				TextColor(t.TextMuted)
+				TextColor(t.TextMuted).TextAlign(ui.Center)
 		}
-		ui.Text(c, "此时不能开始新扫描、不能安装更新，退出会被拒绝。").TextColor(t.TextMuted)
-		ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Children(func() {
+		ui.Text(c, "此时不能开始新扫描、不能安装更新，退出会被拒绝。").TextColor(t.TextMuted).TextAlign(ui.Center)
+		ui.Row(c).Gap(t.Space(2)).AlignItems(ui.Center).Wrap().Justify(ui.Center).Children(func() {
 			if !m.exitFailureDialogOpen && primaryButton(c, "重试保存").Clicked() {
 				m.RetrySave()
 			}
@@ -1276,27 +1279,12 @@ func (m *Model) scanHeader(c *ui.Context, t *ui.Theme) {
 	})
 }
 
-func scanMetric(c *ui.Context, t *ui.Theme, tok *Tokens, label, value string) {
-	panel(c, tok).Background(tok.SurfaceSunken).Grow(1).Basis(0).MinHeight(176).Padding(24).Gap(24).Children(func() {
-		ui.Text(c, label).TextColor(tok.TextSecondary)
-		parts := strings.Fields(value)
-		ui.Row(c).Gap(8).AlignItems(ui.End).Children(func() {
-			if len(parts) > 0 {
-				ui.Text(c, parts[0]).FontSize(t.FontSize * 48 / 14).FontWeight(700).TextColor(tok.AccentFG)
-			}
-			if len(parts) > 1 {
-				ui.Text(c, strings.Join(parts[1:], " "))
-			}
-		})
-	})
-}
-
-func scanStageHeading(c *ui.Context, t *ui.Theme, tok *Tokens, label string) {
-	ui.Row(c).Gap(24).AlignItems(ui.Center).Children(func() {
-		ui.Row(c).Size(80, 80).Radius(16).Background(tok.AccentSoft).Center().Children(func() { ui.Icon(c, scanIcon).Size(32, 32).TextColor(tok.AccentFG) })
-		ui.Column(c).Gap(8).Children(func() {
-			ui.Text(c, label).FontSize(t.FontSize * 32 / 14).FontWeight(700)
-			ui.Text(c, "绝区零 · 驱动盘").TextColor(tok.TextSecondary)
+func scanCapturedCount(c *ui.Context, t *ui.Theme, tok *Tokens, captured int64) {
+	ui.Column(c).Gap(4).AlignItems(ui.Center).Children(func() {
+		ui.Text(c, "已采集").TextColor(tok.TextSecondary)
+		ui.Row(c).Gap(8).AlignItems(ui.Baseline).Children(func() {
+			ui.Text(c, formatCount(captured)).FontSize(t.FontSize * 48 / 14).FontWeight(700).TextColor(tok.AccentFG)
+			ui.Text(c, "件")
 		})
 	})
 }

@@ -380,7 +380,7 @@ func (m *Model) rescanBanner(c *ui.Context, t *ui.Theme, tok *Tokens) {
 	ui.Column(c).Gap(8).Padding(16).Radius(controlRadius).
 		Background(tok.AccentSoft).Children(func() {
 		ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, fmt.Sprintf("补扫准备：只扫描 %s 号位", summaryPositionRanges(p.positions))).
+			ui.Text(c, fmt.Sprintf("补扫准备 · S 级 · %s 号位", summaryPositionRanges(p.positions))).
 				FontWeight(600)
 			ui.Box(c).Grow(1)
 			if !starting {

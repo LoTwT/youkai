@@ -454,7 +454,7 @@ func TestViewStartDiscoveryFailureKeepsCause(t *testing.T) {
 	if !tt.HasText("上次开始失败：" + targetDiscoveryFailedText) {
 		t.Fatalf("the discovery failure's cause is missing beside the start: %q", tt.Texts())
 	}
-	if !tt.HasText("全部满足") {
+	if !tt.HasText("可以开始 · 部分项目将在启动后检查") || tt.HasText("全部满足") {
 		t.Fatalf("the recovered checklist does not read as satisfied: %q", tt.Texts())
 	}
 }
