@@ -832,11 +832,12 @@ func (s *winSession) Frame(ctx context.Context, req FrameRequest) (Frame, error)
 		Rect:   image.Rect(0, 0, capture.Image.Width, capture.Image.Height),
 	}
 	return Frame{
-		ID:        seq,
-		Geometry:  GeometryVersion(capture.GeometryVersion),
-		Image:     img,
-		Content:   image.Rect(0, 0, capture.Image.Width, capture.Image.Height),
-		ArrivedAt: capture.CompletedAt,
+		ID:                    seq,
+		Geometry:              GeometryVersion(capture.GeometryVersion),
+		Image:                 img,
+		Content:               image.Rect(0, 0, capture.Image.Width, capture.Image.Height),
+		ArrivedAt:             capture.CompletedAt,
+		NativeCaptureDuration: capture.CompletedAt.Sub(capture.RequestedAt),
 	}, nil
 }
 
@@ -901,6 +902,8 @@ func (s *winSession) Dispatch(op InputOp) InputResult {
 		}
 		wop = windows.InputOp{Kind: windows.OpDrag, Point: at, To: to, Button: windows.MouseButtonLeft,
 			Steps: op.Steps, Duration: op.Duration}
+	case InputScroll:
+		wop = windows.InputOp{Kind: windows.OpScroll, Point: at, WheelSteps: op.WheelSteps}
 	default:
 		return deny(&Fault{Code: CodeInvalidOperation, Class: ClassPremise,
 			Message: fmt.Sprintf("unknown input kind %q", op.Kind), At: started})
@@ -939,7 +942,7 @@ func (s *winSession) Dispatch(op InputOp) InputResult {
 }
 
 // checkStepPremises re-verifies the live premises at the exact screen
-// point of the next interpolated drag move. The shared InputPrecheck
+// point of a wheel or the next interpolated drag move. The shared InputPrecheck
 // reads the tracked geometry and hit-tests the request's press point;
 // during a multi-batch drag both are stale — the watcher may not tick
 // between steps, and the point actually inserted changes every step.
@@ -970,16 +973,16 @@ func (s *winSession) checkStepPremises(req windows.InputRequest, at windows.Pixe
 	}
 	if !geo.Client.Contains(at) {
 		return &windows.PrecheckError{Code: windows.PrecheckPointOutside,
-			Detail: fmt.Sprintf("drag move point %v outside client rect %v", at, geo.Client)}
+			Detail: fmt.Sprintf("input point %v outside client rect %v", at, geo.Client)}
 	}
 	hit := s.adapter.natives.FG.HitWindow(at)
 	if hit == 0 {
 		return &windows.PrecheckError{Code: windows.PrecheckOccluded,
-			Detail: fmt.Sprintf("hit test at drag move point %v returned no window", at)}
+			Detail: fmt.Sprintf("hit test at input point %v returned no window", at)}
 	}
 	if root := s.adapter.natives.FG.RootOf(hit); root != s.locked.HWND {
 		return &windows.PrecheckError{Code: windows.PrecheckOccluded,
-			Detail: fmt.Sprintf("drag move point %v is covered by window %d (root %d), not target %d", at, hit, root, s.locked.HWND)}
+			Detail: fmt.Sprintf("input point %v is covered by window %d (root %d), not target %d", at, hit, root, s.locked.HWND)}
 	}
 	return nil
 }

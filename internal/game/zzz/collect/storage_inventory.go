@@ -1,0 +1,370 @@
+package collect
+
+import (
+	"context"
+	"fmt"
+	"log"
+
+	"github.com/LoTwT/youkai/internal/platform"
+	"github.com/LoTwT/youkai/internal/scan"
+)
+
+// storageWheelStep is the normal advance input for the three-row candidate:
+// three wheel detents. The matcher still verifies the actual 1/2/3-row
+// displacement from overlap, selection and thumb evidence; the detent count
+// is an input hypothesis, not evidence.
+const storageWheelStep = -3
+
+// storageBottomStep is the independent end recheck. It stays one detent so
+// the last full three-row advance gets the same small final probe as v8.
+const storageBottomStep = -1
+
+// storageTopStep is the return-to-top input. Three detents reduce the
+// number of bounded actions on a long list; the shared top loop still
+// proves the thumb reached and stayed at the top.
+const storageTopStep = 3
+
+func (run *inventoryRun) storageWheelOp(before platform.Frame, steps int) platform.InputOp {
+	return platform.InputOp{
+		Kind:       platform.InputScroll,
+		Geometry:   run.geo,
+		FrameID:    before.ID,
+		At:         run.inv.Layout.ScrollFrom,
+		WheelSteps: steps,
+	}
+}
+
+func (run *inventoryRun) scrollInputOp(before platform.Frame) platform.InputOp {
+	if run.inv.storagePage() {
+		return run.storageWheelOp(before, storageWheelStep)
+	}
+	return platform.InputOp{
+		Kind:     platform.InputDrag,
+		Geometry: run.geo,
+		FrameID:  before.ID,
+		At:       run.inv.Layout.ScrollFrom,
+		To:       run.inv.Layout.ScrollTo,
+		Steps:    10,
+		Duration: run.inv.Layout.ScrollDuration,
+	}
+}
+
+// bottomInputOp keeps the end recheck independent of the normal three-row
+// advance. Non-storage pages keep the existing drag operation.
+func (run *inventoryRun) bottomInputOp(before platform.Frame) platform.InputOp {
+	if run.inv.storagePage() {
+		return run.storageWheelOp(before, storageBottomStep)
+	}
+	return run.scrollInputOp(before)
+}
+
+func (run *inventoryRun) topInputOp(before platform.Frame) platform.InputOp {
+	if run.inv.storagePage() {
+		return run.storageWheelOp(before, storageTopStep)
+	}
+	return platform.InputOp{
+		Kind:     platform.InputDrag,
+		Geometry: run.geo,
+		FrameID:  before.ID,
+		At:       run.inv.Layout.TopFrom,
+		To:       run.inv.Layout.TopTo,
+		Steps:    10,
+		Duration: run.inv.Layout.TopDuration,
+	}
+}
+
+func (run *inventoryRun) requireCardPosition(m PageMatch, slot int, target string) error {
+	if !run.inv.storagePage() {
+		return nil
+	}
+	if m.List == nil || slot < 0 || slot >= len(m.List.Positions) {
+		return scan.NewFault(CodePositionUnreadable, fmt.Errorf(
+			"collect: %s: the drive-storage list has no card-slot evidence for the target", target))
+	}
+	verdict := m.List.Positions[slot]
+	switch {
+	case verdict.Conflict:
+		return scan.NewFault(CodePositionConflict, fmt.Errorf(
+			"collect: %s: the card's slot badge matches more than one calibrated digit: %s", target, m.Evidence))
+	case !verdict.known():
+		return scan.NewFault(CodePositionUnreadable, fmt.Errorf(
+			"collect: %s: the card's slot badge is unreadable: %s", target, m.Evidence))
+	case verdict.Position != run.position:
+		return scan.NewFault(CodePositionConflict, fmt.Errorf(
+			"collect: %s: the card badge says slot %d while the traversal selected slot %d: %s",
+			target, verdict.Position, run.position, m.Evidence))
+	}
+	return nil
+}
+
+func (run *inventoryRun) requireDetailPosition(m PageMatch, slot int, target string) error {
+	if !run.inv.storagePage() {
+		return nil
+	}
+	if m.List == nil || slot < 0 || slot >= len(m.List.Positions) || m.Detail == nil {
+		return scan.NewFault(CodeDetailUnresolved, fmt.Errorf(
+			"collect: %s: the settled frame has no detail-side slot evidence", target))
+	}
+	card := m.List.Positions[slot]
+	switch {
+	case card.Conflict || m.Detail.Position.Conflict:
+		return scan.NewFault(CodePositionConflict, fmt.Errorf(
+			"collect: %s: the card or detail slot badge is ambiguous: %s", target, m.Evidence))
+	case !card.known() || !m.Detail.Position.known():
+		return scan.NewFault(CodePositionUnreadable, fmt.Errorf(
+			"collect: %s: the card or detail slot badge is unreadable: %s", target, m.Evidence))
+	case card.Position != m.Detail.Position.Position:
+		return scan.NewFault(CodePositionConflict, fmt.Errorf(
+			"collect: %s: the card badge says slot %d while the detail badge says slot %d: %s",
+			target, card.Position, m.Detail.Position.Position, m.Evidence))
+	case m.Detail.Position.Position != run.position:
+		return scan.NewFault(CodePositionConflict, fmt.Errorf(
+			"collect: %s: the detail badge says slot %d while the traversal selected slot %d: %s",
+			target, m.Detail.Position.Position, run.position, m.Evidence))
+	}
+	return nil
+}
+
+// runStorage prepares the requested filters once and traverses one list.
+// A global failure keeps admitted items and marks the declared slots incomplete.
+func (run *inventoryRun) runStorage(ctx context.Context) (err error) {
+	run.abTiming = startStorageABTiming()
+	defer func() { run.abTiming.finish(err) }()
+	originalMatcher := run.inv.Matcher
+	defer func() { run.inv.Matcher = originalMatcher }()
+	err = run.prepareStorage(ctx)
+	if err == nil {
+		err = run.collectStorageList(ctx)
+	}
+	if err == nil {
+		run.storageComplete = true
+		run.storageBottomVerified = true
+	}
+	if a := run.abTiming; a != nil {
+		a.stage = "collector_finish"
+	}
+	run.recordStoragePositions(err)
+	return err
+}
+
+func (run *inventoryRun) prepareStorage(ctx context.Context) error {
+	run.inv.reportPosition(0)
+	run.position = 0
+	run.viewport = 0
+	run.ledger = nil
+	run.rangeProof = positionRange{}
+	run.filterActive = false
+	run.selectionTracked = false
+	run.allowInitial = true
+	run.lastScrollRows = 0
+	run.lastScrollEvidence = ""
+	run.lastDetailFrame = platform.Frame{}
+	run.positionVisitMs = 0
+	run.positionScrollMs = 0
+	run.positionBottomMs = 0
+	run.positionScrolls = 0
+
+	if err := run.establishList(ctx); err != nil {
+		return positionIncomplete("list", err)
+	}
+	if a := run.abTiming; a != nil {
+		a.stage = "prepare_range"
+	}
+	if err := run.resetFilters(ctx); err != nil {
+		return positionIncomplete("filter", err)
+	}
+	if a := run.abTiming; a != nil {
+		a.stage = "prepare_top"
+	}
+	var timing positionTiming
+	if err := run.topStep(ctx, &timing); err != nil {
+		return positionIncomplete("top", err)
+	}
+	run.storageTopVerified = true
+	run.ledger = run.newStorageLedger(run.listMatch, run.lastFrame.ID)
+	if err := run.checkLedgerViewport(run.listMatch); err != nil {
+		return positionIncomplete("top", err)
+	}
+	log.Printf("youkai: collect: drive storage prepared: S filter active, sort=%s, top confirmed, %d visible card(s)",
+		run.inv.scope.Sort, countOccupied(run.listMatch.List.Occupied))
+	return nil
+}
+
+func (run *inventoryRun) newStorageLedger(m PageMatch, frameID uint64) *slotLedger {
+	if m.List == nil {
+		return nil
+	}
+	positions := make([]int, len(m.List.Positions))
+	for i, p := range m.List.Positions {
+		if p.known() {
+			positions[i] = p.Position
+		}
+	}
+	return newSlotLedgerWithPositions(run.inv.Layout.Columns, m.List.Occupied, positions, frameID)
+}
+
+func (run *inventoryRun) collectStorageList(ctx context.Context) error {
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if !run.h.InputPermitted() {
+			return ctx.Err()
+		}
+		if !run.positionListVerdict(run.listMatch) {
+			return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
+				"collect: drive storage: the list no longer shows the calibrated 9x4 page: %s",
+				run.listMatch.Evidence))
+		}
+		i := run.nextSlot()
+		if i < 0 {
+			if run.listMatch.List.Bottom {
+				// Every bottom handoff still gets the independent one-detent
+				// recheck, including after a final three-row input that actually
+				// moved only one or two rows. The recheck must prove stillness;
+				// a moving or undecided recheck stops the position rather than
+				// treating the short step as complete end evidence.
+				if a := run.abTiming; a != nil {
+					a.stage = "bottom"
+					a.clickFinishedNS = 0
+				}
+				if err := run.confirmBottomStep(ctx); err != nil {
+					return positionIncomplete("bottom", err)
+				}
+				return nil
+			}
+			if a := run.abTiming; a != nil {
+				a.stage = "scroll"
+				a.clickFinishedNS = 0
+			}
+			if err := run.scroll(ctx); err != nil {
+				return positionIncomplete("scroll", err)
+			}
+			// After a scroll the selection may be an old card that has left
+			// the viewport while its detail stays on screen. No later
+			// initial read is allowed to inherit that detail.
+			run.allowInitial = false
+			continue
+		}
+		verdict := run.listMatch.List.Positions[i]
+		switch {
+		case verdict.Conflict:
+			return positionIncomplete("position", scan.NewFault(CodePositionConflict, fmt.Errorf(
+				"collect: drive storage: slot %d's card badge matches more than one digit; the mixed list has no verifiable slot mapping: %s",
+				i, run.listMatch.Evidence)))
+		case !verdict.known():
+			return positionIncomplete("position", scan.NewFault(CodePositionUnreadable, fmt.Errorf(
+				"collect: drive storage: slot %d's card badge is unreadable; refusing to click a card whose slot is unknown: %s",
+				i, run.listMatch.Evidence)))
+		}
+		if len(run.inv.positions) > 0 && !containsPosition(run.inv.positions, verdict.Position) {
+			run.ledger.visible()[i].State = slotOutOfScope
+			continue
+		}
+		run.position = verdict.Position
+		if err := run.visitSlot(ctx, i); err != nil {
+			return positionIncomplete("detail", err)
+		}
+	}
+}
+
+func (run *inventoryRun) topFlingBound() int {
+	if run.inv.storagePage() {
+		// A long mixed list can be more than a hundred rows; three detents
+		// per bounded action and a 64-action cap still leaves margin.
+		return 64
+	}
+	return maxTopFlings
+}
+
+func containsPosition(positions []int, want int) bool {
+	for _, p := range positions {
+		if p == want {
+			return true
+		}
+	}
+	return false
+}
+
+// recordStoragePositions maps the one storage pass to the existing
+// per-slot ledger. Only a globally complete pass proves every slot: the
+// mixed list is ordered by appearance, so stopping early leaves an unknown
+// remainder for every slot. A scoped pass records only its declared slots.
+func (run *inventoryRun) recordStoragePositions(err error) {
+	order, orderErr := run.inv.positionOrder()
+	if orderErr != nil {
+		return
+	}
+	incomplete, degraded := asPositionIncomplete(err)
+	stage, reasonCode, reason := "", "", ""
+	if degraded {
+		stage = incomplete.stage
+		reasonCode = faultDiagnosticCode(incomplete.err)
+		reason = incomplete.err.Error()
+	} else if err != nil {
+		stage = "storage"
+		reasonCode = faultDiagnosticCode(err)
+		reason = err.Error()
+	}
+	for _, pos := range order {
+		entry := positionScope{
+			Position:   pos,
+			Top:        run.storageTopVerified,
+			Bottom:     run.storageBottomVerified,
+			Range:      run.rangeProof,
+			Stage:      stage,
+			ReasonCode: reasonCode,
+			Reason:     reason,
+		}
+		if run.ledger != nil {
+			entry.Viewports = run.viewport + 1
+		}
+		entry.SlotLedger, entry.Visits = run.storagePositionLedger(pos)
+		// A per-slot ledger is complete only when the one pass also proved
+		// the filter range and both list ends. A scoped rescan can complete
+		// its declared positions this way, but updateCoverage still keeps the
+		// overall session partial because fullScope is false.
+		if run.storageComplete && run.storageTopVerified && run.storageBottomVerified &&
+			run.rangeProof.Verified && entry.SlotLedger != nil {
+			entry.Complete = true
+		}
+		if entry.Complete {
+			entry.Stage, entry.ReasonCode, entry.Reason = "", "", ""
+		}
+		run.inv.recordPosition(entry)
+	}
+	_ = run.inv.writeScope()
+}
+
+func (run *inventoryRun) storagePositionLedger(pos int) (*slotLedgerReport, int) {
+	if run.ledger == nil {
+		return nil, 0
+	}
+	report := &slotLedgerReport{Slots: []slotEntry{}}
+	visits := 0
+	for _, cell := range run.ledger.cells {
+		switch {
+		case cell.State == "":
+			// Preserve empty cells in the saved storage ledger. They are
+			// part of the viewport coverage proof and of merge decisions;
+			// the report-only state keeps them distinguishable from an
+			// item slot without changing the live ledger's zero state.
+			cell.State = slotEmpty
+			report.Slots = append(report.Slots, cell)
+			continue
+		case cell.State == slotOutOfScope:
+			// A scoped rescan must retain the cards it saw but did not
+			// click. Every declared position's report carries them so the
+			// saved evidence can show the approved range was respected.
+			report.Slots = append(report.Slots, cell)
+			continue
+		case cell.Position != pos:
+			continue
+		}
+		report.Slots = append(report.Slots, cell)
+		if cell.State == slotAdmitted || cell.State == slotNotS {
+			visits++
+		}
+	}
+	return report, visits
+}

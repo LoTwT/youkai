@@ -532,3 +532,29 @@ func TestProjectDiscObservationCarriesCaptureState(t *testing.T) {
 		t.Fatalf("crops = %d lines/%d context, want 1/2", len(got.Lines), len(got.Context))
 	}
 }
+
+func TestProjectDiscObservationGatesSlotCrossCheckToDriveStorage(t *testing.T) {
+	img := image.NewRGBA(image.Rect(0, 0, 1, 1))
+	base := collect.Observation{
+		Image:    img,
+		Content:  image.Rect(0, 0, 1, 1),
+		Position: 3,
+		Lines:    []collect.LineRegion{{Role: "name", Rect: image.Rect(0, 0, 1, 1)}},
+	}
+	base.Page = collect.PageWarehouse
+	got, err := ProjectDiscObservation(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.(Observation).Position != 0 {
+		t.Fatalf("warehouse projection position = %d, want 0", got.(Observation).Position)
+	}
+	base.Page = collect.PageDriveStorage
+	got, err = ProjectDiscObservation(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.(Observation).Position != 3 {
+		t.Fatalf("drive-storage projection position = %d, want 3", got.(Observation).Position)
+	}
+}

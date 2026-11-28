@@ -7,6 +7,7 @@ import (
 	"log"
 	"path/filepath"
 	"runtime"
+	"strings"
 
 	"github.com/LoTwT/youkai/internal/game/zzz"
 	"github.com/LoTwT/youkai/internal/game/zzz/collect"
@@ -131,7 +132,42 @@ func structuredDisc(obs Observation, lines []RecognizedLine) *zzz.StructuredDisc
 	if !ok {
 		return nil
 	}
+	// The Windows card and detail badges independently confirm this slot.
+	// Repair a dropped closing bracket only when the one visible digit
+	// agrees and the remaining text names a known set. Keep the raw OCR
+	// line in RecognitionResult and leave ambiguous suffixes to ParseDetail.
+	if obs.Position >= 1 && obs.Position <= 6 {
+		name, suffix, found := strings.Cut(strings.TrimSpace(detail.Set), "[")
+		// The drive-storage OCR can omit 岿 in this catalog name.
+		// Require the title's slot to agree with the two capture badges.
+		if name == "云如我" && len(suffix) == 2 && suffix[0] == '0'+byte(obs.Position) && suffix[1] == ']' {
+			detail.Set = "云岿如我[" + suffix
+		}
+		// The matching field crops show a closing bracket, read as 1.
+		if name == "拂晓行纪" && suffix == "41" && obs.Position == 4 {
+			detail.Set = "拂晓行纪[4]"
+		}
+		if found && len(suffix) == 1 && suffix[0] == '0'+byte(obs.Position) {
+			if _, known := zzz.LookupSetByName(strings.TrimSpace(name)); known {
+				detail.Set = strings.TrimSpace(detail.Set) + "]"
+			}
+		}
+	}
 	rec, issues := zzz.ParseDetail(detail)
+	// The traversal already compared the card badge with the selected card
+	// and the visible detail badge. The name line's [N] suffix is the OCR
+	// side of the same fact; if it disagrees, the slot is unknown rather
+	// than choosing one of the two readings.
+	if obs.Position >= 1 && obs.Position <= 6 && rec.Slot != 0 && rec.Slot != obs.Position {
+		issues = append(issues, zzz.Issue{
+			Field:    "slot",
+			Code:     zzz.CodeSlotPositionMismatch,
+			Severity: zzz.SeverityError,
+			Message: fmt.Sprintf("详情标题槽位 [%d] 与遍历确认的卡片槽位 %d 不一致；槽位记为未知",
+				rec.Slot, obs.Position),
+		})
+		rec.Slot = 0
+	}
 	structured := zzz.ToStructuredWithState(rec, obs.Rarity, zzz.CaptureState{
 		ManagementState: obs.ManagementState,
 		EquippedState:   obs.EquippedState,

@@ -47,7 +47,7 @@ func TestViewTargetNotFound(t *testing.T) {
 	tt := ui.NewTester(m.View, 1020, 700)
 	settle(t, m, q, tt)
 
-	if !tt.HasText("未找到《绝区零》窗口 → 启动游戏并打开驱动盘仓库页") {
+	if !tt.HasText("未找到《绝区零》窗口 → 启动游戏并打开驱动盘仓库页（便携验收版用驱动仓库页）") {
 		t.Fatalf("the not-found state does not show: %q", tt.Texts())
 	}
 	if !tt.HasText("未找到可扫描的游戏窗口。") {
@@ -303,7 +303,7 @@ func TestViewElevatedGameSuggestsAdmin(t *testing.T) {
 	if !tt.HasText("无法读取游戏窗口（游戏以管理员身份运行）") {
 		t.Fatalf("the elevated-game hint does not show: %q", tt.Texts())
 	}
-	if tt.HasText("未找到《绝区零》窗口 → 启动游戏并打开驱动盘仓库页") {
+	if tt.HasText("未找到《绝区零》窗口 → 启动游戏并打开驱动盘仓库页（便携验收版用驱动仓库页）") {
 		t.Fatalf("an unreadable elevated window was reported as not found: %q", tt.Texts())
 	}
 	if !tt.HasText("为什么："+faultCauseText("integrityMismatch", nil)) || !tt.HasText("退出 youkai") {
@@ -333,7 +333,7 @@ func TestViewUnreadableGameShowsGenericCopy(t *testing.T) {
 	if tt.HasText("可能以管理员身份运行") {
 		t.Fatalf("an elevated youkai was told to run as administrator: %q", tt.Texts())
 	}
-	if tt.HasText("未找到《绝区零》窗口 → 启动游戏并打开驱动盘仓库页") {
+	if tt.HasText("未找到《绝区零》窗口 → 启动游戏并打开驱动盘仓库页（便携验收版用驱动仓库页）") {
 		t.Fatalf("an unreadable game window was reported as not found: %q", tt.Texts())
 	}
 	if err := tt.Click("开始扫描"); err != nil {
@@ -404,7 +404,7 @@ func TestViewStartTargetGoneMapsAndRefreshes(t *testing.T) {
 	if tt.HasText("gone or was replaced") {
 		t.Fatalf("the raw target-gone error reached the UI: %q", tt.Texts())
 	}
-	if !tt.HasText("未找到《绝区零》窗口 → 启动游戏并打开驱动盘仓库页") {
+	if !tt.HasText("未找到《绝区零》窗口 → 启动游戏并打开驱动盘仓库页（便携验收版用驱动仓库页）") {
 		t.Fatalf("the candidate list was not refreshed: %q", tt.Texts())
 	}
 	if m.targetReady() {

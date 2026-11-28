@@ -1278,7 +1278,7 @@ func (m *Model) nextPendingAfter(seq int64) int {
 // catchUpLive resumes data refresh after navigation or editing deferred it.
 // It grants no navigation rights and coalesces an already-current read.
 func (m *Model) catchUpLive() {
-	if !m.liveWorkspaceNeedsRefresh() || m.editingDirty() || m.reviewSaving ||
+	if !m.liveWorkspaceNeedsRefresh() || m.deferLiveRecordRead(m.rec.ID) || m.editingDirty() || m.reviewSaving ||
 		m.exitIntent != exitIntentNone || m.exitState == exitRunning || m.exitState == exitDone {
 		return
 	}

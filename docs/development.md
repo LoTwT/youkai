@@ -1,6 +1,6 @@
 # 开发指南
 
-更新日期：2026-11-21。本文维护环境要求与本仓库当前实际可用的开发命令；范围与里程碑安排见[实施清单](specs/scanner-implementation-plan.md)，构建与分发决策见 [T7](specs/t7-public-release-acceptance.md)。
+更新日期：2026-11-22。本文维护环境要求与本仓库当前实际可用的开发命令；范围与里程碑安排见[实施清单](specs/scanner-implementation-plan.md)，构建与分发决策见 [T7](specs/t7-public-release-acceptance.md)。
 
 ## 第五版原生界面
 
@@ -64,12 +64,12 @@ M2 平台会话集成后可用另一组开关接入真实游戏窗口做仅观�
 
 状态以[架构 §6 的 Windows 本地客户端遍历状态](specs/scanner-architecture.md#windows-本地客户端遍历状态1920x1080-首次全量真机扫描完成时序未标定)为唯一权威说明；这里只写开发运行方式。
 
-- **安装版默认扫描源（PR-05，P-01）：** Windows 构建在未设置任何环境变量时自动接入本地客户端遍历，不需要 `YOUKAI_GAME_EXE`；目标识别、选择与完整预检以 [T2 §3.2](specs/t2-platform-capture-input.md#windows-扫描前预检w2b权威说明) 为准，准备页见 [08 §1.1](design/uiux-2026-11/08-screens.md#11-准备检查清单)。初次唯一候选直接选中并显示实际身份，选中不会自动开始；多候选、旧实例失效或用户显式“更换目标”后，未显式选择前“开始扫描”禁用，刷新也不自动重选。点“重新检查”重新枚举；开始时仍核对完整路径、HWND、PID 与进程启动时间并执行完整预检，真正输入前仍复核许可、目标和几何条件。
-- **环境变量（开发覆盖）：** `YOUKAI_GAME_SOURCE=traverse`、`YOUKAI_GAME_CLIENT=local`、`YOUKAI_GAME_EXE=<游戏 exe 完整路径>` 仍可用于固定一个开发目标；此时跳过候选列表，直接锁定该路径。三层都必须满足；缺 `YOUKAI_GAME_EXE` 或把客户端设为 `cloud` 都会在接线时拒绝并说明原因。`observe` 仍按上一节的方式工作。`YOUKAI_SCROLL_MATCHER=legacy` 对安装版默认与固定目标覆盖都生效。
+- **安装版默认扫描源（PR-05，P-01）：** Windows 构建在未设置任何环境变量时自动接入本地客户端的**驱动盘仓库**转盘入口（`PageWarehouse`），不需要 `YOUKAI_GAME_EXE`。目标识别、选择与完整预检以 [T2 §3.2](specs/t2-platform-capture-input.md#windows-扫描前预检w2b权威说明) 为准，准备页见 [08 §1.1](design/uiux-2026-11/08-screens.md#11-准备检查清单)。初次唯一候选直接选中并显示实际身份，选中不会自动开始；多候选、旧实例失效或用户显式“更换目标”后，未显式选择前“开始扫描”禁用，刷新也不自动重选。点“重新检查”重新枚举；开始时仍核对完整路径、HWND、PID 与进程启动时间并执行完整预检，真正输入前仍复核许可、目标和几何条件。
+- **环境变量（开发覆盖）：** `YOUKAI_GAME_SOURCE=traverse`、`YOUKAI_GAME_CLIENT=local`、`YOUKAI_GAME_EXE=<游戏 exe 完整路径>` 进入“驱动盘仓库”转盘入口，并固定一个开发目标；此时跳过候选列表，直接锁定该路径。三层都必须满足；缺 `YOUKAI_GAME_EXE` 或把客户端设为 `cloud` 都会在接线时拒绝并说明原因。本地便携验收版显式设置 `YOUKAI_GAME_SOURCE=drive-storage` 进入 1080p 驱动仓库，并沿用窗口发现和选择。`observe` 仍按上一节的方式工作。`YOUKAI_SCROLL_MATCHER=legacy` 只对旧“驱动盘仓库”入口生效；驱动仓库始终使用带滑块与卡片徽标证据的滚动匹配器，legacy 不再能绕过该页面的独立末端证据。
 - **权限（D-1）：** 必须以管理员身份运行 youkai，否则开始扫描时因游戏进程完整性级别更高而拒绝；程序清单不要求提权。点击在提权后有效，2026-11-02 的 1920×1080 全量扫描也在 `target=high self=high` 下完成；但仍以 T5 的动作效果证据为准。
 - **开始前激活。** Windows 向锁定的 HWND 请求一次前台，在 500 ms 内每 25 ms 核对实际前台。日志记录 `accepted after N ms` 或 `not foreground after 500 ms`，随后执行完整准备检查。开发自动开始可能需要手动聚焦游戏。最小化窗口由预检拒绝。机制和实测见[架构 §6](specs/scanner-architecture.md#windows-本地客户端遍历状态1920x1080-首次全量真机扫描完成时序未标定)。
 - **显示档位：** 首批只开放 1920×1080（窗口/无边框模式）。其他已知 16:9 档位与任意非 16:9 尺寸都会被预检拒绝并提示切换；列出的档位不等于已开放。
-- **参数状态：** 滚动停稳与两个拖拽时长仍沿用 macOS 云客户端的值，由 `WindowsLocalProfile` 集中声明。Windows 输入层的 `MaxDragDuration` 为 1500 ms，以容纳 1200 ms 滚动拖拽。1920×1080 验收候选的遍历诊断包含 `sort=template panel_range_required=true`，一次面板访问各节点沿用 2 秒与连续三帧门槛。滚动时序仍未标定，普通范围的时序证据见 [T5 §3](specs/t5-zzz-inventory-traversal.md#3-开始前必须核对的页面条件)。
+- **参数状态：** 旧仓库的滚动停稳与两个拖拽时长仍沿用 macOS 云客户端的值，由 `WindowsLocalProfile` 集中声明；Windows 输入层的 `MaxDragDuration` 为 1500 ms，以容纳 1200 ms 滚动拖拽。驱动仓库由 `WindowsStorageProfileFor` 生成 `StorageLayout()` / `StorageCalibration()`，正常前进为三格滚轮（`WheelSteps=-3`），回顶为 `+3`，末尾使用独立的 `-1` 复检，其实际位移仍由滑块行程与卡片徽标重叠判定；它只打开 1920×1080 原生客户区，不调用 `ScaledLayout`。两个 1920×1080 验收候选的遍历诊断都包含 `panel_range_required=true`，一次面板访问各节点沿用 2 秒与连续三帧门槛。驱动仓库的滚动时序沿用共享 profile 的当前值，尚未用该页面独立标定；时序证据见 [T5 §8](specs/t5-zzz-inventory-traversal.md#8-windows-驱动仓库单页混排入口2026-11-22)。
 - **覆盖结论：** 每个面板都匹配“稀有度”时 `sort=verified`。整仓覆盖 `complete` 还需要筛选范围已证明、六个位置完整及格位账目闭合。缩放档丢弃原生排序和范围探针。标签模板当前仅验证“稀有度”，排序方向超出证明范围。
 - **真机证据：** Windows 1920×1080 的普通准备、整仓与补扫见 [T5 §3](specs/t5-zzz-inventory-traversal.md#3-开始前必须核对的页面条件)。三轮固定库存对账见[实施清单 M4](specs/scanner-implementation-plan.md#m4双平台交付验收)。早期布局和滑块样本见 [W3a 报告](reports/2026-11-02-windows-local-sample-round.md)。
 - **托盘诊断。** 先检查日志是否有 `tray created`，再验证左键恢复窗口、右键打开菜单。窗口生命周期以[架构 §5](specs/scanner-architecture.md#隐藏恢复与退出)为准，历史诊断见 [2026-11-03 报告](reports/2026-11-03-windows-tray-diagnosis.md)。
@@ -129,6 +129,8 @@ go build -o winprobe.exe ./tools/winprobe
 | `go test -race ./internal/recognition` | 识别包的竞态检查（含取消与生命周期并发路径）。 |
 | `go test -race -timeout 30m ./internal/game/zzz/collect` | 遍历与像素匹配的竞态检查；实测超过 Go 默认 10 分钟超时，必须显式放宽。 |
 | `YOUKAI_M2_SAMPLES=/tmp/m2-samples go test ./internal/game/zzz/collect` | 像素匹配器与单页遍历在完整未掩码源帧上的回放；样本目录不入库，未设置时自动跳过。 |
+| `YOUKAI_STORAGE_SAMPLES=<样本目录> go test ./internal/game/zzz/collect -run TestStoragePrivate -count=1 -v` | 驱动仓库 1080p 私有样本回放：页面/面板、36 个混排号位、单行滚轮、底部 1+8、六份详情号位，以及只改选中探针的同号位视口内对照。样本目录、整帧与附件包不入库；未设置时自动跳过。公开单测：`go test ./internal/game/zzz/collect -run 'TestStorage|TestPositionVerdict'`。 |
+| `YOUKAI_FRAME347_EVIDENCE=<解包目录> go test ./internal/game/zzz/collect -run 'TestStorageFrame347' -count=1 -v` | R15 的 338/340/347 私有候选帧回放：帧 347 必须 36/36 且 R2C8 为 known 3，2/3 半混合仍为 unknown/conflict。只读取外部 ROI 与 manifest，不把裁剪入库；未设置时自动跳过。 |
 | `YOUKAI_SCROLL_REPLAY="$HOME/Library/Logs/Youkai Dev" go test ./internal/game/zzz/collect -run TestScrollReplay` | 滚动判定的现场证据回放：把 2026-10-30 阶段 1 复测的两组失败序列（各 25 帧逐帧诊断）经真实 `scroll()` 走阶段 2 判定（应验证 4 行位移并停稳、写出 `scroll-ok` 帧时间诊断），并用旧判定复现现场失败（消融）；回放 2026-10-31 阶段 2 验收的两组新位置首滚 undecided 序列（选中框 4 行与 NCC 最佳行一致但差距不足，应由滑块行程佐证接受并在两次确认后停稳；撤掉滑块证据后仍判 undecided），并验证其中一组经完整 `scroll()` 提交、`scroll-ok` 清单记录 `selection+feature+scrollbar` 依据；另回放 2026-10-28 两组 before/after 锚点对。并列容差 ε=0.005、滑块行程与其他竞争行数可区分性由合成序列覆盖（不经本回放）。证据目录在仓库外，未设置时自动跳过。 |
 | `go tool mygo vet .` | 先运行 `go vet ./...`，再检查原生 UI 生命周期问题；参数是应用目录（项目根），不能写成 `./...`。 |
 | `go tool mygo dev` | 开发运行，编辑 Go 代码、配置或资源后自动重建重启；开发应用名为 `Youkai Dev`（标识 `com.lotwt.youkai.dev`，位于 `.mygo/dev`），与正式安装的数据和权限隔离。退出应用或 Ctrl+C 结束。 |
@@ -320,3 +322,17 @@ Get-Content err.txt
 用户不在 Windows 上安装开发工具，Windows 上的功能与安装测试使用 GitHub Actions 构建的安装包：开发期测试从 Package workflow 的产物获取（见[上节](#打包-workflow)），正式发布制品随版本发布在 GitHub Releases（约定见[实施清单](specs/scanner-implementation-plan.md#开发与-windows-测试方式)）。
 
 Mac 上的 Windows 交叉编译检查只用于尽早发现编译与平台隔离问题：交叉编译通过不代表能在 Windows 上运行，VC++ 运行库（DLL 来源与实际加载）也不在本地交叉编译的覆盖范围内，需要快速排查非 VC++ 问题时可另行交叉编译免安装包供测试。只能在 Windows 实机验证的事项见实施清单第 1 节。
+
+### Windows 本地驱动仓库便携验收版
+
+在 Windows amd64 上，用项目依赖和已核对摘要的 OCR 资源建立独立便携目录。资源根包含 models、onnxruntime、licenses 与 THIRD-PARTY-NOTICES.md。资源仍按上节的来源与许可维护。
+
+```powershell
+pwsh -File scripts/windows-build-portable.ps1 -Resources <已核资源目录> -Output <新便携目录>
+```
+
+解压或构建后从便携目录运行 `Start-Youkai.cmd`。它会设置 `YOUKAI_GAME_SOURCE=drive-storage` 并启用同帧匹配复用、按件批量保存证据和扫描中的已保存快照；收尾结束后从磁盘重读。由命令行运行 Start-Youkai.cmd --self-test 可以验证 OCR 资源和自动更新状态。此流程产生独立应用数据根，使用测试应用标识。
+
+默认构建内置未设置的 5/6 号位模型。此配置可运行通用回归。对于需要模型消歧的 5/6 号位，只有提供合法模型才能取得分类结论。经过授权在 Windows 本地重建时，可追加 -GlyphModel <本地模型Go文件> 和 -ExpectedGlyphSHA256 <已批准的SHA-256>。脚本校验摘要后通过 Go overlay 注入模型，权重、训练样本与游戏记录均留原机。无权重和带权重产物分开验收。
+
+便携版功能验收基准为同一台机器、1920×1080 原生窗口、1,006 件独立清册、13 分 1.28 秒，逐格核对无漏、重、错号，未处理为 0。该结果对应原 Windows 便携制品。迁移后的构建、不同模型和不同启动配置按实际差异复验。

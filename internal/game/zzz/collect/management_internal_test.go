@@ -100,3 +100,19 @@ func TestEquippedVerdictRequiresBothAvatars(t *testing.T) {
 		})
 	}
 }
+
+func TestStorageEmptyDetailWithoutListPortrait(t *testing.T) {
+	pre := PageMatch{Page: PageDriveStorage, List: &ListEvidence{Avatars: []AvatarState{AvatarUnknown}}}
+	out := PageMatch{Page: PageDriveStorage, List: &ListEvidence{Avatars: []AvatarState{AvatarUnknown}}, Detail: &DetailEvidence{Avatar: AvatarAbsent}}
+	if got, _ := equippedVerdict(pre, out, 0); got != EquippedStateUnequipped {
+		t.Fatalf("empty detail got %q", got)
+	}
+	pre.List.Avatars[0] = AvatarPresent
+	if got, _ := equippedVerdict(pre, out, 0); got != "" {
+		t.Fatalf("conflicting portrait got %q", got)
+	}
+	out.Detail.Avatar = AvatarUnknown
+	if got, _ := equippedVerdict(pre, out, 0); got != "" {
+		t.Fatalf("unknown detail got %q", got)
+	}
+}

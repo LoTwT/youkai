@@ -258,8 +258,14 @@ type Observation struct {
 	Viewport int `json:"viewportIndex"`
 	Row      int `json:"row"`
 	Column   int `json:"column"`
-	// Position is the wheel position (1..6) this visit belongs to.
+	// Position is the wheel position (1..6) this visit belongs to on the
+	// old warehouse page, or the card/detail-confirmed slot on the drive
+	// storage page.
 	Position int `json:"position"`
+	// Page names the calibrated page that produced this capture. The
+	// recognizer uses it to apply the drive-storage-only OCR slot
+	// cross-check, never the old warehouse wheel position.
+	Page PageKind `json:"page,omitempty"`
 	// Quality is the calibrated rarity evidence the admission rested on.
 	Quality Quality `json:"quality"`
 	// RarityFilter names the proved rarity filter. "S" requires a verified
@@ -454,26 +460,48 @@ func (inv *Inventory) Precheck(ctx context.Context, sess platform.Session) error
 			frame.Content))
 	}
 	m := inv.matcher().Match(frame)
-	if m.Page != PageWarehouse || m.List == nil || len(m.List.Occupied) != len(inv.Layout.Slots) {
-		return scan.NewFault(CodePageUnverified, fmt.Errorf(
-			"collect: precheck: the current frame is not a verifiable warehouse list (verdict %s): %s",
-			m.Page, m.Evidence))
-	}
-	if m.Wheel == nil || m.Wheel.Position < 1 || m.Wheel.Position > 6 {
-		return scan.NewFault(CodePageUnverified, fmt.Errorf(
-			"collect: precheck: no unique wheel position is selected: %s", m.Evidence))
+	if inv.storagePage() {
+		if m.Page == PageUnknown {
+			m, err = inv.precheckStorageWeakSelection(ctx, view, frame, m)
+			if err != nil {
+				return err
+			}
+		}
+		if m.Page != PageDriveStorage || m.List == nil || len(m.List.Occupied) != len(inv.Layout.Slots) ||
+			len(m.List.Positions) != len(inv.Layout.Slots) {
+			return scan.NewFault(CodePageUnverified, fmt.Errorf(
+				"collect: precheck: the current frame is not a verifiable drive-storage list (verdict %s): %s",
+				m.Page, m.Evidence))
+		}
+	} else {
+		if m.Page != PageWarehouse || m.List == nil || len(m.List.Occupied) != len(inv.Layout.Slots) {
+			return scan.NewFault(CodePageUnverified, fmt.Errorf(
+				"collect: precheck: the current frame is not a verifiable warehouse list (verdict %s): %s",
+				m.Page, m.Evidence))
+		}
+		if m.Wheel == nil || m.Wheel.Position < 1 || m.Wheel.Position > 6 {
+			return scan.NewFault(CodePageUnverified, fmt.Errorf(
+				"collect: precheck: no unique wheel position is selected: %s", m.Evidence))
+		}
 	}
 	filterAtStart := FilterUnknown
 	if m.Filter != nil {
 		filterAtStart = m.Filter.State
 	}
+	page := string(PageWarehouse)
+	startPosition := 0
+	if inv.storagePage() {
+		page = string(PageDriveStorage)
+	} else {
+		startPosition = m.Wheel.Position
+	}
 	inv.scope = scopePayload{
 		Kind:          "zzzInventory",
-		Page:          string(PageWarehouse),
+		Page:          page,
 		Layout:        inv.Layout.Name,
 		Geometry:      uint64(geo),
 		Slots:         len(inv.Layout.Slots),
-		StartPosition: m.Wheel.Position,
+		StartPosition: startPosition,
 		FilterAtStart: string(filterAtStart),
 		Sort:          scopeSortUnverified,
 		Coverage:      scopeCoverageUnknown,
@@ -483,6 +511,51 @@ func (inv *Inventory) Precheck(ctx context.Context, sess platform.Session) error
 		return fmt.Errorf("collect: precheck: marshal observed scope: %w", err)
 	}
 	return nil
+}
+
+// precheckStorageWeakSelection only waits on a structurally recognized
+// storage frame whose sole page failure is one weak selection border.
+func (inv *Inventory) precheckStorageWeakSelection(ctx context.Context, view SessionView, frame platform.Frame, match PageMatch) (PageMatch, error) {
+	matcher := inv.matcher()
+	provider, ok := matcher.(weakSelectionEvidenceProvider)
+	if !ok {
+		return match, nil
+	}
+	wait, cancel := context.WithTimeout(ctx, 600*time.Millisecond)
+	defer cancel()
+	for match.Page == PageUnknown && wait.Err() == nil {
+		detail, weak := provider.weakSelectionEvidence(frame)
+		if weak == nil || detail.Page != PageDriveStorage || detail.List == nil {
+			break
+		}
+		next, err := view.Frame(wait, platform.FrameRequest{After: frame.ArrivedAt})
+		if err != nil {
+			if ctx.Err() != nil {
+				return match, ctx.Err()
+			}
+			if errors.Is(err, context.DeadlineExceeded) {
+				break
+			}
+			return match, wrapObservationErr(err)
+		}
+		if next.Geometry != frame.Geometry {
+			return match, scan.NewFault(platform.CodeGeometryChanged, errors.New("collect: precheck: geometry changed while waiting for a clear selection"))
+		}
+		if next.Image == nil || !inv.Layout.MatchesFrame(next.Image.Bounds().Size(), next.Content) {
+			return match, scan.NewFault(platform.CodeFrameConfigMismatch, errors.New("collect: precheck: capture configuration changed while waiting for a clear selection"))
+		}
+		if next.Reused || next.ID == frame.ID {
+			if err := sleepCtx(wait, inv.recheckEvery()); err != nil {
+				break
+			}
+			continue
+		}
+		frame, match = next, matcher.Match(next)
+	}
+	if err := ctx.Err(); err != nil {
+		return match, err
+	}
+	return match, nil
 }
 
 // ObservedScope implements ScopeReporter: the range facts the traversal
@@ -567,15 +640,19 @@ func (inv *Inventory) Collect(ctx context.Context, sess platform.Session, h *sca
 		h:    h,
 		geo:  inv.boundGeometry,
 	}
+	if inv.storagePage() {
+		return run.runStorage(ctx)
+	}
 	return run.run(ctx)
 }
 
 // inventoryRun is one Collect's mutable state. It lives on the producer
 // goroutine only.
 type inventoryRun struct {
-	inv  *Inventory
-	view SessionView
-	h    *scan.ControllerHandle
+	abTiming *storageABTiming
+	inv      *Inventory
+	view     SessionView
+	h        *scan.ControllerHandle
 
 	// geo is the geometry version the anchors are bound to; every input
 	// names it and every evidence frame must carry it.
@@ -601,6 +678,7 @@ type inventoryRun struct {
 	rangeProof        positionRange
 	sortLabel         string // positively identified baseline for the whole scan
 	filterActive      bool   // monitor the funnel after this position's panel closes
+	closingPanel      bool   // bounded close wait; unreadable panel frames are transient
 	// selectionTracked reports that this position has resolved at least
 	// one target, so the next pre-click frame can be checked for an
 	// unexpected list shift through the selected cell. A click can make
@@ -658,6 +736,10 @@ type inventoryRun struct {
 	// positions. Neither counter feeds a navigation decision.
 	diagnosticOKManifests int
 	diagnosticOKImages    int
+	// pageUnknownTrace is a QA-only in-memory ring for the first
+	// PageUnknown rejection inside a normal storage target wait. Normal
+	// builds use an empty no-op type.
+	pageUnknownTrace *pageUnknownTraceRing
 	// incompleteReasons records one reason per degraded wheel position for
 	// the failure limit and its diagnostic message (decision §4.6 K5).
 	incompleteReasons []string
@@ -667,6 +749,13 @@ type inventoryRun struct {
 	// without this marker remains session-fatal, because the scanner itself
 	// never opens one except during an approved preparation.
 	pendingPanelClose bool
+
+	// Drive-storage one-pass state. The mixed list has one global top,
+	// bottom and range proof; these facts are mapped to per-slot ledger
+	// entries only after the whole pass completes (T5 §3/§5).
+	storageTopVerified    bool
+	storageBottomVerified bool
+	storageComplete       bool
 }
 
 // positionTiming is one wheel position's preparation stage durations for
@@ -845,6 +934,7 @@ func (run *inventoryRun) preparePosition(ctx context.Context, pos int, timing *p
 	run.rangeProof = positionRange{}
 	run.rebuildEvidence = nil
 	run.filterActive = false
+	run.closingPanel = false
 	run.selectionTracked = false
 	run.allowInitial = true
 	run.lastScrollRows = 0
@@ -1012,15 +1102,23 @@ func (run *inventoryRun) resetFilters(ctx context.Context) error {
 	if err := run.selectRarityS(ctx); err != nil {
 		return err
 	}
+	if err := run.prepareStoragePartitions(ctx); err != nil {
+		return err
+	}
 	if err := run.closeFilterPanel(ctx); err != nil {
+		return err
+	}
+	if err := run.activateStoragePartitions(); err != nil {
 		return err
 	}
 	run.rangeProof.ClosedFrameID = run.lastFrame.ID
 	if run.listMatch.Filter != nil {
 		run.rangeProof.ClosedFunnel = run.listMatch.Filter.State
 	}
-	if err := run.requireWheelPosition("S filter selection"); err != nil {
-		return err
+	if !run.inv.storagePage() {
+		if err := run.requireWheelPosition("S filter selection"); err != nil {
+			return err
+		}
 	}
 	if err := run.requireFilterState(FilterActive, "the funnel did not confirm an active filter after closing the panel"); err != nil {
 		return err
@@ -1042,8 +1140,8 @@ func (run *inventoryRun) requireFilterState(want FilterState, what string) error
 		return nil
 	}
 	return positionFault("filter", CodeNavigationMismatch,
-		"collect: wheel position %d: %s; the funnel is %q, not %q — refusing to continue so filters cannot be assumed",
-		run.position, what, state, want)
+		"collect: %s: %s; the funnel is %q, not %q — refusing to continue so filters cannot be assumed",
+		run.positionLabel(), what, state, want)
 }
 
 func (run *inventoryRun) observedRarityFilter(match PageMatch) string {
@@ -1295,10 +1393,14 @@ func (run *inventoryRun) clickUntilPage(ctx context.Context, at image.Point, wan
 			return !requireSort || observedSortLabel(m) != ""
 		}
 		var out awaitOutcome
+		closingStep := false
 		switch {
 		case run.inv.RequirePanelRangeProof && want == PageWarehouse:
 			if selected := run.rangeProof.SelectedS; selected != nil && selected.EffectVerified {
+				closingStep = true
+				run.closingPanel = true
 				out = run.awaitRangeStep(ctx, match, true)
+				run.closingPanel = false
 			} else {
 				// This close is cleanup after a degraded position, not
 				// the closing step of a proven S selection.
@@ -1317,6 +1419,12 @@ func (run *inventoryRun) clickUntilPage(ctx context.Context, at image.Point, wan
 		case awaitGeometry:
 			return run.geometryChanged(out.frame)
 		default:
+			if run.closeTimeoutOnUnreadablePanel(closingStep, out) {
+				// The close used its whole budget after the label became
+				// unreadable. Retrying would click the shared funnel
+				// control again without a verified panel state.
+				return run.rangeFailure("the filter panel never closed and its sort label is unreadable after the close input")
+			}
 			if openedMatch.Panel != nil {
 				run.rangeProof.Opened = panelRangeObservation(openedFrame, openedMatch)
 				run.inv.observeSort("")
@@ -1348,6 +1456,15 @@ func (run *inventoryRun) clickUntilPage(ctx context.Context, at image.Point, wan
 				run.position, want, out.match.Page, out.match.Evidence))
 		}
 	}
+}
+
+// closeTimeoutOnUnreadablePanel is limited to the independent drive-storage
+// page. The legacy 1920x1080 warehouse also requires range proof, but its
+// close retry is a separate calibrated path; do not alter it here.
+func (run *inventoryRun) closeTimeoutOnUnreadablePanel(closingStep bool, out awaitOutcome) bool {
+	return closingStep && run.inv != nil && run.inv.storagePage() &&
+		run.panelVerdict(out.match) &&
+		(out.match.Panel == nil || !out.match.Panel.SortVerified)
 }
 
 // pageVerdict is the settled-page predicate for clickUntilPage.
@@ -1409,7 +1526,7 @@ func (run *inventoryRun) scrollToTop(ctx context.Context) (*failureFrames, error
 				run.position, run.listMatch.Evidence))
 			return topWaitFailure("top", lastBefore, lastOut, haveWait), run.topProofFault(lastOut, fault)
 		}
-		if flings >= maxTopFlings {
+		if flings >= run.topFlingBound() {
 			fault := scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
 				"collect: wheel position %d: the top was not reached after %d flings: %s",
 				run.position, flings, run.listMatch.Evidence))
@@ -1426,15 +1543,7 @@ func (run *inventoryRun) scrollToTop(ctx context.Context) (*failureFrames, error
 		}
 		before := run.lastFrame
 		beforeStart, beforeOK := run.thumbStart(before)
-		res := run.view.Dispatch(platform.InputOp{
-			Kind:     platform.InputDrag,
-			Geometry: run.geo,
-			FrameID:  before.ID,
-			At:       run.inv.Layout.TopFrom,
-			To:       run.inv.Layout.TopTo,
-			Steps:    10,
-			Duration: run.inv.Layout.TopDuration,
-		})
+		res := run.view.Dispatch(run.topInputOp(before))
 		if err := run.dispatchOutcome(ctx, res); err != nil {
 			return nil, err
 		}
@@ -1563,6 +1672,13 @@ type thumbReporter interface {
 	ThumbStart(frame platform.Frame) (int, bool)
 }
 
+// thumbEdgesReporter is the optional matcher capability for boundary
+// stillness. The top confirmation needs both thumb edges, not only the
+// start used for progress toward the top.
+type thumbEdgesReporter interface {
+	ThumbEdges(frame platform.Frame) (start, end int, ok bool)
+}
+
 // awaitTopBase verifies the current page and wheel before a confirmation
 // drag. The stillness wait only paces the drag: at the deadline a readable
 // same-position frame can be used even without a stationary pair.
@@ -1640,7 +1756,7 @@ func (run *inventoryRun) confirmTop(ctx context.Context) (*failureFrames, error)
 	before := run.lastFrame
 	var lastOut scrollOutcome
 	haveWait := false
-	for attempt := 0; attempt < maxTopFlings; attempt++ {
+	for attempt := 0; attempt < run.topFlingBound(); attempt++ {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
@@ -1657,15 +1773,8 @@ func (run *inventoryRun) confirmTop(ctx context.Context) (*failureFrames, error)
 		}
 		before = run.lastFrame
 		beforeStart, beforeOK := run.thumbStart(before)
-		res := run.view.Dispatch(platform.InputOp{
-			Kind:     platform.InputDrag,
-			Geometry: run.geo,
-			FrameID:  before.ID,
-			At:       run.inv.Layout.TopFrom,
-			To:       run.inv.Layout.TopTo,
-			Steps:    10,
-			Duration: run.inv.Layout.TopDuration,
-		})
+		beforeAtTop := run.listMatch.List != nil && run.listMatch.List.Top
+		res := run.view.Dispatch(run.topInputOp(before))
 		if err := run.dispatchOutcome(ctx, res); err != nil {
 			return nil, err
 		}
@@ -1676,8 +1785,20 @@ func (run *inventoryRun) confirmTop(ctx context.Context) (*failureFrames, error)
 		if err != nil {
 			return nil, err
 		}
-		lastOut, haveWait = out, true
 		afterStart, afterOK := run.thumbStart(out.after)
+		out.beforeAtTop = beforeAtTop
+		out.thumbStill = beforeOK && afterOK && absInt(afterStart-beforeStart) <= 2
+		if r, ok := run.inv.matcher().(thumbEdgesReporter); ok {
+			if bs, be, bok := r.ThumbEdges(before); bok {
+				if as, ae, aok := r.ThumbEdges(out.after); aok {
+					out.thumbStill = absInt(as-bs) <= 2 && absInt(ae-be) <= 2
+				}
+			}
+		}
+		if out.afterMatch.Page == PageDriveStorage && out.stationary {
+			out.listStill, _ = run.stillnessProven(before, out.after, out.match)
+		}
+		lastOut, haveWait = out, true
 		listOK := run.listVerdict(out.afterMatch) && out.afterMatch.List != nil
 		log.Printf("youkai: collect: position %d: top confirmation attempt %d: top=%t thumb %d/%t -> %d/%t stationary=%t displaced=%t lost=%t evidence=%s %s",
 			run.position, attempt+1,
@@ -1730,11 +1851,12 @@ func (run *inventoryRun) confirmTop(ctx context.Context) (*failureFrames, error)
 		}
 	}
 	fault := scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
-		"collect: wheel position %d: the top confirmation did not settle after %d attempts", run.position, maxTopFlings))
+		"collect: wheel position %d: the top confirmation did not settle after %d attempts", run.position, run.topFlingBound()))
 	return topWaitFailure("top", before, lastOut, haveWait), run.topProofFault(lastOut, fault)
 }
 
-// topConfirmed accepts a warehouse frame at the scrollbar's top. A settled
+// topConfirmed accepts a warehouse or drive-storage list frame at the
+// scrollbar's top. A settled
 // stationary outcome is direct evidence. An undecided pixel comparison
 // with an independent, unchanged thumb start is also safe: live UI
 // animation can raise the zero-shift error without moving the list, and a
@@ -1745,13 +1867,28 @@ func (run *inventoryRun) confirmTop(ctx context.Context) (*failureFrames, error)
 // accepted by the thumb guard below. The Lost branch keeps its match check
 // as a safety net for a lost candidate whose final comparison is undecided.
 func topConfirmed(out scrollOutcome, beforeOK, afterOK bool, beforeStart, afterStart int) bool {
-	if out.afterMatch.Page != PageWarehouse || out.afterMatch.List == nil || !out.afterMatch.List.Top {
+	storage := out.afterMatch.Page == PageDriveStorage
+	if (out.afterMatch.Page != PageWarehouse && !storage) ||
+		out.afterMatch.List == nil || !out.afterMatch.List.Top {
+		return false
+	}
+	if storage && !out.beforeAtTop {
+		// A frame that moved into the top on this wait is a scroll, not a
+		// stationary boundary confirmation. Confirm only from an already
+		// proven top base.
 		return false
 	}
 	if out.displaced {
 		return false
 	}
 	thumbStable := beforeOK && afterOK && absInt(afterStart-beforeStart) <= 2
+	if storage {
+		thumbStable = out.thumbStill
+		// A stationary thumb is supporting evidence, not top evidence on
+		// its own. The list must independently prove zero displacement; an
+		// Undecided comparison therefore cannot confirm the top.
+		return out.stationary && out.listStill && thumbStable
+	}
 	if out.lost {
 		return out.match.Undecided && thumbStable
 	}
@@ -1830,24 +1967,16 @@ func (run *inventoryRun) confirmBottom(ctx context.Context) (*failureFrames, err
 		return nil, err
 	}
 	before := run.lastFrame
-	res := run.view.Dispatch(platform.InputOp{
-		Kind:     platform.InputDrag,
-		Geometry: run.geo,
-		FrameID:  before.ID,
-		At:       run.inv.Layout.ScrollFrom,
-		To:       run.inv.Layout.ScrollTo,
-		Steps:    10,
-		Duration: run.inv.Layout.ScrollDuration,
-	})
+	res := run.view.Dispatch(run.bottomInputOp(before))
 	if err := run.dispatchOutcome(ctx, res); err != nil {
 		return nil, err
 	}
-	out, err := run.awaitScroll(ctx, before)
+	out, err := run.awaitScrollAction(ctx, before, true)
 	if err != nil {
 		return nil, err
 	}
-	log.Printf("youkai: collect: position %d: bottom confirmation attempt 1: stationary=%t displaced=%t lost=%t rows=%d %s",
-		run.position, out.stationary, out.displaced, out.lost, out.match.Rows,
+	log.Printf("youkai: collect: position %d: bottom confirmation attempt 1: stationary=%t displaced=%t lost=%t rows=%d rebound_verified=%t %s",
+		run.position, out.stationary, out.displaced, out.lost, out.match.Rows, out.bottomReboundVerified,
 		scrollMarginFields(run.inv.matcher(), out.match, out.settleMatch))
 	if fault := run.latestAdvanceFault("the bottom confirmation", out); fault != nil {
 		if out.after.ID != 0 && out.after.Image != nil {
@@ -1857,6 +1986,15 @@ func (run *inventoryRun) confirmBottom(ctx context.Context) (*failureFrames, err
 	}
 	switch {
 	case out.stationary:
+		if run.inv.storagePage() && !out.unmoved && !out.bottomReboundVerified {
+			fault := run.positionProofFailure("bottom", CodeNavigationMismatch, out,
+				"collect: the bottom confirmation observed movement during the same action and cannot prove the list never left the end (frame %d → %d): %s",
+				before.ID, out.after.ID, out.match.Evidence)
+			if out.after.ID != 0 && out.after.Image != nil {
+				return waitFailure("bottom-unmoved-unproven", before, out), fault
+			}
+			return nil, fault
+		}
 		// A Stationary verdict alone is a weak initial judgement, not end
 		// evidence: when the confirming drag advances the last row while the
 		// anchors are lost, the zero-shift MAD can still read as stillness.
@@ -1906,23 +2044,49 @@ func (run *inventoryRun) confirmBottom(ctx context.Context) (*failureFrames, err
 // reporting another shape is a contract violation, surfaced as a fault
 // rather than papered over.
 func (run *inventoryRun) listVerdict(m PageMatch) bool {
+	if m.List != nil && m.List.weakSelection != nil {
+		return false
+	}
+	if run.inv.storagePage() {
+		return m.Page == PageDriveStorage && m.List != nil &&
+			len(m.List.Occupied) == len(run.inv.Layout.Slots) &&
+			len(m.List.Positions) == len(run.inv.Layout.Slots)
+	}
 	return m.Page == PageWarehouse && m.List != nil && len(m.List.Occupied) == len(run.inv.Layout.Slots)
 }
 
 // positionListVerdict adds the wheel invariant to listVerdict: collection
 // is only allowed to act while the frame still shows the wheel position
 // this traversal prepared. A wheel change under the same page/geometry
-// would otherwise keep the old position's visited map and range.
+// would otherwise keep the old position's visited map and range. The
+// drive-storage page has one mixed list and no wheel, so its invariant is
+// the page and grid shape alone.
 func (run *inventoryRun) positionListVerdict(m PageMatch) bool {
+	if run.inv.storagePage() {
+		return run.listVerdict(m)
+	}
 	return run.listVerdict(m) && m.Wheel != nil && m.Wheel.Position == run.position
 }
 
 // checkLedgerViewport rejects detectable list changes between verified
 // transitions. The ledger describes the last proven viewport only.
 func (run *inventoryRun) checkLedgerViewport(m PageMatch) error {
-	if run.ledger != nil && (!run.positionListVerdict(m) || !run.ledger.agreesWith(m.List.Occupied)) {
-		return scan.NewFault(CodePositionLost, fmt.Errorf("collect: wheel position %d viewport %d: the observed grid no longer agrees with the slot ledger: %s",
-			run.position, run.viewport, m.Evidence))
+	if run.ledger == nil {
+		return nil
+	}
+	ok := run.positionListVerdict(m) && run.ledger.agreesWith(m.List.Occupied)
+	if ok && run.inv.storagePage() {
+		positions := make([]int, len(m.List.Positions))
+		for i, p := range m.List.Positions {
+			if p.known() {
+				positions[i] = p.Position
+			}
+		}
+		ok = run.ledger.positionsAgree(m.List.Occupied, positions)
+	}
+	if !ok {
+		return scan.NewFault(CodePositionLost, fmt.Errorf("collect: %s viewport %d: the observed grid or card slots no longer agree with the slot ledger: %s",
+			run.positionLabel(), run.viewport, m.Evidence))
 	}
 	return nil
 }
@@ -1959,10 +2123,17 @@ func (run *inventoryRun) awaitSelectionReturned(ctx context.Context, target, exp
 // association evidence, admit the capture and continue in the same page.
 func (run *inventoryRun) visitSlot(ctx context.Context, i int) (err error) {
 	row, col := run.inv.Layout.slotPosition(i)
-	target := fmt.Sprintf("wheel position %d viewport %d slot %d (row %d, column %d)", run.position, run.viewport, i, row, col)
+	target := fmt.Sprintf("%s viewport %d slot %d (row %d, column %d)", run.positionLabel(), run.viewport, i, row, col)
 	timing := &visitTiming{}
 	started := time.Now()
+	if a := run.abTiming; a != nil {
+		a.stage = "pre_click"
+		a.clickFinishedNS = 0
+	}
 	defer func() {
+		if a := run.abTiming; a != nil && err != nil {
+			a.failures = append(a.failures, storageABVisitFailure{Visit: run.visitIndex + 1, Viewport: run.viewport, Stage: a.stage, Code: storageABFailureCode(err), AtNS: time.Since(a.started).Nanoseconds()})
+		}
 		if err != nil || !timing.completed {
 			return
 		}
@@ -1999,9 +2170,9 @@ func (run *inventoryRun) visitSlot(ctx context.Context, i int) (err error) {
 		// made after the previous action, so it can seed this wait; fresh
 		// frames still have to confirm the current list before the click.
 		preStart := time.Now()
-		pre := run.awaitSettledSeeded(ctx, func(m PageMatch) bool {
-			return run.positionListVerdict(m) && m.List.Occupied[i]
-		}, run.preClickSeed(i))
+		pre := run.awaitCheckedFrames(ctx, func(_ platform.Frame, m PageMatch) (bool, error) {
+			return run.positionListVerdict(m) && m.List.Occupied[i], nil
+		}, run.preClickSeed(i), run.preClickFrameMatcher())
 		timing.preClick += time.Since(preStart)
 		switch pre.class {
 		case awaitStable:
@@ -2065,6 +2236,10 @@ func (run *inventoryRun) visitSlot(ctx context.Context, i int) (err error) {
 			slot.Discard()
 			return err
 		}
+		if err := run.requireCardPosition(pre.match, i, target); err != nil {
+			slot.Discard()
+			return err
+		}
 		run.listMatch = pre.match
 		run.lastFrame = pre.frame
 		preSelected := pre.match.List.Selected
@@ -2090,6 +2265,10 @@ func (run *inventoryRun) visitSlot(ctx context.Context, i int) (err error) {
 			}
 			switch out.class {
 			case awaitStable:
+				if err := run.requireDetailPosition(out.match, i, target); err != nil {
+					slot.Discard()
+					return err
+				}
 				return run.admit(slot, out, pre.frame, pre.match, i, row, col, AssociationInitial, 0, nil, attempt+1, target, timing)
 			case awaitCanceled, awaitFrameErr:
 				slot.Discard()
@@ -2111,6 +2290,13 @@ func (run *inventoryRun) visitSlot(ctx context.Context, i int) (err error) {
 			FrameID:  pre.frame.ID,
 			At:       run.inv.Layout.slotCenter(i),
 		})
+		tracePageUnknownInput(run, i, pre.frame.ID, res)
+		if a := run.abTiming; a != nil {
+			a.stage = "normal_detail"
+			if !res.FinishedAt.IsZero() {
+				a.clickFinishedNS = res.FinishedAt.Sub(a.started).Nanoseconds()
+			}
+		}
 		timing.click += time.Since(clickStart)
 		if err := run.dispatchOutcome(ctx, res); err != nil {
 			slot.Discard()
@@ -2120,7 +2306,12 @@ func (run *inventoryRun) visitSlot(ctx context.Context, i int) (err error) {
 
 		baseline := run.detailBaseline(pre.frame)
 		detailStart := time.Now()
-		out, err := run.awaitTargetDetail(ctx, baseline, i, false)
+		var out detailOutcome
+		if run.storageDetailRecoveryEnabled() {
+			out, err = run.awaitDetailFramesAnchored(ctx, baseline, pre.match.Detail, i, false, nil, true, pre.frame)
+		} else {
+			out, err = run.awaitTargetDetail(ctx, baseline, i, false)
+		}
 		timing.detail += time.Since(detailStart)
 		if err != nil {
 			slot.Discard()
@@ -2128,6 +2319,10 @@ func (run *inventoryRun) visitSlot(ctx context.Context, i int) (err error) {
 		}
 		switch out.class {
 		case awaitStable:
+			if err := run.requireDetailPosition(out.match, i, target); err != nil {
+				slot.Discard()
+				return err
+			}
 			return run.admit(slot, out, pre.frame, pre.match, i, row, col, AssociationTransition, pre.frame.ID, nil, attempt+1, target, timing)
 		case awaitCanceled, awaitFrameErr:
 			slot.Discard()
@@ -2136,6 +2331,22 @@ func (run *inventoryRun) visitSlot(ctx context.Context, i int) (err error) {
 			slot.Discard()
 			return run.geometryChanged(out.frame)
 		default: // awaitDeadline
+			if out.sawTargetBadgeTransient {
+				slot.Discard()
+				tracePageUnknownTimeout(run, i, out)
+				return scan.NewFault(CodePositionLost, fmt.Errorf(
+					"collect: %s did not independently settle after a target badge dropout within the detail wait", target))
+			}
+			if out.sawBadgeTransient && !out.badgeRecovered {
+				slot.Discard()
+				tracePageUnknownTimeout(run, i, out)
+				return run.badgeTransientFault(target)
+			}
+			if out.detailDeferred {
+				slot.Discard()
+				tracePageUnknownTimeout(run, i, out)
+				return run.detailFault(out, baseline, preSelected, i, false, target)
+			}
 			if run.ineffectiveClick(out, baseline, preSelected) {
 				if attempt < run.inv.maxRetries() {
 					// The click verifiably did nothing: re-establish every
@@ -2144,6 +2355,7 @@ func (run *inventoryRun) visitSlot(ctx context.Context, i int) (err error) {
 					continue
 				}
 				slot.Discard()
+				tracePageUnknownTimeout(run, i, out)
 				return scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
 					"collect: clicking %s never took effect within the budget (attempt %d): %s",
 					target, attempt+1, out.match.Evidence))
@@ -2153,12 +2365,27 @@ func (run *inventoryRun) visitSlot(ctx context.Context, i int) (err error) {
 				// stayed the same as the comparison baseline. One reference
 				// round trip may still prove the target's detail; it is not
 				// a retry of the ineffective click above (T5 §4).
-				return run.referenceRoundTrip(ctx, slot, out, pre.frame, pre.match, i, preSelected, row, col, attempt, target, timing)
+				err := run.referenceRoundTrip(ctx, slot, out, pre.frame, pre.match, i, preSelected, row, col, attempt, target, timing)
+				if err != nil {
+					tracePageUnknownReferenceFault(run, i, platform.Frame{}, PageMatch{}, err)
+				}
+				return err
 			}
 			slot.Discard()
+			tracePageUnknownTimeout(run, i, out)
 			return run.detailFault(out, baseline, preSelected, i, false, target)
 		}
 	}
+}
+
+func (run *inventoryRun) positionLabel() string {
+	if run.inv.storagePage() {
+		if run.position >= 1 && run.position <= 6 {
+			return fmt.Sprintf("card slot %d", run.position)
+		}
+		return "drive storage"
+	}
+	return fmt.Sprintf("wheel position %d", run.position)
 }
 
 // preClickSeed returns the last admitted frame as the first stability
@@ -2173,6 +2400,13 @@ func (run *inventoryRun) preClickSeed(i int) *awaitOutcome {
 	if !run.listVerdict(run.listMatch) || !run.listMatch.List.Occupied[i] {
 		return nil
 	}
+	if run.inv.storagePage() {
+		if len(run.listMatch.List.Positions) != len(run.inv.Layout.Slots) ||
+			!run.listMatch.List.Positions[i].known() {
+			return nil
+		}
+		return &awaitOutcome{frame: run.lastFrame, match: run.listMatch, expected: true}
+	}
 	if run.listMatch.Wheel == nil || run.listMatch.Wheel.Position != run.position {
 		return nil
 	}
@@ -2180,10 +2414,23 @@ func (run *inventoryRun) preClickSeed(i int) *awaitOutcome {
 }
 
 // detailBaseline chooses the detail comparison frame for the next click.
-// The last admitted detail is a known item and is not subject to the
-// pre-click list frame's cloud-video lag; fall back to the fresh
-// pre-click frame only before the first admission of a wheel position.
+// On drive storage the fresh pre-click frame is the authoritative "before"
+// observation: the right pane can already show a detail that differs from
+// the last admitted item, and after the click that same pane may remain
+// unchanged. Comparing only with the last admitted frame would mislabel that
+// unchanged old pane as a transition when the old and target cards share a
+// slot. The old warehouse keeps its cloud-video lag guard (the last admitted
+// detail frame); both paths fall back to the other frame when one is missing.
 func (run *inventoryRun) detailBaseline(pre platform.Frame) platform.Frame {
+	if run.inv != nil && run.inv.storagePage() {
+		if pre.ID != 0 {
+			return pre
+		}
+		if run.lastDetailFrame.ID != 0 {
+			return run.lastDetailFrame
+		}
+		return pre
+	}
 	if run.lastDetailFrame.ID != 0 {
 		return run.lastDetailFrame
 	}
@@ -2226,8 +2473,10 @@ func (run *inventoryRun) sameDetailSelection(out detailOutcome, target int) bool
 // pre-click frame carried exactly the detail the target repeated, so
 // clicking that slot back would only repeat the same ambiguity. Among the
 // remaining occupied slots the nearest grid neighbor wins (reading order
-// breaks ties), keeping the click inside the current viewport. No scroll is
-// ever used to find a reference.
+// breaks ties), keeping the click inside the current viewport. A scoped
+// drive-storage rescan additionally excludes cards whose badge lies outside
+// the declared positions, so a reference never clicks outside the approved
+// range. No scroll is ever used to find a reference.
 func (run *inventoryRun) referenceSlot(m PageMatch, target, previous int) (int, bool) {
 	if !run.listVerdict(m) {
 		return 0, false
@@ -2235,17 +2484,41 @@ func (run *inventoryRun) referenceSlot(m PageMatch, target, previous int) (int, 
 	l := run.inv.Layout
 	targetRow, targetColumn := l.slotPosition(target)
 	best, bestDistance := -1, 0
+	bestDifferent := false
+	targetPosition := 0
+	if run.inv.storagePage() && run.inv.fullScope() && m.List.Positions[target].known() {
+		targetPosition = m.List.Positions[target].Position
+	}
 	for i, occupied := range m.List.Occupied {
 		if !occupied || i == target || i == previous {
 			continue
 		}
+		if run.inv.storagePage() && len(run.inv.positions) > 0 {
+			pos := m.List.Positions[i]
+			if !pos.known() || !containsPosition(run.inv.positions, pos.Position) {
+				continue
+			}
+		}
 		row, column := l.slotPosition(i)
 		distance := absInt(row-targetRow) + absInt(column-targetColumn)
-		if best < 0 || distance < bestDistance {
-			best, bestDistance = i, distance
+		different := targetPosition != 0 && m.List.Positions[i].known() && m.List.Positions[i].Position != targetPosition
+		if best < 0 || (different && !bestDifferent) || (different == bestDifferent && distance < bestDistance) {
+			best, bestDistance, bestDifferent = i, distance, different
 		}
 	}
 	return best, best >= 0
+}
+
+// awaitReferenceDetail shares the verified weak-border wait only when
+// its expected position comes from the verified current ledger.
+func (run *inventoryRun) awaitReferenceDetail(ctx context.Context, baseline platform.Frame, baselineDetail *DetailEvidence, target int) (detailOutcome, error) {
+	if run.storageDetailRecoveryEnabled() && run.ledger != nil {
+		cells := run.ledger.visible()
+		if target >= 0 && target < len(cells) && cells[target].Position > 0 {
+			return run.awaitNormalTargetDetail(ctx, baseline, baselineDetail, target)
+		}
+	}
+	return run.awaitDetail(ctx, baseline, target, false)
 }
 
 // referenceRoundTrip resolves one same-detail target with the single
@@ -2263,16 +2536,20 @@ func (run *inventoryRun) referenceRoundTrip(ctx context.Context, slot *scan.Slot
 	if timing == nil {
 		timing = &visitTiming{}
 	}
+	tracePageUnknownStage(run, "reference-preparation")
 	if err := run.checkLedgerViewport(targetOut.match); err != nil {
 		slot.Discard()
+		tracePageUnknownFrameFault(run, target, targetOut.frame, targetOut.match, true, err)
 		return err
 	}
 	ref, ok := run.referenceSlot(targetOut.match, target, previous)
 	if !ok {
 		slot.Discard()
-		return scan.NewFault(CodeDetailUnattributed, fmt.Errorf(
+		err := scan.NewFault(CodeDetailUnattributed, fmt.Errorf(
 			"collect: the selection reached %s but its settled detail was not proven different from the comparison baseline, and no other visible occupied slot is available as a distinguishable reference (T5 §4): %s",
 			targetName, targetOut.match.Evidence))
+		tracePageUnknownReferenceFault(run, target, platform.Frame{}, PageMatch{}, err)
+		return err
 	}
 	refRow, refColumn := run.inv.Layout.slotPosition(ref)
 	log.Printf("youkai: collect: %s: the settled detail was not proven different after the click; trying one reference round trip via slot %d (row %d, column %d)",
@@ -2285,49 +2562,80 @@ func (run *inventoryRun) referenceRoundTrip(ctx context.Context, slot *scan.Slot
 	}, &awaitOutcome{frame: targetOut.frame, match: targetOut.match, expected: true})
 	switch preRef.class {
 	case awaitStable:
+		tracePageUnknownObserve(run, preRef.frame, preRef.match, target, detailOutcome{})
 	case awaitCanceled, awaitFrameErr:
+		if preRef.frame.ID != 0 {
+			tracePageUnknownObserve(run, preRef.frame, preRef.match, target, detailOutcome{})
+		}
 		slot.Discard()
 		return preRef.err
 	case awaitGeometry:
 		slot.Discard()
-		return run.geometryChanged(preRef.frame)
+		err := run.geometryChanged(preRef.frame)
+		tracePageUnknownFrameFault(run, target, preRef.frame, PageMatch{}, false, err)
+		return err
 	default:
 		slot.Discard()
-		return scan.NewFault(CodeDetailUnattributed, fmt.Errorf(
+		err := scan.NewFault(CodeDetailUnattributed, fmt.Errorf(
 			"collect: the same-detail reference round trip for %s could not establish a stable pre-reference frame with the target selected and reference slot %d occupied: %s",
 			targetName, ref, preRef.match.Evidence))
+		if preRef.frame.ID != 0 && !run.listVerdict(preRef.match) {
+			tracePageUnknownFrameFault(run, target, preRef.frame, preRef.match, true, err)
+		} else if preRef.frame.ID != 0 {
+			tracePageUnknownWaitTimeout(run, target, detailOutcome{frame: preRef.frame, match: preRef.match}, err)
+		} else {
+			tracePageUnknownReferenceFault(run, target, platform.Frame{}, PageMatch{}, err)
+		}
+		return err
 	}
 	if err := run.checkLedgerViewport(preRef.match); err != nil {
 		slot.Discard()
+		tracePageUnknownFrameFault(run, target, preRef.frame, preRef.match, true, err)
 		return err
 	}
 	run.listMatch = preRef.match
 	run.lastFrame = preRef.frame
 	if got := run.inv.matcher().CompareDetail(targetOut.frame, preRef.frame); got != DetailSame {
 		slot.Discard()
-		return scan.NewFault(CodeDetailUnattributed, fmt.Errorf(
+		err := scan.NewFault(CodeDetailUnattributed, fmt.Errorf(
 			"collect: the target %s's detail changed while preparing the reference (frames %d -> %d compare %v); one round trip can no longer attribute the click",
 			targetName, targetOut.frame.ID, preRef.frame.ID, got))
+		tracePageUnknownFrameFault(run, target, preRef.frame, preRef.match, true, err)
+		return err
 	}
 
 	if err := run.observeReady(ctx); err != nil {
 		slot.Discard()
 		return err
 	}
+	tracePageUnknownStage(run, "reference-wait")
 	res := run.view.Dispatch(platform.InputOp{
 		Kind:     platform.InputClick,
 		Geometry: run.geo,
 		FrameID:  preRef.frame.ID,
 		At:       run.inv.Layout.slotCenter(ref),
 	})
+	tracePageUnknownAction(run, "reference-click", ref, preRef.frame.ID, res)
+	if a := run.abTiming; a != nil {
+		a.stage = "reference_out"
+		if !res.FinishedAt.IsZero() {
+			a.clickFinishedNS = res.FinishedAt.Sub(a.started).Nanoseconds()
+		}
+	}
 	if err := run.dispatchOutcome(ctx, res); err != nil {
 		slot.Discard()
 		return err
 	}
-	refOut, err := run.awaitDetail(ctx, preRef.frame, ref, false)
+	refOut, err := run.awaitReferenceDetail(ctx, preRef.frame, preRef.match.Detail, ref)
 	if err != nil {
+		if refOut.frame.ID != 0 {
+			tracePageUnknownObserve(run, refOut.frame, refOut.match, target, detailOutcome{})
+		}
 		slot.Discard()
 		return err
+	}
+	if refOut.frame.ID != 0 {
+		tracePageUnknownObserve(run, refOut.frame, refOut.match, target, detailOutcome{})
 	}
 	switch refOut.class {
 	case awaitStable:
@@ -2336,13 +2644,30 @@ func (run *inventoryRun) referenceRoundTrip(ctx context.Context, slot *scan.Slot
 		return refOut.err
 	case awaitGeometry:
 		slot.Discard()
-		return run.geometryChanged(refOut.frame)
+		err := run.geometryChanged(refOut.frame)
+		tracePageUnknownFrameFault(run, target, refOut.frame, PageMatch{}, false, err)
+		return err
+	case awaitDeadline:
+		slot.Discard()
+		err := run.referenceFault("the reference click", refOut, targetName, ref)
+		if refOut.frame.ID != 0 && run.listVerdict(refOut.match) && refOut.match.List != nil &&
+			refOut.match.List.Selected == ref && refOut.sawDifferent {
+			tracePageUnknownWaitTimeout(run, target, refOut, err)
+		} else if refOut.frame.ID != 0 {
+			tracePageUnknownFrameFault(run, target, refOut.frame, refOut.match, true, err)
+		} else {
+			tracePageUnknownReferenceFault(run, target, platform.Frame{}, PageMatch{}, err)
+		}
+		return err
 	default:
 		slot.Discard()
-		return run.referenceFault("the reference click", refOut, targetName, ref)
+		err := run.referenceFault("the reference click", refOut, targetName, ref)
+		tracePageUnknownFrameFault(run, target, refOut.frame, refOut.match, true, err)
+		return err
 	}
 	if err := run.checkLedgerViewport(refOut.match); err != nil {
 		slot.Discard()
+		tracePageUnknownFrameFault(run, target, refOut.frame, refOut.match, true, err)
 		return err
 	}
 	run.listMatch = refOut.match
@@ -2350,6 +2675,7 @@ func (run *inventoryRun) referenceRoundTrip(ctx context.Context, slot *scan.Slot
 	log.Printf("youkai: collect: %s: reference slot %d selected, its detail differs from the target's and held stable on frame %d",
 		targetName, ref, refOut.frame.ID)
 
+	tracePageUnknownStage(run, "return-preparation")
 	if err := run.observeReady(ctx); err != nil {
 		slot.Discard()
 		return err
@@ -2360,19 +2686,38 @@ func (run *inventoryRun) referenceRoundTrip(ctx context.Context, slot *scan.Slot
 		FrameID:  refOut.frame.ID,
 		At:       run.inv.Layout.slotCenter(target),
 	})
+	tracePageUnknownAction(run, "return-click", target, refOut.frame.ID, res)
+	if a := run.abTiming; a != nil {
+		a.stage = "reference_return"
+		if !res.FinishedAt.IsZero() {
+			a.clickFinishedNS = res.FinishedAt.Sub(a.started).Nanoseconds()
+		}
+	}
 	if err := run.dispatchOutcome(ctx, res); err != nil {
 		slot.Discard()
 		return err
 	}
-	backOut, err := run.awaitDetail(ctx, refOut.frame, target, false)
+	tracePageUnknownStage(run, "return-wait")
+	backOut, err := run.awaitReferenceDetail(ctx, refOut.frame, refOut.match.Detail, target)
 	if err != nil {
+		if backOut.frame.ID != 0 {
+			tracePageUnknownObserve(run, backOut.frame, backOut.match, target, detailOutcome{})
+		}
 		slot.Discard()
 		return err
+	}
+	if backOut.frame.ID != 0 {
+		tracePageUnknownObserve(run, backOut.frame, backOut.match, target, detailOutcome{})
 	}
 	switch backOut.class {
 	case awaitStable:
 		log.Printf("youkai: collect: %s: return click selected the target and its detail differs from reference frame %d, stable on frame %d",
 			targetName, refOut.frame.ID, backOut.frame.ID)
+		if err := run.requireDetailPosition(backOut.match, target, targetName); err != nil {
+			slot.Discard()
+			tracePageUnknownFrameFault(run, target, backOut.frame, backOut.match, true, err)
+			return err
+		}
 		timing.reference += time.Since(referenceStart)
 		return run.admit(slot, backOut, pre, preMatch, target, row, column, AssociationReference, pre.ID,
 			&referenceCapture{slot: ref, row: refRow, column: refColumn, frame: refOut.frame}, attempt+1, targetName, timing)
@@ -2381,10 +2726,26 @@ func (run *inventoryRun) referenceRoundTrip(ctx context.Context, slot *scan.Slot
 		return backOut.err
 	case awaitGeometry:
 		slot.Discard()
-		return run.geometryChanged(backOut.frame)
+		err := run.geometryChanged(backOut.frame)
+		tracePageUnknownFrameFault(run, target, backOut.frame, PageMatch{}, false, err)
+		return err
+	case awaitDeadline:
+		slot.Discard()
+		err := run.referenceFault("the return click on the target", backOut, targetName, ref)
+		if backOut.frame.ID != 0 && run.listVerdict(backOut.match) && backOut.match.List != nil &&
+			backOut.match.List.Selected == target && backOut.sawDifferent {
+			tracePageUnknownWaitTimeout(run, target, backOut, err)
+		} else if backOut.frame.ID != 0 {
+			tracePageUnknownFrameFault(run, target, backOut.frame, backOut.match, true, err)
+		} else {
+			tracePageUnknownReferenceFault(run, target, platform.Frame{}, PageMatch{}, err)
+		}
+		return err
 	default:
 		slot.Discard()
-		return run.referenceFault("the return click on the target", backOut, targetName, ref)
+		err := run.referenceFault("the return click on the target", backOut, targetName, ref)
+		tracePageUnknownFrameFault(run, target, backOut.frame, backOut.match, true, err)
+		return err
 	}
 }
 
@@ -2583,6 +2944,10 @@ func equippedVerdict(pre, out PageMatch, slot int) (string, string) {
 		return EquippedStateEquipped, evidence
 	case detail == AvatarAbsent && list == AvatarAbsent:
 		return EquippedStateUnequipped, evidence
+	case out.Page == PageDriveStorage && detail == AvatarAbsent && !slices.Contains(states, AvatarPresent):
+		// The visible detail placeholder is sufficient for this page.
+		// A readable portrait on the list remains contradictory evidence.
+		return EquippedStateUnequipped, evidence
 	default:
 		return "", evidence + ": the detail and list evidence do not agree on presence"
 	}
@@ -2669,6 +3034,7 @@ func (run *inventoryRun) admit(slot *scan.Slot, out detailOutcome, pre platform.
 		Row:                row,
 		Column:             col,
 		Position:           run.position,
+		Page:               run.inv.Layout.Page,
 		Quality:            out.match.Detail.Quality,
 		RarityFilter:       run.observedRarityFilter(out.match),
 		ScrollEvidence:     run.lastScrollEvidence,
@@ -2752,7 +3118,370 @@ func (run *inventoryRun) admissionEvidence(target string, pre platform.Frame, ou
 	if span := run.inv.detailStableSpan(); span > 0 {
 		stability = fmt.Sprintf(" for at least %s", span)
 	}
-	return fmt.Sprintf("%s%s; matcher: %s", lead, stability, out.match.Evidence)
+	slotEvidence := ""
+	if run.inv.storagePage() && out.match.Detail != nil {
+		slotEvidence = fmt.Sprintf("; drive-storage card slot %d and detail badge slot %d agree",
+			run.position, out.match.Detail.Position.Position)
+	}
+	return fmt.Sprintf("%s%s%s; matcher: %s", lead, stability, slotEvidence, out.match.Evidence)
+}
+
+// storageBadgeDisposition classifies one frame inside the normal
+// full-inventory drive-storage target click. It returns:
+//   - unconfirmed: non-target badges are unreadable/conflicting, so the
+//     frame is skipped and the existing detail wait keeps observing;
+//   - ready: every badge, the target card and the target detail are fully
+//     confirmed, so a later same-detail deadline may use its existing
+//     reference path;
+//   - err: a known wrong badge, target/page/selection/filter/occupancy or
+//     client drift, which keeps the original safe stop.
+//
+// It never feeds the production verdict and never supplies a missing badge
+// from an earlier frame.
+type weakSelectionEvidenceProvider interface {
+	weakSelectionEvidence(platform.Frame) (PageMatch, *weakSelectionEvidence)
+}
+
+// detailViewportSame proves a weak candidate stayed in the same viewport
+// without relying on its unreadable selection border: the list comparison
+// must be Stationary, the scrollbar thumb must be available and unchanged,
+// and the evidence matcher must not report sub-row movement.
+func (run *inventoryRun) detailViewportSame(before, after platform.Frame) (bool, string) {
+	return run.detailViewportSameWithSingleEdge(before, after, false)
+}
+
+func (run *inventoryRun) detailViewportSameWithSingleEdge(before, after platform.Frame, allowSingleEdge bool) (bool, string) {
+	if before.ID == 0 || after.ID == 0 || before.Geometry != after.Geometry || before.Content != after.Content {
+		return false, "missing or changed frame geometry/content"
+	}
+	if sameFrameContent(before, after) {
+		return true, "the same immutable frame content"
+	}
+	sm := run.inv.matcher().MatchScroll(before, after)
+	if sm.Displaced || sm.Lost || sm.Undecided || sm.SelectionConflict || !sm.Stationary {
+		return false, sm.Evidence
+	}
+	thumbs, ok := run.inv.matcher().(thumbEdgesReporter)
+	if !ok {
+		return false, "the scrollbar thumb probe is unavailable"
+	}
+	bs, be, bok := thumbs.ThumbEdges(before)
+	as, ae, aok := thumbs.ThumbEdges(after)
+	mover, observedMovement := run.inv.matcher().(scrollMovementProver)
+	// A one-pixel change in length with one unchanged endpoint is
+	// allowed only with independent list stillness and movement checks.
+	edgeOnly := allowSingleEdge && observedMovement &&
+		((bs == as && absInt(be-ae) == 1) || (be == ae && absInt(bs-as) == 1))
+	if !bok || !aok || ((bs != as || be != ae) && !edgeOnly) {
+		return false, fmt.Sprintf("scrollbar thumb changed or unreadable (%d..%d -> %d..%d)", bs, be, as, ae)
+	}
+	if observedMovement {
+		if moved, why := mover.zeroShiftMovement(before, after); moved {
+			return false, why
+		}
+	}
+	return true, sm.Evidence
+}
+
+// storageWeakSelectionPending accepts one private matcher weak-selection hint
+// only in the normal target detail wait. The public matcher still reports the
+// same PageUnknown/List=nil as v8. A copied probe, with the prior target
+// selection, lets existing structural gates validate the frame; the weak
+// frame itself is never admitted or written to the ledger.
+func (run *inventoryRun) storageWeakSelectionPending(f platform.Frame, baseline platform.Frame, baselineDetail *DetailEvidence, target int, out *detailOutcome, candidate *storageCandidateMatch, sample *storageABFrameTiming) (pending, comparableDetail bool, err error) {
+	if !out.sawTarget || f.Reused || !run.storageDetailRecoveryEnabled() ||
+		f.Geometry != run.geo || f.Content != run.inv.Layout.Content ||
+		run.ledger == nil || !run.rangeProof.Verified || !run.filterActive {
+		return false, false, nil
+	}
+	provider, ok := run.inv.matcher().(weakSelectionEvidenceProvider)
+	if !ok {
+		return false, false, nil
+	}
+	detailed, weak := run.timedStorageWeakMatch(f, provider, candidate, sample)
+	if weak == nil || detailed.Page != PageDriveStorage || detailed.List == nil ||
+		detailed.List.Selected != -1 || weak.Slot != target {
+		return false, false, nil
+	}
+	anchor := out.lastVerifiedFrame
+	incompleteAnchor := anchor.ID == 0
+	if incompleteAnchor {
+		anchor = out.lastIncompleteStrongFrame
+		if anchor.ID == 0 {
+			return false, false, nil
+		}
+	}
+	if out.weakSinceStrong && out.tentativeWeakFrames == 0 && out.preClickAnchor.ID == 0 {
+		err := scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
+			"collect: frame %d shows a second weak target selection without a verified strong frame in between", f.ID))
+		tracePageUnknownTerminal(run, f, detailed, target, err, "weak-selection-second")
+		return false, false, err
+	}
+	if !out.weakSinceStrong {
+		tracePageUnknownWeak(run, f, weak.Slot, weak.Hits)
+	}
+	probe := detailed
+	list := *detailed.List
+	list.Selected = target
+	list.weakSelection = nil
+	probe.List = &list
+	verifiedTarget := platform.Frame{}
+	if !incompleteAnchor && run.inv.fullScope() && out.preClickAnchor.ID != 0 && !out.preClickAnchor.Reused {
+		verifiedTarget = anchor
+	}
+	unconfirmed, ready, detailDeferred, err := run.storageBadgeDisposition(f, baseline, baselineDetail, probe, target, true, out.sawTargetDetail, verifiedTarget)
+	if err != nil {
+		tracePageUnknownTerminal(run, f, detailed, target, err, "weak-selection-probe")
+		return false, false, err
+	}
+	// A weak transition may see the same trailing-edge raster change
+	// as its eventual strong frame. Both stillness checks remain active.
+	allowEdge := run.inv.fullScope() && out.preClickAnchor.ID != 0 &&
+		!out.preClickAnchor.Reused && anchor.ID < f.ID &&
+		f.ArrivedAt.After(anchor.ArrivedAt)
+	if stable, why := run.detailViewportSameWithSingleEdge(anchor, f, allowEdge); !stable {
+		err := scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
+			"collect: frame %d has a weak target selection but its viewport is not proven unchanged from frame %d: %s",
+			f.ID, anchor.ID, why))
+		tracePageUnknownTerminal(run, f, detailed, target, err, "weak-selection-viewport")
+		return false, false, err
+	}
+	// The checked pre-click view and the same-viewport strong target
+	// give a partially readable transition enough context to wait.
+	// Disposition above already rejected every known mismatch, and the
+	// advancing path still requires a later fully checked strong frame.
+	if detailDeferred && run.inv.fullScope() && !out.sawTargetDetail &&
+		out.preClickAnchor.ID != 0 && !out.preClickAnchor.Reused &&
+		out.preClickAnchor.ID < anchor.ID && out.preClickAnchor.ArrivedAt.Before(anchor.ArrivedAt) &&
+		anchor.ID < f.ID && anchor.ArrivedAt.Before(f.ArrivedAt) &&
+		(detailed.Detail == nil || detailed.Detail.Position == (PositionVerdict{})) &&
+		(!out.weakSinceStrong || (out.tentativeWeakFrames > 0 && f.ID > out.frame.ID && f.ArrivedAt.After(out.frame.ArrivedAt))) {
+		const maxTentativeWeakFrames = 4
+		stable, _ := run.detailViewportSameWithSingleEdge(out.preClickAnchor, f, allowEdge)
+		if stable && out.tentativeWeakFrames < maxTentativeWeakFrames {
+			out.tentativeWeakFrames++
+			log.Printf("youkai: collect: weak target awaits fresh proof from pre-click anchor: viewport=%d target=%d pre=%d strong=%d frame=%d attempt=%d", run.viewport, target, out.preClickAnchor.ID, anchor.ID, f.ID, out.tentativeWeakFrames)
+			return true, false, nil
+		}
+	}
+	// Consecutive weak frames can only buy time for a new strong frame.
+	// Recheck occupancy, the readable badges and the target detail badge
+	// on every fresh frame. Detail similarity is tested on the eventual
+	// strong frames, and this wait neither contributes stability nor
+	// allows a different known badge.
+	targetBadgePending := verifiedTarget.ID != 0 && unconfirmed && !ready && !detailDeferred &&
+		list.Positions[target] == (PositionVerdict{})
+	if targetBadgePending && !out.weakSinceStrong {
+		return true, false, nil
+	}
+	if out.weakSinceStrong && !incompleteAnchor && out.preClickAnchor.ID != 0 &&
+		run.inv.fullScope() && out.sawTargetDetail && out.verifiedWeakRepeats < 2 &&
+		f.ID > out.frame.ID && f.ArrivedAt.After(out.frame.ArrivedAt) &&
+		(ready || targetBadgePending) && decidableDisc(detailed.Detail) {
+		out.verifiedWeakRepeats++
+		log.Printf("youkai: collect: consecutive weak target awaiting strong selection: viewport=%d target=%d frame=%d attempt=%d", run.viewport, target, f.ID, out.verifiedWeakRepeats)
+		return true, false, nil
+	}
+	if out.weakSinceStrong {
+		err := scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
+			"collect: frame %d shows a second weak target selection without a verified strong frame in between", f.ID))
+		tracePageUnknownTerminal(run, f, detailed, target, err, "weak-selection-second")
+		return false, false, err
+	}
+	// At this point geometry, occupancy, target and every readable badge
+	// agree. An unreadable non-target badge may consume the one bounded
+	// weak wait only if the target's own detail badge already agrees.
+	if incompleteAnchor && (unconfirmed || !ready) {
+		err := scan.NewFault(CodePositionLost, fmt.Errorf(
+			"collect: frame %d cannot verify the full viewport and target detail after an incomplete strong selection", f.ID))
+		tracePageUnknownTerminal(run, f, detailed, target, err, "weak-selection-incomplete-anchor")
+		return false, false, err
+	}
+	if unconfirmed && ready {
+		return true, false, nil
+	}
+
+	// A strong anchor can have a complete grid while the detail pane
+	// is still transitioning. Let one weak frame with the same grid
+	// and one unreadable non-target badge wait for fresh strong
+	// evidence, even if this frame cannot prove the detail association.
+	if !incompleteAnchor && detailDeferred && run.inv.fullScope() &&
+		f.ID > anchor.ID && f.ArrivedAt.After(anchor.ArrivedAt) &&
+		(detailed.Detail == nil || detailed.Detail.Position == (PositionVerdict{})) {
+		if unknownOnlyBadgeCount(list) == 1 {
+			log.Printf("youkai: collect: weak target and unreadable non-target badge awaiting fresh frame: viewport=%d target=%d anchor=%d frame=%d", run.viewport, target, anchor.ID, f.ID)
+			return true, false, nil
+		}
+	}
+	if err := run.checkLedgerViewport(probe); err != nil {
+		tracePageUnknownTerminal(run, f, detailed, target, err, "weak-selection-ledger")
+		return false, false, err
+	}
+	return true, ready && detailed.Detail.Quality == QualityS && detailed.Detail.Substats > 0, nil
+}
+
+// A conflict cannot use the same grace as one unreadable badge.
+func unknownOnlyBadgeCount(list ListEvidence) int {
+	unreadable := 0
+	for i, pos := range list.Positions {
+		if !list.Occupied[i] || pos.known() {
+			continue
+		}
+		if pos.Conflict {
+			return len(list.Positions)
+		}
+		unreadable++
+	}
+	return unreadable
+}
+
+// storageTargetBadgeMayWait permits only the observed full-scan 1-badge dropout.
+// It provides no position verdict and never writes the ledger.
+func (run *inventoryRun) storageTargetBadgeMayWait(before, f platform.Frame, m PageMatch, target, expected int) bool {
+	if !run.inv.fullScope() || expected != 1 || f.Reused || before.ID == 0 ||
+		f.ID <= before.ID || !f.ArrivedAt.After(before.ArrivedAt) || m.List.Selected != target {
+		return false
+	}
+	badge := m.List.Positions[target]
+	if badge.Position != 0 || badge.Conflict || m.Detail == nil ||
+		m.Detail.Position != (PositionVerdict{Position: expected}) ||
+		m.Detail.Quality != QualityS || m.Detail.Substats == 0 {
+		return false
+	}
+	stable, _ := run.detailViewportSame(before, f)
+	return stable
+}
+
+func (run *inventoryRun) storageBadgeDisposition(f platform.Frame, baseline platform.Frame, baselineDetail *DetailEvidence, m PageMatch, target int, seenTarget, seenTargetDetail bool, verifiedTarget platform.Frame) (unconfirmed, ready, detailDeferred bool, err error) {
+	if run.inv == nil || !run.storageDetailRecoveryEnabled() || !run.rangeProof.Verified || run.ledger == nil ||
+		!run.filterActive || f.Geometry != run.geo {
+		return false, false, false, nil
+	}
+	if m.Page != PageDriveStorage || m.List == nil {
+		if m.Page == PageUnknown && !seenTarget {
+			return false, false, false, nil
+		}
+		return false, false, false, scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
+			"collect: frame %d shows a different page (%s) during detail recovery", f.ID, m.Page))
+	}
+	if f.Content != run.inv.Layout.Content || m.Filter == nil || m.Filter.State != FilterActive {
+		return false, false, false, scan.NewFault(CodePositionLost, fmt.Errorf(
+			"collect: frame %d changed client content or filter during detail recovery", f.ID))
+	}
+	slots := len(run.inv.Layout.Slots)
+	if target < 0 || target >= slots || len(m.List.Occupied) != slots || len(m.List.Positions) != slots {
+		return false, false, false, run.advanceStateFault("waiting for detail", m)
+	}
+	cells := run.ledger.visible()
+	if len(cells) != slots || !run.ledger.agreesWith(m.List.Occupied) {
+		return false, false, false, run.advanceStateFault("waiting for detail", m)
+	}
+	targetCell := cells[target]
+	targetPos := m.List.Positions[target]
+	targetUnconfirmed := targetCell.State != "" && !targetPos.known() &&
+		seenTargetDetail && run.storageTargetBadgeMayWait(verifiedTarget, f, m, target, targetCell.Position)
+	if !targetUnconfirmed && (targetCell.State == "" || !targetPos.known() || targetPos.Position != targetCell.Position) {
+		fault := scan.NewFault(CodePositionLost, fmt.Errorf(
+			"collect: target %d lost its confirmed card badge during detail recovery", target))
+		tracePageUnknownTargetBadgeFault(run, f, m, target, fault)
+		return false, false, false, fault
+	}
+	// The visible ledger carries the clicked cell's expected position.
+	// References may be on a different position from the item being saved.
+	for i, pos := range m.List.Positions {
+		if i == target || !m.List.Occupied[i] {
+			continue
+		}
+		if cells[i].State == "" {
+			return false, false, false, run.advanceStateFault("waiting for detail", m)
+		}
+		if pos.known() {
+			if pos.Position != cells[i].Position {
+				return false, false, false, scan.NewFault(CodePositionLost, fmt.Errorf(
+					"collect: frame %d: non-target cell %d says slot %d while the ledger says %d",
+					f.ID, i, pos.Position, cells[i].Position))
+			}
+			continue
+		}
+		unconfirmed = true
+	}
+	if targetUnconfirmed {
+		if unconfirmed {
+			fault := scan.NewFault(CodePositionLost, fmt.Errorf("collect: frame %d has more than one unconfirmed badge while rechecking target %d", f.ID, target))
+			tracePageUnknownTargetBadgeFault(run, f, m, target, fault)
+			return false, false, false, fault
+		}
+		return true, false, false, nil
+	}
+	if m.List.Selected != target {
+		if seenTarget {
+			return false, false, false, scan.NewFault(CodePositionLost, fmt.Errorf(
+				"collect: frame %d moved the selected target away from %d during detail recovery", f.ID, target))
+		}
+		return false, false, false, nil
+	}
+	detailReady := false
+	if m.Detail == nil {
+		detailDeferred = true
+	} else {
+		switch {
+		case m.Detail.Position.Conflict, !m.Detail.Position.known():
+			// A transition can briefly expose an unreadable/old detail
+			// badge. It is not a target frame and must not start badge
+			// recovery; the ordinary detail wait continues.
+			detailDeferred = true
+		case m.Detail.Position.Position == targetPos.Position:
+			detailReady = true
+		default:
+			if seenTargetDetail {
+				// This click already showed the target's own detail. A later
+				// different detail is a new contradiction, even if its badge
+				// happens to equal the pre-click baseline.
+				return false, false, false, scan.NewFault(CodePositionConflict, fmt.Errorf(
+					"collect: frame %d changed the already observed target detail from slot %d to slot %d",
+					f.ID, targetPos.Position, m.Detail.Position.Position))
+			}
+			if baselineDetail != nil && !baselineDetail.Position.Conflict && baselineDetail.Position.known() &&
+				m.Detail.Position.Position == baselineDetail.Position.Position {
+				// Before any target detail is observed, this can be the old
+				// pane a click has not refreshed yet.
+				detailDeferred = true
+			} else if baselineDetail == nil || baselineDetail.Position.Conflict || !baselineDetail.Position.known() {
+				// Without independent baseline detail evidence, an immediate
+				// text comparison is not enough to call this a new wrong
+				// slot. Keep waiting for the target detail or the deadline.
+				detailDeferred = true
+			} else {
+				return false, false, false, scan.NewFault(CodePositionConflict, fmt.Errorf(
+					"collect: frame %d target detail says slot %d while the target card says %d",
+					f.ID, m.Detail.Position.Position, targetPos.Position))
+			}
+		}
+	}
+	if detailDeferred {
+		return false, false, true, nil
+	}
+	if unconfirmed {
+		return true, detailReady, false, nil
+	}
+	return false, detailReady, false, nil
+}
+
+// storageBadgeTransientFrame is retained for the diagnostic-style helper
+// tests: it reports only the skippable unconfirmed state, never a known
+// contradiction.
+func (run *inventoryRun) storageBadgeTransientFrame(f platform.Frame, m PageMatch, target int) bool {
+	unconfirmed, _, deferred, err := run.storageBadgeDisposition(f, platform.Frame{}, nil, m, target, false, false, platform.Frame{})
+	return err == nil && unconfirmed && !deferred
+}
+
+// badgeTransientFault preserves the original safe stop after a badge
+// transient that never cleared. It is not an admission, a retry, or a
+// reference-round-trip trigger.
+func (run *inventoryRun) badgeTransientFault(target string) error {
+	return scan.NewFault(CodePositionLost, fmt.Errorf(
+		"collect: %s: non-target card badges did not become fully readable within the detail wait; refusing to admit from an unconfirmed frame",
+		target))
 }
 
 // awaitDetail waits for the detail pane to become attributable to the
@@ -2772,13 +3501,63 @@ func (run *inventoryRun) admissionEvidence(target string, pre platform.Frame, ou
 // Initial: no pre-click frame exists; consecutive observations must stay
 // the same over the same window, starting from the first decidable frame.
 func (run *inventoryRun) awaitDetail(ctx context.Context, baseline platform.Frame, target int, initial bool) (detailOutcome, error) {
-	return run.awaitDetailFrames(ctx, baseline, target, initial, nil)
+	return run.awaitDetailFrames(ctx, baseline, nil, target, initial, nil, false)
 }
 
-func (run *inventoryRun) awaitDetailFrames(ctx context.Context, baseline platform.Frame, target int, initial bool, revisitCheck func(platform.Frame, PageMatch) error) (detailOutcome, error) {
+// awaitNormalTargetDetail opts a verified drive-storage click into the
+// non-target badge transient wait. Revisits still use the strict path.
+func (run *inventoryRun) awaitNormalTargetDetail(ctx context.Context, baseline platform.Frame, baselineDetail *DetailEvidence, target int) (detailOutcome, error) {
+	return run.awaitDetailFrames(ctx, baseline, baselineDetail, target, false, nil, true)
+}
+
+func (run *inventoryRun) compareDetailBaseline(baseline, current platform.Frame, baselineDetail, currentDetail *DetailEvidence) DetailComparison {
+	if run.inv.storagePage() && baseline.Geometry == current.Geometry && baseline.Content == current.Content &&
+		baselineDetail != nil && currentDetail != nil &&
+		baselineDetail.Position.known() && currentDetail.Position.known() &&
+		baselineDetail.Position.Position != currentDetail.Position.Position {
+		// Two independently verified detail positions cannot identify the
+		// same pane, even when the short text regions have a low mean MAD.
+		return DetailDifferent
+	}
+	return run.inv.matcher().CompareDetail(baseline, current)
+}
+
+func (run *inventoryRun) awaitDetailFrames(ctx context.Context, baseline platform.Frame, baselineDetail *DetailEvidence, target int, initial bool, revisitCheck func(platform.Frame, PageMatch) error, allowBadgeTransient bool) (detailOutcome, error) {
+	return run.awaitDetailFramesAnchored(ctx, baseline, baselineDetail, target, initial, revisitCheck, allowBadgeTransient, platform.Frame{})
+}
+
+func (run *inventoryRun) awaitDetailFramesAnchored(ctx context.Context, baseline platform.Frame, baselineDetail *DetailEvidence, target int, initial bool, revisitCheck func(platform.Frame, PageMatch) error, allowBadgeTransient bool, preClick platform.Frame) (detailOutcome, error) {
 	deadline := time.Now().Add(run.inv.actionBudget())
+	stage := "normal_detail"
+	if a := run.abTiming; a != nil && (a.stage == "reference_out" || a.stage == "reference_return") {
+		stage = a.stage
+	}
+	if initial {
+		stage = "initial_detail"
+	}
+	if revisitCheck != nil {
+		stage = "reference_detail"
+	}
+	if a := run.abTiming; a != nil {
+		a.stage = stage
+	}
 	span := run.inv.detailStableSpan()
-	out := detailOutcome{lastSelected: -2}
+	out := detailOutcome{lastSelected: -2, preClickAnchor: preClick}
+	const weakSettleWindow = 600 * time.Millisecond
+	weakSettleLimit := deadline.Add(weakSettleWindow)
+	extendWeakSettle := func() {
+		until := time.Now().Add(weakSettleWindow)
+		if until.After(weakSettleLimit) {
+			until = weakSettleLimit
+		}
+		if until.After(deadline) {
+			deadline = until
+		}
+	}
+	var targetBadgeAnchor platform.Frame
+	paced := allowBadgeTransient && revisitCheck == nil && !initial && run.pacedStorageDetailEnabled(preClick)
+	var previousFresh time.Time
+	weakSettleWindowUsed := false
 	after := run.lastArrived
 	var last platform.Frame
 	lastSet := false
@@ -2795,7 +3574,11 @@ func (run *inventoryRun) awaitDetailFrames(ctx context.Context, baseline platfor
 			return out, nil
 		}
 		fctx, cancel := context.WithDeadline(ctx, deadline)
-		f, err := run.view.Frame(fctx, platform.FrameRequest{After: after})
+		request := platform.FrameRequest{After: after}
+		if paced {
+			request = pacedStorageDetailRequest(after, previousFresh)
+		}
+		f, err := run.storageABReadFrame(fctx, request)
 		cancel()
 		if err != nil {
 			switch {
@@ -2810,25 +3593,196 @@ func (run *inventoryRun) awaitDetailFrames(ctx context.Context, baseline platfor
 		}
 		if f.Geometry != run.geo {
 			out.class, out.frame = awaitGeometry, f
+			tracePageUnknownWaitFault(run, target, f, PageMatch{}, run.geometryChanged(f))
 			return out, nil
 		}
-		m, err := run.matchFrame(f)
+		if paced && !f.Reused && f.ID > run.newestFrameID && f.ArrivedAt.After(after) {
+			previousFresh = f.ArrivedAt
+		}
+		sample := run.storageABFrame(f, stage)
+		var candidate storageCandidateMatch
+		if allowBadgeTransient && !initial && revisitCheck == nil {
+			candidate = run.storageCandidate(f)
+			candidate.fastBadges = paced && candidate.matcher != nil
+			if sample != nil {
+				sample.PacedFastDetail = candidate.fastBadges
+			}
+		}
+		m, err := run.checkMatchedFrame(f, run.timedStoragePublicMatch(f, &candidate, sample))
+		if sample != nil {
+			sample.StrongTarget = err == nil && sample.FreshByGate && m.List != nil && m.List.Selected == target
+		}
 		if err != nil {
+			tracePageUnknownWaitFault(run, target, f, m, err)
 			return out, err
 		}
+		if allowBadgeTransient && !initial && revisitCheck == nil {
+			tracePageUnknownObserve(run, f, m, target, out)
+			if targetBadgeAnchor.ID != 0 {
+				if stable, why := run.detailViewportSame(targetBadgeAnchor, f); !stable {
+					fault := scan.NewFault(CodePositionLost, fmt.Errorf(
+						"collect: frame %d changed the target viewport during badge recheck: %s", f.ID, why))
+					tracePageUnknownTargetBadgeFault(run, f, m, target, fault)
+					return out, fault
+				}
+				if m.Page != PageUnknown && (m.Page != PageDriveStorage || m.List == nil || m.List.Selected != target) {
+					fault := scan.NewFault(CodePositionLost, fmt.Errorf("collect: frame %d lost the selected target during badge recheck", f.ID))
+					tracePageUnknownTargetBadgeFault(run, f, m, target, fault)
+					return out, fault
+				}
+			}
+			if out.sawWeakSelection && out.lastVerifiedFrame.ID != 0 && m.Page != PageUnknown {
+				fullStrongTarget := !f.Reused && f.ID > out.lastVerifiedFrame.ID &&
+					f.ArrivedAt.After(out.lastVerifiedFrame.ArrivedAt) &&
+					run.positionListVerdict(m) && m.List.Selected == target &&
+					target >= 0 && target < len(m.List.Positions) &&
+					m.Detail != nil && m.Detail.Quality == QualityS && m.Detail.Substats > 0 &&
+					m.Detail.Position.known() && m.Detail.Position == m.List.Positions[target] &&
+					m.Filter != nil && m.Filter.State == FilterActive && run.checkLedgerViewport(m) == nil
+				if stable, why := run.detailViewportSameWithSingleEdge(out.lastVerifiedFrame, f, fullStrongTarget); !stable {
+					err := scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
+						"collect: frame %d changed the verified target viewport after a weak selection (frame %d): %s",
+						f.ID, out.lastVerifiedFrame.ID, why))
+					tracePageUnknownTerminal(run, f, m, target, err, "weak-selection-viewport")
+					return out, err
+				}
+			}
+			if weak, comparableDetail, err := run.storageWeakSelectionPending(f, baseline, baselineDetail, target, &out, &candidate, sample); err != nil {
+				out.frame, out.match = f, m
+				return out, err
+			} else if weak {
+				if out.lastVerifiedFrame.ID == 0 && out.tentativeWeakFrames == 0 {
+					// A weak frame reached through an incomplete anchor
+					// has independently verified the full list and detail.
+					out.lastVerifiedFrame = f
+				}
+				if comparableDetail && lastSet {
+					// A late weak frame can otherwise consume the deadline
+					// before any fresh strong frame can confirm recovery.
+					extendWeakSettle()
+				}
+				recheckGap := out.sawWeakSelection
+				out.sawWeakSelection = true
+				out.weakSinceStrong = true
+				out.detailDeferred = true
+				out.badgeRecovered = false
+				out.frame, out.match = f, m
+				if !f.Reused {
+					run.lastArrived = f.ArrivedAt
+					after = f.ArrivedAt
+				}
+				// A fully accounted weak frame with the same readable
+				// pane can bridge a visual gap but never counts as strong.
+				if !recheckGap || !comparableDetail || !lastSet || run.inv.matcher().CompareDetail(last, f) != DetailSame {
+					runLen, lastSet = 0, false
+				}
+				out.settledNotDifferent = false
+				continue
+			}
+			if targetBadgeAnchor.ID != 0 && m.Page == PageUnknown {
+				// Only the preceding private weak-target check can hold
+				// a public unknown frame during badge revalidation.
+				fault := scan.NewFault(CodePositionLost, fmt.Errorf("collect: frame %d lost the selected target during badge recheck", f.ID))
+				tracePageUnknownTargetBadgeFault(run, f, m, target, fault)
+				return out, fault
+			}
+			if m.Page == PageDriveStorage && m.List != nil && m.List.Selected == target {
+				out.sawTarget = true
+				out.lastSelected = target
+			}
+			unconfirmed, ready, deferred, err := run.storageBadgeDisposition(f, baseline, baselineDetail, m, target, out.sawTarget, out.sawTargetDetail, out.lastVerifiedFrame)
+			if err != nil {
+				tracePageUnknownWaitFault(run, target, f, m, err)
+				tracePageUnknownReject(run, f, m, target, err)
+				return out, err
+			}
+			if !f.Reused && run.listVerdict(m) && m.List.Selected == target {
+				// A strong selection can anchor the viewport while detail is
+				// still transitioning, if the whole list agrees with the ledger.
+				if (ready && !unconfirmed) || (deferred && out.lastVerifiedFrame.ID == 0 && run.checkLedgerViewport(m) == nil) {
+					out.lastVerifiedFrame = f
+				} else if deferred && out.lastVerifiedFrame.ID == 0 {
+					// Known badges, occupancy and the target card passed
+					// disposition; this frame can only anchor geometry.
+					out.lastIncompleteStrongFrame = f
+				}
+			}
+			if ready {
+				out.sawTargetDetail = true
+			}
+			if deferred {
+				out.detailDeferred = true
+				out.badgeRecovered = false
+				out.frame, out.match = f, m
+				if !f.Reused {
+					run.lastArrived = f.ArrivedAt
+					after = f.ArrivedAt
+				}
+				runLen, lastSet = 0, false
+				out.settledNotDifferent = false
+				continue
+			}
+			if unconfirmed {
+				if !m.List.Positions[target].known() && targetBadgeAnchor.ID == 0 {
+					targetBadgeAnchor = out.lastVerifiedFrame
+					out.sawTargetBadgeTransient = true
+					log.Printf("youkai: collect: target badge recheck pending viewport=%d target=%d anchor=%d frame=%d", run.viewport, target, targetBadgeAnchor.ID, f.ID)
+				}
+				out.sawBadgeTransient = true
+				out.badgeRecovered = false
+				out.frame, out.match = f, m
+				if !f.Reused {
+					run.lastArrived = f.ArrivedAt
+					after = f.ArrivedAt
+				}
+				runLen, lastSet = 0, false
+				out.settledNotDifferent = false
+				continue
+			}
+			out.detailDeferred = false
+			if ready && !f.Reused {
+				out.weakSinceStrong = false
+			}
+			if out.sawWeakSelection && ready && !f.Reused && !weakSettleWindowUsed {
+				// Give the first fully verified strong frame after a weak
+				// observation a bounded opportunity to meet the ordinary
+				// stability gate. This never sends another input.
+				extendWeakSettle()
+				weakSettleWindowUsed = true
+			}
+			if out.sawBadgeTransient {
+				// The transient state and the validation remain active for
+				// the rest of this detail wait. A correct frame only records
+				// that badges are currently recovered; it does not disable
+				// checks for later frames. Reused frames never prove this
+				// recovery.
+				if f.Reused {
+					runLen, lastSet = 0, false
+					out.settledNotDifferent = false
+					continue
+				}
+				out.badgeRecovered = ready
+			}
+		}
 		if run.inv.EnableBoundedRecovery && run.ledger != nil && !run.positionListVerdict(m) && (m.Page != PageUnknown || revisitCheck != nil) {
-			return out, run.advanceStateFault("waiting for detail", m)
+			err := run.advanceStateFault("waiting for detail", m)
+			tracePageUnknownWaitFault(run, target, f, m, err)
+			return out, err
 		}
 		if run.inv.EnableBoundedRecovery && run.rangeProof.Verified && run.ledger != nil {
 			if err := run.checkLedgerViewport(m); err != nil {
+				tracePageUnknownWaitFault(run, target, f, m, err)
 				return out, err
 			}
 			if out.sawTarget && m.List.Selected != target {
-				return out, scan.NewFault(CodePositionLost, fmt.Errorf("collect: frame %d lost the selected detail target %d", f.ID, target))
+				err := scan.NewFault(CodePositionLost, fmt.Errorf("collect: frame %d lost the selected detail target %d", f.ID, target))
+				tracePageUnknownWaitFault(run, target, f, m, err)
+				return out, err
 			}
 		}
 		if revisitCheck != nil {
 			if err := revisitCheck(f, m); err != nil {
+				tracePageUnknownWaitFault(run, target, f, m, err)
 				return out, err
 			}
 		}
@@ -2851,6 +3805,12 @@ func (run *inventoryRun) awaitDetailFrames(ctx context.Context, baseline platfor
 		if !usable {
 			runLen, lastSet = 0, false
 			out.settledNotDifferent = false
+		} else if out.sawWeakSelection && f.Reused {
+			// A reused frame repeats the preceding fresh observation. It may
+			// remain a neutral wait sample, but after a weak candidate it
+			// cannot become an independent stable confirmation. Leave the
+			// already proven settled/not-different state intact so a legal
+			// reference round trip can still resolve it.
 		} else {
 			// Settle on the frame sequence itself first. A click can pass
 			// through a transient crossfade or dim frame that differs from
@@ -2859,12 +3819,15 @@ func (run *inventoryRun) awaitDetailFrames(ctx context.Context, baseline platfor
 			// trip. Only the stable pane is compared with the baseline.
 			cmp := DetailSame
 			if !initial {
-				cmp = run.inv.matcher().CompareDetail(baseline, f)
+				cmp = run.compareDetailBaseline(baseline, f, baselineDetail, m.Detail)
 				if cmp == DetailDifferent {
 					// Keep the any-frame evidence for the ineffective-click
 					// gate, which must not retry after a visible change.
 					out.sawDifferent = true
 				}
+			}
+			if sample != nil && sample.FreshByGate && (initial || cmp == DetailDifferent) {
+				sample.AttributableCandidate = true
 			}
 			if !lastSet {
 				runLen, runStart, last, lastSet = 1, time.Now(), f, true
@@ -2881,6 +3844,13 @@ func (run *inventoryRun) awaitDetailFrames(ctx context.Context, baseline platfor
 			if runLen >= run.inv.stableFrames() && (span <= 0 || time.Since(runStart) >= span) {
 				switch {
 				case initial || cmp == DetailDifferent:
+					if out.sawTargetBadgeTransient {
+						log.Printf("youkai: collect: target badge recheck settled viewport=%d target=%d frame=%d", run.viewport, target, f.ID)
+					}
+					if sample != nil {
+						sample.StableAccepted = true
+						sample.DecisionNS = time.Since(run.abTiming.started).Nanoseconds()
+					}
 					out.class = awaitStable
 					out.stable = true
 					return out, nil
@@ -2891,6 +3861,10 @@ func (run *inventoryRun) awaitDetailFrames(ctx context.Context, baseline platfor
 					// that remains unchanged or ambiguous at the deadline
 					// goes to the reference round trip instead of being
 					// admitted as a transition.
+					if sample != nil {
+						sample.StableNotDifferent = true
+						sample.DecisionNS = time.Since(run.abTiming.started).Nanoseconds()
+					}
 					out.settledNotDifferent = true
 				default:
 					out.settledNotDifferent = false
@@ -2999,22 +3973,14 @@ func (run *inventoryRun) scroll(ctx context.Context) (err error) {
 			return err
 		}
 		dispatchStart := time.Now()
-		res := run.view.Dispatch(platform.InputOp{
-			Kind:     platform.InputDrag,
-			Geometry: run.geo,
-			FrameID:  before.ID,
-			At:       run.inv.Layout.ScrollFrom,
-			To:       run.inv.Layout.ScrollTo,
-			Steps:    10,
-			Duration: run.inv.Layout.ScrollDuration,
-		})
+		res := run.view.Dispatch(run.scrollInputOp(before))
 		drag += time.Since(dispatchStart)
 		attempts++
 		if err := run.dispatchOutcome(ctx, res); err != nil {
 			return err
 		}
 		settleStart := time.Now()
-		out, err := run.awaitScroll(ctx, before)
+		out, err := run.awaitScrollFrames(ctx, before, false, reuseForwardScrollPages)
 		settle += time.Since(settleStart)
 		if err != nil {
 			return err
@@ -3226,6 +4192,20 @@ type scrollOutcome struct {
 	stationary bool
 	displaced  bool
 	lost       bool
+	// beforeAtTop reports that the frame immediately before this wait's
+	// action was already at the scrollbar's top. Drive-storage top
+	// confirmation requires it: a thumb moving into the top on the same
+	// wait is a scroll, not a stationary boundary proof.
+	beforeAtTop bool
+	// thumbStill reports that both thumb edges stayed within the 2 px
+	// jitter floor across this wait. It is computed from both edges when
+	// the matcher exposes them, not only from the start used for progress.
+	thumbStill bool
+	// listStill reports that the complete stillness predicate accepted the
+	// before/after list content. A stationary thumb alone is not enough to
+	// establish the top: the list pixels must independently prove no
+	// displacement.
+	listStill bool
 	// unmoved reports that every observation in the wait was proof the
 	// list had not moved: the same content as the pre-drag frame or a
 	// Stationary comparison uncontradicted by observable movement, with no
@@ -3235,7 +4215,8 @@ type scrollOutcome struct {
 	// baseline does not turn a wait that observed movement into proof the
 	// drag did nothing. Only then may a caller treat the Stationary deadline
 	// as "the drag did nothing" and send one more drag (T5 §5).
-	unmoved bool
+	unmoved               bool
+	bottomReboundVerified bool
 	// sawFrame reports that the wait received at least one observation.
 	// lastFrameIsList reports that the most recently received observation
 	// was a verifiable warehouse list. Together they let a caller tell a
@@ -3342,11 +4323,31 @@ const (
 // gets its own SettleBudget settle window instead of being cut off
 // mid-settle. Neither widening ever shortens the plain scroll budget.
 //
+// scrollSignedRows returns the signed total row displacement. Positive
+// rows move content up and the selected card toward lower row indices.
+func scrollSignedRows(sm ScrollMatch) (int, bool) {
+	if !sm.Displaced || sm.Rows == 0 || len(sm.Matches) == 0 {
+		return 0, false
+	}
+	if sm.Matches[0].FromRow < sm.Matches[0].ToRow {
+		return -sm.Rows, true
+	}
+	return sm.Rows, true
+}
+
 // The terminal verdict is the latest one: Undecided supersedes an earlier
 // Stationary or Lost. An existing candidate still dominates — it cannot be
 // committed without a settling confirmation — and the separate unmoved
 // flag records whether the whole wait only ever proved stillness.
 func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame) (scrollOutcome, error) {
+	return run.awaitScrollAction(ctx, before, false)
+}
+
+func (run *inventoryRun) awaitScrollAction(ctx context.Context, before platform.Frame, confirmEnd bool) (scrollOutcome, error) {
+	return run.awaitScrollFrames(ctx, before, confirmEnd, false)
+}
+
+func (run *inventoryRun) awaitScrollFrames(ctx context.Context, before platform.Frame, confirmEnd, reusePages bool) (scrollOutcome, error) {
 	timing := run.inv.scrollTiming()
 	waitStart := run.inv.scrollNow()
 	deadline := waitStart.Add(run.inv.scrollBudget())
@@ -3426,6 +4427,126 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 	after := run.lastArrived
 	trace := newScrollTrace(run.inv.Layout, before)
 	out := scrollOutcome{trace: trace, waitStart: waitStart}
+	storageAction := run.inv.storagePage()
+	matchFrame := run.matchFrame
+	matchScroll := run.inv.matcher().MatchScroll
+	if matcher, ok := run.inv.matcher().(*ScrollEvidenceMatcher); reusePages && storageAction && !confirmEnd && ok {
+		pages := scrollPageCache{matcher: matcher.PixelMatcher}
+		matchScroll = func(a, b platform.Frame) ScrollMatch {
+			return matcher.matchScrollWithPage(a, b, pages.match)
+		}
+		matchFrame = func(f platform.Frame) (PageMatch, error) {
+			var started time.Time
+			sample := run.storageABFrame(f, run.storageABStage())
+			if sample != nil {
+				started = time.Now()
+			}
+			m := pages.match(f)
+			if sample != nil {
+				sample.PublicNS = time.Since(started).Nanoseconds()
+				sample.Page = m.Page
+			}
+			return run.checkMatchedFrame(f, m)
+		}
+	}
+	actionBeforeMatch := PageMatch{}
+	if storageAction {
+		actionBeforeMatch = run.listMatch
+		if actionBeforeMatch.List == nil {
+			actionBeforeMatch = run.inv.matcher().Match(before)
+		}
+	}
+	var rebound bottomReboundProof
+	if confirmEnd && storageAction {
+		if matcher, ok := run.inv.matcher().(*ScrollEvidenceMatcher); ok &&
+			run.checkLedgerViewport(actionBeforeMatch) == nil && run.listVerdict(actionBeforeMatch) &&
+			actionBeforeMatch.List.Bottom && actionBeforeMatch.List.Selected >= 0 && actionBeforeMatch.Filter != nil {
+			rebound = bottomReboundProof{matcher: matcher, before: before, list: actionBeforeMatch.List, started: waitStart, filter: actionBeforeMatch.Filter.State}
+		}
+	}
+	anchorColumn := -1
+	anchorSlot := -1
+	anchorRows := 0
+	anchorRowsKnown := false
+	if storageAction && actionBeforeMatch.List != nil {
+		if selected := actionBeforeMatch.List.Selected; selected >= 0 && selected < len(run.inv.Layout.Slots) {
+			_, anchorColumn = run.inv.Layout.slotPosition(selected)
+			anchorSlot, anchorRows, anchorRowsKnown = selected, 0, true
+		}
+	}
+	completeBadges := func(list *ListEvidence) bool {
+		if list == nil || len(list.Positions) != len(list.Occupied) {
+			return false
+		}
+		for i, occupied := range list.Occupied {
+			if occupied && !list.Positions[i].known() {
+				return false
+			}
+		}
+		return true
+	}
+	knownBadges := map[int]int{}
+	recordBadges := func(rows int, m PageMatch) bool {
+		if m.List == nil {
+			return false
+		}
+		// An incomplete view can contradict an established badge, but a
+		// transient misread must not establish a newly exposed badge.
+		complete := completeBadges(m.List)
+		for i := range m.List.Positions {
+			p := m.List.Positions[i]
+			if !p.known() {
+				continue
+			}
+			absolute := i + rows*run.inv.Layout.Columns
+			if previous, ok := knownBadges[absolute]; ok {
+				if previous != p.Position {
+					return true
+				}
+				continue
+			}
+			if complete {
+				knownBadges[absolute] = p.Position
+			}
+		}
+		return false
+	}
+	observeFrame := func(rows int, rowsKnown bool, m PageMatch) bool {
+		if rowsKnown && recordBadges(rows, m) {
+			return true
+		}
+		if m.List == nil {
+			return false
+		}
+		selected := m.List.Selected
+		if selected < 0 || selected >= len(run.inv.Layout.Slots) {
+			return false
+		}
+		_, column := run.inv.Layout.slotPosition(selected)
+		switch {
+		case anchorColumn < 0:
+			anchorColumn, anchorSlot = column, selected
+			anchorRows, anchorRowsKnown = rows, rowsKnown
+		case column != anchorColumn:
+			return true
+		case !rowsKnown:
+			return false
+		case !anchorRowsKnown:
+			// A previous readable frame established only the column; this
+			// independently localized frame upgrades it to an absolute row.
+			anchorSlot, anchorRows, anchorRowsKnown = selected, rows, true
+		default:
+			expected := anchorSlot - (rows-anchorRows)*run.inv.Layout.Columns
+			if expected != selected {
+				return true
+			}
+		}
+		return false
+	}
+	if storageAction {
+		_ = observeFrame(0, true, actionBeforeMatch)
+	}
+	actionConflict := false
 	var (
 		candidate       platform.Frame
 		candidateMatch  PageMatch
@@ -3448,6 +4569,11 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 		// proof that the list stayed where it was. A Stationary final
 		// verdict after an Undecided or a displacement is not that proof.
 		out.unmoved = stillOnly && verdict == waitVerdictStationary && !haveCandidate
+		out.bottomReboundVerified = rebound.verified() && !actionConflict && !haveCandidate && verdict == waitVerdictStationary
+		if confirmEnd && storageAction {
+			log.Printf("youkai: collect: bottom rebound evidence: baseline=%d eligible=%t seen=%t rejected=%d reason=%q fresh_settled=%d scroll_conflict=%t",
+				before.ID, rebound.matcher != nil, rebound.seen, rebound.rejected, rebound.reason, rebound.freshStill, actionConflict)
+		}
 		out.motionStarted, out.motionAt, out.motionFrameID = motionStarted, motionAt, motionFrameID
 		switch {
 		case haveCandidate:
@@ -3477,7 +4603,7 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 			return finish()
 		}
 		fctx, cancel := scrollFrameContext(ctx, effectiveDeadline(), run.inv.ScrollNow != nil)
-		f, err := run.view.Frame(fctx, platform.FrameRequest{After: after})
+		f, err := run.storageABReadFrame(fctx, platform.FrameRequest{After: after})
 		cancel()
 		if err != nil {
 			switch {
@@ -3493,7 +4619,7 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 		if f.Geometry != run.geo {
 			return scrollOutcome{}, run.geometryChanged(f)
 		}
-		m, err := run.matchFrame(f)
+		m, err := matchFrame(f)
 		if err != nil {
 			return scrollOutcome{}, err
 		}
@@ -3508,7 +4634,140 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 			// An identified non-list page or a warehouse at another
 			// position cannot create or settle a candidate.
 			out.after, out.afterMatch = f, m
+			rebound.reject(f, "different-page-during-confirmation")
 			return finish()
+		}
+		var (
+			direct      ScrollMatch
+			directRows  int
+			directKnown bool
+		)
+		if storageAction && !actionConflict && m.List != nil {
+			direct = matchScroll(before, f)
+			if direct.SelectionConflict {
+				actionConflict = true
+				haveCandidate = false
+				out.match = direct
+				verdict, stillOnly = waitVerdictUndecided, false
+				settleStreak = 0
+			}
+			if !actionConflict {
+				directRows, directKnown = scrollSignedRows(direct)
+				if !directKnown && !direct.Lost {
+					if proven, _ := run.stillnessProven(before, f, direct); proven {
+						directRows, directKnown = 0, true
+					}
+				}
+				if observeFrame(directRows, directKnown, m) {
+					actionConflict = true
+					haveCandidate = false
+					out.match = ScrollMatch{
+						Undecided: true, SelectionConflict: true,
+						Evidence: fmt.Sprintf("frames %d → %d: the independently localized frame conflicts with the action's known cells or selection; the scroll action is invalidated", before.ID, f.ID),
+					}
+					verdict, stillOnly = waitVerdictUndecided, false
+					settleStreak = 0
+				}
+			}
+		}
+		hadRejection := rebound.invalid
+		rebound.observe(f, m, direct)
+		if rebound.invalid && !hadRejection {
+			trace.pinRejection(f)
+		}
+		var (
+			candidateRel   ScrollMatch
+			candidateStill bool
+		)
+		if !actionConflict && out.lastFrameIsList && m.List != nil && haveCandidate {
+			// Read the candidate-relative comparison once. Its signed
+			// displacement and its independently proven stillness are both
+			// localizations; neither is allowed to reach a state branch
+			// before the action's known cells and badges were checked.
+			if sameFrameContent(candidate, f) {
+				candidateStill = true
+			} else {
+				candidateRel = matchScroll(candidate, f)
+				trace.noteCandidate(candidate, f, candidateRel)
+				out.match = candidateRel
+				if candidateRel.SelectionConflict {
+					actionConflict = true
+					haveCandidate = false
+					verdict, stillOnly = waitVerdictUndecided, false
+					settleStreak = 0
+				} else {
+					// A reused frame can prove the pending candidate was
+					// still there, but only through an independent zero
+					// proof; it cannot prove a new displacement.
+					candidateStill, _ = run.stillnessProven(candidate, f, candidateRel)
+				}
+			}
+			if !actionConflict && storageAction && (!f.Reused || candidateStill) {
+				if candidateStill {
+					if delta, displaced := scrollSignedRows(candidateRel); displaced && delta != 0 {
+						actionConflict = true
+						haveCandidate = false
+						out.match = ScrollMatch{
+							Undecided: true, SelectionConflict: true,
+							Evidence: fmt.Sprintf("frames %d → %d: the candidate-relative comparison proves both stillness and a %+d-row displacement; the scroll action is invalidated", candidate.ID, f.ID, delta),
+						}
+						verdict, stillOnly = waitVerdictUndecided, false
+						settleStreak = 0
+					}
+				}
+				base, baseKnown := scrollSignedRows(candidateScroll)
+				rows, rowsKnown := 0, false
+				if !actionConflict && baseKnown {
+					if candidateStill {
+						rows, rowsKnown = base, true
+					} else if delta, displaced := scrollSignedRows(candidateRel); displaced {
+						rows, rowsKnown = base+delta, true
+					}
+				}
+				if !actionConflict && rowsKnown {
+					switch {
+					case directKnown && directRows != rows:
+						actionConflict = true
+						haveCandidate = false
+						out.match = ScrollMatch{
+							Undecided: true, SelectionConflict: true,
+							Evidence: fmt.Sprintf("frames %d → %d: the action-start comparison locates the frame at %+d rows but the candidate-relative localization locates it at %+d rows; the scroll action is invalidated", before.ID, f.ID, directRows, rows),
+						}
+						verdict, stillOnly = waitVerdictUndecided, false
+						settleStreak = 0
+					case observeFrame(rows, true, m):
+						actionConflict = true
+						haveCandidate = false
+						out.match = ScrollMatch{
+							Undecided: true, SelectionConflict: true,
+							Evidence: fmt.Sprintf("frames %d → %d: the candidate-relative localization disagrees with the action's known absolute cells or selection; the scroll action is invalidated", candidate.ID, f.ID),
+						}
+						verdict, stillOnly = waitVerdictUndecided, false
+						settleStreak = 0
+					}
+				}
+			}
+		}
+		if actionConflict {
+			if !f.Reused {
+				run.lastArrived = f.ArrivedAt
+				after = f.ArrivedAt
+			}
+			out.after, out.afterMatch = f, m
+			verdict, stillOnly = waitVerdictUndecided, false
+			settleStreak = 0
+			if f.Reused {
+				if err := sleepCtx(ctx, run.inv.recheckEvery()); err != nil {
+					return scrollOutcome{}, err
+				}
+			}
+			continue
+		}
+		if storageAction && directKnown && directRows == 0 && haveCandidate {
+			// A proven return to offset zero clears the old candidate only
+			// after the frame's candidate-relative localization was checked;
+			// an incompatible source invalidates the action above.
+			haveCandidate = false
 		}
 		if f.Reused {
 			// Unchanged content can prove the candidate stayed still; it
@@ -3522,22 +4781,28 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 			if run.listVerdict(m) {
 				out.after, out.afterMatch = f, m
 				if haveCandidate {
-					if !sameFrameContent(candidate, f) {
-						rel := run.inv.matcher().MatchScroll(candidate, f)
-						trace.noteCandidate(candidate, f, rel)
-						out.match = rel
-						if rel.Stationary {
-							out.settleMatch = rel
-						}
+					if !sameFrameContent(candidate, f) && candidateRel.Stationary {
+						// The candidate-relative comparison and the action's
+						// known cells were checked before this branch.
+						out.settleMatch = candidateRel
 					}
 				} else {
 					if sameFrameContent(before, f) {
 						verdict = waitVerdictStationary
 					} else {
-						sm := run.inv.matcher().MatchScroll(before, f)
+						sm := direct
+						if !storageAction {
+							sm = matchScroll(before, f)
+						}
 						trace.noteBefore(f, sm)
 						observeMotion(f, sm)
 						out.match = sm
+						if storageAction && sm.SelectionConflict {
+							actionConflict = true
+							haveCandidate = false
+							verdict, stillOnly = waitVerdictUndecided, false
+							settleStreak = 0
+						}
 						switch {
 						case sm.Stationary:
 							verdict = waitVerdictStationary
@@ -3574,19 +4839,23 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 			continue
 		}
 		if haveCandidate {
-			stationary := sameFrameContent(candidate, f)
-			var rel ScrollMatch
-			if !stationary {
-				rel = run.inv.matcher().MatchScroll(candidate, f)
-				trace.noteCandidate(candidate, f, rel)
-				out.match = rel
-				stationary, _ = run.stillnessProven(candidate, f, rel)
-			}
 			// A settling confirmation must be proof the list stayed at the
 			// candidate, not merely a Stationary verdict: on repeated rows a
 			// still-moving list can keep the zero-shift MAD low, and accepting
 			// that would commit a stale offset while the scene has moved on.
-			if stationary {
+			if candidateStill {
+				if storageAction && !completeBadges(candidateMatch.List) {
+					// A geometric candidate may have unreadable badges. Before
+					// committing it, require a complete fresh view that also
+					// independently proves the same displacement from the start.
+					if !completeBadges(m.List) || !direct.Displaced ||
+						direct.Rows != candidateScroll.Rows || len(direct.Matches) == 0 {
+						settleStreak = 0
+						continue
+					}
+					candidate, candidateMatch, candidateScroll = f, m, direct
+					trace.pinCandidate(f)
+				}
 				// Even a stationary grid cannot inherit a candidate's
 				// correspondence if the occupied slots disagree.
 				if !slices.Equal(candidateMatch.List.Occupied, m.List.Occupied) {
@@ -3601,7 +4870,23 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 					settleStreak = 0
 					continue
 				}
-				out.settleMatch = rel
+				total := direct
+				if !storageAction {
+					total = matchScroll(before, f)
+					trace.noteBefore(f, total)
+					if total.SelectionConflict ||
+						(candidateScroll.Displaced && total.Displaced && total.Rows != candidateScroll.Rows) {
+						actionConflict = true
+						haveCandidate = false
+						verdict, stillOnly = waitVerdictUndecided, false
+						out.match = total
+						settleStreak = 0
+						continue
+					}
+				} else {
+					trace.noteBefore(f, total)
+				}
+				out.settleMatch = candidateRel
 				settleStreak++
 				if settleStreak >= timing.SettleObservations {
 					return settle(f)
@@ -3609,9 +4894,23 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 				continue
 			}
 			settleStreak = 0
-			total := run.inv.matcher().MatchScroll(before, f)
+			total := direct
+			if !storageAction {
+				total = matchScroll(before, f)
+			}
 			trace.noteBefore(f, total)
 			observeMotion(f, total)
+			if total.SelectionConflict {
+				// The total rejudgment is an action-level check too. Its
+				// conflict invalidates the whole action; it is not a generic
+				// Undecided that leaves the old candidate pending.
+				actionConflict = true
+				haveCandidate = false
+				verdict, stillOnly = waitVerdictUndecided, false
+				out.match = total
+				settleStreak = 0
+				continue
+			}
 			switch {
 			case total.Displaced && len(total.Matches) > 0:
 				// The list moved further: the latest total displacement is
@@ -3663,10 +4962,23 @@ func (run *inventoryRun) awaitScroll(ctx context.Context, before platform.Frame)
 			verdict = waitVerdictStationary
 			continue
 		}
-		sm := run.inv.matcher().MatchScroll(before, f)
+		sm := direct
+		if !storageAction {
+			sm = matchScroll(before, f)
+		}
 		trace.noteBefore(f, sm)
 		observeMotion(f, sm)
 		out.match = sm
+		if storageAction && sm.SelectionConflict {
+			// A conflict discovered before the first candidate is still an
+			// action failure; it must not be stored as a generic Undecided
+			// and then be forgotten when a later candidate appears.
+			actionConflict = true
+			haveCandidate = false
+			verdict, stillOnly = waitVerdictUndecided, false
+			settleStreak = 0
+			continue
+		}
 		switch {
 		case sm.Displaced && len(sm.Matches) > 0:
 			haveCandidate = true
@@ -3768,6 +5080,18 @@ func (run *inventoryRun) applyTransition(before, after platform.Frame, beforeMat
 			return fail(fmt.Sprintf("the correspondence (%d,%d)→(%d,%d) changes occupancy",
 				p.FromRow, p.FromColumn, p.ToRow, p.ToColumn))
 		}
+		if run.inv.storagePage() && beforeMatch.List.Occupied[from] {
+			// Empty cells have no card badge to read. Their correspondence is
+			// already proven by equal occupancy above; requiring a badge here
+			// would reject a proven overlap as soon as it contains an empty
+			// cell.
+			beforePos := beforeMatch.List.Positions[from]
+			afterPos := afterMatch.List.Positions[to]
+			if !beforePos.known() || !afterPos.known() || beforePos.Position != afterPos.Position {
+				return fail(fmt.Sprintf("the correspondence (%d,%d)→(%d,%d) changes or loses the card slot badge",
+					p.FromRow, p.FromColumn, p.ToRow, p.ToColumn))
+			}
+		}
 	}
 	// Full overlap coverage: the after-viewport's overlap rows must be
 	// exactly the matched to-positions.
@@ -3779,7 +5103,17 @@ func (run *inventoryRun) applyTransition(before, after platform.Frame, beforeMat
 			}
 		}
 	}
-	run.ledger.advance(sm.Rows, afterMatch.List.Occupied, after.ID)
+	if run.inv.storagePage() {
+		positions := make([]int, len(afterMatch.List.Positions))
+		for i, p := range afterMatch.List.Positions {
+			if p.known() {
+				positions[i] = p.Position
+			}
+		}
+		run.ledger.advanceWithPositions(sm.Rows, afterMatch.List.Occupied, positions, after.ID)
+	} else {
+		run.ledger.advance(sm.Rows, afterMatch.List.Occupied, after.ID)
+	}
 	run.viewport++
 	return nil
 }
@@ -3817,16 +5151,28 @@ type awaitOutcome struct {
 // reference round trip then decides the target's detail instead of the
 // traversal guessing a transition.
 type detailOutcome struct {
-	class               awaitClass
-	frame               platform.Frame
-	match               PageMatch
-	err                 error
-	sawTarget           bool
-	sawPopulated        bool
-	sawDifferent        bool
-	settledNotDifferent bool
-	lastSelected        int
-	stable              bool
+	class                     awaitClass
+	frame                     platform.Frame
+	match                     PageMatch
+	err                       error
+	sawTarget                 bool
+	sawPopulated              bool
+	sawDifferent              bool
+	settledNotDifferent       bool
+	lastSelected              int
+	stable                    bool
+	sawBadgeTransient         bool
+	sawTargetBadgeTransient   bool
+	badgeRecovered            bool
+	detailDeferred            bool
+	sawTargetDetail           bool
+	sawWeakSelection          bool
+	weakSinceStrong           bool
+	lastVerifiedFrame         platform.Frame
+	lastIncompleteStrongFrame platform.Frame
+	preClickAnchor            platform.Frame
+	tentativeWeakFrames       int
+	verifiedWeakRepeats       int
 }
 
 // awaitSettled waits for the expected page verdict to hold stably:
@@ -3861,6 +5207,10 @@ func (run *inventoryRun) awaitSettledFrame(ctx context.Context, expect func(plat
 // awaitCheckedFrame also lets a step reject a verified contradiction before
 // additional observations can be counted toward the expected state.
 func (run *inventoryRun) awaitCheckedFrame(ctx context.Context, check func(platform.Frame, PageMatch) (bool, error), seed *awaitOutcome) awaitOutcome {
+	return run.awaitCheckedFrames(ctx, check, seed, run.matchFrame)
+}
+
+func (run *inventoryRun) awaitCheckedFrames(ctx context.Context, check func(platform.Frame, PageMatch) (bool, error), seed *awaitOutcome, match func(platform.Frame) (PageMatch, error)) awaitOutcome {
 	deadline := time.Now().Add(run.inv.actionBudget())
 	samples := 0
 	out := awaitOutcome{}
@@ -3886,7 +5236,7 @@ func (run *inventoryRun) awaitCheckedFrame(ctx context.Context, check func(platf
 			return out
 		}
 		fctx, cancel := context.WithDeadline(ctx, deadline)
-		f, err := run.view.Frame(fctx, platform.FrameRequest{After: after})
+		f, err := run.storageABReadFrame(fctx, platform.FrameRequest{After: after})
 		cancel()
 		if err != nil {
 			switch {
@@ -3903,7 +5253,7 @@ func (run *inventoryRun) awaitCheckedFrame(ctx context.Context, check func(platf
 			out.class, out.frame = awaitGeometry, f
 			return out
 		}
-		m, err := run.matchFrame(f)
+		m, err := match(f)
 		if err != nil {
 			out.class, out.frame, out.match, out.err = awaitFrameErr, f, m, err
 			return out

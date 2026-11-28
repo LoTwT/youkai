@@ -65,8 +65,7 @@ func (s *Store) Load(recordID string) (*Recovery, error) {
 	if err := checkID("record", recordID); err != nil {
 		return nil, err
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.lockStorageTiming("recover", 0)()
 	if err := s.ensureRecord(recordID); err != nil {
 		return nil, err
 	}

@@ -542,6 +542,8 @@ func selfTest(root string) {
 //   - YOUKAI_GAME_SOURCE=traverse wires the calibrated macOS cloud
 //     inventory traversal (darwin only) or the Windows local client with
 //     an explicitly fixed target;
+//   - YOUKAI_GAME_SOURCE=drive-storage selects the Windows drive-storage
+//     acceptance path with the usual discovered target;
 //   - YOUKAI_DEV_SOURCE and YOUKAI_GAME_SOURCE set at once is a wiring
 //     error the entry point refuses;
 //   - on Windows neither variable is the installed default: the local
@@ -605,6 +607,12 @@ func scanSourceFrom(getenv func(string) string, goos string, host func() (platfo
 	if devDir != "" {
 		return devScanSourceFrom(devDir, getenv)
 	}
+	if gameMode == "drive-storage" {
+		if goos != "windows" {
+			return nil, "", fmt.Errorf("YOUKAI_GAME_SOURCE=drive-storage needs the Windows local client (%s is not supported)", goos)
+		}
+		return discoveredWindowsSource(host, windowsStorageTraversal(getenv), "游戏窗口（自动遍历驱动仓库）")
+	}
 	if gameMode != "" {
 		return gameScanSourceFrom(gameMode, goos, getenv, host)
 	}
@@ -612,43 +620,58 @@ func scanSourceFrom(getenv func(string) string, goos string, host func() (platfo
 		// The installed default (D-01, P-01): the local client with its
 		// target discovered from the running windows and confirmed by the
 		// user. No environment variable is needed.
-		return installedWindowsSource(host, getenv)
+		return discoveredWindowsSource(host, windowsLocalTraversal(getenv), "游戏窗口（自动遍历）")
 	}
 	return nil, "开发数据源", nil
 }
 
-// installedWindowsSource wires the Windows installation's default scan
-// source: the local client's calibrated traversal, with the target window
-// discovered from the running processes (P-01). The source has no fixed
-// target, so the prepare area lists the candidates and refuses a start
-// until the user confirms one — even when only one window is running.
-func installedWindowsSource(host func() (platform.Port, error), getenv func(string) string) (app.ScanSource, string, error) {
+// discoveredWindowsSource wires a traversal for the local client with
+// the target window discovered from running processes (P-01). The prepare
+// area shows the target, and a scan start must carry a selected window.
+func discoveredWindowsSource(host func() (platform.Port, error), traversal func(image.Point) (collect.Traversal, error), label string) (app.ScanSource, string, error) {
 	port, err := host()
 	if err != nil {
 		return nil, "", fmt.Errorf("platform: %w", err)
 	}
 	src := &app.GameScanSource{
-		Port:   port,
-		Hotkey: platform.StopScanHotkey("windows"),
-		Client: record.ClientWindowsLocal,
-		Mode:   "traverse",
+		Port:               port,
+		Hotkey:             platform.StopScanHotkey("windows"),
+		Client:             record.ClientWindowsLocal,
+		Mode:               "traverse",
+		TraversalForClient: traversal,
 	}
-	src.TraversalForClient = windowsLocalTraversal(getenv)
-	log.Printf("youkai: game scan source wired (installed default): client=%s target=confirm-one-discovered-window timing=%s",
-		src.Client, collect.WindowsLocalTimingProvenance)
-	return src, "游戏窗口（自动遍历）", nil
+	log.Printf("youkai: game scan source wired: client=%s source=%q target=confirm-one-discovered-window timing=%s",
+		src.Client, label, collect.WindowsLocalTimingProvenance)
+	return src, label, nil
 }
 
-// windowsLocalTraversal builds the Windows local client's traversal from
-// the client area the platform precheck measured. The installed default
-// and the environment override share it.
+// windowsStorageTraversal builds the opt-in Windows drive-storage
+// traversal from the client area the platform precheck measured. It is the
+// only entry that opens the 9×4 mixed list; another tier is refused rather
+// than stretched.
+func windowsStorageTraversal(getenv func(string) string) func(image.Point) (collect.Traversal, error) {
+	return func(clientArea image.Point) (collect.Traversal, error) {
+		profile, err := collect.WindowsStorageProfileFor(clientArea)
+		if err != nil {
+			return nil, err
+		}
+		log.Printf("youkai: game scan source: windows drive-storage traverse: %s", profile.Diagnostic())
+		inv := profile.Inventory(strings.ToLower(getenv("YOUKAI_SCROLL_MATCHER")) == "legacy")
+		inv.Project = app.ProjectDiscObservation
+		return inv, nil
+	}
+}
+
+// windowsLocalTraversal builds the Windows local warehouse traversal from
+// the measured client area. Both the installed default and the fixed-target
+// YOUKAI_GAME_SOURCE=traverse mode use it.
 func windowsLocalTraversal(getenv func(string) string) func(image.Point) (collect.Traversal, error) {
 	return func(clientArea image.Point) (collect.Traversal, error) {
 		profile, err := collect.WindowsLocalProfileFor(clientArea)
 		if err != nil {
 			return nil, err
 		}
-		log.Printf("youkai: game scan source: windows local traverse: %s", profile.Diagnostic())
+		log.Printf("youkai: game scan source: windows local warehouse traverse (legacy entry): %s", profile.Diagnostic())
 		inv := profile.Inventory(strings.ToLower(getenv("YOUKAI_SCROLL_MATCHER")) == "legacy")
 		inv.Project = app.ProjectDiscObservation
 		return inv, nil
@@ -664,7 +687,7 @@ func gameScanSourceFrom(mode, goos string, getenv func(string) string, host func
 	switch mode {
 	case "observe", "traverse":
 	default:
-		return nil, "", fmt.Errorf("YOUKAI_GAME_SOURCE=%q is not supported (use \"observe\" or \"traverse\")", mode)
+		return nil, "", fmt.Errorf("YOUKAI_GAME_SOURCE=%q is not supported (use \"observe\", \"traverse\", or \"drive-storage\")", mode)
 	}
 	if mode == "traverse" && goos != "darwin" && goos != "windows" {
 		return nil, "", fmt.Errorf("YOUKAI_GAME_SOURCE=traverse needs a calibrated layout; only the macOS cloud and Windows local clients have one (%s has none yet)", goos)

@@ -58,14 +58,55 @@ func TestScanSourceRejectsBothSwitches(t *testing.T) {
 // The installed Windows default (D-01, P-01): with no environment variable
 // the local client is wired without a fixed target, so the window lists the
 // discovered candidates and a start must carry a confirmed one.
-func TestScanSourceWindowsDefaultDiscoversTarget(t *testing.T) {
+func TestScanSourceWindowsDefaultPreservesWarehouse(t *testing.T) {
+	host := func() (platform.Port, error) { return &platformfake.Port{}, nil }
+	source, _, err := scanSourceFrom(envOf(nil), "windows", host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	game, ok := source.(*app.GameScanSource)
+	if !ok {
+		t.Fatalf("source = %T, want *app.GameScanSource", source)
+	}
+	if !game.RequiresTargetConfirmation() || game.Target.ExecutablePath != "" || game.Target.BundleID != "" {
+		t.Fatalf("default entry must discover its target: %+v", game.Target)
+	}
+	traversal, err := game.TraversalForClient(image.Pt(1920, 1080))
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile, err := collect.WindowsLocalProfileFor(image.Pt(1920, 1080))
+	if err != nil {
+		t.Fatal(err)
+	}
+	inv, ok := traversal.(*collect.Inventory)
+	if !ok || !reflect.DeepEqual(inv.Layout, profile.Layout) || !inv.RequirePanelRangeProof || inv.Project == nil {
+		t.Fatalf("default entry did not preserve the range-gated warehouse: %T", traversal)
+	}
+}
+
+func TestScanSourceDriveStorageRejectsOtherPlatforms(t *testing.T) {
+	host := func() (platform.Port, error) {
+		t.Fatal("drive-storage must refuse a non-Windows platform before opening its host")
+		return nil, nil
+	}
+	env := envOf(map[string]string{"YOUKAI_GAME_SOURCE": "drive-storage"})
+	if _, _, err := scanSourceFrom(env, "darwin", host); err == nil {
+		t.Fatal("drive-storage unexpectedly accepted macOS")
+	}
+}
+
+// The portable drive-storage mode uses the same target discovery and
+// start confirmation as the installed Windows source.
+func TestScanSourceWindowsDriveStorageDiscoversTarget(t *testing.T) {
 	target := platform.TargetCandidate{Handle: 1, PID: 42, ExecutablePath: `C:\Games\ZZZ\ZenlessZoneZero.exe`}
 	host := func() (platform.Port, error) {
 		return &platformfake.Port{DiscoverFn: func() (platform.TargetDiscoveryResult, error) {
 			return platform.TargetDiscoveryResult{Candidates: []platform.TargetCandidate{target}}, nil
 		}}, nil
 	}
-	source, label, err := scanSourceFrom(envOf(nil), "windows", host)
+	env := envOf(map[string]string{"YOUKAI_GAME_SOURCE": "drive-storage"})
+	source, label, err := scanSourceFrom(env, "windows", host)
 	if err != nil {
 		t.Fatalf("scanSourceFrom: %v", err)
 	}
@@ -96,8 +137,11 @@ func TestScanSourceWindowsDefaultDiscoversTarget(t *testing.T) {
 	if _, ok := inv.Matcher.(*collect.ScrollEvidenceMatcher); !ok {
 		t.Fatalf("type of installed matcher = %T", inv.Matcher)
 	}
-	if got := [4]image.Point{inv.Layout.FilterButton, inv.Layout.PanelReset, inv.Layout.PanelS, inv.Layout.PanelClose}; got != [4]image.Point{{X: 304, Y: 52}, {X: 1430, Y: 1030}, {X: 1426, Y: 604}, {X: 1805, Y: 49}} {
-		t.Fatalf("installed panel clicks differ from the replayed Windows inputs: %v", got)
+	if inv.Layout.Page != collect.PageDriveStorage {
+		t.Fatalf("installed entry page = %s, want the drive-storage entry", inv.Layout.Page)
+	}
+	if got := [4]image.Point{inv.Layout.FilterButton, inv.Layout.PanelReset, inv.Layout.PanelS, inv.Layout.PanelClose}; got != [4]image.Point{{X: 148, Y: 929}, {X: 1431, Y: 1028}, {X: 1425, Y: 441}, {X: 148, Y: 929}} {
+		t.Fatalf("installed panel clicks differ from the drive-storage inputs: %v", got)
 	}
 	if _, err := game.TraversalForClient(image.Pt(1280, 720)); err == nil {
 		t.Fatal("an unopened display tier obtained an installed traversal")

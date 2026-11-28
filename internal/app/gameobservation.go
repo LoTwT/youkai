@@ -46,9 +46,14 @@ func ProjectDiscObservation(obs collect.Observation) (any, error) {
 	// Rarity is the traversal's calibrated quality verdict. It is copied
 	// explicitly so the recognizer can attach it without parsing the
 	// capture JSON or inferring a rarity from the recognized text.
+	position := 0
+	if obs.Page == collect.PageDriveStorage {
+		position = obs.Position
+	}
 	return Observation{
 		Lines:              lines,
 		Context:            context,
+		Position:           position,
 		Rarity:             string(obs.Quality),
 		ManagementState:    obs.ManagementState,
 		ManagementEvidence: obs.ManagementEvidence,

@@ -24,7 +24,7 @@
 | [T2 平台采集与输入](specs/t2-platform-capture-input.md) | 窗口身份、客户区、DPI、支持档位、输入许可与采集时序。 |
 | [T3 OCR 运行库、模型与样本](specs/t3-ocr-runtime-model-samples.md) | 固定依赖、资源摘要、预处理和识别质量评估。 |
 | [T4 扫描会话与结果契约](specs/scanner-architecture.md#5-扫描会话与结果语义) | 接纳记账、取消、恢复、保存与资源所有权。 |
-| [T5 绝区零仓库遍历与详情归属](specs/t5-zzz-inventory-traversal.md) | 筛选范围、滚动衔接、相同盘、末尾、覆盖和 Windows 阶段 3 实测。 |
+| [T5 绝区零仓库遍历与详情归属](specs/t5-zzz-inventory-traversal.md) | 旧仓库与驱动仓库入口、筛选范围、滚动衔接、号位证据、相同盘、末尾、覆盖和 Windows 实测。 |
 | [T6 用户操作、结果校对与导出](specs/t6-review-export-workflow.md) | 逐件校对、按号位补扫与合并、导出预检、历史和清理。 |
 | [扫描结果 JSON/CSV v2](specs/scan-json-format.md) | 公共字段、空值、计数及列序。另见同源 [JSON](examples/scan-usable-v2.json) 与 [CSV](examples/scan-usable-v2.csv) 示例。 |
 
@@ -55,6 +55,7 @@
 | [Windows 托盘诊断](reports/2026-11-03-windows-tray-diagnosis.md)、[Windows 第三阶段界面验收](reports/2026-11-14-windows-uiux-acceptance.md) | 托盘恢复诊断和第五版之前的交互证据。 |
 | [11-14 依赖升级](reports/2026-11-14-dependency-upgrade.md)、[MyGo v0.10.0 升级](reports/2026-11-19-mygo-v0.10.0-upgrade.md) | 历史适配、固定依赖、测试结果及各轮未验证边界。 |
 | [Windows 安装保护与单号位补扫](reports/2026-11-19-windows-install-and-rescan-acceptance.md) | 运行中拒绝覆盖或卸载、5 号位独立补扫与导出。 |
+| [Windows 驱动仓库入口离线标定](reports/2026-11-22-windows-drive-storage.md) | 9×4 混排、滚轮一行、卡片/详情号位与私有样本回放；真机验收未完成。 |
 
 ## 目录约定
 

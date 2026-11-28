@@ -38,17 +38,69 @@ func (s *Store) WriteEvidence(recordID, evidenceID string, image []byte) (Eviden
 	if err := checkID("record", recordID); err != nil {
 		return EvidenceFile{}, err
 	}
-	if err := checkID("evidence", evidenceID); err != nil {
+	input := EvidenceWrite{ID: evidenceID, PNG: image}
+	if err := input.validate(); err != nil {
 		return EvidenceFile{}, err
 	}
-	if len(image) == 0 {
-		return EvidenceFile{}, fmt.Errorf("evidence %q of %q: image is empty", evidenceID, recordID)
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.lockStorageTiming("evidence-file", 1)()
 	if err := s.ensureRecord(recordID); err != nil {
 		return EvidenceFile{}, err
 	}
+	return s.writeEvidenceLocked(recordID, input)
+}
+
+// EvidenceWrite holds one encoded evidence image from an observation.
+type EvidenceWrite struct {
+	ID  string
+	PNG []byte
+}
+
+// EvidenceWriteResult reports the outcome for one image in submission order.
+type EvidenceWriteResult struct {
+	File EvidenceFile
+	Err  error
+}
+
+func (e EvidenceWrite) validate() error {
+	if err := checkID("evidence", e.ID); err != nil {
+		return err
+	}
+	if len(e.PNG) == 0 {
+		return fmt.Errorf("evidence %q: image is empty", e.ID)
+	}
+	return nil
+}
+
+// WriteEvidenceBatch writes one observation's evidence under a single
+// store lock and record-directory check. Every valid input is attempted
+// and reported separately, including after an earlier failure.
+func (s *Store) WriteEvidenceBatch(recordID string, inputs []EvidenceWrite) []EvidenceWriteResult {
+	results := make([]EvidenceWriteResult, len(inputs))
+	if len(inputs) == 0 {
+		return results
+	}
+	if err := checkID("record", recordID); err != nil {
+		for i := range results {
+			results[i].Err = err
+		}
+		return results
+	}
+	defer s.lockStorageTiming("evidence-batch", len(inputs))()
+	recordErr := s.ensureRecord(recordID)
+	for i, input := range inputs {
+		if err := input.validate(); err != nil {
+			results[i].Err = err
+		} else if recordErr != nil {
+			results[i].Err = recordErr
+		} else {
+			results[i].File, results[i].Err = s.writeEvidenceLocked(recordID, input)
+		}
+	}
+	return results
+}
+
+func (s *Store) writeEvidenceLocked(recordID string, input EvidenceWrite) (EvidenceFile, error) {
+	evidenceID, image := input.ID, input.PNG
 	state := s.state(recordID)
 	path := s.evidencePath(recordID, evidenceID)
 	file, err := s.fs.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)

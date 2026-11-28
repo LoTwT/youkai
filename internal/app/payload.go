@@ -40,6 +40,12 @@ type Observation struct {
 	// and the selected cell's border. The deliverer writes them as
 	// evidence; the recognizer never reads them.
 	Context []LineCrop
+	// Position is the drive-storage traversal's confirmed slot (1–6) for
+	// this admission from the card badge and the visible detail badge; 0
+	// for the old warehouse entry (whose wheel position is not the new
+	// page's dual-badge evidence) or any capture without that evidence.
+	// The recognizer uses it to cross-check the name line's [N] suffix.
+	Position int
 	// Rarity is the capture's verified rarity evidence, copied from the
 	// traversal's quality verdict ("S" when calibrated). It is empty when
 	// the observation carries no such evidence; the recognizer never
