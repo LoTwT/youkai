@@ -13,6 +13,7 @@
 - 查阅里程碑、实施顺序和验证记录时，使用[首版实施清单](specs/scanner-implementation-plan.md)。
 - 核对 Windows 三轮实扫、安装、签名升级、免验决定或首发后检查时，查阅 [M4 验收记录](specs/scanner-implementation-plan.md#m4双平台交付验收)。
 - 准备标签、签名制品或验证更新渠道时，查阅[发布与自动更新](release.md)。
+- 构建 Windows 驱动仓库安装包，或核对便携版实测与主线验收进度时，查阅[驱动仓库构建说明](development.md#windows-驱动仓库安装包和本地验收版)。
 - 确定 Windows 安装包、支持系统和交付门槛时，查阅 [T7 构建打包与交付验收](specs/t7-public-release-acceptance.md)。
 - 查阅项目起因、参考扫描器和与 fairy 的边界时，使用[项目背景](scanner-handoff.md)。
 
@@ -55,7 +56,7 @@
 | [Windows 托盘诊断](reports/2026-11-03-windows-tray-diagnosis.md)、[Windows 第三阶段界面验收](reports/2026-11-14-windows-uiux-acceptance.md) | 托盘恢复诊断和第五版之前的交互证据。 |
 | [11-14 依赖升级](reports/2026-11-14-dependency-upgrade.md)、[MyGo v0.10.0 升级](reports/2026-11-19-mygo-v0.10.0-upgrade.md) | 历史适配、固定依赖、测试结果及各轮未验证边界。 |
 | [Windows 安装保护与单号位补扫](reports/2026-11-19-windows-install-and-rescan-acceptance.md) | 运行中拒绝覆盖或卸载、5 号位独立补扫与导出。 |
-| [Windows 驱动仓库入口离线标定](reports/2026-11-22-windows-drive-storage.md) | 9×4 混排、滚轮一行、卡片/详情号位与私有样本回放；真机验收未完成。 |
+| [Windows 驱动仓库入口离线标定](reports/2026-11-22-windows-drive-storage.md) | 初期 9×4 混排、单行滚轮、卡片与详情号位标定及私有样本回放。 |
 
 ## 目录约定
 

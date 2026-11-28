@@ -129,8 +129,7 @@ go build -o winprobe.exe ./tools/winprobe
 | `go test -race ./internal/recognition` | 识别包的竞态检查（含取消与生命周期并发路径）。 |
 | `go test -race -timeout 30m ./internal/game/zzz/collect` | 遍历与像素匹配的竞态检查；实测超过 Go 默认 10 分钟超时，必须显式放宽。 |
 | `YOUKAI_M2_SAMPLES=/tmp/m2-samples go test ./internal/game/zzz/collect` | 像素匹配器与单页遍历在完整未掩码源帧上的回放；样本目录不入库，未设置时自动跳过。 |
-| `YOUKAI_STORAGE_SAMPLES=<样本目录> go test ./internal/game/zzz/collect -run TestStoragePrivate -count=1 -v` | 驱动仓库 1080p 私有样本回放：页面/面板、36 个混排号位、单行滚轮、底部 1+8、六份详情号位，以及只改选中探针的同号位视口内对照。样本目录、整帧与附件包不入库；未设置时自动跳过。公开单测：`go test ./internal/game/zzz/collect -run 'TestStorage|TestPositionVerdict'`。 |
-| `YOUKAI_FRAME347_EVIDENCE=<解包目录> go test ./internal/game/zzz/collect -run 'TestStorageFrame347' -count=1 -v` | R15 的 338/340/347 私有候选帧回放：帧 347 必须 36/36 且 R2C8 为 known 3，2/3 半混合仍为 unknown/conflict。只读取外部 ROI 与 manifest，不把裁剪入库；未设置时自动跳过。 |
+| `go test ./internal/game/zzz/collect -run 'TestStorage|TestPositionVerdict'` | 驱动仓库公开回归，覆盖页面匹配、号位冲突、三行推进和末页复检。早期私有样本回放见[历史标定报告](reports/2026-11-22-windows-drive-storage.md#2-样本来源与保存边界)。 |
 | `YOUKAI_SCROLL_REPLAY="$HOME/Library/Logs/Youkai Dev" go test ./internal/game/zzz/collect -run TestScrollReplay` | 滚动判定的现场证据回放：把 2026-10-30 阶段 1 复测的两组失败序列（各 25 帧逐帧诊断）经真实 `scroll()` 走阶段 2 判定（应验证 4 行位移并停稳、写出 `scroll-ok` 帧时间诊断），并用旧判定复现现场失败（消融）；回放 2026-10-31 阶段 2 验收的两组新位置首滚 undecided 序列（选中框 4 行与 NCC 最佳行一致但差距不足，应由滑块行程佐证接受并在两次确认后停稳；撤掉滑块证据后仍判 undecided），并验证其中一组经完整 `scroll()` 提交、`scroll-ok` 清单记录 `selection+feature+scrollbar` 依据；另回放 2026-10-28 两组 before/after 锚点对。并列容差 ε=0.005、滑块行程与其他竞争行数可区分性由合成序列覆盖（不经本回放）。证据目录在仓库外，未设置时自动跳过。 |
 | `go tool mygo vet .` | 先运行 `go vet ./...`，再检查原生 UI 生命周期问题；参数是应用目录（项目根），不能写成 `./...`。 |
 | `go tool mygo dev` | 开发运行，编辑 Go 代码、配置或资源后自动重建重启；开发应用名为 `Youkai Dev`（标识 `com.lotwt.youkai.dev`，位于 `.mygo/dev`），与正式安装的数据和权限隔离。退出应用或 Ctrl+C 结束。 |
@@ -331,10 +330,10 @@ Mac 上的 Windows 交叉编译检查只用于尽早发现编译与平台隔离�
 pwsh -File scripts/windows-build-portable.ps1 -Resources <已核资源目录> -Output <新便携目录>
 ```
 
-正式安装版和本地 QA 便携版从同一源码编入 [5/6 徽标权重](specs/t3-ocr-runtime-model-samples.md#驱动仓库-56-徽标权重)。Windows 正常启动使用仓库内固定的 13m01 配置，包括同帧匹配复用、点击前快速确认、详情采样节拍、滚动复用、按件批量保存证据、扫描期间读取已保存快照，以及收尾后从磁盘重读。
+从当前主线构建的 Windows 安装版默认扫描游戏内「驱动仓库」，并与本地 QA 便携版从同一源码编入 [5/6 徽标权重](specs/t3-ocr-runtime-model-samples.md#驱动仓库-56-徽标权重)。七项优化随正常启动生效，包括同帧匹配复用、点击前快速确认、详情采样节拍、滚动复用、按件批量保存证据、扫描期间读取已保存快照，以及收尾后从磁盘重读。用户在游戏内手动打开仓库页面后开始扫描。
 
 本地 QA 包使用独立应用数据根。运行 `Start-Youkai.cmd` 可清除继承的开发覆盖值，`Start-Youkai.cmd --self-test` 可验证模型、有效配置和 OCR 资源。脚本支持用 `-GlyphModel` 和 `-ExpectedGlyphSHA256` 在本机做 overlay 实验；通过正式自检需要仓库固定的参数。对外安装文件应使用 Package 或 Release 工作流。
 
 Windows Package 和 Release 通过 `scripts/verify-windows-package.ps1` 在清空扫描环境变量后运行成品自检，并核对安装器内的 EXE 与自检 EXE 的 SHA-256。Release 同时核对更新完整归档中的 EXE。
 
-便携版功能验收基准为同一台机器、1920×1080 原生窗口、1,006 件独立清册、13 分 1.28 秒，逐格核对无漏、重、错号，未处理为 0。该结果对应原 Windows 便携制品。迁移后的构建、不同模型和不同启动配置按实际差异复验。
+原 Windows 便携版在 1920×1080 原生客户区扫描 1,006 件，用时 13 分 1.28 秒。逐格对账无漏扫、重复或错号，未处理为 0。采用同组权重和运行配置的主线候选已通过留存画面回放和安装包自检。完整更新归档也已用测试密钥签名并通过本地校验。实际安装后的整仓扫描和从 `v0.0.1` 升级仍待验收，步骤见[发布指南](release.md#windows-安装与升级验收)。

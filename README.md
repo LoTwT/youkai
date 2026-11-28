@@ -6,11 +6,11 @@ Youkai 是《绝区零》S 级驱动盘扫描器。扫描结果在本机识别�
 
 ## 下载与支持范围
 
-在 [GitHub Releases](https://github.com/LoTwT/youkai/releases) 选择标签为 `v<版本>` 的正式版，下载并运行 `youkai-setup-<版本>-amd64.exe`。安装包随附识别资源，可用同一发布页的 `SHA256SUMS` 核对下载文件。`test-v<版本>` 属于测试渠道，请选择正式版安装。
+在 GitHub Releases 的正式发布页下载并运行 `youkai-setup-*-amd64.exe`。安装包随附识别资源，可用同一发布页的 `SHA256SUMS` 核对下载文件。[正式发布页](https://github.com/LoTwT/youkai/releases/latest)
 
 安装包未做 Authenticode 代码签名。Windows 可能提示发布者未知或显示 SmartScreen 警告。智能应用控制（Smart App Control）或设备策略也可能直接阻止运行。
 
-- **系统**为 Windows x64，安装实测使用 Windows 11 x64 23H2。详见[首版验收记录](docs/specs/scanner-implementation-plan.md#m4双平台交付验收)。
+- **系统**为 Windows x64。实测配置见[安装验收记录](docs/specs/scanner-implementation-plan.md#m4双平台交付验收)。
 - **游戏**使用《绝区零》本地客户端和简体中文界面。
 - **画面**使用窗口或无边框模式，游戏客户区为 **1920×1080**。
 
@@ -18,9 +18,9 @@ Youkai 是《绝区零》S 级驱动盘扫描器。扫描结果在本机识别�
 
 Youkai 通过前台截屏和鼠标操作扫描仓库，无需加载驱动、向游戏注入代码或读取游戏内存。
 
-1. 在游戏里打开「驱动仓库」（Windows 安装版默认入口），按「稀有度」排序，并把游戏窗口完整放在屏幕内，避开任务栏和其他窗口。
+1. 在游戏里打开「驱动仓库」，按「稀有度」排序。把游戏窗口完整放在屏幕内，避开任务栏和其他窗口。
 2. 打开 Youkai 的「扫描」页，按准备检查的提示调整设置。若列出多个游戏窗口，先选定这次要扫描的窗口。若准备检查提示权限不足，请从系统托盘退出 Youkai，再右键选择「以管理员身份运行」重新打开 Youkai。
-3. 点击「开始扫描」。如果游戏没有自动切到前台，请在倒计时内切过去。扫描期间保持游戏在前台，暂时停下游戏操作。需要停止时按 `Ctrl+Alt+Shift+S`，再等 Youkai 完成保存。
+3. 点击「开始扫描」。如果游戏没有自动切到前台，请在倒计时内切过去。Youkai 会将仓库筛选设为仅 S 级，并回到列表顶部开始扫描。扫描期间保持游戏在前台，暂时停下游戏操作。需要停止时按 `Ctrl+Alt+Shift+S`，再等 Youkai 完成保存。
 4. 打开结果摘要，查看覆盖结论和待处理件。可以在「记录」里重开已保存的结果，按需补录或对照截图校对。
 5. 导出为 JSON 或 CSV。导出前可查看纳入和排除数，文件保存在系统下载目录。
 
@@ -32,6 +32,6 @@ Youkai 通过前台截屏和鼠标操作扫描仓库，无需加载驱动、向�
 
 ## 开发与许可
 
-Youkai 使用 Go 和 MyGo。环境配置、运行和测试见[开发指南](docs/development.md)，其他规格和验收记录见[文档索引](docs/index.md)。
+Youkai 使用 Go 和 MyGo。环境配置、运行和测试见[开发指南](docs/development.md)，主线的 Windows 扫描配置和安装包验证见[驱动仓库构建说明](docs/development.md#windows-驱动仓库安装包和本地验收版)。其他规格和验收记录见[文档索引](docs/index.md)。
 
 项目采用 [MIT 许可证](LICENSE)。随包依赖、模型和其他资源的许可见[第三方声明](resources/THIRD-PARTY-NOTICES.md)。

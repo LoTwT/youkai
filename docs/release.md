@@ -1,6 +1,6 @@
 # 发布与自动更新
 
-更新日期：2026-11-21。本文维护标签、更新渠道、密钥、发布步骤和发布后检查。日常构建见[开发指南](development.md)，交付条件见 [T7](specs/t7-public-release-acceptance.md)，实测结果见 [M4](specs/scanner-implementation-plan.md#m4双平台交付验收)。
+更新日期为 2026-11-28。本文维护标签、更新渠道、密钥、发布步骤和发布后检查。日常构建见[开发指南](development.md)，交付条件见 [T7](specs/t7-public-release-acceptance.md)，首版实测结果见 [M4](specs/scanner-implementation-plan.md#m4双平台交付验收)。
 
 首版 Release 只发布 Windows x64。macOS 继续使用开发和 Package 构建。平台范围见[架构 §6](specs/scanner-architecture.md#6-首版功能范围)。
 
@@ -31,6 +31,13 @@
 - 应用侧（`mygo.Updater`）：`Enabled()` 要求构建时嵌入了更新源与公钥、非开发运行（`mygo dev`）、且能写入安装位置（macOS 的 `.app`、Windows 的每用户安装目录）；`Check` 读清单并比较版本，`Install` 下载（优先差量、失败回退整包）、按内置公钥验签、替换应用本体。安装成功后应用走明确退出收尾（保存失败的会话会拒绝退出，窗口留在重试），**收尾完成后自动重启进入新版本**——MyGo 的 `App.Relaunch` 在退出被拒（如收尾未完成）时会自行取消，重启由应用在收尾完成后重新发起；数据根占用的释放跟随退出路径——收尾清理成功时随收尾先行释放，清理失败时保持到重启前一刻，由退出钩子在 MyGo 保存窗口状态之后、启动新进程之前释放，两条路径下新进程都能立即接管。检查时机：启动后一次、应用持续运行期间每 24 小时一次（`internal/ui` 的 `updateCheckInterval` 常量）、更新区按钮手动触发；检查与安装都不激活窗口。Windows“应用和功能”的版本显示（HKCU 卸载项 `DisplayVersion`）由应用启动时刷新到当前版本——NSIS 安装器只在安装当天写一次，MyGo 更新器只替换文件不写注册表；NSIS 卸载器删除整个键、从不读该值，刷新不影响卸载。数据根与记录目录不在替换范围内，历史数据保留。
 - 不参与更新的是 **Package workflow 的测试构建**：构建前移除 `mygo.json` 的 `updates`，不嵌入更新配置、不产出更新档案，识别自检断言 `updates=disabled`（见[开发指南](development.md#打包-workflow)）。开发运行（`mygo dev`）同样关闭更新。本地 `go tool mygo build` 带 `updates` 而无私钥时会嵌入更新源（产物可收到正式渠道更新）但不产出更新档案，构建日志会警告——需要完全关闭时同样先移除 `updates`。
 
+## Windows 安装与升级验收
+
+准备发布驱动仓库版时，用本次候选制品完成两轮验收：
+
+- **全新安装**。从安装后的快捷方式启动，在受支持的游戏窗口里完成一次整仓扫描。按清册逐格核对物品与号位，检查未处理件数并记录耗时。实测对照见[驱动仓库构建说明](development.md#windows-驱动仓库安装包和本地验收版)。
+- **升级**。用同一候选的签名更新归档，从已安装的 `v0.0.1` 验证更新与重启。确认新版可以扫描「驱动仓库」，并重开一条旧记录核对 JSON 和 CSV 导出。
+
 ## 发布步骤
 
 1. 确认版本相对同一渠道的上一发布版递增，[CHANGELOG.md](../CHANGELOG.md) 有对应小节，并核对已合并到 `main` 的目标提交。
@@ -39,7 +46,7 @@
    - 测试版用 `git tag test-v<版本> <提交>`，再执行 `git push origin test-v<版本>`。
 3. `Release` workflow（[release.yml](../.github/workflows/release.yml)）自动执行：
    1. **草稿**。校验标签、对应的 CHANGELOG 小节和更新配置。查询 Release 列表后创建草稿或复用同标签的唯一草稿。列表无法完整读取、格式不合规或同标签状态无法确定时停止。
-   2. **构建**。写入版本和渠道，下载固定依赖，随包放入 VC++ DLL，生成安装器、签名更新归档和差量。校验布局、摘要以及指向本标签的更新清单，并运行 OCR 自检断言 `updates=enabled`。再次确认仍是草稿后上传制品，最后上传更新清单。
+   2. **构建**。写入版本和渠道，下载固定依赖，随包放入 VC++ DLL，生成安装器、签名更新归档和差量。校验布局、摘要以及指向本标签的更新清单。运行成品自检，核对 OCR、驱动仓库默认配置、已链接的权重、更新启用状态，以及安装器和完整更新归档内的 EXE。再次确认仍是草稿后上传制品，最后上传更新清单。
    3. **发布**。按草稿的 Release ID 校验必需资产，按资产 ID 下载并验证更新清单，生成可公开访问的下载区块，保留原更新说明。发布前重新确认同一 ID 仍为草稿。测试渠道使用 `make_latest=false`。正式渠道在完整校验当前 latest 与已发布版本后选择 `make_latest`。状态解析见 [release-state.sh](../scripts/release-state.sh)，下载区块见 [generate-release-downloads.mjs](../scripts/generate-release-downloads.mjs)。
 4. 仅对草稿使用 **Re-run failed jobs**。它沿用原运行的 SHA/ref 和 workflow 定义，允许覆盖同名草稿资产。已发布版本需要修正时发新版本。标签或变更日志有误时，先修正提交与尚未发布的标签，再触发新运行。相同标签的运行串行，正式发布的 latest 判断与写入共享一个队列。自动运行期间避免手动改同一草稿。
    - 早期 `test-v0.0.1` 曾因安装器存储名与本地名不同需补发布。修正和当时的发布证据见 [M1](specs/scanner-implementation-plan.md#m1正式工程资源与会话底座)。
