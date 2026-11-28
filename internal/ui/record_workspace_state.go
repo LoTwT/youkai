@@ -1,6 +1,10 @@
 package ui
 
 import (
+	"log"
+	"os"
+	"time"
+
 	"github.com/LoTwT/youkai/internal/app"
 	"github.com/LoTwT/youkai/internal/record"
 	"github.com/LoTwT/youkai/internal/scan"
@@ -603,7 +607,16 @@ func (m *Model) resetResultList() {
 // reloadRecord loads the open record and applies the result only while it
 // is still current. A response that belongs to another record or to a
 // superseded load is discarded.
+func (m *Model) deferLiveRecordRead(id string) bool {
+	return os.Getenv("YOUKAI_DEFER_WRAP_LIVE_READ") == "1" &&
+		m.snap.Busy && id == string(m.snap.SessionID) &&
+		(m.snap.Scan.Phase == scan.PhaseFinalizing || m.snap.Scan.Phase == scan.PhaseEnded)
+}
+
 func (m *Model) reloadRecord(id string, live bool) {
+	if live && m.deferLiveRecordRead(id) {
+		return
+	}
 	m.recLoad++
 	version := m.recLoad
 	load := newRecordLoad()
@@ -616,8 +629,24 @@ func (m *Model) reloadRecord(id string, live bool) {
 	// the old callback would otherwise never match.
 	m.trackRecordRead(id, version, load)
 	m.loading = true
+	activeRefresh := live && m.snap.Busy && m.snap.Scan.Phase == scan.PhaseCapturing
 	m.goAsync(func() {
-		rec, err := m.cfg.Service.LoadRecord(id)
+		traceStorage := live && os.Getenv("YOUKAI_RECORD_STORAGE_TIMING") == "1"
+		if traceStorage {
+			log.Printf("youkai: record-workspace-live-read start_ns=%d", time.Now().UnixNano())
+		}
+		loadRecord := m.cfg.Service.LoadRecord
+		if activeRefresh {
+			if service, ok := m.cfg.Service.(interface {
+				LoadActiveRecord(string) (*record.Recovery, error)
+			}); ok {
+				loadRecord = service.LoadActiveRecord
+			}
+		}
+		rec, err := loadRecord(id)
+		if traceStorage {
+			log.Printf("youkai: record-workspace-live-read end_ns=%d", time.Now().UnixNano())
+		}
 		load.finish(rec, err)
 		m.update(func() {
 			if version != m.recLoad || !m.recordIsOpen(id) {

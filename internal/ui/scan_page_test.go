@@ -122,7 +122,7 @@ func TestReadinessUnsatisfiedCopy(t *testing.T) {
 				FaultCode: "targetNotFound",
 			}),
 			want: []string{
-				"未找到《绝区零》窗口 → 启动游戏并打开驱动盘仓库页",
+				"未找到《绝区零》窗口 → 启动游戏并打开驱动盘仓库页（便携验收版用驱动仓库页）",
 				"等待找到游戏",
 			},
 		},

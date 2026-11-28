@@ -866,7 +866,7 @@ func (m *Model) Apply(snap app.Snapshot) {
 	// read or navigate to details before its final generation is ready.
 	pendingLiveOpen := m.historyOpen != nil && m.historyOpen.id == string(snap.SessionID)
 	if !pendingLiveOpen && m.rec != nil && m.rec.Live && snap.SessionID != "" &&
-		m.rec.ID == string(snap.SessionID) && snap.SavedCount > m.liveSavedShown {
+		m.rec.ID == string(snap.SessionID) && snap.SavedCount > m.liveSavedShown && !m.deferLiveRecordRead(m.rec.ID) {
 		dirtyActive := m.editingDirty() || m.reviewSaving
 		if !dirtyActive {
 			m.liveSavedShown = snap.SavedCount

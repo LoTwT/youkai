@@ -5,6 +5,7 @@ import (
 	"image"
 	"image/color"
 	"math"
+	"os"
 	"sort"
 
 	"github.com/LoTwT/youkai/internal/platform"
@@ -20,14 +21,24 @@ type PixelMatcher struct {
 
 	// valid is false when the layout or the threshold set is structurally
 	// unusable; every verdict is then "cannot determine".
-	valid bool
+	valid             bool
+	partitionOneBadge bool
+	fastCardBadges    bool
+	fastBeforeClick   bool
+	pacedFastDetail   bool
 }
 
 // NewPixelMatcher returns a matcher over the given anchors and thresholds.
 // A structurally invalid layout or an unordered threshold set makes the
 // matcher report undecidable verdicts instead of panicking or guessing.
 func NewPixelMatcher(l Layout, c Calibration) *PixelMatcher {
-	return &PixelMatcher{L: l, C: c, valid: l.Validate() == nil && l.FitsContent(l.Content) && c.validate() == nil}
+	return &PixelMatcher{
+		L: l, C: c,
+		valid:           l.Validate() == nil && l.FitsContent(l.Content) && c.validate() == nil,
+		fastCardBadges:  os.Getenv("YOUKAI_STORAGE_FAST_BADGES") == "1",
+		fastBeforeClick: os.Getenv("YOUKAI_STORAGE_FAST_BEFORE_CLICK") == "1",
+		pacedFastDetail: os.Getenv("YOUKAI_STORAGE_PACED_FAST_DETAIL") == "1",
+	}
 }
 
 // frameFits reports whether the frame is the calibrated display
@@ -50,6 +61,9 @@ func (m *PixelMatcher) Match(f platform.Frame) PageMatch {
 	if !m.frameFits(f) {
 		return m.unknown("frame %d is not the calibrated display configuration (image %v, content %v, want %dx%d and %v)",
 			f.ID, boundsOrNil(f.Image), f.Content, m.L.Image.X, m.L.Image.Y, m.L.Content)
+	}
+	if m.L.Page == PageDriveStorage {
+		return m.storageMatch(f)
 	}
 
 	// The filter panel overlays the warehouse; its two probes must agree
@@ -179,6 +193,9 @@ func (m *PixelMatcher) detailEvidence(img *image.RGBA) *DetailEvidence {
 		ev.Quality = QualityS
 	}
 	ev.Avatar = m.avatarState(img, m.L.DetailAvatar)
+	if m.L.Page == PageDriveStorage {
+		ev.Position = m.positionVerdictDetail(img, m.L.DetailPositionBadge, m.L.DetailPositions)
+	}
 	switch ink := m.inkCount(img, m.L.Substat4Probe, m.C.InkThreshold); {
 	case ink >= m.C.Substat4InkMin:
 		ev.Substats = 4
@@ -355,16 +372,19 @@ func (m *PixelMatcher) topManagement(img *image.RGBA) TopManagementState {
 			}
 			i := img.PixOffset(x, y)
 			red, green, blue := int(img.Pix[i]), int(img.Pix[i+1]), int(img.Pix[i+2])
-			if neutral(red, green, blue, 150, 50) {
+			whiteGlyph := neutral(red, green, blue, 150, 50)
+			if whiteGlyph {
 				bright++
 			}
-			if neutral(red, green, blue, 80, 60) {
+			// In drive storage the white open-lock glyph would also
+			// pass the dim floor. Its pixels cannot count as dim fill.
+			if neutral(red, green, blue, 80, 60) && (m.L.Page != PageDriveStorage || !whiteGlyph) {
 				dim++
 			}
 		}
 	}
 	switch {
-	case dim >= m.C.TopLockedDimMin:
+	case dim >= m.C.TopLockedDimMin && (m.L.Page != PageDriveStorage || bright < m.C.TopUnlockedBrightMin):
 		return TopManagementLocked
 	case bright >= m.C.TopUnlockedBrightMin && dim <= m.C.TopUnlockedDimMax:
 		return TopManagementUnlocked
@@ -437,6 +457,16 @@ func (m *PixelMatcher) ThumbStart(f platform.Frame) (int, bool) {
 	}
 	start, _, ok := m.thumbSegment(f.Image)
 	return start, ok
+}
+
+// ThumbEdges reports both ends of the scrollbar thumb. Boundary stillness
+// needs both: a stable start alone does not rule out a moving trailing
+// edge, and a one-edge move must not pass the top or bottom confirmation.
+func (m *PixelMatcher) ThumbEdges(f platform.Frame) (start, end int, ok bool) {
+	if m == nil || !m.valid || !m.frameFits(f) {
+		return 0, 0, false
+	}
+	return m.thumbSegment(f.Image)
 }
 
 // thumbSegment finds the longest bright run in the scrollbar's thumb

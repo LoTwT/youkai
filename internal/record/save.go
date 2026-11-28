@@ -83,8 +83,7 @@ func (s *Store) SaveCheckpoint(recordID string, cp Checkpoint) (int64, error) {
 	if err := checkID("record", recordID); err != nil {
 		return 0, err
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.lockStorageTiming("checkpoint", len(cp.Evidence))()
 	if err := s.ensureRecord(recordID); err != nil {
 		return 0, err
 	}

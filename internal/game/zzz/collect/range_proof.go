@@ -13,8 +13,9 @@ import (
 // RarityS comes from the S chip's fill and stays unknown when unreadable.
 // Neither verdict can be inferred from input delivery.
 type PanelRangeEvidence struct {
-	ResetVerified bool        `json:"resetVerified"`
-	RarityS       FilterState `json:"rarityS,omitempty"`
+	StoragePartitions *uint8      `json:"storagePartitions,omitempty"`
+	ResetVerified     bool        `json:"resetVerified"`
+	RarityS           FilterState `json:"rarityS,omitempty"`
 }
 
 func (p *PanelRangeEvidence) resetConfirmed() bool {
@@ -33,12 +34,13 @@ type panelRangeSample struct {
 }
 
 type positionRange struct {
-	Verified      bool              `json:"verified"`
-	Opened        *panelRangeSample `json:"opened,omitempty"`
-	Reset         *panelRangeSample `json:"reset,omitempty"`
-	SelectedS     *panelRangeSample `json:"selectedS,omitempty"`
-	ClosedFrameID uint64            `json:"closedFrameId,omitempty"`
-	ClosedFunnel  FilterState       `json:"closedFunnel,omitempty"`
+	Verified           bool              `json:"verified"`
+	Opened             *panelRangeSample `json:"opened,omitempty"`
+	Reset              *panelRangeSample `json:"reset,omitempty"`
+	SelectedPartitions *panelRangeSample `json:"selectedPartitions,omitempty"`
+	SelectedS          *panelRangeSample `json:"selectedS,omitempty"`
+	ClosedFrameID      uint64            `json:"closedFrameId,omitempty"`
+	ClosedFunnel       FilterState       `json:"closedFunnel,omitempty"`
 }
 
 func panelRangeObservation(frame platform.Frame, match PageMatch) *panelRangeSample {
@@ -75,7 +77,11 @@ func observedSortLabel(m PageMatch) string {
 // the next position's preparation. A template miss or a hidden label is
 // absence of proof. Only a directly identified different label is a change.
 func (run *inventoryRun) matchFrame(frame platform.Frame) (PageMatch, error) {
-	m := run.inv.matcher().Match(frame)
+	m := run.timedStoragePublicMatch(frame, nil, run.storageABFrame(frame, run.storageABStage()))
+	return run.checkMatchedFrame(frame, m)
+}
+
+func (run *inventoryRun) checkMatchedFrame(frame platform.Frame, m PageMatch) (PageMatch, error) {
 	if run.inv.EnableBoundedRecovery && run.rangeProof.Verified {
 		fresh := !frame.Reused && frame.ID > run.newestFrameID && frame.ArrivedAt.After(run.lastArrived)
 		idle := frame.Reused && frame.ID == run.newestFrameID && frame.ArrivedAt.Equal(run.lastArrived)
@@ -94,11 +100,42 @@ func (run *inventoryRun) matchFrame(frame platform.Frame) (PageMatch, error) {
 		run.inv.updateCoverage()
 		_ = run.inv.writeScope()
 		return m, scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
-			"collect: wheel position %d frame %d: the observed sort label changed from %q to %q", run.position, frame.ID, run.sortLabel, label))
+			"collect: %s frame %d: the observed sort label changed from %q to %q",
+			run.positionLabel(), frame.ID, run.sortLabel, label))
 	}
-	if run.filterActive && m.Page == PageWarehouse && m.Filter != nil && m.Filter.State == FilterClear {
+	if run.inv != nil && run.inv.storagePage() && run.sortLabel != "" && m.Page == PageFilterPanel &&
+		(m.Panel == nil || !m.Panel.SortVerified) {
+		// A proven close can still show the panel for a few frames. The
+		// label is unreadable there, not a second sort: wait for the list
+		// instead of treating the open probes as a new panel. A changed
+		// label is rejected above, before this transient allowance.
+		if !run.closingPanel || m.Panel == nil {
+			return m, scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
+				"collect: %s frame %d: a later filter-panel frame no longer matches the ready-to-scan sort label",
+				run.positionLabel(), frame.ID))
+		}
+	}
+	if run.inv != nil && run.inv.storagePage() && run.filterActive && m.Page == PageFilterPanel &&
+		(m.Panel == nil || m.Panel.Range == nil || m.Panel.Range.RarityS != FilterActive) {
+		// A panel reopened after preparation is read, not skipped. A clear
+		// or unreadable S chip means the locked range can no longer be
+		// assumed; the prior range proof is not carried across it.
 		return m, scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
-			"collect: wheel position %d frame %d: the active filter changed to clear", run.position, frame.ID))
+			"collect: %s frame %d: the prepared S range is no longer proven on a reopened filter panel",
+			run.positionLabel(), frame.ID))
+	}
+	if run.filterActive && (m.Page == PageWarehouse || m.Page == PageDriveStorage) &&
+		m.Filter != nil && m.Filter.State == FilterClear {
+		return m, scan.NewFault(CodeNavigationMismatch, fmt.Errorf(
+			"collect: %s frame %d: the active filter changed to clear", run.positionLabel(), frame.ID))
+	}
+	if matcher, ok := run.inv.matcher().(*ScrollEvidenceMatcher); ok && matcher.storagePartitions != 0 {
+		if m.Page == PageDriveStorage && m.List != nil && !storageListInPartitions(m.List, matcher.storagePartitions, false) {
+			return m, scan.NewFault(CodePositionLost, fmt.Errorf("collect: frame %d contains a badge outside the verified storage partitions", frame.ID))
+		}
+		if m.Page == PageFilterPanel && run.filterActive {
+			return m, scan.NewFault(CodeNavigationMismatch, fmt.Errorf("collect: frame %d reopened the verified partition filter", frame.ID))
+		}
 	}
 	if run.rebuildGuard != nil {
 		return m, run.checkRebuildFrame(frame, m)

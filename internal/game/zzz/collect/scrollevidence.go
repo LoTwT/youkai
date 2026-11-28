@@ -29,6 +29,7 @@ import (
 // frame and only combined pairwise.
 type ScrollEvidenceMatcher struct {
 	*PixelMatcher
+	storagePartitions uint8
 }
 
 // NewScrollEvidenceMatcher wraps a calibrated pixel matcher with the stage 2
@@ -105,7 +106,10 @@ type nccCandidate struct {
 // content change. A uniform support has no correlation to measure and
 // reports ok=false, so the information gate can reject it.
 func (m *ScrollEvidenceMatcher) correlationAt(before, after *image.RGBA, dy int, mask []image.Rectangle) (ncc, std float64, ok bool) {
-	r := m.L.ListViewport
+	return m.correlationIn(before, after, m.L.ListViewport, dy, mask)
+}
+
+func (m *ScrollEvidenceMatcher) correlationIn(before, after *image.RGBA, r image.Rectangle, dy int, mask []image.Rectangle) (ncc, std float64, ok bool) {
 	inMask := func(x, y int) bool {
 		for _, rect := range mask {
 			if x >= rect.Min.X && x < rect.Max.X && y >= rect.Min.Y && y < rect.Max.Y {
@@ -332,6 +336,16 @@ func (m *ScrollEvidenceMatcher) stationaryEvidence(cands map[int]nccCandidate) (
 // The absolute MAD thresholds never reject a displacement the selection box
 // and the features agree on; they only appear in the evidence prose.
 func (m *ScrollEvidenceMatcher) MatchScroll(before, after platform.Frame) ScrollMatch {
+	// The method value belongs to the same PixelMatcher used by this pair.
+	// The pair may reject the geometry before ever invoking it.
+	var page func(platform.Frame) PageMatch
+	if m != nil && m.PixelMatcher != nil {
+		page = m.PixelMatcher.Match
+	}
+	return m.matchScrollWithPage(before, after, page)
+}
+
+func (m *ScrollEvidenceMatcher) matchScrollWithPage(before, after platform.Frame, page func(platform.Frame) PageMatch) ScrollMatch {
 	if m == nil || m.PixelMatcher == nil || !m.valid {
 		return ScrollMatch{Evidence: "scroll evidence matcher: the layout or calibration is incomplete"}
 	}
@@ -363,8 +377,14 @@ func (m *ScrollEvidenceMatcher) MatchScroll(before, after platform.Frame) Scroll
 	if selB >= 0 && selA >= 0 {
 		selRows, selRowsOK = m.selectionRows(selB, selA)
 	}
-	selectionStill := selB >= 0 && selA >= 0 && selB == selA
+	selectionKnown := selB >= 0 && selA >= 0
+	selectionStill := selectionKnown && selB == selA
 	selectionMoved := selRowsOK && selRows != 0
+	// A readable pair that is neither still nor a vertical row change is a
+	// conflict, not a missing anchor. Treating it as missing would let the
+	// no-selection path accept a scroll that the observed selection
+	// contradicts.
+	selectionConflict := selectionKnown && !selectionStill && !selectionMoved
 	thumbMoved := m.thumbMoved(
 		thumbReading{start: thumbBStart, end: thumbBEnd, ok: thumbBOK},
 		thumbReading{start: thumbAStart, end: thumbAEnd, ok: thumbAOK})
@@ -373,6 +393,15 @@ func (m *ScrollEvidenceMatcher) MatchScroll(before, after platform.Frame) Scroll
 		Err0:            err0,
 		SelectionBefore: selB,
 		SelectionAfter:  selA,
+	}
+	if m.L.Page == PageDriveStorage && selectionConflict {
+		// Two readable anchors that did not move along a column are a
+		// positive contradiction of a vertical list scroll. This must veto
+		// even a MAD-level Stationary/interprets-as-still path; it must not
+		// be relabelled as "no anchor".
+		return ScrollMatch{Undecided: true, SelectionConflict: true, Metrics: metrics, Evidence: fmt.Sprintf(
+			"frames %d → %d: both selection anchors are readable but the selection changed from slot %d to %d without a vertical row correspondence; the observed selection contradicts a column scroll",
+			before.ID, after.ID, selB, selA)}
 	}
 
 	// 1) Pixel-identical frames prove stillness directly, uniform content
@@ -428,6 +457,33 @@ func (m *ScrollEvidenceMatcher) MatchScroll(before, after platform.Frame) Scroll
 		return ScrollMatch{Stationary: true, Metrics: metrics, Evidence: fmt.Sprintf(
 			"frames %d → %d: same content by normalized correlation (ncc %.3f ≥ %.2f, runner-up gap %.3f ≥ %.2f, info std %.1f) with zero-shift error %.2f — the list did not move; %s",
 			before.ID, after.ID, cand.ncc, m.C.ScrollStationaryNCC, comp.gap, m.C.ScrollNCCMargin, cand.std, err0, thumbNote)}
+	}
+
+	// Drive storage with a visible selection uses the same independent
+	// witness as the no-selection path: a physical-direction thumb travel
+	// plus the card-badge overlap. The selected card is not allowed to
+	// bypass that witness, and the repeated-grid zero-shift correlation is
+	// not allowed to overrule a selection whose direction the thumb and
+	// overlap already prove.
+	if m.L.Page == PageDriveStorage && selectionMoved {
+		beforeThumb := thumbReading{start: thumbBStart, end: thumbBEnd, ok: thumbBOK}
+		afterThumb := thumbReading{start: thumbAStart, end: thumbAEnd, ok: thumbAOK}
+		match, ok := m.storageScrollEvidence(before, after, beforeThumb, afterThumb, metrics, false, page)
+		if !ok {
+			return ScrollMatch{Undecided: true, Metrics: metrics, Evidence: fmt.Sprintf(
+				"frames %d → %d: the selection box and the card overlap did not produce one consistent displacement (zero-shift error %.2f, ncc0 %.3f); %s",
+				before.ID, after.ID, err0, metrics.RowNCC[0], thumbNote)}
+		}
+		storageRows := match.Rows
+		if len(match.Matches) > 0 && match.Matches[0].FromRow < match.Matches[0].ToRow {
+			storageRows = -storageRows
+		}
+		if storageRows != selRows {
+			return ScrollMatch{Undecided: true, SelectionConflict: true, Metrics: metrics, Evidence: fmt.Sprintf(
+				"frames %d → %d: the selection box names %+d row(s) but the thumb and card overlap name %+d; the witnesses contradict each other; %s",
+				before.ID, after.ID, selRows, storageRows, thumbNote)}
+		}
+		return match
 	}
 
 	// 3) The selection box's displacement: the primary evidence, corroborated
@@ -527,6 +583,32 @@ func (m *ScrollEvidenceMatcher) MatchScroll(before, after platform.Frame) Scroll
 			"frames %d → %d: the content changed (zero-shift error %.2f) but the selection box stayed on slot %d; the changed pixels are not list movement (ncc0 %.3f); %s",
 			before.ID, after.ID, err0, selB, metrics.RowNCC[0], thumbNote)}
 	}
+	// The drive-storage grid repeats the same card art and level text, so
+	// the normalized feature can prefer zero shift after a real one-row
+	// move (the 2026-11-22 handoff: ncc0 0.945 vs +1 0.922). When the
+	// selected card has scrolled out there is no selection anchor either.
+	// The scrollbar's geometry-derived travel and the card slot badges'
+	// overlap are independent evidence; use them only when both name one
+	// unique row count, and never guess when two counts fit.
+	if m.L.Page == PageDriveStorage && !selectionMoved {
+		beforeThumb := thumbReading{start: thumbBStart, end: thumbBEnd, ok: thumbBOK}
+		afterThumb := thumbReading{start: thumbAStart, end: thumbAEnd, ok: thumbAOK}
+		if m.storagePartitions != 0 {
+			if match, ok := m.filteredStorageScroll(before, after, beforeThumb, afterThumb, metrics); ok {
+				return match
+			}
+		}
+		if match, ok := m.storageScrollEvidence(before, after, beforeThumb, afterThumb, metrics, true, page); ok {
+			return match
+		}
+		// Falling through to the feature-only path would let the repeated
+		// card grid's normalized best row choose a displacement without the
+		// independent badge witness. Stay undecided instead; the wait will
+		// stop safely rather than skip or double-count a row.
+		return ScrollMatch{Undecided: true, Metrics: metrics, Evidence: fmt.Sprintf(
+			"frames %d → %d: no unique scrollbar-travel and card-slot overlap witness for the drive-storage displacement (zero-shift error %.2f, ncc0 %.3f); refusing to fall back to the repeated-grid normalized feature; %s",
+			before.ID, after.ID, err0, metrics.RowNCC[0], thumbNote)}
+	}
 
 	// 4) A feature-only displacement: the stronger threshold, the
 	// competition margin and the scrollbar's corroboration.
@@ -583,6 +665,99 @@ func (m *ScrollEvidenceMatcher) MatchScroll(before, after platform.Frame) Scroll
 	return ScrollMatch{Undecided: true, Metrics: metrics, Evidence: fmt.Sprintf(
 		"frames %d → %d: undecided (zero-shift error %.2f, best shift %d at error %.2f, normalized candidates %s)",
 		before.ID, after.ID, err0, dy, bestErr, formatRowNCC(metrics.RowNCC))}
+}
+
+// storageScrollEvidence resolves a drive-storage scroll from two
+// independent facts: the thumb's geometry-derived travel and the card
+// slot badges visible on both sides of the overlap. The normalized pixel
+// feature is deliberately not used as the decider here: the 9×4 cards
+// carry the same art and level text, so a real one-row move can leave the
+// zero-shift correlation higher than the shifted rows. Exactly one row
+// count must fit both witnesses; zero or multiple fits stay unverified.
+// requireChange is true for the no-selection branch, where the destination
+// badges must prove the grid moved; a consistent selection supplies that
+// independent instance evidence and may sit on a same-column repeated
+// badge pattern.
+func (m *ScrollEvidenceMatcher) storageScrollEvidence(before, after platform.Frame, thumbB, thumbA thumbReading, metrics *ScrollMetrics, requireChange bool, page func(platform.Frame) PageMatch) (ScrollMatch, bool) {
+	beforePage := page(before)
+	afterPage := page(after)
+	if beforePage.Page != PageDriveStorage || afterPage.Page != PageDriveStorage ||
+		beforePage.List == nil || afterPage.List == nil ||
+		len(beforePage.List.Positions) != len(m.L.Slots) ||
+		len(afterPage.List.Positions) != len(m.L.Slots) ||
+		!thumbB.ok || !thumbA.ok {
+		return ScrollMatch{}, false
+	}
+	type candidate struct {
+		rows int
+	}
+	var fits []candidate
+	// A wheel advances the list down; returning to the top scrolls it up.
+	// Both directions use the same badge-overlap witness, with the signed
+	// row count also checked against the thumb's independent travel.
+	for _, direction := range []int{1, -1} {
+		for rows := 1; rows <= m.L.Rows-1; rows++ {
+			signed := rows * direction
+			if _, ok, _ := m.thumbTravelOfStrict(thumbB, thumbA, signed); !ok {
+				continue
+			}
+			occupied, matched, changed := 0, 0, 0
+			valid := true
+			for r := 0; r < m.L.Rows-rows && valid; r++ {
+				for c := 0; c < m.L.Columns; c++ {
+					fromRow, toRow := r+rows, r
+					if direction < 0 {
+						fromRow, toRow = r, r+rows
+					}
+					from := fromRow*m.L.Columns + c
+					to := toRow*m.L.Columns + c
+					beforeOccupied := beforePage.List.Occupied[from]
+					afterOccupied := afterPage.List.Occupied[to]
+					if beforeOccupied != afterOccupied {
+						valid = false
+						break
+					}
+					// A repeated slot number is not an instance identity.
+					// Require the destination cell itself to show a change
+					// from the before frame; a static same-slot grid must not
+					// satisfy a displacement the list never made.
+					bd := beforePage.List.Positions[to]
+					ad := afterPage.List.Positions[to]
+					if (!bd.known() && ad.known()) ||
+						(bd.known() && ad.known() && bd.Position != ad.Position) {
+						changed++
+					}
+					if !beforeOccupied {
+						continue
+					}
+					occupied++
+					bp := beforePage.List.Positions[from]
+					ap := afterPage.List.Positions[to]
+					if !bp.known() || !ap.known() || bp.Position != ap.Position {
+						valid = false
+						break
+					}
+					matched++
+				}
+			}
+			// At least one occupied overlap cell must carry the same known
+			// slot badge on both sides. Without a readable selection the
+			// destination grid must also change somewhere; with an already
+			// proven selection, a same-column repeated badge pattern is
+			// allowed because the selection, thumb and every occupied
+			// overlap cell agree on the row. An all-empty overlap still
+			// leaves only the scrollbar as evidence and is rejected.
+			if valid && occupied > 0 && matched == occupied && (!requireChange || changed > 0) {
+				fits = append(fits, candidate{rows: signed})
+			}
+		}
+	}
+	if len(fits) != 1 {
+		return ScrollMatch{}, false
+	}
+	rows := fits[0].rows
+	return m.displaced(before.ID, after.ID, rows, ScrollBasisStoragePositions, metrics,
+		fmt.Sprintf("the scrollbar travel and the card slot badges' overlap both name the same %d-row displacement", rows)), true
 }
 
 // displaced builds the Displaced verdict for a verified signed row count:
@@ -666,10 +841,26 @@ func (m *ScrollEvidenceMatcher) zeroDisplacementProven(before, after platform.Fr
 			selectionMoved = true
 		}
 	}
+	if m.L.Page == PageDriveStorage && selB >= 0 && selA >= 0 && selB != selA {
+		if _, ok := m.selectionRows(selB, selA); !ok {
+			// A readable cross-column/non-vertical selection pair is a
+			// positive conflict, not an absent anchor. It cannot prove
+			// stillness, and it must not let the caller settle a pending
+			// candidate as if the confirmation pane had stayed put.
+			return false, fmt.Sprintf(
+				"frames %d → %d: both selection anchors are readable but the selection changed from slot %d to %d without a vertical row correspondence; a cross-column confirmation cannot prove stillness",
+				before.ID, after.ID, selB, selA)
+		}
+	}
 	if selectionMoved {
 		return false, fmt.Sprintf(
 			"frames %d → %d: the selection box moved (slot %d → %d), so the list did not stay at one position (zero-shift error %.2f)",
 			before.ID, after.ID, selB, selA, err0)
+	}
+	if m.L.Page == PageDriveStorage && !m.thumbStationary(beforeThumb, afterThumb) {
+		return false, fmt.Sprintf(
+			"frames %d → %d: the scrollbar thumb moved at an edge (%d–%d → %d–%d), so boundary stillness is not proven (zero-shift error %.2f)",
+			before.ID, after.ID, thumbBStart, thumbBEnd, thumbAStart, thumbAEnd, err0)
 	}
 	if m.thumbMoved(beforeThumb, afterThumb) {
 		return false, fmt.Sprintf(
@@ -822,6 +1013,20 @@ func (m *ScrollEvidenceMatcher) thumbMoved(before, after thumbReading) bool {
 	return translated && absInt(travel) >= m.C.ScrollbarMoveMin
 }
 
+// thumbStationary reports that neither thumb edge moved by more than the
+// calibrated movement floor. It is the boundary-stillness predicate: a
+// single moving edge is a measurement artifact for proving a row, but it is
+// still a contradiction of "the thumb did not move" and must not be ignored
+// when top/bottom stillness is being confirmed. The floor absorbs the 2 px
+// jitter seen at the Windows bottom capture; a 6 px edge move is real motion.
+func (m *ScrollEvidenceMatcher) thumbStationary(before, after thumbReading) bool {
+	if !before.ok || !after.ok {
+		return false
+	}
+	return absInt(after.start-before.start) <= m.C.ScrollbarMoveMin &&
+		absInt(after.end-before.end) <= m.C.ScrollbarMoveMin
+}
+
 // thumbTravel is the scrollbar's independently measured travel for a claimed
 // row count: the signed pixels the thumb moved and the per-row travel the
 // observed thumb geometry implies.
@@ -853,6 +1058,17 @@ func (t thumbTravel) expected(rows int) float64 {
 // the step count at ~1.0 despite measurement jitter, and its genuine one-row
 // scroll must still corroborate.
 func (m *ScrollEvidenceMatcher) thumbTravelOf(before, after thumbReading, rows int) (thumbTravel, bool, string) {
+	return m.thumbTravelCheck(before, after, rows, false)
+}
+
+// thumbTravelOfStrict is the drive-storage variant: both thumb edges must
+// move in the claimed direction; a lone leading-edge move is not enough.
+// The old warehouse keeps thumbTravelOf's original contract.
+func (m *ScrollEvidenceMatcher) thumbTravelOfStrict(before, after thumbReading, rows int) (thumbTravel, bool, string) {
+	return m.thumbTravelCheck(before, after, rows, true)
+}
+
+func (m *ScrollEvidenceMatcher) thumbTravelCheck(before, after thumbReading, rows int, strict bool) (thumbTravel, bool, string) {
 	if !before.ok || !after.ok {
 		return thumbTravel{}, false, "thumb unreadable"
 	}
@@ -862,14 +1078,54 @@ func (m *ScrollEvidenceMatcher) thumbTravelOf(before, after thumbReading, rows i
 		return thumbTravel{}, false, fmt.Sprintf("thumb %d–%d → %d–%d fills the track: no scrollable content below the viewport",
 			before.start, before.end, after.start, after.end)
 	}
-	travel := after.start - before.start
-	if rows < 0 {
+	startTravel := after.start - before.start
+	endTravel := after.end - before.end
+	travel := startTravel
+	if strict {
+		translated, both := thumbTranslation(before, after)
+		physical := translated
+		if !both {
+			// The trailing edge may be pinned at a track end while the leading
+			// edge still moves for the final row. A synthetic one-edge move
+			// (leading edge 300→306, trailing edge 323→323) is not a track-end
+			// clamp and must not prove a row. Down: the bottom edge is pinned;
+			// up: the top edge is pinned.
+			pinnedDown := rows > 0 && endTravel == 0 && startTravel > 0 &&
+				after.end >= m.C.ScrollbarBottomEndMin
+			pinnedUp := rows < 0 && startTravel == 0 && endTravel < 0 &&
+				after.start <= m.C.ScrollbarTopStartMax
+			if !pinnedDown && !pinnedUp {
+				return thumbTravel{}, false, fmt.Sprintf(
+					"thumb %d–%d → %d–%d did not move both edges together (start %+d, end %+d)",
+					before.start, before.end, after.start, after.end, startTravel, endTravel)
+			}
+			if pinnedUp {
+				physical = endTravel
+			} else {
+				physical = startTravel
+			}
+		}
+		// Positive rows mean the content moved up and the thumb moved down.
+		// Keep the physical sign through the row test; taking the magnitude
+		// first would let an upward thumb corroborate a forward row.
+		if rows == 0 || physical*rows <= 0 {
+			return thumbTravel{}, false, fmt.Sprintf(
+				"thumb %d–%d → %d–%d moved %+dpx, opposite to the claimed %+d-row direction",
+				before.start, before.end, after.start, after.end, physical, rows)
+		}
+		travel = absInt(physical)
+	}
+	if rows < 0 && !strict {
 		travel = -travel
 	}
 	totalRows := float64(m.L.Rows) * float64(trackLen) / thumbLen
 	steps := totalRows - float64(m.L.Rows)
 	t := thumbTravel{moved: travel, perRow: (float64(trackLen) - thumbLen) / steps}
 	if float64(travel) < float64(m.C.ScrollbarMoveMin) || !m.thumbTravelFits(t, rows) {
+		if strict {
+			return t, false, fmt.Sprintf("thumb %d–%d → %d–%d travelled %dpx, expected ~%.0fpx (≈%.1fpx per row × %d) within ±%.0f%%",
+				before.start, before.end, after.start, after.end, travel, t.expected(rows), t.perRow, absInt(rows), m.C.ScrollbarTravelTolerance*100)
+		}
 		return t, false, fmt.Sprintf("thumb %d → %d travelled %dpx, expected ~%.0fpx (≈%.1fpx per row × %d) within ±%.0f%%",
 			before.start, after.start, travel, t.expected(rows), t.perRow, absInt(rows), m.C.ScrollbarTravelTolerance*100)
 	}

@@ -42,6 +42,12 @@ const (
 	LineSelectedCell = "selectedCell"
 	LineDetailAvatar = "detailAvatar"
 	LineListAvatar   = "listAvatar"
+	// Drive-storage slot evidence: the card's top-left badge and the
+	// detail pane's independent badge. They are saved as context crops so a
+	// reviewer can compare the slot the traversal acted on with the detail
+	// it admitted.
+	LineCardPositionBadge   = "cardPositionBadge"
+	LineDetailPositionBadge = "detailPositionBadge"
 )
 
 // detailLines returns the detail pane's line regions actually present on
@@ -64,12 +70,19 @@ func (l Layout) detailLines(substats int) []LineRegion {
 // identity matcher and persisted as evidence; they never reach the
 // recognizer.
 func (l Layout) contextLines(slot int) []LineRegion {
-	return []LineRegion{
+	out := []LineRegion{
 		{Role: LineQualityBadge, Rect: l.QualityBadge},
 		{Role: LineSelectedCell, Rect: l.BorderRect(slot)},
 		{Role: LineDetailAvatar, Rect: l.DetailAvatar},
 		{Role: LineListAvatar, Rect: l.AvatarRect(slot)},
 	}
+	if l.Page == PageDriveStorage {
+		out = append(out,
+			LineRegion{Role: LineCardPositionBadge, Rect: l.CardPositionRect(slot)},
+			LineRegion{Role: LineDetailPositionBadge, Rect: l.DetailPositionBadge},
+		)
+	}
+	return out
 }
 
 // ColorProbe is one small region classified by its mean color: the colors
@@ -107,6 +120,10 @@ type CellProbes struct {
 // differs is not this calibration's frame. The pixel matcher only reads
 // the regions declared here.
 type Layout struct {
+	// Page selects the matcher's page branch. The zero value is the
+	// historical warehouse page with a wheel; PageDriveStorage selects the
+	// mixed 9×4 drive-storage page.
+	Page PageKind
 	// Name identifies the display configuration in diagnostics and the
 	// observed-range report.
 	Name string
@@ -206,6 +223,19 @@ type Layout struct {
 	// three-substat disc shows the set-effect label there instead, so this
 	// probe distinguishes 3 from 4 substats (design §2).
 	Substat4Probe image.Rectangle
+
+	// Drive-storage page evidence. These are unused on the old warehouse
+	// page. CardPositionBadge is a search window relative to a cell center;
+	// the six glyph sets hold one or more masks no larger than the window.
+	// DetailPositionBadge is the absolute search window around the detail's
+	// independent badge. PageTitle is the fixed header text (without the
+	// dynamic count).
+	CardPositionBadge   image.Rectangle
+	CardPositions       [6]glyphSet
+	DetailPositionBadge image.Rectangle
+	DetailPositions     [6]glyphSet
+	PageTitle           image.Rectangle
+	PageTitleStencil    *glyphStencil
 }
 
 // Validate checks the layout's structural sanity. The pixel values
@@ -215,6 +245,7 @@ type Layout struct {
 // regions, or drags that go nowhere. PixelMatcher construction and the
 // traversal's precheck both run this check.
 func (l Layout) Validate() error {
+	storage := l.Page == PageDriveStorage
 	if l.Image.X <= 0 || l.Image.Y <= 0 {
 		return fmt.Errorf("collect: layout: image size is %dx%d; a calibrated layout needs a positive frame size", l.Image.X, l.Image.Y)
 	}
@@ -282,7 +313,25 @@ func (l Layout) Validate() error {
 			l.PanelS, l.Content)
 	}
 	if p := l.panelRange; p != nil {
-		if p.sLabel.Size() != image.Pt(len(windowsPanelSStencil[0]), len(windowsPanelSStencil)) || !l.PanelS.In(p.sLabel) {
+		labelSize := image.Pt(len(windowsPanelSStencil[0]), len(windowsPanelSStencil))
+		if p.sStencil != nil {
+			if !p.sStencil.valid() {
+				return fmt.Errorf("collect: layout: the native panel S stencil is invalid")
+			}
+			labelSize = p.sStencil.size()
+		}
+		if p.sLabelSet != nil {
+			if !p.sLabelSet.valid() {
+				return fmt.Errorf("collect: layout: the drive-storage panel S glyph set is invalid")
+			}
+			for i, mask := range p.sLabelSet.masks {
+				if mask.size().X > p.sLabel.Dx() || mask.size().Y > p.sLabel.Dy() {
+					return fmt.Errorf("collect: layout: panel S mask %d (%v) does not fit its label window %v",
+						i+1, mask.size(), p.sLabel)
+				}
+			}
+		}
+		if p.sLabel.Size() != labelSize || !l.PanelS.In(p.sLabel) {
 			return fmt.Errorf("collect: layout: the native S label and click point do not share the calibrated anchor")
 		}
 		for _, probe := range []ColorProbe{p.funnel, p.sFill, p.otherFills[0], p.otherFills[1]} {
@@ -304,15 +353,55 @@ func (l Layout) Validate() error {
 		return fmt.Errorf("collect: layout: the sort template is %v but the sort label region is %v",
 			l.SortTemplate.Bounds().Size(), l.SortLabel.Size())
 	}
-	if l.Wheel == [6]image.Point{} {
-		return fmt.Errorf("collect: layout: the wheel positions are not calibrated")
-	}
-	if len(l.WheelArcs) == 0 {
-		return fmt.Errorf("collect: layout: the wheel probes are empty")
-	}
-	for i, r := range l.WheelArcs {
-		if r.Empty() {
-			return fmt.Errorf("collect: layout: wheel probe %d is empty", i)
+	if storage {
+		if l.Wheel != [6]image.Point{} || len(l.WheelArcs) != 0 {
+			return fmt.Errorf("collect: layout: the drive-storage page has no wheel; wheel anchors must stay empty")
+		}
+		if l.CardPositionBadge.Empty() || l.DetailPositionBadge.Empty() {
+			return fmt.Errorf("collect: layout: the drive-storage slot badge windows are not calibrated")
+		}
+		for i, set := range l.CardPositions {
+			if !set.valid() {
+				return fmt.Errorf("collect: layout: card position glyph set %d is invalid", i+1)
+			}
+			for k, mask := range set.masks {
+				if mask.size().X > l.CardPositionBadge.Dx() || mask.size().Y > l.CardPositionBadge.Dy() {
+					return fmt.Errorf("collect: layout: card position set %d mask %d (%v) does not fit its window %v",
+						i+1, k+1, mask.size(), l.CardPositionBadge)
+				}
+			}
+		}
+		for i, set := range l.DetailPositions {
+			if !set.valid() {
+				return fmt.Errorf("collect: layout: detail position glyph set %d is invalid", i+1)
+			}
+			for k, mask := range set.masks {
+				if mask.size().X > l.DetailPositionBadge.Dx() || mask.size().Y > l.DetailPositionBadge.Dy() {
+					return fmt.Errorf("collect: layout: detail position set %d mask %d (%v) does not fit its window %v",
+						i+1, k+1, mask.size(), l.DetailPositionBadge)
+				}
+			}
+		}
+		if l.PageTitle.Empty() != (l.PageTitleStencil == nil) {
+			return fmt.Errorf("collect: layout: the page title region and stencil must be calibrated together")
+		}
+		if l.PageTitleStencil != nil {
+			if !l.PageTitleStencil.valid() || l.PageTitleStencil.size() != l.PageTitle.Size() {
+				return fmt.Errorf("collect: layout: the page title stencil is %v but its region is %v",
+					l.PageTitleStencil.size(), l.PageTitle)
+			}
+		}
+	} else {
+		if l.Wheel == [6]image.Point{} {
+			return fmt.Errorf("collect: layout: the wheel positions are not calibrated")
+		}
+		if len(l.WheelArcs) == 0 {
+			return fmt.Errorf("collect: layout: the wheel probes are empty")
+		}
+		for i, r := range l.WheelArcs {
+			if r.Empty() {
+				return fmt.Errorf("collect: layout: wheel probe %d is empty", i)
+			}
 		}
 	}
 	if len(l.DetailLines) == 0 {
@@ -399,15 +488,29 @@ func (l Layout) FitsContent(content image.Rectangle) bool {
 			return false
 		}
 	}
-	for _, c := range l.Wheel {
-		if !ptIn(content, c) {
+	if l.Page == PageDriveStorage {
+		for i := range l.Slots {
+			if !inside(l.CardPositionRect(i)) {
+				return false
+			}
+		}
+		if !inside(l.DetailPositionBadge) {
 			return false
 		}
-	}
-	for i := range l.Wheel {
-		for _, rel := range l.WheelArcs {
-			if !inside(rel.Add(l.Wheel[i])) {
+		if !l.PageTitle.Empty() && !inside(l.PageTitle) {
+			return false
+		}
+	} else {
+		for _, c := range l.Wheel {
+			if !ptIn(content, c) {
 				return false
+			}
+		}
+		for i := range l.Wheel {
+			for _, rel := range l.WheelArcs {
+				if !inside(rel.Add(l.Wheel[i])) {
+					return false
+				}
 			}
 		}
 	}
@@ -445,7 +548,17 @@ func (l Layout) ReadRegions() []image.Rectangle {
 	for _, line := range l.DetailLines {
 		regions = append(regions, line.Rect)
 	}
-	return append(regions, l.QualityBadge, l.DetailAvatar, l.TopManagement, l.Substat4Probe)
+	regions = append(regions, l.QualityBadge, l.DetailAvatar, l.TopManagement, l.Substat4Probe)
+	if l.Page == PageDriveStorage {
+		for i := range l.Slots {
+			regions = append(regions, l.CardPositionRect(i))
+		}
+		regions = append(regions, l.DetailPositionBadge)
+		if !l.PageTitle.Empty() {
+			regions = append(regions, l.PageTitle)
+		}
+	}
+	return regions
 }
 
 // BorderRect is slot i's selection-border probe in frame pixels.
@@ -466,6 +579,14 @@ func (l Layout) ManagementRect(i int) image.Rectangle {
 // AvatarRect is slot i's equipped-agent avatar probe in frame pixels.
 func (l Layout) AvatarRect(i int) image.Rectangle {
 	return l.Cell.Avatar.Add(slotCenterOf(l.Slots[i]))
+}
+
+// CardPositionRect is slot i's card-badge search window in frame pixels.
+func (l Layout) CardPositionRect(i int) image.Rectangle {
+	if l.CardPositionBadge.Empty() {
+		return image.Rectangle{}
+	}
+	return l.CardPositionBadge.Add(slotCenterOf(l.Slots[i]))
 }
 
 // slotCenter is the click point of slot i: the region's center. The

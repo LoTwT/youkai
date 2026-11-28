@@ -43,6 +43,7 @@ type scrollTrace struct {
 	// sequence when the caps trim the middle.
 	firstMovedSeq uint64
 	candidateSeq  uint64
+	rejectionSeq  uint64
 	// dropped and droppedBytes describe what the caps removed, so the
 	// manifest can state which part of the sequence is missing.
 	dropped      int
@@ -129,7 +130,7 @@ func (t *scrollTrace) droppableFrom(start int) int {
 	}
 	for i := start; i < len(t.frames)-1; i++ {
 		seq := t.frames[i].seq
-		if seq == t.firstMovedSeq || seq == t.candidateSeq {
+		if seq == t.firstMovedSeq || seq == t.candidateSeq || seq == t.rejectionSeq {
 			continue
 		}
 		return i
@@ -190,6 +191,16 @@ func (t *scrollTrace) pinCandidate(f platform.Frame) {
 	}
 }
 
+// pinRejection keeps the first frame that invalidated the bottom-rebound proof.
+func (t *scrollTrace) pinRejection(f platform.Frame) {
+	if t == nil {
+		return
+	}
+	if entry := t.entry(f.ID); entry != nil {
+		t.rejectionSeq = entry.seq
+	}
+}
+
 // noteCandidate attaches a candidate-relative comparison. The candidate is
 // the frame the settle rule compared against at that moment; it is not
 // necessarily the wait's final candidate, so the entry records its ID.
@@ -235,6 +246,6 @@ func (t *scrollTrace) retentionPolicy() string {
 	}
 	return fmt.Sprintf("keep the pre-drag baseline, the next %d frames, the first "+
 		"frame that was not stationary against the baseline, the current "+
-		"candidate and the newest frames; when a limit is exceeded, drop the "+
+		"candidate, the bottom rebound rejection and the newest frames; when a limit is exceeded, drop the "+
 		"oldest unpinned frame from the middle, then from the head as a last resort", head)
 }

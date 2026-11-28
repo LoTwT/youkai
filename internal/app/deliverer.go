@@ -11,7 +11,9 @@ import (
 	"image"
 	"image/png"
 	"log"
+	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/LoTwT/youkai/internal/game/zzz"
@@ -94,7 +96,9 @@ type recordDeliverer struct {
 	// only from the kernel's producer and worker goroutines — never from
 	// finish or retry, whose callers hold the service lock and would
 	// deadlock.
-	onChange func()
+	onChange        func()
+	admissionTiming bool
+	batchEvidence   bool
 
 	mu sync.Mutex
 	// items holds one item per admitted sequence, in admission order —
@@ -109,7 +113,9 @@ type recordDeliverer struct {
 	// savedItems is the item count of the newest saved generation.
 	savedItems int
 	// savedGeneration is the revision of the newest saved generation.
-	savedGeneration int64
+	savedGeneration   int64
+	savedLiveSnapshot atomic.Pointer[record.Checkpoint]
+	cacheLiveSnapshot bool
 	// saveErr is the unresolved save failure; nil while clean.
 	saveErr error
 	// finalSaveFailures counts the wrap-up's failed save attempts: the
@@ -150,6 +156,9 @@ func newRecordDeliverer(store recordStore, shell record.SessionShell, onChange f
 		recordID:                shell.SessionID,
 		shell:                   shell,
 		onChange:                onChange,
+		admissionTiming:         os.Getenv("YOUKAI_STORAGE_ADMISSION_TIMING") == "1",
+		batchEvidence:           os.Getenv("YOUKAI_STORAGE_BATCH_EVIDENCE") == "1",
+		cacheLiveSnapshot:       os.Getenv("YOUKAI_ACTIVE_CHECKPOINT_SNAPSHOT") == "1",
 		completeCoverageAllowed: completeAllowed,
 	}
 }
@@ -167,7 +176,18 @@ func newRecordDeliverer(store recordStore, shell record.SessionShell, onChange f
 // whatever evidence survived and the error is returned for the kernel to
 // report as a storage fault.
 func (d *recordDeliverer) Admitted(seq scan.Seq, observation any) error {
+	var started, locked, evidenceDone time.Time
+	var checkpoint time.Duration
+	var phases evidenceWriteTiming
+	var timing *evidenceWriteTiming
+	if d.admissionTiming {
+		started = time.Now()
+		timing = &phases
+	}
 	d.mu.Lock()
+	if d.admissionTiming {
+		locked = time.Now()
+	}
 	if d.finished {
 		d.mu.Unlock()
 		return fmt.Errorf("app: record %s: admission %d after finish", d.recordID, seq)
@@ -179,7 +199,10 @@ func (d *recordDeliverer) Admitted(seq scan.Seq, observation any) error {
 		d.mu.Unlock()
 		return fmt.Errorf("app: record %s: admission %d out of order, want %d", d.recordID, seq, len(d.items)+1)
 	}
-	item, evidence, evErr := d.buildAdmittedLocked(seq, observation)
+	item, evidence, evErr := d.buildAdmittedLocked(seq, observation, timing)
+	if d.admissionTiming {
+		evidenceDone = time.Now()
+	}
 	d.items = append(d.items, item)
 	d.evidence = append(d.evidence, evidence...)
 	d.sinceSave++
@@ -187,12 +210,23 @@ func (d *recordDeliverer) Admitted(seq scan.Seq, observation any) error {
 	if evErr != nil {
 		err = evErr
 	} else if d.sinceSave >= checkpointBatchSize {
+		var checkpointStarted time.Time
+		if d.admissionTiming {
+			checkpointStarted = time.Now()
+		}
 		err = d.saveLocked()
+		if d.admissionTiming {
+			checkpoint = time.Since(checkpointStarted)
+		}
 	}
 	if err != nil {
 		d.saveErr = err
 	}
 	d.mu.Unlock()
+	if d.admissionTiming {
+		log.Printf("youkai: admission-timing seq=%d lock_wait_us=%d evidence_us=%d checkpoint_us=%d ok=%t encode_us=%d store_us=%d crop_writes=%d",
+			seq, locked.Sub(started).Microseconds(), evidenceDone.Sub(locked).Microseconds(), checkpoint.Microseconds(), err == nil, phases.encode.Microseconds(), phases.store.Microseconds(), phases.writes)
+	}
 	if d.onChange != nil {
 		d.onChange()
 	}
@@ -247,7 +281,7 @@ func (d *recordDeliverer) Deliver(rec scan.Record) error {
 // saved. A failing line does not stop the others — the evidence that
 // survives is what the record keeps — and the first error is returned.
 // Callers hold mu.
-func (d *recordDeliverer) buildAdmittedLocked(seq scan.Seq, observation any) (record.ItemRecord, []record.EvidenceFile, error) {
+func (d *recordDeliverer) buildAdmittedLocked(seq scan.Seq, observation any, timing *evidenceWriteTiming) (record.ItemRecord, []record.EvidenceFile, error) {
 	item := record.ItemRecord{
 		Sequence: int64(seq),
 		Status:   record.StatusQueued,
@@ -265,19 +299,31 @@ func (d *recordDeliverer) buildAdmittedLocked(seq scan.Seq, observation any) (re
 	var evidence []record.EvidenceFile
 	var evErr error
 	if obs, ok := observation.(Observation); ok {
-		write := func(id string, img image.Image) {
-			if img == nil {
-				return
-			}
-			ev, err := d.writeEvidence(id, img)
+		add := func(ev record.EvidenceFile, err error) {
 			if err != nil {
 				if evErr == nil {
 					evErr = err
 				}
 				return
 			}
-			item.EvidenceIDs = append(item.EvidenceIDs, id)
+			item.EvidenceIDs = append(item.EvidenceIDs, ev.ID)
 			evidence = append(evidence, ev)
+		}
+		// Only the concrete local store opts into the experiment. A
+		// substituted store retains its own per-write behavior.
+		store, useBatch := d.store.(*record.Store)
+		useBatch = useBatch && d.batchEvidence
+		var batch []queuedEvidenceWrite
+		write := func(id string, img image.Image) {
+			if img == nil {
+				return
+			}
+			if useBatch {
+				data, err := encodeEvidence(img, timing)
+				batch = append(batch, queuedEvidenceWrite{input: record.EvidenceWrite{ID: id, PNG: data}, encodeErr: err})
+				return
+			}
+			add(d.writeEvidence(id, img, timing))
 		}
 		for i, crop := range obs.Lines {
 			write(evidenceID(seq, i), crop.Image)
@@ -285,19 +331,86 @@ func (d *recordDeliverer) buildAdmittedLocked(seq scan.Seq, observation any) (re
 		for i, crop := range obs.Context {
 			write(contextEvidenceID(seq, i), crop.Image)
 		}
+		if useBatch {
+			d.writeEvidenceBatch(store, batch, timing, add)
+		}
 	}
 	return item, evidence, evErr
 }
 
-// writeEvidence persists one crop as a PNG evidence file and returns its
-// descriptor.
-func (d *recordDeliverer) writeEvidence(id string, img image.Image) (record.EvidenceFile, error) {
-	var buf bytes.Buffer
-	if err := png.Encode(&buf, img); err != nil {
-		return record.EvidenceFile{}, fmt.Errorf("encode evidence: %w", err)
+type evidenceWriteTiming struct {
+	encode, store time.Duration
+	writes        int
+}
+
+type queuedEvidenceWrite struct {
+	input     record.EvidenceWrite
+	encodeErr error
+}
+
+// writeEvidenceBatch keeps per-crop results and the original first-error
+// ordering, even when later images encode or write successfully.
+func (d *recordDeliverer) writeEvidenceBatch(store *record.Store, entries []queuedEvidenceWrite, timing *evidenceWriteTiming, add func(record.EvidenceFile, error)) {
+	inputs := make([]record.EvidenceWrite, 0, len(entries))
+	for _, e := range entries {
+		if e.encodeErr == nil {
+			inputs = append(inputs, e.input)
+		}
 	}
-	data := buf.Bytes()
+	var phase time.Time
+	if timing != nil {
+		phase = time.Now()
+	}
+	results := store.WriteEvidenceBatch(d.recordID, inputs)
+	if timing != nil {
+		timing.store += time.Since(phase)
+		timing.writes += len(inputs)
+	}
+	for _, e := range entries {
+		if e.encodeErr != nil {
+			add(record.EvidenceFile{}, e.encodeErr)
+			continue
+		}
+		result := results[0]
+		results = results[1:]
+		add(finishEvidenceWrite(e.input.ID, e.input.PNG, result.File, result.Err))
+	}
+}
+
+func encodeEvidence(img image.Image, timing *evidenceWriteTiming) ([]byte, error) {
+	var buf bytes.Buffer
+	var phase time.Time
+	if timing != nil {
+		phase = time.Now()
+	}
+	encodeErr := png.Encode(&buf, img)
+	if timing != nil {
+		timing.encode += time.Since(phase)
+	}
+	if encodeErr != nil {
+		return nil, fmt.Errorf("encode evidence: %w", encodeErr)
+	}
+	return buf.Bytes(), nil
+}
+
+func (d *recordDeliverer) writeEvidence(id string, img image.Image, timing *evidenceWriteTiming) (record.EvidenceFile, error) {
+	data, err := encodeEvidence(img, timing)
+	if err != nil {
+		return record.EvidenceFile{}, err
+	}
+	var phase time.Time
+	if timing != nil {
+		phase = time.Now()
+	}
 	ev, err := d.store.WriteEvidence(d.recordID, id, data)
+	if timing != nil {
+		timing.store += time.Since(phase)
+		timing.writes++
+	}
+	return finishEvidenceWrite(id, data, ev, err)
+}
+
+func finishEvidenceWrite(id string, data []byte, ev record.EvidenceFile, err error) (record.EvidenceFile, error) {
 	if errors.Is(err, record.ErrEvidenceExists) {
 		// A previous attempt already wrote this crop (evidence is
 		// write-once and the store is the only writer below the data
@@ -456,6 +569,12 @@ func (d *recordDeliverer) saveLocked() error {
 		size = -1
 	}
 	d.savedGeneration = gen
+	if d.cacheLiveSnapshot {
+		doc.Format = record.FormatName
+		doc.FormatVersion = record.FormatVersion
+		doc.SavedRevision = gen
+		d.savedLiveSnapshot.Store(&doc)
+	}
 	d.savedItems = len(d.items)
 	d.sinceSave = 0
 	log.Printf("youkai: scan %s: checkpoint generation %d saved (%d items, %d bytes, %d ms)",

@@ -100,6 +100,10 @@ const (
 	CodeNameLineUnparsed = "nameLineUnparsed"
 	// CodeSlotOutOfRange: the slot read from the name line is not 1–6.
 	CodeSlotOutOfRange = "slotOutOfRange"
+	// CodeSlotPositionMismatch: the detail name's [N] suffix disagrees with
+	// the traversal's confirmed card-slot position. Neither value is
+	// substituted for the other; the slot is recorded as unknown.
+	CodeSlotPositionMismatch = "slotPositionMismatch"
 	// CodeUnknownSet: the set name is not in the catalog.
 	CodeUnknownSet = "unknownSet"
 	// CodeLevelLineUnparsed: the level line has no 等级N/15 shape.
@@ -346,7 +350,8 @@ func splitNameLine(text string) (name string, slot int, ok bool) {
 }
 
 // splitLevelLine splits the level line ("等级15/15") into the level and
-// the denominator, both non-negative decimals without leading zeros.
+// the denominator. Accept the Windows warehouse's two-digit display of
+// single-digit levels, and reject extra padding or a padded denominator.
 func splitLevelLine(text string) (level, denominator int, ok bool) {
 	line := strings.TrimSpace(text)
 	rest, found := strings.CutPrefix(line, "等级")
@@ -355,7 +360,8 @@ func splitLevelLine(text string) (level, denominator int, ok bool) {
 	}
 	num, denom, found := strings.Cut(rest, "/")
 	if !found || !isDigits(num) || !isDigits(denom) ||
-		(len(num) > 1 && num[0] == '0') || (len(denom) > 1 && denom[0] == '0') {
+		(len(num) > 2 && num[0] == '0') ||
+		(len(denom) > 1 && denom[0] == '0') {
 		return 0, 0, false
 	}
 	level, err1 := strconv.Atoi(num)

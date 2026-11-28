@@ -2102,10 +2102,11 @@ func TestAdmitFailureCarriesEvidenceFailed(t *testing.T) {
 	}
 }
 
-// TestDetailBaselinePrefersLastAdmittedDetail pins the cloud-video lag
-// guard: a freshly taken pre-click list frame may still show the previous
-// item's stale detail, so a later same-detail click must compare against
-// the last admitted detail frame instead.
+// TestDetailBaselinePrefersLastAdmittedDetail pins the old warehouse's
+// cloud-video lag guard: a freshly taken pre-click list frame may still show
+// the previous item's stale detail, so a later same-detail click must compare
+// against the last admitted detail frame instead. Drive storage uses the
+// current pre-click frame; see TestStorageDetailBaselineUsesCurrentFrame.
 func TestDetailBaselinePrefersLastAdmittedDetail(t *testing.T) {
 	run := &inventoryRun{}
 	pre := platform.Frame{ID: 20}

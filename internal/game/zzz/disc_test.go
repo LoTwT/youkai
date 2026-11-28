@@ -617,6 +617,64 @@ func TestCanonicalDecimal(t *testing.T) {
 	}
 }
 
+// TestParseDetailWindowsLevelZeroDoubleZero covers the Windows independent
+// warehouse's real zero rendering. Its level line is "等级00/15"; level 0
+// must parse to the known zero value and pass structured validation when the
+// rest of the record is valid. The macOS/cloud form "等级0/15" remains valid.
+func TestParseDetailWindowsLevelZeroDoubleZero(t *testing.T) {
+	rec, issues := ParseDetail(DetailLines{
+		Set:   "河豚电音[4]",
+		Level: "等级00/15",
+		Main:  "暴击率 24%",
+		Subs:  []string{"攻击力 9%", "防御力 30", "穿透值 9"},
+	})
+	if len(issues) != 0 {
+		t.Fatalf("issues = %+v, want none", issues)
+	}
+	if rec.Level == nil || *rec.Level != 0 {
+		t.Fatalf("level = %v, want known 0", rec.Level)
+	}
+	structured := ToStructuredWithState(rec, RarityS, CaptureState{
+		ManagementState: ManagementLocked,
+		EquippedState:   EquippedStateUnequipped,
+	}, issues)
+	if structured.Validation.Status != ValidationPassed {
+		t.Fatalf("validation = %+v, want passed", structured.Validation)
+	}
+	if structured.Data.Level == nil || *structured.Data.Level != 0 {
+		t.Fatalf("structured level = %v, want known 0", structured.Data.Level)
+	}
+}
+
+// TestSplitLevelLineZeroSpelling covers the two-digit level display and rejects extra padding.
+func TestSplitLevelLineZeroSpelling(t *testing.T) {
+	valid := map[string]int{
+		"等级0/15":  0,
+		"等级00/15": 0,
+		"等级03/15": 3,
+		"等级04/15": 4,
+		"等级09/15": 9,
+		"等级15/15": 15,
+	}
+	for input, wantLevel := range valid {
+		level, denominator, ok := splitLevelLine(input)
+		if !ok || level != wantLevel || denominator != 15 {
+			t.Fatalf("splitLevelLine(%q) = %d/%d,%v; want %d/15,true", input, level, denominator, ok, wantLevel)
+		}
+	}
+	for _, input := range []string{
+		"等级000/15",
+		"等级0000/15",
+		"等级00/015",
+		"等级15/015",
+		"等级00/15EMPTY",
+	} {
+		if level, denominator, ok := splitLevelLine(input); ok {
+			t.Fatalf("splitLevelLine(%q) = %d/%d,true; want unparsed", input, level, denominator)
+		}
+	}
+}
+
 // TestParseDetailLevelZero covers the level grammar's lower end: level 0
 // is valid, so unknown must be represented by nil, not by zero.
 func TestParseDetailLevelZero(t *testing.T) {

@@ -82,7 +82,7 @@ func (run *inventoryRun) awaitTargetDetail(ctx context.Context, baseline platfor
 		previous = f
 		return nil
 	}
-	next, err := run.awaitDetailFrames(ctx, baseline, target, initial, check)
+	next, err := run.awaitDetailFrames(ctx, baseline, nil, target, initial, check, false)
 	if err == nil && next.class == awaitDeadline {
 		return next, incomplete("the bounded detail revisit did not establish an admissible observation")
 	}
