@@ -4,7 +4,10 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	"os"
 	"time"
+
+	"github.com/LoTwT/youkai/internal/storageconfig"
 )
 
 // The 2026-11-22 drive-storage page (游戏内「驱动仓库」, Windows local
@@ -596,9 +599,13 @@ func WindowsStorageProfileFor(client image.Point) (WindowsStorageProfile, error)
 // bottom as stillness. Drive storage therefore always uses the evidence
 // matcher regardless of the legacy switch; the switch remains meaningful
 // only for the old warehouse entry.
-func (p WindowsStorageProfile) Inventory(legacy bool) *Inventory {
-	_ = legacy
-	pixel := NewPixelMatcher(p.Layout, p.Calibration)
+func (p WindowsStorageProfile) Inventory(_ bool) *Inventory {
+	return p.InventoryWithConfig(storageconfig.FromEnv(os.Getenv))
+}
+
+// InventoryWithConfig uses the same resolved settings as the application.
+func (p WindowsStorageProfile) InventoryWithConfig(settings storageconfig.Config) *Inventory {
+	pixel := newPixelMatcher(p.Layout, p.Calibration, settings)
 	timing := p.ScrollTiming
 	return &Inventory{
 		Layout:                 p.Layout,

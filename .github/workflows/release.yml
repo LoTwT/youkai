@@ -103,6 +103,9 @@ jobs:
             echo "ERROR: mygo.json must carry updates.publicKey and updates.github (\"LoTwT/youkai\") for release builds"
             exit 1
           fi
+      - name: Check the pinned 5/6 badge model source
+        shell: bash
+        run: sha256sum -c internal/game/zzz/collect/storage_card_glyph_model.sha256
       - name: Create or reuse the draft release
         # The Windows job uploads into this draft only after its local
         # artifact checks and recognition self-test have all succeeded.
@@ -297,29 +300,14 @@ jobs:
           for name in MSVCP140.dll MSVCP140_1.dll VCRUNTIME140.dll VCRUNTIME140_1.dll; do
             7z l "$setup" | grep -i "$name" || { echo "ERROR: $name not found in the installer"; exit 1; }
           done
-      - name: Recognition self-test on the packaged EXE
-        # Runs the GUI-subsystem EXE headlessly: the self-test path returns
-        # before any window exists, loading the bundled onnxruntime.dll —
-        # whose CRT imports resolve through the VC++ DLLs placed next to the
-        # EXE — and the model, then recognizing one embedded sample. The
-        # log's first line reports the updater state, asserted here: a
-        # release build must have updates on.
+      - name: Verify the Windows installer and update archive against the tested EXE
         shell: pwsh
         run: |
-          $env:YOUKAI_SELFTEST = "1"
-          $exe = "build\windows-amd64\Youkai.exe"
-          $p = Start-Process -FilePath $exe -NoNewWindow -Wait -PassThru `
-            -RedirectStandardOutput selftest-stdout.txt -RedirectStandardError selftest-stderr.txt
-          $err = Get-Content selftest-stderr.txt -Raw
-          if ($err) { Write-Host $err }
-          if ($p.ExitCode -ne 0) {
-            $out = Get-Content selftest-stdout.txt -Raw
-            if ($out) { Write-Host $out }
-            throw "recognition self-test failed: exit code $($p.ExitCode) — the stderr above names the library and model paths it tried; a missing VC++ DLL or a broken packaged layout shows up here"
-          }
-          if (-not (Select-String -Path selftest-stderr.txt -Pattern 'youkai: self-test: updates=enabled' -Quiet)) {
-            throw "a release build must have updates on — the self-test log does not say updates=enabled"
-          }
+          $version = $env:RELEASE_VERSION
+          $out = "build/windows-amd64"
+          ./scripts/verify-windows-package.ps1 -Executable "$out/Youkai.exe" `
+            -Installer "$out/youkai-setup-$version-amd64.exe" -Updates enabled `
+            -UpdateArchive "$out/youkai-$version-windows-amd64.tar.gz"
       - name: Upload verified artifacts, then the update manifest
         # Keep every upload after all checks. In particular, MyGo's
         # build -upload publishes before those later steps can reject a

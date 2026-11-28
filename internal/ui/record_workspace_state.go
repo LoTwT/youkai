@@ -608,7 +608,7 @@ func (m *Model) resetResultList() {
 // is still current. A response that belongs to another record or to a
 // superseded load is discarded.
 func (m *Model) deferLiveRecordRead(id string) bool {
-	return os.Getenv("YOUKAI_DEFER_WRAP_LIVE_READ") == "1" &&
+	return m.cfg.DeferWrapRead &&
 		m.snap.Busy && id == string(m.snap.SessionID) &&
 		(m.snap.Scan.Phase == scan.PhaseFinalizing || m.snap.Scan.Phase == scan.PhaseEnded)
 }

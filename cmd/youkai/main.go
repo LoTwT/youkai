@@ -24,6 +24,7 @@ import (
 	"github.com/LoTwT/youkai/internal/platform"
 	"github.com/LoTwT/youkai/internal/recognition"
 	"github.com/LoTwT/youkai/internal/record"
+	"github.com/LoTwT/youkai/internal/storageconfig"
 	"github.com/LoTwT/youkai/internal/ui"
 	"github.com/egoist/mygo"
 	// MyGo's built-in controls, dialogs and menus speak Simplified Chinese
@@ -207,6 +208,14 @@ func main() {
 	}
 
 	source, sourceLabel := scanSource(filepath.Join(paths.Logs, "diagnostics"))
+	storage := storageconfig.ForApp(runtime.GOOS, os.Getenv)
+	if storageconfig.WindowsDefault(runtime.GOOS, os.Getenv) {
+		if line, err := windowsStorageDescription(storage); err != nil {
+			log.Printf("youkai: windows storage: %v", err)
+		} else {
+			log.Printf("youkai: windows storage: %s", line)
+		}
+	}
 	// The installed Windows source starts only the window the user
 	// confirms (P-01); the window lists the discovered candidates.
 	targetSelection := false
@@ -217,6 +226,7 @@ func main() {
 		Paths:    paths,
 		DataLock: dataLock,
 		Source:   source,
+		Storage:  storage,
 	})
 	if err != nil {
 		log.Fatalf("youkai: %v", err)
@@ -243,8 +253,9 @@ func main() {
 		log.Printf("youkai: decode app icon: %v", err)
 	}
 	model := ui.New(ui.Config{
-		Service: svc,
-		AppIcon: appIcon,
+		Service:       svc,
+		AppIcon:       appIcon,
+		DeferWrapRead: storage.DeferWrapRead,
 		// The scan page's countdown and ten-second readiness re-check.
 		After: time.After,
 		ScanSource: ui.ScanSourceInfo{
@@ -516,6 +527,13 @@ func selfTest(root string) {
 	} else {
 		log.Printf("youkai: self-test: updates=disabled")
 	}
+	if runtime.GOOS == "windows" {
+		line, err := verifyWindowsStorageSelfTest(os.Getenv)
+		if err != nil {
+			log.Fatalf("youkai: self-test: %v", err)
+		}
+		log.Printf("youkai: self-test: windows storage: %s", line)
+	}
 	res, err := app.OCRResources(root)
 	if err != nil {
 		log.Fatalf("youkai: self-test: %v", err)
@@ -607,20 +625,14 @@ func scanSourceFrom(getenv func(string) string, goos string, host func() (platfo
 	if devDir != "" {
 		return devScanSourceFrom(devDir, getenv)
 	}
-	if gameMode == "drive-storage" {
+	if gameMode == "drive-storage" || storageconfig.WindowsDefault(goos, getenv) {
 		if goos != "windows" {
 			return nil, "", fmt.Errorf("YOUKAI_GAME_SOURCE=drive-storage needs the Windows local client (%s is not supported)", goos)
 		}
-		return discoveredWindowsSource(host, windowsStorageTraversal(getenv), "游戏窗口（自动遍历驱动仓库）")
+		return discoveredWindowsSource(host, windowsStorageTraversal(storageconfig.ForApp(goos, getenv)), "游戏窗口（自动遍历驱动仓库）")
 	}
 	if gameMode != "" {
 		return gameScanSourceFrom(gameMode, goos, getenv, host)
-	}
-	if goos == "windows" {
-		// The installed default (D-01, P-01): the local client with its
-		// target discovered from the running windows and confirmed by the
-		// user. No environment variable is needed.
-		return discoveredWindowsSource(host, windowsLocalTraversal(getenv), "游戏窗口（自动遍历）")
 	}
 	return nil, "开发数据源", nil
 }
@@ -645,26 +657,28 @@ func discoveredWindowsSource(host func() (platform.Port, error), traversal func(
 	return src, label, nil
 }
 
-// windowsStorageTraversal builds the opt-in Windows drive-storage
+// windowsStorageTraversal builds the default Windows drive-storage
 // traversal from the client area the platform precheck measured. It is the
 // only entry that opens the 9×4 mixed list; another tier is refused rather
 // than stretched.
-func windowsStorageTraversal(getenv func(string) string) func(image.Point) (collect.Traversal, error) {
+func windowsStorageTraversal(settings storageconfig.Config) func(image.Point) (collect.Traversal, error) {
 	return func(clientArea image.Point) (collect.Traversal, error) {
+		if _, err := collect.VerifiedStorageCardGlyphModel(); err != nil {
+			return nil, err
+		}
 		profile, err := collect.WindowsStorageProfileFor(clientArea)
 		if err != nil {
 			return nil, err
 		}
 		log.Printf("youkai: game scan source: windows drive-storage traverse: %s", profile.Diagnostic())
-		inv := profile.Inventory(strings.ToLower(getenv("YOUKAI_SCROLL_MATCHER")) == "legacy")
+		inv := profile.InventoryWithConfig(settings)
 		inv.Project = app.ProjectDiscObservation
 		return inv, nil
 	}
 }
 
 // windowsLocalTraversal builds the Windows local warehouse traversal from
-// the measured client area. Both the installed default and the fixed-target
-// YOUKAI_GAME_SOURCE=traverse mode use it.
+// the measured client area for the explicit fixed-target traverse mode.
 func windowsLocalTraversal(getenv func(string) string) func(image.Point) (collect.Traversal, error) {
 	return func(clientArea image.Point) (collect.Traversal, error) {
 		profile, err := collect.WindowsLocalProfileFor(clientArea)

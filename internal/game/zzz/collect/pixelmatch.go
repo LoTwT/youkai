@@ -9,6 +9,7 @@ import (
 	"sort"
 
 	"github.com/LoTwT/youkai/internal/platform"
+	"github.com/LoTwT/youkai/internal/storageconfig"
 )
 
 // PixelMatcher is the calibrated evidence engine for one display
@@ -26,18 +27,26 @@ type PixelMatcher struct {
 	fastCardBadges    bool
 	fastBeforeClick   bool
 	pacedFastDetail   bool
+	reuseFrameMatch   bool
+	reuseScrollPages  bool
 }
 
 // NewPixelMatcher returns a matcher over the given anchors and thresholds.
 // A structurally invalid layout or an unordered threshold set makes the
 // matcher report undecidable verdicts instead of panicking or guessing.
 func NewPixelMatcher(l Layout, c Calibration) *PixelMatcher {
+	return newPixelMatcher(l, c, storageconfig.FromEnv(os.Getenv))
+}
+
+func newPixelMatcher(l Layout, c Calibration, settings storageconfig.Config) *PixelMatcher {
 	return &PixelMatcher{
 		L: l, C: c,
-		valid:           l.Validate() == nil && l.FitsContent(l.Content) && c.validate() == nil,
-		fastCardBadges:  os.Getenv("YOUKAI_STORAGE_FAST_BADGES") == "1",
-		fastBeforeClick: os.Getenv("YOUKAI_STORAGE_FAST_BEFORE_CLICK") == "1",
-		pacedFastDetail: os.Getenv("YOUKAI_STORAGE_PACED_FAST_DETAIL") == "1",
+		valid:            l.Validate() == nil && l.FitsContent(l.Content) && c.validate() == nil,
+		fastCardBadges:   settings.FastBadges,
+		fastBeforeClick:  settings.FastBeforeClick,
+		pacedFastDetail:  settings.PacedDetail,
+		reuseFrameMatch:  settings.ReuseFrameMatch,
+		reuseScrollPages: settings.ReuseScrollPages,
 	}
 }
 

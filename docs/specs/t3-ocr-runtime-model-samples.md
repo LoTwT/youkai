@@ -121,6 +121,14 @@ PaddleOCR 自有评测的“屏幕文字”类别中，v6 small 为 79.7%，v5 m
 
 RapidOCR 已发布 v6 识别模型的 ONNX 与配套信息，无需从零转换；其清单区分 tiny 与 small/medium 的字符表。不能复用不配套的 v5 字典，也不能把公开评测记为这个固定文件在 youkai 的成绩。[固定资源清单](https://github.com/RapidAI/RapidOCR/blob/7cfd3d9ef786a2e538ca30df700325e72e85b5f5/python/rapidocr/default_models.yaml)
 
+### 驱动仓库 5/6 徽标权重
+
+Windows 独立驱动仓库的卡片 5/6 号位用两类线性判别模型复核。项目方确认以项目 MIT 许可公开纳入仓库并编进 EXE。生成文件是 [storage_card_glyph_model.go](../../internal/game/zzz/collect/storage_card_glyph_model.go)，其原始文件摘要见[校验清单](../../internal/game/zzz/collect/storage_card_glyph_model.sha256)。
+
+这组参数来自独立标注的 48 个物件，5、6 各 24 个。特征包括 21×16 字形核心的 336 个亮度值、16 个行均值及 21 个列均值。共 373 个权重、一个偏置和 0.5 的确认门槛，训练 ridge 为 0.01。生成工具由 Evelyn 编写，Jane 在 Windows 训练、导出并复验。模型版本为训练清单 SHA-256；仓库保留导出的数值参数和摘要，训练素材和清单正文留在 Windows。
+
+持有原参数导出时，从仓库根目录运行 `go run ./tools/storageglyphgen -model <参数导出.json> -out <生成目标.go>`，再与固定文件摘要比较。生产自检用[参数摘要](../../internal/game/zzz/collect/storage_card_glyph_check.go)校验已链接的模型，依次对权重、偏置和门槛的 IEEE 754 binary64 小端字节计算 SHA-256。Jane 已从原 13m01 实测 EXE 逐位核对同一组参数；这组证据对应原便携包。
+
 ## 3. 模型配套资料
 
 正式选定模型前，建议将以下信息作为一份版本化识别资源记录维护；模型、字典或预处理改变后重新验收，不分别追随各自的最新版本。OCR 字符表属于模型配套资源；游戏套装、属性词表属于适配资料，后者才可能从 fairy 的固定公开制品生成，二者不能混为同一份字典。

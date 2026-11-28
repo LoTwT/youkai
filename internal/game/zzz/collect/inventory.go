@@ -3980,7 +3980,8 @@ func (run *inventoryRun) scroll(ctx context.Context) (err error) {
 			return err
 		}
 		settleStart := time.Now()
-		out, err := run.awaitScrollFrames(ctx, before, false, reuseForwardScrollPages)
+		matcher := storagePixelMatcher(run.inv.matcher())
+		out, err := run.awaitScrollFrames(ctx, before, false, matcher != nil && matcher.reuseScrollPages)
 		settle += time.Since(settleStart)
 		if err != nil {
 			return err

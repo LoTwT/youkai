@@ -20,6 +20,9 @@ import (
 
 const pageUnknownTraceEnv = "YOUKAI_PAGE_UNKNOWN_TRACE"
 
+// StoragePageTraceBuilt reports whether this binary includes the QA trace.
+const StoragePageTraceBuilt = true
+
 type pageUnknownTraceRing struct {
 	frames []pageUnknownTraceFrame
 	input  *pageUnknownTraceInput

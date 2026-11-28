@@ -859,7 +859,7 @@ func TestRecordConclusion(t *testing.T) {
 			tag:               "失败",
 			text:              "没有开始：30 秒内游戏没有就绪",
 			summaryTitle:      "没有开始：30 秒内游戏没有就绪",
-			summarySupplement: "怎么做：请让游戏保持在前台并停在驱动盘仓库页（便携验收版用驱动仓库页），然后重新开始扫描。",
+			summarySupplement: "怎么做：请让游戏保持在前台并停在驱动仓库页（转盘模式为驱动盘仓库页），然后重新开始扫描。",
 		},
 		{
 			name: "zero captured after a normal end",

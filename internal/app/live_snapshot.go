@@ -35,7 +35,7 @@ func (s *Service) activeSavedSnapshot(id string) *record.Checkpoint {
 	}
 	// A refresh scheduled during capture can run after the kernel begins
 	// wrapping up. Keep its saved snapshot path during that race.
-	if os.Getenv("YOUKAI_DEFER_WRAP_LIVE_READ") != "1" && current.kernel.Snapshot().Phase != scan.PhaseCapturing {
+	if !s.cfg.Storage.DeferWrapRead && current.kernel.Snapshot().Phase != scan.PhaseCapturing {
 		return nil
 	}
 	return current.deliverer.savedLiveSnapshot.Load()

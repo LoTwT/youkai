@@ -12,8 +12,6 @@ import (
 	"github.com/LoTwT/youkai/internal/platform"
 )
 
-var storageMatchABReuse = os.Getenv("YOUKAI_STORAGE_MATCH_AB") == "B"
-
 // storageCandidateMatch is local to one detail-wait iteration. It contains
 // only the pure matcher output. The caller still executes frame gates and
 // independently advances freshness, selection and stability state.
@@ -24,11 +22,11 @@ type storageCandidateMatch struct {
 }
 
 func (run *inventoryRun) storageCandidate(f platform.Frame) storageCandidateMatch {
-	if !storageMatchABReuse || f.Reused || !run.inv.storagePage() {
+	if f.Reused || !run.inv.storagePage() {
 		return storageCandidateMatch{}
 	}
 	m := storagePixelMatcher(run.inv.matcher())
-	if m == nil || !m.valid || m.L.Page != PageDriveStorage || !m.frameFits(f) {
+	if m == nil || !m.reuseFrameMatch || !m.valid || m.L.Page != PageDriveStorage || !m.frameFits(f) {
 		return storageCandidateMatch{}
 	}
 	return storageCandidateMatch{matcher: m}
@@ -106,12 +104,12 @@ func pacedStorageDetailRequest(after, previousFresh time.Time) platform.FrameReq
 }
 
 func (run *inventoryRun) pacedStorageDetailEnabled(preClick platform.Frame) bool {
-	if runtime.GOOS != "windows" || !storageMatchABReuse || preClick.ID == 0 ||
+	if runtime.GOOS != "windows" || preClick.ID == 0 ||
 		!run.inv.storagePage() || !run.inv.fullScope() {
 		return false
 	}
 	m := storagePixelMatcher(run.inv.matcher())
-	return m != nil && m.pacedFastDetail && !m.fastCardBadges
+	return m != nil && m.reuseFrameMatch && m.pacedFastDetail && !m.fastCardBadges
 }
 
 type storageABFrameTiming struct {
@@ -148,6 +146,7 @@ type storageABVisitFailure struct {
 	AtNS            int64  `json:"at_ns"`
 }
 type storageABTiming struct {
+	reuse           bool
 	path            string
 	started         time.Time
 	stage           string
@@ -201,7 +200,7 @@ func (a *storageABTiming) finish(err error) {
 		Dropped            int                     `json:"dropped"`
 		Frames             []storageABFrameTiming  `json:"frames"`
 		Rejections         []storageABVisitFailure `json:"rejections"`
-	}{a.started.UTC(), ended.Sub(a.started).Nanoseconds(), storageMatchABReuse, "completed", a.dropped, a.frames, a.failures}
+	}{a.started.UTC(), ended.Sub(a.started).Nanoseconds(), a.reuse, "completed", a.dropped, a.frames, a.failures}
 	if err != nil {
 		report.Termination = storageABFailureCode(err)
 	}
