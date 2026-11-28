@@ -129,6 +129,10 @@ func (run *inventoryRun) requireDetailPosition(m PageMatch, slot int, target str
 // A global failure keeps admitted items and marks the declared slots incomplete.
 func (run *inventoryRun) runStorage(ctx context.Context) (err error) {
 	run.abTiming = startStorageABTiming()
+	if run.abTiming != nil {
+		m := storagePixelMatcher(run.inv.matcher())
+		run.abTiming.reuse = m != nil && m.reuseFrameMatch
+	}
 	defer func() { run.abTiming.finish(err) }()
 	originalMatcher := run.inv.Matcher
 	defer func() { run.inv.Matcher = originalMatcher }()

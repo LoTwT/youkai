@@ -1,12 +1,6 @@
 package collect
 
-import (
-	"os"
-
-	"github.com/LoTwT/youkai/internal/platform"
-)
-
-var reuseForwardScrollPages = os.Getenv("YOUKAI_STORAGE_REUSE_SCROLL_PAGES") == "1"
+import "github.com/LoTwT/youkai/internal/platform"
 
 type scrollPageSample struct {
 	frame platform.Frame

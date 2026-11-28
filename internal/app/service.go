@@ -14,6 +14,7 @@ import (
 	"github.com/LoTwT/youkai/internal/recognition"
 	"github.com/LoTwT/youkai/internal/record"
 	"github.com/LoTwT/youkai/internal/scan"
+	"github.com/LoTwT/youkai/internal/storageconfig"
 )
 
 // ScanSpec is what one accepted start needs beyond the request itself:
@@ -89,6 +90,8 @@ type Config struct {
 	// Source supplies the scans the service can start; nil means no scan
 	// source is wired, and starts are refused with a clear error.
 	Source ScanSource
+	// Storage configures persistence for the selected scan source.
+	Storage storageconfig.Config
 	// Store persists records below Paths.Data. Nil opens a
 	// *record.Store; tests inject a failing wrapper through this seam.
 	Store recordStore
@@ -578,6 +581,8 @@ func (s *Service) Start(req StartRequest) (StartOutcome, error) {
 		defer s.mu.Unlock()
 		s.notifyLocked()
 	})
+	deliverer.batchEvidence = s.cfg.Storage.BatchEvidence
+	deliverer.cacheLiveSnapshot = s.cfg.Storage.SavedSnapshot
 	// A controller whose traversal reports the range it observed during
 	// preparation (T5 §3) gets the deliverer's sink wired in before the
 	// session starts, so the observed range reaches the record.

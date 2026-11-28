@@ -164,7 +164,7 @@ func TestRecordSummaryConclusionTable(t *testing.T) {
 			wantTitle:      "没有开始：游戏页面不是已支持的仓库页",
 			wantPrimary:    summaryActionPrepare,
 			wantPrimaryLbl: "回到准备检查",
-			wantSupplement: "怎么做：请打开驱动盘仓库页（便携验收版用驱动仓库页）后重新开始扫描。",
+			wantSupplement: "怎么做：请打开驱动仓库页（转盘模式为驱动盘仓库页）后重新开始扫描。",
 			wantSecondary:  []summaryActionKind{summaryActionCopyDiagnostics},
 		},
 		{

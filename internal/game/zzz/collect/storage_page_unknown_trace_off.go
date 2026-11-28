@@ -4,6 +4,9 @@ package collect
 
 import "github.com/LoTwT/youkai/internal/platform"
 
+// StoragePageTraceBuilt reports whether this binary includes the QA trace.
+const StoragePageTraceBuilt = false
+
 type pageUnknownTraceRing struct{}
 
 func tracePageUnknownInput(_ *inventoryRun, _ int, _ uint64, _ platform.InputResult)            {}

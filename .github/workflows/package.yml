@@ -184,6 +184,9 @@ jobs:
           mv mygo.json.tmp mygo.json
           test "$(jq 'has("updates")' mygo.json)" = false
           echo "updates removed from mygo.json for this test build"
+      - name: Check the pinned 5/6 badge model source
+        shell: bash
+        run: sha256sum -c internal/game/zzz/collect/storage_card_glyph_model.sha256
       - name: Download OCR resources (fetchdeps)
         run: go run ./tools/fetchdeps -platform windows/amd64
       - name: Place the VC++ runtime DLLs next to the app (app-local)
@@ -288,29 +291,14 @@ jobs:
           for name in MSVCP140.dll MSVCP140_1.dll VCRUNTIME140.dll VCRUNTIME140_1.dll; do
             7z l "$setup" | grep -i "$name" || { echo "ERROR: $name not found in the installer"; exit 1; }
           done
-      - name: Recognition self-test on the packaged EXE
-        # Runs the GUI-subsystem EXE headlessly: the self-test path returns
-        # before any window exists, loading the bundled onnxruntime.dll —
-        # whose CRT imports resolve through the VC++ DLLs placed next to the
-        # EXE — and the model, then recognizing one embedded sample. The
-        # log's first line reports the updater state, asserted here: a test
-        # build must have updates off.
+      - name: Verify the Windows package against the tested EXE
         shell: pwsh
         run: |
-          $env:YOUKAI_SELFTEST = "1"
-          $exe = "build\windows-amd64\Youkai.exe"
-          $p = Start-Process -FilePath $exe -NoNewWindow -Wait -PassThru `
-            -RedirectStandardOutput selftest-stdout.txt -RedirectStandardError selftest-stderr.txt
-          $err = Get-Content selftest-stderr.txt -Raw
-          if ($err) { Write-Host $err }
-          if ($p.ExitCode -ne 0) {
-            $out = Get-Content selftest-stdout.txt -Raw
-            if ($out) { Write-Host $out }
-            throw "recognition self-test failed: exit code $($p.ExitCode) — the stderr above names the library and model paths it tried; a missing VC++ DLL or a broken packaged layout shows up here"
-          }
-          if (-not (Select-String -Path selftest-stderr.txt -Pattern 'youkai: self-test: updates=disabled' -Quiet)) {
-            throw "updates must be disabled in a Package build — the self-test log does not say updates=disabled"
-          }
+          $version = (Get-Content mygo.json -Raw | ConvertFrom-Json).version
+          $out = "build/windows-amd64"
+          ./scripts/verify-windows-package.ps1 -Executable "$out/Youkai.exe" `
+            -Installer "$out/youkai-setup-$version-amd64.exe" -Updates disabled `
+            -ProfilePath "$env:RUNNER_TEMP\windows-storage-profile.json"
       - name: Write the packaging manifest
         shell: bash
         run: |
@@ -330,6 +318,9 @@ jobs:
             echo "## Artifacts"
             entry "$(basename "$setup")" "$setup"
             entry "Youkai.exe" "$exe"
+            echo
+            echo "## Verified Windows drive storage profile"
+            cat "$RUNNER_TEMP/windows-storage-profile.json"
             echo
             echo "## Bundled native libraries and model"
             entry "onnxruntime.dll" "build/windows-amd64/onnxruntime/onnxruntime.dll"

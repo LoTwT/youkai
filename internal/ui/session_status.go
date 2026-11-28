@@ -159,7 +159,7 @@ var faultGuidanceTable = map[string]func(faultFacts) faultGuidance{
 		faultExitHotkey, false),
 	"targetNotFound": staticGuidance(
 		"没有找到《绝区零》的游戏窗口",
-		"请启动游戏并打开驱动盘仓库页（便携验收版用驱动仓库页）。",
+		"请启动游戏并打开驱动仓库页（转盘模式为驱动盘仓库页）。",
 		faultExitTargetClient, false),
 	"screenRecordingUnavailable": staticGuidance(
 		"无法使用屏幕录制权限",
@@ -364,11 +364,11 @@ var faultGuidanceTable = map[string]func(faultFacts) faultGuidance{
 
 	"prepareTimeout": staticGuidance(
 		"30 秒内游戏没有就绪",
-		"请让游戏保持在前台并停在驱动盘仓库页（便携验收版用驱动仓库页），然后重新开始扫描。",
+		"请让游戏保持在前台并停在驱动仓库页（转盘模式为驱动盘仓库页），然后重新开始扫描。",
 		faultExitGamePage, false),
 	"pageUnverified": staticGuidance(
 		"游戏页面不是已支持的仓库页",
-		"请打开驱动盘仓库页（便携验收版用驱动仓库页）后重新开始扫描。",
+		"请打开驱动仓库页（转盘模式为驱动盘仓库页）后重新开始扫描。",
 		faultExitGamePage, false),
 	"anchorsMissing": staticGuidance(
 		"游戏画面与当前客户端的布局不匹配",

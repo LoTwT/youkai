@@ -157,8 +157,6 @@ func newRecordDeliverer(store recordStore, shell record.SessionShell, onChange f
 		shell:                   shell,
 		onChange:                onChange,
 		admissionTiming:         os.Getenv("YOUKAI_STORAGE_ADMISSION_TIMING") == "1",
-		batchEvidence:           os.Getenv("YOUKAI_STORAGE_BATCH_EVIDENCE") == "1",
-		cacheLiveSnapshot:       os.Getenv("YOUKAI_ACTIVE_CHECKPOINT_SNAPSHOT") == "1",
 		completeCoverageAllowed: completeAllowed,
 	}
 }

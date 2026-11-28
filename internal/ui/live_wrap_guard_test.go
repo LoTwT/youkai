@@ -7,7 +7,6 @@ import (
 )
 
 func TestDeferLiveRefreshUntilFinalCheckpoint(t *testing.T) {
-	t.Setenv("YOUKAI_DEFER_WRAP_LIVE_READ", "1")
 	for _, c := range []struct {
 		name string
 		end  scan.EndKind
@@ -19,7 +18,7 @@ func TestDeferLiveRefreshUntilFinalCheckpoint(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			svc := &fakeService{loads: map[string]*record.Recovery{"s1": recovery(item(1, record.StatusProduced, "", ""))}}
-			m, q := newTestModel(t, Config{Service: svc})
+			m, q := newTestModel(t, Config{Service: svc, DeferWrapRead: true})
 			m.Apply(openCapturing("s1", 1, 1))
 			drainAll(t, m, q)
 			before := len(svc.loadLog)

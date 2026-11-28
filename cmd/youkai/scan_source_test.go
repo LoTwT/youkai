@@ -55,36 +55,6 @@ func TestScanSourceRejectsBothSwitches(t *testing.T) {
 	}
 }
 
-// The installed Windows default (D-01, P-01): with no environment variable
-// the local client is wired without a fixed target, so the window lists the
-// discovered candidates and a start must carry a confirmed one.
-func TestScanSourceWindowsDefaultPreservesWarehouse(t *testing.T) {
-	host := func() (platform.Port, error) { return &platformfake.Port{}, nil }
-	source, _, err := scanSourceFrom(envOf(nil), "windows", host)
-	if err != nil {
-		t.Fatal(err)
-	}
-	game, ok := source.(*app.GameScanSource)
-	if !ok {
-		t.Fatalf("source = %T, want *app.GameScanSource", source)
-	}
-	if !game.RequiresTargetConfirmation() || game.Target.ExecutablePath != "" || game.Target.BundleID != "" {
-		t.Fatalf("default entry must discover its target: %+v", game.Target)
-	}
-	traversal, err := game.TraversalForClient(image.Pt(1920, 1080))
-	if err != nil {
-		t.Fatal(err)
-	}
-	profile, err := collect.WindowsLocalProfileFor(image.Pt(1920, 1080))
-	if err != nil {
-		t.Fatal(err)
-	}
-	inv, ok := traversal.(*collect.Inventory)
-	if !ok || !reflect.DeepEqual(inv.Layout, profile.Layout) || !inv.RequirePanelRangeProof || inv.Project == nil {
-		t.Fatalf("default entry did not preserve the range-gated warehouse: %T", traversal)
-	}
-}
-
 func TestScanSourceDriveStorageRejectsOtherPlatforms(t *testing.T) {
 	host := func() (platform.Port, error) {
 		t.Fatal("drive-storage must refuse a non-Windows platform before opening its host")
@@ -96,8 +66,7 @@ func TestScanSourceDriveStorageRejectsOtherPlatforms(t *testing.T) {
 	}
 }
 
-// The portable drive-storage mode uses the same target discovery and
-// start confirmation as the installed Windows source.
+// The installed drive storage entry discovers and confirms its target.
 func TestScanSourceWindowsDriveStorageDiscoversTarget(t *testing.T) {
 	target := platform.TargetCandidate{Handle: 1, PID: 42, ExecutablePath: `C:\Games\ZZZ\ZenlessZoneZero.exe`}
 	host := func() (platform.Port, error) {
@@ -105,8 +74,7 @@ func TestScanSourceWindowsDriveStorageDiscoversTarget(t *testing.T) {
 			return platform.TargetDiscoveryResult{Candidates: []platform.TargetCandidate{target}}, nil
 		}}, nil
 	}
-	env := envOf(map[string]string{"YOUKAI_GAME_SOURCE": "drive-storage"})
-	source, label, err := scanSourceFrom(env, "windows", host)
+	source, label, err := scanSourceFrom(envOf(nil), "windows", host)
 	if err != nil {
 		t.Fatalf("scanSourceFrom: %v", err)
 	}

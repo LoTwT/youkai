@@ -126,6 +126,8 @@ type ScanSourceInfo struct {
 type Config struct {
 	// Service is the application service the window drives. Required.
 	Service Service
+	// DeferWrapRead leaves the final live record refresh to the save completion.
+	DeferWrapRead bool
 	// AppIcon is the embedded brand icon used in the navigation rail and
 	// the Windows tray hint. A nil bitmap leaves the icon hidden.
 	AppIcon *ui.Bitmap
